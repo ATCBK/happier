@@ -59,7 +59,7 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
   var onComposerChange: ((String, Map<String, Int>, Int) -> Unit)? = null
   var onComposerSelection: ((Map<String, Int>) -> Unit)? = null
   var onComposerKey: ((Map<String, Any>) -> Unit)? = null
-  var onComposerSubmit: (() -> Unit)? = null
+  var onComposerSubmit: ((Map<String, Any>) -> Unit)? = null
   var onComposerReference: ((String) -> Unit)? = null
   var onComposerDecoration: ((String) -> Unit)? = null
   var referenceMenuLabels: Map<String, String> = emptyMap()
@@ -72,15 +72,21 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
   var composerAccessibilityHint: String? = null
   var nativeEventCount = 0
     private set
-  private data class ControlledDocument(val value: String?, val eventCount: Int, val references: List<Map<String, Any?>>?, val decorations: List<Map<String, Any?>>?)
-  private var pendingDocument: ControlledDocument? = null
+  private data class DocumentUpdate(val value: String? = null, val selection: Map<String, Int>? = null,
+    val references: List<Map<String, Any?>>? = null, val decorations: List<Map<String, Any?>>? = null,
+    val eventCount: Int? = null)
+  private var pendingDocument: DocumentUpdate? = null
   private var applyingControlled = false
   private var snappingSelection = false
   private var ready = false
-  private var pendingValue: String? = null
-  private var pendingSelection: Map<String, Int>? = null
-  private var pendingReferences: List<Map<String, Any?>>? = null
-  private var pendingDecorations: List<Map<String, Any?>>? = null
+  private data class BoundReference(val start: Int, val end: Int, val reference: ComposerReference)
+  private data class EditFragment(val value: String, val references: List<BoundReference>)
+  private data class NativeEdit(val start: Int, val before: EditFragment, var after: EditFragment,
+    val selectionBefore: Map<String, Int>, var selectionAfter: Map<String, Int>)
+  private val undoEdits = mutableListOf<NativeEdit>()
+  private val redoEdits = mutableListOf<NativeEdit>()
+  private var editing: NativeEdit? = null
+  private var chipContainerWidth = 0
   private var decorationSpecs = emptyList<Map<String, Any?>>()
   private var decorationSpans = mutableListOf<Any>()
   private var theme = emptyMap<String, Any?>()
@@ -112,8 +118,12 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
       }
     })
     addTextChangedListener(object : TextWatcher {
-      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+      override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
+        if (!applyingControlled) editing = NativeEdit(start, fragment(start, start + count), EditFragment("", emptyList()), sourceSelection(), sourceSelection())
+      }
+      override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+        if (!applyingControlled) editing?.after = fragment(start, start + count)
+      }
       override fun afterTextChanged(s: Editable) {
         if (applyingControlled) return
         chips().forEach { span ->
@@ -121,6 +131,11 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
           val end = s.getSpanEnd(span)
           if (start < 0 || end <= start || s.subSequence(start, end).toString() != span.reference.source) s.removeSpan(span)
         }
+        editing?.let { edit ->
+          // Store only the changed fragment and its typed bindings, never a text-derived identity.
+          if (edit.before.value != edit.after.value) { undoEdits.add(edit); redoEdits.clear() }
+        }
+        editing = null
         nativeEventCount++
         onComposerChange?.invoke(s.toString(), sourceSelection(), nativeEventCount)
         requestLayout()
@@ -130,7 +145,7 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
     setOnEditorActionListener { _, actionId, event ->
       if (submitBehavior != "newline" && !isComposing() && event?.isShiftPressed != true &&
         (actionId != EditorInfo.IME_NULL || event?.keyCode == KeyEvent.KEYCODE_ENTER)) {
-        submit()
+        if (event == null || event.action == KeyEvent.ACTION_DOWN) submit(keyPayload("Enter", event))
         true
       } else false
     }
@@ -168,6 +183,7 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
     dimension(typography, "chipGlyphSize", 0f) * density * fontScale,
     dimension(typography, "chipGap", 0f) * density * fontScale,
     ink("chipGlyphForeground", ink("chipForeground")),
+    chipContainerWidth.toFloat(),
   )
 
   fun setThemeTokens(value: Map<String, Any?>) {
@@ -190,8 +206,7 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
       else Typeface.create(Typeface.DEFAULT, if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
     (value["lineHeight"] as? Number)?.let { setLineSpacing(max(0f, it.toFloat() * density * fontScale - paint.fontSpacing), 1f) }
     applyDecorations()
-    requestLayout()
-    invalidate()
+    remeasureChips()
   }
 
   fun setPaddingTokens(value: Map<String, Any?>) {
@@ -214,46 +229,61 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
     }
   }
 
-  fun setControlledValue(value: String, selection: Map<String, Int>? = null) {
-    if (isComposing()) {
-      if (text.toString() == value && selection == null) return
-      pendingValue = value
-      pendingSelection = selection
-      return
-    }
-    if (text.toString() != value) {
-      val previous = sourceSelection()
-      val before = text.toString()
-      var prefix = 0
-      while (prefix < min(before.length, value.length) && before[prefix] == value[prefix]) prefix++
-      prefix = snap(prefix, -1)
-      var suffix = 0
-      while (suffix < min(before.length - prefix, value.length - prefix) && before[before.length - suffix - 1] == value[value.length - suffix - 1]) suffix++
-      val oldEnd = snap(before.length - suffix, 1)
-      val newEnd = value.length - (before.length - oldEnd)
-      applyingControlled = true
-      try {
-        text!!.replace(prefix, oldEnd, value, prefix, newEnd)
-        setSourceSelection(selection ?: previous)
-      } finally { applyingControlled = false }
-    } else if (selection != null) setSourceSelection(selection)
-  }
+  fun setTextAndSelection(value: String, selection: Map<String, Int>, references: List<Map<String, Any?>>) =
+    updateDocument(DocumentUpdate(value = value, selection = selection, references = references))
 
   /** Match the source value and ranges to the acknowledged native edit, as one prop batch. */
   fun setControlledDocument(value: String?, eventCount: Int, references: List<Map<String, Any?>>?, decorations: List<Map<String, Any?>>?) {
-    if (eventCount < nativeEventCount) return
-    if (isComposing()) {
-      val previous = pendingDocument?.takeIf { it.eventCount == eventCount }
-      pendingDocument = ControlledDocument(value ?: previous?.value, eventCount, references ?: previous?.references, decorations ?: previous?.decorations)
-      return
-    }
-    if (value != null) setControlledValue(value)
-    if (references != null) setReferences(references)
-    if (decorations != null) setDecorations(decorations)
+    updateDocument(DocumentUpdate(value = value, eventCount = eventCount, references = references, decorations = decorations))
   }
 
-  fun setReferences(values: List<Map<String, Any?>>) {
-    if (isComposing()) { pendingReferences = values; return }
+  private fun updateDocument(update: DocumentUpdate) {
+    if (update.eventCount != null && update.eventCount < nativeEventCount) return
+    if (isComposing()) {
+      val command = pendingDocument?.takeIf { it.eventCount == null }
+      if (command != null && update.eventCount != null) {
+        // A controlled echo cannot replace an explicit command waiting for IME completion.
+        pendingDocument = command.copy(decorations = update.decorations ?: command.decorations)
+        return
+      }
+      val previous = pendingDocument?.takeIf { it.eventCount == update.eventCount }
+      pendingDocument = update.copy(value = update.value ?: previous?.value,
+        selection = update.selection ?: previous?.selection, references = update.references ?: previous?.references,
+        decorations = update.decorations ?: pendingDocument?.decorations)
+      return
+    }
+    val previousSelection = sourceSelection()
+    var commandEdit: NativeEdit? = null
+    var newEnd = 0
+    applyingControlled = true
+    try {
+      val value = update.value
+      if (value != null && text.toString() != value) {
+        val before = text.toString()
+        var prefix = 0
+        while (prefix < min(before.length, value.length) && before[prefix] == value[prefix]) prefix++
+        prefix = snap(prefix, -1)
+        var suffix = 0
+        while (suffix < min(before.length - prefix, value.length - prefix) && before[before.length - suffix - 1] == value[value.length - suffix - 1]) suffix++
+        val oldEnd = snap(before.length - suffix, 1)
+        newEnd = value.length - (before.length - oldEnd)
+        if (update.eventCount == null) commandEdit = NativeEdit(prefix, fragment(prefix, oldEnd), EditFragment("", emptyList()), previousSelection, previousSelection)
+        else { undoEdits.clear(); redoEdits.clear() }
+        text!!.replace(prefix, oldEnd, value, prefix, newEnd)
+      }
+      update.references?.let(::applyReferences)
+      update.decorations?.let { decorationSpecs = it; applyDecorations() }
+      setSourceSelection(update.selection ?: previousSelection)
+      commandEdit?.let { edit ->
+        edit.after = fragment(edit.start, newEnd)
+        edit.selectionAfter = sourceSelection()
+        undoEdits.add(edit)
+        redoEdits.clear()
+      }
+    } finally { applyingControlled = false }
+  }
+
+  private fun applyReferences(values: List<Map<String, Any?>>) {
     val editable = text ?: return
     chips().forEach(editable::removeSpan)
     var previousEnd = 0
@@ -262,25 +292,59 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
       val end = (value["end"] as? Number)?.toInt() ?: return@forEach
       val ref = value["ref"] as? String ?: return@forEach
       val label = value["label"] as? String ?: return@forEach
+      val token = value["token"] as? String ?: return@forEach
       if (start < previousEnd || start < 0 || end <= start || end > editable.length || splitsSurrogate(start) || splitsSurrogate(end)) return@forEach
+      if (editable.subSequence(start, end).toString() != token) return@forEach
       val reference = ComposerReference(ref, label, value["kind"] as? String ?: "", value["state"] as? String ?: "ready",
         value["glyph"] as? String, value["accessibilityLabel"] as? String ?: label, value["marker"] as? String ?: label,
-        editable.subSequence(start, end).toString())
-      lateinit var span: ComposerChipSpan
-      span = ComposerChipSpan(reference, ::chipStyle) { selectionStart == editable.getSpanStart(span) && selectionEnd == editable.getSpanEnd(span) }
-      editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        token)
+      installReference(reference, start, end)
       previousEnd = end
     }
-    setSourceSelection(sourceSelection())
     requestLayout()
     invalidate()
     sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
   }
 
-  fun setDecorations(values: List<Map<String, Any?>>) {
-    if (isComposing()) { pendingDecorations = values; return }
-    decorationSpecs = values
-    applyDecorations()
+  private fun installReference(reference: ComposerReference, start: Int, end: Int) {
+    val editable = text ?: return
+    lateinit var span: ComposerChipSpan
+    span = ComposerChipSpan(reference, ::chipStyle) { selectionStart == editable.getSpanStart(span) && selectionEnd == editable.getSpanEnd(span) }
+    editable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+  }
+
+  private fun fragment(start: Int, end: Int): EditFragment {
+    val editable = text ?: return EditFragment("", emptyList())
+    val references = chips().mapNotNull { span ->
+      val left = editable.getSpanStart(span)
+      val right = editable.getSpanEnd(span)
+      if (left >= start && right <= end && right > left && editable.subSequence(left, right).toString() == span.reference.source)
+        BoundReference(left - start, right - start, span.reference) else null
+    }
+    return EditFragment(editable.subSequence(start, end).toString(), references)
+  }
+
+  private fun restoreEdit(undo: Boolean): Boolean {
+    if (!isEnabled || !isFocusable || isComposing()) return false
+    val from = if (undo) undoEdits else redoEdits
+    val edit = from.lastOrNull() ?: return false
+    val replaced = if (undo) edit.after else edit.before
+    val restored = if (undo) edit.before else edit.after
+    if (undo) edit.selectionAfter = sourceSelection()
+    applyingControlled = true
+    try {
+      val editable = text ?: return false
+      editable.replace(edit.start, edit.start + replaced.value.length, restored.value)
+      restored.references.forEach { installReference(it.reference, edit.start + it.start, edit.start + it.end) }
+      setSourceSelection(if (undo) edit.selectionBefore else edit.selectionAfter)
+    } finally { applyingControlled = false }
+    from.removeAt(from.lastIndex)
+    (if (undo) redoEdits else undoEdits).add(edit)
+    nativeEventCount++
+    onComposerChange?.invoke(text.toString(), sourceSelection(), nativeEventCount)
+    requestLayout()
+    invalidate()
+    return true
   }
 
   private fun applyDecorations() {
@@ -351,7 +415,7 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
 
   override fun onSelectionChanged(selStart: Int, selEnd: Int) {
     super.onSelectionChanged(selStart, selEnd)
-    if (!ready || snappingSelection || selStart < 0 || selEnd < 0) return
+    if (!ready || applyingControlled || snappingSelection || selStart < 0 || selEnd < 0) return
     val selection = sourceSelection()
     if (selStart != selection["start"] || selEnd != selection["end"]) {
       snappingSelection = true
@@ -366,15 +430,8 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
   private fun flushControlledUpdates() {
     if (isComposing()) return
     val document = pendingDocument
-    val value = pendingValue
-    val selection = pendingSelection
-    val references = pendingReferences
-    val decorations = pendingDecorations
-    pendingDocument = null; pendingValue = null; pendingSelection = null; pendingReferences = null; pendingDecorations = null
-    if (document != null) setControlledDocument(document.value, document.eventCount, document.references, document.decorations)
-    if (value != null) setControlledValue(value, selection)
-    if (references != null) setReferences(references)
-    if (decorations != null) setDecorations(decorations)
+    pendingDocument = null
+    if (document != null) updateDocument(document)
   }
 
   private fun expandedRange(start: Int, end: Int): Pair<Int, Int> = snap(start, -1) to snap(end, 1)
@@ -431,7 +488,7 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
       }
       override fun commitText(value: CharSequence?, newCursorPosition: Int): Boolean {
         if (!isComposing() && value?.toString() == "\n" && submitBehavior != "newline") {
-          emitPlainKey("Enter")
+          emitPlainKey("Enter", submitting = true)
           submit()
           return true
         }
@@ -472,13 +529,17 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
     }
   }
 
-  private fun submit() {
-    onComposerSubmit?.invoke()
+  private fun submit(event: Map<String, Any> = keyPayload("Enter")) {
+    onComposerSubmit?.invoke(event)
     if (submitBehavior == "blurAndSubmit") clearFocus()
   }
 
-  private fun emitPlainKey(key: String) {
-    onComposerKey?.invoke(mapOf("key" to key, "shiftKey" to false, "ctrlKey" to false, "altKey" to false, "metaKey" to false))
+  private fun keyPayload(key: String, event: KeyEvent? = null): Map<String, Any> = mapOf("key" to key,
+    "shiftKey" to (event?.isShiftPressed ?: false), "ctrlKey" to (event?.isCtrlPressed ?: false),
+    "altKey" to (event?.isAltPressed ?: false), "metaKey" to (event?.isMetaPressed ?: false))
+
+  private fun emitPlainKey(key: String, submitting: Boolean = false) {
+    onComposerKey?.invoke(keyPayload(key) + if (submitting) mapOf("submitting" to true) else emptyMap())
   }
 
   override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -494,11 +555,12 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
       KeyEvent.KEYCODE_TAB -> "Tab"
       else -> if (event.unicodeChar != 0) String(Character.toChars(event.unicodeChar)) else KeyEvent.keyCodeToString(keyCode)
     }
-    if (!isComposing()) onComposerKey?.invoke(mapOf("key" to key, "shiftKey" to event.isShiftPressed, "ctrlKey" to event.isCtrlPressed, "altKey" to event.isAltPressed, "metaKey" to event.isMetaPressed))
+    val submitting = !isComposing() && keyCode == KeyEvent.KEYCODE_ENTER && submitBehavior != "newline" && !event.isShiftPressed
+    if (!isComposing()) onComposerKey?.invoke(keyPayload(key, event) + if (submitting) mapOf("submitting" to true) else emptyMap())
     if (!isComposing()) {
       if (keyCode == KeyEvent.KEYCODE_DEL && !event.isCtrlPressed && !event.isAltPressed) return deleteSurrounding(1, 0, false)
       if (keyCode == KeyEvent.KEYCODE_FORWARD_DEL && !event.isCtrlPressed && !event.isAltPressed) return deleteSurrounding(0, 1, false)
-      if (keyCode == KeyEvent.KEYCODE_ENTER && submitBehavior != "newline" && !event.isShiftPressed) { submit(); return true }
+      if (submitting) { submit(keyPayload(key, event)); return true }
       if (!event.isShiftPressed && !event.isCtrlPressed && !event.isAltPressed && selectionStart == selectionEnd && keyCode in listOf(KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT)) {
         val span = chips().firstOrNull { if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) text!!.getSpanEnd(it) == selectionStart else text!!.getSpanStart(it) == selectionStart }
         if (span != null) { setSelection(if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) text!!.getSpanStart(span) else text!!.getSpanEnd(span)); return true }
@@ -523,6 +585,7 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
   }
 
   override fun onTextContextMenuItem(id: Int): Boolean {
+    if (id == android.R.id.undo || id == android.R.id.redo) return restoreEdit(id == android.R.id.undo)
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val selection = sourceSelection()
     val start = selection.getValue("start")
@@ -544,6 +607,14 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
       return true
     }
     return super.onTextContextMenuItem(id)
+  }
+
+  override fun onKeyShortcut(keyCode: Int, event: KeyEvent): Boolean {
+    if (event.isCtrlPressed && !event.isAltPressed) {
+      if (keyCode == KeyEvent.KEYCODE_Z) return onTextContextMenuItem(if (event.isShiftPressed) android.R.id.redo else android.R.id.undo)
+      if (keyCode == KeyEvent.KEYCODE_Y && !event.isShiftPressed) return onTextContextMenuItem(android.R.id.redo)
+    }
+    return super.onKeyShortcut(keyCode, event)
   }
 
   private fun dropActivity(): Activity? {
@@ -641,6 +712,22 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     reportContentHeight()
+  }
+
+  override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+    val available = (View.MeasureSpec.getSize(widthMeasureSpec) - compoundPaddingLeft - compoundPaddingRight).coerceAtLeast(0)
+    if (chipContainerWidth != available) {
+      chipContainerWidth = available
+      remeasureChips()
+    }
+    super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+  }
+
+  private fun remeasureChips() {
+    val editable = text ?: return
+    chips().forEach { editable.setSpan(it, editable.getSpanStart(it), editable.getSpanEnd(it), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE) }
+    requestLayout()
+    invalidate()
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {

@@ -28,6 +28,7 @@ import type {
 } from './nativeComposerInput';
 import type { ComposerEditorReference } from './composerEditor/composerEditorTypes';
 import { boundComposerEditorReferences } from './composerEditor/composerTextDocMapping';
+import { reconcileStructuredInputMentionsWithTextChange } from '@/components/sessions/agentInput/structuredInputMentions';
 
 export type { SupportedKey } from '@/keyboard/events';
 export type { ComposerInputReference, ComposerInputDecoration } from './nativeComposerInput';
@@ -122,6 +123,16 @@ function clampSelection(selection: TextInputState['selection'], length: number, 
 
 const bindingKey = (ref: string, token: string) => JSON.stringify([ref, token]);
 
+function serializeReferences(references: readonly ComposerEditorReference[]): readonly ComposerInputReference[] {
+    return references.map(reference => ({
+        token: reference.token, start: reference.start, end: reference.end, ref: reference.ref, label: reference.label, kind: reference.kind,
+        glyph: nativeReferenceChipGlyph(reference.ref, undefined, Platform.OS, reference.kind === 'image'),
+        ...(reference.state === undefined ? {} : { state: reference.state }),
+        ...(reference.accessibilityLabel === undefined ? {} : { accessibilityLabel: reference.accessibilityLabel }),
+        ...(reference.readableMarker === undefined ? {} : { marker: reference.readableMarker }),
+    }));
+}
+
 export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextInputProps>((props, ref) => {
     const { theme } = useUnistyles();
     const resolveInk = useGlassBackedInk();
@@ -150,14 +161,14 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
     // Native undo retains attachment/span identity; opaque JS owner bindings stay on this side of the bridge.
     const bindingsRef = React.useRef(new Map<string, ComposerEditorReference>());
     const boundReferences = React.useMemo(() => boundComposerEditorReferences(props.value, props.references ?? NO_REFERENCES), [props.value, props.references]);
+    const liveReferencesRef = React.useRef(boundReferences);
+    const controlledReferencesRef = React.useRef(boundReferences);
+    if (controlledReferencesRef.current !== boundReferences) {
+        controlledReferencesRef.current = boundReferences;
+        liveReferencesRef.current = boundReferences;
+    }
     for (const reference of boundReferences) bindingsRef.current.set(bindingKey(reference.ref, reference.token), reference);
-    const nativeReferences = React.useMemo<readonly ComposerInputReference[]>(() => boundReferences.map(reference => ({
-        start: reference.start, end: reference.end, ref: reference.ref, label: reference.label, kind: reference.kind,
-        glyph: nativeReferenceChipGlyph(reference.ref, undefined, Platform.OS, reference.kind === 'image'),
-        ...(reference.state === undefined ? {} : { state: reference.state }),
-        ...(reference.accessibilityLabel === undefined ? {} : { accessibilityLabel: reference.accessibilityLabel }),
-        ...(reference.readableMarker === undefined ? {} : { marker: reference.readableMarker }),
-    })), [boundReferences]);
+    const nativeReferences = React.useMemo(() => serializeReferences(boundReferences), [boundReferences]);
     if (controlledValueRef.current !== props.value) {
         const atEnd = selectionRef.current.start === controlledValueRef.current.length
             && selectionRef.current.end === controlledValueRef.current.length;
@@ -196,7 +207,8 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             const binding = bindingsRef.current.get(bindingKey(reference.ref, reference.token));
             return binding ? [{ ...binding, start: reference.start, end: reference.end }] : [];
         });
-        props.onReferencesChange?.(boundComposerEditorReferences(text, restored));
+        liveReferencesRef.current = boundComposerEditorReferences(text, restored);
+        props.onReferencesChange?.(liveReferencesRef.current);
         props.onChangeText(text);
     }, [recordGeometry, props.onChangeText, props.onReferencesChange, publishSelection]);
     const onSelection = React.useCallback<NativeComposerInputProps['onSelection']>((event) => {
@@ -252,10 +264,16 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
 
     React.useImperativeHandle(ref, () => ({
         setTextAndSelection(text, selection) {
-            const nextSelection = clampSelection(selection, text.length, boundReferences.filter(reference => text.slice(reference.start, reference.end) === reference.token));
+            const references = reconcileStructuredInputMentionsWithTextChange({
+                previousText: textRef.current, nextText: text, previousSelection: selectionRef.current,
+                mentions: liveReferencesRef.current.map(reference => ({ ...reference, tokenText: reference.token })),
+            }).map(({ tokenText: _tokenText, ...reference }) => reference);
+            const nextSelection = clampSelection(selection, text.length, references);
             textRef.current = text;
             selectionRef.current = nextSelection;
-            inputRef.current?.setTextAndSelection(text, nextSelection);
+            liveReferencesRef.current = references;
+            inputRef.current?.setTextAndSelection(text, nextSelection, serializeReferences(references));
+            props.onReferencesChange?.(references);
             props.onChangeText(text);
             publishSelection(nextSelection);
         },
@@ -278,7 +296,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
         },
         offsetAtPoint: async point => await inputRef.current?.offsetAtPoint(point.x, point.y) ?? null,
         setDropCaret: offset => { inputRef.current?.setDropCaret(offset); },
-    }), [props.value, props.onChangeText, publishSelection, boundReferences]);
+    }), [props.value, props.onChangeText, props.onReferencesChange, publishSelection, boundReferences]);
 
     return <View style={{ width: '100%' }} onLayout={props.onLayout}>
         <NativeComposerInput
@@ -297,7 +315,7 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             editable={props.editable !== false}
             placeholder={props.placeholder ?? ''}
             returnKeyType={props.submitBehavior === 'submit' || props.submitBehavior === 'blurAndSubmit' ? 'send' : 'default'}
-            submitBehavior={props.submitBehavior ?? 'newline'}
+            submitBehavior={props.accessibilityState?.expanded === true ? 'submit' : props.submitBehavior ?? 'newline'}
             autoFocus={props.autoFocus === true}
             autoCorrect={true}
             autoCapitalize="sentences"
@@ -318,13 +336,19 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             onSelection={onSelection}
             onContentHeightChange={onContentHeightChange}
             onKeyPress={event => {
+                // Submit-producing Enter is handled once, from the corresponding native submit event.
+                if (event.nativeEvent.submitting) return;
                 const key = normalizeKeyboardKeyPressEvent(event.nativeEvent);
                 if (key) props.onKeyPress?.({ ...key, inputState: { text: textRef.current, selection: selectionRef.current } });
             }}
             onScroll={event => { recordGeometry(event.nativeEvent); props.onScrollYChange?.(event.nativeEvent.y); }}
             onFocus={event => { if (event) recordGeometry(event.nativeEvent); props.onFocus?.(); }}
             onBlur={props.onBlur}
-            onSubmitEditing={props.onSubmitEditing}
+            onSubmitEditing={event => {
+                const key = normalizeKeyboardKeyPressEvent(event?.nativeEvent ?? { key: 'Enter' });
+                if (key && props.onKeyPress?.({ ...key, inputState: { text: textRef.current, selection: selectionRef.current } })) return;
+                props.onSubmitEditing?.();
+            }}
             onReferencePress={event => {
                 if (props.onReferencePress) props.onReferencePress(event.nativeEvent.ref);
                 else boundReferences.find(reference => reference.ref === event.nativeEvent.ref)?.onOpen?.();

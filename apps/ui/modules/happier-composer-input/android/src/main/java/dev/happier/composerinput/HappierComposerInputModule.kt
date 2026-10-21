@@ -33,7 +33,7 @@ class HappierComposerInputModule : Module() {
       Prop("scrollRestoreToken") { view: HappierComposerInputView, value: String? -> view.setScrollRestoreToken(value) }
       AsyncFunction("focus") { view: HappierComposerInputView -> view.focusEditor() }
       AsyncFunction("blur") { view: HappierComposerInputView -> view.blurEditor() }
-      AsyncFunction("setTextAndSelection") { view: HappierComposerInputView, text: String, selection: Map<String, Int> -> view.editor.setControlledValue(text, selection) }
+      AsyncFunction("setTextAndSelection") { view: HappierComposerInputView, text: String, selection: Map<String, Int>, references: List<Map<String, Any?>> -> view.editor.setTextAndSelection(text, selection, references) }
       AsyncFunction("setSelection") { view: HappierComposerInputView, selection: Map<String, Int> -> view.editor.setSourceSelection(selection) }
       AsyncFunction("offsetAtPoint") { view: HappierComposerInputView, x: Double, y: Double -> view.editor.offsetAtWindowPoint(x.toFloat(), y.toFloat()) }
       AsyncFunction("setDropCaret") { view: HappierComposerInputView, offset: Int? -> view.editor.setDropCaret(offset) }

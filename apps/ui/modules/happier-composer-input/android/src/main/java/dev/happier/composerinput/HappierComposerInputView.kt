@@ -39,7 +39,7 @@ internal class HappierComposerInputView(context: Context, appContext: AppContext
     editor.onComposerChange = { text, selection, eventCount -> onChange(mapOf("text" to text, "selection" to selection, "eventCount" to eventCount, "nativeInputTag" to editor.id, "references" to editor.referenceSnapshots()) + caretPayload()) }
     editor.onComposerSelection = { selection -> onSelection(mapOf("selection" to selection, "nativeInputTag" to editor.id) + caretPayload()) }
     editor.onComposerKey = { event -> onKeyPress(event) }
-    editor.onComposerSubmit = { onSubmitEditing(emptyMap()) }
+    editor.onComposerSubmit = { event -> onSubmitEditing(event) }
     editor.onComposerReference = { ref -> onReferencePress(mapOf("ref" to ref)) }
     editor.onComposerDecoration = { url -> onDecorationPress(mapOf("url" to url)) }
     editor.onComposerAttachmentDrop = { payload -> onAttachmentDrop(payload) }

@@ -15,6 +15,9 @@ import android.view.ContextThemeWrapper
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.TextView
+import com.swmansion.enriched.markdown.spans.ReferenceChipSpan
+import org.json.JSONObject
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.BaseInputConnection
 import androidx.core.view.ContentInfoCompat
@@ -123,10 +126,9 @@ class ComposerEditTextTest {
     return ComposerEditText(context).apply {
       layoutParams = ViewGroup.LayoutParams(600, ViewGroup.LayoutParams.WRAP_CONTENT)
       setTypographyTokens(mapOf("fontSize" to 14, "lineHeight" to 22, "chipHeight" to 20, "chipRadius" to 6, "chipMaxLabelWidth" to 190))
-      setControlledValue(prefix + token + " z")
-      setReferences(listOf(mapOf("start" to prefix.length, "end" to prefix.length + token.length,
-        "ref" to "session:auth", "label" to "Auth", "kind" to "session", "state" to "ready",
-        "marker" to "@Session \"Auth\"", "accessibilityLabel" to "Session, Auth")))
+      setControlledDocument(prefix + token + " z", 0, listOf(mapOf("start" to prefix.length, "end" to prefix.length + token.length,
+        "token" to token, "ref" to "session:auth", "label" to "Auth", "kind" to "session", "state" to "ready",
+        "marker" to "@Session \"Auth\"", "accessibilityLabel" to "Session, Auth")), emptyList())
       measure(View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.AT_MOST))
       layout(0, 0, 600, measuredHeight)
     }
@@ -142,6 +144,81 @@ class ComposerEditTextTest {
     editor.onKeyDown(KeyEvent.KEYCODE_DEL, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL))
     assertEquals(prefix + " z", editor.text.toString())
     assertTrue(editor.referenceSnapshots().isEmpty())
+  }
+
+  @Test fun undoAfterControlledEmptyReferenceEchoRestoresTypedSpanAndRedoRemovesIt() {
+    val editor = editor()
+    editor.setSelection(prefix.length + token.length)
+    repeat(2) { editor.onKeyDown(KeyEvent.KEYCODE_DEL, KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL)) }
+    editor.setControlledDocument(editor.text.toString(), editor.nativeEventCount, emptyList(), emptyList())
+    assertTrue(editor.onKeyShortcut(KeyEvent.KEYCODE_Z,
+      KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Z, 0, KeyEvent.META_CTRL_ON)))
+    assertEquals(prefix + token + " z", editor.text.toString())
+    val span = editor.text!!.getSpans(0, editor.length(), ComposerChipSpan::class.java).single()
+    assertEquals("session:auth", span.reference.ref)
+    assertEquals(listOf(mapOf("ref" to "session:auth", "token" to token, "start" to prefix.length,
+      "end" to prefix.length + token.length)), editor.referenceSnapshots())
+    editor.setSelection(prefix.length, prefix.length + token.length)
+    editor.onTextContextMenuItem(android.R.id.copy)
+    val clipboard = editor.context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    assertEquals("@Session \"Auth\"", clipboard.primaryClip!!.getItemAt(0).text.toString())
+    assertTrue(editor.onKeyShortcut(KeyEvent.KEYCODE_Y,
+      KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_Y, 0, KeyEvent.META_CTRL_ON)))
+    assertEquals(prefix + " z", editor.text.toString())
+    assertTrue(editor.referenceSnapshots().isEmpty())
+    assertTrue(editor.onTextContextMenuItem(android.R.id.undo))
+    editor.setSelection(prefix.length + token.length)
+    editor.onCreateInputConnection(EditorInfo())!!.commitText("!", 1)
+    assertEquals(prefix + token + "! z", editor.text.toString())
+    assertEquals("session:auth", editor.referenceSnapshots().single()["ref"])
+    assertFalse(editor.onTextContextMenuItem(android.R.id.redo))
+  }
+
+  @Test @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun largeChipFitsMeasuredContentWidthAndRemeasuresAfterResize() {
+    val editor = editor()
+    editor.setTypographyTokens(mapOf("fontSize" to 28, "chipHeight" to 40, "chipRadius" to 12,
+      "chipMaxLabelWidth" to 380, "chipPaddingLeft" to 8, "chipPaddingRight" to 12,
+      "chipGlyphSize" to 28, "chipGap" to 8))
+    editor.setControlledDocument(null, editor.nativeEventCount, listOf(mapOf("start" to prefix.length, "end" to prefix.length + token.length,
+      "token" to token, "ref" to "session:auth", "label" to "A very long reference title with enough words to fill a large chip",
+      "accessibilityLabel" to "Full Session reference title")), null)
+    editor.setPadding(16, 0, 24, 0)
+    fun chipWidth(width: Int): Int {
+      editor.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(500, View.MeasureSpec.AT_MOST))
+      editor.layout(0, 0, width, editor.measuredHeight)
+      val span = editor.text!!.getSpans(0, editor.length(), ComposerChipSpan::class.java).single()
+      assertEquals("Full Session reference title", span.contentDescription)
+      return span.getSize(editor.paint, editor.text!!, prefix.length, prefix.length + token.length, null)
+    }
+    val narrow = chipWidth(240)
+    assertTrue("chip width $narrow exceeds content width", narrow <= 200)
+    val wide = chipWidth(500)
+    assertTrue(wide > narrow)
+    assertTrue(wide <= 460)
+    assertEquals(narrow, chipWidth(240))
+  }
+
+  @Test @GraphicsMode(GraphicsMode.Mode.NATIVE)
+  fun transcriptChipFitsRegisteredTextViewWidthAtLargeFontAndAfterResize() {
+    val host = TextView(RuntimeEnvironment.getApplication()).apply {
+      setPadding(8, 0, 8, 0)
+      textSize = 32f
+    }
+    val anatomy = JSONObject().put("baseFontSize", 14).put("height", 20).put("radius", 6)
+      .put("maxLabelWidth", 240).put("paddingLeft", 4).put("paddingRight", 6)
+      .put("glyphSize", 14).put("gap", 4).put("thumbnailRadius", 2)
+    val span = ReferenceChipSpan(host.context,
+      JSONObject().put("label", "A long Session reference title that needs to fit a phone"),
+      JSONObject().put("fontSize", 14).put("anatomy", anatomy))
+    span.registerTextView(host)
+    host.layout(0, 0, 180, 100)
+    val narrow = span.getSize(host.paint, "label", 0, 5, null)
+    assertTrue("transcript chip width $narrow exceeds 164", narrow <= 164)
+    host.layout(0, 0, 300, 100)
+    val wide = span.getSize(host.paint, "label", 0, 5, null)
+    assertTrue(wide > narrow)
+    assertTrue(wide <= 284)
   }
 
   @Test fun softwareKeyboardDeleteAndCodePointDeleteRespectTheSameTwoPressContract() {
@@ -185,10 +262,46 @@ class ComposerEditTextTest {
     editor.setSelection(editor.length())
     connection.setComposingText("に", 1)
     val composing = editor.text.toString()
-    editor.setControlledValue("controlled")
+    editor.setTextAndSelection("controlled", mapOf("start" to 10, "end" to 10), emptyList())
     assertEquals(composing, editor.text.toString())
     connection.finishComposingText()
     assertEquals("controlled", editor.text.toString())
+  }
+
+  @Test fun textSelectionAndRebasedReferencesApplyAsOneCommandAfterComposition() {
+    for (composing in listOf(false, true)) {
+      val editor = editor()
+      editor.setSelection(editor.length())
+      val connection = editor.onCreateInputConnection(EditorInfo())!!
+      if (composing) connection.setComposingText("に", 1)
+      val echoed = editor.text.toString()
+      val count = editor.nativeEventCount
+      val value = "Hi " + prefix + token + " z"
+      val start = 3 + prefix.length
+      val selection = mapOf("start" to 3, "end" to 3)
+      editor.setTextAndSelection(value, selection, listOf(mapOf("start" to start, "end" to start + token.length,
+        "token" to token, "ref" to "session:auth", "label" to "Auth", "marker" to "@Session \"Auth\"")))
+      if (composing) {
+        assertEquals(echoed, editor.text.toString())
+        editor.setControlledDocument(echoed, count, emptyList(), emptyList())
+        connection.finishComposingText()
+      }
+      assertEquals(value, editor.text.toString())
+      assertEquals(selection, editor.sourceSelection())
+      assertEquals(start, editor.referenceSnapshots().single()["start"])
+      editor.setControlledDocument(value, editor.nativeEventCount, listOf(mapOf("start" to start,
+        "end" to start + token.length, "token" to token, "ref" to "session:auth", "label" to "Auth")), emptyList())
+      assertEquals(selection, editor.sourceSelection())
+    }
+  }
+
+  @Test fun controlledBindingWithAnObsoleteTokenDoesNotCreateAChip() {
+    val editor = editor()
+    editor.setControlledDocument(editor.text.toString(), editor.nativeEventCount,
+      listOf(mapOf("start" to prefix.length, "end" to prefix.length + token.length,
+        "token" to "obsolete token", "ref" to "session:auth", "label" to "Auth")), emptyList())
+    assertTrue(editor.referenceSnapshots().isEmpty())
+    assertTrue(editor.text!!.getSpans(0, editor.length(), ComposerChipSpan::class.java).isEmpty())
   }
 
   @Test fun pointMappingUsesWindowCoordinatesAndNeverReturnsChipInterior() {
@@ -238,7 +351,7 @@ class ComposerEditTextTest {
 
   @Test fun controlledAppendKeepsAnUnchangedChipAndPlainTypingDoesNotCreateOne() {
     val editor = editor()
-    editor.setControlledValue(editor.text.toString() + "!")
+    editor.setControlledDocument(editor.text.toString() + "!", editor.nativeEventCount, null, null)
     assertEquals(1, editor.text!!.getSpans(0, editor.length(), ComposerChipSpan::class.java).size)
     editor.setSelection(editor.length())
     editor.onCreateInputConnection(EditorInfo())!!.commitText(" $token", 1)
@@ -289,6 +402,34 @@ class ComposerEditTextTest {
     connection.commitText("\n", 1)
     assertEquals(1, submissions)
     assertEquals(before, editor.text.toString())
+  }
+
+  @Test fun submitProducingEnterReportsOneIntentWithItsModifiers() {
+    val editor = editor()
+    editor.submitBehavior = "submit"
+    val keys = mutableListOf<Map<String, Any>>()
+    val submits = mutableListOf<Map<String, Any>>()
+    editor.onComposerKey = { keys.add(it) }
+    editor.onComposerSubmit = { submits.add(it) }
+    val event = KeyEvent(0, 0, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER, 0, KeyEvent.META_CTRL_ON)
+    assertTrue(editor.dispatchKeyEvent(event))
+    editor.dispatchKeyEvent(KeyEvent.changeAction(event, KeyEvent.ACTION_UP))
+    assertEquals(1, keys.size)
+    assertEquals(true, keys.single()["submitting"])
+    assertEquals(1, submits.size)
+    assertEquals(true, submits.single()["ctrlKey"])
+    keys.clear(); submits.clear()
+    editor.setSelection(editor.length())
+    editor.onCreateInputConnection(EditorInfo())!!.commitText("\n", 1)
+    assertEquals(1, keys.size)
+    assertEquals(true, keys.single()["submitting"])
+    assertEquals(1, submits.size)
+    assertEquals(false, submits.single()["ctrlKey"])
+    keys.clear(); submits.clear()
+    editor.onCreateInputConnection(EditorInfo())!!.performEditorAction(EditorInfo.IME_ACTION_SEND)
+    assertEquals(1, submits.size)
+    assertEquals("Enter", submits.single()["key"])
+    assertTrue(keys.isEmpty())
   }
 
   @Test fun staleControlledEchoCannotReplaceACommittedComposition() {

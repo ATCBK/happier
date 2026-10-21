@@ -37,6 +37,7 @@ internal data class ComposerChipStyle(
   val glyphSize: Float,
   val gap: Float,
   val glyphForeground: Int,
+  val maxWidth: Float,
 )
 
 /** The Editable retains its original UTF-16 characters; only their presentation changes. */
@@ -50,7 +51,10 @@ internal class ComposerChipSpan(
   }
 
   private fun label(paint: Paint): String {
-    return TextUtils.ellipsize(reference.label, TextPaint(paint).apply { typeface = style().typeface }, style().maxLabelWidth, TextUtils.TruncateAt.END).toString()
+    val tokens = style()
+    val chrome = tokens.paddingLeft + tokens.paddingRight + tokens.glyphSize + tokens.gap
+    val available = minOf(tokens.maxLabelWidth, (tokens.maxWidth - chrome).coerceAtLeast(0f))
+    return TextUtils.ellipsize(reference.label, TextPaint(paint).apply { typeface = tokens.typeface }, available, TextUtils.TruncateAt.END).toString()
   }
 
   override fun getSize(paint: Paint, text: CharSequence, start: Int, end: Int, fm: Paint.FontMetricsInt?): Int {
@@ -64,11 +68,15 @@ internal class ComposerChipSpan(
       leading = metrics.leading
     }
     val tokens = style()
-    return ceil(Paint(paint).apply { typeface = tokens.typeface }.measureText(label(paint)) + tokens.paddingLeft + tokens.paddingRight + tokens.glyphSize + tokens.gap).toInt()
+    return minOf(tokens.maxWidth.toInt(), ceil(Paint(paint).apply { typeface = tokens.typeface }.measureText(label(paint)) + tokens.paddingLeft + tokens.paddingRight + tokens.glyphSize + tokens.gap).toInt())
   }
 
   override fun draw(canvas: Canvas, text: CharSequence, start: Int, end: Int, x: Float, top: Int, y: Int, bottom: Int, paint: Paint) {
-    drawQuietInkChip(canvas, paint, label(paint), reference.glyph ?: "", x, y.toFloat(), getSize(paint, text, start, end, null).toFloat(), style(), reference.state, selected())
+    val width = getSize(paint, text, start, end, null).toFloat()
+    val save = canvas.save()
+    canvas.clipRect(x, top.toFloat(), x + width, bottom.toFloat())
+    drawQuietInkChip(canvas, paint, label(paint), reference.glyph ?: "", x, y.toFloat(), width, style(), reference.state, selected())
+    canvas.restoreToCount(save)
   }
 }
 

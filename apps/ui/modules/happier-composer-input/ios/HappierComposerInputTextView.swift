@@ -32,7 +32,7 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
   var onChange: ((String, [String: Int]) -> Void)?
   var onSelection: (([String: Int]) -> Void)?
   var onKeyPress: (([String: Any]) -> Void)?
-  var onSubmitEditing: (() -> Void)?
+  var onSubmitEditing: (([String: Any]) -> Void)?
   var onFocus: (() -> Void)?
   var onBlur: (() -> Void)?
   var onContentHeightChange: ((CGFloat) -> Void)?
@@ -59,12 +59,14 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
   private var decorations: [[String: Any]] = []
   private var theme: [String: String] = [:]
   private var typography: [String: Any] = [:]
-  private var pendingText: String?
-  private var pendingTextEventCount: Int?
-  private var pendingTextIsCommand = false
-  private var pendingSelection: [String: Int]?
-  private var pendingReferences: [[String: Any]]?
-  private var pendingReferencesEventCount: Int?
+  private struct DocumentUpdate {
+    var text: String?
+    var references: [[String: Any]]?
+    var selection: [String: Int]?
+    var acknowledgedEventCount: Int?
+    var isCommand: Bool
+  }
+  private var pendingDocument: DocumentUpdate?
   private var pendingPresentation = false
   private var rendering = false
   private var dropOffset: Int?
@@ -75,6 +77,7 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
   private var pendingScrollRestore = false
   private var hardwareModifiers: UIKeyModifierFlags = []
   private var handlingHardwareKey = false
+  private var measuredChipContainerWidth: CGFloat = -1
 
   override init(frame: CGRect, textContainer: NSTextContainer? = nil) {
     let storage = NSTextStorage()
@@ -94,6 +97,11 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     self.textContainer.widthTracksTextView = true
     font = UIFont.preferredFont(forTextStyle: .body)
     adjustsFontForContentSizeCategory = true
+    if #available(iOS 17.0, *) {
+      registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: HappierComposerTextView, _: UITraitCollection) in
+        view.updatePresentation()
+      }
+    }
     placeholderLabel.isAccessibilityElement = false
     placeholderLabel.numberOfLines = 0
     addSubview(placeholderLabel)
@@ -153,43 +161,58 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     }
     return bounded - delta
   }
-  func setControlledText(_ value: String, eventCount acknowledgedEventCount: Int? = nil) {
-    if let acknowledgedEventCount, acknowledgedEventCount < eventCount { return }
-    if pendingTextIsCommand { return }
-    if markedTextRange != nil { pendingText = value; pendingTextEventCount = acknowledgedEventCount; return }
-    guard value != sourceText else { return }
-    render(value, selection: sourceSelection)
-    lastEmittedText = value
+  func setTextAndSelection(_ value: String, selection: [String: Int], references: [[String: Any]]) {
+    admitDocument(DocumentUpdate(text: value, references: references, selection: selection, isCommand: true))
   }
-  func setTextAndSelection(_ value: String, selection: [String: Int]) {
-    if markedTextRange != nil { pendingText = value; pendingTextIsCommand = true; pendingTextEventCount = nil; pendingSelection = selection; return }
-    if value != sourceText { render(value, selection: selection) } else { setSourceSelection(selection) }
-    lastEmittedText = value
-  }
-  func setReferences(_ value: [[String: Any]], eventCount acknowledgedEventCount: Int? = nil) {
+  func setControlledDocument(value: String? = nil, references: [[String: Any]]? = nil, eventCount acknowledgedEventCount: Int? = nil) {
     if let acknowledgedEventCount, acknowledgedEventCount < eventCount { return }
-    if markedTextRange != nil { pendingReferences = value; pendingReferencesEventCount = acknowledgedEventCount; return }
-    guard !NSArray(array: references).isEqual(to: value) else { return }
-    references = value
+    guard pendingDocument?.isCommand != true else { return }
+    let pending = pendingDocument?.acknowledgedEventCount == acknowledgedEventCount ? pendingDocument : nil
+    admitDocument(DocumentUpdate(text: value ?? pending?.text,
+                                 references: references ?? pending?.references,
+                                 selection: pendingDocument?.selection,
+                                 acknowledgedEventCount: acknowledgedEventCount, isCommand: false))
+  }
+  private func admitDocument(_ update: DocumentUpdate) {
+    if markedTextRange != nil { pendingDocument = update; return }
+    applyDocument(update)
+  }
+  private func applyDocument(_ update: DocumentUpdate) {
+    let value = update.text ?? sourceText
+    let selection = update.selection ?? sourceSelection
+    let referencesChanged = update.references.map { !NSArray(array: references).isEqual(to: $0) } ?? false
+    if let updatedReferences = update.references { references = updatedReferences }
+    if value != sourceText { render(value, selection: selection) }
+    else if referencesChanged { updateReferencePresentation(selection: selection) }
+    else if update.selection != nil { setSourceSelection(selection) }
+    if update.text != nil { lastEmittedText = value }
+  }
+  private func updateReferencePresentation(selection: [String: Int]) {
     let runs = referenceRuns()
     // The document echoes shifted ranges after typing. Keep UIKit's storage/undo in that case.
-    if runs.count == value.count && zip(runs, value).allSatisfy({ run, reference in
+    if runs.count == references.count && zip(runs, references).allSatisfy({ run, reference in
       sourceOffset(forDisplay: run.range.location) == reference["start"] as? Int &&
       sourceOffset(forDisplay: NSMaxRange(run.range)) == reference["end"] as? Int &&
-      run.attachment.reference["ref"] as? String == reference["ref"] as? String
+      run.attachment.reference["ref"] as? String == reference["ref"] as? String &&
+      ((reference["token"] as? String).map { $0 == run.attachment.token } ?? true)
     }) {
-      for (run, reference) in zip(runs, value) {
+      for (run, reference) in zip(runs, references) {
         run.attachment.reference = reference
         drawChip(run.attachment)
         layoutManager.invalidateDisplay(forCharacterRange: run.range)
       }
+      setSourceSelection(selection)
       updateAccessibility()
       return
     }
-    render(sourceText, selection: sourceSelection)
+    render(sourceText, selection: selection)
   }
   func setSourceSelection(_ selection: [String: Int]) {
-    if markedTextRange != nil { pendingSelection = selection; return }
+    if markedTextRange != nil {
+      if pendingDocument != nil { pendingDocument?.selection = selection }
+      else { pendingDocument = DocumentUpdate(selection: selection, isCommand: false) }
+      return
+    }
     let start = selection["start"] ?? 0
     let end = selection["end"] ?? start
     let collapsed = start == end
@@ -235,15 +258,12 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
   override func unmarkText() { super.unmarkText(); flushDeferredUpdates() }
   private func flushDeferredUpdates() {
     guard markedTextRange == nil else { return }
-    let value = pendingTextEventCount.map { $0 < eventCount } == true ? nil : pendingText
-    let selection = pendingSelection
-    let newReferences = pendingReferencesEventCount.map { $0 < eventCount } == true ? nil : pendingReferences
-    pendingText = nil; pendingTextEventCount = nil; pendingTextIsCommand = false; pendingSelection = nil
-    pendingReferences = nil; pendingReferencesEventCount = nil
-    if let newReferences { references = newReferences }
-    if let value { render(value, selection: selection ?? sourceSelection); lastEmittedText = value }
-    else if newReferences != nil { render(sourceText, selection: selection ?? sourceSelection) }
-    else if let selection { setSourceSelection(selection) }
+    let update = pendingDocument
+    pendingDocument = nil
+    if let update {
+      if update.acknowledgedEventCount.map({ $0 < eventCount }) != true { applyDocument(update) }
+      else if let selection = update.selection { setSourceSelection(selection) }
+    }
     if pendingPresentation { pendingPresentation = false; updatePresentation() }
   }
 
@@ -267,9 +287,9 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     if handlingHardwareKey { return true }
     if markedTextRange == nil && text == "\n" {
       if !hardwareModifiers.isEmpty { return true }
-      emitKey("Enter")
+      emitKey("Enter", submitting: submitBehavior != "newline")
       if submitBehavior != "newline" {
-        onSubmitEditing?()
+        onSubmitEditing?(keyPayload("Enter"))
         if submitBehavior == "blurAndSubmit" { resignFirstResponder() }
         return false
       }
@@ -314,11 +334,11 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
       case .keyboardTab: normalized = "Tab"
       default: normalized = key.charactersIgnoringModifiers
       }
-      emitKey(normalized)
+      emitKey(normalized, submitting: normalized == "Enter" && !key.modifierFlags.contains(.shift) && submitBehavior != "newline")
       if normalized == "Enter" {
         if key.modifierFlags.contains(.shift) { super.insertText("\n"); textViewDidChange(self) }
         else if submitBehavior != "newline" {
-          onSubmitEditing?()
+          onSubmitEditing?(keyPayload("Enter"))
           if submitBehavior == "blurAndSubmit" { resignFirstResponder() }
         } else { super.insertText("\n"); textViewDidChange(self) }
         return
@@ -326,9 +346,14 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     }
     super.pressesBegan(presses, with: event)
   }
-  private func emitKey(_ key: String) {
-    onKeyPress?(["key": key, "shiftKey": hardwareModifiers.contains(.shift), "ctrlKey": hardwareModifiers.contains(.control),
-                 "altKey": hardwareModifiers.contains(.alternate), "metaKey": hardwareModifiers.contains(.command)])
+  private func keyPayload(_ key: String) -> [String: Any] {
+    ["key": key, "shiftKey": hardwareModifiers.contains(.shift), "ctrlKey": hardwareModifiers.contains(.control),
+     "altKey": hardwareModifiers.contains(.alternate), "metaKey": hardwareModifiers.contains(.command)]
+  }
+  private func emitKey(_ key: String, submitting: Bool = false) {
+    var payload = keyPayload(key)
+    if submitting { payload["submitting"] = true }
+    onKeyPress?(payload)
   }
   override func copy(_ sender: Any?) {
     guard selectedRange.length > 0 else { return }
@@ -447,6 +472,10 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
   }
   override func layoutSubviews() {
     super.layoutSubviews()
+    if measuredChipContainerWidth != availableChipWidth {
+      measuredChipContainerWidth = availableChipWidth
+      remeasureChips()
+    }
     updatePlaceholder()
     let measured = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height
     let height = max(minimumHeight, measured)
@@ -460,6 +489,7 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
   }
   override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
     super.traitCollectionDidChange(previousTraitCollection)
+    if #available(iOS 17.0, *) { return }
     if previousTraitCollection?.preferredContentSizeCategory != traitCollection.preferredContentSizeCategory { updatePresentation() }
   }
   func setTheme(_ value: [String: String]) { theme = value; updatePresentation() }
@@ -509,7 +539,7 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     placeholderLabel.font = font; placeholderLabel.textColor = ink("placeholder", fallback: .placeholderText)
     textStorage.addAttributes(baseAttributes(), range: fullRange)
     typingAttributes = baseAttributes()
-    for run in referenceRuns() { drawChip(run.attachment) }
+    remeasureChips()
     applyDecorations(); updatePlaceholder(); setNeedsLayout()
   }
   private func updatePlaceholder() {
@@ -546,6 +576,19 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     typingAttributes = baseAttributes()
   }
   /// One CA painter consumes the JS theme/typography owner; no chip has embedded controls.
+  private var availableChipWidth: CGFloat {
+    let viewWidth = max(0, bounds.width - textContainerInset.left - textContainerInset.right)
+    let containerWidth = textContainer.size.width > 0 ? min(viewWidth, textContainer.size.width) : viewWidth
+    return max(0, containerWidth - 2 * textContainer.lineFragmentPadding)
+  }
+  private func remeasureChips() {
+    guard markedTextRange == nil else { pendingPresentation = true; return }
+    for run in referenceRuns() {
+      drawChip(run.attachment)
+      layoutManager.invalidateLayout(forCharacterRange: run.range, actualCharacterRange: nil)
+      layoutManager.invalidateDisplay(forCharacterRange: run.range)
+    }
+  }
   private func drawChip(_ attachment: ComposerReferenceAttachment) {
     let font = self.font ?? UIFont.preferredFont(forTextStyle: .body)
     let scale = UIFontMetrics(forTextStyle: .body).scaledValue(for: 1, compatibleWith: traitCollection)
@@ -561,8 +604,10 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     let foreground = ink("chipForeground")
     let chipFont = (typography["chipFontFamily"] as? String).flatMap { UIFont(name: $0, size: font.pointSize) } ?? font
     let attributes: [NSAttributedString.Key: Any] = [.font: chipFont, .foregroundColor: foreground, .paragraphStyle: paragraph]
-    let labelWidth = min(maxLabel, ceil((label as NSString).size(withAttributes: attributes).width))
-    let width = inset + rightInset + glyphSize + gap + labelWidth
+    let chromeWidth = inset + rightInset + glyphSize + gap
+    let labelWidth = min(maxLabel, max(0, availableChipWidth - chromeWidth), ceil((label as NSString).size(withAttributes: attributes).width))
+    let width = min(availableChipWidth, chromeWidth + labelWidth)
+    guard width > 0, height > 0 else { attachment.image = nil; attachment.bounds = .zero; return }
     let state = attachment.reference["state"] as? String
     let opacity: CGFloat = state == "pending" || state == "removed" || state == "unavailable" ? 0.55 : 1
     let image = (attachment.reference["glyph"] as? String).flatMap { UIImage(systemName: $0) }

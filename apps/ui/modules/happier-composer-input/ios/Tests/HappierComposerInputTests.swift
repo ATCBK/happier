@@ -42,12 +42,11 @@ final class HappierComposerInputTests: XCTestCase {
   private func makeInput(prefix: String = "😀 ", suffix: String = " done") -> HappierComposerTextView {
     let input = HappierComposerTextView(frame: CGRect(x: 0, y: 0, width: 320, height: 120))
     let start = (prefix as NSString).length
-    input.setReferences([[
+    input.setControlledDocument(value: prefix + token + suffix, references: [[
       "start": start, "end": start + (token as NSString).length,
       "ref": "session:auth", "kind": "session", "label": "Auth", "state": "ready",
       "marker": "@Session \"Auth\"", "accessibilityLabel": "Session, Auth",
     ]])
-    input.setControlledText(prefix + token + suffix)
     return input
   }
 
@@ -93,10 +92,21 @@ final class HappierComposerInputTests: XCTestCase {
     input.selectedRange = NSRange(location: 1, length: 0)
     input.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
     XCTAssertNotNil(input.markedTextRange)
-    input.setControlledText("external")
+    input.setControlledDocument(value: "external")
     XCTAssertTrue(input.sourceText.contains("に"))
     input.unmarkText()
     XCTAssertEqual(input.sourceText, "external")
+  }
+
+  func testSelectionRestoreDuringMarkedTextKeepsThePendingControlledDocument() {
+    let input = makeInput(prefix: "", suffix: "")
+    input.selectedRange = NSRange(location: 1, length: 0)
+    input.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+    input.setControlledDocument(value: "external", references: [], eventCount: input.eventCount)
+    input.setSourceSelection(["start": 4, "end": 4])
+    input.unmarkText()
+    XCTAssertEqual(input.sourceText, "external")
+    XCTAssertEqual(input.sourceSelection, ["start": 4, "end": 4])
   }
 
   func testStaleControlledCompositionEchoCannotRestoreAnEarlierMarkedValue() {
@@ -105,11 +115,12 @@ final class HappierComposerInputTests: XCTestCase {
     input.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
     let intermediate = input.sourceText
     let acknowledgedEvent = input.eventCount
-    input.setControlledText(intermediate, eventCount: acknowledgedEvent)
+    input.setControlledDocument(value: intermediate, references: [], eventCount: acknowledgedEvent)
     input.setMarkedText("日本", selectedRange: NSRange(location: 2, length: 0))
     input.unmarkText()
     XCTAssertEqual(input.sourceText, token + "日本")
-    input.setControlledText(intermediate, eventCount: acknowledgedEvent)
+    XCTAssertEqual(input.referenceSnapshots().count, 1)
+    input.setControlledDocument(value: intermediate, eventCount: acknowledgedEvent)
     XCTAssertEqual(input.sourceText, token + "日本")
   }
 
@@ -117,17 +128,109 @@ final class HappierComposerInputTests: XCTestCase {
     let input = makeInput()
     input.selectedRange = NSRange(location: 4, length: 0)
     input.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
-    input.setTextAndSelection("New draft", selection: ["start": 4, "end": 4])
+    input.setTextAndSelection("New draft", selection: ["start": 4, "end": 4], references: [])
     XCTAssertTrue(input.sourceText.contains("に"))
     input.unmarkText()
     XCTAssertEqual(input.sourceText, "New draft")
     XCTAssertEqual(input.sourceSelection, ["start": 4, "end": 4])
   }
 
+  func testProgrammaticPrefixKeepsRequestedCaretBeforeRebasedChipAfterControlledEcho() {
+    for composing in [false, true] {
+      let input = makeInput(prefix: "", suffix: "")
+      if composing {
+        input.selectedRange = NSRange(location: 1, length: 0)
+        input.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+      }
+      let shifted: [[String: Any]] = [["start": 3, "end": 3 + (token as NSString).length,
+                                      "ref": "session:auth", "label": "Auth", "token": token]]
+      input.setTextAndSelection("Hi " + token, selection: ["start": 3, "end": 3], references: shifted)
+      if composing {
+        input.setControlledDocument(value: token, references: [], eventCount: input.eventCount)
+        input.unmarkText()
+      }
+      XCTAssertEqual(input.sourceSelection, ["start": 3, "end": 3], "before echo, composing=\(composing)")
+      input.setControlledDocument(value: "Hi " + token, references: shifted, eventCount: input.eventCount)
+      XCTAssertEqual(input.text, "Hi \u{fffc}", "composing=\(composing)")
+      XCTAssertEqual(input.sourceSelection, ["start": 3, "end": 3], "composing=\(composing)")
+    }
+  }
+
+  func testControlledDocumentAppliesTextAndBindingsTogetherImmediatelyAndAfterMarkedText() {
+    for composing in [false, true] {
+      let input = makeInput(prefix: "", suffix: "")
+      input.setSourceSelection(["start": 0, "end": 0])
+      if composing {
+        input.selectedRange = NSRange(location: 1, length: 0)
+        input.setMarkedText("に", selectedRange: NSRange(location: 1, length: 0))
+      }
+      input.setControlledDocument(value: "Hi " + token,
+                                  references: [["start": 3, "end": 3 + (token as NSString).length,
+                                                "ref": "session:auth", "label": "Auth", "token": token]],
+                                  eventCount: input.eventCount)
+      if composing { input.unmarkText() }
+      XCTAssertEqual(input.text, "Hi \u{fffc}")
+      XCTAssertEqual(input.referenceSnapshots().first?["token"] as? String, token)
+      XCTAssertEqual(input.referenceSnapshots().first?["start"] as? Int, 3)
+    }
+  }
+
+  func testLargeTextChipFitsPaddedContainerAndRemeasuresAfterRotationAndDynamicType() throws {
+    guard #available(iOS 17.0, *) else { throw XCTSkip("Trait overrides require iOS 17") }
+    let input = makeInput(prefix: "", suffix: "")
+    let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 640, height: 400))
+    window.addSubview(input)
+    let label = String(repeating: "Long session title ", count: 12)
+    input.setControlledDocument(references: [["start": 0, "end": (token as NSString).length, "ref": "session:auth",
+                          "label": label, "accessibilityLabel": "Session, " + label]])
+    input.setTypography(["fontSize": 28.0, "chipHeight": 40.0, "chipRadius": 12.0,
+                         "chipPaddingLeft": 8.0, "chipPaddingRight": 12.0, "chipGlyphSize": 28.0,
+                         "chipGap": 8.0, "chipMaxLabelWidth": 380.0])
+    input.setPadding(["left": 12, "right": 16])
+    input.textContainer.lineFragmentPadding = 5
+    input.layoutIfNeeded()
+    let attachment = try XCTUnwrap(input.textStorage.attribute(.attachment, at: 0, effectiveRange: nil) as? NSTextAttachment)
+    let narrowWidth = attachment.bounds.width
+    XCTAssertLessThanOrEqual(narrowWidth, input.bounds.width - 12 - 16 - 10)
+    input.frame.size.width = 640
+    input.setNeedsLayout()
+    input.layoutIfNeeded()
+    XCTAssertGreaterThan(attachment.bounds.width, narrowWidth)
+    XCTAssertLessThanOrEqual(attachment.bounds.width, 640 - 12 - 16 - 10)
+    let regularHeight = attachment.bounds.height
+    input.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+    input.updateTraitsIfNeeded()
+    XCTAssertEqual(input.traitCollection.preferredContentSizeCategory, .accessibilityExtraExtraExtraLarge)
+    input.layoutIfNeeded()
+    XCTAssertGreaterThan(attachment.bounds.height, regularHeight)
+    XCTAssertLessThanOrEqual(attachment.bounds.width, 640 - 12 - 16 - 10)
+    XCTAssertEqual(input.accessibleReferenceElements.first?.accessibilityLabel, "Session, " + label)
+  }
+
+  func testSubmitEnterMarksKeyAndCarriesModifiersInOneSubmitPayload() {
+    let input = makeInput(prefix: "", suffix: "")
+    input.submitBehavior = "submit"
+    var keyPayloads: [[String: Any]] = []
+    var submits: [[String: Any]] = []
+    input.onKeyPress = { keyPayloads.append($0) }
+    input.onSubmitEditing = { submits.append($0) }
+    XCTAssertFalse(input.textView(input, shouldChangeTextIn: NSRange(location: 1, length: 0), replacementText: "\n"))
+    XCTAssertEqual(keyPayloads.count, 1)
+    XCTAssertEqual(keyPayloads.first?["key"] as? String, "Enter")
+    XCTAssertEqual(keyPayloads.first?["submitting"] as? Bool, true)
+    XCTAssertEqual(submits.count, 1)
+    XCTAssertEqual(submits.first?["key"] as? String, "Enter")
+    for modifier in ["shiftKey", "ctrlKey", "altKey", "metaKey"] { XCTAssertEqual(submits.first?[modifier] as? Bool, false) }
+    input.submitBehavior = "newline"
+    XCTAssertTrue(input.textView(input, shouldChangeTextIn: NSRange(location: 1, length: 0), replacementText: "\n"))
+    XCTAssertNil(keyPayloads.last?["submitting"])
+    XCTAssertEqual(submits.count, 1)
+  }
+
   func testAdjacentChipsCRLFAndEmojiRemainInOneSourceOffsetSpace() {
     let input = makeInput(prefix: "", suffix: token + "\r\n😀")
     let length = (token as NSString).length
-    input.setReferences([
+    input.setControlledDocument(references: [
       ["start": 0, "end": length, "ref": "session:auth", "label": "Auth"],
       ["start": length, "end": length * 2, "ref": "session:auth", "label": "Auth"],
     ])
@@ -144,12 +247,22 @@ final class HappierComposerInputTests: XCTestCase {
     let attachment = input.textStorage.attribute(.attachment, at: 3, effectiveRange: nil) as? NSTextAttachment
     input.selectedRange = NSRange(location: 0, length: 0)
     input.insertText("Hi ")
-    input.setReferences([["start": 6, "end": 6 + (token as NSString).length,
+    input.setControlledDocument(references: [["start": 6, "end": 6 + (token as NSString).length,
                           "ref": "session:auth", "label": "Updated"]])
     let retained = input.textStorage.attribute(.attachment, at: 6, effectiveRange: nil) as? NSTextAttachment
     XCTAssertTrue(attachment === retained)
     input.undoManager?.undo()
     XCTAssertEqual(input.sourceText, "😀 " + token + " done")
+  }
+
+  func testControlledBindingWithMismatchedTokenCannotRetainAnOldAttachment() {
+    let input = makeInput(prefix: "", suffix: "")
+    input.setControlledDocument(references: [["start": 0, "end": (token as NSString).length,
+                                             "ref": "session:auth", "label": "Work",
+                                             "token": token.replacingOccurrences(of: "[Auth]", with: "[Work]")]])
+    XCTAssertEqual(input.sourceText, token)
+    XCTAssertEqual(input.text, token)
+    XCTAssertTrue(input.referenceSnapshots().isEmpty)
   }
 
   func testPlainClipboardProjectionDoesNotRebuildChipsOnPaste() {
@@ -160,8 +273,7 @@ final class HappierComposerInputTests: XCTestCase {
     input.selectedRange = NSRange(location: 0, length: 1)
     input.copy(nil)
     XCTAssertEqual(clipboard, "@Session \"Auth\"")
-    input.setReferences([])
-    input.setControlledText("")
+    input.setControlledDocument(value: "", references: [])
     clipboard = token
     input.paste(nil)
     XCTAssertEqual(input.sourceText, token)

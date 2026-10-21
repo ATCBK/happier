@@ -11,6 +11,7 @@ export type NativeComposerAttachmentDrop = Readonly<{
 }>;
 
 export type ComposerInputReference = Readonly<{
+    token: string;
     start: number;
     end: number;
     ref: string;
@@ -31,7 +32,7 @@ type NativeBoundReference = Readonly<{ ref: string; token: string; start: number
 export type NativeComposerInputHandle = Readonly<{
     focus: () => void;
     blur: () => void;
-    setTextAndSelection: (text: string, selection: Selection) => void;
+    setTextAndSelection: (text: string, selection: Selection, references: readonly ComposerInputReference[]) => void;
     setSelection: (selection: Selection) => void;
     offsetAtPoint: (x: number, y: number) => Promise<number | null>;
     setDropCaret: (offset: number | null) => void;
@@ -70,10 +71,10 @@ export type NativeComposerInputProps = Omit<ViewProps, 'onFocus' | 'onBlur'> & R
     onAttachmentDrop: (event: NativeSyntheticEvent<NativeComposerAttachmentDrop & Readonly<{ scope: string }>>) => void;
     onChange: (event: NativeSyntheticEvent<NativeInputGeometry & Readonly<{ text: string; selection: Selection; eventCount: number; references: readonly NativeBoundReference[] }>>) => void;
     onSelection: (event: NativeSyntheticEvent<NativeInputGeometry & Readonly<{ selection: Selection }>>) => void;
-    onKeyPress: (event: NativeSyntheticEvent<KeyboardKeyPressEventInput>) => void;
+    onKeyPress: (event: NativeSyntheticEvent<KeyboardKeyPressEventInput & Readonly<{ submitting?: boolean }>>) => void;
     onFocus: (event?: NativeSyntheticEvent<NativeInputGeometry>) => void;
     onBlur?: () => void;
-    onSubmitEditing?: () => void;
+    onSubmitEditing?: (event?: NativeSyntheticEvent<KeyboardKeyPressEventInput>) => void;
     onContentHeightChange: (event: NativeSyntheticEvent<Readonly<{ height: number }>>) => void;
     onScroll: (event: NativeSyntheticEvent<NativeInputGeometry & Readonly<{ y: number }>>) => void;
     onReferencePress?: (event: NativeSyntheticEvent<Readonly<{ ref: string }>>) => void;

@@ -38,7 +38,7 @@ final class HappierComposerInputView: ExpoView {
       self.onSelection(self.withCaret(["selection": selection]))
     }
     input.onKeyPress = { [weak self] payload in self?.onKeyPress(payload) }
-    input.onSubmitEditing = { [weak self] in self?.onSubmitEditing([:]) }
+    input.onSubmitEditing = { [weak self] payload in self?.onSubmitEditing(payload) }
     input.onFocus = { [weak self] in
       guard let self else { return }
       self.onFocus(self.withCaret([:]))
@@ -61,8 +61,7 @@ final class HappierComposerInputView: ExpoView {
     pendingValue = nil; pendingReferences = nil; pendingDecorations = nil
     guard mostRecentEventCount >= input.eventCount else { return }
     applyingControlledProps = true
-    if let value { input.setControlledText(value, eventCount: mostRecentEventCount) }
-    if let references { input.setReferences(references, eventCount: mostRecentEventCount) }
+    input.setControlledDocument(value: value, references: references, eventCount: mostRecentEventCount)
     if let decorations { input.setDecorations(decorations) }
     applyingControlledProps = false
     if value != nil || references != nil { onSelection(withCaret(["selection": input.sourceSelection])) }

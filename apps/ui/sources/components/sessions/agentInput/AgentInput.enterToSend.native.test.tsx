@@ -8,7 +8,8 @@ import {
 } from '@happier-dev/protocol';
 
 import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen } from '@/dev/testkit';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from '@/components/ui/forms/largeTextInputPolicy';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
@@ -168,18 +169,10 @@ vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
     PermissionFooter: () => null,
 }));
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Text', props, props.children),
-    TextInput: React.forwardRef((props: Record<string, unknown>, ref) => {
-        React.useImperativeHandle(ref, () => ({
-            blur: mocks.inputBlur,
-            focus: mocks.inputFocus,
-            setNativeProps: () => {},
-        }));
-        return React.createElement('TextInput', props, null);
-    }),
-}));
+vi.mock('@/components/ui/text/Text', async () => {
+    const { createUiTextModuleMock } = await import('@/dev/testkit/mocks/uiText');
+    return createUiTextModuleMock();
+});
 
 vi.mock('@/components/ui/forms/Switch', () => ({
     Switch: (props: Record<string, unknown>) => React.createElement('Switch', props, null),
@@ -259,24 +252,19 @@ vi.mock('./subscribeToIosHardwareShiftEnter', () => ({
 
 const { AgentInput } = await import('./AgentInput');
 
-function findNativeTextInput(screen: Awaited<ReturnType<typeof renderScreen>>) {
-    const nodes = screen.findAll((node) => (node.type as any) === 'TextInput');
-    expect(nodes.length).toBe(1);
-    return nodes[0]!;
+function renderScreen(element: React.ReactElement) {
+    return renderTestScreen(element, {
+        createNodeMock: node => node.type === 'HappierComposerInput' ? {
+            focus: mocks.inputFocus, blur: mocks.inputBlur,
+            setTextAndSelection: () => {}, setSelection: () => {},
+        } : null,
+    });
 }
 
-function flattenStyle(style: unknown): Record<string, unknown> {
-    if (!style) return {};
-    if (Array.isArray(style)) {
-        return style.reduce<Record<string, unknown>>((merged, entry) => ({
-            ...merged,
-            ...flattenStyle(entry),
-        }), {});
-    }
-    if (typeof style === 'object') {
-        return style as Record<string, unknown>;
-    }
-    return {};
+function findNativeTextInput(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    const nodes = screen.findAll((node) => node.type === 'HappierComposerInput');
+    expect(nodes.length).toBe(1);
+    return nodes[0]!;
 }
 
 // Module transform is paid once, outside any single case's time budget.
@@ -326,8 +314,8 @@ describe('AgentInput (enter to send on native)', () => {
             />,
         );
 
-        expect(flattenStyle(findNativeTextInput(existingSessionScreen).props.style).fontSize).toBe(16);
-        expect(flattenStyle(findNativeTextInput(newSessionScreen).props.style).fontSize).toBe(16);
+        expect(findNativeTextInput(existingSessionScreen).props.typography.fontSize).toBe(16);
+        expect(findNativeTextInput(newSessionScreen).props.typography.fontSize).toBe(16);
     });
 
     it('keeps slash autocomplete active when focusing a large native input with an active trigger', async () => {
@@ -649,8 +637,12 @@ describe('AgentInput (enter to send on native)', () => {
         });
         mocks.activeSuggestions = [];
         mocks.activeSuggestionIndex = -1;
+        const insertedText = formatInlineReferenceTokenV1({ label: 'GitHub', ref: buildMentionRefForKindV1(MENTION_KIND_V1.vendorPlugin, 'github') }) + ' ';
+        await screen.update(<AgentInput sessionId="session-1" value={insertedText} onChangeText={mocks.onChangeText}
+            placeholder="p" onSend={mocks.onSend} autocompleteKinds={['file', 'vendorPlugin']}
+            autocompleteSuggestions={async () => mocks.activeSuggestions} />);
         await act(async () => {
-            input.props.onSubmitEditing?.();
+            findNativeTextInput(screen).props.onSubmitEditing?.();
         });
 
         expect(mocks.onSend).toHaveBeenCalledWith({
@@ -660,7 +652,7 @@ describe('AgentInput (enter to send on native)', () => {
                     mentions: [{
                         kind: MENTION_KIND_V1.vendorPlugin,
                         ref: buildMentionRefForKindV1(MENTION_KIND_V1.vendorPlugin, 'github'),
-                        token: '@github',
+                        token: formatInlineReferenceTokenV1({ label: 'GitHub', ref: buildMentionRefForKindV1(MENTION_KIND_V1.vendorPlugin, 'github') }),
                         label: 'GitHub',
                     }],
                     vendorPluginMentions: [{
@@ -729,6 +721,35 @@ describe('AgentInput (enter to send on native)', () => {
         expect(mocks.onSend).toHaveBeenCalledTimes(1);
     });
 
+    it('handles one physical Enter as one submit intent through the native key and submit sequence', async () => {
+        settingState.nativeEnterToSend = true;
+        const screen = await renderScreen(<AgentInput value="hello" onChangeText={mocks.onChangeText}
+            placeholder="p" onSend={mocks.onSend} autocompleteKinds={[]} autocompleteSuggestions={async () => []} />);
+        const input = findNativeTextInput(screen);
+        await act(async () => {
+            input.props.onKeyPress({ nativeEvent: { key: 'Enter', submitting: true } });
+            input.props.onSubmitEditing({ nativeEvent: { key: 'Enter' } });
+        });
+        expect(mocks.onSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('consumes picker Enter without a newline or send when native Enter-to-send is disabled', async () => {
+        mocks.activeSuggestions = [{ kind: 'slashCommand', key: 'cmd-qa', text: '/qa', label: '/qa' }];
+        mocks.activeSuggestionIndex = 0;
+        const screen = await renderScreen(<AgentInput value="/qa" onChangeText={mocks.onChangeText}
+            placeholder="p" onSend={mocks.onSend} autocompleteKinds={['slashCommand']}
+            autocompleteSuggestions={async () => mocks.activeSuggestions} />);
+        const input = findNativeTextInput(screen);
+        expect(input.props.submitBehavior).toBe('submit');
+        await act(async () => {
+            input.props.onKeyPress({ nativeEvent: { key: 'Enter', submitting: true } });
+            input.props.onSubmitEditing({ nativeEvent: { key: 'Enter' } });
+        });
+        expect(mocks.onChangeText).toHaveBeenCalledWith('/qa');
+        expect(mocks.onChangeText).not.toHaveBeenCalledWith('/qa\n');
+        expect(mocks.onSend).not.toHaveBeenCalled();
+    });
+
     it('blurs the existing-session composer when native Enter sends', async () => {
         settingState.webEnterToSend = false;
         settingState.nativeEnterToSend = true;
@@ -779,7 +800,7 @@ describe('AgentInput (enter to send on native)', () => {
         const input = findNativeTextInput(screen);
 
         await act(async () => {
-            input.props.onSelectionChange?.({
+            input.props.onSelection?.({
                 nativeEvent: {
                     selection: { start: 5, end: 5 },
                 },
@@ -822,7 +843,7 @@ describe('AgentInput (enter to send on native)', () => {
         expect(input.props.submitBehavior).toBe('newline');
 
         await act(async () => {
-            input.props.onSelectionChange?.({ nativeEvent: { selection: { start: 5, end: 5 } } });
+            input.props.onSelection?.({ nativeEvent: { selection: { start: 5, end: 5 } } });
             input.props.onFocus?.({ nativeEvent: {} });
         });
         // No hardware Shift+Enter interception: Enter is already a newline.

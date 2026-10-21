@@ -117,7 +117,7 @@ describe('MultiTextInput native composer boundary', () => {
             onChangeText={() => {}} accessibilityLabel="Message" accessibilityRole="combobox" accessibilityState={{ expanded: true }} />);
         const view = screen.tree.findByType('HappierComposerInput');
         expect(view.props.value).toBe(text);
-        expect(view.props.references).toEqual(references.map(({ token: _token, ...reference }) => ({ ...reference, glyph: 'photo' })));
+        expect(view.props.references).toEqual(references.map(reference => ({ ...reference, glyph: 'photo' })));
         expect(view.props.decorations).toEqual(decorations);
         expect(view.props.accessibilityLabel).toBe('Message');
         expect(view.props.accessibilityRole).toBe('combobox');
@@ -135,7 +135,7 @@ describe('MultiTextInput native composer boundary', () => {
         }];
         const screen = await renderScreen(<MultiTextInput value={references[0].token} references={references} onChangeText={() => {}} />);
         expect(screen.tree.findByType('HappierComposerInput').props.references).toEqual([{
-            start: 0, end: token.length, ref: 'session:auth', label: 'Auth', kind: 'happier.session', marker: '@Session "Auth"', glyph: 'bubble.left',
+            token, start: 0, end: token.length, ref: 'session:auth', label: 'Auth', kind: 'happier.session', marker: '@Session "Auth"', glyph: 'bubble.left',
         }]);
     });
 
@@ -192,14 +192,34 @@ describe('MultiTextInput native composer boundary', () => {
         });
         act(() => ref.current?.setTextAndSelection('hello world', { start: 11, end: 11 }));
         expect(ref.current?.getText()).toBe('hello world');
-        expect(native.setTextAndSelection).toHaveBeenCalledWith('hello world', { start: 11, end: 11 });
+        expect(native.setTextAndSelection).toHaveBeenCalledWith('hello world', { start: 11, end: 11 }, []);
         expect(onStateChange).toHaveBeenLastCalledWith({ text: 'hello world', selection: { start: 11, end: 11 } });
+    });
+
+    it('rebases existing typed references with the text and caret in one native command', async () => {
+        const { MultiTextInput } = await import('./MultiTextInput');
+        const token = formatInlineReferenceTokenV1({ ref: 'session:auth', label: 'Auth' });
+        const reference = { ref: 'session:auth', token, start: 0, end: token.length, kind: 'session', label: 'Auth', binding: { id: 'auth' } };
+        const ref = React.createRef<MultiTextInputHandle>();
+        const native = { setTextAndSelection: vi.fn(), setSelection: vi.fn() };
+        const onReferencesChange = vi.fn();
+        await renderScreen(<MultiTextInput ref={ref} value={token} references={[reference]}
+            onChangeText={() => {}} onReferencesChange={onReferencesChange} />, {
+            createNodeMock: element => element.type === 'HappierComposerInput' ? native : null,
+        });
+        act(() => ref.current?.setSelection({ start: 0, end: 0 }));
+        act(() => ref.current?.setTextAndSelection(`Hi ${token}`, { start: 3, end: 3 }));
+        expect(native.setTextAndSelection).toHaveBeenLastCalledWith(`Hi ${token}`, { start: 3, end: 3 }, [
+            expect.objectContaining({ ref: reference.ref, start: 3, end: token.length + 3 }),
+        ]);
+        expect(onReferencesChange).toHaveBeenLastCalledWith([{ ...reference, start: 3, end: token.length + 3 }]);
+        expect(onReferencesChange.mock.calls.at(-1)?.[0][0].binding).toBe(reference.binding);
     });
 
     it('notifies measured height once and preserves native focus, scroll, submit and keyboard events', async () => {
         const { MultiTextInput } = await import('./MultiTextInput');
         const onContentHeightChange = vi.fn(), onScrollYChange = vi.fn(), onFocus = vi.fn(), onBlur = vi.fn();
-        const onSubmitEditing = vi.fn(), onKeyPress = vi.fn(() => true);
+        const onSubmitEditing = vi.fn(), onKeyPress = vi.fn(() => false);
         const screen = await renderScreen(<MultiTextInput value="hello" onChangeText={() => {}}
             maxHeight={144} initialScrollY={25} scrollRestoreToken="draft-a" submitBehavior="submit"
             onContentHeightChange={onContentHeightChange} onScrollYChange={onScrollYChange}

@@ -42,8 +42,8 @@ public final class HappierComposerInputModule: Module {
       OnViewDidUpdateProps { (view: HappierComposerInputView) in view.applyControlledProps() }
       AsyncFunction("focus") { (view: HappierComposerInputView) in view.input.becomeFirstResponder() }
       AsyncFunction("blur") { (view: HappierComposerInputView) in view.input.resignFirstResponder() }
-      AsyncFunction("setTextAndSelection") { (view: HappierComposerInputView, text: String, selection: [String: Int]) in
-        view.input.setTextAndSelection(text, selection: selection)
+      AsyncFunction("setTextAndSelection") { (view: HappierComposerInputView, text: String, selection: [String: Int], references: [[String: Any]]) in
+        view.input.setTextAndSelection(text, selection: selection, references: references)
       }
       AsyncFunction("setSelection") { (view: HappierComposerInputView, selection: [String: Int]) in view.input.setSourceSelection(selection) }
       AsyncFunction("offsetAtPoint") { (view: HappierComposerInputView, x: Double, y: Double) -> Int? in
