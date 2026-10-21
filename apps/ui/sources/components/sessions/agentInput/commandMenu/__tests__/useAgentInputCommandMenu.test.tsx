@@ -131,4 +131,58 @@ describe('useAgentInputCommandMenu', () => {
         }));
         expect(getCurrent().commandMenuOpen).toBe(true);
     });
+
+    describe('reference picker', () => {
+        const references = [
+            { kind: 'file' as const, key: 'f1', text: '@a.ts', label: 'a.ts' },
+            { kind: 'session' as const, key: 's1', text: '@s1', label: 'Relay retry' },
+            { kind: 'file' as const, key: 'f2', text: '@b.ts', label: 'b.ts' },
+        ];
+        const referenceArgs = (overrides: Partial<HookArgs> = {}): HookArgs => buildDefaultArgs({
+            suggestions: references, selected: 0, activeWord: '@', activeWordRange: { start: 4, end: 5 }, inputTextLength: 5,
+            kindTabs: ['file', 'session'], settledEmpty: true, emptyStateWhenResolved: true, ...overrides,
+        });
+
+        it('cycles the kind tabs and shows only that kind, keeping each row selectable by its own index', async () => {
+            const handleSuggestionSelect = vi.fn();
+            const hook = await renderHook((props: HookArgs) => useAgentInputCommandMenu(props), { initialProps: referenceArgs({ handleSuggestionSelect }) });
+            expect(hook.getCurrent().kindTab).toBeNull();
+            expect(hook.getCurrent().items.map((item) => item.id)).toHaveLength(3);
+            await act(async () => hook.getCurrent().cycleKindTab());
+            expect(hook.getCurrent().kindTab).toBe('file');
+            expect(hook.getCurrent().items.map((item) => item.label)).toEqual(['a.ts', 'b.ts']);
+            await act(async () => hook.getCurrent().moveDown());
+            expect(hook.getCurrent().selectedIndex).toBe(1);
+            await act(async () => hook.getCurrent().onSelectFromMenu());
+            // b.ts is the third suggestion of the whole list.
+            expect(handleSuggestionSelect).toHaveBeenCalledWith(2);
+            await act(async () => hook.getCurrent().cycleKindTab());
+            expect(hook.getCurrent().kindTab).toBe('session');
+            await act(async () => hook.getCurrent().cycleKindTab());
+            expect(hook.getCurrent().kindTab).toBeNull();
+        });
+
+        it('stays open on a settled empty answer to show its empty state, and holds no keys but Escape', async () => {
+            const hook = await renderHook((props: HookArgs) => useAgentInputCommandMenu(props), {
+                initialProps: referenceArgs({ suggestions: [], settledEmpty: false, activeWord: '@zebra', activeWordRange: { start: 4, end: 10 } }),
+            });
+            expect(hook.getCurrent().commandMenuOpen).toBe(false);
+            await hook.rerender(referenceArgs({ suggestions: [], settledEmpty: true, activeWord: '@zebra', activeWordRange: { start: 4, end: 10 } }));
+            expect(hook.getCurrent().commandMenuOpen).toBe(true);
+            expect(hook.getCurrent().showsEmptyState).toBe(true);
+            expect(hook.getCurrent().selectable).toBe(false);
+            // A slash command list keeps today's rule: no rows, no menu.
+            await hook.rerender(buildDefaultArgs({ suggestions: [], settledEmpty: true }));
+            expect(hook.getCurrent().commandMenuOpen).toBe(false);
+        });
+
+        it('starts a new trigger on All', async () => {
+            const hook = await renderHook((props: HookArgs) => useAgentInputCommandMenu(props), { initialProps: referenceArgs() });
+            await act(async () => hook.getCurrent().cycleKindTab());
+            expect(hook.getCurrent().kindTab).toBe('file');
+            await hook.rerender(referenceArgs({ activeWordRange: { start: 12, end: 13 }, inputTextLength: 13 }));
+            expect(hook.getCurrent().kindTab).toBeNull();
+        });
+    });
 });
+

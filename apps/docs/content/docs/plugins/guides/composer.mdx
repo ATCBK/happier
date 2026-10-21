@@ -154,6 +154,20 @@ author-owned bundler configuration.
 `search` and `resolve` receive the host's `AbortSignal`. Honour it: the person
 keeps typing and the host retires the previous query.
 
+### Inline reference chips (0.3 development)
+
+In unreleased 0.3 source, selecting a contributed reference inserts an atomic
+chip at the caret. A drop inserts it at the drop caret; **Mention in composer**
+uses the same insertion owner. The host stores an inline token in the text and
+its identity in the existing typed reference record. Pasting token-shaped text
+does not create a reference. Let the host build and position the reference;
+plain text alone supplies no binding.
+
+Sent messages draw bound references inline. The Agent receives a readable
+marker at that position and the resolved context in one reference block.
+Repeated mentions reuse the same context entry. The resolver still owns
+send-time context; a chip label is display text, not authority or stored context.
+
 ## Read the mounted draft
 
 From a mounted surface, `useComposer()` returns the Composer facade and
@@ -203,6 +217,49 @@ export function TicketContext() {
 this mount. `active()` and an exact `get(ref)` remain available on generic
 mounts. Always pass the `expectedRevision` you read: the host rejects an apply
 built on a stale draft instead of silently overwriting the person's edits.
+
+### Attach and mention in one transaction
+
+In unreleased 0.3, `attachment.add` accepts an optional `mentionAt` range in
+the snapshot's text offsets. The host mints the attachment instance identity,
+then replaces that range with a bound chip in the same transaction. Use a
+collapsed range at the caret to insert without replacing text:
+
+```ts
+const read = await composer.read();
+if (read.status === 'ready') {
+  const snapshot = read.snapshot;
+  const caret = snapshot.selection?.end ?? snapshot.text.length;
+  await composer.apply({
+    expectedRevision: snapshot.revision,
+    operations: [{
+      kind: 'attachment.add',
+      attachmentLocalId: 'ticket',
+      value: {
+        key: 'ticket:T-1',
+        value: { ticketId: 'T-1' },
+        presentation: { label: 'Ticket T-1' },
+      },
+      mentionAt: { start: caret, end: caret },
+    }],
+  });
+}
+```
+
+Without `mentionAt`, adding the attachment keeps it in the tray without
+inserting a chip. Deleting a chip keeps its attachment; removing the attachment
+also removes its chips. Offsets refer to the token-bearing snapshot text, not
+to the shorter displayed chip labels; never choose an offset inside a reference.
+
+### Decorations in the input
+
+The mounted handle's `setDecorations(key, { revision, ranges })` applies treatments
+to ranges of that same snapshot text. In unreleased 0.3, web and native inputs
+draw them in place. Treatments are `highlight`, `muted`, `warning`, `success`,
+`code`, or `{ kind: 'link', url }`; an optional `label` describes the range for
+assistive technology. Decorations do not insert references or change draft
+text. The host rejects stale revisions. Pass `null` to `setDecorations(key, null)`
+to clear that decoration set.
 
 ## Discussion integration (development)
 

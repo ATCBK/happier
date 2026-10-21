@@ -16,7 +16,7 @@ export type ComposerReferenceInsertion = Readonly<{
 
 export type RecentComposerReferenceInsertion = Readonly<{
     reference: ComposerReferenceInsertion;
-    suggestion?: Pick<AutocompleteSuggestion, 'kind' | 'key' | 'label' | 'structuredInput'>;
+    suggestion?: Pick<AutocompleteSuggestion, 'kind' | 'key' | 'label' | 'structuredInput' | 'description' | 'component' | 'icon'>;
     workspaceKey?: string;
 }>;
 const insertedByHome = new Map<string, readonly RecentComposerReferenceInsertion[]>();
@@ -27,7 +27,10 @@ export function recordComposerReferenceInsertion(scope: ServerAccountScope, refe
     const key = serverAccountScopeKeySuffix(scope);
     const workspaceKey = reference.kind === MENTION_KIND_V1.file && workspace ? tryBuildWorkspaceCacheKey(workspace) : null;
     insertedByHome.set(key, [{ reference, ...(workspaceKey ? { workspaceKey } : {}), ...(suggestion ? { suggestion: { kind: suggestion.kind, key: suggestion.key,
-        label: suggestion.label, structuredInput: suggestion.structuredInput } } : {}) },
+        label: suggestion.label, structuredInput: suggestion.structuredInput,
+        ...(suggestion.description ? { description: suggestion.description } : {}),
+        ...(suggestion.component ? { component: suggestion.component } : {}),
+        ...(suggestion.icon ? { icon: suggestion.icon } : {}) } } : {}) },
         ...(insertedByHome.get(key) ?? []).filter(item => item.reference.ref !== reference.ref || item.workspaceKey !== (workspaceKey ?? undefined))]);
 }
 

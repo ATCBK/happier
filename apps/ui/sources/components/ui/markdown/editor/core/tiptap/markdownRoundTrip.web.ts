@@ -7,7 +7,7 @@
  * (element-less, `contentType: 'markdown'`) and reads it back via
  * `editor.getMarkdown()`. Using a real `Editor` (rather than the manager alone)
  * means the round-trip reflects exactly what the live editor would serialize,
- * mirroring Orca's verified throwaway-editor approach (plan §5.3).
+ * mirroring upstream's verified throwaway-editor approach (plan §5.3).
  *
  * Returns the re-serialized markdown, or `null` if the round-trip throws (which
  * the gate treats as "not preserved" -> raw fallback).

@@ -20,6 +20,7 @@ internal class HappierComposerInputView(context: Context, appContext: AppContext
   private val onScroll by EventDispatcher<Map<String, Any>>()
   private val onReferencePress by EventDispatcher<Map<String, Any>>()
   private val onDecorationPress by EventDispatcher<Map<String, Any>>()
+  private val onAttachmentDrop by EventDispatcher<Map<String, Any>>()
   val editor = ComposerEditText(context)
   private var autoFocus = false
   private var initialScrollY = 0.0
@@ -41,6 +42,7 @@ internal class HappierComposerInputView(context: Context, appContext: AppContext
     editor.onComposerSubmit = { onSubmitEditing(emptyMap()) }
     editor.onComposerReference = { ref -> onReferencePress(mapOf("ref" to ref)) }
     editor.onComposerDecoration = { url -> onDecorationPress(mapOf("url" to url)) }
+    editor.onComposerAttachmentDrop = { payload -> onAttachmentDrop(payload) }
     editor.onComposerHeight = { height -> onContentHeightChange(mapOf("height" to height)) }
     editor.onComposerScroll = { y -> onScroll(mapOf("y" to y) + caretPayload()) }
     editor.setOnFocusChangeListener { _, focused -> if (focused) onFocus(mapOf("nativeInputTag" to editor.id) + caretPayload()) else onBlur(emptyMap()) }

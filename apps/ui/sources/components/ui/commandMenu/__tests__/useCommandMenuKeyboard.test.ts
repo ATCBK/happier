@@ -110,4 +110,26 @@ describe('useCommandMenuKeyboard', () => {
             expect(cbs.onClose).not.toHaveBeenCalled();
         });
     });
+
+    describe('a menu with tabs or with no rows', () => {
+        it('Tab cycles the tabs instead of choosing a row', async () => {
+            const cbs = makeCallbacks();
+            const onTab = vi.fn();
+            const { getCurrent } = await renderHook(() => useCommandMenuKeyboard({ open: true, ...cbs, onTab }));
+            expect(getCurrent().handleKey(key('Tab'))).toBe(true);
+            expect(onTab).toHaveBeenCalledOnce();
+            expect(cbs.onSelect).not.toHaveBeenCalled();
+        });
+
+        it('a menu showing only its empty state leaves Enter and the arrows to the composer', async () => {
+            const cbs = makeCallbacks();
+            const { getCurrent } = await renderHook(() => useCommandMenuKeyboard({ open: true, ...cbs, selectable: false }));
+            expect(getCurrent().handleKey(key('Enter'))).toBe(false);
+            expect(getCurrent().handleKey(key('ArrowDown'))).toBe(false);
+            expect(getCurrent().handleKey(key('Escape'))).toBe(true);
+            expect(cbs.onSelect).not.toHaveBeenCalled();
+            expect(cbs.onClose).toHaveBeenCalledOnce();
+        });
+    });
 });
+

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 
 interface CommandMenuRowProps {
     label: string;
@@ -64,11 +65,11 @@ const styles = StyleSheet.create((theme) => ({
     },
     dimmed: { opacity: 0.5 },
     label: {
+        ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
-        fontSize: 14,
     },
     description: {
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
-        fontSize: 12,
     },
 }));

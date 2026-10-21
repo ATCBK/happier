@@ -3,7 +3,7 @@
  * editor and emits a `MenuTriggerState` with the caret rectangle in WebView
  * viewport coordinates.
  *
- * Mirrors Orca's `syncSlashMenu` (~`rich-markdown-commands.tsx:341-383`) as a
+ * Mirrors upstream's `syncSlashMenu` (~`rich-markdown-commands.tsx:341-383`) as a
  * proper TipTap Extension, subscribed via `onUpdate` + `onSelectionUpdate`.
  *
  * The extension is framework-agnostic (no React) so it works in both the
@@ -98,7 +98,7 @@ function readSlashMenuState(editor: Editor): MenuTriggerState | null {
 
 /**
  * Runs the slash-menu sync predicate against the current editor state.
- * Mirrors Orca's `syncSlashMenu` logic.
+ * Mirrors upstream's `syncSlashMenu` logic.
  */
 function syncSlashMenu(
     editor: Editor,

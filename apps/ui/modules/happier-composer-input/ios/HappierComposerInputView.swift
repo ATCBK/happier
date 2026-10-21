@@ -13,6 +13,7 @@ final class HappierComposerInputView: ExpoView {
   let onScroll = EventDispatcher()
   let onReferencePress = EventDispatcher()
   let onDecorationPress = EventDispatcher()
+  let onAttachmentDrop = EventDispatcher()
   var autoFocus = false
   var mostRecentEventCount = 0
   var pendingValue: String?
@@ -50,6 +51,7 @@ final class HappierComposerInputView: ExpoView {
     }
     input.onReferencePress = { [weak self] ref in self?.onReferencePress(["ref": ref]) }
     input.onDecorationPress = { [weak self] url in self?.onDecorationPress(["url": url]) }
+    input.onAttachmentDrop = { [weak self] payload in self?.onAttachmentDrop(payload) }
   }
 
   func applyControlledProps() {

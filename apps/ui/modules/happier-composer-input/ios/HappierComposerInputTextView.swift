@@ -1,4 +1,5 @@
 import UIKit
+import UniformTypeIdentifiers
 
 private final class ComposerReferenceAttachment: NSTextAttachment {
   let token: String
@@ -24,7 +25,10 @@ private final class ComposerReferenceAccessibilityElement: UIAccessibilityElemen
 /// The native owner of token-bearing UTF-16 source offsets versus UIKit attachment offsets.
 /// User edits retain UIKit's text storage, marked text and undo history.
 @objc(HappierComposerTextView)
-final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropDelegate, UIContextMenuInteractionDelegate {
+final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropDelegate, UIContextMenuInteractionDelegate, UIDropInteractionDelegate {
+  var acceptsAttachmentDrops = false
+  var attachmentDropScope = ""
+  var onAttachmentDrop: (([String: Any]) -> Void)?
   var onChange: ((String, [String: Int]) -> Void)?
   var onSelection: (([String: Int]) -> Void)?
   var onKeyPress: (([String: Any]) -> Void)?
@@ -82,6 +86,7 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
     delegate = self
     textDropDelegate = self
     textDragInteraction?.isEnabled = false
+    addInteraction(UIDropInteraction(delegate: self))
     allowsEditingTextAttributes = false
     backgroundColor = .clear
     textContainerInset = .zero
@@ -346,6 +351,63 @@ final class HappierComposerTextView: UITextView, UITextViewDelegate, UITextDropD
   func textDroppableView(_ textDroppableView: UIView & UITextDroppable, proposalForDrop drop: UITextDropRequest) -> UITextDropProposal {
     // Shared entity/attachment intake owns drops; UIKit may never install foreign attachments.
     UITextDropProposal(operation: .cancel)
+  }
+  func attachmentDropType(_ provider: NSItemProvider) -> String? {
+    if provider.hasItemConformingToTypeIdentifier(UTType.folder.identifier) { return UTType.folder.identifier }
+    let file = provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+    return provider.registeredTypeIdentifiers.first { identifier in
+      guard let type = UTType(identifier), type.conforms(to: .data) else { return false }
+      return file || type.conforms(to: .image) || (provider.suggestedName != nil && !type.conforms(to: .text))
+    } ?? (file ? UTType.fileURL.identifier : nil)
+  }
+  func dropInteraction(_ interaction: UIDropInteraction, canHandle session: UIDropSession) -> Bool {
+    isEditable && acceptsAttachmentDrops && !session.items.isEmpty && session.items.allSatisfy { attachmentDropType($0.itemProvider) != nil }
+  }
+  func dropInteraction(_ interaction: UIDropInteraction, sessionDidUpdate session: UIDropSession) -> UIDropProposal {
+    guard dropInteraction(interaction, canHandle: session), let window else { setDropCaret(nil); return UIDropProposal(operation: .cancel) }
+    let point = session.location(in: window)
+    setDropCaret(sourceOffsetAtWindowPoint(x: point.x, y: point.y))
+    return UIDropProposal(operation: .copy)
+  }
+  func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: UIDropSession) { setDropCaret(nil) }
+  func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) { setDropCaret(nil) }
+  func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
+    guard dropInteraction(interaction, canHandle: session), let window else { return }
+    let point = session.location(in: window)
+    guard let offset = sourceOffsetAtWindowPoint(x: point.x, y: point.y) else { return }
+    let scope = attachmentDropScope
+    setDropCaret(nil)
+    let providers = session.items.map(\.itemProvider)
+    // Preserve provider order even when asynchronous file-provider loads finish out of order.
+    func load(_ index: Int, sources: [[String: Any]]) {
+      guard index < providers.count else {
+        onAttachmentDrop?(["sources": sources, "offset": offset, "scope": scope]); return
+      }
+      let provider = providers[index]
+      guard let type = attachmentDropType(provider) else { return }
+      let receive: (URL?, Error?) -> Void = { url, error in
+        let result = Result { () throws -> [String: Any] in
+          if let error { throw error }
+          guard let url else { throw CocoaError(.fileReadUnknown) }
+          return try ComposerAttachmentDrop.read(url)
+        }
+        DispatchQueue.main.async {
+          guard self.acceptsAttachmentDrops, self.isEditable, self.attachmentDropScope == scope else { return }
+          switch result {
+          case .success(let source): load(index + 1, sources: sources + [source])
+          case .failure: self.onAttachmentDrop?(["sources": [], "offset": offset, "scope": scope, "error": true])
+          }
+        }
+      }
+      if type == UTType.fileURL.identifier {
+        provider.loadItem(forTypeIdentifier: type, options: nil) { item, error in
+          receive(item as? URL, error)
+        }
+      } else {
+        provider.loadInPlaceFileRepresentation(forTypeIdentifier: type) { url, _, error in receive(url, error) }
+      }
+    }
+    load(0, sources: [])
   }
   private func readableText(in range: NSRange) -> String {
     let result = NSMutableString(string: (textStorage.string as NSString).substring(with: range))

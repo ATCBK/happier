@@ -3,6 +3,13 @@ package dev.happier.composerinput
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContentProvider
+import android.content.ContentValues
+import android.database.MatrixCursor
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.graphics.Color
 import android.view.ContextThemeWrapper
 import android.view.KeyEvent
@@ -17,6 +24,15 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Robolectric
+import android.app.Activity
+import android.content.pm.ProviderInfo
+import org.robolectric.shadows.ShadowContentResolver
+import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import android.os.Looper
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 import org.robolectric.annotation.GraphicsMode
@@ -30,6 +46,77 @@ import org.robolectric.annotation.SQLiteMode
 class ComposerEditTextTest {
   private val token = "[Auth](happier-ref:session:auth)"
   private val prefix = "😀 a "
+
+  @Test fun treeUriDropRetainsRelativeEntriesAndEmptyDirectoriesAfterTheProviderGrantEnds() {
+    val context = RuntimeEnvironment.getApplication()
+    val providerFile = File.createTempFile("composer-provider", ".svg", context.cacheDir).apply { writeText("svg") }
+    val provider = object : ContentProvider() {
+      override fun onCreate() = true
+      override fun getType(uri: Uri) = if (DocumentsContract.getDocumentId(uri) == "icon") "image/svg+xml" else DocumentsContract.Document.MIME_TYPE_DIR
+      override fun query(uri: Uri, projection: Array<out String>?, selection: String?, args: Array<out String>?, sort: String?): MatrixCursor {
+        val columns = projection ?: arrayOf(OpenableColumns.DISPLAY_NAME)
+        val ids = if (uri.path!!.endsWith("/children")) when (DocumentsContract.getDocumentId(uri)) {
+          "root" -> listOf("icons", "empty")
+          "icons" -> listOf("icon")
+          else -> emptyList()
+        } else listOf(DocumentsContract.getDocumentId(uri))
+        return MatrixCursor(columns).apply { for (id in ids) addRow(columns.map { column -> when (column) {
+          DocumentsContract.Document.COLUMN_DOCUMENT_ID -> id
+          OpenableColumns.DISPLAY_NAME -> when (id) { "root" -> "Design"; "icon" -> "a.svg"; else -> id }
+          DocumentsContract.Document.COLUMN_MIME_TYPE -> if (id == "icon") "image/svg+xml" else DocumentsContract.Document.MIME_TYPE_DIR
+          else -> null
+        } }.toTypedArray()) }
+      }
+      override fun openFile(uri: Uri, mode: String) = ParcelFileDescriptor.open(providerFile, ParcelFileDescriptor.MODE_READ_ONLY)
+      override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+      override fun delete(uri: Uri, selection: String?, args: Array<out String>?) = 0
+      override fun update(uri: Uri, values: ContentValues?, selection: String?, args: Array<out String>?) = 0
+    }
+    provider.attachInfo(context, ProviderInfo().apply { authority = "composer.documents"; exported = true })
+    ShadowContentResolver.registerProviderInternal("composer.documents", provider)
+    val source = ComposerAttachmentDrop.read(context, Uri.parse("content://composer.documents/tree/root"))
+    assertEquals("folder", source["kind"])
+    assertEquals("Design", source["name"])
+    assertEquals(setOf("icons", "empty"), (source["directories"] as List<*>).toSet())
+    val entries = source["entries"] as List<*>
+    assertEquals(1, entries.size)
+    val entry = entries[0] as Map<*, *>
+    assertEquals("icons/a.svg", entry["relativePath"])
+    val file = entry["source"] as Map<*, *>
+    val cached = File(requireNotNull(Uri.parse(file["uri"] as String).path))
+    providerFile.delete()
+    assertEquals("native", file["kind"])
+    assertEquals("svg", cached.readText())
+    cached.parentFile!!.deleteRecursively()
+  }
+
+  @Test fun receiveContentRoutesOnlyDroppedUrisToAttachmentIntakeAtTheCaret() {
+    val editor = editor()
+    val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+    activity.setContentView(editor)
+    editor.acceptsAttachmentDrops = true
+    editor.setSelection(prefix.length)
+    val received = CountDownLatch(1)
+    var payload: Map<String, Any>? = null
+    editor.onComposerAttachmentDrop = { payload = it; received.countDown() }
+    val file = File.createTempFile("composer-drop", ".txt", editor.context.cacheDir).apply { writeText("drop") }
+    val clip = ClipData.newRawUri("file", Uri.fromFile(file))
+    assertNull(ViewCompat.performReceiveContent(editor, ContentInfoCompat.Builder(clip, ContentInfoCompat.SOURCE_INPUT_METHOD).build()))
+    assertNull(payload)
+    assertNull(ViewCompat.performReceiveContent(editor, ContentInfoCompat.Builder(clip, ContentInfoCompat.SOURCE_DRAG_AND_DROP).build()))
+    // The native provider read runs off the UI thread; drain only the main dispatcher while it finishes.
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+    while (received.count > 0 && System.nanoTime() < deadline) { shadowOf(Looper.getMainLooper()).idle(); Thread.yield() }
+    assertTrue(received.await(0, TimeUnit.MILLISECONDS))
+    assertEquals(prefix.length, payload!!["offset"])
+    assertEquals(prefix + token + " z", editor.text.toString())
+    assertNotEquals(true, payload!!["error"])
+    val sources = payload!!["sources"] as List<*>
+    val source = sources[0] as Map<*, *>
+    assertEquals("native", source["kind"])
+    file.delete()
+    File(requireNotNull(Uri.parse(source["uri"] as String).path)).parentFile!!.deleteRecursively()
+  }
 
   private fun editor(): ComposerEditText {
     val context = ContextThemeWrapper(RuntimeEnvironment.getApplication(), androidx.appcompat.R.style.Theme_AppCompat)

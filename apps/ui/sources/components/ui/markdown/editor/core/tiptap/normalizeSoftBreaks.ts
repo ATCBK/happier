@@ -11,7 +11,7 @@
  *
  * This module:
  *   - Exports the imperative `normalizeSoftBreaks(editor)` function (a faithful
- *     port from Orca's `rich-markdown-normalize.ts`) — testable in isolation and
+ *     port from upstream's `rich-markdown-normalize.ts`) — testable in isolation and
  *     callable from the canonical seed boundary (`seedMarkdown`).
  *   - Exports the `NormalizeSoftBreaks` TipTap extension which runs the same
  *     normalization on `onCreate` (so initial `content: 'markdown'` constructor

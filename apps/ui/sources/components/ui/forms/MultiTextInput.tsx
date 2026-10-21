@@ -24,6 +24,7 @@ import {
 import type {
     ComposerInputReference, ComposerInputDecoration,
     NativeComposerInputProps, NativeComposerInputHandle,
+    NativeComposerAttachmentDrop,
 } from './nativeComposerInput';
 import type { ComposerEditorReference } from './composerEditor/composerEditorTypes';
 import { boundComposerEditorReferences } from './composerEditor/composerTextDocMapping';
@@ -55,6 +56,8 @@ export interface MultiTextInputHandle {
 }
 
 export interface MultiTextInputProps {
+    onAttachmentsDropped?: (drop: NativeComposerAttachmentDrop) => void;
+    attachmentDropScope?: string;
     attachmentIds?: readonly string[];
     onReferencesChange?: (references: readonly ComposerEditorReference[]) => void;
     textStyle?: TextStyle;
@@ -301,6 +304,12 @@ export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextIn
             initialScrollY={props.initialScrollY}
             scrollRestoreToken={props.scrollRestoreToken}
             referenceMenuLabels={{ open: t('common.open'), remove: t('common.remove') }}
+            acceptsAttachmentDrops={props.editable !== false && Boolean(props.onAttachmentsDropped)}
+            attachmentDropScope={props.attachmentDropScope ?? ''}
+            onAttachmentDrop={event => {
+                const { scope, ...drop } = event.nativeEvent;
+                if (props.editable !== false && (scope ?? '') === (props.attachmentDropScope ?? '')) props.onAttachmentsDropped?.(drop);
+            }}
             accessibilityLabel={props.accessibilityLabel}
             accessibilityHint={props.accessibilityHint}
             accessibilityRole={props.accessibilityRole}

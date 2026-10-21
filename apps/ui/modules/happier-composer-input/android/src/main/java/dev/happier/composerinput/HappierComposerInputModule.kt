@@ -7,7 +7,9 @@ class HappierComposerInputModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("HappierComposerInput")
     View(HappierComposerInputView::class) {
-      Events("onChange", "onSelection", "onKeyPress", "onSubmitEditing", "onFocus", "onBlur", "onContentHeightChange", "onScroll", "onReferencePress", "onDecorationPress")
+      Events("onChange", "onSelection", "onKeyPress", "onSubmitEditing", "onFocus", "onBlur", "onContentHeightChange", "onScroll", "onReferencePress", "onDecorationPress", "onAttachmentDrop")
+      Prop("acceptsAttachmentDrops") { view: HappierComposerInputView, value: Boolean -> view.editor.acceptsAttachmentDrops = value }
+      Prop("attachmentDropScope") { view: HappierComposerInputView, value: String -> view.editor.attachmentDropScope = value }
       Prop("value") { view: HappierComposerInputView, value: String -> view.stageValue(value) }
       Prop("mostRecentEventCount") { view: HappierComposerInputView, value: Int -> view.stageEventCount(value) }
       Prop("references") { view: HappierComposerInputView, value: List<Map<String, Any?>> -> view.stageReferences(value) }

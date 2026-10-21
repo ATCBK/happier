@@ -95,7 +95,7 @@ export function createMarkdownEditorExtensions(
         // Plain extensions (no nodes/marks) registered AFTER the markdown
         // manager. Order matters for two reasons:
         //   1. Nodes/marks must be declared before plugins/keymaps so the
-        //      schema is fully resolved when the keymap runs (mirrors Orca's
+        //      schema is fully resolved when the keymap runs (mirrors upstream's
         //      "data nodes → behavior plugins" ordering).
         //   2. NormalizeSoftBreaks's `onCreate` runs the post-parse paragraph
         //      split after `@tiptap/markdown` has populated the doc.

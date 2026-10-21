@@ -163,7 +163,7 @@ test('composer input is autolinked on both native platforms with a new binary ru
         readText(join(moduleRoot, 'android', 'src', 'main', 'java', 'dev', 'happier', 'composerinput', 'HappierComposerInputModule.kt')),
     ]);
     const expectedEvents = ['onChange', 'onSelection', 'onKeyPress', 'onSubmitEditing', 'onFocus', 'onBlur',
-        'onContentHeightChange', 'onScroll', 'onReferencePress', 'onDecorationPress'].sort();
+        'onContentHeightChange', 'onScroll', 'onReferencePress', 'onDecorationPress', 'onAttachmentDrop'].sort();
     for (const source of nativeModuleSources) {
         assert.deepEqual(extractQuotedEventNames(source), expectedEvents);
         for (const name of ['focus', 'blur', 'setTextAndSelection', 'setSelection', 'offsetAtPoint', 'setDropCaret']) {

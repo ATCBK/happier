@@ -4,8 +4,8 @@
  * The rich markdown editor's Phase-1 schema has no node that can faithfully
  * round-trip raw HTML or HTML comments, so any document containing them used to
  * be forced to the whole-document raw fallback by the eligibility gate. This
- * module is the FIRST half of Orca's two-part fix (verified vs
- * `/tmp/orca-analysis/.../raw-markdown-html.ts`, 2026-05-24): a pure,
+ * module is the FIRST half of upstream's two-part fix (verified vs
+ * `/tmp/upstream-analysis/.../raw-markdown-html.ts`, 2026-05-24): a pure,
  * single-pass scanner that rewrites each "risky" run (inline HTML, block-only
  * HTML, HTML comments) into an opaque placeholder sentinel BEFORE the markdown
  * parser ever sees it. A companion pair of TipTap atom nodes
@@ -52,7 +52,7 @@ export type RiskyMarkdownPlaceholderKind = 'inline' | 'block';
 /**
  * Matches an inline HTML run (or HTML comment) anchored at the start of `src`:
  * an HTML comment, or an opening/closing/self-closing tag with optional
- * attributes. Mirrors Orca's `INLINE_HTML_PATTERN`. The attribute body forbids
+ * attributes. Mirrors upstream's `INLINE_HTML_PATTERN`. The attribute body forbids
  * `<`/`>` so a stray `<` does not greedily swallow following markup.
  */
 const INLINE_HTML_PATTERN = /^<!--[\s\S]*?-->|^<\/?[A-Za-z][\w.:-]*(?:\s[^<>]*?)?\/?>/;
@@ -181,10 +181,10 @@ function matchBlockHtml(content: string, start: number): string | null {
 /**
  * Single left-to-right scan over `content` that rewrites risky HTML runs into
  * opaque sentinels while leaving code regions (fenced blocks + inline spans) and
- * backslash-escaped `<` untouched. Mirrors Orca's
+ * backslash-escaped `<` untouched. Mirrors upstream's
  * `encodeRawMarkdownHtmlForRichEditor` (minus the deferred doc-link branch).
  *
- * Ordering inside the loop (mirrors Orca) is significant:
+ * Ordering inside the loop (mirrors upstream) is significant:
  *  1. Fence tracking (length-aware open/close) — inside a fence, copy verbatim.
  *  2. Inline code span (exact-length backtick close) — copy verbatim.
  *  3. Block-only HTML at line start — emit a block sentinel.
@@ -267,7 +267,7 @@ export function encodeRiskyMarkdown(content: string): string {
             if (blockHtml) {
                 result += createPlaceholder('block', blockHtml);
                 index += blockHtml.length;
-                // `isLineStart` is intentionally left as-is (mirrors Orca's
+                // `isLineStart` is intentionally left as-is (mirrors upstream's
                 // verified scanner): `index` now points at the line's trailing
                 // `\n` (or EOF), and the next iteration's char-copy recomputes
                 // `isLineStart` from that newline.

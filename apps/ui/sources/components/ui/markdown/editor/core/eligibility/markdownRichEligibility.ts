@@ -1,5 +1,5 @@
 /**
- * Layered rich-eligibility gate (cheap-check-first), modeled on Orca's
+ * Layered rich-eligibility gate (cheap-check-first), modeled on upstream's
  * `markdown-rich-mode.ts` (verified 2026-05-23).
  *
  * The #1 correctness risk for a rich markdown *file* editor is a lossy/
@@ -64,7 +64,7 @@ function byteLen(value: string): number {
 
 /**
  * Verifies that every embedded HTML fragment in `probe` survives the round-trip,
- * appearing in `roundTripOutput` in the same relative order (Orca's
+ * appearing in `roundTripOutput` in the same relative order (upstream's
  * `preservesEmbeddedHtml`). Ordered-substring presence catches dropped/reordered
  * HTML even if the serializer escapes surrounding markdown differently.
  */
@@ -89,7 +89,7 @@ export function preservesEmbeddedHtml(probe: string, roundTripOutput: string | n
     return true;
 }
 
-// --- Bounded content-hash cache (FIFO, ~20 entries; lighter than Orca's raw-string key) ---
+// --- Bounded content-hash cache (FIFO, ~20 entries; lighter than upstream's raw-string key) ---
 // Hashing + bounded FIFO eviction live in `_shared.ts` so the eligibility cache
 // and the round-trip cache (`core/tiptap/markdownRoundTrip.web.ts`) stay identical.
 

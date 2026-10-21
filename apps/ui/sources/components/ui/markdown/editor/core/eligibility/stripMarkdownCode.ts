@@ -2,7 +2,7 @@
  * Strips markdown code regions so eligibility blocker regexes (reference links,
  * footnotes, HTML/JSX) don't trip on examples written *inside* code.
  *
- * Mirrors Orca's `stripMarkdownCode` (verified vs `markdown-rich-mode.ts`):
+ * Mirrors upstream's `stripMarkdownCode` (verified vs `markdown-rich-mode.ts`):
  * - fenced code blocks delimited by ``` or ~~~ (with optional info string), and
  * - inline code spans delimited by matching runs of backticks.
  *
@@ -16,7 +16,7 @@
 /**
  * Returns `md` with fenced code blocks and inline code spans blanked out,
  * preserving line count so downstream line-anchored regexes (`/^…/m`) keep
- * their original line offsets. Line-based state machine mirroring Orca's
+ * their original line offsets. Line-based state machine mirroring upstream's
  * verified `stripMarkdownCode` (a single regex mis-handles fence pairing and
  * over-blanks past the closing fence).
  */

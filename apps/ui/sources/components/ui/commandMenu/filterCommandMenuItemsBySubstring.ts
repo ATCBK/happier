@@ -1,7 +1,7 @@
 import type { CommandMenuItem } from './commandMenuTypes';
 
 /**
- * Orca-style substring match: builds `[label, ...aliases].join(' ').toLowerCase()`
+ * upstream-style substring match: builds `[label, ...aliases].join(' ').toLowerCase()`
  * and tests `haystack.includes(query.trim().toLowerCase())`. Empty query returns all items.
  * Stable order: preserves input order. Hosts that want fuzzy scoring use their own filter.
  */

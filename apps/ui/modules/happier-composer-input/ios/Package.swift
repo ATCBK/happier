@@ -9,7 +9,7 @@ let package = Package(
     .target(
       name: "HappierComposerInputNative", path: ".",
       exclude: ["Tests", "HappierComposerInputModule.swift", "HappierComposerInputView.swift", "HappierComposerInput.podspec"],
-      sources: ["HappierComposerInputTextView.swift"]
+      sources: ["HappierComposerInputTextView.swift", "ComposerAttachmentDrop.swift"]
     ),
     .testTarget(name: "HappierComposerInputNativeTests", dependencies: ["HappierComposerInputNative"], path: "Tests"),
   ]

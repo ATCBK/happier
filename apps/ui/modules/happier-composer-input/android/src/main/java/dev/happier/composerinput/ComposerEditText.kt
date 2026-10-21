@@ -3,6 +3,10 @@ package dev.happier.composerinput
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
+import android.app.Activity
+import android.net.Uri
+import android.view.DragAndDropPermissions
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
@@ -39,6 +43,7 @@ import android.view.inputmethod.InputContentInfo
 import androidx.appcompat.widget.AppCompatEditText
 import androidx.appcompat.widget.PopupMenu
 import androidx.core.view.ViewCompat
+import androidx.core.view.ContentInfoCompat
 import com.facebook.react.common.assets.ReactFontManager
 import java.lang.Character
 import kotlin.math.abs
@@ -48,6 +53,9 @@ import kotlin.math.roundToInt
 
 /** Sole Android editing owner: source text, spans, selection, composition and clipboard. */
 internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
+  var acceptsAttachmentDrops = false
+  var attachmentDropScope = ""
+  var onComposerAttachmentDrop: ((Map<String, Any>) -> Unit)? = null
   var onComposerChange: ((String, Map<String, Int>, Int) -> Unit)? = null
   var onComposerSelection: ((Map<String, Int>) -> Unit)? = null
   var onComposerKey: ((Map<String, Any>) -> Unit)? = null
@@ -87,9 +95,11 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
     setSingleLine(false)
     inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
     setPadding(0, 0, 0, 0)
-    // Consume refused content: returning it would invoke AppCompat's default text insertion.
-    // AndroidX requires a concrete MIME family; InputConnection advertises no rich content.
-    ViewCompat.setOnReceiveContentListener(this, arrayOf("image/*")) { _, _ -> null }
+    // Only a drag may enter attachment intake. IME and clipboard rich content never enter text storage.
+    ViewCompat.setOnReceiveContentListener(this, arrayOf("image/*", "application/*", "text/uri-list")) { _, payload ->
+      if (payload.source == ContentInfoCompat.SOURCE_DRAG_AND_DROP) receiveAttachmentDrop(payload.clip, sourceSelection().getValue("start"))
+      null
+    }
     filters = arrayOf(InputFilter { _, _, _, dest, dstart, dend ->
       if (applyingControlled) null else {
         val partial = dest.getSpans(0, dest.length, ComposerChipSpan::class.java).any { span ->
@@ -536,7 +546,50 @@ internal class ComposerEditText(context: Context) : AppCompatEditText(context) {
     return super.onTextContextMenuItem(id)
   }
 
-  override fun onDragEvent(event: DragEvent): Boolean = false
+  private fun dropActivity(): Activity? {
+    var current = context
+    while (current is ContextWrapper) {
+      if (current is Activity) return current
+      current = current.baseContext
+    }
+    return current as? Activity
+  }
+
+  fun receiveAttachmentDrop(clip: ClipData, offset: Int, permission: DragAndDropPermissions? = null) {
+    if (!acceptsAttachmentDrops || !isEnabled || onComposerAttachmentDrop == null) { permission?.release(); return }
+    val uris = (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri }.filter { it.scheme == "content" || it.scheme == "file" }
+    if (uris.isEmpty()) { permission?.release(); return }
+    val scope = attachmentDropScope
+    Thread({
+      val result = runCatching { uris.map { ComposerAttachmentDrop.read(context, it) } }
+      permission?.release()
+      post {
+        if (acceptsAttachmentDrops && isEnabled && attachmentDropScope == scope) {
+          val payload = mutableMapOf<String, Any>("scope" to scope, "offset" to offset, "sources" to result.getOrDefault(emptyList()))
+          if (result.isFailure) payload["error"] = true
+          onComposerAttachmentDrop?.invoke(payload)
+        }
+      }
+    }, "composer-attachment-drop").start()
+  }
+
+  override fun onDragEvent(event: DragEvent): Boolean {
+    if (!acceptsAttachmentDrops || !isEnabled || onComposerAttachmentDrop == null) return false
+    val location = IntArray(2)
+    getLocationInWindow(location)
+    val offset = offsetAtWindowPoint((location[0] + event.x) / density, (location[1] + event.y) / density)
+    when (event.action) {
+      DragEvent.ACTION_DRAG_STARTED -> return true
+      DragEvent.ACTION_DRAG_LOCATION -> setDropCaret(offset)
+      DragEvent.ACTION_DROP -> {
+        setDropCaret(null)
+        val clip = event.clipData ?: return true
+        if (offset != null) receiveAttachmentDrop(clip, offset, dropActivity()?.requestDragAndDropPermissions(event))
+      }
+      DragEvent.ACTION_DRAG_EXITED, DragEvent.ACTION_DRAG_ENDED -> setDropCaret(null)
+    }
+    return true
+  }
 
   fun offsetAtWindowPoint(x: Float, y: Float): Int? {
     if (!x.isFinite() || !y.isFinite() || width <= 0 || height <= 0) return null

@@ -1,10 +1,43 @@
 import UIKit
 import XCTest
+import UniformTypeIdentifiers
 @testable import HappierComposerInputNative
 
 @MainActor
 final class HappierComposerInputTests: XCTestCase {
   private let token = "[Auth](happier-ref:session:auth)"
+
+  func testDirectoryDropCopiesScopedFilesIntoTheSharedFolderSourceShapeIncludingEmptyDirectories() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("Design")
+    try FileManager.default.createDirectory(at: root.appendingPathComponent("icons/empty"), withIntermediateDirectories: true)
+    try Data("svg".utf8).write(to: root.appendingPathComponent("icons/a.svg"))
+    defer { try? FileManager.default.removeItem(at: root.deletingLastPathComponent()) }
+    let source = try ComposerAttachmentDrop.read(root)
+    XCTAssertEqual(source["kind"] as? String, "folder")
+    XCTAssertEqual(source["name"] as? String, "Design")
+    XCTAssertEqual(source["mimeType"] as? String, "inode/directory")
+    XCTAssertEqual(Set(source["directories"] as? [String] ?? []), Set(["icons", "icons/empty"]))
+    let entries = try XCTUnwrap(source["entries"] as? [[String: Any]])
+    XCTAssertEqual(entries.count, 1)
+    XCTAssertEqual(entries[0]["relativePath"] as? String, "icons/a.svg")
+    let file = try XCTUnwrap(entries[0]["source"] as? [String: Any])
+    XCTAssertEqual(file["kind"] as? String, "native")
+    XCTAssertEqual(file["sizeBytes"] as? Int, 3)
+    let cached = try XCTUnwrap(URL(string: try XCTUnwrap(file["uri"] as? String)))
+    defer { try? FileManager.default.removeItem(at: cached.deletingLastPathComponent().deletingLastPathComponent()) }
+    try FileManager.default.removeItem(at: root.appendingPathComponent("icons/a.svg"))
+    XCTAssertEqual(try Data(contentsOf: cached), Data("svg".utf8))
+  }
+
+  func testNativeDropInteractionAdmitsFilesButRefusesRichTextProviders() {
+    let input = makeInput()
+    XCTAssertTrue(input.interactions.contains { $0 is UIDropInteraction && ($0 as? UIDropInteraction)?.delegate === input })
+    let rich = NSItemProvider(item: "<b>foreign</b>" as NSString, typeIdentifier: UTType.html.identifier)
+    XCTAssertNil(input.attachmentDropType(rich))
+    let folder = NSItemProvider()
+    folder.registerFileRepresentation(forTypeIdentifier: UTType.folder.identifier, fileOptions: .openInPlace, visibility: .all) { _ in nil }
+    XCTAssertEqual(input.attachmentDropType(folder), UTType.folder.identifier)
+  }
 
   private func makeInput(prefix: String = "😀 ", suffix: String = " done") -> HappierComposerTextView {
     let input = HappierComposerTextView(frame: CGRect(x: 0, y: 0, width: 320, height: 120))

@@ -1,7 +1,7 @@
 /**
  * List-continuation helpers + extension for the rich markdown editor.
  *
- * Ported from Orca's `rich-markdown-list-continuation.ts`. Addresses three
+ * Ported from upstream's `rich-markdown-list-continuation.ts`. Addresses three
  * editor friction points that fall through the StarterKit defaults:
  *
  *   1. Ambiguous `1. ` — Markdown's ordered-list shortcut is also a perfectly
@@ -20,7 +20,7 @@
  *
  * The functions are exported as imperative helpers (testable in isolation +
  * callable from a higher-level key handler that owns input-rule state such as
- * Orca's `typedEmptyOrderedListMarkerRef`). The bundled `ListContinuation`
+ * upstream's `typedEmptyOrderedListMarkerRef`). The bundled `ListContinuation`
  * extension wires the unambiguous BACKSPACE behavior into the editor's
  * keyboard shortcuts. The Enter behavior (`commitEmptyOrderedListMarkerAsText`)
  * is NOT wired into a keymap here because it must only fire after the user
@@ -249,7 +249,7 @@ export function convertEmptyNestedOrderedItemToContinuation(editor: Editor): boo
  * TipTap extension that wires the UNAMBIGUOUS Backspace behavior into the
  * editor's keyboard shortcuts.
  *
- * Backspace order matches Orca: try the "convert empty nested item to
+ * Backspace order matches upstream: try the "convert empty nested item to
  * continuation" first, then the "collapse empty continuation paragraph"
  * fall-back. Either consumes the keystroke (returns `true`); otherwise we
  * return `false` so the default Backspace handlers run.

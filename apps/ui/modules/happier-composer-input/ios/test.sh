@@ -11,7 +11,7 @@ native_test_scratch=$(mktemp -d "${TMPDIR:-/tmp}/happier-composer-tests.XXXXXX")
 
 # Xcode generates .swiftpm/xcode beside Package.swift. Keep that build directory
 # outside the moving mirror; symlinks keep compilation on the current sources.
-for native_source in Package.swift HappierComposerInputTextView.swift HappierComposerInputModule.swift HappierComposerInputView.swift HappierComposerInput.podspec Tests; do
+for native_source in Package.swift HappierComposerInputTextView.swift ComposerAttachmentDrop.swift HappierComposerInputModule.swift HappierComposerInputView.swift HappierComposerInput.podspec Tests; do
   ln -s "$native_source_root/$native_source" "$native_test_scratch/$native_source"
 done
 

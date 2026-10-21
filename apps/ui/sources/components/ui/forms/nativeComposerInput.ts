@@ -2,6 +2,13 @@ import type { ComposerEditorDecoration } from './composerEditor/composerEditorTy
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';
 import type { CaretRect } from '@/hooks/ui/textInputCaretRect/useTextInputCaretRect.types';
 import type { KeyboardKeyPressEventInput } from '@/keyboard/events';
+import type { AttachmentUploadSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
+
+export type NativeComposerAttachmentDrop = Readonly<{
+    sources: readonly AttachmentUploadSource[];
+    offset: number;
+    error?: boolean;
+}>;
 
 export type ComposerInputReference = Readonly<{
     start: number;
@@ -58,6 +65,9 @@ export type NativeComposerInputProps = Omit<ViewProps, 'onFocus' | 'onBlur'> & R
     initialScrollY?: number;
     scrollRestoreToken?: string;
     referenceMenuLabels: Readonly<{ open: string; remove: string }>;
+    acceptsAttachmentDrops: boolean;
+    attachmentDropScope: string;
+    onAttachmentDrop: (event: NativeSyntheticEvent<NativeComposerAttachmentDrop & Readonly<{ scope: string }>>) => void;
     onChange: (event: NativeSyntheticEvent<NativeInputGeometry & Readonly<{ text: string; selection: Selection; eventCount: number; references: readonly NativeBoundReference[] }>>) => void;
     onSelection: (event: NativeSyntheticEvent<NativeInputGeometry & Readonly<{ selection: Selection }>>) => void;
     onKeyPress: (event: NativeSyntheticEvent<KeyboardKeyPressEventInput>) => void;

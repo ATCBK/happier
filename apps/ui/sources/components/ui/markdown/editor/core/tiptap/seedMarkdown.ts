@@ -46,7 +46,7 @@ export type SeedMarkdownOptions = Readonly<{
 export function seedMarkdown(editor: Editor, markdown: string, options?: SeedMarkdownOptions): void {
     const applySeed = () => {
         editor.commands.setContent(encodeRiskyMarkdown(markdown), { contentType: 'markdown' });
-        // Mirror Orca's setContent path: re-run the post-parse paragraph split so
+        // Mirror upstream's setContent path: re-run the post-parse paragraph split so
         // multi-line paragraphs emitted by `marked` become per-line blocks for
         // block ops (cut/Enter/selection). Idempotent on already-clean docs.
         normalizeSoftBreaks(editor);

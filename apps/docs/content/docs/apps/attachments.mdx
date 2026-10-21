@@ -41,6 +41,33 @@ You can attach both images and non-image files in the same message.
 
 Before you send the message, Happier keeps attachments as **drafts** in the composer.
 
+### Inline references (0.3 development)
+
+The following describes unreleased 0.3 development behavior. Adding an attachment
+places a reference chip at the caret as well as an item in the attachment tray.
+Images have an **Image #N** chip and a matching number on the tray thumbnail;
+only images are numbered. Other files and folders show their names.
+
+You can write around a chip, select it, or delete it as one item. Deleting the
+chip keeps the attachment in the tray, so it still goes to the Agent when you
+send. Removing the tray item also removes its chips. An attachment chip whose
+item is gone shows a removed state and is omitted from the sent text.
+
+On web, dropping a file, image or folder into the text inserts its chip at the
+drop caret. A folder is one tray item and one chip; its directory structure is
+preserved when uploaded to the Session machine using the attachment storage
+location below. In an existing Session the folder can upload before Send; a
+New Session keeps the existing upload timing until a Session is available.
+The chip stays pending during upload, with progress in the tray. A failed folder
+upload shows the Files upload-failure message; its removed chip is omitted at send.
+Folders cannot be attached to a Runner launch.
+
+For a file or folder already in the workspace, or a Session, workflow, widget or
+supported plugin item, use **Mention in composer** from its menu to insert at
+the caret. These references do not upload another copy. Native OS drops from
+other apps require a matching native build; their device validation is still
+pending. Plain text pasted into the composer does not create reference chips.
+
 In the **new-session flow**, those draft attachments are kept while you move around the same in-app flow, such as opening picker screens and returning to the composer.
 
 That also includes the newer in-place browser surfaces used by session start, such as folder browsing and Resume ID browsing.
@@ -104,8 +131,14 @@ When you send a message with attachments:
 
 1. Happier uploads each file first
 2. Happier stores the files in the configured attachment upload location
-3. the sent message includes an attachments block with stable file paths
+3. the sent message records stable file paths for its attachments
 4. the message tells the agent to read those paths from disk before answering
+
+In unreleased 0.3, the Agent receives readable markers such as **[Image #1]**,
+**[File: report.pdf]** or **[Folder: samples]** where you placed the chips,
+plus one reference context block with the file paths. An attachment kept in the
+tray without a chip is still listed there. Older messages retain their existing
+attachment-block reader.
 
 This means attachments behave like real files in the session environment, not like provider-specific “inline binary parts”.
 
@@ -124,6 +157,10 @@ Sent user messages keep their attachments in the transcript.
 ### Inline transcript images
 
 If an attachment is an image, Happier shows it inline in the message instead of only listing the filename.
+
+In unreleased 0.3, numbered thumbnails appear above the message text, and
+reference chips appear within the text. Pressing an **Image #N** chip focuses
+its thumbnail. Older messages keep their references row below the text.
 
 This makes transcripts easier to scan when you shared:
 

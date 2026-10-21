@@ -44,6 +44,8 @@ type ActiveSuggestionState = Readonly<{
     pinnedKey: string | null;
     /** A partial snapshot does not currently contain the user's pinned candidate. */
     selectionPending: boolean;
+    /** The final answer for `query` is empty: "no matches", not "still looking". */
+    settledEmpty: boolean;
 }>;
 
 /** The next row the user can take from `from` in `step` direction (wrapping when asked), or -1 when none. */
@@ -78,6 +80,7 @@ function unchangedSuggestionState(
         && previous.selected === next.selected
         && previous.pinnedKey === next.pinnedKey
         && previous.selectionPending === next.selectionPending
+        && previous.settledEmpty === next.settledEmpty
         && sameSuggestionSnapshot(previous.suggestions, next.suggestions)
         ? previous
         : next;
@@ -102,6 +105,7 @@ function reconcileSuggestionSnapshot(params: Readonly<{
                 selected,
                 pinnedKey: previous.pinnedKey,
                 selectionPending: false,
+                settledEmpty: false,
             });
         }
         if (!complete) {
@@ -114,6 +118,7 @@ function reconcileSuggestionSnapshot(params: Readonly<{
                 selected: -1,
                 pinnedKey: previous.pinnedKey,
                 selectionPending: true,
+                settledEmpty: complete && suggestions.length === 0,
             });
         }
     }
@@ -131,6 +136,7 @@ function reconcileSuggestionSnapshot(params: Readonly<{
         selected: selected < 0 && suggestions.length > 0 && autoSelectFirst ? stepToEnabled(suggestions, -1, 1, false) : selected,
         pinnedKey: null,
         selectionPending: false,
+        settledEmpty: complete && suggestions.length === 0,
     });
 }
 
@@ -151,6 +157,7 @@ export function useActiveSuggestions(
         selected: -1,
         pinnedKey: null,
         selectionPending: false,
+        settledEmpty: false,
     });
     const stateRef = React.useRef(state);
     stateRef.current = state;
@@ -209,6 +216,7 @@ export function useActiveSuggestions(
                     && previous.selected === -1
                     && previous.pinnedKey === null
                     && !previous.selectionPending
+                    && !previous.settledEmpty
                 ) {
                     return;
                 }
@@ -218,6 +226,7 @@ export function useActiveSuggestions(
                     selected: -1,
                     pinnedKey: null,
                     selectionPending: false,
+                    settledEmpty: false,
                 };
                 stateRef.current = next;
                 setState(next);
@@ -291,9 +300,10 @@ export function useActiveSuggestions(
 
     // If no query return empty suggestions
     if (!query || state.query !== query) {
-        return [[], -1, moveUp, moveDown, false] as const;
+        return [[], -1, moveUp, moveDown, false, false] as const;
     }
 
     // Return state suggestions
-    return [state.suggestions, state.selected, moveUp, moveDown, state.selectionPending] as const;
+    // The sixth value says the settled answer for this query is empty ("no matches", not "still looking").
+    return [state.suggestions, state.selected, moveUp, moveDown, state.selectionPending, state.settledEmpty] as const;
 }

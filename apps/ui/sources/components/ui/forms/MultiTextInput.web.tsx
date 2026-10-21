@@ -41,6 +41,8 @@ export interface MultiTextInputHandle {
 }
 export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
 export interface MultiTextInputProps {
+    onAttachmentsDropped?: (drop: import('./nativeComposerInput').NativeComposerAttachmentDrop) => void;
+    attachmentDropScope?: string;
     textStyle?: TextStyle;
     testID?: string;
     value: string;

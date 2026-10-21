@@ -463,4 +463,23 @@ describe('useActiveSuggestions', () => {
         await act(async () => { hook.getCurrent()[3](); });
         expect(hook.getCurrent()[1]).toBe(-1);
     });
+
+    it('says when the current query has settled, so an empty answer can be told from a pending one', async () => {
+        const pending = createDeferred<AutocompleteSuggestion[]>();
+        const handler = vi.fn((query: string) => (query === '@zebra' ? pending.promise : Promise.resolve([suggestion('a')])));
+        const hook = await renderHook(
+            ({ query }: { query: string | null }) => useActiveSuggestions(query, handler),
+            { initialProps: { query: '@zebra' as string | null } },
+        );
+        // Nothing has answered yet: empty, but not settled.
+        expect(hook.getCurrent()[0]).toEqual([]);
+        expect(hook.getCurrent()[5]).toBe(false);
+        pending.resolve([]);
+        await flushHookEffects();
+        // The final answer is empty: settled.
+        expect(hook.getCurrent()[0]).toEqual([]);
+        expect(hook.getCurrent()[5]).toBe(true);
+        await hook.rerender({ query: null });
+        expect(hook.getCurrent()[5]).toBe(false);
+    });
 });
