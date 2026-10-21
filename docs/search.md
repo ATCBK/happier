@@ -50,28 +50,35 @@ file reads and writes. `machines/workspaceFilesReplace.ts` owns the pure byte
 transformation for both operations. Literal replacement keeps dollar signs
 literal; regex replacement follows JavaScript capture and replacement patterns.
 Matching and replacement stay within one line.
+An explicitly armed Replace mode accepts an empty replacement to delete the
+selected matches; an empty field alone does not arm replacement.
 
 Preview hashes cover raw bytes, including a UTF-8 BOM. Apply receives only
 reviewed files and their excluded match positions. Files whose hashes changed
 are reported individually without a write. Invalid UTF-8, UTF-16 and binary
 content are skipped; the transformation preserves a UTF-8 BOM and existing
 line endings. Every successful write uses the editor's guarded atomic writer.
-Returned inverse edits support hash-guarded Undo without server-held pre-images.
+Returned inverse edits support hash-guarded Undo through the same replace Action
+without server-held pre-images. Apply results and their Undo retain the original
+Machine, root and Account; another search scope cannot adopt them.
 
 The Universal Search composition owns draft exclusion, selection and preview
-freshness. It must retire a preview whenever query, options or replacement
-change, and apply only loaded, selected matches. Surface composition and loaded
+freshness. Retained previews render with their captured matcher; a changed
+query, option or replacement disables Apply until a fresh preview succeeds.
+Apply covers only loaded, selected matches. Surface composition and loaded
 runtime acceptance are separate from these Machine contracts. Regex discovery
 inventories files through ripgrep's existing exclusions/ignore/hidden policy;
 the JavaScript matcher alone decides matches. This includes JavaScript patterns
 that ripgrep cannot compile and avoids differing Unicode boundary semantics.
 Whole-file continuation pages expose only complete selectable files, with
 explicit incomplete coverage for an indivisible result beyond the existing
-transport boundary. Replace apply opts into cooperative cancellation: it sends
-the existing correlated cancel but retains that call's ACK for completed-file
-results and inverse edits. The original deadline and disconnect handling remain
-in force, and other callers keep immediate cancellation by default. These are
-unreleased source contracts, not completed loaded-surface validation.
+transport boundary. Replace apply and Undo enter the canonical danger Action.
+Its existing host operation owns cooperative cancellation between files and
+retains the terminal acknowledgement, including completed-file inverse edits,
+in the same in-memory operation result. Clients cancel and wait for that exact
+operation rather than treating acceptance or a cancelled observation as its
+file result. These are unreleased source contracts, not completed
+loaded-surface validation.
 
 ## Data flow
 
@@ -242,6 +249,15 @@ machine's status after a successful clear. Rejection or Account retirement does
 not redirect the clear to the page's newly selected target.
 
 ## Memory index and native ingestion (0.3 development)
+
+Restarting the daemon reuses retained summary, deep and native index data when
+its saved indexing policy is unchanged. The cursor database retains the policy
+baseline; older indexes are qualified using their existing row policy keys,
+with unproven cursor-only progress rewound. A real policy change removes the
+affected old-policy content before background reconstruction. Startup and
+settings admission do not rebuild transcripts. A failed startup access check
+keeps the worker and status/settings RPCs available, reports an error, and
+withholds index paths until the existing inventory loop can requalify access.
 
 Native title/transcript display hides only reproduced Happier base guidance
 and installed-Agent catalog blocks. The coding-plan delivery renderer and its

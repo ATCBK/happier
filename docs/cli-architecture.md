@@ -44,6 +44,15 @@ Workspace replacement in 0.3 development calls the same
 `commitGuardedFileReplace` owner as editor saves: the replace handler authorizes
 each rooted path and supplies raw bytes plus the reviewed SHA-256 expectation;
 it does not own another filesystem writer.
+The same apply owner accepts semantic edit sets: zero-based UTF-16 ranges
+address each file's original text, and successful writes return the existing
+post-coordinate inverse edits for Undo. File renames and their inverse moves
+also require a current source hash and an absent destination. Results remain
+per file; semantic edit sets and inverse file-move sets stop at the first refused or incomplete file and
+mark dependent files unattempted. Earlier files remain applied, as required by
+the negotiated LSP abort failure mode.
+If a rename succeeds before its content write fails, the result preserves the
+move and its hash with a failure reason so the caller retains Undo custody.
 Replace apply uses the shared Socket RPC `waitForResultOnCancel` opt-in: the
 existing correlated cancel stops work between files while the caller and relay
 retain that call's own ACK for partial results and Undo edits. The existing

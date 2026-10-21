@@ -15,11 +15,25 @@ blame intents through this same catalog. Preview and blame are safe reads;
 replace is a danger Action with the normal agent approval default. A present
 user applying the reviewed replacement uses `uiConfirmation: 'direct'` with
 present-user confirmation. Result custody remains distinct from prompting.
-The replace Action accepts a matcher and reviewed file hashes; it exposes no
-restore operation. Undo is the UI's hash-guarded RPC affordance, with exact
-inverse-text validation. The generated Action reference owns the exact schemas
+The replace Action accepts `operation.kind: 'replace'` with a matcher and reviewed file hashes, or
+`operation.kind: 'restore'` with post-replacement hashes and inverse edits. Undo
+uses this same danger Action with exact inverse-text validation; present-user
+calls use direct confirmation and automated callers retain normal approval.
+The same host Action operation owns acceptance, cooperative cancellation and
+the terminal per-file result. Its in-memory result retains inverse edits for
+Undo; accepting an operation does not mean that its files have been written.
+The generated Action reference owns the exact schemas
 and surface inventory; this development contract does not imply release or
 completed surface validation.
+
+Unreleased 0.3 language intelligence also exposes symbol rename, file rename
+with importer edits, and code fixes through `code.rename.preview/apply`,
+`code.file.rename.preview/apply`, and `code.codeActions.list` /
+`code.codeAction.apply`. Preview/list are safe reads. Apply keeps danger's normal
+automated approval default and uses direct confirmation for a present user.
+All edits, including server-requested command edits, use the same guarded
+multi-file writer and inverse-restore owner as workspace replacement; no native
+language-server command payload is an agent-facing execution authority.
 
 The same unreleased review work extends `scm.diffSummary.reviewed.mark` and
 `scm.diffSummary.reviewed.unmark` with live source/content-key selectors; Keep
@@ -33,6 +47,15 @@ composer transaction and Run draft owners; it seeds a draft, never sends a
 question automatically. See [SCM comparison ownership](scm-diff-summary.md) for
 scope, result deletion and mark persistence. Rendered integration and generated
 surface projections are separate from these development-source contracts.
+
+In the same development source, `composer.transaction.apply` accepts
+`reviewComment.add` with the canonical review-comment draft (anchor, selected-text
+snapshot, body and inclusion choice). On a mounted editable Session composer,
+the host resolves that Session's workspace and upserts through the workspace
+review-draft owner used by editor, diff and Problems Ask. The operation keeps
+unsent text and plugin attachments intact and never sends a message. The safe
+composer Action's existing approval settings apply. The UI's direct use of that
+same draft owner also retains selection context before the composer mounts.
 
 The unreleased 0.3 editor work adds `file.editor.save` and
 `file.editor.resolve` through the existing scope Action family. They address the
@@ -1426,6 +1449,13 @@ The optional `sourceKeyPreparation` result records that separate outcome beside
 `initialInput`; neither is a failed Session creation. Persistent destination
 daemons require no standalone source-key transfer. Ephemeral destinations retain
 their existing key requirement and report missing source material as waiting.
+
+While native startup is still pending, the receiving host's existing tracked
+operation is returned as optional `operation: {serverId, machineId, operationId}`.
+Use that address with `action.operations.get` or an `action_operation` wait target
+to observe startup without submitting another create. `session create --json`
+retains it beside `session_create_pending` and the existing spawn-attempt id.
+An unknown outcome without an observed operation does not invent an address.
 
 In 0.3 development, a signed-out Agent keeps the non-retryable
 `agent_signed_out` creation result and its Agent identity. Its existing

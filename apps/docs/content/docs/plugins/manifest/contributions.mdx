@@ -103,7 +103,15 @@ export const { manifest, activate } = definePlugin({
 
 `languageIds` maps the app's language name to the server's LSP language id; they
 can differ, as `tsx` and `typescriptreact` do here. Optional `filePatterns` add
-matching fallbacks. Leave `rootMarkers` absent to use the workspace root; declare
+matching fallbacks. To add a language the app does not recognize, use your own
+language key, for example `languageIds: { example: 'example-lsp' }`, alongside
+`filePatterns: ['*.example']`. The pattern selects the server and the single
+declared LSP id is sent when opening the document. Multiple keys may map to the
+same LSP id; a pattern-only match with several distinct ids cannot choose a
+language and is unavailable. Avoid mapping `text` to your language, since that
+also selects unrelated plain-text files.
+
+Leave `rootMarkers` absent to use the workspace root; declare
 markers only when your server needs root selection. `initializationOptions` go
 to the server once during initialization. Use optional `settings` for JSON
 configuration that the server requests by a dotted section name.
