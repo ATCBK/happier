@@ -16,6 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+    vi.useRealTimers();
     for (const pool of pools.splice(0)) pool.terminate();
     // Let the manager's final animation-frame broadcast finish while its browser
     // clock boundary is still installed.
@@ -25,6 +26,23 @@ afterEach(async () => {
 });
 
 describe('getPierreDiffWorkerPool', () => {
+    it('allows healthy worker initialization beyond the former ten-second cutoff', async () => {
+        BrowserWorker.holdInitialization = true;
+        const owner = await import('./pierreWorkerPool.web');
+        vi.useFakeTimers();
+        const pool = owner.getPierreDiffWorkerPool({ style: 'unified' });
+        if (!pool) throw new Error('Expected a pool');
+        pools.push(pool);
+        let failure: unknown;
+        const initialized = pool.initialize().catch(error => { failure = error; });
+        await vi.waitFor(() => expect(BrowserWorker.pendingInitializations.length).toBeGreaterThan(0));
+        await vi.advanceTimersByTimeAsync(10_001);
+        expect(failure).toBeUndefined();
+        expect(owner.getPierreDiffWorkerPoolFailed('unified')).toBe(false);
+        for (const respond of BrowserWorker.pendingInitializations.splice(0)) respond();
+        await initialized;
+        expect(owner.getPierreDiffWorkerPool({ style: 'unified' })).toBe(pool);
+    });
     it('returns null and logs once when the browser cannot construct a worker', async () => {
         BrowserWorker.successfulConstructionsBeforeFailure = 0;
         const { getPierreDiffWorkerPool } = await import('./pierreWorkerPool.web');

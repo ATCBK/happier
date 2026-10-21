@@ -1,3 +1,17 @@
+diff --git a/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js b/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js
+--- a/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js
++++ b/node_modules/@pierre/diffs/dist/worker/WorkerPoolManager.js
+@@ -337,6 +337,10 @@
+ 		const timeoutMs = this.options.workerInitializationTimeout ?? DEFAULT_WORKER_INITIALIZATION_TIMEOUT;
+ 		let timeoutId;
+ 		try {
++			if (timeoutMs === 0) {
++				await Promise.all(initPromises);
++				return;
++			}
+ 			await Promise.race([Promise.all(initPromises), new Promise((_, reject) => {
+ 				timeoutId = setTimeout(() => {
+ 					reject(/* @__PURE__ */ new Error(`WorkerPoolManager: worker initialization timed out after ${timeoutMs}ms`));
 diff --git a/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js b/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js
 --- a/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js
 +++ b/node_modules/@pierre/diffs/dist/renderers/DiffHunksRenderer.js

@@ -2,11 +2,15 @@
 export class BrowserWorker extends EventTarget {
     static instances: BrowserWorker[] = [];
     static successfulConstructionsBeforeFailure: number | undefined;
+    static holdInitialization = false;
+    static pendingInitializations: Array<() => void> = [];
     terminated = false;
 
     static reset(): void {
         BrowserWorker.instances = [];
         BrowserWorker.successfulConstructionsBeforeFailure = undefined;
+        BrowserWorker.holdInitialization = false;
+        BrowserWorker.pendingInitializations = [];
     }
 
     constructor() {
@@ -24,12 +28,14 @@ export class BrowserWorker extends EventTarget {
         if (type !== 'initialize' && type !== 'set-render-options') {
             throw new Error(`Unexpected Pierre worker request: ${String(type)}`);
         }
-        queueMicrotask(() => {
+        const respond = () => {
             if (this.terminated) return;
             this.dispatchEvent(new MessageEvent('message', {
                 data: { type: 'success', requestType: type, id, sentAt: Date.now() },
             }));
-        });
+        };
+        if (type === 'initialize' && BrowserWorker.holdInitialization) BrowserWorker.pendingInitializations.push(respond);
+        else queueMicrotask(respond);
     }
 
     terminate(): void {

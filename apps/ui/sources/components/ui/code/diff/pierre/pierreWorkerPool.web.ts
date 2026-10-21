@@ -95,6 +95,9 @@ export function getPierreDiffWorkerPool(params?: Readonly<{ style?: PierreDiffPr
         const created = new WorkerPoolManager(
             {
                 workerFactory: createPierreDiffWorker,
+                // Worker errors/termination own failure. A busy renderer is not a failed worker.
+                // The package patch makes zero opt out of its arbitrary initialization deadline.
+                workerInitializationTimeout: 0,
                 poolSize: config.poolSize,
                 totalASTLRUCacheSize: config.totalASTLRUCacheSize,
                 onWorkerError: (event) => {
