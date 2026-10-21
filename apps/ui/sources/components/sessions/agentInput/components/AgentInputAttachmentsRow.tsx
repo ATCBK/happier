@@ -14,7 +14,7 @@ import {
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { hapticsLight } from '@/components/ui/theme/haptics';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
+import { isTouchPrimaryPointer, resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { LazyMountOnScreen } from '@/components/ui/performance/LazyMountOnScreen';
 import { Text } from '@/components/ui/text/Text';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
@@ -109,6 +109,79 @@ function resolveUploadProgressPercent(progress?: AgentInputAttachmentUploadProgr
 }
 
 const ATTACHMENT_REMOVE_ICON_SIZE = 16;
+const ATTACHMENT_CORNER_REMOVE_SIZE = 20;
+const ATTACHMENT_CORNER_REMOVE_OVERHANG = 6;
+const ATTACHMENT_CORNER_REMOVE_ICON_SIZE = 11;
+
+/**
+ * A tray picture and its remove control. With a fine pointer the control is the lab's (TA) small ink
+ * disc on the picture's corner, shown while the picture is hovered or the control has keyboard focus.
+ * On touch it stays beside the picture, always shown, so the two press targets never overlap. Either
+ * way the control's own frame is the platform's target size: no hit slop.
+ */
+function TrayPictureTile(props: Readonly<{
+    children: React.ReactNode;
+    onRemove: (() => void) | undefined;
+    removeTestID: string | undefined;
+    removeAccessibilityLabel: string;
+    removeRef?: React.Ref<View>;
+}>) {
+    const styles = stylesheet;
+    const { theme } = useUnistyles();
+    const touch = isTouchPrimaryPointer();
+    const [hovered, setHovered] = React.useState(false);
+    const [focused, setFocused] = React.useState(false);
+    const target = resolveMinimumInteractiveTargetSize(Platform.OS);
+    if (touch) {
+        return (
+            <View style={[styles.attachmentImageTileBeside, { width: ATTACHMENT_IMAGE_PREVIEW_SIZE + target, height: Math.max(ATTACHMENT_IMAGE_PREVIEW_SIZE, target) }]}>
+                {props.children}
+                {props.onRemove ? (
+                    <Pressable
+                        ref={props.removeRef}
+                        testID={props.removeTestID}
+                        accessibilityLabel={props.removeAccessibilityLabel}
+                        accessibilityRole="button"
+                        onPress={props.onRemove}
+                        style={[styles.attachmentImageRemoveBeside, { minWidth: target, minHeight: target }]}
+                    >
+                        <Icon name="x-circle" size={ATTACHMENT_REMOVE_ICON_SIZE} color={theme.colors.text.secondary} />
+                    </Pressable>
+                ) : null}
+            </View>
+        );
+    }
+    // The frame is centred on the disc, which overhangs the picture's corner.
+    const frameOffset = -(ATTACHMENT_CORNER_REMOVE_OVERHANG + (target - ATTACHMENT_CORNER_REMOVE_SIZE) / 2);
+    return (
+        <View
+            style={styles.attachmentImageTileFrame}
+            onPointerEnter={() => setHovered(true)}
+            onPointerLeave={() => setHovered(false)}
+        >
+            {props.children}
+            {props.onRemove ? (
+                <Pressable
+                    ref={props.removeRef}
+                    testID={props.removeTestID}
+                    accessibilityLabel={props.removeAccessibilityLabel}
+                    accessibilityRole="button"
+                    onPress={props.onRemove}
+                    onFocus={() => setFocused(true)}
+                    onBlur={() => setFocused(false)}
+                    style={[
+                        styles.attachmentImageRemoveFrame,
+                        { width: target, height: target, top: frameOffset, right: frameOffset, opacity: hovered || focused ? 1 : 0 },
+                    ]}
+                >
+                    <View style={styles.attachmentImageRemoveDisc}>
+                        <Icon name="x" size={ATTACHMENT_CORNER_REMOVE_ICON_SIZE} color={styles.attachmentImageRemoveIcon.color} />
+                    </View>
+                </Pressable>
+            ) : null}
+        </View>
+    );
+}
 const ATTACHMENT_IMAGE_PREVIEW_SIZE = 52;
 
 type FocusableAttachmentTarget = Readonly<{
@@ -200,10 +273,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         gap: theme.space.s4,
     },
-    attachmentImageTile: {
-        alignItems: 'center',
-        flexDirection: 'row',
-    },
     attachmentImageSurface: {
         width: ATTACHMENT_IMAGE_PREVIEW_SIZE,
         height: ATTACHMENT_IMAGE_PREVIEW_SIZE,
@@ -231,11 +300,49 @@ const stylesheet = StyleSheet.create((theme) => ({
     attachmentImageErrorOverlay: {
         backgroundColor: theme.colors.state.danger.background,
     },
-    attachmentImageRemoveButton: {
+    attachmentImageTileFrame: {
         position: 'relative',
+        width: ATTACHMENT_IMAGE_PREVIEW_SIZE,
+        height: ATTACHMENT_IMAGE_PREVIEW_SIZE,
+    },
+    attachmentImageTileBeside: {
+        alignItems: 'center',
+        flexDirection: 'row',
+    },
+    attachmentImageRemoveBeside: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    attachmentImageRemoveFrame: {
+        position: 'absolute',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    // Lab TA: a small ink disc on the picture's corner, ringed in the composer's paper so it reads
+    // over any picture.
+    attachmentImageRemoveDisc: {
+        width: ATTACHMENT_CORNER_REMOVE_SIZE,
+        height: ATTACHMENT_CORNER_REMOVE_SIZE,
+        borderRadius: ATTACHMENT_CORNER_REMOVE_SIZE / 2,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: theme.colors.text.primary,
+        borderWidth: 2,
+        borderColor: theme.colors.surface.base,
+    },
+    attachmentImageRemoveIcon: {
+        color: theme.colors.surface.base,
+    },
+    // The rail's scroll frame clips; it reaches up and right into the row's padding by the corner
+    // control's overhang, so the control is not cut while the tray keeps its height.
+    compactRail: {
+        marginTop: -ATTACHMENT_CORNER_REMOVE_OVERHANG,
+        marginRight: -ATTACHMENT_CORNER_REMOVE_OVERHANG,
     },
     rowContent: {
         gap: theme.space.s8,
+        paddingTop: ATTACHMENT_CORNER_REMOVE_OVERHANG,
+        paddingRight: ATTACHMENT_CORNER_REMOVE_OVERHANG,
     },
     contentSurfaceBand: {
         gap: theme.space.s8,
@@ -383,10 +490,6 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
         justifyContent: 'center' as const,
         minHeight: attachmentActionTargetSize,
         minWidth: attachmentActionTargetSize,
-    }), [attachmentActionTargetSize]);
-    const attachmentImageTileStyle = React.useMemo(() => ({
-        width: ATTACHMENT_IMAGE_PREVIEW_SIZE + attachmentActionTargetSize,
-        height: Math.max(ATTACHMENT_IMAGE_PREVIEW_SIZE, attachmentActionTargetSize),
     }), [attachmentActionTargetSize]);
     const attachmentImagePreviewStyle = React.useMemo(() => ({
         minHeight: attachmentActionTargetSize,
@@ -726,7 +829,12 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                     item={att}
                 >
                     {({ anchorRef, onPress, onRemove }) => (
-                        <View style={[styles.attachmentImageTile, attachmentImageTileStyle]}>
+                        <TrayPictureTile
+                            removeTestID={att.onRemove ? att.removeTestID ?? `agent-input-attachment-remove:${att.key}` : undefined}
+                            removeAccessibilityLabel={att.removeAccessibilityLabel ?? t('common.remove')}
+                            removeRef={onPress ? undefined : attachmentFocusRef(att.key)}
+                            onRemove={att.onRemove ? () => requestAttachmentRemoval(att, onRemove) : undefined}
+                        >
                             {onPress ? (
                                 <Pressable
                                     ref={attachmentFocusRef(att.key, anchorRef)}
@@ -764,19 +872,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     <Icon name="warning-circle" size={20} color={theme.colors.overlay.foreground} />
                                 </View>
                             ) : null}
-                            {att.onRemove ? (
-                                <Pressable
-                                    ref={onPress ? undefined : attachmentFocusRef(att.key)}
-                                    testID={att.removeTestID ?? `agent-input-attachment-remove:${att.key}`}
-                                    accessibilityLabel={att.removeAccessibilityLabel ?? t('common.remove')}
-                                    accessibilityRole="button"
-                                    onPress={() => requestAttachmentRemoval(att, onRemove)}
-                                    style={[styles.attachmentImageRemoveButton, attachmentActionFrameStyle]}
-                                >
-                                    <Icon name="x-circle" size={ATTACHMENT_REMOVE_ICON_SIZE} color={theme.colors.text.secondary} />
-                                </Pressable>
-                            ) : null}
-                        </View>
+                        </TrayPictureTile>
                     )}
                 </AttachmentRowPreviewTrigger>
             );
@@ -802,7 +898,11 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                     }}
                 >
                     {({ anchorRef, onPress, onRemove }) => (
-                        <View style={[styles.attachmentImageTile, attachmentImageTileStyle]}>
+                        <TrayPictureTile
+                            removeTestID={att.onRemove ? att.removeTestID ?? `agent-input-attachment-remove:${att.key}` : undefined}
+                            removeAccessibilityLabel={att.removeAccessibilityLabel ?? t('common.remove')}
+                            onRemove={att.onRemove ? () => requestAttachmentRemoval(att, onRemove) : undefined}
+                        >
                             <Pressable
                                 ref={attachmentFocusRef(att.key, anchorRef)}
                                 accessibilityLabel={resolveAttachmentAccessibilityLabel(att)}
@@ -833,18 +933,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                                     </View>
                                 ) : null}
                             </Pressable>
-                            {att.onRemove ? (
-                                <Pressable
-                                    testID={att.removeTestID ?? `agent-input-attachment-remove:${att.key}`}
-                                    accessibilityLabel={att.removeAccessibilityLabel ?? t('common.remove')}
-                                    accessibilityRole="button"
-                                    onPress={() => requestAttachmentRemoval(att, onRemove)}
-                                    style={[styles.attachmentImageRemoveButton, attachmentActionFrameStyle]}
-                                >
-                                    <Icon name="x-circle" size={ATTACHMENT_REMOVE_ICON_SIZE} color={theme.colors.text.secondary} />
-                                </Pressable>
-                            ) : null}
-                        </View>
+                        </TrayPictureTile>
                     )}
                 </AttachmentRowPreviewTrigger>
             );
@@ -924,6 +1013,7 @@ export const AgentInputAttachmentsRow = React.memo(function AgentInputAttachment
                 <ScrollView
                     horizontal
                     testID="agent-input-attachment-compact-viewport"
+                    style={styles.compactRail}
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.rowContent}
                     onLayout={onCompactRailLayout}

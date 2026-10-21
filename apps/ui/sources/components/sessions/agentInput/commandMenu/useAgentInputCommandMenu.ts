@@ -144,8 +144,11 @@ export function useAgentInputCommandMenu(
     !includePromptPicker &&
     (kindTab !== null ||
       (input.emptyStateWhenResolved === true && input.settledEmpty === true));
+  // A reference picker keeps its frame while it is still looking, so a slow kind never makes it
+  // vanish and come back (the body stays blank until rows or the empty state arrive).
+  const holdsFrame = input.emptyStateWhenResolved === true;
   const commandMenuOpen =
-    (shownSuggestions.length > 0 || includePromptPicker || showsEmptyState) &&
+    (shownSuggestions.length > 0 || includePromptPicker || showsEmptyState || holdsFrame) &&
     activeTriggerKey !== null &&
     activeTriggerKey !== dismissedTriggerKey;
 

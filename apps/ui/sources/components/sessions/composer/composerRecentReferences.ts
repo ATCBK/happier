@@ -15,9 +15,11 @@ export async function applyRecentComposerSkillSelection(candidate: AutocompleteS
 export function buildComposerRecentReferenceSuggestions(input: Readonly<{
     inserted: readonly RecentComposerReferenceInsertion[];
     files: readonly string[];
-    sessions: readonly Pick<ComposerSessionSuggestionItem, 'id' | 'title'>[];
+    sessions: readonly (Pick<ComposerSessionSuggestionItem, 'id' | 'title'> & Partial<Pick<ComposerSessionSuggestionItem, 'workspaceLabel' | 'agentLabel'>>)[];
     kinds: readonly ComposerSuggestionKindId[];
     group: string;
+    /** A session row's second line when it has no folder or Agent to name (keeps every row two lines). */
+    sessionKindLabel?: string;
     skillSelectionEffect?: (reference: Readonly<{ ref: string; label: string }>) => NonNullable<AutocompleteSuggestion['selectionEffect']>;
 }>): AutocompleteSuggestion[] {
     const candidates: Array<Readonly<{ reference: string; suggestion: AutocompleteSuggestion }>> = input.inserted.map(({ reference, suggestion }) => ({ reference: reference.ref, suggestion: {
@@ -29,6 +31,9 @@ export function buildComposerRecentReferenceSuggestions(input: Readonly<{
         label: reference.label,
         text: formatInlineReferenceTokenV1(reference),
         structuredInput: suggestion?.structuredInput ?? reference.payload ?? { kind: reference.kind, ref: reference.ref, label: reference.label },
+        ...(suggestion?.description ? { description: suggestion.description } : {}),
+        ...(suggestion?.component ? { component: suggestion.component } : {}),
+        ...(suggestion?.icon ? { icon: suggestion.icon } : {}),
     } }));
     for (const path of input.files) {
         const label = path.split('/').at(-1) || path;
@@ -39,7 +44,9 @@ export function buildComposerRecentReferenceSuggestions(input: Readonly<{
     for (const session of input.sessions) {
         const selection = buildComposerSessionReferenceSelection(session);
         candidates.push({ reference: selection.ref, suggestion: { kind: 'session', key: `session-${session.id}`, text: selection.token,
-            label: session.title, structuredInput: selection.payload } });
+            label: session.title, structuredInput: selection.payload,
+            // The same second line the Sessions section gives its rows (lab P1).
+            description: session.workspaceLabel ?? session.agentLabel ?? input.sessionKindLabel } });
     }
     const seen = new Set<string>();
     return candidates.flatMap(({ suggestion: candidate, reference: identity }) => {

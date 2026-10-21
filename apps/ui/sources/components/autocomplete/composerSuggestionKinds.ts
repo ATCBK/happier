@@ -358,7 +358,8 @@ async function resolveSessionSuggestions(
             key: `session-${item.id}`,
             text: selection.token,
             label: item.title,
-            description: item.workspaceLabel ?? item.agentLabel ?? item.id,
+            // A row's second line names where the session works; never its raw id.
+            description: item.workspaceLabel ?? item.agentLabel ?? t('composerReferences.kindSession'),
             // Which agent is running in a session is what a user scans this list for, so the
             // row carries that session's machine-qualified catalog mark rather than the kind's
             // shared glyph. The projection carries the exact declared identity (external plugin

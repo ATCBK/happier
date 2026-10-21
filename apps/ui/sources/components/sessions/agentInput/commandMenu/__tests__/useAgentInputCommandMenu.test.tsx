@@ -148,7 +148,7 @@ describe('useAgentInputCommandMenu', () => {
             const hook = await renderHook((props: HookArgs) => useAgentInputCommandMenu(props), { initialProps: referenceArgs({ handleSuggestionSelect }) });
             expect(hook.getCurrent().kindTab).toBeNull();
             expect(hook.getCurrent().items.map((item) => item.id)).toHaveLength(3);
-            await act(async () => hook.getCurrent().cycleKindTab());
+            await act(async () => hook.getCurrent().cycleKindTab?.());
             expect(hook.getCurrent().kindTab).toBe('file');
             expect(hook.getCurrent().items.map((item) => item.label)).toEqual(['a.ts', 'b.ts']);
             await act(async () => hook.getCurrent().moveDown());
@@ -156,9 +156,9 @@ describe('useAgentInputCommandMenu', () => {
             await act(async () => hook.getCurrent().onSelectFromMenu());
             // b.ts is the third suggestion of the whole list.
             expect(handleSuggestionSelect).toHaveBeenCalledWith(2);
-            await act(async () => hook.getCurrent().cycleKindTab());
+            await act(async () => hook.getCurrent().cycleKindTab?.());
             expect(hook.getCurrent().kindTab).toBe('session');
-            await act(async () => hook.getCurrent().cycleKindTab());
+            await act(async () => hook.getCurrent().cycleKindTab?.());
             expect(hook.getCurrent().kindTab).toBeNull();
         });
 
@@ -166,7 +166,9 @@ describe('useAgentInputCommandMenu', () => {
             const hook = await renderHook((props: HookArgs) => useAgentInputCommandMenu(props), {
                 initialProps: referenceArgs({ suggestions: [], settledEmpty: false, activeWord: '@zebra', activeWordRange: { start: 4, end: 10 } }),
             });
-            expect(hook.getCurrent().commandMenuOpen).toBe(false);
+            // Still looking: the frame stays, without claiming there is nothing.
+            expect(hook.getCurrent().commandMenuOpen).toBe(true);
+            expect(hook.getCurrent().showsEmptyState).toBe(false);
             await hook.rerender(referenceArgs({ suggestions: [], settledEmpty: true, activeWord: '@zebra', activeWordRange: { start: 4, end: 10 } }));
             expect(hook.getCurrent().commandMenuOpen).toBe(true);
             expect(hook.getCurrent().showsEmptyState).toBe(true);
@@ -178,7 +180,7 @@ describe('useAgentInputCommandMenu', () => {
 
         it('starts a new trigger on All', async () => {
             const hook = await renderHook((props: HookArgs) => useAgentInputCommandMenu(props), { initialProps: referenceArgs() });
-            await act(async () => hook.getCurrent().cycleKindTab());
+            await act(async () => hook.getCurrent().cycleKindTab?.());
             expect(hook.getCurrent().kindTab).toBe('file');
             await hook.rerender(referenceArgs({ activeWordRange: { start: 12, end: 13 }, inputTextLength: 13 }));
             expect(hook.getCurrent().kindTab).toBeNull();
