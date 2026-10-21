@@ -726,6 +726,92 @@ describe('multi-Home Session creation composition', () => {
         } finally { heldRead.resolve(); heldList.resolve(); await screen.unmount(); }
     });
 
+    it('keeps one New Session composer for a Home draft through image paste and deletion', async () => {
+        const { SessionDraftMutateRequestV2Schema, SessionDraftMutateResponseV2Schema } = await import('@happier-dev/protocol/drafts/sessionDraftsV2');
+        const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
+        const features = createRootLayoutFeaturesResponse({ features: { sessions: { drafts: { enabled: true } } } });
+        const coreHttp = await createDraftSurfaceCoreHttpBoundary();
+        const records = new Map<string, Extract<import('@happier-dev/protocol/drafts/sessionDraftsV2').SessionDraftMutateResponseV2, { status: 'updated' }>['record']>();
+        sessionHttpBoundary = async (url, init) => {
+            const path = new URL(url).pathname;
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json({ ...features,
+                capabilities: { ...features.capabilities, serverIdentity: { serverIdentityId: profiles.getActiveServerSnapshot().serverId } } });
+            if (path === '/v2/account/session-drafts/list') return Response.json({ items: [] });
+            if (path === '/v2/account/session-drafts/read') {
+                const { address } = JSON.parse(String(init?.body));
+                const record = records.get(address.draftId);
+                return Response.json(record ? { status: record.content === null ? 'deleted' : 'present', record } : { status: 'absent' });
+            }
+            if (path === '/v1/account/session-drafts/mutate' || path === '/v2/account/session-drafts/mutate') {
+                const input = SessionDraftMutateRequestV2Schema.parse(JSON.parse(String(init?.body)));
+                if (input.address.kind !== 'newSession') throw new Error('Expected a New Session draft');
+                const current = records.get(input.address.draftId);
+                if ((current?.revision ?? 'absent') !== input.expectedRevision) return Response.json({ status: 'conflict', current: current ?? { status: 'absent' } });
+                const result = SessionDraftMutateResponseV2Schema.parse({ status: 'updated', record: {
+                    address: input.address, revision: (current?.revision ?? 0) + 1, createdAt: 1, updatedAt: Date.now(), content: input.content,
+                } });
+                if (result.status !== 'updated') throw new Error('Expected updated draft');
+                records.set(input.address.draftId, result.record);
+                return Response.json(result);
+            }
+            return coreHttp(path);
+        };
+        accountHttpSettings = { experiments: true, featureToggles: { 'attachments.uploads': true } };
+        ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA('composer-image-delete', { applyConnectionManager: true }));
+        const { storage } = await import('@/sync/domains/state/storage');
+        await storage.getState().activateSettingsScope({ serverId: homeAScopeId, accountId: 'account-a' });
+        storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'attachments.uploads': true } });
+        const scope = { serverId: homeAScopeId, accountId: 'account-a' };
+        const draftId = '00000000-0000-4000-8000-000000000941';
+        const address = { kind: 'newSession' as const, draftId };
+        const { getSessionDraftSnapshot, writeNewSessionDraft, flushSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: { text: 'Describe this picture' } });
+        await expect(flushSessionDraft({ scope, address })).resolves.toMatchObject({ status: 'clean' });
+        storage.getState().applySettingsLocal({ newSessionDraftEntryMode: 'resumePrevious', newSessionOrdinaryEntryDraftId: draftId });
+        routeBoundary.params = { draftId, draftOrigin: 'ordinary' };
+        const { HubComposerSection } = await import('@/components/hub/composer/HubComposerSection');
+        const { DestinationInstanceContext } = await import('@/components/appShell/workspace/destinationInstanceContext');
+        const { NewSessionScreen } = await import('../NewSessionScreen');
+        const { NewSessionDraftComposerActions } = await import('@/components/sessions/drafts/NewSessionDraftComposerActions');
+        const { AgentInput } = await import('@/components/sessions/agentInput');
+        const { MultiTextInput } = await import('@/components/ui/forms/MultiTextInput');
+        const navigation = { push: routeBoundary.push, replace: routeBoundary.replace, back: () => {} };
+        const element = (routeOpen: boolean, homeFocused = !routeOpen) => <InjectedAuthProvider credentials={{ token: homeAToken }}>
+            <DestinationInstanceContext.Provider value={{ tabId: 'home', ref: { kind: 'home', params: {} }, pathname: '/', focused: homeFocused, visible: !routeOpen, navigation }}>
+                <HubComposerSection suggestions="tiles" />
+            </DestinationInstanceContext.Provider>
+            {routeOpen ? <NewSessionScreen presentation="screen" /> : null}
+        </InjectedAuthProvider>;
+        const screen = await renderScreen(element(false));
+        modalBoundary.confirm.mockResolvedValue(true);
+        try {
+            await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
+            const homeComposer = screen.root.findByType(AgentInput);
+            await screen.update(element(false, false));
+            expect(screen.root.findByType(AgentInput)).toBe(homeComposer);
+            await screen.update(element(true));
+            await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
+            await vi.waitFor(() => expect(screen.root.findByType(MultiTextInput).props.onFilesPasted).toBeTypeOf('function'));
+            const input = screen.root.findByType(MultiTextInput);
+            // Clipboard delivery is the browser boundary; New Session intake,
+            // draft persistence, tray projection and reference insertion stay real.
+            await act(async () => {
+                await input.props.onFilesPasted([new File([new Uint8Array([1])], 'diagram.png', { type: 'image/png' })]);
+            });
+            expect(screen.root.findByType(AgentInput).props.attachmentRowItems).toMatchObject([{ attachmentId: expect.any(String), status: 'pending' }]);
+            expect(screen.root.findByType(MultiTextInput).props.references).toMatchObject([{ readableMarker: '[Image #1]', state: 'pending' }]);
+            expect(getSessionDraftSnapshot(scope, address)?.conflict).toBeNull();
+            await act(async () => { await screen.findByType(NewSessionDraftComposerActions).props.onDelete(); });
+            expect(getSessionDraftSnapshot(scope, address)).toBeNull();
+            expect(records.get(draftId)?.content).toBeNull();
+            await screen.update(element(false));
+            await vi.waitFor(() => expect(screen.root.findAllByType(AgentInput)).toHaveLength(1));
+            expect(screen.root.findByType(AgentInput).props.value).toBe('');
+            expect(screen.root.findByType(AgentInput).props.attachmentRowItems).toEqual([]);
+            expect(getSessionDraftSnapshot(scope, address)).toBeNull();
+        } finally { await screen.unmount(); }
+    });
+
     it.each(['disabled', 'waived', 'defaultApproved', 'defaultRejected', 'retargeted', 'pointerChanged'] as const)('routes the composer delete through the %s Action policy', async policy => {
         const { normalizeActionsSettingsV1 } = await import('@happier-dev/protocol');
         const { SessionDraftMutateRequestV2Schema, SessionDraftMutateResponseV2Schema } = await import('@happier-dev/protocol/drafts/sessionDraftsV2');
