@@ -21,6 +21,7 @@
       "types": "./dist/targetedContributions.d.ts",
       "default": "./dist/targetedContributions.js"
     },
+    "./happier-plugin-ui/triage-account-runtime": "./src/accountRuntime.ts",
     "./happier-plugin-ui/triage-list-page-native": "./src/ui/surface.tsx",
     "./happier-plugin-ui/triage-internal-task-detail-native": "./src/internalTasks/detail.tsx",
     "./happier-plugin-ui/triage-internal-task-settings-native": "./src/internalTasks/settings.tsx",

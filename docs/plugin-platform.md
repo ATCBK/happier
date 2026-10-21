@@ -97,6 +97,17 @@ Explicit startup activation, background services and Event subscriptions retain
 their startup lifecycle. Source custody, exact occurrence checks and retirement
 continue to govern both bundled and installed plugins.
 
+Account Action discovery retains selected manifests and exact source custody,
+including daemon-only targeted source declarations. Only Account-placed Actions
+receive Account activation targets; retaining a declaration grants no daemon
+execution rights. Resources retain their declarations in the selected manifest,
+but the Account runtime's executable Resource projection is empty because their
+registration host is daemon-only. They cannot require an Account activation
+target or fail unrelated discovery. Actual module or activation failures retain
+their plugin-scoped diagnostics and exclude that plugin's callable Actions while
+healthy peers remain discoverable. This applies to bundled and external plugins
+in 0.3 development source.
+
 In 0.3 development source, mounted plugins call `hostApi.admitAction(action, input, options)`
 before a caller-owned Account KV or Collection mutation. The existing surface Action
 dispatcher applies Account enablement before its normal approval presenter, without
@@ -195,12 +206,24 @@ entry under `./happier-plugin-ui/<artifactId>`; it must not import host internal
 See the [SDK author reference](../packages/plugin-sdk/README.md#portable-account-actions-03-development)
 and [separately authored fixture](../packages/plugin-sdk/fixtures/account-actions/src/index.ts).
 
-Triage's approved cutover moves its aggregate and credentialless personal
-source to this placement while the existing `tasks.internal.*` Actions remain
-the task data/CAS owner. Its live declarations are temporarily Machine-placed
-until the consumed UI/CLI executor and declaration switch land together; do not
-infer loaded-runtime availability from the new SDK contract. The aggregate
-still merges sources through its existing targeted-source owner.
+In this unreleased UI path, Account Availability projects current page caller
+custody and standalone targeted renderer facts. The app projection merge admits
+Account Actions without a Machine. Mounted Account targets reuse SDK declaration
+admission and the shared Protocol semantic projection; each contributor child
+receives its own custody and contribution snapshot rather than the parent's.
+
+An explicitly selected Machine, when supplied, provides transport for
+Machine-placed source roles. It grants an Account child neither Machine
+execution authority nor readable or dynamic Machine Resources. Missing Machine
+transport produces a typed requirement for the affected source while Account
+rows remain available. These source mechanics do not establish loaded-runtime
+or release readiness.
+
+In 0.3 development source, Triage's aggregate data Actions and credentialless
+personal source use Account placement while the existing `tasks.internal.*`
+Actions remain the task data/CAS owner. The aggregate merges sources through its
+existing targeted-source owner. Its pull request status read retains daemon
+placement.
 Provider-backed source Actions remain Machine-placed: without their required
 Machine, they report `plugin_action_machine_required` per source without hiding
 personal rows. Account placement grants neither provider credentials nor Machine

@@ -42,7 +42,7 @@ function targetedTaskSource(source: TriageEntryRefV1['source'], kindId: string, 
   };
 }
 
-it.each([false, true])('keeps task creation behind source readiness and its declared execution placement (Account data: %s)', async (accountData) => {
+it.each([false, true])('submits a create through the Account aggregate without a Machine once sources are ready (Account data: %s)', async (accountData) => {
   let setReadiness!: React.Dispatch<React.SetStateAction<{ loaded: boolean; unavailableReason: string | null }>>;
   let setSources!: React.Dispatch<React.SetStateAction<readonly TriageMountedConfiguredSourceV1[]>>;
   const sourceFixture = createTriageSourceV1Fixture();
@@ -63,7 +63,7 @@ it.each([false, true])('keeps task creation behind source readiness and its decl
           onApplied={async () => undefined} onClose={() => undefined} />;
       }),
       surfaceContext: createSurfaceContextFixture({ targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create'),
-        ...(accountData ? { machineConnectionPending: true, machineExecutionReady: false } : {}) }),
+        machineConnectionPending: true, machineExecutionReady: false }),
       adapter: createPluginUiRnwSemanticSurfaceAdapter({ overlays: true }),
       handlers: { executeAction: ({ action, input }) => {
         expect(action).toBe('tasks/create-v1');
@@ -84,13 +84,6 @@ it.each([false, true])('keeps task creation behind source readiness and its decl
   expect(document.body.textContent).toContain('Add a source that supports creating tasks');
   await act(async () => { setSources([{ sourceInstanceId: source.configuredInstance.instance.sourceInstanceId,
     configured: source.configuredInstance, displayLabel: 'Engineering' }]); });
-  if (accountData) {
-    expect((await place()).state?.disabled).toBe(true);
-    await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
-      targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create'),
-      machineConnectionPending: false, machineExecutionReady: true,
-    })); });
-  }
   expect((await place()).state?.disabled).not.toBe(true);
   await act(async () => { await fixture.press(await place()); });
   expect(document.querySelector('[role="form"]')).not.toBeNull();
@@ -99,15 +92,7 @@ it.each([false, true])('keeps task creation behind source readiness and its decl
   expect(document.querySelector('[role="form"]')).toBeNull();
   await act(async () => { await fixture.press(await place()); });
   expect(document.querySelector('[role="form"]')).not.toBeNull();
-  if (!accountData) {
-    const targetedContributions = targetedTaskSource(source.configuredInstance.instance.source, 'issue', 'create');
-    await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
-      targetedContributions, machineConnectionPending: true, machineExecutionReady: false,
-    })); });
-    expect(document.querySelector('[role="form"]')).not.toBeNull();
-    expect((await fixture.getByRole('button', { name: 'Create task' })).state?.disabled).toBe(true);
-    await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({ targetedContributions })); });
-  }
+  expect((await fixture.getByRole('button', { name: 'Create task' })).state?.disabled).not.toBe(true);
   await act(async () => { setReadiness({ loaded: true, unavailableReason: 'The Account is unavailable.' }); });
   expect(document.body.textContent).toContain('The Account is unavailable.');
   expect(document.querySelector('[role="form"]')).toBeNull();
@@ -199,8 +184,8 @@ it('offers no Edit task when the admitted source has no edit role', async () => 
   expect(saved).toEqual([]);
 });
 
-it.each([true, false])('blocks task edits during a Machine outage even with retained admitted source facts (pending: %s)', async (pending) => {
-  const { fixture, saved } = await mountEditor();
+it.each([true, false])('refuses an editor when the admitted source cannot supply its current fields (Machine pending: %s)', async (pending) => {
+  const { fixture, saved } = await mountEditor({ readFailed: true });
   const source = createTriageSourceV1Fixture();
   const entry = testkitEntryRef();
   await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
@@ -208,13 +193,13 @@ it.each([true, false])('blocks task edits during a Machine outage even with reta
     machineConnectionPending: pending, machineExecutionReady: false,
   })); });
   const edit = await fixture.getByRole('button', { name: 'Edit task' });
-  if (!edit.state?.disabled) await act(async () => { await fixture.press(edit); });
+  expect(edit.state?.disabled).not.toBe(true);
+  await act(async () => { await fixture.press(edit); });
   expect(document.querySelector('[aria-label="Notes"]')).toBeNull();
-  expect((await fixture.getByRole('button', { name: 'Edit task' })).state?.disabled).toBe(true);
   expect(saved).toEqual([]);
 });
 
-it('does not infer Account execution placement from an Account-data source binding', async () => {
+it('edits an Account task while no Machine is reachable', async () => {
   const { fixture, saved, rereads } = await mountEditor({ accountData: true });
   const source = createTriageSourceV1Fixture();
   const entry = testkitEntryRef();
@@ -222,12 +207,8 @@ it('does not infer Account execution placement from an Account-data source bindi
     targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, entry.kindId, 'edit'),
     machineConnectionPending: true, machineExecutionReady: false,
   })); });
-  expect((await fixture.getByRole('button', { name: 'Edit task' })).state?.disabled).toBe(true);
+  expect((await fixture.getByRole('button', { name: 'Edit task' })).state?.disabled).not.toBe(true);
   expect(saved).toEqual([]);
-  await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
-    targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, entry.kindId, 'edit'),
-    machineConnectionPending: false, machineExecutionReady: true,
-  })); });
   await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'Edit task' })); });
   const input = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Notes"]');
   expect(input?.value).toContain('Original Markdown.');
@@ -304,11 +285,18 @@ it('edits labels as a list of names, like assignees, not as a JSON document', as
   expect(saved[0]?.fields).toEqual({ labelIds: ['bug', 'ui'] });
 });
 
-it('offers the source transitions as a Change status menu beside Edit task and commits the chosen one', async () => {
-  const { fixture, saved, transitioned } = await mountEditor({ transitions: [
+it('offers the source transitions without a Machine and commits the chosen one through the Account aggregate', async () => {
+  const transitions = [
     { id: 'close', label: 'Closed', state: { presentation: 'resolved', nativeLabel: 'Closed', completionReason: 'completed' } },
     { id: 'reopen', label: 'Open', state: { presentation: 'active', nativeLabel: 'Open' } },
-  ] });
+  ] satisfies NonNullable<TriageTaskCapabilitiesV1['transitions']>;
+  const { fixture, saved, transitioned } = await mountEditor({ transitions });
+  const source = createTriageSourceV1Fixture();
+  const entry = testkitEntryRef();
+  await act(async () => { await fixture.updateSurface(createSurfaceContextFixture({
+    targetedContributions: targetedTaskSource(source.configuredInstance.instance.source, entry.kindId, 'edit', false, ['title', 'body'], transitions),
+    machineConnectionPending: true, machineExecutionReady: false,
+  })); });
   // An operation, not a field: no unlabelled "Choose…" select waiting for a value.
   expect(document.querySelector('[aria-label="Change status"][role="combobox"]')).toBeNull();
   // The fixture task is Open: the control says so, and its name keeps the operation.

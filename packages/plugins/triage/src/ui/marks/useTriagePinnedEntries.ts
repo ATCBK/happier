@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import { usePluginHostApi, usePluginHostReadiness, usePluginTranslation } from '@happier-dev/plugin-ui';
 
@@ -115,7 +116,7 @@ function noticeFor(
 export function useTriagePinnedEntries(): TriageMountedPinsV1 {
   const hostApi = usePluginHostApi();
   const durable = useTriageDurableAccount();
-  const readiness = usePluginHostReadiness(durable.collections === null);
+  const readiness = usePluginHostReadiness(durable.collections === null && Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
   const text = usePluginTranslation();
   // One owner, two transports. Direct Account Collections when this mount can
   // reach the Account — which is what keeps Pin working while no daemon is —

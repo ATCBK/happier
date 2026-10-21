@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import { usePluginHostApi, usePluginHostReadiness, usePluginTranslation } from '@happier-dev/plugin-ui';
 
@@ -70,7 +71,7 @@ const UNAVAILABLE_REASON = 'Happier cannot reach your account right now, so save
 export function useTriageSavedViews(): TriageMountedSavedViewsV1 {
   const hostApi = usePluginHostApi();
   const durable = useTriageDurableAccount();
-  const readiness = usePluginHostReadiness(durable.savedViews === null);
+  const readiness = usePluginHostReadiness(durable.savedViews === null && Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
   const text = usePluginTranslation();
   // One owner, two transports. Direct Account KV when this mount can
   // reach the Account — which is what keeps saved views readable and writable

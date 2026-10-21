@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { TRIAGE_DATA_ACTION_EXECUTION_V1 } from '../../accountExecution.js';
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 import { usePluginHostApi, usePluginHostReadiness, usePluginTranslation } from '@happier-dev/plugin-ui';
@@ -123,7 +124,7 @@ export function useTriageFixPullRequests(
   const hostApi = usePluginHostApi();
   const text = usePluginTranslation();
   const durable = useTriageDurableAccount();
-  const readiness = usePluginHostReadiness(durable.collections === null);
+  const readiness = usePluginHostReadiness(durable.collections === null && Object.is(TRIAGE_DATA_ACTION_EXECUTION_V1.target, 'daemon'));
   const workflowSubjectOf = input?.workflowSubjectOf;
   const presentationOf = input?.presentationOf;
   const transport = useMemo<TriageFixPullRequestsTransportV1>(

@@ -1,4 +1,6 @@
 import { createPluginTestkit, type PluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { createPluginRegistrationScope } from '@happier-dev/plugin-sdk/host/registration';
+import { derivePluginAccountContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import type { PluginServices, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { PluginAccountActionContext } from '@happier-dev/plugin-sdk/actions';
 import type { StorageService } from '@happier-dev/plugin-sdk/storage';
@@ -29,6 +31,7 @@ import {
 import { TRIAGE_ENTRY_ATTACHMENT_LOCAL_ID_V1 } from './composer/attachmentValue.js';
 import { PLUGIN_MANIFEST, TRIAGE_PLUGIN } from './manifest.js';
 import { activate } from './activate.js';
+import { activate as activateAccount } from './accountRuntime.js';
 import { CORPUS_USER_MARKS_COLLECTION } from './corpus/collections/definitions.js';
 import {
   CORPUS_SOURCE_INSTANCES_COLLECTION_ID,
@@ -83,13 +86,24 @@ describe('Triage activation', () => {
     expectTypeOf<PluginInvocationContext>().toMatchTypeOf<TriageDataActionContext>();
     expectTypeOf<PluginAccountActionContext>().toMatchTypeOf<TriageDataActionContext>();
   });
-  it('registers personal source configuration through the currently loaded root activation', async () => {
+  it('registers personal source configuration only through the portable Account activation', async () => {
+    const target = { artifactId: 'triage-account-runtime', exportName: 'activate' };
+    const account = createPluginRegistrationScope({
+      pluginId: PLUGIN_MANIFEST.id,
+      target: { realm: 'account', ...target },
+      rights: derivePluginAccountContributionRegistrationRights(PLUGIN_MANIFEST.contributes, target),
+    });
     const plugin = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: { activate } });
     try {
-      expect(plugin.registration('actions', 'internal/tasks/configure-v1')).toBeDefined();
+      await activateAccount(account.api);
+      const registrations = account.commit();
+      expect(registrations.find(entry => entry.family === 'actions' && entry.localId === 'internal/tasks/configure-v1')).toBeDefined();
+      expect(registrations.map(entry => entry.localId).sort())
+        .toEqual(PLUGIN_MANIFEST.contributes.actions.filter(action => action.execution.target === 'account').map(action => action.id).sort());
+      expect(plugin.registration('actions', 'internal/tasks/configure-v1')).toBeUndefined();
       expect(plugin.registrations().filter(entry => entry.family === 'actions').map(entry => entry.localId).sort())
-        .toEqual(PLUGIN_MANIFEST.contributes.actions.filter(action => action.execution.target !== 'client').map(action => action.id).sort());
-    } finally { await plugin.dispose(); }
+        .toEqual(PLUGIN_MANIFEST.contributes.actions.filter(action => action.execution.target === 'daemon').map(action => action.id).sort());
+    } finally { await Promise.all([plugin.dispose(), account.dispose()]); }
   });
 
   it.each(['agent', 'mcp', 'cli'] as const)('keeps built-ins and explicit opt-outs identical on registered %s Actions and direct UI reads', async (surface) => {

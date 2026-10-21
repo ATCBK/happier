@@ -25,7 +25,7 @@ import { testkitEntryRef } from './corpus/testkit/observations.test-support.js';
 import { createTriageSetEntryPinnedActionHandler, listTriagePinnedEntries } from './actions/userMarks.js';
 
 describe('Triage plugin manifest', () => {
-  it('keeps task reads and writes on the currently loaded daemon checkpoint', () => {
+  it('places aggregate and personal task operations on the portable Account artifact', () => {
     const dataActions = [
       'tasks/list-v1', 'tasks/create-v1', 'tasks/edit-v1', 'tasks/transition-v1',
       TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1, 'entries/read-detail-v1',
@@ -35,7 +35,7 @@ describe('Triage plugin manifest', () => {
     ];
     for (const id of dataActions) {
       expect(PLUGIN_MANIFEST.contributes.actions.find(action => action.id === id), id).toMatchObject({
-        execution: { target: 'daemon' },
+        execution: { target: 'account', account: { artifactId: 'triage-account-runtime', exportName: 'activate' } },
       });
     }
   });
@@ -276,7 +276,7 @@ describe('Triage plugin manifest', () => {
     expect(PLUGIN_MANIFEST.entrypoints.daemon).toBe('./.happier-plugin/daemon.js');
   });
 
-  it('offers one existing safe list read to Voice through its canonical daemon Action', () => {
+  it('offers one existing safe list read to Voice through its canonical Account Action', () => {
     const action = PLUGIN_MANIFEST.contributes.actions.find(
       (candidate) => candidate.id === TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
     );
@@ -285,7 +285,7 @@ describe('Triage plugin manifest', () => {
     expect(action).toMatchObject({
       id: TRIAGE_LIST_ENTRIES_ACTION_LOCAL_ID_V1,
       surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'],
-      execution: { target: 'daemon' },
+      execution: { target: 'account', account: { artifactId: 'triage-account-runtime', exportName: 'activate' } },
     });
   });
 
