@@ -8,6 +8,26 @@ const containers: HTMLElement[] = [];
 afterEach(() => { containers.splice(0).forEach((node) => node.remove()); vi.restoreAllMocks(); });
 
 describe('CodeLinesView reading continuity', () => {
+    it.each(['deactivate', 'unmount'] as const)('captures the departing native reading line on %s', async (departure) => {
+        const { CodeLinesReadingAnchor } = await import('./CodeLinesReadingAnchor');
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        containers.push(host);
+        const root = createRoot(host);
+        const remember = vi.fn();
+        const nativeAnchor = { current: { index: 2, offset: -7 } };
+        const lines = buildCodeLinesFromFile({ text: 'a\nb\nreading\nd' });
+        const render = (active: boolean) => root.render(<CodeLinesReadingAnchor lines={lines} getRoot={() => null}
+            nativeAnchor={nativeAnchor} onRememberReadingLine={active ? remember : undefined}>native list</CodeLinesReadingAnchor>);
+        try {
+            await act(async () => render(true));
+            if (departure === 'deactivate') await act(async () => render(false));
+            else await act(async () => root.unmount());
+            expect(remember).toHaveBeenCalledWith(3);
+        } finally {
+            if (departure === 'deactivate') await act(async () => root.unmount());
+        }
+    });
     it('lets only the viewer containing the viewport top restore a shared scroll parent', async () => {
         const { CodeLinesReadingAnchor } = await import('./CodeLinesReadingAnchor');
         const scroller = document.createElement('div');

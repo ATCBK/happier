@@ -74,6 +74,8 @@ export type CodeLinesViewProps = {
     showPrefix?: boolean;
     syntaxHighlighting?: CodeLinesSyntaxHighlightingConfig;
     scrollToLineId?: string;
+    scrollToLineAlignment?: 'start';
+    onRememberReadingLine?: (line: number) => void;
     /** Inline native viewers delegate measured targets to their enclosing scroll owner. */
     onScrollToLine?: (windowY: number) => void;
     externalScrollView?: CodeLinesExternalScrollView;
@@ -487,7 +489,7 @@ export function CodeLinesViewCore(
                 // covered strip counts as the row's margin, so the row centres in the part still visible.
                 const covered = props.contentPaddingBottom ?? 0;
                 if (covered > 0) el.style.scrollMarginBottom = `${covered}px`;
-                el.scrollIntoView({ block: 'center' });
+                el.scrollIntoView({ block: props.scrollToLineAlignment === 'start' ? 'start' : 'center' });
                 if (covered > 0) el.style.scrollMarginBottom = '';
                 return true;
             } catch {
@@ -546,7 +548,7 @@ export function CodeLinesViewCore(
                         const scrollY = Math.max(0, y);
                         completedScrollTarget.current = scrollTargetKey;
                         owner.offsetRef.current = scrollY;
-                        owner.scrollRef.current?.scrollTo({ y: scrollY, animated: true });
+                        owner.scrollRef.current?.scrollTo({ y: scrollY, animated: props.scrollToLineAlignment !== 'start' });
                     });
                     return;
                 }
@@ -561,7 +563,7 @@ export function CodeLinesViewCore(
             // Defer until after layout to avoid "no item at index" on first paint.
             try {
                 if (listRef.current) {
-                    listRef.current.scrollToIndex({ index: scrollIndex, viewPosition: 0.25, animated: true });
+                    listRef.current.scrollToIndex({ index: scrollIndex, viewPosition: props.scrollToLineAlignment === 'start' ? 0 : 0.25, animated: props.scrollToLineAlignment !== 'start' });
                     completedScrollTarget.current = scrollTargetKey;
                 }
             } catch {
@@ -589,7 +591,7 @@ export function CodeLinesViewCore(
             cancelled = true;
             clearTimeout(timer);
         };
-    }, [estimatedRowHeight, lineNativeIdPrefix, props.lines, props.externalScrollView, props.onScrollToLine, props.scrollToLineId, scrollTargetKey, scrollIndex, virtualized]);
+    }, [estimatedRowHeight, lineNativeIdPrefix, props.lines, props.externalScrollView, props.onScrollToLine, props.scrollToLineId, props.scrollToLineAlignment, scrollTargetKey, scrollIndex, virtualized]);
 
     // FlatList is a PureComponent: when behavior depends on props outside `data`, we must provide `extraData`
     // to ensure rows get re-rendered. This matters for "selected" state and inline review-comment composers.
@@ -654,6 +656,7 @@ export function CodeLinesViewCore(
 
     const preserveReadingAnchor = (children: React.ReactNode) => (
         <CodeLinesReadingAnchor
+            onRememberReadingLine={props.onRememberReadingLine}
             lines={props.lines}
             viewId={lineNativeIdPrefix}
             scrollToLineId={props.scrollToLineId}

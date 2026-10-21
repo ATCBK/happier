@@ -98,6 +98,7 @@ type FileContentPanelProps = {
     rangeSelectionActive?: boolean;
     jumpToAnchor?: ReviewCommentAnchor | null;
     find?: FileViewerFindSnapshot;
+    readingMemory?: Readonly<{ identity: string; line?: number; active: boolean; remember(line: number): void }>;
     /** A lane before the line numbers (the Blame region's run column), in View and Changes. */
     renderLeadingLane?: CodeLinesViewProps['renderLeadingLane'];
     /** New-side lines to emphasize while their Blame card is open (lab BL1 Bc); a jump highlight wins. */
@@ -237,6 +238,7 @@ function FileContentPanelInner({
     rangeSelectionActive,
     jumpToAnchor,
     find,
+    readingMemory,
     renderLeadingLane,
     emphasizedLines,
     liveMoment,
@@ -272,7 +274,16 @@ function FileContentPanelInner({
         : MARKDOWN_PREVIEW_COMPACT_PADDING;
 
     // Only web observes blocks: native prose must share one text view for cross-paragraph selection.
-    const markdownReading = useMarkdownReadingAnchor(`${_sessionId}:${filePath}:${displayMode}`, markdownPreviewTopPadding);
+    const rememberedLine = React.useMemo(() => readingMemory?.line, [readingMemory?.identity]);
+    const markdownReading = useMarkdownReadingAnchor(`${_sessionId}:${filePath}:${displayMode}`, markdownPreviewTopPadding, Platform.OS === 'web' && !jumpToAnchor && !find?.open ? rememberedLine : undefined);
+    const canReadMarkdown = displayMode === 'markdown' && (Platform.OS === 'web' || find?.open === true);
+    React.useLayoutEffect(() => {
+        if (!readingMemory?.active || !canReadMarkdown) return;
+        return () => {
+            const line = markdownReading.readLine();
+            if (line !== null) readingMemory.remember(line);
+        };
+    }, [readingMemory?.active, readingMemory?.identity, readingMemory?.remember, canReadMarkdown, markdownReading.readLine]);
 
     const commentSource: ReviewCommentSource = displayMode === 'diff' ? 'diff' : 'file';
     const draftsForThisView = React.useMemo(() => {
@@ -383,7 +394,8 @@ function FileContentPanelInner({
         return null;
     }, [displayMode, jumpToAnchor]);
 
-    const scrollToLineId = useFileContentScrollTarget(jumpHighlight?.scrollToLineId ?? reviewScrollToLineId, find);
+    const rememberedTarget = displayMode === 'file' ? lines.find(line => line.newLine === rememberedLine)?.id : undefined;
+    const scrollToLineId = useFileContentScrollTarget(jumpHighlight?.scrollToLineId ?? reviewScrollToLineId, find, rememberedTarget, readingMemory?.identity);
 
     React.useEffect(() => {
         if (displayMode === 'markdown' && find?.open && find.markdownLineTarget !== null) {
@@ -592,6 +604,8 @@ function FileContentPanelInner({
                 externalScrollView={!virtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}
                 virtualized={virtualized}
                 scrollToLineId={scrollToLineId}
+                scrollToLineAlignment={scrollToLineId && scrollToLineId === rememberedTarget && !jumpHighlight && !find?.open ? 'start' : undefined}
+                onRememberReadingLine={readingMemory?.active ? readingMemory.remember : undefined}
                 findRangesByLineId={find?.lineRanges}
                 highlightLineId={jumpHighlight?.scrollToLineId}
                 highlightLineIds={highlightLineIds}

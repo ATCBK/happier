@@ -34,8 +34,8 @@ function sourceRanges(projection: FindDisplayText, start: number, end: number): 
 }
 
 /** One ephemeral mounted file owner; closed refreshes never project or match its content. */
-export function createFileViewerFindModel(read: () => FileViewerFindContent) {
-    let snapshot: FileViewerFindSnapshot = { open: false, query: '', options: { matchCase: false, regex: false },
+export function createFileViewerFindModel(read: () => FileViewerFindContent, initialQuery = '') {
+    let snapshot: FileViewerFindSnapshot = { open: false, query: initialQuery, options: { matchCase: false, regex: false },
         status: { kind: 'idle' }, lineTarget: null, markdownLineTarget: null,
         lineRanges: new Map(), markdownRanges: [], revealRevision: 0 };
     let matches: readonly FileViewerFindMatch[] = [];
@@ -142,10 +142,10 @@ export function createFileViewerFindModel(read: () => FileViewerFindContent) {
 
 export type FileViewerFindModel = ReturnType<typeof createFileViewerFindModel>;
 
-export function useFileViewerFind(content: FileViewerFindContent, active = true): FileViewerFindModel {
+export function useFileViewerFind(content: FileViewerFindContent, active = true, initialQuery = ''): FileViewerFindModel {
     const latest = React.useRef(content);
     latest.current = content;
-    const model = React.useMemo(() => createFileViewerFindModel(() => latest.current), [content.path]);
+    const model = React.useMemo(() => createFileViewerFindModel(() => latest.current, initialQuery), [content.path]);
     React.useEffect(() => { if (active) model.refresh(); }, [model, active, content.mode, content.text]);
     return model;
 }

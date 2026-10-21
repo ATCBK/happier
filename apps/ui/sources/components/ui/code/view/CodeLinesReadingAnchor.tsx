@@ -1,7 +1,7 @@
 import React from 'react';
 import type { CodeLine } from '../model/codeLineTypes';
 import { mapCodeReadingAnchor } from '../model/mapCodeReadingAnchor';
-import { findVerticalScroller } from './readCodeViewReadingLine';
+import { findVerticalScroller, readCodeViewReadingLine } from './readCodeViewReadingLine';
 
 export type NativeCodeReadingAnchor = Readonly<{ index: number; offset: number }>;
 type Props = Readonly<{
@@ -12,25 +12,41 @@ type Props = Readonly<{
     getNativeAnchor?: (lines: readonly CodeLine[]) => NativeCodeReadingAnchor | null;
     nativeAnchor?: React.RefObject<NativeCodeReadingAnchor | null>;
     scrollToIndex?: (index: number, offset: number) => void;
+    onRememberReadingLine?: (line: number) => void;
     children: React.ReactNode;
 }>;
-type Snapshot = Readonly<{
+type ReadingSnapshot = Readonly<{
     index: number;
     offset: number;
     scroller?: HTMLElement;
 }> | null;
+type Snapshot = Readonly<{ anchor: ReadingSnapshot; remember: Readonly<{ line: number; write(line: number): void }> | null }>;
 
 /** Capture layout before React replaces index-keyed rows, including external scroll parents. */
 export class CodeLinesReadingAnchor extends React.Component<Props, object, Snapshot> {
     private frame: number | null = null;
 
+    private readLine(props = this.props): number | null {
+        const web = readCodeViewReadingLine(props.getRoot());
+        if (web) return web.top.line;
+        const anchor = props.getNativeAnchor?.(props.lines) ?? props.nativeAnchor?.current;
+        const line = anchor ? props.lines[anchor.index] : undefined;
+        return line?.newLine ?? line?.oldLine ?? null;
+    }
 
     getSnapshotBeforeUpdate(previous: Props): Snapshot {
+        const line = previous.onRememberReadingLine && previous.onRememberReadingLine !== this.props.onRememberReadingLine
+            ? this.readLine(previous) : null;
+        return { anchor: this.captureReadingAnchor(previous), remember: line !== null && previous.onRememberReadingLine
+            ? { line, write: previous.onRememberReadingLine } : null };
+    }
+
+    private captureReadingAnchor(previous: Props): ReadingSnapshot {
         if (previous.lines === this.props.lines || previous.scrollToLineId !== this.props.scrollToLineId) return null;
         if (previous.lines.length === this.props.lines.length
             && previous.lines.every((line, index) => line.renderCodeText === this.props.lines[index]?.renderCodeText)) return null;
         const root = this.props.getRoot();
-        let anchor: Snapshot = this.props.getNativeAnchor?.(previous.lines) ?? this.props.nativeAnchor?.current ?? null;
+        let anchor: ReadingSnapshot = this.props.getNativeAnchor?.(previous.lines) ?? this.props.nativeAnchor?.current ?? null;
         if (typeof HTMLElement !== 'undefined' && root instanceof HTMLElement) {
             if (!this.props.viewId) return null;
             const scroller = findVerticalScroller(root);
@@ -56,10 +72,11 @@ export class CodeLinesReadingAnchor extends React.Component<Props, object, Snaps
     }
 
     componentDidUpdate(_previous: Props, _state: object, snapshot: Snapshot) {
+        snapshot.remember?.write(snapshot.remember.line);
         if (this.frame !== null) cancelAnimationFrame(this.frame);
         this.frame = null;
-        if (!snapshot) return;
-        const { scroller, index, offset } = snapshot;
+        if (!snapshot.anchor) return;
+        const { scroller, index, offset } = snapshot.anchor;
         if (!scroller) {
             if (this.props.nativeAnchor?.current) this.props.nativeAnchor.current = { index, offset };
             this.props.scrollToIndex?.(index, offset);
@@ -80,6 +97,8 @@ export class CodeLinesReadingAnchor extends React.Component<Props, object, Snaps
     }
 
     componentWillUnmount() {
+        const line = this.props.onRememberReadingLine ? this.readLine() : null;
+        if (line !== null) this.props.onRememberReadingLine?.(line);
         if (this.frame !== null) cancelAnimationFrame(this.frame);
     }
 

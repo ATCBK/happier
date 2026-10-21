@@ -22,6 +22,19 @@ installCodeViewCommonModuleMocks({
 const { FileContentPanel } = await import('./FileContentPanel');
 
 describe('native file panel reading continuity', () => {
+    it('remembers the departing raw reader before Changes replaces its viewport', async () => {
+        const remember = vi.fn();
+        const props = { theme: { colors: { text: { secondary: '#999' } } }, sessionId: 's1', filePath: 'a.txt',
+            diffContent: '@@ -1,3 +1,3 @@\n a\n-b\n+B\n c', language: null, fileContent: 'a\nb\nc',
+            selectedLineKeys: new Set<string>(), lineSelectionEnabled: false, onToggleLine: vi.fn() };
+        const screen = await renderScreen(<FileContentPanel {...props} displayMode="file"
+            readingMemory={{ identity: 'a.txt', active: true, remember }} />);
+        try {
+            await act(async () => screen.findByType('FlatList').props.onViewableItemsChanged({ viewableItems: [{ index: 2 }] }));
+            await screen.update(<FileContentPanel {...props} displayMode="diff" />);
+            expect(remember).toHaveBeenCalledWith(3);
+        } finally { await screen.unmount(); }
+    });
     it.each([true, false])('retains nonvirtualized commented file reading with wrapLines=%s', async (wrapLines) => {
         let scrollY = 55;
         const props = {

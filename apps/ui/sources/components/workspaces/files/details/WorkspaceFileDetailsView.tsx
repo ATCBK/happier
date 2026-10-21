@@ -635,6 +635,9 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const tabKey = React.useMemo(() => `file:${filePath}`, [filePath]);
     const { view: fileView, patchView: patchFileView } = useWorkspaceFileView(pane, tabKey);
     const isActive = props.openableContentViewer?.details.active ?? (presentation === 'screen' || (pane.scopeState?.details?.isOpen === true && pane.scopeState.details.activeTabKey === tabKey));
+    const rememberFindQuery = React.useCallback((findQuery: string) => patchFileView({ findQuery }), [patchFileView]);
+    const rememberReadingLine = React.useCallback((scrollLine: number) => patchFileView({ scrollLine }), [patchFileView]);
+    const readingMemory = React.useMemo(() => ({ identity: `${props.scopeId}:${tabKey}`, line: fileView.scrollLine, active: isActive, remember: rememberReadingLine }), [props.scopeId, tabKey, fileView.scrollLine, isActive, rememberReadingLine]);
     const persistedDraft = readWorkspaceFileEditorDraft(pane.scopeState?.details?.tabState?.[tabKey], editorAccountScope?.accountId ?? null);
     // Mirrors the editor state (declared below, after the content it needs) for the loader's diff request.
     const [diffWhileEditing, setDiffWhileEditing] = React.useState(persistedDraft?.isEditingFile === true);
@@ -1473,11 +1476,13 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     <>
                     {blameRegion.note ? <FileBlameNote note={blameRegion.note} /> : null}
                     {blameRegion.card}
-                    <FileViewerFindSurface surfaceId={findSurfaceId} active={isActive} focusRootRef={findFocusRoot}
+                    <FileViewerFindSurface key={readingMemory.identity} surfaceId={findSurfaceId} active={isActive} focusRootRef={findFocusRoot}
+                        initialQuery={fileView.findQuery} onRememberQuery={rememberFindQuery}
                         content={{ path: filePath, mode: displayMode, text: displayMode === 'diff' ? (surface ? surface.unifiedDiff : diffContent) : fileContent?.isBinary ? null : fileContent?.content ?? null }}
                         findSeed={props.findSeed} onFindSeedConsumed={props.onFindSeedConsumed}>
                     {(find) => (
                     <FileContentPanel
+                        readingMemory={displayMode === 'diff' ? undefined : readingMemory}
                         workspaceScope={scope}
                         find={find}
                         liveMoment={displayMode === 'file' ? liveMoment : null}

@@ -7,7 +7,7 @@ type Layout = Readonly<{ y: number; height: number }>;
 type Anchor = Readonly<{ index: number; offset: number }>;
 
 /** The Markdown renderer measures its own blocks; the file preview remains the only scroll owner. */
-export function useMarkdownReadingAnchor(identity: string, paddingTop: number) {
+export function useMarkdownReadingAnchor(identity: string, paddingTop: number, initialLine?: number) {
     const scrollRef = React.useRef<ScrollView>(null);
     const state = React.useMemo(() => ({
         ranges: [] as readonly MarkdownSourceRangeAction[],
@@ -18,7 +18,7 @@ export function useMarkdownReadingAnchor(identity: string, paddingTop: number) {
         anchorMeasured: false,
         scrollY: 0,
         requestedY: null as number | null,
-        requestedLine: null as number | null,
+        requestedLine: (initialLine ?? null) as number | null,
     }), [identity]);
     const restore = React.useCallback(() => {
         if (!state.pending || !state.anchor || !state.anchorMeasured) return;
@@ -96,5 +96,6 @@ export function useMarkdownReadingAnchor(identity: string, paddingTop: number) {
         state.requestedLine = line;
         revealRequestedLine();
     }, [revealRequestedLine, state]);
-    return { scrollRef, observer, onScroll, onContentSizeChange: restore, revealLine };
+    const readLine = React.useCallback(() => state.anchor ? state.ranges[state.anchor.index]?.sourceRange.startLine ?? null : null, [state]);
+    return { scrollRef, observer, onScroll, onContentSizeChange: restore, revealLine, readLine };
 }

@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen } from '@/dev/testkit';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { HappierMaterialRoleProvider } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet } from 'react-native';
 import { storage as settingsStorage } from '@/sync/domains/state/storageStore';
@@ -22,6 +23,10 @@ import type {
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import type { WorkspaceFileOpenableContentViewerHost } from './WorkspaceFileDetailsView';
 import { installWorkspaceFileDetailsCommonModuleMocks } from './workspaceFileDetails/workspaceFileDetailsTestHelpers';
+
+function renderScreen(element: React.ReactElement) {
+    return renderTestScreen(element, { wrapper: ({ children }) => <AppPaneProvider>{children}</AppPaneProvider> });
+}
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
@@ -74,7 +79,9 @@ vi.mock('@/components/appShell/panes/details/surfaces/pluginDetailsDestination',
     usePluginDetailsDestinationLaunchStaging: () => openableContentViewerState.stage,
 }));
 
-vi.mock('@/components/plugins/surfaces/pluginSurfaceOpenableContent', () => ({
+vi.mock('@/components/plugins/surfaces/pluginSurfaceOpenableContent', async (importOriginal) => ({
+    // Substitute the opaque external file-I/O port, not the shared content classifier.
+    ...await importOriginal<typeof import('@/components/plugins/surfaces/pluginSurfaceOpenableContent')>(),
     createWorkspaceFileOpenableContentBinding: (...args: unknown[]) => {
         openableContentViewerState.createBinding(...args);
         return ({
@@ -92,10 +99,6 @@ vi.mock('@/sync/runtime/getSyncSingleton', () => ({
 vi.mock('@/components/workspaces/files/file/FileContentPanel', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/components/workspaces/files/file/FileContentPanel')>(),
     FileContentPanel: (props: any) => React.createElement('FileContentPanel', props),
-}));
-
-vi.mock('@/components/workspaces/files/file/editor/FileEditorPanel', () => ({
-    FileEditorPanel: (props: any) => React.createElement('FileEditorPanel', props),
 }));
 
 // Metro's platform projection and the native WebView are the genuine engine boundary.
@@ -121,10 +124,6 @@ vi.mock('@/components/workspaces/files/details/sessionAugmentation/WorkspaceAugm
 
 vi.mock('@/components/workspaces/files/file/WorkspaceFileDownloadButton', () => ({
     WorkspaceFileDownloadButton: (props: any) => React.createElement('WorkspaceFileDownloadButton', props),
-}));
-
-vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
-    useAppPaneScope: () => ({ scopeState: { details: { tabState: {} } }, setDetailsTabState: vi.fn() }),
 }));
 
 const featureState = vi.hoisted(() => ({ markdownRichEditor: true }));
@@ -867,7 +866,15 @@ describe('WorkspaceFileDetailsView (markdown edit mode)', () => {
             expect(openableContentViewerState.mutateSettings.mock.calls.map(([input]) => (
                 input.expectedSettingsVersion
             ))).toEqual([7, 8]);
-            expect(openableContentViewerState.stage).toHaveBeenCalledTimes(2);
+            // The real pane patch rerenders this retained page; replacement is a port fixture,
+            // so assert the selected destination, not an incidental number of staging renders.
+            expect(openableContentViewerState.stage).toHaveBeenLastCalledWith(expect.objectContaining({
+                placement: expect.objectContaining({
+                    binding: expect.objectContaining({
+                        destination: { pluginId: 'plugin.preview', localId: 'markdown-viewer' },
+                    }),
+                }),
+            }));
             expect(openableContentViewerState.replaceTab).toHaveBeenCalledWith(
                 'plugin-details:plugin.preview:text-viewer',
                 expect.objectContaining({

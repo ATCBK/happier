@@ -8,6 +8,20 @@ const ranges = (markdown: string) => splitMarkdownRenderSegments({ markdown, str
 const scrollEvent = (y: number) => ({ nativeEvent: { contentOffset: { x: 0, y } } }) as NativeSyntheticEvent<NativeScrollEvent>;
 
 describe('Markdown file reading continuity', () => {
+    it('restores a remembered source line through measured blocks and captures the next passage', async () => {
+        const hook = await renderHook(() => useMarkdownReadingAnchor('session:remembered', 24, 5));
+        const anchor = hook.getCurrent();
+        const scrollTo = vi.fn();
+        anchor.scrollRef.current = { scrollTo } as unknown as ScrollView;
+        const blocks = ranges('# Heading\n\nFirst paragraph.\n\nRemembered paragraph.');
+        anchor.observer.onRanges(blocks);
+        blocks.forEach((range, index) => anchor.observer.onLayout(range, { y: index * 100, height: 100 }));
+        expect(scrollTo).toHaveBeenLastCalledWith({ y: 224, animated: false });
+        expect(anchor.readLine()).toBe(5);
+        anchor.onScroll(scrollEvent(144));
+        expect(anchor.readLine()).toBe(3);
+        await hook.unmount();
+    });
     it('reveals an offscreen Find source line after its block is measured and lets manual scrolling take over', async () => {
         const hook = await renderHook(() => useMarkdownReadingAnchor('session:find', 24));
         const anchor = hook.getCurrent();

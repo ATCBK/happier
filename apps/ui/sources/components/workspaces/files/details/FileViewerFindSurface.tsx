@@ -17,9 +17,15 @@ export function FileViewerFindSurface(props: Readonly<{
     focusRootRef?: React.RefObject<View | null>;
     findSeed?: FileFindSeed | null;
     onFindSeedConsumed?: () => void;
+    initialQuery?: string;
+    onRememberQuery?: (query: string) => void;
     children(snapshot: FileViewerFindSnapshot): React.ReactNode;
 }>) {
-    const model = useFileViewerFind(props.content, props.active);
+    const model = useFileViewerFind(props.content, props.active, props.initialQuery);
+    React.useLayoutEffect(() => {
+        if (!props.active) return;
+        return () => props.onRememberQuery?.(model.query);
+    }, [model, props.active, props.onRememberQuery]);
     const snapshot = React.useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
     const viewport = React.useRef<View | null>(null);
     const input = React.useRef<TextInput | null>(null);
