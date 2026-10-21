@@ -311,9 +311,13 @@ function EditSetDeclinedLine(props: Readonly<{ text: string }>) {
 
 /** The shared pending-approval line, in the band's (or the sheet footer's) status slot. */
 function EditSetWaitingLine(props: Readonly<{ waiting: EditSetWaiting }>) {
+  // The line hugs its words, so its open control sits right after "Waiting for your approval" rather
+  // than at the slot's far edge beside the band's own buttons.
   return (
-    <ActionApprovalPendingNotice presentation="line" message={t('approvals.waitingForYou')}
-      onOpenApproval={props.waiting.open} testID="code-edit-set-approval" />
+    <View style={styles.waitingLine}>
+      <ActionApprovalPendingNotice presentation="line" message={t('approvals.waitingForYou')}
+        onOpenApproval={props.waiting.open} testID="code-edit-set-approval" />
+    </View>
   );
 }
 
@@ -1461,6 +1465,10 @@ const styles = StyleSheet.create((theme) => ({
   footerStatus: {
     flex: 1,
     minWidth: 0,
+  },
+  waitingLine: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   mono: {
     ...Typography.mono(),
