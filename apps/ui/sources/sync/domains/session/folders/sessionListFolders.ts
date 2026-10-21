@@ -189,7 +189,7 @@ function narrowSessionListIndexToFocusedFolder(params: Readonly<{
         }
         if (item.type !== 'session') continue;
         const assignedFolderId = params.assignmentsBySessionKey[
-            buildSessionFolderAssignmentKey(item.serverId ?? headerServerId ?? null, item.sessionId)
+            buildSessionFolderAssignmentKey(item.serverId ?? headerServerId ?? null, item.sessionId, item.keyParts)
         ] ?? null;
         if (!assignedFolderId || !focus.folderIds.has(assignedFolderId)) continue;
         items.push(item);
@@ -235,6 +235,7 @@ export function applySessionFolderTreeToSessionListIndex(params: Readonly<{
                 buildSessionFolderAssignmentKey(
                     session.serverId ?? group.header.serverId ?? null,
                     session.sessionId,
+                    session.keyParts,
                 )
             ];
             if (folderId) assignedFolderIds.add(folderId);
@@ -266,7 +267,7 @@ export function applySessionFolderTreeToSessionListIndex(params: Readonly<{
         const rootSessions: Array<Extract<SessionListIndexItem, { type: 'session' }>> = [];
         for (const session of group.sessions) {
             const assignedFolderId = params.assignmentsBySessionKey[
-                buildSessionFolderAssignmentKey(session.serverId ?? group.header.serverId ?? null, session.sessionId)
+                buildSessionFolderAssignmentKey(session.serverId ?? group.header.serverId ?? null, session.sessionId, session.keyParts)
             ] ?? null;
             if (assignedFolderId && knownFolderIds.has(assignedFolderId)) {
                 if (!sessionsByFolderId.has(assignedFolderId)) sessionsByFolderId.set(assignedFolderId, []);

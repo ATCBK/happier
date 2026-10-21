@@ -13,7 +13,7 @@
  * layer or re-derive the order. `keyboard/sessions` keeps only shortcut-availability policy.
  */
 
-import { normalizeSessionAddress, sessionAddressKey } from '../sessionAddress';
+import { normalizeSessionListKeyParts, type NormalizedSessionListKeyParts } from '../listing/sessionListKeyNormalization';
 
 export type SessionNavigationDirection = 'previous' | 'next';
 
@@ -34,6 +34,7 @@ export type SessionListLikeItem = Readonly<{
     type: string;
     sessionId?: unknown;
     serverId?: unknown;
+    keyParts?: NormalizedSessionListKeyParts;
 }>;
 
 const DEFAULT_SESSION_MRU_MAX_ENTRIES = 50;
@@ -42,11 +43,10 @@ function normalizeSessionKeyPart(value: unknown): string {
     return typeof value === 'string' ? value.trim() : '';
 }
 
-export function buildServerScopedSessionKey(sessionId: string, serverId?: string | null): string {
+export function buildServerScopedSessionKey(sessionId: string, serverId?: string | null, keyParts?: NormalizedSessionListKeyParts): string {
     const normalizedSessionId = normalizeSessionKeyPart(sessionId);
     const normalizedServerId = normalizeSessionKeyPart(serverId);
-    const address = normalizeSessionAddress(normalizedServerId, normalizedSessionId);
-    return address ? sessionAddressKey(address) : normalizedSessionId;
+    return normalizeSessionListKeyParts(normalizedServerId, normalizedSessionId, keyParts).sessionKey ?? normalizedSessionId;
 }
 
 /**
@@ -85,7 +85,7 @@ export function buildVisibleSessionNavigationEntries(
         entries.push({
             index,
             sessionId,
-            sessionKey: buildServerScopedSessionKey(sessionId, serverId),
+            sessionKey: buildServerScopedSessionKey(sessionId, serverId, item.keyParts),
             ...(serverId ? { serverId } : null),
         });
     });

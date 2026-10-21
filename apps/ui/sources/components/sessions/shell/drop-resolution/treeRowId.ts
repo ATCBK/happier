@@ -1,5 +1,6 @@
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { normalizeSessionListKeyParts, type NormalizedSessionListKeyParts } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 
 export const treeRowId = Object.freeze({
     folder: (serverId: string, folderId: string) => JSON.stringify([
@@ -7,9 +8,10 @@ export const treeRowId = Object.freeze({
         serverId.trim(),
         folderId.trim(),
     ]),
-    session: (serverId: string, sessionId: string) => JSON.stringify([
+    session: (serverId: string, sessionId: string, keyParts?: NormalizedSessionListKeyParts) => JSON.stringify([
         'session',
-        sessionAddressKey({ serverId: serverId.trim(), sessionId: sessionId.trim() }),
+        normalizeSessionListKeyParts(serverId, sessionId, keyParts).sessionKey
+            ?? sessionAddressKey({ serverId: serverId.trim(), sessionId: sessionId.trim() }),
     ]),
     workspaceRoot: (workspaceKey: string) => JSON.stringify(['workspace-root', workspaceKey.trim()]),
 });

@@ -217,7 +217,7 @@ export type RegisterSessionFolderDropTarget = (target: Readonly<{
 function resolveTreeRowIdForSessionItem(item: Extract<SessionListIndexItem, { type: 'session' }>): string {
     const serverId = typeof item.serverId === 'string' ? item.serverId.trim() : '';
     const sessionId = String(item.sessionId ?? '').trim();
-    return serverId ? treeRowId.session(serverId, sessionId) : `session:${sessionId}`;
+    return serverId ? treeRowId.session(serverId, sessionId, item.keyParts) : `session:${sessionId}`;
 }
 
 function mergeSessionListRowStoreKeySets(
@@ -1529,7 +1529,7 @@ export function useSessionListViewStateFromPaneState(
         const map = new Map<string, Extract<SessionListIndexItem, { type: 'session' }>>();
         for (const item of renderedListItems) {
             if (item.type !== 'session') continue;
-            map.set(buildServerScopedSessionKey(item.sessionId, item.serverId), item);
+            map.set(buildServerScopedSessionKey(item.sessionId, item.serverId, item.keyParts), item);
         }
         return map;
     }, [renderedListItems]);
@@ -1582,7 +1582,7 @@ export function useSessionListViewStateFromPaneState(
         }
         return renderModels.selectionScopeListItems.filter((item): item is Extract<SessionListIndexItem, { type: 'session' }> => (
             item.type === 'session'
-            && sessionListSelectionSnapshot.selectedKeys.has(buildServerScopedSessionKey(item.sessionId, item.serverId))
+            && sessionListSelectionSnapshot.selectedKeys.has(buildServerScopedSessionKey(item.sessionId, item.serverId, item.keyParts))
         ));
     }, [
         renderModels.selectionScopeListItems,
@@ -1594,10 +1594,7 @@ export function useSessionListViewStateFromPaneState(
         if (selectedSessionListItems.length === 0) return new Map<string, SessionBulkActionTarget>();
         const targets = new Map<string, SessionBulkActionTarget>();
         for (const item of selectedSessionListItems) {
-            const rowKey = resolveSessionListRowStoreScopeKey({
-                sessionId: item.sessionId,
-                serverId: item.serverId ?? null,
-            });
+            const rowKey = resolveSessionListRowStoreScopeKey(item);
             const session = selectedRowRenderableByKey.get(rowKey);
             if (!session) continue;
             const target = buildSessionBulkActionTargetFromSessionItem({
@@ -2060,10 +2057,7 @@ export function useSessionListViewStateFromPaneState(
         index: number,
     ) => {
         const treeRowIdForItem = resolveTreeRowIdForSessionItem(item);
-        const rowScopeKey = resolveSessionListRowStoreScopeKey({
-            sessionId: item.sessionId,
-            serverId: item.serverId ?? null,
-        });
+        const rowScopeKey = resolveSessionListRowStoreScopeKey(item);
         const rowAttentionAnimationEnabled = rowSubscriptionKeys === null
             || rowSubscriptionKeys.has(rowScopeKey);
         const moveActionHandlers = getRowMoveActionHandlers({
@@ -2084,7 +2078,7 @@ export function useSessionListViewStateFromPaneState(
             orderingModeV1: sessionListOrderingModeV1,
         });
         const draftServerId = item.serverId ?? draftScope?.serverId ?? null;
-        const draftKey = draftServerId ? sessionTagKey(draftServerId, item.sessionId) : null;
+        const draftKey = draftServerId ? sessionTagKey(draftServerId, item.sessionId, item.keyParts) : null;
         const draft = draftKey ? renderModels.existingDraftBySessionKey.get(draftKey) ?? null : null;
         const deleteDraft = draftScope
             && (!item.serverId || item.serverId === draftScope.serverId)
@@ -2295,10 +2289,7 @@ export function useSessionListViewStateFromPaneState(
             const item = node ? nodeByIdRef.current.get(node.id) ?? null : null;
             if (!item || item.type === 'header') continue;
             if (item.type === 'workflow_run') { nextKeys.add(buildSessionListIndexNodeId(item)); continue; }
-            nextKeys.add(resolveSessionListRowStoreScopeKey({
-                sessionId: item.sessionId,
-                serverId: item.serverId ?? null,
-            }));
+            nextKeys.add(resolveSessionListRowStoreScopeKey(item));
         }
         const previousKeys = viewableSessionRowKeysRef.current;
         if (stringSetsEqual(previousKeys, nextKeys)) return;

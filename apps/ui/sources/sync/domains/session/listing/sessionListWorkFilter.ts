@@ -64,7 +64,7 @@ export function buildSessionListRowFilterFacts(
         attentionRequired: options.attentionRequired ?? row?.viewer?.attention.needsAttention,
         scopeMatches, underSessionMatches: options.underSessionMatches,
         audiences: options.audiences, tagIds: options.tagIds,
-        workspaceRefs: options.workspaceRefs, workspaceContext: workspaceRefResolutionContextV1,
+        workspaceRefs: options.workspaceRefs, workspaceContext: workspaceRefResolutionContextV1(),
     };
 }
 
@@ -134,7 +134,7 @@ export function buildWorkflowRunFilterFacts(
         tagIds: [], source: 'persisted',
         underSessionMatches,
         // A Run's destination is not owner Session Project/status evidence.
-        workspaceContext: workspaceRefResolutionContextV1,
+        workspaceContext: workspaceRefResolutionContextV1(),
     };
 }
 

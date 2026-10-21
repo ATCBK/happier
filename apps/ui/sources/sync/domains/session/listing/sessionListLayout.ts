@@ -115,6 +115,7 @@ function projectRecentActivitySessionItem(params: Readonly<{
     return {
         type: 'session',
         sessionId: item.sessionId,
+        ...(item.keyParts ? { keyParts: item.keyParts } : {}),
         ...(item.serverId ? { serverId: item.serverId } : {}),
         ...(item.serverName ? { serverName: item.serverName } : {}),
         ...(item.storageKind ? { storageKind: item.storageKind } : {}),
@@ -161,7 +162,7 @@ export function projectSessionListIndexForLayout(params: Readonly<{
     const seen = new Set<string>();
     for (const item of params.source) {
         if (item.type !== 'session') continue;
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey
             || normalizeTrimmedString(item.sessionId);
         if (!key || seen.has(key)) continue;
         seen.add(key);

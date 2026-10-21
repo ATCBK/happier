@@ -1,5 +1,6 @@
 import { LruMap } from '@/utils/cache/lruMap';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { normalizeSessionListKeyParts, type NormalizedSessionListKeyParts } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 
 import { readSessionListShellCacheMaxEntriesFromEnv } from './sessionListShellCacheConfig';
 
@@ -28,8 +29,9 @@ function areTagsEqual(left: ReadonlyArray<string>, right: ReadonlyArray<string>)
     return true;
 }
 
-export function sessionTagKey(serverId: string, sessionId: string): string {
-    return sessionAddressKey({ serverId: serverId.trim(), sessionId: sessionId.trim() });
+export function sessionTagKey(serverId: string, sessionId: string, keyParts?: NormalizedSessionListKeyParts): string {
+    return normalizeSessionListKeyParts(serverId, sessionId, keyParts).sessionKey
+        ?? sessionAddressKey({ serverId: serverId.trim(), sessionId: sessionId.trim() });
 }
 
 export function getTagsForSession(

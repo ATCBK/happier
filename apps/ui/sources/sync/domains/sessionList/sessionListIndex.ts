@@ -10,7 +10,7 @@ import type {
     SessionListAttentionPlacementOrdering,
     SessionListWorkingPlacementReason,
 } from '../session/listing/sessionListAttentionPlacementTypes';
-import { sessionAddressKey } from '../session/sessionAddress';
+import { normalizeSessionListKeyParts, type NormalizedSessionListKeyParts } from '../session/listing/sessionListKeyNormalization';
 
 export type SessionListIndexItem =
     | Readonly<{
@@ -43,6 +43,8 @@ export type SessionListIndexItem =
     | Readonly<{
         type: 'session';
         sessionId: string;
+        /** Prepared by the index producer; survives non-address row updates. */
+        keyParts?: NormalizedSessionListKeyParts;
         storageKind?: SessionStorageKind;
         section?: 'active' | 'inactive';
         groupKey?: string;
@@ -261,7 +263,7 @@ export function buildSessionListIndexNodeId(item: SessionListIndexItem): string 
     const serverId = String(item.serverId ?? '').trim();
     if (item.type === 'workflow_run') return `workflow_run:${JSON.stringify([serverId, item.runId])}`;
     const sessionId = String(item.sessionId ?? '').trim();
-    if (serverId && sessionId) return `session:${sessionAddressKey({ serverId, sessionId })}`;
+    if (serverId && sessionId) return `session:${normalizeSessionListKeyParts(serverId, sessionId, item.keyParts).sessionKey}`;
     return `session:${sessionId}`;
 }
 
@@ -329,12 +331,19 @@ export function buildSessionListIndexFromViewData(
         return null;
     }
 
+    const previousKeyPartsByHome = new Map<string, Map<string, NormalizedSessionListKeyParts>>();
     const previousByKey = Array.isArray(previousIndex)
         ? (() => {
             const map = new Map<string, SessionListIndexItem>();
             for (let index = 0; index < previousIndex.length; index += 1) {
                 const item = previousIndex[index];
                 map.set(buildSessionListIndexNodeId(item), item);
+                if (item.type === 'session') {
+                    const parts = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts);
+                    let bySession = previousKeyPartsByHome.get(parts.serverId);
+                    if (!bySession) previousKeyPartsByHome.set(parts.serverId, bySession = new Map());
+                    bySession.set(parts.sessionId, parts);
+                }
             }
             return map;
         })()
@@ -368,9 +377,13 @@ export function buildSessionListIndexFromViewData(
             return nextItem;
         }
 
+        const serverId = String(item.serverId ?? '').trim();
+        const sessionId = String(item.session.id ?? '').trim();
+        const keyParts = normalizeSessionListKeyParts(serverId, sessionId, previousKeyPartsByHome.get(serverId)?.get(sessionId));
         const nextItem: SessionListIndexItem = {
             type: 'session',
             sessionId: item.session.id,
+            keyParts,
             storageKind: getSessionStorageKind(item.session),
             section: item.section,
             groupKey: item.groupKey,
@@ -387,7 +400,8 @@ export function buildSessionListIndexFromViewData(
         };
         const key = buildSessionListIndexNodeId(nextItem);
         const previousItem = previousByKey?.get(key) ?? null;
-        if (previousItem && areSessionListIndexItemsEqual(previousItem, nextItem)) {
+        if (previousItem?.type === 'session' && previousItem.keyParts === keyParts
+            && areSessionListIndexItemsEqual(previousItem, nextItem)) {
             return previousItem;
         }
         didChange = true;

@@ -482,7 +482,7 @@ function resolveAttentionCandidate(params: Readonly<{
     backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
     allowArchived?: boolean;
 }>): PlacementCandidate<SessionListAttentionPlacementReason> | null {
-    const key = normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId).sessionKey;
+    const key = normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId, params.item.keyParts).sessionKey;
     if (!key || !params.row) return null;
     if (!params.allowArchived && (params.item.archivedAt != null || params.row.archivedAt != null)) return null;
 
@@ -543,7 +543,7 @@ function resolveWorkingCandidate(params: Readonly<{
     nowMs: number;
     backgroundWorkAttentionMode?: SessionListBackgroundWorkAttentionMode;
 }>): PlacementCandidate<'working'> | null {
-    const key = normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId).sessionKey;
+    const key = normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId, params.item.keyParts).sessionKey;
     if (!key || !params.row) return null;
     if (params.item.archivedAt != null || params.row.archivedAt != null) return null;
     return createWorkingCandidate({
@@ -728,7 +728,7 @@ export function buildSessionListGlobalPlacements(params: Readonly<{
 
     params.source.forEach((item, originalIndex) => {
         if (item.type !== 'session') return;
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         if (!key) return;
         const row = params.resolveSessionRow(item.serverId, item.sessionId);
         if (!row) return;
@@ -787,7 +787,7 @@ export function buildSessionListGlobalPlacements(params: Readonly<{
 
     const remainder = params.source.filter((item) => {
         if (item.type !== 'session') return true;
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         return !key || !promotedKeySet.has(key);
     });
 

@@ -200,7 +200,7 @@ function buildCanonicalSessionKeyAliases(
     const ambiguousLegacyAliases = new Set<string>();
     for (const item of source) {
         if (item.type !== 'session') continue;
-        const parts = normalizeSessionListKeyParts(item.serverId, item.sessionId);
+        const parts = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts);
         if (!parts.sessionKey) continue;
         aliases.set(parts.sessionKey, parts.sessionKey);
 
@@ -445,7 +445,7 @@ function reorderSessionItemsByKeys(
 
     const byKey = new Map<string, Extract<SessionListIndexItem, { type: 'session' }>>();
     for (const item of items) {
-        const k = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const k = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         if (k) {
             byKey.set(k, item);
         }
@@ -479,7 +479,7 @@ function reorderPinnedSessionItemsByStructuralKeys(
 
     const byKey = new Map<string, SessionIndexItem>();
     for (const item of items) {
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         if (key) {
             byKey.set(key, item);
         }
@@ -505,8 +505,8 @@ function reorderPinnedSessionItemsByStructuralKeys(
     const remaining = items
         .filter((item) => !used.has(item))
         .sort((a, b) => {
-            const keyA = normalizeSessionListKeyParts(a.serverId, a.sessionId).sessionKey || a.sessionId;
-            const keyB = normalizeSessionListKeyParts(b.serverId, b.sessionId).sessionKey || b.sessionId;
+            const keyA = normalizeSessionListKeyParts(a.serverId, a.sessionId, a.keyParts).sessionKey || a.sessionId;
+            const keyB = normalizeSessionListKeyParts(b.serverId, b.sessionId, b.keyParts).sessionKey || b.sessionId;
             return keyA.localeCompare(keyB);
         });
     return [...out, ...remaining];
@@ -543,7 +543,7 @@ function isManualSessionOrderSupported(
 
 function buildListItemOrderKey(item: SessionListIndexItem): string | null {
     if (item.type === 'session') {
-        return normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        return normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
     }
     if (item.type === 'header' && item.headerKind === 'folder') {
         return buildSessionListFolderOrderItemKey({
@@ -1001,7 +1001,7 @@ function applyPinnedSessionListIndexFlags(params: Readonly<{
     let changed = false;
     const next = params.ordered.map((item) => {
         if (item.type !== 'session') return item;
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         if (!key || !pinnedSet.has(key)) return item;
         missingPinnedSet?.delete(key);
         if (item.pinned === true && item.variant === 'default') return item;
@@ -1035,7 +1035,7 @@ function buildPinnedSessionListIndexItems(params: Readonly<{
             remainder.push(item);
             continue;
         }
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         if (key && pinnedSet.has(key)) {
             pinnedSessions.push({
                 ...item,

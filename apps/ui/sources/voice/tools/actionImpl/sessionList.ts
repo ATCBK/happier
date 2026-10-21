@@ -160,12 +160,13 @@ export async function listSessionsForVoiceTool(params: Readonly<{
           .map((sessionId) => findSessionListLookupSession(state, { serverId, sessionId })?.session);
         if (rows.some((row) => !row)) return failure('invalid_response');
         const projectRows = readCurrentProjectAccountRows(state);
+        const workspaceContext = workspaceRefResolutionContextV1();
         const sessions = rows.flatMap((row) => {
           if (!row) return [];
           if (params.project) {
             if (!isSessionAccessOwner(row.access, row.accessLevel) || (row.owner && row.owner !== state.profileScope?.accountId)) return [];
             const projectMatch = matchSessionProjectFilterV1(row.metadataUnavailable ? null : readSessionListRenderableOwnerMetadataView(row), serverId, params.project,
-              projectRows?.status === 'ready' && projectRows.coverage === 'complete' ? projectRows.workspaceRefs : undefined, workspaceRefResolutionContextV1);
+              projectRows?.status === 'ready' && projectRows.coverage === 'complete' ? projectRows.workspaceRefs : undefined, workspaceContext);
             if (projectMatch === 'unavailable') projectFilterUnavailableCount += 1;
             if (projectMatch !== 'match') return [];
           }

@@ -1,6 +1,6 @@
 import { normalizeTrimmedString } from './normalizeTrimmedString';
 
-import { normalizeSessionAddress, sessionAddressKey } from '../sessionAddress';
+import { sessionAddressKey } from '../sessionAddress';
 
 export const EMPTY_SESSION_LIST_SERVER_KEY = '__unknown_server__';
 
@@ -22,12 +22,14 @@ const EMPTY_NORMALIZED_SESSION_LIST_KEY_PARTS: NormalizedSessionListKeyParts = {
 export function normalizeSessionListKeyParts(
     serverIdRaw: unknown,
     sessionIdRaw?: unknown,
+    previous?: NormalizedSessionListKeyParts,
 ): NormalizedSessionListKeyParts {
     const serverId = normalizeTrimmedString(serverIdRaw);
     const sessionId = normalizeTrimmedString(sessionIdRaw);
     if (!serverId && !sessionId) {
         return EMPTY_NORMALIZED_SESSION_LIST_KEY_PARTS;
     }
+    if (previous?.serverId === serverId && previous.sessionId === sessionId) return previous;
 
     return {
         serverId,
@@ -40,18 +42,20 @@ export function normalizeSessionListKeyParts(
 export function buildSessionListServerScopedRowKey(
     serverIdRaw: unknown,
     sessionIdRaw?: unknown,
+    keyParts?: NormalizedSessionListKeyParts,
 ): string | null {
-    const address = normalizeSessionAddress(serverIdRaw, sessionIdRaw);
-    return address ? sessionAddressKey(address) : null;
+    if (typeof serverIdRaw !== 'string' || typeof sessionIdRaw !== 'string') return null;
+    return normalizeSessionListKeyParts(serverIdRaw, sessionIdRaw, keyParts).sessionKey;
 }
 
 export function buildSessionListRowScopeKey(
     serverIdRaw: unknown,
     sessionIdRaw?: unknown,
+    keyParts?: NormalizedSessionListKeyParts,
 ): string | null {
     const sessionId = typeof sessionIdRaw === 'string' ? sessionIdRaw.trim() : '';
     if (!sessionId) return null;
     // A missing Home is used only by the incumbent active-Home row subscription.
     if (serverIdRaw === null || serverIdRaw === undefined || serverIdRaw === '') return sessionId;
-    return buildSessionListServerScopedRowKey(serverIdRaw, sessionId);
+    return buildSessionListServerScopedRowKey(serverIdRaw, sessionId, keyParts);
 }

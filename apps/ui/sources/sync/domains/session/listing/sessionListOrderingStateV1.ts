@@ -324,7 +324,7 @@ function buildChildKeySetByGroupKeyFromIndex(source: ReadonlyArray<SessionListIn
         if (item.type === 'session') {
             const groupKey = normalizeTrimmedString(item.groupKey);
             if (!groupKey) continue;
-            const sessionKey = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+            const sessionKey = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
             if (sessionKey) addKey(map, groupKey, sessionKey);
             continue;
         }

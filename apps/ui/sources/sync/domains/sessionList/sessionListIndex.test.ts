@@ -1,4 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { buildVisibleSessionNavigationEntries } from '../session/navigation/sessionNavigationOrder';
+import { resolveSessionListRowStoreScopeKey } from '@/components/sessions/shell/row/sessionListVisibleRowStoreScopes';
+import { treeRowId } from '@/components/sessions/shell/drop-resolution/treeRowId';
+import { sessionTagKey } from '@/components/sessions/shell/sessionTagUtils';
+import { buildSessionFolderAssignmentKey } from '../session/folders/assignmentKeys';
 
 import type { SessionListRenderableSession } from '../session/listing/sessionListRenderable';
 import type { SessionListViewItem } from '../session/listing/sessionListViewData';
@@ -29,6 +34,61 @@ function makeRenderable(id: string): SessionListRenderableSession {
 }
 
 describe('buildSessionListIndexFromViewData', () => {
+    it('publishes address keys once and reuses them for unchanged reads and reordered rows', () => {
+        const items: SessionListViewItem[] = ['one', 'two'].map(id => ({
+            type: 'session', session: makeRenderable(id), serverId: 'home',
+        }));
+        const first = buildSessionListIndexFromViewData(items)!;
+        const encode = vi.spyOn(JSON, 'stringify');
+        let addressEncodes: number;
+        try {
+            for (let index = 0; index < 20; index++) {
+                expect(first.map(buildSessionListIndexNodeId)).toEqual(['session:["home","one"]', 'session:["home","two"]']);
+                expect(buildVisibleSessionNavigationEntries(first).map(entry => entry.sessionKey)).toEqual([
+                    '["home","one"]', '["home","two"]',
+                ]);
+                expect(first.filter(item => item.type === 'session').map(resolveSessionListRowStoreScopeKey)).toEqual([
+                    '["home","one"]', '["home","two"]',
+                ]);
+                for (const item of first) {
+                    if (item.type !== 'session') continue;
+                    const key = `["home","${item.sessionId}"]`;
+                    expect(treeRowId.session('home', item.sessionId, item.keyParts)).toBe(`["session",${JSON.stringify(key)}]`);
+                    expect(sessionTagKey('home', item.sessionId, item.keyParts)).toBe(key);
+                    expect(buildSessionFolderAssignmentKey('home', item.sessionId, item.keyParts)).toBe(key);
+                }
+            }
+            expect(buildSessionListIndexFromViewData(items, first)).toBe(first);
+            const reordered = buildSessionListIndexFromViewData([...items].reverse(), first)!;
+            expect(reordered).toEqual([first[1], first[0]]);
+            const changed = buildSessionListIndexFromViewData(items.map(item => ({ ...item, pinned: true })), first)!;
+            expect(changed.every(item => item.type === 'session' && item.pinned === true)).toBe(true);
+            expect(changed[0]).not.toBe(first[0]);
+            addressEncodes = encode.mock.calls.filter(([value]) => Array.isArray(value) && value[0] === 'home').length;
+        } finally { encode.mockRestore(); }
+        expect(addressEncodes).toBe(0);
+        const moved = buildSessionListIndexFromViewData(items.map(item => ({ ...item, serverId: 'other-home' })), first)!;
+        expect(moved.map(buildSessionListIndexNodeId)).toEqual([
+            'session:["other-home","one"]', 'session:["other-home","two"]',
+        ]);
+        const rebased = first.map(item => ({ ...item, serverId: 'other-home' }));
+        expect(rebased.map(buildSessionListIndexNodeId)).toEqual(moved.map(buildSessionListIndexNodeId));
+        expect(buildVisibleSessionNavigationEntries(rebased).map(entry => entry.sessionKey)).toEqual([
+            '["other-home","one"]', '["other-home","two"]',
+        ]);
+        const movedItems = items.map(item => ({ ...item, serverId: 'other-home' }));
+        const repaired = buildSessionListIndexFromViewData(movedItems, rebased)!;
+        const repairedEncode = vi.spyOn(JSON, 'stringify');
+        let repairedAddressEncodes: number;
+        try {
+            expect(buildSessionListIndexFromViewData(movedItems, repaired)).toBe(repaired);
+            expect(repaired.map(buildSessionListIndexNodeId)).toEqual(moved.map(buildSessionListIndexNodeId));
+            repairedAddressEncodes = repairedEncode.mock.calls.filter(([value]) => Array.isArray(value)
+                && value[0] === 'other-home').length;
+        } finally { repairedEncode.mockRestore(); }
+        expect(repairedAddressEncodes).toBe(0);
+    });
+
     it('builds stable node ids without relying on item index', () => {
         const sessionNodeId = buildSessionListIndexNodeId({
             type: 'session',

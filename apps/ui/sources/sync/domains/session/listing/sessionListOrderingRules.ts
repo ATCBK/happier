@@ -56,13 +56,13 @@ export function readSessionListUpdatedOrderingKey(
 }
 
 export function buildSessionListSessionOrderingKey(params: Readonly<{
-    item: Pick<Extract<SessionListIndexItem, { type: 'session' }>, 'serverId' | 'sessionId'>;
+    item: Pick<Extract<SessionListIndexItem, { type: 'session' }>, 'serverId' | 'sessionId' | 'keyParts'>;
     row: SessionListOrderingTimestampSource | null | undefined;
 }>): SessionListSessionOrderingKey {
     return {
         updated: readSessionListUpdatedOrderingKey(params.row),
         createdAt: normalizePositiveTimestamp(params.row?.createdAt),
-        stableId: normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId).sessionKey
+        stableId: normalizeSessionListKeyParts(params.item.serverId, params.item.sessionId, params.item.keyParts).sessionKey
             || normalizeTrimmedString(params.item.sessionId),
     };
 }

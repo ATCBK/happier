@@ -1,6 +1,8 @@
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storageStore';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { readHomeAccountReadRevision } from '@/sync/runtime/orchestration/homeAccountChange';
 import { sync } from '@/sync/sync';
 import {
     fetchConcurrentSessionListQueryPage,
@@ -136,19 +138,13 @@ export async function refreshOrdinarySessionList(serverIdRaw: string): Promise<v
     await refreshConcurrentOrdinarySessionList(serverIdRaw);
 }
 
-type SharedPageRead = {
-    readonly result: ReturnType<typeof readSessionListQueryPageForHome>;
-    readonly abort: AbortController;
-    waiters: number;
-};
-
 /**
  * Page reads on the wire. Every surface that shows a corpus owns its own controller, so one commit
  * that mounts several of them, or one Account change that refreshes them, asks for the same page
  * together. Those callers share one request. A read that began before the Home's latest invalidation
  * is never shared with a caller that asks after it.
  */
-const pageReadsInFlight = new Map<string, SharedPageRead>();
+const pageReads = createScopedResolutionSingleFlight<Awaited<ReturnType<typeof readSessionListQueryPageForHome>>>();
 
 /**
  * A strict-query page and a row-only page of one corpus are the same read: the store tells them apart
@@ -165,35 +161,10 @@ export function fetchSessionListQueryPageForHome(
 ) {
     const serverId = String(serverIdRaw ?? '').trim();
     const key = JSON.stringify([
-        serverId, readSessionListQueryReadEpoch(serverId),
+        serverId, readHomeAccountReadRevision(serverId), readSessionListQueryReadEpoch(serverId),
         page.source, readSharedMembership(page.membership), page.hydration ?? null, page.limit ?? null, page.cursor ?? null, page.attentionCursor ?? null,
     ]);
-    let shared = pageReadsInFlight.get(key);
-    if (!shared) {
-        const abort = new AbortController();
-        const created: SharedPageRead = {
-            result: readSessionListQueryPageForHome(serverId, { ...page, signal: abort.signal }),
-            abort,
-            waiters: 0,
-        };
-        shared = created;
-        pageReadsInFlight.set(key, created);
-        const forget = () => {
-            if (pageReadsInFlight.get(key) === created) pageReadsInFlight.delete(key);
-        };
-        created.result.then(forget, forget);
-    }
-    const read = shared;
-    read.waiters += 1;
-    const leave = () => {
-        read.waiters -= 1;
-        if (read.waiters > 0) return;
-        if (pageReadsInFlight.get(key) === read) pageReadsInFlight.delete(key);
-        read.abort.abort(page.signal.reason);
-    };
-    if (page.signal.aborted) leave();
-    else page.signal.addEventListener('abort', leave, { once: true });
-    return read.result;
+    return pageReads.run(key, signal => readSessionListQueryPageForHome(serverId, { ...page, signal }), { signal: page.signal });
 }
 
 async function readSessionListQueryPageForHome(

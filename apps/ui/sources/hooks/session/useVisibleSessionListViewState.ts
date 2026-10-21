@@ -203,7 +203,7 @@ function resolveRetainedAttentionPlacements(params: Readonly<{
         // sliding away under them; retaining a standing row would instead pin it
         // in the band until they navigate elsewhere.
         if (item.attentionPlacementReason === 'standing') continue;
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         const ordering = item.attentionPlacementOrdering ?? (item.attentionPlacementReason
             ? { reason: item.attentionPlacementReason, timestamp: 0 } : null);
         return key && ordering ? [{ key, ...ordering }] : [];
@@ -411,7 +411,7 @@ function resolveRetainedWorkingSessionKeys(
     for (const item of previousVisibleIndex) {
         if (item.type !== 'session') continue;
         if (item.groupKind !== 'working' && !isSessionListWorkingPlacementReason(item.workingPlacementReason)) continue;
-        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId).sessionKey;
+        const key = normalizeSessionListKeyParts(item.serverId, item.sessionId, item.keyParts).sessionKey;
         if (!key || seen.has(key)) continue;
         seen.add(key);
         retainedKeys.push(key);

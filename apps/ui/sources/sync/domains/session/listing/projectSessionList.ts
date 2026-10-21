@@ -22,6 +22,7 @@ export function projectSessionList(input: Readonly<{
 }>): Readonly<{ items: readonly ProjectSessionListItem[]; unavailableCount: number }> {
     if (!selectActiveServerAccountScopeForServer(input.viewer, input.project.serverId)) return { items: [], unavailableCount: 0 };
     let unavailableCount = 0;
+    const workspaceContext = workspaceRefResolutionContextV1();
     const items = (input.source ?? []).filter((item): item is ProjectSessionListItem => {
         if (item.type !== 'session' || !item.serverId || !areServerProfileIdentifiersEquivalent(item.serverId, input.project.serverId)) return false;
         const row = input.rows[item.sessionId];
@@ -29,7 +30,7 @@ export function projectSessionList(input: Readonly<{
             || (row.owner !== undefined && row.owner !== input.viewer!.accountId)
             || !isUserFacingSession(row)) return false;
         const match = matchSessionProjectFilterV1(row.metadataUnavailable ? null : readSessionListRenderableOwnerMetadataView(row),
-            item.serverId, input.project, input.workspaceRefs, workspaceRefResolutionContextV1);
+            item.serverId, input.project, input.workspaceRefs, workspaceContext);
         if (match === 'unavailable') unavailableCount += 1;
         return match === 'match';
     });

@@ -19,6 +19,7 @@ import { buildMachineDisplaysByIdFromMachineList, buildSessionListIndexWithServe
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { SessionListRenderableSession } from './sessionListRenderable';
 import type { SessionAddress } from '../sessionAddress';
+import { normalizeSessionListKeyParts } from './sessionListKeyNormalization';
 import {
     resolveRuntimeFeatureDecisionFromSnapshot,
     useServerFeaturesMainSelectionSnapshot,
@@ -293,6 +294,7 @@ export function buildSessionListQueryHomeIndex(input: Readonly<{
                 serverId: address.serverId,
                 ...(input.serverName ? { serverName: input.serverName } : {}),
                 sessionId: address.sessionId,
+                keyParts: normalizeSessionListKeyParts(address.serverId, address.sessionId),
                 section: 'active',
                 groupKind: 'loading',
             });

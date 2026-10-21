@@ -1,5 +1,5 @@
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
-import { buildSessionListRowScopeKey } from '@/sync/domains/session/listing/sessionListKeyNormalization';
+import { buildSessionListRowScopeKey, type NormalizedSessionListKeyParts } from '@/sync/domains/session/listing/sessionListKeyNormalization';
 import { isSessionListWorkingPlacementReason } from '@/sync/domains/session/listing/sessionListAttentionPlacementTypes';
 export {
     buildSessionListRuntimePriorityRowKeys,
@@ -11,6 +11,7 @@ export {
 export type SessionListRowStoreSubscriptionScope = Readonly<{
     sessionId: string;
     serverId?: string | null;
+    keyParts?: NormalizedSessionListKeyParts;
 }>;
 
 export type SessionListRowStorePriorityOptions = Readonly<{
@@ -21,7 +22,7 @@ export type SessionListRowStorePriorityOptions = Readonly<{
 const UNKNOWN_VIEWABILITY_EAGER_SUBSCRIPTION_MAX_ROWS = 50;
 
 export function resolveSessionListRowStoreScopeKey(scope: SessionListRowStoreSubscriptionScope): string {
-    return buildSessionListRowScopeKey(scope.serverId, scope.sessionId) ?? '';
+    return buildSessionListRowScopeKey(scope.serverId, scope.sessionId, scope.keyParts) ?? '';
 }
 
 export function reuseSessionListRowStoreSubscriptionScopes<T extends ReadonlyArray<SessionListRowStoreSubscriptionScope>>(
@@ -87,10 +88,7 @@ export function buildSessionListRowStorePriorityKeys(
     const keys = new Set<string>();
     for (const item of items) {
         if (!isSessionListRowStorePriorityItem(item, exactOptions)) continue;
-        keys.add(resolveSessionListRowStoreScopeKey({
-            sessionId: item.sessionId,
-            serverId: item.serverId ?? null,
-        }));
+        keys.add(resolveSessionListRowStoreScopeKey(item));
     }
     return keys;
 }
@@ -170,10 +168,7 @@ export function resolveSessionListRowStoreSubscriptionItems(
         if (!priorityRowKeys || priorityRowKeys.size === 0) return [];
         return items.filter((item) => {
             if (item.type !== 'session') return false;
-            const key = resolveSessionListRowStoreScopeKey({
-                sessionId: item.sessionId,
-                serverId: item.serverId ?? null,
-            });
+            const key = resolveSessionListRowStoreScopeKey(item);
             return priorityRowKeys.has(key);
         });
     }
@@ -182,10 +177,7 @@ export function resolveSessionListRowStoreSubscriptionItems(
     if (subscriptionKeys.size === 0) return [];
     return items.filter((item) => {
         if (item.type !== 'session') return false;
-        const key = resolveSessionListRowStoreScopeKey({
-            sessionId: item.sessionId,
-            serverId: item.serverId ?? null,
-        });
+        const key = resolveSessionListRowStoreScopeKey(item);
         return subscriptionKeys.has(key);
     });
 }
@@ -202,10 +194,7 @@ export function resolveSessionListRowStoreSubscriptionItemsWithUncachedRows(
         const next: SessionListIndexItem[] = [];
         for (const item of items) {
             if (item.type !== 'session') continue;
-            const key = resolveSessionListRowStoreScopeKey({
-                sessionId: item.sessionId,
-                serverId: item.serverId ?? null,
-            });
+            const key = resolveSessionListRowStoreScopeKey(item);
             if (!key) continue;
             if (priorityRowKeys?.has(key) === true || !isRowCached(key)) {
                 next.push(item);
@@ -220,10 +209,7 @@ export function resolveSessionListRowStoreSubscriptionItemsWithUncachedRows(
     const next: SessionListIndexItem[] = [];
     for (const item of items) {
         if (item.type !== 'session') continue;
-        const key = resolveSessionListRowStoreScopeKey({
-            sessionId: item.sessionId,
-            serverId: item.serverId ?? null,
-        });
+        const key = resolveSessionListRowStoreScopeKey(item);
         if (!key) continue;
         if (subscriptionKeys.has(key) || !isRowCached(key)) {
             next.push(item);

@@ -123,7 +123,7 @@ function buildSessionListItemKeySet(items: ReadonlyArray<SessionListIndexItem>):
     const keys = new Set<string>();
     for (const item of items) {
         if (item.type !== 'session' || !item.serverId) continue;
-        keys.add(sessionTagKey(item.serverId, item.sessionId));
+        keys.add(sessionTagKey(item.serverId, item.sessionId, item.keyParts));
     }
     return keys;
 }
@@ -154,10 +154,7 @@ function resolveCachedSessionListRowRenderablesForItems(input: Readonly<{
     const next = new Map<string, SessionListRenderableSession>();
     for (const item of input.items) {
         if (item.type !== 'session') continue;
-        const key = resolveSessionListRowStoreScopeKey({
-            sessionId: item.sessionId,
-            serverId: item.serverId ?? null,
-        });
+        const key = resolveSessionListRowStoreScopeKey(item);
         if (!key) continue;
         const retention = retentionByKey.get(key);
         const cached = input.cacheByKey.get(key);
@@ -191,7 +188,7 @@ function resolveCachedSessionListReachabilityRenderablesForItems(input: Readonly
     const next = new Map<string, SessionListReachabilityRenderable>();
     for (const item of input.items) {
         if (item.type !== 'session') continue;
-        const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId);
+        const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId, item.keyParts);
         if (!key) continue;
         const retention = retentionByKey.get(key);
         const cached = input.cacheByKey.get(key);
@@ -234,7 +231,7 @@ function buildSessionListRetentionByRowKey(
     const result = new Map<string, SessionListRenderableRetention>();
     for (const item of items) {
         if (item.type !== 'session') continue;
-        const key = resolveSessionListRowStoreScopeKey({ sessionId: item.sessionId, serverId: item.serverId ?? null });
+        const key = resolveSessionListRowStoreScopeKey(item);
         if (!key) continue;
         result.set(key, {
             binding: resolveCurrentCredentialBinding(bindings, item.serverId),
@@ -251,7 +248,7 @@ function buildSessionListRetentionByReachabilityKey(
     const result = new Map<string, SessionListRenderableRetention>();
     for (const item of items) {
         if (item.type !== 'session') continue;
-        const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId);
+        const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId, item.keyParts);
         if (!key) continue;
         result.set(key, {
             binding: resolveCurrentCredentialBinding(bindings, item.serverId),
@@ -393,7 +390,7 @@ export function useSessionListRenderModels(input: Readonly<{
         for (const item of listItems) {
             if (item.type !== 'session' || (item.serverId && item.serverId !== draftScope.serverId)) continue;
             const projection = getExistingSessionDraftProjection(draftScope, item.sessionId);
-            if (projection?.listed) drafts.set(sessionTagKey(draftScope.serverId, item.sessionId), projection);
+            if (projection?.listed) drafts.set(sessionTagKey(draftScope.serverId, item.sessionId, item.keyParts), projection);
         }
         return drafts.size === 0 ? EMPTY_SESSION_LIST_RENDER_MODELS.existingDraftBySessionKey : drafts;
     }, [draftListRevision, draftScope, listItems]);
@@ -515,7 +512,7 @@ export function useSessionListRenderModels(input: Readonly<{
                 workspaceRefs: normalizedShellState.workspaceRefs,
                 workspacePathDisplayModeV1: input.workspacePathDisplayModeV1,
                 resolveSessionRenderable: (item) => {
-                    const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId);
+                    const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId, item.keyParts);
                     return key ? reachabilityRenderablesByKey.get(key) ?? null : null;
                 },
             }),

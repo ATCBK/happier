@@ -1,4 +1,5 @@
 import { sessionAddressKey } from '../sessionAddress';
+import { normalizeSessionListKeyParts, type NormalizedSessionListKeyParts } from '../listing/sessionListKeyNormalization';
 
 /**
  * `serverId` is nullable because the canonical folder record is
@@ -13,10 +14,11 @@ export function sessionFolderAddressKey(address: SessionFolderAddress): string {
     return JSON.stringify([normalizedServerId ? normalizedServerId : null, address.folderId.trim()]);
 }
 
-export function buildSessionFolderAssignmentKey(serverId: string | null | undefined, sessionId: string): string {
+export function buildSessionFolderAssignmentKey(serverId: string | null | undefined, sessionId: string, keyParts?: NormalizedSessionListKeyParts): string {
     const normalizedServerId = typeof serverId === 'string' ? serverId.trim() : '';
     const normalizedSessionId = sessionId.trim();
     return normalizedServerId
-        ? sessionAddressKey({ serverId: normalizedServerId, sessionId: normalizedSessionId })
+        ? normalizeSessionListKeyParts(normalizedServerId, normalizedSessionId, keyParts).sessionKey
+            ?? sessionAddressKey({ serverId: normalizedServerId, sessionId: normalizedSessionId })
         : JSON.stringify([null, normalizedSessionId]);
 }

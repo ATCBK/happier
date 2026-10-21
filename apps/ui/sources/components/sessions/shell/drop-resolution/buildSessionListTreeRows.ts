@@ -382,7 +382,7 @@ export function buildSessionListTreeRows(params: BuildSessionListTreeRowsParams)
             const sessionId = String(item.sessionId ?? '').trim();
             if (!sessionId) return;
             const rowId = serverId
-                ? treeRowId.session(serverId, sessionId)
+                ? treeRowId.session(serverId, sessionId, item.keyParts)
                 : JSON.stringify(['session', null, sessionId]);
             const metadata: SessionListTreeRowMetadata = {
                 rowId,
