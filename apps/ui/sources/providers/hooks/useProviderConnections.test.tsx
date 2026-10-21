@@ -51,6 +51,19 @@ describe('useProviderConnections', () => {
         otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test', accountId: 'account-a', active: false });
     });
 
+    it('withdraws the addressed catalog when its Home is missing instead of reading the active Home', async () => {
+        let addressedServerId: string | null = serverId;
+        const hook = await renderHook(() => useProviderConnections({
+            enabled: true, machineId: null, serverId: addressedServerId,
+        }));
+        await vi.waitFor(() => expect(hook.getCurrent().data).not.toBeNull());
+        addressedServerId = null;
+        await hook.rerender();
+        await vi.waitFor(() => expect(hook.getCurrent().loading).toBe(false));
+        expect(hook.getCurrent().data).toBeNull();
+        expect(hook.getCurrent().catalog).toBeNull();
+    });
+
     it('keeps saved editor configuration at the revision its Account describe read', async () => {
         let revision = 1;
         const catalogAt = (value: number) => ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,

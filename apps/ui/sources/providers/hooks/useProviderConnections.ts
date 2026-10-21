@@ -37,7 +37,9 @@ export function useProviderConnections(input: Readonly<{
     serverId: string | null;
     connectionId?: string;
 }>) {
-    const { describeProviderConnections, ready, retryReadiness, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
+    // A missing addressed Home must not use the Action client's omitted-target
+    // fallback to the active Home. Account reads may omit a Machine, not a Home.
+    const { describeProviderConnections, ready, retryReadiness, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId ?? []);
     const active = input.active ?? true;
     const activeRef = React.useRef(active);
     activeRef.current = active;
