@@ -5,6 +5,7 @@ import type { UsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHo
 import { getPreferredLanguage, t } from '@/text';
 import { formatUsageDuration as formatSharedUsageDuration, formatUsageDurationCompact as formatSharedUsageDurationCompact,
   type UsageDurationLabels } from '@happier-dev/protocol/usage/usageFormatting';
+export { formatUsageUtcOffset } from '@happier-dev/protocol/usage/usageFormatting';
 
 /**
  * Presentation-only shaping of the How-you-work projection (Protocol `resolveUsageHowYouWork` owns
@@ -232,13 +233,6 @@ export function readUsageAnsweringShares(
     unknown: counts.unknown,
     shares,
   };
-}
-
-/** "UTC+02:00": the fixed offset the query's calendar uses, stated rather than assumed local. */
-export function formatUsageUtcOffset(offsetMinutes: number): string {
-    const sign = offsetMinutes < 0 ? '−' : '+';
-    const absolute = Math.abs(Math.round(offsetMinutes));
-    return `UTC${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`;
 }
 
 /** The night window's hours in clock order from its start ("23, 0, 1 … 6"). */

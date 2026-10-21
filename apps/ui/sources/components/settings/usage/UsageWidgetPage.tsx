@@ -74,6 +74,7 @@ const PRESET_ICON: Readonly<Record<UsageWidgetPresetId, IconName>> = {
   coach: 'sparkle',
   'how-you-work': 'clock',
   sources: 'stack',
+  agents: 'robot',
 };
 const PRESET_NAME_KEYS = {
   overview: 'usage.presets.overview',
@@ -84,6 +85,7 @@ const PRESET_NAME_KEYS = {
   coach: 'usage.presets.coach',
   'how-you-work': 'usage.presets.how-you-work',
   sources: 'usage.presets.sources',
+  agents: 'usage.presets.agents',
 } as const satisfies Record<UsageWidgetPresetId, string>;
 export type UsageWidgetPageProps = Readonly<{
   /** Supplied only by the Session route after its own scope/hydration admission. */

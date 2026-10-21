@@ -73,7 +73,7 @@ export function useUsageWidgetPageContext(input: UsageWidgetPageContextInput): U
         setState(current => {
             if (!canChange() || current.authority !== input.authority || current.retired
                 || current.sessionId !== input.sessionId || current.initialKey !== initialKey) return current;
-            const query = applyUsageWidgetPageScope(current.query, patch, input.sessionId);
+            const query = { ...applyUsageWidgetPageScope(current.query, patch, input.sessionId), metric: current.query.metric };
             return getUsageQueryKey(query) === getUsageQueryKey(current.query) ? current : { ...current, query, edited: true };
         });
         return true;
@@ -83,8 +83,8 @@ export function useUsageWidgetPageContext(input: UsageWidgetPageContextInput): U
         setState(current => {
             if (!canChange() || current.authority !== input.authority || current.retired
                 || current.sessionId !== input.sessionId || current.initialKey !== initialKey) return current;
-            const query = UsageQuerySchema.parse({ ...current.query,
-                ...resolveUsageWidgetPeriod(period, input.nowMs ?? Date.now(), current.query.timeZoneOffsetMinutes) });
+            const query = { ...UsageQuerySchema.parse({ ...current.query,
+                ...resolveUsageWidgetPeriod(period, input.nowMs ?? Date.now(), current.query.timeZoneOffsetMinutes) }), metric: current.query.metric };
             return current.period === period && getUsageQueryKey(query) === getUsageQueryKey(current.query)
                 ? current : { ...current, query, period, edited: true };
         });

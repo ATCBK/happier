@@ -28,6 +28,7 @@ import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
 import { HappierDataMetric, HappierDataRows } from '@happier-dev/plugin-ui/presentation';
+import { useUsageAnalyticsView } from './usageBodyKit';
 
 const accounting: UsageAnalyticsQueryResponse = {
   v: 1,
@@ -96,20 +97,30 @@ describe('Usage page batch', () => {
     const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
     storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
     let query: ReturnType<typeof useUsageWidgetModel>['query'] = null;
-    function Probe(props: { metric: 'tokens' | 'busy' }) {
-      query = useUsageWidgetModel({ ...scope, metric: props.metric, style: 'sky', colourBy: 'intensity', day: '2026-10-21' }, 'usage_rhythm').query;
+    let accountingViewAvailable: boolean | undefined;
+    function AccountingProjection(props: { slice: NonNullable<UsageWidgetBodyModel['slice']>; query: NonNullable<ReturnType<typeof useUsageWidgetModel>['query']> }) {
+      accountingViewAvailable = useUsageAnalyticsView(props.slice, props.query) !== null;
       return null;
     }
-    const view = (metric: 'tokens' | 'busy') => <InjectedAuthProvider credentials={credentials}><UsageWidgetBatchProvider clauses={clauses}>
-      <Probe metric={metric} /></UsageWidgetBatchProvider></InjectedAuthProvider>;
+    function Probe(props: { metric: 'tokens' | 'busy'; style: 'sky' | 'heatmap' }) {
+      const selected = useUsageWidgetModel({ ...scope, metric: props.metric, style: props.style, colourBy: 'intensity', day: '2026-10-21' }, 'usage_rhythm');
+      query = selected.query;
+      return selected.query && selected.model.slice ? <AccountingProjection slice={selected.model.slice} query={selected.query} /> : null;
+    }
+    const view = (metric: 'tokens' | 'busy', style: 'sky' | 'heatmap' = 'sky') => <InjectedAuthProvider credentials={credentials}><UsageWidgetBatchProvider clauses={clauses}>
+      <Probe metric={metric} style={style} /></UsageWidgetBatchProvider></InjectedAuthProvider>;
     const screen = await renderScreen(view('tokens'));
     try {
       await expect.poll(() => query?.metric).toBe('tokens');
       expect(query).toMatchObject({ includeSessionEvidence: false, includeTranscriptEvidence: false });
+      await expect.poll(() => accountingViewAvailable).toBe(true);
       for (const key of ['style', 'colourBy', 'day']) expect(query).not.toHaveProperty(key);
       await screen.update(view('busy'));
       await expect.poll(() => query?.metric).toBe('busy');
       expect(query).toMatchObject({ includeSessionEvidence: true, includeTranscriptEvidence: false });
+      await expect.poll(() => accountingViewAvailable).toBe(false);
+      await screen.update(view('busy', 'heatmap'));
+      await expect.poll(() => query?.includeSessionEvidence).toBe(false);
     } finally { await screen.unmount(); }
   });
   it('keeps a Project setup preview out of the mounted Account page batch', async () => {

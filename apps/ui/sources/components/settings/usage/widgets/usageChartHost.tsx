@@ -7,10 +7,12 @@ import { getPreferredLanguage, t } from '@/text';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { formatUsageCalendarDate } from '@/sync/domains/usage/usageCalendarPresentation';
 import { resolveUsageCalendarDateStart } from '@happier-dev/protocol/usage/usageCalendar';
-import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import type { UsageQuery, UsagePresentationMetric } from '@happier-dev/protocol/inputs/usageQuery';
 import { usageSignatureAccent } from '../usageAccent';
 import { UsageAgentMark, usageAgentTitle, useUsagePluginTheme } from './usageBodyKit';
 import { formatUsageDuration } from './usageHowYouWorkPresentation';
+export { formatUsageChartClock as usageChartClock, formatUsageSharePercent as usageChartPercent }
+  from '@happier-dev/protocol/usage/usageFormatting';
 
 /**
  * The app's side of the shared Usage chart bodies: Agent identities from the catalog, the Usage accent and card
@@ -53,10 +55,8 @@ export function usageChartWeekdays(): readonly [string, string, string, string, 
   return [name(0), name(1), name(2), name(3), name(4), name(5), name(6)];
 }
 
-export const usageChartClock = (hour: number) => `${String(Math.floor(hour) % 24 === 0 && hour >= 24 ? 24 : Math.floor(hour) % 24).padStart(2, '0')}:${String(Math.round((hour % 1) * 60)).padStart(2, '0')}`;
-
 /** A presentation metric's value in its own unit; one formatter per unit, never another metric's. */
-export type UsageChartMetric = 'tokens' | 'cost' | 'sessions' | 'busy' | 'steering' | 'peakParallel';
+export type UsageChartMetric = UsagePresentationMetric;
 export function formatUsageChartMetric(metric: UsageChartMetric, value: number): string {
   switch (metric) {
     case 'tokens': return formatTokenCount(value);
@@ -71,5 +71,3 @@ export function formatUsageChartMetric(metric: UsageChartMetric, value: number):
 export function usageChartMetricName(metric: UsageChartMetric): string {
   return t(`usage.board.charts.metric_${metric}`);
 }
-
-export const usageChartPercent = (share: number) => `${Math.round(share * 100)}%`;

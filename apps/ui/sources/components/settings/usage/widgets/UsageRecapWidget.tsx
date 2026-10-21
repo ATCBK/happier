@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { UsageAccountingMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { getUsageQueryKey } from '@happier-dev/protocol/inputs/usageQuery';
@@ -90,7 +91,7 @@ function UsageRecapWidgetOriginal(props: UsageBodyProps): React.ReactElement {
   const filters = React.useMemo<UsageFilterState>(
     () => ({
       period,
-      metric: props.query.metric,
+      metric: UsageAccountingMetricSchema.parse(props.query.metric),
       costMode: props.query.costBasis,
       focus: null,
     }),

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { UsageAccountingMetricSchema, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { buildUsageSettingsRouteTarget } from './usageRouteParams';
 import {
@@ -48,6 +48,8 @@ export function useUsageDrill(query: UsageQuery): UsageDrill {
   const router = useRouter();
   return React.useMemo((): UsageDrill => {
     if (page) return page;
+    const metric = UsageAccountingMetricSchema.safeParse(query.metric);
+    if (!metric.success) return { available: () => false, selected: () => false, toggle: () => false };
     const sessionScoped =
       query.session !== undefined &&
       query.session !== null &&
@@ -61,7 +63,7 @@ export function useUsageDrill(query: UsageQuery): UsageDrill {
         router.push(
           buildUsageSettingsRouteTarget({
             scope: { ...readUsageWidgetPageScope(query), [field]: [id] },
-            metric: query.metric,
+            metric: metric.data,
             queryOverrides: readUsageWidgetQueryOverrides(query),
           }) as Parameters<typeof router.push>[0],
         );

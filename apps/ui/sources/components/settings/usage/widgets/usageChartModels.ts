@@ -5,8 +5,9 @@ import type {
 import type { UsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { resolveUsageDayStreaks } from '@happier-dev/protocol/usage/usageActivitySummary';
-import { resolveUsageCalendarInstant } from '@happier-dev/protocol/usage/usageCalendar';
-import { isUsageNightHour } from '@happier-dev/protocol/usage/usageWorkIntervals';
+import { resolveUsageCalendarInstant, resolveUsageBucketBounds } from '@happier-dev/protocol/usage/usageCalendar';
+import { isUsageNightHour, summarizeUsageConcurrency } from '@happier-dev/protocol/usage/usageWorkIntervals';
+import { UsagePresentationMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageChartMetric } from './usageChartHost';
 
 /**
@@ -25,12 +26,13 @@ const METRIC_FIELDS = { tokens: 'tokens', cost: 'cost', sessions: 'sessions', bu
 
 export function readUsageCalendarMetric(metrics: CalendarMetrics, metric: UsageChartMetric): number | null {
   if (metric === 'cost') return metrics.cost?.amountUsd ?? null;
-  return metrics[METRIC_FIELDS[metric]] as number | null;
+  return metrics[METRIC_FIELDS[metric]];
 }
 
 /** Normalizes the query's presentation metric to a chart measure (an unknown value is never read as tokens). */
 export function resolveUsageChartMetric(metric: string | undefined, fallback: UsageChartMetric): UsageChartMetric {
-  return metric === 'tokens' || metric === 'cost' || metric === 'sessions' || metric === 'busy' || metric === 'steering' || metric === 'peakParallel' ? metric : fallback;
+  const result = UsagePresentationMetricSchema.safeParse(metric);
+  return result.success ? result.data : fallback;
 }
 
 /** Every calendar date of the owner's period, oldest first (the owner lists only days it has facts for). */
@@ -48,7 +50,7 @@ export function projectUsageSkyModel(calendar: UsageAgentCalendar, metric: Usage
   const field = METRIC_FIELDS[metric];
   const days: UsageSkyDay[] = dates.map((date) => {
     const bucket = byDate.get(date);
-    if (!bucket) return { date, state: 'inactive' };
+    if (!bucket) return { date, state: emptyCalendarMetric(calendar, metric) === 0 ? 'inactive' : 'unknown' };
     const value = readUsageCalendarMetric(bucket.totals, metric);
     if (value === null) return { date, state: 'unknown' };
     if (value <= 0) return { date, state: 'inactive', value: 0 };
@@ -131,19 +133,26 @@ const DAY_BINS = 96;
 export function projectUsageDayModel(slice: UsageQueryResultSlice, bucket: CalendarBucket): UsageDayModel | null {
   const lanes = slice.howYouWork?.intervals?.lanes;
   if (!lanes) return null;
-  const hourOf = (ms: number) => Math.max(0, Math.min(24, (ms - bucket.startMs) / HOUR_MS));
-  const byAgent = new Map<string, { spans: { fromHour: number; toHour: number; waits: [number, number][] }[] }>();
-  const working: { agentId: string; from: number; to: number; waits: readonly (readonly [number, number])[] }[] = [];
+  const dayStartMs = resolveUsageCalendarInstant(bucket.startMs, slice.shownQuery.timeZoneOffsetMinutes).bucketStartMs;
+  const hourOf = (ms: number) => Math.max(0, Math.min(24, (ms - dayStartMs) / HOUR_MS));
+  const byAgent = new Map<string | null, { spans: { fromHour: number; toHour: number; waits: [number, number][] }[] }>();
+  const working: { agentId: string | null; from: number; to: number; waits: readonly (readonly [number, number])[] }[] = [];
   for (const lane of lanes) {
-    if (!lane.agentId) continue;
     for (const span of lane.busy) {
       if (span.endMs <= bucket.startMs || span.startMs >= bucket.endMs) continue;
-      const waits = lane.waits.filter((wait) => wait.endMs > span.startMs && wait.startMs < span.endMs)
-        .map((wait) => [hourOf(Math.max(wait.startMs, span.startMs)), hourOf(Math.min(wait.endMs, span.endMs))] as [number, number]);
       const entry = byAgent.get(lane.agentId) ?? { spans: [] };
-      entry.spans.push({ fromHour: hourOf(span.startMs), toHour: hourOf(span.endMs), waits });
+      entry.spans.push({ fromHour: hourOf(span.startMs), toHour: hourOf(span.endMs), waits: [] });
       byAgent.set(lane.agentId, entry);
-      working.push({ agentId: lane.agentId, from: hourOf(span.startMs), to: hourOf(span.endMs), waits });
+      working.push({ agentId: lane.agentId, from: hourOf(span.startMs), to: hourOf(span.endMs), waits: [] });
+    }
+    // The canonical interval owner subtracts waits from busy time. Retain those witnessed spans
+    // separately for the hatch, without putting them back in concurrency or Agent-time totals.
+    for (const wait of lane.waits) {
+      if (wait.endMs <= bucket.startMs || wait.startMs >= bucket.endMs) continue;
+      const entry = byAgent.get(lane.agentId) ?? { spans: [] };
+      const fromHour = hourOf(wait.startMs), toHour = hourOf(wait.endMs);
+      entry.spans.push({ fromHour, toHour, waits: [[fromHour, toHour]] });
+      byAgent.set(lane.agentId, entry);
     }
   }
   // Display bins sample the witnessed spans at each bin's middle; the peak figure is the owner's own.
@@ -151,41 +160,49 @@ export function projectUsageDayModel(slice: UsageQueryResultSlice, bucket: Calen
     const at = ((bin + 0.5) / DAY_BINS) * 24;
     return working.filter((span) => at >= span.from && at < span.to && !span.waits.some(([from, to]) => at >= from && at < to)).length;
   });
-  const peakCount = bucket.totals.peakParallel ?? Math.max(0, ...atOnce);
-  const peakBin = atOnce.reduce((best, count, index) => count > atOnce[best]! ? index : best, 0);
-  const at = ((peakBin + 0.5) / DAY_BINS) * 24;
-  const peakBy = new Map<string, number>();
+  const concurrency = summarizeUsageConcurrency(lanes.flatMap(lane => lane.busy.flatMap(span => {
+    const startMs = Math.max(span.startMs, bucket.startMs), endMs = Math.min(span.endMs, bucket.endMs);
+    return endMs > startMs ? [{ startMs, endMs }] : [];
+  })));
+  const peakCount = concurrency.maxParallel;
+  const at = hourOf(concurrency.peakAtMs ?? bucket.startMs);
+  const peakBy = new Map<string | null, number>();
   for (const span of working) if (at >= span.from && at < span.to && !span.waits.some(([from, to]) => at >= from && at < to)) peakBy.set(span.agentId, (peakBy.get(span.agentId) ?? 0) + 1);
-  const agentTime = new Map(bucket.agents.flatMap((entry) => entry.agentId ? [[entry.agentId, entry.metrics.busyMs ?? 0] as const] : []));
+  const agentTime = new Map(bucket.agents.map(entry => [entry.agentId, entry.metrics.busyMs ?? 0] as const));
   return {
     date: bucket.date,
     lanes: [...byAgent.entries()].map(([agentId, entry]) => ({ agentId, spans: entry.spans, agentTimeMs: agentTime.get(agentId) ?? 0 }))
       .sort((a, b) => b.agentTimeMs - a.agentTimeMs),
     atOnce,
-    peak: { count: peakCount, atHour: (peakBin / DAY_BINS) * 24, byAgent: [...peakBy.entries()].map(([agentId, count]) => ({ agentId, count })).sort((a, b) => b.count - a.count) },
+    peak: { count: peakCount, atHour: at, byAgent: [...peakBy.entries()].map(([agentId, count]) => ({ agentId, count })).sort((a, b) => b.count - a.count) },
     waitCount: [...byAgent.values()].reduce((sum, entry) => sum + entry.spans.reduce((inner, span) => inner + span.waits.length, 0), 0),
   };
 }
 
 /** The week shown: the one containing `day`, else the period's busiest week by witnessed busy time. */
 export function projectUsageScoreModel(calendar: UsageAgentCalendar, day: string | undefined): UsageScoreModel | null {
-  const week = day ? calendar.weeks.find((bucket) => bucket.startMs <= Date.parse(`${day}T12:00:00Z`) && bucket.endMs > Date.parse(`${day}T12:00:00Z`))
+  const selectedDayMs = day ? calendar.days.find(bucket => bucket.date === day)?.startMs : undefined;
+  const week = day ? calendar.weeks.find((bucket) => selectedDayMs !== undefined && bucket.startMs <= selectedDayMs && bucket.endMs > selectedDayMs)
     : calendar.weeks.reduce<UsageAgentCalendar['weeks'][number] | null>((best, bucket) => (bucket.totals.busyMs ?? 0) > (best?.totals.busyMs ?? 0) ? bucket : best, null);
   if (!week) return null;
-  const rows = new Map<string, number[][]>();
+  const weekStartMs = resolveUsageBucketBounds('week', week.startMs, calendar.timeZoneOffsetMinutes).bucketStartMs;
+  const rows = new Map<string, (number | null)[][]>();
   for (const bucket of calendar.hours) {
     if (bucket.hour === null || bucket.startMs < week.startMs || bucket.startMs >= week.endMs) continue;
-    const dayIndex = Math.floor((bucket.startMs - week.startMs) / DAY_MS);
+    const dayIndex = Math.floor((bucket.startMs - weekStartMs) / DAY_MS);
     for (const entry of bucket.agents) {
       if (!entry.agentId || !entry.metrics.busyMs) continue;
-      const hours = rows.get(entry.agentId) ?? Array.from({ length: 7 }, () => Array.from<number>({ length: 24 }).fill(0));
-      hours[dayIndex]![bucket.hour] = Math.min(60, Math.round(entry.metrics.busyMs / 60_000));
+      const hours = rows.get(entry.agentId) ?? Array.from({ length: 7 }, (_, dayIndex) => Array.from({ length: 24 }, (_, hour) => {
+        const instant = weekStartMs + dayIndex * DAY_MS + hour * HOUR_MS;
+        return calendar.coverage.busy === 'complete_for_supplied_facts' && instant >= calendar.period.startMs && instant + HOUR_MS <= calendar.period.endMs ? 0 : null;
+      }));
+      hours[dayIndex]![bucket.hour] = entry.metrics.busyMs / 60_000;
       rows.set(entry.agentId, hours);
     }
   }
   if (rows.size === 0) return null;
-  const total = (hours: number[][]) => hours.flat().reduce((sum, value) => sum + value, 0);
-  return { weekStart: week.date, encoding: 'minutes',
+  const total = (hours: (number | null)[][]) => hours.flat().reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  return { weekStart: resolveUsageCalendarInstant(weekStartMs, calendar.timeZoneOffsetMinutes).date, encoding: 'minutes',
     rows: [...rows.entries()].sort((a, b) => total(b[1]) - total(a[1])).map(([agentId, hours]) => ({ agentId, hours })) };
 }
 
@@ -201,11 +218,20 @@ export function projectUsageAgentShares(calendar: UsageAgentCalendar, metric: Us
 }
 
 export function projectUsageRiverModel(calendar: UsageAgentCalendar, metric: UsageChartMetric): UsageRiverModel | null {
-  const totals = new Map(calendar.weeks.map((week) => [week.startMs, readUsageCalendarMetric(week.totals, metric) ?? 0]));
-  const weeks = calendar.weeklyAgentMix.filter((week) => week.endMs <= calendar.period.endMs).map((week) => ({
-    start: resolveUsageCalendarInstant(week.startMs, calendar.timeZoneOffsetMinutes).date, total: totals.get(week.startMs) ?? 0,
-    shares: Object.fromEntries(week.mix.flatMap((entry) => entry.agentId ? [[entry.agentId, entry.share]] : [])),
-  }));
+  const weeks = calendar.weeks.filter(week => {
+    const bounds = resolveUsageBucketBounds('week', week.startMs, calendar.timeZoneOffsetMinutes);
+    return week.startMs === bounds.bucketStartMs && week.endMs === bounds.bucketEndMs;
+  }).map(week => {
+    const total = readUsageCalendarMetric(week.totals, metric);
+    const tokenMix = calendar.weeklyAgentMix.find(mix => mix.startMs === week.startMs);
+    return { start: week.date, total,
+      shares: metric === 'tokens' ? Object.fromEntries(tokenMix?.mix.flatMap(entry => entry.agentId ? [[entry.agentId, entry.share]] : []) ?? [])
+        : Object.fromEntries(week.agents.flatMap(entry => {
+          const value = readUsageCalendarMetric(entry.metrics, metric);
+          return entry.agentId !== null && value !== null && total !== null && total > 0 ? [[entry.agentId, value / total]] : [];
+        })),
+    };
+  });
   return weeks.length >= 2 ? { width: 'amount', weeks } : null;
 }
 
@@ -244,17 +270,18 @@ export function projectUsageSteeringModel(slice: UsageQueryResultSlice): UsageSt
   return { night: night ? { fromHour: night.startHour, toHour: night.endHour } : null,
     rows: steering.byAgent.filter((row) => row.agentId !== null || (row.steeringCount ?? 0) + (row.permissionAnswerCount ?? 0) > 0).map((row) => {
       const hourly = steering.hourly.filter((entry) => entry.agentId === row.agentId);
-      const steersByHour = Array.from<number>({ length: 24 }).fill(0), phoneAnswersByHour = Array.from<number>({ length: 24 }).fill(0);
+      const steersByHour = Array.from<number | null>({ length: 24 }).fill(steering.inputsObserved ? 0 : null);
+      const phoneAnswersByHour = Array.from<number | null>({ length: 24 }).fill(steering.permissionsObserved ? 0 : null);
       for (const entry of hourly) {
-        steersByHour[entry.hour] = steersByHour[entry.hour]! + (entry.steeringCount ?? 0);
-        phoneAnswersByHour[entry.hour] = phoneAnswersByHour[entry.hour]! + entry.byAnsweringClient.ios + entry.byAnsweringClient.android;
+        if (entry.steeringCount !== null) steersByHour[entry.hour] = (steersByHour[entry.hour] ?? 0) + entry.steeringCount;
+        if (steering.permissionsObserved) phoneAnswersByHour[entry.hour] = (phoneAnswersByHour[entry.hour] ?? 0) + entry.byAnsweringClient.ios + entry.byAnsweringClient.android;
       }
       return { agentId: row.agentId, steersByHour, phoneAnswersByHour, steers: row.steeringCount, busyMs: row.busyMs, perBusyHour: row.steersPerBusyHour,
-        phoneAnswers: row.byAnsweringClient.ios + row.byAnsweringClient.android };
+        phoneAnswers: steering.permissionsObserved ? row.byAnsweringClient.ios + row.byAnsweringClient.android : null };
     }) };
 }
 
-export function projectUsageRunLengthModel(slice: UsageQueryResultSlice): UsageRunLengthModel | null {
+export function projectUsageRunLengthModel(slice: UsageQueryResultSlice): (UsageRunLengthModel & Readonly<{ openCount: number; croppedCount: number }>) | null {
   const runs = slice.howYouWork?.runLengths;
   if (!runs || runs.sampleCount === 0) return null;
   return { rows: runs.byAgent.filter((row) => row.sampleCount > 0).map((row) => ({ agentId: row.agentId, samples: row.sampleCount, medianMs: row.medianMs,
@@ -287,7 +314,7 @@ export function projectUsageRecordFacts(slice: UsageQueryResultSlice, metric: Us
   let longest: { agentId: string | null; ms: number } | null = null;
   for (const row of slice.howYouWork?.runLengths?.byAgent ?? []) for (const ms of row.durationsMs) if (ms > (longest?.ms ?? 0)) longest = { agentId: row.agentId, ms };
   return {
-    longestStreak: sky.best ? { days: sky.best.days, startDate: sky.best.startDate, endDate: sky.best.endDate,
+    longestStreak: sky.best?.startDate !== undefined ? { days: sky.best.days, startDate: sky.best.startDate, endDate: sky.best.endDate,
       ongoing: sky.current !== null && sky.current !== undefined && sky.current.startDate === sky.best.startDate } : null,
     busiestDay: busiest, peakParallel: peak, longestClosedTurn: longest, mostAgents: most,
   };

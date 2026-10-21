@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { UsageBuiltinWidgetIdV1 } from '@happier-dev/protocol/widgets';
 import { readBuiltinWidgetDescriptorV1, proposeWidgetInputDefaultBindingsV1 } from '@happier-dev/protocol/widgets';
+import { resolveEffectiveInputFields } from '@happier-dev/protocol/inputs/inputFieldRuntime';
 import {
   getUsageQueryKey,
   normalizeUsageQuery,
@@ -36,7 +37,7 @@ const USAGE_WIDGET_DEMAND = {
   usage_flow: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_efficiency: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_breakdowns: { includeSessionEvidence: false, includeWorkEvidence: false },
-  usage_capacity: { includeAccounting: false, includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_capacity: { includeAccounting: false, includeQuotaHistory: false, includeSessionEvidence: false, includeWorkEvidence: false },
   usage_projections: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_resets: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_plan_fit: { includeSessionEvidence: false, includeWorkEvidence: false },
@@ -58,7 +59,7 @@ const USAGE_WIDGET_DEMAND = {
   usage_constellation: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: false },
   usage_planet: { includeSessionEvidence: true, includeWorkEvidence: false },
   usage_run_length: { includeSessionEvidence: true, includeWorkEvidence: false },
-} satisfies Record<UsageQueryWidgetId, Readonly<{ includeAccounting?: boolean; includeSessionEvidence: boolean; includeTranscriptEvidence?: boolean; includeWorkEvidence: boolean }>>;
+} satisfies Record<UsageQueryWidgetId, Readonly<{ includeAccounting?: boolean; includeQuotaHistory?: boolean; includeSessionEvidence: boolean; includeTranscriptEvidence?: boolean; includeWorkEvidence: boolean }>>;
 type UsageWidgetBatch = Readonly<{
   clauses: UsageWidgetQueryOverrides;
   register(id: string, registration: Registration): () => void;
@@ -196,11 +197,16 @@ function resolveQuery(
     const defaults = proposeWidgetInputDefaultBindingsV1(descriptor);
     // The platform has already bound scope. Only own presentation defaults belong here;
     // never let a descriptor's empty scope defaults replace a page or group pin.
-    const ownDefaults = Object.fromEntries(descriptor.inputs!.fields.flatMap(field => {
+    const ownDefaults: Record<string, JsonValue> = Object.fromEntries(descriptor.inputs!.fields.flatMap(field => {
       const binding = field.contextMode === 'own' ? defaults[field.path] : undefined;
       return binding?.kind === 'value' ? [[field.path, binding.value]] : [];
     }));
-    const { style: _style, colourBy: _colourBy, day: _day, ...queryInput } = { ...ownDefaults, ...input };
+    const resolvedInput: Record<string, JsonValue> = { ...ownDefaults, ...input };
+    const effective = new Set(resolveEffectiveInputFields({ inputHints: descriptor.inputs }, resolvedInput).map(field => field.path));
+    // Defaults may not resurrect an own input the platform has made non-applicable for this Style.
+    // Scope pins still belong to the binder and are never pruned or re-defaulted here.
+    for (const field of descriptor.inputs!.fields) if (field.contextMode === 'own' && !effective.has(field.path)) delete resolvedInput[field.path];
+    const { style: _style, colourBy: _colourBy, day: _day, ...queryInput } = resolvedInput;
     // This widget bundle consumes both the calendar and weekday/hour facts, irrespective of partial route read clauses.
     // Direct usage.query callers retain their explicit includeActivity/activityResolution semantics.
     const singleSession = typeof input.session === 'string' && input.session.length > 0
@@ -208,10 +214,11 @@ function resolveQuery(
     // The Work autopsy renders only for one selected Session. The aggregate
     // Session-value plot/rows consume allocation facts, not private transcripts.
     const autopsy = widgetId === 'usage_session_value' && singleSession;
-    const rhythmMetric = queryInput.metric;
+    const rhythmMetric = queryInput.metric ?? 'tokens';
     const query = normalizeUsageQuery({ ...clauses, ...queryInput, includeActivity: true, activityResolution: 'both', includeAccounting: true,
       includeTranscriptEvidence: false,
       ...USAGE_WIDGET_DEMAND[widgetId],
+      ...(typeof queryInput.includeQuotaHistory === 'boolean' ? { includeQuotaHistory: queryInput.includeQuotaHistory } : {}),
       ...(widgetId === 'usage_rhythm' ? {
         includeSessionEvidence: rhythmMetric !== 'tokens' && rhythmMetric !== 'cost',
         includeTranscriptEvidence: rhythmMetric === 'steering',

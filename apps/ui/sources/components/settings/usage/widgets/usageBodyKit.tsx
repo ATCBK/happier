@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { PluginUiThemeV1 } from '@happier-dev/plugin-sdk/ui';
 import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { UsageAccountingMetricSchema, type UsageAccountingMetric, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageBuiltinWidgetIdV1 } from '@happier-dev/protocol/widgets';
 import type {
   UsageQueryResultSlice,
@@ -64,7 +64,7 @@ export function usagePeriodPhrase(query: Pick<UsageQuery, 'period' | 'timeZoneOf
 }
 
 // One projection per admitted accounting response and presentation; bodies share it, never rebuild it.
-type UsageBodyAnalyticsView = UsageAnalyticsViewModel & Readonly<{ pageCost: UsagePageCostProjection }>;
+type UsageBodyAnalyticsView = UsageAnalyticsViewModel & Readonly<{ pageCost: UsagePageCostProjection; metric: UsageAccountingMetric }>;
 const viewModels = new WeakMap<object, Map<string, UsageBodyAnalyticsView | number | null>>();
 
 function usageBodyProjections(accounting: object) {
@@ -114,6 +114,8 @@ export function useUsageAnalyticsView(
   const language = getPreferredLanguage();
   return React.useMemo(() => {
     if (!accounting) return null;
+    const metric = UsageAccountingMetricSchema.safeParse(query.metric);
+    if (!metric.success) return null;
     const key = `${query.metric}\u0000${query.costBasis}\u0000${query.timeZoneOffsetMinutes ?? 0}\u0000${language}`;
     const byKey = usageBodyProjections(accounting);
     const cached = byKey.get(key);
@@ -121,10 +123,10 @@ export function useUsageAnalyticsView(
     const analytics = buildUsageAnalyticsViewModel(
       accounting,
       // The response already carries the admitted range; the legacy array filter is unused here.
-      { period: 'all', metric: query.metric, costMode: query.costBasis, focus: null },
+      { period: 'all', metric: metric.data, costMode: query.costBasis, focus: null },
       query.timeZoneOffsetMinutes ?? 0,
     );
-    const built = { ...analytics, pageCost: analytics.pageCost ?? projectUsagePageCost(accounting, query.costBasis) };
+    const built = { ...analytics, metric: metric.data, pageCost: analytics.pageCost ?? projectUsagePageCost(accounting, query.costBasis) };
     byKey.set(key, built);
     return built;
   }, [

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
-import { projectUsageAgentShares, projectUsageConstellationModel, projectUsageDaylight, projectUsageSkyModel, projectUsageWeekHours, type UsageAgentCalendar } from './usageChartModels';
+import { projectUsageAgentShares, projectUsageConstellationModel, projectUsageDaylight, projectUsageDayModel, projectUsageScoreModel, projectUsageRiverModel, projectUsageSkyModel, projectUsageSteeringModel, projectUsageWeekHours, type UsageAgentCalendar } from './usageChartModels';
 import { resolveUsagePageAggregation } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 
@@ -28,6 +28,79 @@ const calendar = (input: Partial<UsageAgentCalendar>): UsageAgentCalendar => ({
 } satisfies UsageAgentCalendar);
 
 describe('Usage chart models', () => {
+  it('keeps unavailable phone-answer observations unknown beside observed zero steering', () => {
+    const query = normalizeUsageQuery({ period: { startMs: START, endMs: START + DAY }, includeActivity: true });
+    const slice = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail: { status: 'partial', acceptedInputs: [], facts: [
+      { workId: 'one', evidenceId: 'one', agentId: 'claude', machineId: null, kind: 'busy', startMs: START, endMs: START + 60_000 },
+    ] } }] }).results[0]!;
+    expect(slice.howYouWork!.steering!.inputsObserved).toBe(true);
+    const row = projectUsageSteeringModel(slice)!.rows[0]!;
+    expect(row.steers).toBe(0);
+    expect(row.steersByHour).toEqual(Array(24).fill(0));
+    expect(row.phoneAnswers).toBeNull();
+    expect(row.phoneAnswersByHour).toEqual(Array(24).fill(null));
+  });
+  it('keeps sub-bin concurrency peaks and wait bands at the actual witnessed boundaries', () => {
+    const query = normalizeUsageQuery({ period: { startMs: START, endMs: START + DAY }, includeActivity: true });
+    const minute = 60_000;
+    const slice = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail: { status: 'partial', facts: [
+      { workId: 'one', evidenceId: 'one', agentId: 'claude', machineId: null, kind: 'busy', startMs: START, endMs: START + 5 * minute },
+      { workId: 'two', evidenceId: 'two', agentId: 'codex', machineId: null, kind: 'busy', startMs: START + minute, endMs: START + 2 * minute },
+      { workId: 'one', evidenceId: 'wait', agentId: 'claude', machineId: null, kind: 'user_wait', startMs: START + 3 * minute, endMs: START + 4 * minute },
+    ] } }] }).results[0]!;
+    const day = slice.howYouWork!.agentCalendar!.days[0]!;
+    const model = projectUsageDayModel(slice, day)!;
+    expect(model.peak).toEqual({ count: 2, atHour: 1 / 60, byAgent: [{ agentId: 'claude', count: 1 }, { agentId: 'codex', count: 1 }] });
+    expect(model.waitCount).toBe(1);
+    expect(model.lanes.find(lane => lane.agentId === 'claude')!.spans.flatMap(span => span.waits)).toEqual([[3 / 60, 4 / 60]]);
+  });
+
+  it('keeps Score minute precision and simultaneous Agent time rather than clipping it to one wall hour', () => {
+    const value = calendar({ weeks: [{ ...bucket(0, { busyMs: 7_201_000 }), endMs: START + 7 * DAY }],
+      hours: [bucket(0, { busyMs: 7_201_000 }, [['codex', { busyMs: 7_201_000 }]], {}, 9)] });
+    expect(projectUsageScoreModel(value, undefined)!.rows[0]!.hours[0]![9]).toBeCloseTo(7_201_000 / 60_000);
+  });
+
+  it('keeps partial-range day clocks and Score weekdays on the query calendar, with out-of-range hours unknown', () => {
+    const hour = 3_600_000;
+    const query = normalizeUsageQuery({ period: { startMs: START + DAY + 9 * hour, endMs: START + 3 * DAY }, timeZoneOffsetMinutes: 120, includeActivity: true });
+    const slice = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail: { status: 'partial', facts: [
+      { workId: 'one', evidenceId: 'one', agentId: 'codex', machineId: null, kind: 'busy', startMs: START + DAY + 9 * hour, endMs: START + DAY + 10 * hour },
+    ] } }] }).results[0]!;
+    const owner = slice.howYouWork!.agentCalendar!;
+    expect(projectUsageDayModel(slice, owner.days[0]!)!.peak.atHour).toBe(11);
+    const score = projectUsageScoreModel(owner, undefined)!;
+    expect(score.weekStart).toBe('2026-09-07');
+    expect(score.rows[0]!.hours[0]![11]).toBeNull();
+    expect(score.rows[0]!.hours[1]![11]).toBe(60);
+  });
+
+  it('keeps witnessed work with unknown Agent attribution instead of inventing an identity or dropping the lane', () => {
+    const query = normalizeUsageQuery({ period: { startMs: START, endMs: START + DAY }, includeActivity: true });
+    const slice = resolveUsagePageAggregation({ queries: [query], howYouWork: [{ query, detail: { status: 'partial', facts: [
+      { workId: 'unknown', evidenceId: 'unknown', agentId: null, machineId: null, kind: 'busy', startMs: START, endMs: START + 60_000 },
+    ] } }] }).results[0]!;
+    const model = projectUsageDayModel(slice, slice.howYouWork!.agentCalendar!.days[0]!)!;
+    expect(model.lanes.map(lane => [lane.agentId, lane.agentTimeMs])).toEqual([[null, 60_000]]);
+    expect(model.peak.byAgent).toEqual([{ agentId: null, count: 1 }]);
+  });
+
+  it('does not give a cost River token shares or replace its unavailable total with zero', () => {
+    const usd = (amountUsd: number) => ({ amountUsd, currency: 'USD', source: 'provider', kind: 'reported' as const });
+    const weeks = [0, 7].map(day => ({ ...bucket(day, { tokens: 100, cost: usd(10) }, [['claude', { tokens: 90, cost: usd(2) }], ['codex', { tokens: 10, cost: usd(8) }]]), endMs: START + (day + 7) * DAY }));
+    const value = calendar({ period: { startMs: START, endMs: START + 14 * DAY }, weeks,
+      weeklyAgentMix: weeks.map(week => ({ startMs: week.startMs, endMs: week.endMs, mix: [
+        { agentId: 'claude', share: 0.9, coverage: 'partial' }, { agentId: 'codex', share: 0.1, coverage: 'partial' },
+      ] })) });
+    expect(projectUsageRiverModel(value, 'cost')!.weeks[0]!.shares).toEqual({ claude: 0.2, codex: 0.8 });
+    expect(projectUsageRiverModel({ ...value, weeks: weeks.map(week => ({ ...week, totals: metrics({ tokens: 100 }) })) }, 'cost')!.weeks[0]!.total).toBeNull();
+    expect(projectUsageRiverModel({ ...value, period: { ...value.period, endMs: START + 8 * DAY },
+      weeks: [weeks[0]!, { ...weeks[1]!, endMs: START + 8 * DAY }] }, 'cost')).toBeNull();
+  });
+  it('does not turn an absent day of partial evidence into measured inactivity', () => {
+    const model = projectUsageSkyModel(calendar({ coverage: { ...coverage, busy: 'partial' } }), 'busy', 'intensity', START + DAY);
+    expect(model.days.every(day => day.state === 'unknown')).toBe(true);
+  });
   it('reads the selected metric on Sky of days and keeps ties, unattributed and unrecorded days distinct', () => {
     const model = projectUsageSkyModel(calendar({ days: [
       bucket(0, { tokens: 900, steeringCount: 4, eventCount: 3 }, [], { steeringCount: { status: 'leading', agentIds: ['codex'], includesUnknown: false } }),

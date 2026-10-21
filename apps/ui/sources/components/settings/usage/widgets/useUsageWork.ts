@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { UsageAccountingMetricSchema, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
@@ -34,6 +34,7 @@ export function useUsageWork(
   query: UsageQuery,
   serverId: string,
 ) {
+  const metric = UsageAccountingMetricSchema.parse(query.metric);
   const work = slice.work;
   const view = useUsageAnalyticsView(slice, query);
   const protectedProjectLabels = useUsageProjectLabels(serverId);
@@ -122,7 +123,7 @@ export function useUsageWork(
     (sessionId: string) => {
       router.push(
         buildScopedSessionRouteHref({ sessionId, serverId, suffix: '/usage', query: buildUsageRouteParams({
-          scope: { ...readUsageWidgetPageScope(query), session: sessionId }, metric: query.metric,
+          scope: { ...readUsageWidgetPageScope(query), session: sessionId }, metric,
           queryOverrides: readUsageWidgetQueryOverrides(query),
           costMode: query.costBasis === 'estimated' ? 'estimated' : query.costBasis === 'reported' ? 'reported' : 'auto', layoutId: 'work',
         }) }) as Parameters<
@@ -130,7 +131,7 @@ export function useUsageWork(
         >[0],
       );
     },
-    [router, serverId, query],
+    [router, serverId, query, metric],
   );
   return { summary, format, cell, basisLabel, projectLabel: projectName, projectPlace, sessionLabel, openSession };
 }

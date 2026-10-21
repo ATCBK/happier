@@ -29,6 +29,7 @@ import { UsagePeriodSummaryWidget } from './widgets/UsagePeriodSummaryWidget';
 import { UsageWidgetPage } from './UsageWidgetPage';
 import { UsageFilterBar } from './UsageFilterBar';
 import { getUsagePeriodDefinition } from '@/sync/api/account/usagePeriods';
+import { USAGE_WIDGET_PRESET_IDS } from './usageWidgetPresets';
 import { t } from '@/text';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
@@ -111,8 +112,8 @@ describe('mounted Usage page scope commands', () => {
         inventoryRead.resolve();
         await vi.waitFor(() => expect(screen.findByType(WidgetAreaLayoutBar).props.selectedId).toBe(layoutId));
         const views = screen.findByType(WidgetAreaLayoutBar).props.layouts;
-        expect(views).toHaveLength(8);
-        expect(new Set(views.map((view: { id: string }) => view.id)).size).toBe(8);
+        expect(views.map((view: { id: string }) => view.id).sort()).toEqual([...USAGE_WIDGET_PRESET_IDS].sort());
+        expect(views.every((view: { name: string }) => typeof view.name === 'string' && view.name.length > 0)).toBe(true);
         expect(views.filter((view: { id: string }) => view.id === layoutId)).toEqual([
             expect.objectContaining({ isPreset: true, edited: true }),
         ]);

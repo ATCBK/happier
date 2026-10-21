@@ -154,6 +154,9 @@ it('keeps standalone Capacity independent of accounting across unrelated Account
     expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(48);
     expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/history'))
       .map(request => [request.method, request.path])).toEqual([]);
+    // Source facts can settle before their Resource finishes publishing bytes.
+    // Begin the held refresh only after the canonical read itself is idle.
+    await expect.poll(() => seen.at(-1)?.pending).toBe(false);
     holdCurrentRead = true;
     let refreshing: Promise<void> | undefined;
     await act(async () => { refreshing = seen.at(-1)!.refresh(); await flushHookEffects({ cycles: 5 }); });

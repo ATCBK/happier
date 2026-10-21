@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { UsageAccountingMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
@@ -71,7 +72,7 @@ export function UsageDailyWidget(props: UsageBodyProps) {
   const view = useUsageAnalyticsView(props.slice, props.query);
   const presentation = useWidgetPresentation();
   const phone = useDeviceType() === 'phone';
-  const metric = props.query.metric;
+  const metric = UsageAccountingMetricSchema.parse(props.query.metric);
   const currency = view?.pageCost.selection?.currency ?? 'USD';
   const format = React.useMemo(
     () => usageSeriesValueFormatter(metric, currency),

@@ -89,11 +89,12 @@ describe('Usage host fragment presets', () => {
 
     it('uses declared Usage inputs for every definition; Home owns values and Project follows only projects', () => {
         const presets = createUsageWidgetPresets(names).map(preset => WidgetAreaPresetV1Schema.parse(preset));
-        expect(presets.length).toBe(8);
+        expect(presets.length).toBe(9);
         const ids = new Set(presets.flatMap(preset => flattenWidgetLayoutWidgetsV1(preset.items).map(row => row.instance.definition.kind === 'builtin' ? row.instance.definition.id : '')));
         expect([...ids].sort()).toEqual(['usage_daily', 'usage_period_summary', 'usage_cost_facts', 'usage_flow', 'usage_efficiency',
             'usage_breakdowns', 'usage_capacity', 'usage_projections', 'usage_resets', 'usage_plan_fit', 'usage_project_ledger', 'usage_session_value',
-            'usage_outcomes', 'usage_coach', 'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_sources',
+            'usage_outcomes', 'usage_coach', 'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_recap', 'usage_sources',
+            'usage_score', 'usage_orbit', 'usage_constellation', 'usage_planet', 'usage_run_length',
             'usage_source_coverage', 'usage_unpriced'].sort());
         for (const preset of presets) for (const row of flattenWidgetLayoutWidgetsV1(preset.items)) {
             const descriptor = readBuiltinWidgetDescriptorV1(row.instance.definition)!;

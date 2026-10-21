@@ -94,8 +94,9 @@ export function resolveUsageWidgetPageInitialQuery(input: Readonly<{
     sessionId?: string;
     nowMs: number;
     timeZoneOffsetMinutes: number;
-}>): UsageQuery {
+}>): UsageQuery & Readonly<{ metric: UsageFilterState['metric'] }> {
     const filters = input.initialFilters;
+    const metric = filters?.metric ?? 'tokens';
     const query = usageAnalyticsRequestToQuery({
         granularity: getUsagePeriodDefinition(filters?.period ?? '7days').granularity,
         timeZoneOffsetMinutes: input.timeZoneOffsetMinutes,
@@ -108,10 +109,10 @@ export function resolveUsageWidgetPageInitialQuery(input: Readonly<{
         includeModelTimeline: true,
         includeMessageStats: true,
         activityResolution: 'both',
-    }, { metric: filters?.metric ?? 'tokens' });
-    return UsageQuerySchema.parse({ ...query, ...resolveUsageWidgetPeriod(filters?.period ?? '7days', input.nowMs, input.timeZoneOffsetMinutes),
+    }, { metric });
+    return { ...UsageQuerySchema.parse({ ...query, ...resolveUsageWidgetPeriod(filters?.period ?? '7days', input.nowMs, input.timeZoneOffsetMinutes),
         ...filters?.queryOverrides, ...filters?.scope,
-        ...(input.sessionId === undefined ? {} : { session: input.sessionId }) });
+        ...(input.sessionId === undefined ? {} : { session: input.sessionId }) }), metric };
 }
 
 /** Session-page changes cannot widen or replace their admitted route scope. */

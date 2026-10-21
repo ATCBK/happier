@@ -121,13 +121,13 @@ export function UsageDayStyleBody(props: UsageChartStyleBodyProps & Readonly<{ s
   const calendar = useCalendar(props);
   const bucket = React.useMemo(() => calendar ? resolveUsageChartDay(calendar, props.presentation?.day) : null, [calendar, props.presentation?.day]);
   const model = React.useMemo(() => bucket ? projectUsageDayModel(props.slice, bucket) : null, [bucket, props.slice]);
-  const agents = React.useMemo(() => (model?.lanes ?? []).map((lane) => host.agent(lane.agentId)), [model, host.agent]);
+  const agents = React.useMemo(() => (model?.lanes ?? []).flatMap(lane => lane.agentId === null ? [] : [host.agent(lane.agentId)]), [model, host.agent]);
   if (!model || model.lanes.length === 0) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.dayEmptyTitle')} reason={t('usage.board.charts.dayEmptyReason')} />;
   const dates = usageChartDateLabels(props.query);
   return <View style={{ gap: 12 }} testID={`${props.testID}.day`}>
     <UsageDayInAgents theme={host.theme} paint={host.paint} agents={agents} model={model} style={props.style} testID={`${props.testID}.dayChart`}
       label={t('usage.board.charts.dayA11y', { day: dates.day(model.date), count: model.peak.count })}
-      labels={{ clock: usageChartClock, duration: formatUsageDuration, atOnce: t('usage.board.charts.atOnce'), turns: t('usage.board.charts.turns'), agentTime: t('usage.board.charts.agentTime'),
+      labels={{ unknownAgent: t('usage.board.charts.unknownAgent'), clock: usageChartClock, duration: formatUsageDuration, atOnce: t('usage.board.charts.atOnce'), turns: t('usage.board.charts.turns'), agentTime: t('usage.board.charts.agentTime'),
         peak: (count, at) => t('usage.board.charts.peakAt', { count, time: usageChartClock(at) }), peakCount: (count) => t('usage.board.charts.atOnceCount', { count }),
         peakLine: (at, byAgent) => `${usageChartClock(at)} · ${byAgent.map((entry) => `${entry.name} ${entry.count}`).join(', ')}`,
         waiting: t('usage.board.charts.waitingForYou'), caption: { lanes: t('usage.board.charts.lanesCaption'), dial: t('usage.board.charts.dialCaption') },

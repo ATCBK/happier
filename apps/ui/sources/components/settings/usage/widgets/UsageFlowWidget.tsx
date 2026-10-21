@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { UsageAccountingMetricSchema } from '@happier-dev/protocol/inputs/usageQuery';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { useWidgetPresentation } from '@happier-dev/plugin-ui';
@@ -54,21 +55,22 @@ export function UsageFlowWidget(props: UsageBodyProps) {
  * breakdown asks for models. Money uses the same selected kind as the period and daily bars.
  */
 function UsageFlowWidgetOriginal(props: UsageBodyProps) {
+  const metric = UsageAccountingMetricSchema.parse(props.query.metric);
   const { theme } = useUnistyles();
   const chartTheme = useUsagePluginTheme();
   const view = useUsageAnalyticsView(props.slice, props.query);
   const presentation = useWidgetPresentation();
   const areaInk = useUsageSeriesAreaInk();
   const byModel = props.query.breakdown.includes('model');
-  const cost = props.query.metric === 'cost';
-  const format = usageSeriesValueFormatter(props.query.metric, view?.pageCost.selection?.currency ?? 'USD');
+  const cost = metric === 'cost';
+  const format = usageSeriesValueFormatter(metric, view?.pageCost.selection?.currency ?? 'USD');
   const accounting = cost ? view?.pageCost.accounting : props.slice.accounting;
   const range = React.useMemo(() => resolveUsageShownCalendarRange(props.query, props.slice.accounting?.coverage, props.slice.accounting),
     [props.query, props.slice.accounting]);
   const sourceSeries = React.useMemo(() => usageSourceTimelineSeries({
     timeline: byModel ? accounting?.modelTimeline : accounting?.engineTimeline,
     range, coverage: props.slice.accounting?.coverage,
-    metric: props.query.metric, costMode: props.query.costBasis, costSelection: view?.pageCost.selection ?? null,
+    metric, costMode: props.query.costBasis, costSelection: view?.pageCost.selection ?? null,
     dimensionKey: byModel ? key => key : agentIdFromEngineKey,
     label: byModel ? (key, fallback) => usageDimensionLabel('model', key, fallback) : usageAgentTitle,
     color: (index, key) => byModel ? usageSeriesColor(theme, index) : getAgentIdentityColor(theme, key),
