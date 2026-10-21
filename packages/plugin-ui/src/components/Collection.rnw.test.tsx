@@ -475,7 +475,7 @@ function mount(
     openKey?: string | null;
     pane?: ReturnType<typeof createPaneHost>;
     scrollTracker?: PluginUiScrollActivityTracker;
-    pageChrome?: Readonly<{ showsTitle: boolean; columnMaxWidthPx?: number }>;
+    pageChrome?: Readonly<{ showsTitle: boolean; columnMaxWidthPx?: number; renderNavigationActions?: (actions: React.ReactNode) => React.ReactNode }>;
     hostApiOverrides?: Parameters<typeof createHostApiStub>[1];
   }> &
     HarnessOptions = {},
@@ -4955,6 +4955,29 @@ describe('the Collection toolbar', () => {
       primary.click();
     });
     expect(calls).toEqual(['primary']);
+    view.unmount();
+  });
+
+  it('puts the primary inside the host page actions, so the column Hide stays the last control', () => {
+    const calls: string[] = [];
+    const view = mount({
+      search,
+      header: toolbarHeader(calls),
+      renderPopover: openPopover,
+      pageChrome: {
+        showsTitle: false,
+        renderNavigationActions: (actions: React.ReactNode) => (
+          <><button aria-label="Runs on">Runs on</button>{actions}<button aria-label="Hide Tasks" /></>
+        ),
+      },
+    });
+    view.measure(1440);
+    const toolbar = view.query('toolbar')!;
+    const order = ['Runs on', 'New task', 'Hide Tasks'].map((label) => button(toolbar, label)!);
+    expect(order.every(Boolean)).toBe(true);
+    expect(order[0]!.compareDocumentPosition(order[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(order[1]!.compareDocumentPosition(order[2]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toolbar.querySelectorAll('[aria-label="Hide Tasks"]')).toHaveLength(1);
     view.unmount();
   });
 

@@ -117,6 +117,11 @@ export function CollectionToolbar(props: CollectionToolbarProps): ReactElement {
 
 function WideToolbar(props: CollectionToolbarProps): ReactElement {
   const { slots, freshness, refresh } = props;
+  const chrome = useHappierPageChromeInternal();
+  const primary = props.primary === undefined ? null : (
+    <Button title={props.primary.label} variant="primary" onPress={props.primary.onPress}
+      {...(props.primary.testID === undefined ? {} : { testID: props.primary.testID })} />
+  );
   return (
     <Row
       gap="small"
@@ -155,11 +160,11 @@ function WideToolbar(props: CollectionToolbarProps): ReactElement {
         )}
         <MoreMenu {...props} folded={false} />
         <Views views={props.views} compact={false} />
-        {slots?.pageActions ?? null}
-        {props.primary === undefined ? null : (
-          <Button title={props.primary.label} variant="primary" onPress={props.primary.onPress}
-            {...(props.primary.testID === undefined ? {} : { testID: props.primary.testID })} />
-        )}
+        {/* The host's page actions take the primary in their place, as a page header's actions do (route
+            controls, then the page's own, then the column's Hide last). */}
+        {slots?.pageActions != null && chrome?.renderNavigationActions !== undefined
+          ? chrome.renderNavigationActions(primary)
+          : <>{slots?.pageActions ?? null}{primary}</>}
       </Row>
     </Row>
   );
