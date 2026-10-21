@@ -12,6 +12,7 @@ import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/
 import { QUIET_SESSION_PERSONAL_ATTENTION_V1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { createDeferred, createMachineFixture, createSessionFixture, createRootLayoutFeaturesResponse, flushHookEffects, renderScreen as renderScreenWithTestkit, standardCleanup } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createAccountTokenForTests, createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
@@ -188,7 +189,8 @@ async function prepareControllerFixture() {
         }
         return null;
     };
-    network.setHttpResponder(httpResponse);
+    const sessionReadResponse = createSessionReadBatchFetchBoundary(httpResponse);
+    network.setHttpResponder(sessionReadResponse);
     network.setRpcAckResponder(async call => {
         const serverId = call.serverUrl === homeUrl(HOME_A) ? HOME_A : HOME_B;
         try {
@@ -208,7 +210,7 @@ async function prepareControllerFixture() {
         const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
         controllerConnection = await restoreServerAccountForTest({ serverUrl: homeUrl(fixture.singleHome ? HOME_B : HOME_A),
             serverIdentityId: fixture.singleHome ? HOME_B : HOME_A, accountId: fixture.singleHome ? 'account-1' : 'account-a',
-            additionalRequestOrigins: [homeUrl(HOME_B)], request: httpResponse });
+            additionalRequestOrigins: [homeUrl(HOME_B)], request: sessionReadResponse });
         await waitForHomeGovernance(() => {
             if (!storage.getState().isDataReady) throw new Error('Controller fixture Sync bootstrap is not ready');
         });

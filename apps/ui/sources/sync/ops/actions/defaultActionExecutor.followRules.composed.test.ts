@@ -8,6 +8,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { ListSessionFollowSourcesResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -27,7 +28,8 @@ it('resolves rule Session followers through the captured own-Account census and 
     const serverUrl = 'https://follow-targets.test';
     const serverId = await homes.addHome({ name: 'Followers', serverUrl, accountId: 'alice', currentAccount: true });
     restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
-        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) },
+        request: createSessionReadBatchFetchBoundary(homes.request) });
     await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
     const sessions = ['source', 'rule-receiver', 'direct-receiver'].map(id => createSessionFixture({ id, serverId,
         encryptionMode: 'plain', access: createSessionAccessFixture('view') }));
@@ -103,7 +105,8 @@ it('previews unloaded manager and worker targets without executing an Action, an
     const serverUrl = 'https://picker-targets.test';
     const serverId = await homes.addHome({ name: 'Picker', serverUrl, accountId: 'alice', currentAccount: true });
     restored = await restoreServerAccountForTest({ serverUrl, accountId: 'alice',
-        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) }, request: homes.request });
+        credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }) },
+        request: createSessionReadBatchFetchBoundary(homes.request) });
     await vi.waitFor(() => expect(getStorage().getState().isDataReady).toBe(true));
     getStorage().setState({ sessions: {}, sessionListRowsByServerId: {}, ordinarySessionListMembershipByServerId: {} });
     const source = createSessionFixture({ id: 'source', serverId, encryptionMode: 'plain',

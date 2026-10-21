@@ -13,6 +13,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { storage, readSessionOrganizationProjectionCached } from '@/sync/domains/state/storage';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { fetchAndApplySessionOrganizationSnapshot } from '@/sync/ops/sessionOrganization/fetchSessionOrganizationSnapshot';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 // Real Account restoration, Sync, HTTP schemas, store and rail projection; only
 // the network transport and native platform adapters are substituted.
@@ -63,11 +64,33 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
                 capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) },
         })]));
         const exactReads: string[] = [];
+        const readSession = (path: string): Response | undefined => {
+            const sessionId = path.startsWith('/v2/sessions/') ? decodeURIComponent(path.slice('/v2/sessions/'.length)) : '';
+            const record = records.get(sessionId);
+            if (!record) return undefined;
+            exactReads.push(sessionId);
+            if (membership === 'reloaded-unavailable' && staleSnapshotAvailable && sessionId === 'rail-only') {
+                return Response.json({ error: 'unavailable' }, { status: 503 });
+            }
+            if (membership === 'reloaded-removed' && staleSnapshotAvailable && sessionId === 'rail-only') {
+                return Response.json(V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 });
+            }
+            return Response.json({ session: serveNewerRow
+                ? { ...record, seq: 14, updatedAt: 3, metadataVersion: 2 }
+                : record });
+        };
+        const sessionBoundary = createSessionReadBatchHttpBoundary(request => readSession(request.path));
         connection = await restoreServerAccountForTest({
             serverUrl: `https://${membership}-rail-hydration.example.test`,
             serverIdentityId: `srv_rail-hydration-${membership}`, accountId: 'rail-account',
-            request: async url => {
-                const path = new URL(String(url)).pathname;
+            request: async (url, init) => {
+                const target = new URL(String(url));
+                const path = target.pathname;
+                if (path === '/v2/sessions/read-batch') return await sessionBoundary.handle({
+                    home: membership, accountId: 'rail-account', url: target, path, method: init?.method ?? 'GET',
+                    headers: new Headers(init?.headers), signal: init?.signal,
+                    body: init?.body ? JSON.parse(String(init.body)) : undefined,
+                }) ?? null;
                 if (path === '/health') return Response.json({ status: 'ok' });
                 if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: {} }));
                 if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
@@ -80,19 +103,7 @@ describe('ordinary Session refresh hydrates every personal pin surface', () => {
                     sessions: staleSnapshotAvailable ? [records.get('rail-only')] : [],
                     nextCursor: null, hasNext: false,
                 });
-                const sessionId = path.startsWith('/v2/sessions/') ? decodeURIComponent(path.slice('/v2/sessions/'.length)) : '';
-                const record = records.get(sessionId);
-                if (!record) return null;
-                exactReads.push(sessionId);
-                if (membership === 'reloaded-unavailable' && staleSnapshotAvailable && sessionId === 'rail-only') {
-                    return Response.json({ error: 'unavailable' }, { status: 503 });
-                }
-                if (membership === 'reloaded-removed' && staleSnapshotAvailable && sessionId === 'rail-only') {
-                    return Response.json(V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 });
-                }
-                return Response.json({ session: serveNewerRow
-                    ? { ...record, seq: 14, updatedAt: 3, metadataVersion: 2 }
-                    : record });
+                return readSession(path) ?? null;
             },
         });
         const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);

@@ -26,6 +26,7 @@ import { createSessionListQueryHomeController } from '@/sync/domains/session/lis
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { subscribeSessionListQueryHomeInvalidation } from '@/sync/domains/session/listing/sessionListQueryInvalidation';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 const secureStore = vi.hoisted(() => new Map<string, string>());
 type TelemetrySocket = Socket & Readonly<{ dispatch: (event: string, payload: unknown) => void }>;
@@ -118,7 +119,7 @@ describe('concurrent session cache telemetry', () => {
                 capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'view' }),
             },
         });
-        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        vi.stubGlobal('fetch', vi.fn(createSessionReadBatchFetchBoundary(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (url.pathname === '/v1/auth/ping') return Response.json({ ok: true });
             if (url.pathname === '/v1/features') return Response.json({ features: {}, capabilities: {} });
@@ -146,12 +147,12 @@ describe('concurrent session cache telemetry', () => {
                 const id = decodeURIComponent(url.pathname.slice('/v2/sessions/'.length));
                 exactReads.push(id);
                 if (id === 'team-withdrawn' && accessWithdrawn) return Response.json({ error: 'Session not found' }, { status: 404 });
-                if (id === 'temporarily-unavailable' && failRetainedRead) return new Response(null, { status: 503 });
+                if (id === 'temporarily-unavailable' && failRetainedRead) return Response.json({ error: 'session_read_unavailable' }, { status: 503 });
                 return Response.json({ session: sessionRow(id, { seq: 2, updatedAt: 2 }) });
             }
             if (url.pathname === '/v1/machines') return Response.json([]);
             throw new Error(`Unexpected request: ${url.pathname}`);
-        }));
+        })));
         const syncBridge = await loadSyncSingletonForTests();
         registerStandardCleanupTarget({ unmount: syncBridge.dispose });
         const profiles = await import('@/sync/domains/server/serverProfiles');
@@ -489,7 +490,7 @@ describe('concurrent session cache telemetry', () => {
         restoreLocalStorage = localStorageHandle.restore;
         let recovered = false;
         let ordinaryReads = 0;
-        vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        vi.stubGlobal('fetch', vi.fn(createSessionReadBatchFetchBoundary(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (url.pathname === '/v1/auth/ping') return Response.json({ ok: true });
             if (url.pathname === '/v1/features') return Response.json({ features: {}, capabilities: {} });
@@ -504,7 +505,7 @@ describe('concurrent session cache telemetry', () => {
             }
             if (url.pathname === '/v1/machines') return Response.json([]);
             throw new Error(`Unexpected request: ${url.pathname}`);
-        }));
+        })));
         const profiles = await import('@/sync/domains/server/serverProfiles');
         const runtime = await import('@/sync/domains/server/serverRuntime');
         const reachability = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');

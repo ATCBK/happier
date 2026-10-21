@@ -34,7 +34,21 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
         },
     };
 });
-vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => boundary.fetch(...args) }));
+vi.mock('@/utils/system/runtimeFetch', async () => {
+    const { createSessionReadBatchHttpBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
+    const batch = createSessionReadBatchHttpBoundary(request => {
+        if (request.path === '/v2/sessions/read-batch') return undefined;
+        if (request.path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
+        return boundary.fetch(request.url.toString(), { method: request.method, headers: request.headers,
+            signal: request.signal, ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) });
+    });
+    return { runtimeFetch: async (url: string, init?: RequestInit) => {
+        if (new URL(url).pathname !== '/v2/sessions/read-batch') return boundary.fetch(url, init);
+        return batch.handle({ home: new URL(url).origin, url: new URL(url), path: '/v2/sessions/read-batch',
+            method: init?.method ?? 'GET', headers: new Headers(init?.headers), accountId: 'account-b',
+            body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined, signal: init?.signal });
+    } };
+});
 vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
     const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
     return createPartialServerProfilesModuleMock(importOriginal, { profiles: [

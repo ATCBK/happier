@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { encodeV2SessionListCursorV2, projectLegacySessionAccessCapabilitiesV1, SessionAwarenessListResultV1Schema } from '@happier-dev/protocol';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { Encryption } from '@/sync/encryption/encryption';
@@ -66,6 +67,10 @@ vi.mock('@/log', () => ({
 
 const requestMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
+
+// The callbacks describe external per-Session facts. The canonical adapter
+// serves those same facts through either the single or current batch HTTP wire.
+const sessionHttpBoundary = createSessionReadBatchFetchBoundary(async (url, init) => runtimeFetchMock(String(url), init));
 
 import { storage } from './domains/state/storage';
 import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
@@ -148,11 +153,11 @@ async function applySelectedHomeForSessionListTest(credentials?: import('@/auth/
     const connection = await restoreServerAccountForTest({
         serverUrl: selected.serverUrl,
         credentials: appliedCredentials,
-        request: (url, init) => runtimeFetchMock(String(url), init),
+        request: sessionHttpBoundary,
     });
     // Current restore harness uses real secure credential storage.
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    setRuntimeFetch((url, init) => runtimeFetchMock(String(url), init));
+    setRuntimeFetch(sessionHttpBoundary);
     onTestFinished(connection.dispose);
     const { sync } = await import('./sync');
     // Bootstrap starts its Session queue only after core/Profile settlement.
@@ -1885,6 +1890,12 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
         syncInternals.hasFetchedSessionsSnapshotForActiveServer = true;
         syncInternals.encryption = await Encryption.create(new Uint8Array(32).fill(7));
 
+        const olderRow = {
+            id: olderSessionId, seq: 1, createdAt: 100, updatedAt: 100, active: true, activeAt: 100,
+            archivedAt: null, encryptionMode: 'plain', dataEncryptionKey: null,
+            metadata: JSON.stringify({ path: '/tmp/older-row', host: 'local' }), metadataVersion: 1,
+            agentState: null, agentStateVersion: 0, share: null,
+        };
         requestMock.mockImplementation(async (path: string) => {
             if (path === `/v2/sessions/${sessionId}`) {
                 return new Response(JSON.stringify({
@@ -1907,13 +1918,9 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
                     headers: { 'Content-Type': 'application/json' },
                 });
             }
+            if (path === `/v2/sessions/${olderSessionId}`) return Response.json({ session: olderRow });
             if (/^\/v2\/sessions(?:\/active)?(?:\?|$)/.test(path)) return Response.json({
-                sessions: [{
-                    id: olderSessionId, seq: 1, createdAt: 100, updatedAt: 100, active: true, activeAt: 100,
-                    archivedAt: null, encryptionMode: 'plain', dataEncryptionKey: null,
-                    metadata: JSON.stringify({ path: '/tmp/older-row', host: 'local' }), metadataVersion: 1,
-                    agentState: null, agentStateVersion: 0, share: null,
-                }], nextCursor: null, hasNext: false,
+                sessions: [olderRow], nextCursor: null, hasNext: false,
             });
             return new Response('unexpected request', { status: 404 });
         });

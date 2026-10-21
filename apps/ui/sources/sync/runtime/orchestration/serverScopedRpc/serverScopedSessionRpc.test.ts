@@ -83,8 +83,9 @@ vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
   isAppliedActiveServerRuntimeAvailable: () => true,
 }));
 
-vi.mock('@/utils/system/runtimeFetch', () => ({
-  runtimeFetch: (input: RequestInfo | URL, init?: RequestInit) => {
+vi.mock('@/utils/system/runtimeFetch', async () => {
+  const { createSessionReadBatchFetchBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
+  return { runtimeFetch: createSessionReadBatchFetchBoundary((input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).endsWith('/v1/auth/ping')) {
       return Promise.resolve(new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -92,8 +93,8 @@ vi.mock('@/utils/system/runtimeFetch', () => ({
       }));
     }
     return globalThis.fetch(input, init);
-  },
-}));
+  }) };
+});
 
 vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation((...args) => getCredentialsSpy(...args));
 
@@ -301,20 +302,13 @@ describe('sessionRpcWithServerScope', () => {
     });
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          session: {
-            ...sessionListByIdFixture,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-          },
-        }),
-      })),
+      vi.fn(async () => Response.json({ session: {
+        ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null,
+      } })),
     );
 
     const emitWithAck = vi.fn(async () => ({ ok: true, result: { watched: true } }));
-    const timeout = vi.fn(() => ({ emitWithAck: vi.fn() }));
+    const timeout = vi.fn((_timeoutMs?: number) => ({ emitWithAck: vi.fn() }));
     const fakeSocket = {
       timeout,
       emitWithAck,
@@ -334,7 +328,8 @@ describe('sessionRpcWithServerScope', () => {
     expect(createEphemeralSocketSpy).toHaveBeenCalledWith(expect.objectContaining({
       timeoutMs: 30_000,
     }));
-    expect(timeout).not.toHaveBeenCalled();
+    // Socket.IO's incumbent timeout flag may be cleared; no finite RPC deadline may be selected.
+    expect(timeout.mock.calls.every(([value]) => value === undefined)).toBe(true);
     expect(emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CALL, {
       method: 'session-1:session.permission.remote.grants.list',
       params: { sessionId: 'session-1' },
@@ -405,9 +400,8 @@ describe('sessionRpcWithServerScope', () => {
       initializeSessions: vi.fn(async () => {}),
       getSessionEncryption: vi.fn(() => null),
     });
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ session: { ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null } }),
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      session: { ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null },
     })));
     const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({
       ok: true,
@@ -466,16 +460,9 @@ describe('sessionRpcWithServerScope', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          session: {
-            ...sessionListByIdFixture,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-          },
-        }),
-      })),
+      vi.fn(async () => Response.json({ session: {
+        ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null,
+      } })),
     );
 
     const emitWithAck = vi.fn(async () => ({ ok: true, result: { decodedPlain: true } }));
@@ -598,16 +585,9 @@ describe('sessionRpcWithServerScope', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          session: {
-            ...sessionListByIdFixture,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-          },
-        }),
-      })),
+      vi.fn(async () => Response.json({ session: {
+        ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null,
+      } })),
     );
 
     const calls: string[] = [];
@@ -731,10 +711,7 @@ describe('sessionRpcWithServerScope', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ session: { ...sessionListByIdFixture, dataEncryptionKey: envelope } }),
-      })),
+      vi.fn(async () => Response.json({ session: { ...sessionListByIdFixture, dataEncryptionKey: envelope } })),
     );
 
     const daemonSaw: unknown[] = [];
@@ -848,10 +825,7 @@ describe('sessionRpcWithServerScope', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ session: { ...sessionListByIdFixture, dataEncryptionKey: envelope } }),
-      })),
+      vi.fn(async () => Response.json({ session: { ...sessionListByIdFixture, dataEncryptionKey: envelope } })),
     );
 
     const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: string }) => {
@@ -907,16 +881,9 @@ describe('sessionRpcWithServerScope', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          session: {
-            ...sessionListByIdFixture,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-          },
-        }),
-      })),
+      vi.fn(async () => Response.json({ session: {
+        ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null,
+      } })),
     );
 
     const emitWithAck = vi.fn(async () => ({ ok: true, result: { decodedPlain: true } }));
@@ -968,16 +935,9 @@ describe('sessionRpcWithServerScope', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          session: {
-            ...sessionListByIdFixture,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-          },
-        }),
-      })),
+      vi.fn(async () => Response.json({ session: {
+        ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null,
+      } })),
     );
 
     const emitWithAck = vi.fn(async () => ({
@@ -1031,16 +991,9 @@ describe('sessionRpcWithServerScope', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          session: {
-            ...sessionListByIdFixture,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-          },
-        }),
-      })),
+      vi.fn(async () => Response.json({ session: {
+        ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null,
+      } })),
     );
 
     const emitWithAck = vi.fn(() => new Promise<never>(() => {}));
@@ -1099,16 +1052,9 @@ describe('sessionRpcWithServerScope', () => {
     });
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          session: {
-            ...sessionListByIdFixture,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-          },
-        }),
-      })),
+      vi.fn(async () => Response.json({ session: {
+        ...sessionListByIdFixture, encryptionMode: 'plain', dataEncryptionKey: null,
+      } })),
     );
 
     let resolveLateAck!: (value: unknown) => void;

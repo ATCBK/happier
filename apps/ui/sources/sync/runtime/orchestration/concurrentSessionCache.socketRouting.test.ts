@@ -19,7 +19,7 @@ const machines = () => h.storage.getState().machineListByServerId[h.homeB.id];
 const route = (serverId = h.homeB.id, remoteMachineId = 'machine-b') => ({ serverId, remoteMachineId });
 
 describe('concurrent session cache socket routing', () => {
-    it('keeps cold encrypted rows private and retains demanded per-Home metadata without reopening Session data keys', async () => {
+    it('keeps shared encrypted content cold while retaining Account-owned names and demanded per-Home metadata', async () => {
         // Observe the real owner so accidental content demand is visible at
         // every batch size, including batches below the Worker threshold.
         const decryptDataKeys = vi.spyOn(Encryption.prototype, 'decryptEncryptionKeys');
@@ -64,7 +64,10 @@ describe('concurrent session cache socket routing', () => {
             expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toEqual([]);
             expect(Object.keys(rows() ?? {})).toEqual(encryptedRows.map(row => row.id));
             for (const row of encryptedRows) {
-                expect(rows()?.[row.id]?.metadata?.name).toBeUndefined();
+                // The canonical locked-owner projection admits the Account-encrypted
+                // name, but does not open Session-encrypted workspace content.
+                expect(rows()?.[row.id]?.metadata?.name).toBe('Encrypted ' + encryptedRows.indexOf(row));
+                expect(rows()?.[row.id]?.metadata?.path).toBe('');
                 expect(h.storage.getState().sessionListRowsByServerId[h.homeA.id]?.[row.id]).toBeUndefined();
             }
             expect(h.socket().serverUrl).toBe(h.homeB.serverUrl);
@@ -105,7 +108,9 @@ describe('concurrent session cache socket routing', () => {
             expect(rows()).toBe(initialRows);
             for (const row of encryptedRows) expect(rows()?.[row.id]).toBe(initialRows?.[row.id]);
             expect(rows()?.['encrypted-session-4']?.metadata?.name).toBe('Encrypted 4');
-            expect(h.requests('/v2/sessions/encrypted-session-0').map(request => request.url.origin))
+            expect(h.requests('/v2/sessions/read-batch').filter(request =>
+                JSON.parse(String(request.init?.body)).sessionIds.includes('encrypted-session-0'))
+                .map(request => request.url.origin))
                 .toEqual([h.homeB.serverUrl, h.homeB.serverUrl]);
             expect(h.storage.getState().sessionListRowsByServerId[h.homeA.id]?.['encrypted-session-0']).toBeUndefined();
             expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toEqual([]);

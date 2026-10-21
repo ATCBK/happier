@@ -4,9 +4,11 @@ import { FeaturesResponseSchema, ExecutionRunEnsureOrStartRequestSchema, type Ex
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunVoiceAgentIntentInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionRunnerRuntimeStatusFixture } from '@/dev/testkit/fixtures/sessionRunnerRuntimeFixtures';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { storage } from '@/sync/domains/state/storage';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -179,7 +181,7 @@ describe('initializeVoiceAgentHandle', () => {
             credentialScope: 'restored-home',
             // Session HTTP is a genuine boundary. Retained-run adoption writes
             // its pointer through the real metadata tuple owner, not a stub.
-            request: async (url, init) => {
+            request: createSessionReadBatchFetchBoundary(async (url, init) => {
                 const path = new URL(String(url)).pathname;
                 const respond = (body: unknown) => Response.json(body);
                 if (path === '/health') return respond({ status: 'ok' });
@@ -187,14 +189,15 @@ describe('initializeVoiceAgentHandle', () => {
                 if (path === '/v1/features' || path === '/v1/features/authenticated') return respond(FeaturesResponseSchema.parse({ features: { voice: { enabled: true } }, capabilities: {} }));
                 if (path === '/v1/account/encryption') return respond({ mode: 'plain', updatedAt: 0 });
                 if (path === '/v1/machines') return respond([createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })]);
+                if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === 'machine-1' ? createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
                 if (path === '/v1/machines/machine-1') return respond({ machine: createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' }) });
                 if (path.endsWith('/messages')) return respond({ messages: [], hasMore: false });
-                if (path === '/v1/account/encryption/currentness') return respond({ mode: 'plain', version: 0,
-                    signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
+                if (path === '/v1/account/encryption/currentness') return respond(createPlainAccountEncryptionCurrentnessFixture());
                 const sessionResponse = sessionHttp.handle(url, init);
                 if (sessionResponse) return sessionResponse;
                 return new Response('{}', { status: 404 });
-            },
+            }),
         });
         const { home } = connection;
         const normalizeSessions = (sessions: Record<string, Parameters<typeof createSessionFixture>[0]>) =>

@@ -10,6 +10,7 @@ import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixt
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 const HOME_B = 'https://iroh-home-b.example.test';
 const ORIGIN = 'http://127.0.0.1:45991';
@@ -81,6 +82,7 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
     let reconcileNumber = 0;
     let currentDescriptor = descriptor;
     let featureResponse: (() => Promise<Response>) | null = null;
+    let pageResponse: ((url: URL) => Promise<Response | null>) | null = null;
     const features = () => createRootLayoutFeaturesResponse({
         capabilities: { serverIdentity: { serverIdentityId: failIdentity ? 'srv_wrong_home' : descriptor.homeServerIdentityId } },
         // Authenticated discovery describes the same adopted generation, not a
@@ -88,7 +90,7 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
         homeConnectionDescriptor: currentDescriptor,
     });
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-    setRuntimeFetch(async (input) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (input) => {
         const url = new URL(String(input));
         fetchedUrls.push(url.href);
         if (![ORIGIN, homeA.serverUrl, HOME_B, ...(homeC ? [homeC.serverUrl] : [])].includes(url.origin)) {
@@ -106,6 +108,8 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
         if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (url.pathname === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
         if (url.pathname === '/v2/sessions') {
+            const overridden = await pageResponse?.(url);
+            if (overridden) return overridden;
             return Response.json({ sessions: sessions.map((id) => {
                 const session = createSessionFixture({ id });
                 const access = createSessionAccessFixture();
@@ -136,7 +140,7 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
             return Response.json(machines.map(id => createPlainMachineRowFixture({ id, accountId })));
         }
         return Response.json({}, { status: 404 });
-    });
+    }));
     // Exact removal delegates to the real Sync lifetime owner through its
     // Node require bridge, just as the canonical concurrent-cache harness does.
     const bridge = await loadSyncSingletonForTests();
@@ -164,6 +168,7 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
         failIdentity(value: boolean) { failIdentity = value; },
         setRows(sessionIds: string[], machineIds: string[]) { sessions = sessionIds; machines = machineIds; },
         holdFeatures(responder: (() => Promise<Response>) | null) { featureResponse = responder; },
+        servePage(responder: (url: URL) => Promise<Response | null>) { pageResponse = responder; },
         closeNativeLease() { closedNativeLeases.add('native-home-1'); },
         async reconcile() { await profiles.upsertServerProfile({ serverUrl: HOME_B, name: `Home B ${++reconcileNumber}` }); await vi.advanceTimersByTimeAsync(1); },
         async changeEndpoint() {
@@ -213,6 +218,48 @@ beforeEach(() => {
 afterEach(resetHarness);
 
 describe('concurrent session cache Iroh Home routing', () => {
+    it('starts a fresh page after same-Account carrier replacement before the replacement socket connects', async () => {
+        const h = await installHarness();
+        h.startConcurrentSessionCacheSync();
+        await h.settle();
+        await vi.waitFor(() => expect(h.storage.getState().concurrentSessionListCacheByServerId[h.homeBScope]?.listObservation?.phase)
+            .toBe('ready'));
+        const { fetchSessionListQueryPageForHome } = await import('@/sync/domains/session/listing/sessionListQueryRuntime');
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let pageReads = 0;
+        h.servePage(async url => {
+            if (url.searchParams.get('cursor') !== 'carrier-replacement-page') return null;
+            if (++pageReads === 1) await held;
+            return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+        });
+        const page = { source: { kind: 'ordinary' as const, path: '/v2/sessions', allowV1Fallback: false },
+            membership: 'rowOnly' as const, cursor: 'carrier-replacement-page', signal: new AbortController().signal };
+        const older = fetchSessionListQueryPageForHome(h.homeBScope, page);
+        let newer: ReturnType<typeof fetchSessionListQueryPageForHome> | undefined;
+        try {
+            await vi.waitFor(() => expect(pageReads).toBe(1));
+            h.network.setSocketConfigurator(boundary => {
+                // A verified HTTP carrier can become online before Socket.IO connects.
+                // Hold only that external connect event, not the runtime/reachability owners.
+                boundary.socket.connect.mockImplementation(() => { boundary.socket.active = true; });
+            });
+            await h.changeEndpoint();
+            await h.settle();
+            await vi.waitFor(() => expect(h.network.socketBoundaries).toHaveLength(2));
+            expect(h.network.socketBoundaries[1]!.socket.connected).toBe(false);
+            expect(h.getConcurrentSessionListQueryHomeAvailability(h.homeBScope)).toBe('online');
+            newer = fetchSessionListQueryPageForHome(h.homeBScope, { ...page, signal: new AbortController().signal });
+            await vi.waitFor(() => expect(pageReads).toBe(2));
+            await expect(newer).resolves.toMatchObject({ current: true, sessionIds: [] });
+            release();
+            await expect(older).resolves.toMatchObject({ current: false });
+        } finally {
+            release();
+            await Promise.allSettled([older, ...(newer ? [newer] : [])]);
+        }
+    });
+
     it('starts an independent secondary Home while another Home transport acquisition is held', async () => {
         const h = await installHarness({ additionalHome: true });
         let finish!: () => void;

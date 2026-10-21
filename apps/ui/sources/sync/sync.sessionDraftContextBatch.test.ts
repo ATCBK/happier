@@ -15,6 +15,7 @@ import tweetnacl from 'tweetnacl';
 import { encodeBase64 } from '@/encryption/base64';
 import { Encryption } from '@/sync/encryption/encryption';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { SessionPartsInvalidResponseError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionBatchForAuthority';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -160,7 +161,7 @@ describe('Session draft collection context batching', () => {
 
         incomplete = true;
         await advanceRecords('after failed batch');
-        await expect(drafts.ensureSessionDraftRepositoryHydrated(scope)).rejects.toThrow('Incomplete Session batch response');
+        await expect(drafts.ensureSessionDraftRepositoryHydrated(scope)).rejects.toBeInstanceOf(SessionPartsInvalidResponseError);
         expect(text('retained')).toBe('new remote text');
         expect(text('missing-b')).toBe('new remote text');
         incomplete = false;

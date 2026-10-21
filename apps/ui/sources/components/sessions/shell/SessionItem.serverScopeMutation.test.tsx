@@ -7,6 +7,8 @@ import { createMachineFixture, createPlainAccountEncryptionCurrentnessFixture, c
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
@@ -112,7 +114,11 @@ async function renderScreen(element: React.ReactElement<ModelBackedSessionItemTe
     if (props.session && props.serverId) {
         const homeUrl = `https://${props.serverId.replaceAll('_', '-')}.test`;
         const home = await network.addHome(homeUrl, 'row-account');
-        account = await restoreServerAccountForTest({ serverUrl: homeUrl, accountId: 'row-account', request: async (input, init) => {
+        const session = createSessionFixture({ ...props.session, serverId: home.id,
+            metadata: { path: '/repo', host: 'tester.local', machineId: 'machine-row', name: 'Scoped row' },
+        });
+        const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [session.id]: session }));
+        account = await restoreServerAccountForTest({ serverUrl: homeUrl, accountId: 'row-account', request: createSessionReadBatchFetchBoundary(async (input, init) => {
             const url = new URL(String(input));
             const method = init?.method ?? 'GET';
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
@@ -131,11 +137,8 @@ async function renderScreen(element: React.ReactElement<ModelBackedSessionItemTe
                 }
                 return Response.json({ success: true, state: 'unread', lastViewedSessionSeq: 0, didChange: true });
             }
-            return Response.json({}, { status: 404 });
-        } });
-        const session = createSessionFixture({ ...props.session, serverId: home.id,
-            metadata: { path: '/repo', host: 'tester.local', machineId: 'machine-row', name: 'Scoped row' },
-        });
+            return sessionHttp.handle(input, init) ?? Response.json({}, { status: 404 });
+        }) });
         storage.getState().applyMachines([createMachineFixture({ id: 'machine-row' })], true, { sourceServerId: home.id });
         storage.getState().applySessions([session]);
         return renderCanonicalScreen(React.cloneElement(element, { ...props, session, serverId: home.id }));

@@ -3,6 +3,7 @@ import { SessionModelSelectionV1Schema, SPAWN_SESSION_ERROR_CODES } from '@happi
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 describe('session resume and fork routing through the Home and Account boundary', () => {
     let boundary: SessionOpsNetworkBoundary;
@@ -18,6 +19,7 @@ describe('session resume and fork routing through the Home and Account boundary'
     let retireSettingsAfterRead: boolean;
     let unregisterSettingsPreparation: (() => void) | null;
     let censusMachineIds: Set<string>;
+    let respondHttp: Parameters<SessionOpsNetworkBoundary['setHttpResponder']>[0];
 
     const providerModelSelection = SessionModelSelectionV1Schema.parse({
         v: 1, updatedAt: 1,
@@ -56,7 +58,7 @@ describe('session resume and fork routing through the Home and Account boundary'
         censusMachineIds = new Set();
         for (const sessionId of ['session-1', 'session-success', 'session-native', 'sess-parent']) setSession(sessionId);
         setMachine('machine-1');
-        boundary.setHttpResponder(async (input, init) => {
+        respondHttp = async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === '/v1/machines') return Response.json([...censusMachineIds].map((id) => machineFixtures.createPlainMachineRowFixture({ id, accountId: home.accountId })));
             if (path === '/v1/machines/read-batch' && init?.method === 'POST') return machineFixtures.createMachineReadBatchResponseFixture(init.body,
@@ -88,7 +90,8 @@ describe('session resume and fork routing through the Home and Account boundary'
                         metadata: session.metadata } : {}) }) });
             }
             return null;
-        });
+        };
+        boundary.setHttpResponder(createSessionReadBatchFetchBoundary(respondHttp));
         boundary.respond(RPC_METHODS.SPAWN_HAPPY_SESSION, { type: 'success', sessionId: 'session-1' });
         boundary.respond(RPC_METHODS.SESSION_FORK, { ok: true, childSessionId: 'sess-child' });
         vi.stubEnv('EXPO_PUBLIC_HAPPIER_SPAWN_SESSION_RPC_TIMEOUT_MS', '');
@@ -373,19 +376,19 @@ describe('session resume and fork routing through the Home and Account boundary'
         const { captureLazyActionAccountContext } = await import('./actions/actionAccountContext');
         const account = await captureLazyActionAccountContext(home.id);
         try {
-            boundary.setHttpResponder(async (input) => {
+            boundary.setHttpResponder(createSessionReadBatchFetchBoundary(async (input) => {
                 const path = new URL(String(input)).pathname;
                 if (path === '/v2/sessions/session-1') {
                     await boundary.setAccount(home.serverUrl, 'replacement-account');
                     return Response.json({ session: fixtures.createPlainSessionCurrentProjectionRecordFixture() });
                 }
                 return null;
-            });
+            }));
             await expect(ops.sessionSwitch('session-1', 'remote', { serverId: home.id, accountLifetime: account.accountLifetime }))
                 .rejects.toThrow();
             expect(account.accountLifetime.isCurrent()).toBe(false);
             expect(boundary.requests).toEqual([]);
-            expect(boundary.httpRequests).toContainEqual(expect.objectContaining({ url: expect.stringContaining('/v2/sessions/session-1') }));
+            expect(boundary.httpRequests).toContainEqual(expect.objectContaining({ url: expect.stringContaining('/v2/sessions/read-batch') }));
         } finally { account.dispose(); }
     });
 
@@ -555,11 +558,14 @@ describe('session resume and fork routing through the Home and Account boundary'
         boundary.setSocketConfigurator(({ socket }) => { physicalSocket = socket; });
         let releaseRow!: () => void;
         const row = new Promise<void>(resolve => { releaseRow = resolve; });
-        boundary.setHttpResponder(async input => {
-            if (new URL(String(input)).pathname !== '/v1/machines/machine-1') return null;
+        boundary.setHttpResponder(createSessionReadBatchFetchBoundary(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path !== '/v1/machines/machine-1' && path !== '/v1/machines/read-batch') return respondHttp(input, init);
             await row;
+            if (path === '/v1/machines/read-batch') return machineFixtures.createMachineReadBatchResponseFixture(init?.body,
+                id => id === 'machine-1' ? machineFixtures.createPlainMachineRowFixture({ id, accountId: home.accountId }) : null);
             return Response.json({ machine: machineFixtures.createPlainMachineRowFixture({ id: 'machine-1', accountId: home.accountId }) });
-        });
+        }));
         const { machineCapabilitiesDescribe } = await import('./capabilities');
         const pending = kind === 'describe'
             ? machineCapabilitiesDescribe('machine-1', { serverId: home.id })

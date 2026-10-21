@@ -38,6 +38,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import {
@@ -178,13 +179,14 @@ async function prepareDaemonAudioQa(allowedPorts: number[] = []) {
     }) });
     return new Response('{}', { status: 404 });
   };
+  const sessionReadResponse = createSessionReadBatchFetchBoundary(answerRequest);
   account = await restoreServerAccountForTest({
     serverUrl: 'https://voice-qa.example.test', accountId: 'voice-qa-account', credentialScope: 'restored-home',
-    request: answerRequest,
+    request: sessionReadResponse,
   });
   const { sync } = await import('@/sync/sync');
   await sync.resumeSync('manual');
-  setRuntimeFetch(async (url, init) => await answerRequest(url, init) ?? new Response('{}', { status: 404 }));
+  setRuntimeFetch(async (url, init) => await sessionReadResponse(url, init) ?? new Response('{}', { status: 404 }));
 }
 
 
