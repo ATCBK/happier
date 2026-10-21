@@ -31,6 +31,7 @@ import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/
 import { readAgentSessionCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 import { resolveAgentContributionQualifiedId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import type { SessionCatalogControlAdapterParams } from '@/session/catalogControls/sessionCatalogControlTypes';
+import { projectNativeVendorPluginCatalog } from '@/session/catalogControls/nativeVendorPluginCatalog';
 import type {
   SessionGoalControlAdapter,
   SessionGoalControlAdapterParams,
@@ -602,26 +603,7 @@ export function createNativeInactiveCatalogAdapter(params: Readonly<{
           context,
           { signal: context.signal },
         );
-        if (result.status !== 'ok' || result.kind !== 'vendorPlugins') {
-          return {
-            unsupported: true,
-            vendorPlugins: [],
-            diagnostic: result.status === 'ok'
-              ? 'native_vendor_plugin_catalog_kind_mismatch'
-              : result.diagnostic.code,
-          };
-        }
-        return {
-          vendorPlugins: result.items.map((item) => ({
-            vendorPluginRef: item.id,
-            name: item.name,
-            displayName: item.displayName,
-            ...(item.description ? { description: item.description } : {}),
-            installed: item.installed,
-            enabled: item.enabled,
-            mentionable: item.mentionable,
-          })),
-        };
+        return projectNativeVendorPluginCatalog(params.agentId, result);
       }
       const result = await factory.catalog!.list(
         { kind: 'skills' },

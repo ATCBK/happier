@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveSpawnChildEnvironment } from '@/daemon/spawn/resolveSpawnChildEnvironment';
 import { bindInactiveSessionControlLaunchScope } from '@/daemon/spawn/inactiveSessionControlLaunchScope';
 import { createCodexNativeSessionControls } from '../../../../../packages/plugins/codex/src/agent/runtime/controls';
+import { withCodexNativeAttachFixture } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime.nativeAttach.test-support';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { SessionWorkStateGetResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { SessionWorkStateV1Schema, writeSessionWorkStateV1ToMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -224,6 +226,65 @@ function claudeResumeGoalHarness() {
 }
 
 describe('native inactive Agent session controls', () => {
+  it('projects a populated Codex vendor catalog through inactive routing into the Action output contract', async () => {
+    await withCodexNativeAttachFixture(async native => {
+      const controls = createCodexNativeSessionControls();
+      const fixture = runtimeRegistryFixture({
+        sessions: { ...controls, async open() { throw new Error('Catalog reads must not open a Session'); } },
+        createServices: async () => ({ ...createUnavailablePluginServices(), exec: native.exec }),
+      });
+      const adapter = createNativeInactiveCatalogAdapter({ agentId: fixture.agentId,
+        native: { vendorPlugins: true, skills: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
+      const result = await routeSessionCatalogControl({ ...commonRouteParams('vendor-catalog-session'),
+        operation: 'vendorPlugins', resolveAdapter: async () => adapter });
+      const parsed = getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(result);
+      expect(parsed).toMatchObject({ vendorPlugins: [{
+        v: 1, backendId: fixture.agentId, agentId: fixture.agentId,
+        vendorPluginRef: 'plugin://mail@curated', name: 'mail', displayName: 'Mail',
+        installed: true, enabled: true, mentionable: true,
+      }] });
+    }, { pluginListResponse: { marketplaces: [{ name: 'curated', plugins: [{
+      name: 'mail', interface: { displayName: 'Mail' }, installed: true, enabled: true,
+    }] }] } });
+  });
+
+  it.each([true, false])('projects external vendor catalogs with populated=%s into the same Action contract', async populated => {
+    // The external contribution is the plugin boundary; host routing and projection stay real.
+    const fixture = runtimeRegistryFixture({ agent: { pluginId: 'acme.catalog', localId: 'native' }, sessions: {
+      catalog: { async list() { return { status: 'ok', kind: 'vendorPlugins', items: populated ? [{
+        id: 'plugin://review@acme', name: 'review', displayName: 'Review', description: 'Review changes',
+        installed: false, enabled: false, mentionable: false,
+      }] : [] }; } },
+      async open() { throw new Error('Catalog reads must not open a Session'); },
+    } });
+    const adapter = createNativeInactiveCatalogAdapter({ agentId: fixture.agentId,
+      native: { vendorPlugins: true, skills: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
+    const result = await routeSessionCatalogControl({ ...commonRouteParams('external-catalog-session'),
+      operation: 'vendorPlugins', resolveAdapter: async () => adapter });
+    expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(result)).toEqual({
+      vendorPlugins: populated ? [{ v: 1, backendId: fixture.agentId, agentId: fixture.agentId,
+        vendorPluginRef: 'plugin://review@acme', name: 'review', displayName: 'Review', description: 'Review changes',
+        installed: false, enabled: false, mentionable: false }] : [],
+    });
+  });
+
+  it.each(['unsupported', 'wrong-kind'] as const)('keeps native vendor catalog %s results schema-valid', async outcome => {
+    const fixture = runtimeRegistryFixture({ agent: { pluginId: 'acme.catalog', localId: 'native' }, sessions: {
+      catalog: { async list() { return outcome === 'unsupported'
+        ? { status: 'unsupported', diagnostic: { code: 'acme_catalog_unsupported', severity: 'error' } }
+        : { status: 'ok', kind: 'skills', items: [] }; } },
+      async open() { throw new Error('Catalog reads must not open a Session'); },
+    } });
+    const adapter = createNativeInactiveCatalogAdapter({ agentId: fixture.agentId,
+      native: { vendorPlugins: true, skills: false }, dependencies: { acquireRuntimeRegistryLease: fixture.acquire } });
+    const result = await routeSessionCatalogControl({ ...commonRouteParams('unavailable-catalog-session'),
+      operation: 'vendorPlugins', resolveAdapter: async () => adapter });
+    expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(result)).toEqual({
+      unsupported: true, vendorPlugins: [], diagnostic: outcome === 'unsupported'
+        ? 'acme_catalog_unsupported' : 'native_vendor_plugin_catalog_kind_mismatch',
+    });
+  });
+
   it.each([
     { status: 'unavailable' as const, facet: { phase: 'native_effect' as const }, expected: { phase: 'native_effect' } },
     { status: 'rejected' as const, facet: { phase: 'host_publication_rejected' as const }, expected: { phase: 'host_publication_rejected' } },

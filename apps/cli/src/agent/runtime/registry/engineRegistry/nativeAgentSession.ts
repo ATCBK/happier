@@ -2,6 +2,7 @@ import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/session
 import { isSessionModeSelectionUnavailable } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { isForegroundTurnRuntimeTranscriptEvent } from '@/agent/runtime/session/events/runtimeTranscriptScope';
 import { readRegistryCatalogHook } from '@/agent/catalog/runtimeEntry';
+import { projectNativeVendorPluginCatalog } from '@/session/catalogControls/nativeVendorPluginCatalog';
 import { randomUUID } from 'node:crypto';
 import { AsyncLock } from '@/utils/lock';
 import { probeMcpStdioServerTools } from '@/mcp/servers/probeMcpStdioServerTools';
@@ -3478,27 +3479,7 @@ export function createNativeAgentSessionOperations(
                                     context,
                                     { signal: context.signal },
                                 );
-                                if (result.status !== 'ok' || result.kind !== 'vendorPlugins') {
-                                    const diagnostic = result.status === 'ok'
-                                        ? 'native_vendor_plugin_catalog_kind_mismatch'
-                                        : result.diagnostic.code;
-                                    return {
-                                        unsupported: true,
-                                        vendorPlugins: [],
-                                        diagnostic,
-                                    };
-                                }
-                                return {
-                                    vendorPlugins: result.items.map((item) => ({
-                                        vendorPluginRef: item.id,
-                                        name: item.name,
-                                        displayName: item.displayName,
-                                        ...(item.description ? { description: item.description } : {}),
-                                        installed: item.installed,
-                                        enabled: item.enabled,
-                                        mentionable: item.mentionable,
-                                    })),
-                                };
+                                return projectNativeVendorPluginCatalog(context.agent.id, result);
                             },
                         }
                         : {}),

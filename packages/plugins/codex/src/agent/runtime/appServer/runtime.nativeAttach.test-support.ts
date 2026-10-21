@@ -39,6 +39,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   interactions?: CodexAppServerRuntimeHost['ui'];
   models?: AgentSessionRuntimeContext['session']['services']['models'];
   modelListResponse?: unknown;
+  pluginListResponse?: unknown;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
   beforeTurnStartResponse?: () => Promise<void>;
   beforeThreadResumeResponse?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown> }>) => void | Promise<void>;
@@ -173,6 +174,8 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       result = { data: [{ name: 'realtime_conversation', enabled: true }], nextCursor: null };
     } else if (message.method === 'model/list') {
       result = options.modelListResponse ?? { data: [{ id: 'fixture-model', model: 'fixture-model', displayName: 'Fixture Model', isDefault: true }], nextCursor: null };
+    } else if (message.method === 'plugin/list') {
+      result = options.pluginListResponse ?? { marketplaces: [] };
     } else if (message.method === 'skills/extraRoots/set' && options.rejectExtraRootsSet) {
       error = { code: -32601, message: 'Method not found' };
     }

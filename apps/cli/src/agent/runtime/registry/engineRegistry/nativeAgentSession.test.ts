@@ -75,6 +75,7 @@ import type { SessionRollbackRangeV1 } from '@happier-dev/protocol/sessions/meta
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime';
 import { ProviderRuntimeBindingBasisV1Schema } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import {
     CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY,
     CurrentSessionPresentationStateV1Schema,
@@ -5355,8 +5356,10 @@ describe('native Agent session host adapter', () => {
         await controls.refreshGoal();
         await controls.setGoal('Ship direct facets', { status: 'active', tokenBudget: 1000 });
         await controls.clearGoal();
-        await expect(controls.listVendorPlugins()).resolves.toEqual({
+        const vendorCatalog = await controls.listVendorPlugins();
+        expect(getActionSpec('session.vendor_plugin_catalog.list').outputSchema.parse(vendorCatalog)).toEqual({
             vendorPlugins: [{
+                v: 1, backendId: agentId, agentId,
                 vendorPluginRef: 'plugin://gmail', name: 'gmail', displayName: 'Gmail',
                 installed: true, enabled: true, mentionable: true,
             }],
