@@ -231,6 +231,7 @@ async function daemonSettingsProjection(params: Readonly<{
     method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
     request: DaemonContributionRegistryProjectionDescribeRequestSchema.parse({
       machineId: params.target.machineId,
+      selection: 'settings',
     }),
     ...(params.signal ? { signal: params.signal } : {}),
   });

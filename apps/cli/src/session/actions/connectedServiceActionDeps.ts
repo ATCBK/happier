@@ -192,7 +192,10 @@ export function createCliConnectedServiceAction(params: Readonly<{
       },
       admitPurposeTarget: async input => {
         await assertReadCurrent();
-        const request = DaemonContributionRegistryProjectionDescribeRequestSchema.parse({ machineId: input.machineId });
+        const request = DaemonContributionRegistryProjectionDescribeRequestSchema.parse({
+          machineId: input.machineId,
+          selection: 'connectedAccountAdmission',
+        });
         let rawProjection: unknown;
         try {
           rawProjection = await params.callMachineAction({ machineId: input.machineId,

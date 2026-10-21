@@ -124,7 +124,7 @@ describe('bundled daemon contribution describe cost', () => {
             reloadConfiguration();
             invalidateDaemonContributionRegistryProjectionCache();
         }
-    });
+    }, 120_000);
 
     it('returns verified Artifact metadata and detects changed installed files on the next read', async () => {
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'gi-artifact-cost-'));

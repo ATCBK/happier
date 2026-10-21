@@ -28,6 +28,7 @@ import type {
     ResolvedAgentContribution,
 } from '../types';
 import {
+    buildPluginProjectionFamilyV2,
     buildPluginProjectionFamiliesByIdV2,
 } from '@/plugins/projection/families';
 import { managedDependenciesProjectionFamily } from '../managedDependencies';
@@ -918,6 +919,102 @@ function narrowIntrospectionToClientReadFamilies(
         ...introspection,
         contributions,
         diagnostics: contributions.flatMap((record) => record.diagnostics),
+    };
+}
+
+function createEmptyPluginProjectionV2(generation: number): PluginProjectionV2 {
+    return {
+        v: 2,
+        generation,
+        installedPackagesById: {},
+        agentsById: {},
+        actionsById: {},
+        toolsById: {},
+        commandsById: {},
+        resourcesById: {},
+        settingsById: {},
+        familiesById: {},
+        diagnostics: [],
+    };
+}
+
+export function buildPluginSettingsProjectionV2(params: Readonly<{
+    registry: ResolvedContributionRegistry;
+    generation: number;
+}>): PluginProjectionV2 {
+    return {
+        ...createEmptyPluginProjectionV2(params.generation),
+        settingsById: buildSettingsById(params.registry),
+    };
+}
+
+export function buildPluginConnectedAccountAdmissionProjectionV2(params: Readonly<{
+    registry: ResolvedContributionRegistry;
+    generation: number;
+    installedPackages?: readonly PluginCatalogEntry[];
+    pluginDiagnosticsByPluginId?: Readonly<Record<string, readonly PluginCompatibilityDiagnostic[]>>;
+    brandAssetsByPluginId?: Readonly<Record<string, PluginProjectionBrandAssetV2>>;
+    pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>;
+    resolveActionPresentUserGatePolicy?: (
+        pluginId: string,
+        localId: string,
+    ) => PluginActionPresentUserGatePolicy | null;
+    pluginFinalPolicyCurrentRuntimesById?: ReadonlyMap<string, PluginFinalPolicyCurrentRuntime>;
+    introspectionRuntimeSnapshot?: PluginTargetActivationIntrospectionSnapshot;
+    requestedLocale?: string;
+}>): PluginProjectionV2 {
+    const installedPackages = params.installedPackages ?? [];
+    const pluginDiagnosticsByPluginId = params.pluginDiagnosticsByPluginId
+        ?? params.registry.pluginDiagnosticsByPluginId;
+    const purposeScopes = deriveRegistryConnectedAccountPurposeAuthorizations(params.registry);
+    const familyContext = {
+        registry: params.registry,
+        generation: params.generation,
+        pluginDiagnosticsByPluginId,
+        ...(params.pluginExecutionOriginsByPluginId
+            ? { pluginExecutionOriginsByPluginId: params.pluginExecutionOriginsByPluginId }
+            : {}),
+        ...(params.requestedLocale === undefined ? {} : { requestedLocale: params.requestedLocale }),
+    };
+    return {
+        ...createEmptyPluginProjectionV2(params.generation),
+        installedPackagesById: buildInstalledPackagesById({
+            registry: params.registry,
+            installedPackages,
+            pluginDiagnosticsByPluginId,
+            ...(params.brandAssetsByPluginId
+                ? { brandAssetsByPluginId: params.brandAssetsByPluginId }
+                : {}),
+            ...(params.pluginExecutionOriginsByPluginId
+                ? { pluginExecutionOriginsByPluginId: params.pluginExecutionOriginsByPluginId }
+                : {}),
+            ...(params.pluginFinalPolicyCurrentRuntimesById
+                ? { pluginFinalPolicyCurrentRuntimesById: params.pluginFinalPolicyCurrentRuntimesById }
+                : {}),
+        }),
+        actionsById: buildActionsById(
+            params.registry,
+            purposeScopes,
+            params.pluginExecutionOriginsByPluginId,
+            params.resolveActionPresentUserGatePolicy,
+            params.pluginFinalPolicyCurrentRuntimesById,
+            params.introspectionRuntimeSnapshot?.runtimeFactsByQualifiedId,
+        ),
+        resourcesById: buildResourcesById(
+            params.registry,
+            purposeScopes,
+            params.pluginExecutionOriginsByPluginId,
+        ),
+        familiesById: Object.freeze({
+            connectedAccounts: buildPluginProjectionFamilyV2(
+                familyContext,
+                connectedAccountProjectionFamily,
+            ),
+            machineProvisioners: buildPluginProjectionFamilyV2(
+                familyContext,
+                machineProvisionersProjectionFamily,
+            ),
+        }),
     };
 }
 

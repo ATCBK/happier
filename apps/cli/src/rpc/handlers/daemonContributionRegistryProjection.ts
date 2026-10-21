@@ -54,12 +54,20 @@ import type {
     AdmittedTargetedContributionSnapshot,
     ResolvedContributionRegistry,
 } from '@/plugins/projection/registry/types';
-import { buildAgentsById, buildPluginProjectionV2 } from '@/plugins/projection/registry/projection/v2';
+import {
+    buildAgentsById,
+    buildPluginConnectedAccountAdmissionProjectionV2,
+    buildPluginSettingsProjectionV2,
+    buildPluginProjectionV2,
+} from '@/plugins/projection/registry/projection/v2';
 import {
     projectDaemonEmbeddedPluginUiRenderer,
     projectDaemonComposerSurfaceCatalog,
 } from '@/plugins/projection/registry/composer';
-import { adaptTargetActivationFacts } from '@/plugins/projection/introspection/targetActivationFacts';
+import {
+    adaptTargetActivationFacts,
+    type PluginTargetActivationIntrospectionSnapshot,
+} from '@/plugins/projection/introspection/targetActivationFacts';
 import { mapPluginSourceToDiagnosticSource } from '@/plugins/projection/introspection/source';
 import {
     resolvePluginUiProjectionHostRuntime,
@@ -1371,6 +1379,33 @@ type ProjectionBuildInputs = Readonly<{
     locale?: string;
 }>;
 
+function projectActivationIntrospectionRuntimeSnapshot(
+    lease: ProjectionLease,
+    generation: number,
+): PluginTargetActivationIntrospectionSnapshot | undefined {
+    const activationIntrospection = lease.targetActivationFacts
+        ? adaptTargetActivationFacts({
+            generation: lease.runtimeRegistry?.generation ?? generation,
+            candidates: lease.registry.introspectionContributions ?? [],
+            plugins: lease.registry.activationTargets.map((target) => ({
+                pluginId: target.pluginId,
+                pluginVersion: target.manifest.version,
+                source: mapPluginSourceToDiagnosticSource(target.sourceSpec),
+            })),
+            targetActivationFacts: lease.targetActivationFacts,
+            runtimeState: 'current',
+        })
+        : undefined;
+    return activationIntrospection
+        ? Object.freeze({
+            ...activationIntrospection,
+            // This is a snapshot of the current public projection revision.
+            // Individual retained registrations keep their internal activation generation.
+            generation,
+        })
+        : undefined;
+}
+
 async function buildProjection(
     opts: DaemonContributionRegistryProjectionRegistrationOptions | undefined,
     lease: ProjectionLease,
@@ -1424,27 +1459,7 @@ async function buildProjection(
         } : {}),
     });
 
-    const activationIntrospection = lease.targetActivationFacts
-        ? adaptTargetActivationFacts({
-            generation: lease.runtimeRegistry?.generation ?? generation,
-            candidates: lease.registry.introspectionContributions ?? [],
-            plugins: lease.registry.activationTargets.map((target) => ({
-                pluginId: target.pluginId,
-                pluginVersion: target.manifest.version,
-                source: mapPluginSourceToDiagnosticSource(target.sourceSpec),
-            })),
-            targetActivationFacts: lease.targetActivationFacts,
-            runtimeState: 'current',
-        })
-        : undefined;
-    const introspectionRuntimeSnapshot = activationIntrospection
-        ? Object.freeze({
-            ...activationIntrospection,
-            // This is a snapshot of the current public projection revision.
-            // Individual retained registrations keep their internal activation generation.
-            generation,
-        })
-        : undefined;
+    const introspectionRuntimeSnapshot = projectActivationIntrospectionRuntimeSnapshot(lease, generation);
     const baseProjection = buildPluginProjectionV2({
         registry: lease.registry,
         generation,
@@ -1568,9 +1583,12 @@ async function describeProjection(
     request: DaemonContributionRegistryProjectionDescribeRequest,
     signal?: AbortSignal,
 ): Promise<DaemonContributionRegistryProjectionDescribeResponse> {
-    if (request.selection === 'agents' || request.selection === 'skills') {
+    if (request.selection === 'agents' || request.selection === 'skills'
+        || request.selection === 'settings' || request.selection === 'connectedAccountAdmission') {
         const generation = await (opts?.resolveGeneration ?? defaultResolveGeneration)();
-        const lease = await acquireProjectionContributionRegistryLease(opts, generation, request.selection === 'skills');
+        const requireRuntimeRegistry = request.selection === 'skills'
+            || request.selection === 'connectedAccountAdmission';
+        const lease = await acquireProjectionContributionRegistryLease(opts, generation, requireRuntimeRegistry);
         try {
             signal?.throwIfAborted();
             const skills = request.selection === 'skills';
@@ -1578,6 +1596,55 @@ async function describeProjection(
                 entry => request.skillIds!.includes(pluginSkillIdV1(entry.identity))) } : lease.registry;
             const pluginExecutionOriginsByPluginId = skills ? await resolvePluginExecutionOriginsForProjection(
                 opts, registry, lease.runtimeRegistry) : undefined;
+            if (request.selection === 'settings') {
+                return {
+                    protocolVersion: 1,
+                    projection: buildPluginSettingsProjectionV2({
+                        registry,
+                        generation,
+                    }),
+                };
+            }
+            if (request.selection === 'connectedAccountAdmission') {
+                const admissionExecutionOriginsByPluginId = await resolvePluginExecutionOriginsForProjection(
+                    opts,
+                    registry,
+                    lease.runtimeRegistry,
+                );
+                const pluginFinalPolicyCurrentRuntimesById = lease.runtimeRegistry
+                    ?.pluginFinalPolicyCurrentRuntimesById;
+                const introspectionRuntimeSnapshot = projectActivationIntrospectionRuntimeSnapshot(
+                    lease,
+                    generation,
+                );
+                return {
+                    protocolVersion: 1,
+                    projection: buildPluginConnectedAccountAdmissionProjectionV2({
+                        registry,
+                        generation,
+                        installedPackages: await resolveInstalledPackagesForProjection(opts, lease.runtimeRegistry),
+                        pluginDiagnosticsByPluginId: lease.pluginDiagnosticsByPluginId,
+                        brandAssetsByPluginId: readCurrentPluginBrandAssetsForProjection({
+                            registry,
+                            runtimeRegistry: lease.runtimeRegistry,
+                        }),
+                        pluginExecutionOriginsByPluginId: admissionExecutionOriginsByPluginId,
+                        ...(lease.runtimeRegistry?.resolveActionPresentUserGatePolicy
+                            ? {
+                                resolveActionPresentUserGatePolicy:
+                                    lease.runtimeRegistry.resolveActionPresentUserGatePolicy,
+                            }
+                            : {}),
+                        ...(pluginFinalPolicyCurrentRuntimesById
+                            ? { pluginFinalPolicyCurrentRuntimesById }
+                            : {}),
+                        ...(introspectionRuntimeSnapshot
+                            ? { introspectionRuntimeSnapshot }
+                            : {}),
+                        ...(request.locale ? { requestedLocale: request.locale } : {}),
+                    }),
+                };
+            }
             // Selected reads share the full catalog's producers and current
             // registry without resolving unrelated UI features or assets.
             return {

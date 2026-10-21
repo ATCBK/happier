@@ -31,10 +31,9 @@ describe('machine provisioner projection', () => {
         expect(entry).toMatchObject({ connectedAccountPurposes: [{ purpose: 'cloud-account', serviceRefs: [service] }] });
         expect(projection.resourcesById).toEqual({});
         const purpose = { consumer: { pluginId, localId: 'guest' }, purpose: 'cloud-account' };
-        const setupProjection = { ...projection, machineProvisionersById: projection.familiesById.machineProvisioners!.entriesById };
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: setupProjection })).toMatchObject({ consumerKind: 'machineProvisioner', serviceRefs: [service] });
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...setupProjection, installedPackagesById: {} } })).toBeNull();
-        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'other' }, projection: setupProjection })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection })).toMatchObject({ consumerKind: 'machineProvisioner', serviceRefs: [service] });
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...projection, installedPackagesById: {} } })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'other' }, projection })).toBeNull();
         // Resource defaults are a separate operation: a provisioner must never acquire that authority.
         expect(readDeclaredConnectedAccountResourcePurposeV1({ projection,
             purpose: { consumer: { pluginId, localId: 'guest' }, purpose: 'cloud-account' } })).toBeNull();

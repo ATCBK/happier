@@ -8488,7 +8488,8 @@ export function createCliActionDeps(params: Readonly<{
             const currentContext = context ?? { surface: 'cli' as const };
             const described = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await callMachineAction({
               machineId, method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
-              request: { machineId }, context: currentContext, effectActionId: 'session.status.get', exactMachine: true,
+              request: { machineId, selection: 'connectedAccountAdmission' },
+              context: currentContext, effectActionId: 'session.status.get', exactMachine: true,
               ...(operationSignal ? { signal: operationSignal } : {}),
             }));
             const authorizeRequest = (request: Readonly<{ method: string; path: string; body?: unknown }>) =>
