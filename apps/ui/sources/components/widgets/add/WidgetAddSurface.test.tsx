@@ -375,17 +375,19 @@ describe('WidgetAddSurface', () => {
 
     it('waits for saved inventory before saying a search has no match, then offers Clear', async () => {
         const rec = recorder();
-        const screen = await renderPanel({
+        const panelProps: React.ComponentProps<typeof WidgetAddPanel> = {
+            testID: 'add', title: 'Add to Home', searchPlaceholder: 'Search widgets', addLabel: 'Add to Home',
+            composition: 'split', onRequestClose: () => {},
             sections: [{ id: 'all', title: 'All', entries: [widgetEntry(SIGNUPS, rec)] }],
             pendingSections: [{ id: 'yours', title: 'Your widgets' }],
-        });
-        screen.changeTextByTestId('add.search', 'kanban');
+        };
+        const screen = await renderScreen(<WidgetAddPanel {...panelProps} />);
+        await act(async () => { screen.changeTextByTestId('add.search', 'kanban'); });
         await flushHookEffects({ cycles: 2 });
         expect(screen.findHostByTestId('add.noMatch')).toBeNull();
         expect(screen.findHostByTestId('add.clearSearch')).toBeNull();
         expect(screen.findAllByTestId('add.pending.yours').length).toBeGreaterThan(0);
         expect(screen.getTextContent()).toContain('Your widgets');
-        const panelProps: React.ComponentProps<typeof WidgetAddPanel> = screen.findByType(WidgetAddPanel).props;
         await screen.update(<WidgetAddPanel {...panelProps} pendingSections={[]} />);
         expect(screen.findHostByTestId('add.pending.yours')).toBeNull();
         expect(screen.findHostByTestId('add.noMatch')).not.toBeNull();

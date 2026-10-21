@@ -400,8 +400,9 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
 }>): React.ReactElement {
     const styles = stylesheet;
     const split = props.composition === 'split';
-    // Nothing found says so even when the ask is offered under it; an empty list with no search is the ask alone.
-    const nothing = props.sections.length === 0 && (!props.askEntry || props.query.trim().length > 0);
+    // An unresolved inventory cannot establish absence. Once it settles, a search without matches
+    // says so even when the ask is offered under it; an empty list with no search is the ask alone.
+    const nothing = props.sections.length === 0 && !props.pendingSections?.length && (!props.askEntry || props.query.trim().length > 0);
     // Rows that run past the surface fade at the cut edge, so the list never ends mid-row (web).
     const fades = useScrollEdgeFades({ enabledEdges: LIST_FADE_EDGES });
     const fadeMask = Platform.OS === 'web' && !props.phone ? resolveVerticalScrollEdgeMaskStyle(fades.visibility) : null;

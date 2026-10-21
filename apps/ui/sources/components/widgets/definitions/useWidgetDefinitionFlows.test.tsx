@@ -22,6 +22,11 @@ vi.mock('@legendapp/list/react-native', async importOriginal =>
     (await import('@/dev/testkit/mocks/legendList')).createCapturingLegendListMock({
         original: await importOriginal<Record<string, unknown>>(), renderItems: true,
     }).module);
+// Popover placement is a native layout boundary; keep the real Gallery visible in the host renderer.
+vi.mock('@/components/ui/popover', async importOriginal =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal, {
+        maxHeight: 624, maxWidth: 960, placement: 'bottom',
+    }));
 installHomeGovernanceBoundaries(harness);
 // The fixture Home is reachable. Deliver only the external transport event;
 // the real connection owner still establishes scoped request authority.
@@ -36,6 +41,7 @@ await loadSyncSingletonForTests();
 const { BoardWidgetAddPopover } = await import('../add/BoardWidgetAddPopover');
 
 const ACCOUNT_ID = 'account-a';
+const DEFINITION_LIST_PATH = '/v1/artifacts?limit=500&kind=widget_definition';
 let restoreUuid: (() => void) | null = null;
 
 async function addDefinitionHome(portable = false): Promise<string> {
@@ -395,6 +401,64 @@ describe('widget definition flows', () => {
         } finally { await disconnect(); storage.setState(previousScopes); }
     });
 
+    it.each(['sessionBoard', 'companion'] as const)('keeps the %s Gallery demand-gated and shows delayed, refused and retried saved inventory', async host => {
+        const serverId = await addDefinitionHome();
+        const React = await import('react');
+        const { act } = await import('react-test-renderer');
+        const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+        const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { useSessionBoardController } = await import('@/components/sessions/board/useSessionBoardController');
+        const { createSessionBoardActionsPort } = await import('@/sync/domains/session/board/sessionBoardActionsPort');
+        const { projectSessionBoard } = await import('@/sync/domains/session/board');
+        const { CompanionWidgetAddPopover } = await import('../add/CompanionWidgetAddPopover');
+        const account = { serverId, accountId: ACCOUNT_ID };
+        expect(await createDefaultActionExecutor().execute('widgets.definition.create', {
+            account, artifactId: 'recovered-checks', definition: DRAFT,
+        }, { serverId, surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+        const recovered = await harness.artifacts(serverId).handle(DEFINITION_LIST_PATH);
+        if (!recovered) throw new Error('Expected the canonical Artifact list boundary');
+        const recoveredInventory: unknown = await recovered.json();
+        const session = createSessionFixture({ id: 'gallery-session', serverId, encryptionMode: 'plain' });
+        const snapshot = projectSessionBoard({ layout: undefined, items: new Map(), capabilities: { readTranscript: true, editSessionRecords: true },
+            freshness: 'fresh', reachability: 'reachable', loading: 'idle', incomplete: false });
+        const actions = createSessionBoardActionsPort({ serverId, sessionId: session.id });
+        const anchorRef = React.createRef<import('react-native').View>();
+        function Gallery({ open }: { open: boolean }) {
+            const controller = useSessionBoardController({ serverId, sessionId: session.id, actions, binding: { status: 'ready', snapshot } });
+            return host === 'sessionBoard'
+                ? React.createElement(BoardWidgetAddPopover, { open, anchorRef, onRequestClose: () => {}, controller,
+                    sessionId: session.id, session, candidates: [], testID: 'inventoryGallery' })
+                : React.createElement(CompanionWidgetAddPopover, { open, anchorRef, onRequestClose: () => {}, testID: 'inventoryGallery',
+                    source: { refs: [], snapshot: null, pluginProjection: null, addItem: () => {},
+                        context: { session: { ref: { serverId, sessionId: session.id }, label: 'Current session' } } } });
+        }
+        const pending = createDeferred<void>();
+        harness.answer(serverId, DEFINITION_LIST_PATH, { status: 403, body: { error: 'forbidden' }, respondAfter: pending.promise });
+        const reads = () => harness.requestsFor(DEFINITION_LIST_PATH).length;
+        const before = reads();
+        const screen = await renderScreen(React.createElement(Gallery, { open: false }));
+        try {
+            expect(reads()).toBe(before);
+            await screen.update(React.createElement(Gallery, { open: true }));
+            await vi.waitFor(() => expect(reads()).toBeGreaterThan(before));
+            expect(screen.findHostByTestId('inventoryGallery.pending.yours')).not.toBeNull();
+            expect(screen.findHostByTestId('inventoryGallery.pending.yours.failed')).toBeNull();
+            await act(async () => { screen.changeTextByTestId('inventoryGallery.search', DRAFT.name); });
+            expect(screen.findHostByTestId('inventoryGallery.noMatch')).toBeNull();
+            await act(async () => { pending.resolve(); });
+            await vi.waitFor(() => expect(screen.findHostByTestId('inventoryGallery.pending.yours.failed')).not.toBeNull());
+            expect(screen.findHostByTestId('inventoryGallery.noMatch')).toBeNull();
+            // Restore the real HTTP Artifact store after the refused read.
+            harness.answer(serverId, DEFINITION_LIST_PATH, { body: recoveredInventory });
+            await screen.pressByTestIdAsync('inventoryGallery.pending.yours.retry');
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain(DRAFT.name));
+            expect(reads()).toBeGreaterThan(before + 1);
+            expect(screen.findHostByTestId('inventoryGallery.pending.yours')).toBeNull();
+        } finally { pending.resolve(); await screen.unmount(); }
+    });
+
     it('keeps authored gallery fields when the installed contribution declares different fields', async () => {
         const serverId = await addDefinitionHome();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -412,9 +476,9 @@ describe('widget definition flows', () => {
         const { act } = await import('react-test-renderer');
         const { Text } = await import('react-native');
         const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
-        const { useYourWidgetCandidates } = await import('./useYourWidgetCandidates');
+        const { useYourWidgetCandidatesState } = await import('./useYourWidgetCandidates');
         function Gallery() {
-            const candidates = useYourWidgetCandidates(account, projection);
+            const { candidates } = useYourWidgetCandidatesState(account, projection);
             return React.createElement(Text, {}, candidates.map(candidate => `${candidate.title}:${candidate.inputs?.fields.map(field => field.path).join(',')}:${candidate.target}`).join('|'));
         }
         const screen = await renderScreen(React.createElement(Gallery));
@@ -436,8 +500,8 @@ describe('widget definition flows', () => {
             retry = state.retry;
             return React.createElement(Text, {}, state.status);
         }
-        harness.answer(serverId, '/v1/artifacts?limit=500', { status: 403, body: { error: 'forbidden' } });
-        const reads = () => harness.requestsFor('/v1/artifacts?limit=500').length;
+        harness.answer(serverId, DEFINITION_LIST_PATH, { status: 403, body: { error: 'forbidden' } });
+        const reads = () => harness.requestsFor(DEFINITION_LIST_PATH).length;
         const screen = await renderScreen(React.createElement(Gallery));
         try {
             await vi.waitFor(() => { expect(screen.getTextContent()).toBe('failed'); });
@@ -454,9 +518,9 @@ describe('widget definition flows', () => {
         const { act } = await import('react-test-renderer');
         const { Text } = await import('react-native');
         const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
-        const { useYourWidgetCandidates } = await import('./useYourWidgetCandidates');
+        const { useYourWidgetCandidatesState } = await import('./useYourWidgetCandidates');
         function Gallery() {
-            const candidates = useYourWidgetCandidates(null, null);
+            const { candidates } = useYourWidgetCandidatesState(null, null);
             return React.createElement(Text, {}, String(candidates.length));
         }
         const before = harness.requests.length;
@@ -524,12 +588,12 @@ describe('widget definition flows', () => {
         const { act } = await import('react-test-renderer');
         const { Text } = await import('react-native');
         const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
-        const { useYourWidgetCandidates } = await import('./useYourWidgetCandidates');
+        const { useYourWidgetCandidatesState } = await import('./useYourWidgetCandidates');
         let changeAccount: React.Dispatch<React.SetStateAction<typeof account>> = () => {};
         function Gallery() {
             const [selected, setSelected] = React.useState(account);
             changeAccount = setSelected;
-            const candidates = useYourWidgetCandidates(selected, null);
+            const { candidates } = useYourWidgetCandidatesState(selected, null);
             return React.createElement(Text, {}, candidates.map(candidate => candidate.title).join('|'));
         }
         const screen = await renderScreen(React.createElement(Gallery));
@@ -573,7 +637,7 @@ describe('widget definition flows', () => {
         } finally { await screen.unmount(); await disconnect(); storage.setState(previousScopes); }
     });
 
-    it.each(['companion', 'area'] as const)('names the retained %s frame and its setup controls from the saved header without opening its body', async (placement) => {
+    it.each(['companion', 'area'] as const)('names the retained %s frame from the saved header without opening its body', async (placement) => {
         const serverId = await addDefinitionHome();
         const disconnect = await applyDefinitionHomeConnection();
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -628,9 +692,14 @@ describe('widget definition flows', () => {
             }));
             try {
                 await vi.waitFor(() => { expect(screen.getTextContent()).toContain(DRAFT.name); });
-                const menu = screen.tree.root.findByType(ItemRowActions);
-                expect(menu.props.title).toBe(DRAFT.name);
-                expect(menu.props.actions.some((action: { id: string }) => action.id === 'editInputs')).toBe(true);
+                if (placement === 'companion') {
+                    const menu = screen.tree.root.findByType(ItemRowActions);
+                    expect(menu.props.title).toBe(DRAFT.name);
+                    expect(menu.props.actions.some((action: { id: string }) => action.id === 'editInputs')).toBe(true);
+                } else {
+                    // A retained, unfocused area keeps its header but relinquishes active controls.
+                    expect(screen.tree.root.findAllByType(ItemRowActions)).toHaveLength(0);
+                }
                 expect(harness.requests.slice(before).some(request => request.path === '/v1/artifacts/checks-definition')).toBe(false);
             } finally { await act(async () => { screen.tree.unmount(); }); }
         } finally { await disconnect(); storage.setState(previousScopes); }
@@ -1002,6 +1071,11 @@ describe('widget definition flows', () => {
                 '/v2/sessions/source/system-records/record?owner=host&namespace=surface&kind=item.v1&localId=html']) {
                 harness.answer(serverId, `GET ${path}`, { body: await (await fixture.request(`https://definitions-home.example${path}`)).json() });
             }
+            const { SessionReadBatchResponseV1Schema } = await import('@happier-dev/protocol/sessions/read/sessionReadBatchV1');
+            const detail: unknown = await (await fixture.request('https://definitions-home.example/v2/sessions/source?accessProjectionVersion=1')).json();
+            harness.answer(serverId, 'POST /v2/sessions/read-batch', { body: SessionReadBatchResponseV1Schema.parse({
+                results: [{ sessionId: 'source', detail: { status: 200, body: detail } }],
+            }) });
         }
         let screen = await renderScreen(React.createElement(SessionVisualCopyPanel, { account: { serverId, accountId: ACCOUNT_ID },
             sessionId: 'source', itemId: 'html', item, share: true, onClose: () => {}, testID: 'copyHandoff' }));

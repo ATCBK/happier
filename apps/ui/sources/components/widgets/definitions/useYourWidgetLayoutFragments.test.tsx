@@ -46,6 +46,16 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null =
 let previousSettings: ReturnType<typeof storage.getState>['settings'] | null = null;
 let restoreUuid: (() => void) | null = null;
 
+/** Preserve the real boundary's filtered/unfiltered wire shapes while controlling read timing. */
+function answerArtifactInventory(serverId: string, respondAfter?: Promise<void>) {
+    harness.answer(serverId, 'GET /v1/artifacts', { select: async (_input, request) => {
+        const url = new URL(request.url);
+        const inventory = await harness.artifacts(serverId).handle(`${url.pathname}${url.search}`, request.init);
+        if (!inventory) throw new Error('Expected the canonical Artifact inventory boundary');
+        return { body: await inventory.json(), ...(respondAfter ? { respondAfter } : {}) };
+    } });
+}
+
 async function renderGallery(options: Readonly<{ waiveManagementApproval?: boolean }> = {}) {
     const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://fragments-home.example', accountId: ACCOUNT_ID });
     const account = { serverId, accountId: ACCOUNT_ID };
@@ -108,9 +118,7 @@ describe('saved-group Gallery management', () => {
         await screen.unmount();
         let release!: () => void;
         const held = new Promise<void>(resolve => { release = resolve; });
-        const inventory = await harness.artifacts(serverId).handle('/v1/artifacts?includeBody=true');
-        if (!inventory) throw new Error('Expected the canonical Artifact inventory boundary');
-        harness.answer(serverId, 'GET /v1/artifacts', { respondAfter: held, body: await inventory.json() });
+        answerArtifactInventory(serverId, held);
         const scope = { ...account, owner: { kind: 'home' } } as const;
         const hook = await renderHook(() => useAccountWidgetAddSections({ scope, instances: NO_INSTANCES,
             labels: LABELS, addInstance, testID: 'pending-gallery' }));
@@ -129,9 +137,6 @@ describe('saved-group Gallery management', () => {
     it('settles a refused Account inventory as a retryable section and reads again, never staying on Loading', async () => {
         const { account, screen, serverId } = await renderGallery();
         await screen.unmount();
-        const inventory = await harness.artifacts(serverId).handle('/v1/artifacts?includeBody=true');
-        if (!inventory) throw new Error('Expected the canonical Artifact inventory boundary');
-        const body = await inventory.json();
         harness.answer(serverId, 'GET /v1/artifacts', { status: 403, body: { error: 'forbidden' } });
         const scope = { ...account, owner: { kind: 'home' } } as const;
         const hook = await renderHook(() => useAccountWidgetAddSections({ scope, instances: NO_INSTANCES,
@@ -140,7 +145,7 @@ describe('saved-group Gallery management', () => {
             await vi.waitFor(() => expect(hook.getCurrent().pendingSections).toEqual([{ id: 'yours', title: expect.any(String), retry: expect.any(Function) }]));
             // Everything that is not the Account's own read stays searchable meanwhile.
             expect(hook.getCurrent().sections.some(section => section.id.startsWith('builtins') && section.entries.length > 0)).toBe(true);
-            harness.answer(serverId, 'GET /v1/artifacts', { body });
+            answerArtifactInventory(serverId);
             await act(async () => { hook.getCurrent().pendingSections[0]!.retry!(); await flushHookEffects({ cycles: 2 }); });
             await vi.waitFor(() => expect(hook.getCurrent().pendingSections).toEqual([]));
         } finally { await hook.unmount(); }

@@ -22,19 +22,15 @@ export function describeYourWidgetSource(candidate: WidgetCandidate, projection:
     return names.size > 0 ? [...names].join(', ') : t('widgetDefinition.yourWidget');
 }
 
-/**
- * The Account's own widget definitions for the gallery's "Your widgets" (lab `dashboards` dbind G):
- * read through `widgets.definition.list` — the same Action an agent uses — only while the Add
- * is open, so a closed control reads nothing. Body reads belong to the demanded preview/mount.
- */
-export function useYourWidgetCandidates(account: Account | null, projection: PluginUiProjectionModel | null | undefined): readonly WidgetCandidate[] {
-    return useYourWidgetCandidatesState(account, projection).candidates;
-}
-
 /** Where an Account inventory read stands: it settles as ready or failed, it never stays loading. */
 export type AccountInventoryStatus = 'loading' | 'ready' | 'failed';
 
-/** The same candidates, with how the Account's definitions read went (a search can wait for them, a failure offers Retry). */
+/**
+ * The Account's own widget definitions for the gallery's "Your widgets" (lab `dashboards` dbind G),
+ * including read state and Retry. Read through `widgets.definition.list` — the same Action an agent
+ * uses — only while the Add is open, so a closed control reads nothing. Body reads belong to the
+ * demanded preview/mount.
+ */
 export function useYourWidgetCandidatesState(account: Account | null, projection: PluginUiProjectionModel | null | undefined): Readonly<{
     candidates: readonly WidgetCandidate[];
     status: AccountInventoryStatus;
