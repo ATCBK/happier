@@ -207,7 +207,11 @@ function TabularCell(props: Readonly<{ text: string }>) {
   );
 }
 
-/** The system a machine starts with, as cards showing the provisioner's own preview. */
+/**
+ * The system a machine starts with. A provisioner that ships previews gets visual cards showing them;
+ * one that names its images only gets cards with room for the name, since a blank preview frame with a
+ * clipped caption says nothing.
+ */
 export const ManagedImageTiles = React.memo(function ManagedImageTiles(
   props: Readonly<{
     images: readonly ManagedImageOption[];
@@ -216,26 +220,47 @@ export const ManagedImageTiles = React.memo(function ManagedImageTiles(
     testID: string;
   }>,
 ) {
+  const options = props.images.map((image) => ({
+    id: image.id,
+    title: managedImageLabel(image.name),
+    subtitle: image.description,
+    disabled: !(image.selectable ?? image.unavailableReason === undefined),
+    preview: image.preview,
+  }));
+  const onChange = (next: string | null) => {
+    if (next) props.onChange(next);
+  };
+  if (!props.images.some((image) => image.preview)) {
+    return (
+      <SelectionTiles<string>
+        surface="sheet"
+        density="compact"
+        maximumColumns={2}
+        minimumTileWidth={IMAGE_TILE_MIN_WIDTH_PX}
+        subtitleLines={1}
+        accessibilityLabel={t('managedMachines.config.image')}
+        testIdPrefix={props.testID}
+        options={options}
+        value={props.value}
+        onChange={onChange}
+      />
+    );
+  }
   return (
     <SelectionTiles<string>
       variant="visual"
       tileSizing="fill"
       accessibilityLabel={t('managedMachines.config.image')}
       testIdPrefix={props.testID}
-      options={props.images.map((image) => ({
-        id: image.id,
-        title: managedImageLabel(image.name),
-        subtitle: image.description,
-        disabled: !(image.selectable ?? image.unavailableReason === undefined),
-        preview: image.preview,
-      }))}
+      options={options}
       value={props.value}
-      onChange={(next) => {
-        if (next) props.onChange(next);
-      }}
+      onChange={onChange}
     />
   );
 });
+
+/** A name-only image card: narrower than this, an image takes the full row. */
+const IMAGE_TILE_MIN_WIDTH_PX = 200;
 
 /**
  * Named regions as one radio group drawn as cells of the section's one sheet: flag, city, country, two

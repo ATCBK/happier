@@ -194,6 +194,10 @@ describe('managed location choice', () => {
     expect(radios.map((node) => node.props.accessibilityLabel)).toEqual(
       expect.arrayContaining(['linux:24.04-disk', 'Ubuntu 24.04']),
     );
+    // Images with nothing to show are named in cards with room for the name, not as blank preview frames with clipped captions.
+    expect(
+      screen.tree.findAll((node) => node.props.variant === 'visual'),
+    ).toHaveLength(0);
     await screen.unmount();
   });
 
