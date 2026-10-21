@@ -71,8 +71,8 @@ describe('provisioner picker demand', () => {
     expect(scope.getCurrent().controller?.machineId).toBe('a');
     await act(async () => storage.setState({ machineListByServerId: { srv_build: [online('z'), asleep,
       createMachineFixture({ id: 'a', installationId: 'a-installation', active: false, activeAt: 0 })] } }));
-    expect(scope.getCurrent().controller?.machineId).toBe('a');
-    expect(scope.getCurrent().selection?.canExecute).toBe(false);
+    // An automatic pick whose machine went offline yields to the online controller.
+    expect(scope.getCurrent().controller?.machineId).toBe('z');
     const target = scope.getCurrent().selection?.pickerRows.find(row => row.candidate.target.machineId === 'z')?.candidate.target;
     expect(target).toBeDefined();
     await act(async () => scope.getCurrent().selection?.selectTarget(target!));

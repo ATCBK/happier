@@ -107,7 +107,10 @@ export function useManagedControllerScope(
   const automaticRetainedRow = !namedRetained && scopedChoice && !scopedChoice.explicit
     ? scopedRows.find((row) => row.candidate.target.machineId === scopedChoice.controller.machineId)
     : undefined;
+  // An automatic pick is kept across presence churn only while its machine is still selectable; one that went
+  // offline (a first frame from warm cache, a stale beat) yields to the next online controller.
   const automaticRetained = automaticRetainedRow && scopedChoice
+    && isMachineAdministrationCandidateSelectable(automaticRetainedRow.candidate)
     && readMachineRequestReachabilityObservation(
       binding?.isCurrent() ? binding.scope : null,
       automaticRetainedRow.candidate.target.machineId,
