@@ -65,10 +65,13 @@ export function createCuaLocalSpace(native: CuaNativeClient) {
                 || parsed.data.spaces[0].provider !== 'local') {
                 return { kind: 'unknown', recovery: resource };
             }
-            // SpaceInfo omits runtime and image; registry presence cannot qualify
-            // selected compute. Inspect the same exact sandbox, never create again.
+            // Registry presence cannot qualify selected compute: inspect the same
+            // exact sandbox, never create again. Native `sandbox info` reports a
+            // null image for VMs; the registry row then names the image the Space
+            // was created from.
             const inspected = await sandbox.inspect(resource, signal);
-            return inspected.existence === 'present' && inspected.imageId === launch.imageId
+            const actualImage = inspected.imageId ?? parsed.data.spaces[0].image;
+            return inspected.existence === 'present' && actualImage === launch.imageId
                 ? { kind: 'bound', resource }
                 : { kind: 'unknown', recovery: resource };
         },

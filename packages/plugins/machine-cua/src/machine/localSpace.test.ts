@@ -67,6 +67,18 @@ describe('created local Cua Space native leaf', () => {
         expect(h.argv).toHaveLength(2);
     });
 
+    it('qualifies a VM Space by its registry image when native sandbox info omits the image', async () => {
+        // Observed on cua 0.5.0: `sandbox info` of a qemu Space reports image null,
+        // while the Space registry row names the image it was created from.
+        const noImage = { ...sandbox, image: null };
+        const bound = harness(result({ spaces: [{ ...registered, image: launch.imageId }] }), result(noImage));
+        expect(await bound.spaces.create(launch, 'owned', launch.size.diskBytes)).toEqual({ kind: 'bound', resource });
+        const other = harness(result({ spaces: [{ ...registered, image: 'ghcr.io/acme/linux@sha256:neighbor' }] }), result(noImage));
+        expect(await other.spaces.create(launch, 'owned', launch.size.diskBytes)).toEqual({ kind: 'unknown', recovery: resource });
+        const silent = harness(result({ spaces: [registered] }), result(noImage));
+        expect(await silent.spaces.create(launch, 'owned', launch.size.diskBytes)).toEqual({ kind: 'unknown', recovery: resource });
+    });
+
     it('does not round hardware sizes that the native integer MiB/GiB flags cannot represent', async () => {
         const h = harness();
         expect(await h.spaces.create({ ...launch, size: { ...launch.size, diskBytes: launch.size.diskBytes + 1 } }, 'owned', launch.size.diskBytes))

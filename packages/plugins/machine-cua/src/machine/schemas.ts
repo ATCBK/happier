@@ -65,7 +65,7 @@ export const CuaNativeCloudSandboxSchema = z.object({ ...sandboxInfo, id: z.stri
     provider_details: z.object({ provider: z.enum(['aws', 'gcp', 'modal']), id: id }) });
 export const CuaNativeDeleteSchema = z.object({ deleted: z.string(), missing: z.boolean() });
 /** `spaces ls` / `spaces add` rows. */
-export const CuaNativeSpaceSchema = z.object({ id: z.string(), provider: z.string() });
+export const CuaNativeSpaceSchema = z.object({ id: z.string(), provider: z.string(), image: z.optional(z.string()) });
 export const CuaNativeSpaceRegistrySchema = z.object({ spaces: z.array(CuaNativeSpaceSchema) });
 /** The catalog row fields every image read shares (`images ls` / `images info`). */
 export const CuaNativeImageRefSchema = z.object({ ref: id, published: z.boolean() });
