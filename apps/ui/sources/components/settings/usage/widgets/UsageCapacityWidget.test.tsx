@@ -148,6 +148,17 @@ it('keeps standalone Capacity independent of accounting across unrelated Account
     }
     expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/')))
       .toHaveLength(quotaReadsBeforeHydration);
+    for (let index = 0; index < 6; index++) {
+      await act(async () => {
+        storage.setState(state => ({ profile: { ...state.profile, connectedAccountsV4: state.profile.connectedAccountsV4.map(account => ({
+          ...account, lastUsedAt: now + index,
+        })) } }));
+        await flushHookEffects({ cycles: 5 });
+      });
+      await expect.poll(() => seen.at(-1)?.pending).toBe(false);
+    }
+    expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/')))
+      .toHaveLength(quotaReadsBeforeHydration);
     const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
     const { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol/changes');
     for (let index = 0; index < 8; index++) {
