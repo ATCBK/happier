@@ -184,11 +184,11 @@ function classifyActionFailure(
     }
     return { kind: 'cancelled', code: result.errorCode };
   }
-  if (
+  if (!start && (
     result.errorCode === 'execution_run_not_found'
     || result.errorCode === 'execution_run_target_unavailable'
     || result.errorCode === 'execution_run_protocol_unsupported'
-  ) {
+  )) {
     return { kind: 'needs_attention', code: 'continuation_unavailable' };
   }
   return { kind: 'failed', code: result.errorCode };

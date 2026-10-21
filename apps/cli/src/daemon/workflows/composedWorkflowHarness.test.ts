@@ -566,7 +566,9 @@ it.each(['ordinary', 'claim-lost-during-startup'] as const)('delivers a saved th
   const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => accountId,
     generateOperationId: () => 'retained-startup' });
   let interrupted = false;
-  const spawnHandler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async options => {
+  const spawnHandler = createMachineSessionSpawnRpcHandler({ handlers: {
+    stopSession: async () => { throw new Error('Successful startup must not retire its runner'); },
+    spawnSession: async options => {
     launches++;
     const metadata = buildCommittedLaunchMetadata({ options, directory, accountSettings: {} });
     freshSessionRecords.set(childId, createSessionRecordFixture({ id: childId, active: true, encryptionMode: 'plain', machineId,
@@ -745,7 +747,9 @@ it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-du
   let started!: () => void;
   const launching = new Promise<void>(resolve => { started = resolve; });
   let launches = 0;
-  const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async options => {
+  const handler = createMachineSessionSpawnRpcHandler({ handlers: {
+    stopSession: async () => { throw new Error('Cancelled startup retains its existing cleanup owner'); },
+    spawnSession: async options => {
     launches++;
     started();
     await nativeOpen;
@@ -920,7 +924,9 @@ it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'term
   let launches = 0;
   // Native launch is the substituted boundary; the operation producer, strict
   // operation reader, Session adapter and parent coordinator remain real.
-  const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async () => {
+  const handler = createMachineSessionSpawnRpcHandler({ handlers: {
+    stopSession: async () => { throw new Error('Failed pre-launch startup has no runner to retire'); },
+    spawnSession: async () => {
     launches++;
     return refuse();
   } }, awaitAgentSessionOpen: async () => { throw new Error('No child was created'); } });
@@ -1051,7 +1057,8 @@ it('retains the original cold Session setup operation in durable Workflow progre
     return { type: 'success', sessionId: 'setup-child', sessionCreationOutcome: {
       disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] },
     } };
-  } }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
+  }, stopSession: async () => { throw new Error('Setup success must not retire its runner'); }
+  }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
   let notifyHeld!: () => void;
   const heldReady = new Promise<void>(resolve => { notifyHeld = resolve; });
   const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup({ ...input,
@@ -1126,6 +1133,7 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
     runnerAgentSourceCustodyV1: binding.sourceCustody,
     agentRuntimeDaemonServiceAuthorityFilePath: '/private/authority.json' };
   const attestationPhases: string[] = [];
+  const retiredSessions: string[] = [];
   const send = vi.fn(async () => ({ status: 'admitted' as const }));
   let finishOpen!: () => void;
   const nativeFinished = new Promise<void>(resolve => { finishOpen = resolve; });
@@ -1162,7 +1170,8 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
     freshSessionRecords.set('native-mode-child', createSessionRecordFixture({ id: 'native-mode-child', encryptionMode: 'plain',
       metadata: JSON.stringify(buildCommittedLaunchMetadata({ options, directory, accountSettings: {} })) }));
     authorizedConversations.set('native-mode-child', directory);
-    // Physical launch/webhook is substituted. The actual native-open producer remains live and does not exit on refusal.
+    // Physical launch/webhook and Stop are OS boundaries. Native admission,
+    // attestation and the original startup operation remain composed.
     // This port substitutes the runner's process/Session transport, as in the native owner fixture.
     void native.config.createSessionRuntime({ directory, metadata: {}, machineId,
       session: createNativeSessionClientTestPort('native-mode-child'), transcriptSession: {}, messageBuffer: {}, mcpServers: {},
@@ -1170,6 +1179,10 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
     } as never).then(value => { openedRuntime = value; finishOpen(); }, error => { openError = error; finishOpen(); });
     return { type: 'success', sessionId: 'native-mode-child', sessionCreationOutcome: {
       disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
+  }, stopSession: async sessionId => {
+    retiredSessions.push(sessionId);
+    tracked.childProcess = Object.assign(new (await import('node:child_process')).ChildProcess(), { exitCode: 0 });
+    return { status: 'stopped' };
   } }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
   const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup(input, {
     serverId: 'server-1', machineId, observeExecution: operations.observeExecution, rpcContext: {},
@@ -1206,6 +1219,7 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
         expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
         expect(sessionInput.enqueue).not.toHaveBeenCalled();
         expect(attestationPhases).toEqual(['prepare', 'refused']);
+        expect(retiredSessions).toEqual(['native-mode-child']);
         expect(openRowProgress(kit, rowFor(kit, 'launch')!)).toMatchObject({ execution: {
           kind: 'action', actionId: 'session.spawn_new', output: { operation: { state: 'failed' } } } });
         await expect(coordinate({ runId, attempt: 0, expectedRevision: kit.run().revision,
@@ -1213,7 +1227,8 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
       }
     }
     expect(launches).toBe(1);
-    expect(tracked.childProcess?.exitCode).toBeUndefined();
+    expect(retiredSessions).toEqual(mode === 'unavailable' ? ['native-mode-child'] : []);
+    expect(tracked.childProcess?.exitCode).toBe(mode === 'unavailable' ? 0 : undefined);
     expect(send).not.toHaveBeenCalled();
   } finally {
     controller.abort(new WorkflowRuntimeInterruption());

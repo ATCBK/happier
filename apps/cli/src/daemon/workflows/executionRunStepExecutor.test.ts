@@ -146,6 +146,38 @@ function baseParams(overrides: Record<string, unknown> = {}) {
 }
 
 describe('workflow detached Execution Run step executor', () => {
+  it.each(['execution_run_target_unavailable', 'execution_run_protocol_unsupported'] as const)(
+    'retains the typed prelaunch refusal %s through Action admission and Workflow persistence', async errorCode => {
+      const store = createInMemoryWorkflowCoordinatorStore();
+      const params = baseParams({ execution: { agentTarget: CLAUDE_TARGET, permissionMode: 'default',
+        conversation: { kind: 'fresh' } } });
+      const executionRunStart = vi.fn(async () => { throw new Error('refused target must not launch'); });
+      // Exact-Machine capability discovery is a transport boundary. Keep the
+      // Action executor, noRunCreated evidence and Workflow coordinator real.
+      const actionExecutor = createActionExecutor({ executionRunStart,
+        executionRunCheckProtocolV2: async () => ({ ok: false, errorCode, error: errorCode }),
+      } as unknown as ActionExecutorDeps);
+      const executeStep = createWorkflowDetachedExecutionRunStepExecutor({ actionExecutor, workDepth: 0,
+        buildActionContext, resolveSharedRunConversation: async () => null,
+        resolveProducerConversation: async () => null });
+      const coordinator = createWorkflowCoordinator({ store, executeStep,
+        isAcceptedAuthorizationCurrent: async () => true,
+        resolveWorkspace: async () => ({ ok: true, workspace: params.workspace }) });
+
+      await expect(coordinator.run({ runId: params.runId,
+        definition: { version: 1, inputs: [], defaults: params.execution, blocks: [params.step] },
+        inputs: {}, executionTarget: { kind: 'detached_run' }, authorization: params.authorization,
+      })).resolves.toEqual({ state: 'interrupted', reason: errorCode });
+      const leaf = store.list().find(row => row.blockId === params.step.id);
+      expect(leaf).toMatchObject({ lifecycle: 'failed', reason: errorCode });
+      expect(leaf?.execution).toBeUndefined();
+      await expect(executeStep(baseParams({ observationOnly: true }))).resolves.toEqual({
+        kind: 'needs_attention', code: 'continuation_unavailable',
+      });
+      expect(executionRunStart).not.toHaveBeenCalled();
+    },
+  );
+
   it('holds the same Workflow invocation on native setup observation until its original Run accepts input', async () => {
     const store = createInMemoryWorkflowCoordinatorStore();
     const scm = createGitWorkflowWorkspaceTestDependencies();
