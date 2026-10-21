@@ -4,6 +4,7 @@ import type { RawSessionListRow } from '@/session/transport/http/sessionsHttp';
 import type { StoredCredentials } from '@/persistence';
 import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadata, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { SESSION_METADATA_LAYOUT_VERSION_V1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { readSessionAccessProjectionRoleV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 
 import { selectSessionsForBackfill } from './selectSessionsForBackfill';
 
@@ -29,10 +30,9 @@ export function createMemorySessionLocalityReader(params: Readonly<{
   machineId: string;
   credentials: StoredCredentials;
 }>) {
-  // This worker already retains admitted local Session identities. Keep only
-  // their exact encrypted owner content, not opened metadata or access facts.
-  // Every caller still obtains a fresh authorized row and current Account mode.
-  const localOwnerCiphertexts = new Map<string, string>();
+  // Every caller obtains a freshly authorized row and current Account mode.
+  // Retain only the inputs and boolean locality, never opened owner metadata.
+  const ownerLocality = new Map<string, Readonly<{ key: string; local: boolean }>>();
   let materialType = params.credentials.encryption?.type;
   const readKey = () => params.credentials.encryption?.type === 'legacy'
     ? params.credentials.encryption.secret : params.credentials.encryption?.machineKey;
@@ -43,7 +43,7 @@ export function createMemorySessionLocalityReader(params: Readonly<{
       if (materialType !== params.credentials.encryption?.type
         || materialBytes?.length !== key?.length
         || (key && !key.every((value, index) => materialBytes?.[index] === value))) {
-        localOwnerCiphertexts.clear();
+        ownerLocality.clear();
         materialType = params.credentials.encryption?.type;
         materialBytes = key?.slice();
       }
@@ -52,14 +52,22 @@ export function createMemorySessionLocalityReader(params: Readonly<{
         && session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1
         && envelope?.t === 'encrypted' && typeof envelope.c === 'string'
         ? envelope.c : null;
-      if (ciphertext !== null && localOwnerCiphertexts.get(session.id) === ciphertext) return true;
+      // Legacy locality also depends on Session content-key/access selection
+      // and its released raw locality fallback. Presence/recency is unrelated.
+      const legacy = session as RawSessionListRow & Readonly<{ machineId?: unknown; host?: unknown; homeDir?: unknown }>;
+      const contentKey = ciphertext !== null ? JSON.stringify([1, ciphertext])
+        : accountEncryptionMode === 'e2ee' && (session.metadataLayoutVersion === undefined || session.metadataLayoutVersion === 0)
+          ? JSON.stringify([0, session.encryptionMode, session.metadata, session.dataEncryptionKey,
+            readSessionAccessProjectionRoleV1(session), legacy.machineId, legacy.host, legacy.homeDir]) : null;
+      const retained = ownerLocality.get(session.id);
+      if (contentKey !== null && retained?.key === contentKey) return retained.local;
       const local = isMemorySessionOnMachine({ ...params, session, accountEncryptionMode });
-      if (local && ciphertext !== null) localOwnerCiphertexts.set(session.id, ciphertext);
-      else localOwnerCiphertexts.delete(session.id);
+      if (contentKey !== null) ownerLocality.set(session.id, { key: contentKey, local });
+      else ownerLocality.delete(session.id);
       return local;
     },
-    forget: (sessionIds: readonly string[]) => { for (const id of sessionIds) localOwnerCiphertexts.delete(id); },
-    clear: () => { localOwnerCiphertexts.clear(); },
+    forget: (sessionIds: readonly string[]) => { for (const id of sessionIds) ownerLocality.delete(id); },
+    clear: () => { ownerLocality.clear(); },
   };
 }
 

@@ -25,6 +25,9 @@ export function memorySearchTextColumns(text: string): Readonly<{ body: string; 
   const body: string[] = [];
   const identifiers: string[] = [];
   for (const word of String(text ?? '').normalize('NFKC').match(WORDS) ?? []) {
+    // Ordinary lower-case ASCII words already are one normalized body token.
+    // Avoid identifier splitting/CJK segmentation per repeated prose token.
+    if (/^[a-z0-9]+$/u.test(word)) { body.push(word); continue; }
     const parts = splitIdentifier(word);
     if (parts.length === 0) continue;
     body.push(...tokensForWord(word));

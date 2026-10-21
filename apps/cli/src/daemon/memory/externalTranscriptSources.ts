@@ -11,7 +11,7 @@ import type { NativeUsageSourceBoundary } from '@/usage/collector/nativeUsageSou
 import type { discoverNativeUsageSourceMetadata as DiscoverNativeUsageSourceMetadata } from '@/usage/collector/nativeUsageSourceDiscovery';
 import type { createExternalSessionObservationDaemonProjection } from '@/api/session/external/leases/createExternalSessionObservationDaemonProjection';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
-import { externalMemoryStorageId, type MemoryExternalSourceReader } from './externalTranscriptIndex';
+import { externalMemoryStorageId, memoryExternalSourceReadError, type MemoryExternalSourceReader } from './externalTranscriptIndex';
 import { resolveMemoryCoverageCreatedAtCutoffMs } from './transcript/coveragePolicy';
 import { logger } from '@/ui/logger';
 
@@ -307,7 +307,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           ...(cutoff === null ? {} : { updatedAfterMs: cutoff }),
           ...(state.cursor ? { cursor: state.cursor } : {}), signal });
         signal.throwIfAborted();
-        if (!page.ok) throw new Error(page.code);
+        if (!page.ok) throw memoryExternalSourceReadError(native, page);
         state.failed = false;
         for (const candidate of page.value.candidates) {
           // Native activity metadata is the source's last-update authority.

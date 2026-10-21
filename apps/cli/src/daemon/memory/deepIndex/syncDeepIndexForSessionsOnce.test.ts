@@ -9,6 +9,41 @@ import { syncDeepIndexForSessionsOnce } from './syncDeepIndexForSessionsOnce';
 import { memoryIndexPolicyKey, resolveMemoryIndexPolicy } from '../transcript/coveragePolicy';
 
 describe('syncDeepIndexForSessionsOnce', () => {
+  it('clears a prior read failure after a successful empty retry and keeps queue status consistent', async () => {
+    const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-deep-retry-'));
+    const tier1 = openSummaryShardIndexDb({ dbPath: join(dir, 'memory.sqlite') });
+    const deep = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    try {
+      tier1.init(); deep.init();
+      let unavailable = true;
+      const sync = () => syncDeepIndexForSessionsOnce({ sessionIds: ['empty'], tier1, deep, now: () => 10_000,
+        settings: { enabled: true, indexMode: 'deep', coveragePolicy: { type: 'full' },
+          deep: { maxChunkChars: 8000, maxChunkMessages: 20, minChunkMessages: 1,
+            includeAssistantAcpMessage: true, failureBackoffBaseMs: 0, failureBackoffMaxMs: 0 } },
+        fetchDecryptedTranscriptPageAfterSeq: async () => {
+          if (unavailable) throw new Error('agent_error');
+          return [];
+        } });
+      await sync();
+      expect(tier1.getSessionCursors({ sessionId: 'empty', nowMs: 10_000 }).consecutiveDeepFailures).toBe(1);
+      expect.soft(tier1.getMemorySessionIndexStatus('empty')).toBe('failed');
+      unavailable = false;
+      await sync();
+      expect(tier1.getSessionCursors({ sessionId: 'empty', nowMs: 10_000 }).consecutiveDeepFailures).toBe(0);
+      expect(tier1.getMemorySessionIndexStatus('empty')).toBe('empty');
+      expect(tier1.getMemoryIndexQueueTelemetry()).toMatchObject({ failedSessionCount: 0, emptySessionCount: 1 });
+      // An empty incremental retry can also follow retained searchable work.
+      deep.insertChunk({ sessionId: 'empty', seqFrom: 1, seqTo: 1,
+        createdAtFromMs: 1, createdAtToMs: 1, text: 'quartz retained fact',
+        policyKey: memoryIndexPolicyKey(resolveMemoryIndexPolicy({ coveragePolicy: { type: 'full' } })) });
+      tier1.markDeepIndexSuccess({ sessionId: 'empty', seqTo: 1, nowMs: 10_000 });
+      tier1.recordMemorySessionIndexState({ sessionId: 'empty', status: 'indexed', updatedAtMs: 10_000 });
+      unavailable = true; await sync();
+      unavailable = false; await sync();
+      expect(tier1.getMemorySessionIndexStatus('empty')).toBe('indexed');
+      expect(deep.search({ query: 'quartz', scope: { type: 'global' }, maxResults: 1 })).toHaveLength(1);
+    } finally { deep.close(); tier1.close(); await rm(dir, { recursive: true, force: true }); }
+  });
   it('replaces indexed text when a snapshot contains an edit at the same sequence', async () => {
     const dir = await mkdtemp(join(os.tmpdir(), 'happier-memory-deep-edit-'));
     const tier1 = openSummaryShardIndexDb({ dbPath: join(dir, 'memory.sqlite') });

@@ -33,6 +33,63 @@ vi.mock('../../../../../apps/ui/sources/sync/runtime/orchestration/serverScopedR
 vi.mock('../../../../../apps/ui/sources/sync/ops/machineExternalSessions', () => ({ machineExternalSessionsCandidatesList: transports.list }));
 
 describe('external memory transcript ingestion', () => {
+  it('retains the bounded native reader failure reason without exposing native content', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-native-failure-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    try {
+      const project = join(dir, 'projects', 'project');
+      await mkdir(project, { recursive: true });
+      await writeFile(join(project, 'native.jsonl'), Buffer.from([0xff, 0x0a]));
+      const reader = createBoundedAgentExternalSessionsContribution({ contribution: createClaudeExternalSessionsContribution({ env: {} }),
+        identity: { pluginId: 'fixture.claude', agentId: 'claude', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.claude/agents/claude', sourceCustody: { kind: 'development', registeredRootId: 'fixture' } },
+        retirementSignal: new AbortController().signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+        coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: ['claude'] } } });
+      await expect(syncExternalMemoryTranscriptOnce({
+        source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'local', nativeSessionId: 'native' },
+        native: { agentId: 'claude', sourceKey: 'local', source: { kind: 'claudeConfig', configDir: dir }, reader },
+        db, settings, nowMs: Date.now(), signal: new AbortController().signal,
+      })).rejects.toMatchObject({ code: 'agent_error', reason: 'external_sessions_transcript_read_failed' });
+    } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
+  it('admits cancellation between native chunk writes while keeping committed progress searchable', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-native-cancel-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    const controller = new AbortController();
+    let finished = false;
+    let observer: NodeJS.Immediate | undefined;
+    try {
+      const project = join(dir, 'projects', 'project');
+      await mkdir(project, { recursive: true });
+      await writeFile(join(project, 'native.jsonl'), Array.from({ length: 100 }, (_, index) => JSON.stringify({
+        type: 'user', uuid: String(index), sessionId: 'native', timestamp: '2026-10-21T00:00:00Z',
+        message: { role: 'user', content: `quartz cancellable native fact ${index}` },
+      }) + '\n').join(''));
+      const reader = createBoundedAgentExternalSessionsContribution({ contribution: createClaudeExternalSessionsContribution({ env: {} }),
+        identity: { pluginId: 'fixture.claude', agentId: 'claude', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.claude/agents/claude', sourceCustody: { kind: 'development', registeredRootId: 'fixture' } },
+        retirementSignal: new AbortController().signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const observe = () => {
+        if (finished) return;
+        if (db.getDeepIndexStats().deepChunkCount > 0) controller.abort(new Error('stop native indexing'));
+        else observer = setImmediate(observe);
+      };
+      observer = setImmediate(observe);
+      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history',
+        coveragePolicy: { type: 'full' }, conversationSearch: { indexExternal: { enabled: true, agents: ['claude'] } } });
+      await expect(syncExternalMemoryTranscriptOnce({
+        source: { type: 'external_transcript', agentId: 'claude', sourceKey: 'local', nativeSessionId: 'native' },
+        native: { agentId: 'claude', sourceKey: 'local', source: { kind: 'claudeConfig', configDir: dir }, reader },
+        db, settings, nowMs: Date.now(), signal: controller.signal,
+      })).rejects.toThrow('stop native indexing');
+      expect(db.getDeepIndexStats().deepChunkCount).toBeGreaterThan(0);
+      expect(db.getDeepIndexStats().deepChunkCount).toBeLessThan(100);
+      expect(db.search({ query: 'quartz', scope: { type: 'global' }, maxResults: 1, includeExternal: true })).toHaveLength(1);
+    } finally { finished = true; if (observer) clearImmediate(observer); db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
   it('keeps reader progress after budget eviction but exposes lost coverage to automatic scan fallback', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-memory-native-eviction-'));
     const dbPath = join(dir, 'deep.sqlite');

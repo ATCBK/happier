@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/env/envSnapshot';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { Credentials, StoredCredentials } from '@/persistence';
+import nacl from 'tweetnacl';
+import { encodeBase64, encryptLegacy } from '@/api/encryption';
 
 // Transform the shared API graph outside the per-operation workload deadline.
 await import('@/api/api');
@@ -103,6 +105,41 @@ describe('memoryWorker', () => {
     vi.doUnmock('node:fs/promises');
     vi.resetModules();
     if (homeDir) await removeTempDir(homeDir);
+  });
+
+  it('keeps locality reuse across inventory refreshes for unchanged local and excluded Sessions', async () => {
+    vi.useFakeTimers();
+    const secret = new Uint8Array(32).fill(19);
+    const sessions = ['machine_1', 'elsewhere'].map((machineId, index) => ({
+      id: `locality-${index}`, seq: 0, createdAt: 1000, updatedAt: 1000, active: false, activeAt: 0,
+      archivedAt: null, encryptionMode: 'e2ee', share: null,
+      metadata: encodeBase64(encryptLegacy({ machineId }, secret)),
+    }));
+    const fetchSessionsPage = vi.fn(async () => ({ sessions, nextCursor: null, hasNext: false }));
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage,
+      fetchSessionById: async ({ sessionId }: { sessionId: string }) => sessions.find(session => session.id === sessionId),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const { configuration } = await import('@/configuration');
+    const daemonBefore = configuration.isDaemonProcess;
+    configuration.isDaemonProcess = true;
+    const worker = await startMemoryWorker({ credentials: { token: 't', encryption: { type: 'legacy', secret } },
+      machineId: 'machine_1', deps: { fetchDecryptedTranscriptPageAfterSeq: async () => [] } });
+    const opens = vi.spyOn(nacl.secretbox, 'open');
+    try {
+      await vi.waitFor(() => expect(fetchSessionsPage.mock.calls.length).toBeGreaterThan(0));
+      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
+      const previousReads = fetchSessionsPage.mock.calls.length;
+      opens.mockClear();
+      await vi.advanceTimersByTimeAsync(worker.getSettings().worker.inventoryRefreshIntervalMs);
+      await vi.waitFor(() => expect(fetchSessionsPage.mock.calls.length).toBeGreaterThan(previousReads));
+      const ownerBodies = sessions.map(session => Buffer.from(session.metadata, 'base64').subarray(nacl.secretbox.nonceLength));
+      const localityOpens = opens.mock.calls.filter(([body]) => ownerBodies.some(expected => expected.equals(Buffer.from(body))));
+      expect(localityOpens.length).toBe(0);
+    } finally { opens.mockRestore(); await worker.stop(); configuration.isDaemonProcess = daemonBefore; vi.useRealTimers(); }
   });
 
   it('removes retained foreign and unknown Session ownership at restart and after a local Session moves', async () => {
@@ -993,6 +1030,8 @@ describe('memoryWorker', () => {
     tier1.insertSummaryShard({ sessionId: 'retained', seqFrom: 1, seqTo: 7, createdAtFromMs: 1000,
       createdAtToMs: 1000, summary: 'quartz retained hint', keywords: [], entities: [], decisions: [], policyKey });
     tier1.trySeedSessionCursorsIfMissing({ sessionId: 'retained', nowMs: 1, lastHintedSeq: 7, lastDeepIndexedSeq: 7 });
+    tier1.recordMemorySessionIndexState({ sessionId: 'retained', status: 'indexed', lastObservedSeq: 7,
+      lastDeepIndexedSeq: 7, updatedAtMs: 1 });
     tier1.close();
     const source = { type: 'external_transcript' as const, agentId: 'claude', sourceKey: 'user', nativeSessionId: 'native' };
     const deep = openDeepIndexDb({ dbPath: deepPath });
@@ -1018,6 +1057,9 @@ describe('memoryWorker', () => {
         try {
           expect(retainedTier1.getSummaryIndexStats().lightShardCount).toBe(1);
           expect(retainedTier1.getSessionCursors({ sessionId: 'retained', nowMs: 2 }).lastDeepIndexedSeq).toBe(7);
+          expect.soft(worker.getIndexSources?.()).toContainEqual({
+            source: { type: 'happier_session', sessionId: 'retained' }, state: 'ready',
+          });
           expect.soft(retainedDeep.search({ query: 'quartz', scope: { type: 'global' }, maxResults: 10, includeExternal: true })
             .map(hit => hit.text).sort()).toEqual(['quartz native', 'quartz retained deep']);
           expect.soft(retainedDeep.getExternalSourceState({ sessionId: 'external' })?.cursor).toBe('retained-native-cursor');

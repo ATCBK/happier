@@ -518,7 +518,13 @@ export async function startMemoryWorker(params: Readonly<{
       ...(options?.signal ? { signal: options.signal } : {}),
     });
     options?.signal?.throwIfAborted();
-    if (excludedScopeSessionIds.size) await removeSessions([...excludedScopeSessionIds]);
+    if (excludedScopeSessionIds.size) {
+      // An unrelated Account Session has no memory state to remove. Repeated
+      // removal would also discard its unchanged negative locality decision.
+      const retained = new Set(listIndexedSessionIds());
+      await removeSessions([...excludedScopeSessionIds].filter(id => retained.has(id)
+        || inventorySeenSessionIds.has(id) || candidateObservedSeqBySessionId.has(id)));
+    }
     for (const [sessionId, updatedAt] of refresh.observedUpdatedAtBySessionId) {
       const previous = observedUpdatedAtBySessionId.get(sessionId);
       const cursors = tier1?.getSessionCursors({ sessionId, nowMs: Date.now() });
@@ -1523,10 +1529,12 @@ export async function startMemoryWorker(params: Readonly<{
         const observed = candidateObservedSeqBySessionId.get(sessionId);
         const indexed = settings.indexMode === 'deep' ? cursors.lastDeepIndexedSeq : cursors.lastHintedSeq;
         const pending = editedSessionIds.has(sessionId) || [...activeIndexOperations].some(operation => operation.sessionIds.has(sessionId));
-        const failed = tier1.getMemorySessionIndexStatus(sessionId) === 'failed'
+        const queueStatus = tier1.getMemorySessionIndexStatus(sessionId);
+        const failed = queueStatus === 'failed'
           || (settings.indexMode === 'deep' && cursors.consecutiveDeepFailures > 0);
         return { source, state: pending ? 'indexing' : failed ? 'error'
-          : observed !== undefined && indexed >= Math.max(observed, cursors.lastObservedSeq) ? 'ready' : 'indexing' };
+          : (observed !== undefined || queueStatus === 'indexed' || queueStatus === 'empty')
+            && indexed >= Math.max(observed ?? 0, cursors.lastObservedSeq) ? 'ready' : 'indexing' };
       });
       return [...sessions, ...externalSources.getIndexSources(indexesQualified ? deep : null).map(row =>
         !settings.enabled || !settings.conversationSearch.indexExternal.enabled ? { ...row, state: 'disabled' as const } : row)];

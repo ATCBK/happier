@@ -117,6 +117,7 @@ export type DeepIndexDbHandle = Readonly<{
   pruneDocumentIndexData: (args: Readonly<{ eligibleDocuments: readonly DeepIndexDocumentIdentity[] }>) => number;
   /** Every Session id for which this deep index retains a chunk or embedding. */
   listIndexedSessionIds: () => readonly string[];
+  hasSessionChunks: (args: Readonly<{ sessionId: string }>) => boolean;
   hasSessionArtifactsOutsidePolicy: (args: Readonly<{ sessionId: string; policyKey: string }>) => boolean;
   pruneSessionArtifacts: (args: Readonly<{
     sessionId: string;
@@ -469,6 +470,7 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
   `);
   const deleteSessionChunksStmt = db.prepare(`DELETE FROM message_chunks WHERE sessionId = ?;`);
   const deleteSessionEmbeddingsStmt = db.prepare(`DELETE FROM chunk_embeddings WHERE sessionId = ?;`);
+  const hasSessionChunksStmt = db.prepare('SELECT 1 FROM message_chunks WHERE sessionId = ? LIMIT 1;');
   const listIndexedSessionIdsStmt = db.prepare(`
     SELECT sessionId FROM message_chunks
     UNION
@@ -856,6 +858,7 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
       }
       return doomed.length > 0;
     },
+    hasSessionChunks: ({ sessionId }) => Boolean(hasSessionChunksStmt.get(sessionId)),
     listIndexedSessionIds: () => {
       const rows = listIndexedSessionIdsStmt.all() as Array<{ sessionId?: unknown }>;
       const out: string[] = [];

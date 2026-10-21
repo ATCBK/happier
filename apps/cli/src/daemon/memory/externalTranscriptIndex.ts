@@ -5,11 +5,21 @@ import { EXTERNAL_SESSIONS_INVOCATION_POLICY, type BoundedAgentExternalSessionsC
 import type { AgentExternalSessionSource } from '@happier-dev/plugin-sdk/sessions/external';
 import type { DeepIndexDbHandle } from './deepIndex/deepIndexDb';
 import { logger } from '@/ui/logger';
+import { setImmediate } from 'node:timers/promises';
 import { extractMemoryIndexableTranscriptItemFromDecryptedRow } from './transcript/extractIndexableItem';
 import { applyMemoryCoveragePolicy, memoryIndexPolicyKey, resolveMemoryIndexPolicy, resolveMemoryCoverageCreatedAtCutoffMs } from './transcript/coveragePolicy';
 
 export function externalMemoryStorageId(source: MemoryExternalTranscriptSourceV1): string {
   return JSON.stringify(['external_transcript', source.agentId, source.sourceKey, source.nativeSessionId]);
+}
+
+/** Keep the host's closed diagnostic tokens; never log a plugin's free text. */
+export function memoryExternalSourceReadError(source: Readonly<{ agentId: string; sourceKey: string }>, failure: Readonly<{ code: string; message?: string }>) {
+  const reason = failure.message && /^external_sessions_(?:operation_(?:type_error|range_error|syntax_error|rejected)|(?:failure_byte_budget|result_envelope|result_value|result_byte_budget|native_cursor_too_large|transcript_read_failed|transcript_cursor_invalid|transcript_item_json|transcript_page_envelope|transcript_page_item|transcript_page_diagnostics|transcript_page_continuation|transcript_page_byte_budget))$/u.test(failure.message)
+    ? failure.message : undefined;
+  logger.debug('[memoryWorker] Native source read failed', { agentId: source.agentId, sourceKey: source.sourceKey,
+    code: failure.code, ...(reason ? { reason } : {}) });
+  return Object.assign(new Error(reason ? `${failure.code}:${reason}` : failure.code), { code: failure.code, reason });
 }
 
 export function resolveExternalMemoryIndexPolicy(settings: MemorySettingsV1): Readonly<{
@@ -106,7 +116,7 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
   if (frontier.type === 'tail' && frontier.cursor) {
     const result = await input.native.reader.readAfterTranscript({ ...operation, cursor: frontier.cursor });
     input.signal.throwIfAborted();
-    if (!result.ok) throw new Error(result.code);
+    if (!result.ok) throw memoryExternalSourceReadError(input.source, result);
     if (result.value.outcome === 'already_current') return 'current';
     if (result.value.outcome === 'source_unavailable') {
       input.db.deleteSessionIndexData({ sessionId });
@@ -129,7 +139,7 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
         input.db.deleteSessionIndexData({ sessionId });
         return 'removed';
       }
-      throw new Error(result.code);
+      throw memoryExternalSourceReadError(input.source, result);
     }
     items = result.value.items;
     hasMore = result.value.hasMore === true || result.value.truncated === true;
@@ -146,12 +156,17 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
   const indexable = applyMemoryCoveragePolicy({ items: extracted, policy: policy.coveragePolicy,
     nowMs: input.nowMs, enabledAtMs: policy.enabledAtMs, backfillPolicy: policy.backfillPolicy });
   for (const item of indexable) {
+    input.signal.throwIfAborted();
     if (effectiveCutoff !== null && item.createdAtMs < effectiveCutoff) continue;
     input.db.insertChunk({ sessionId, source: input.source, sourceItemId: item.sourceItemId,
       sourceOrder: item.sourceOrder,
       ...(pageCursor ? { sourceCursor: pageCursor } : {}), seqFrom: item.seq, seqTo: item.seq,
       createdAtFromMs: item.createdAtMs, createdAtToMs: item.createdAtMs, text: item.text, policyKey });
+    // FTS/tokenization and SQLite commits are synchronous. Let daemon RPCs and
+    // cancellation run between records instead of monopolizing a whole page.
+    await setImmediate();
   }
+  input.signal.throwIfAborted();
   if (policy.coveragePolicy.type === 'latest_messages') {
     input.db.pruneExternalSourceChunks({ sessionId, maxSemanticMessages: policy.coveragePolicy.maxSemanticMessagesPerSession });
     if (frontier.type === 'page' && nextOrdinal - 1 + semanticItems.length >= policy.coveragePolicy.maxSemanticMessagesPerSession) {

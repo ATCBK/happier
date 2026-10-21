@@ -78,6 +78,17 @@ export async function syncDeepIndexForSessionsOnce(params: Readonly<{
     semanticRowsFound: 0,
     deepChunksCreated: 0,
   };
+  const recordFailure = (sessionId: string) => {
+    params.tier1.markDeepIndexFailure({ sessionId, nowMs,
+      backoffBaseMs: params.settings.deep.failureBackoffBaseMs,
+      backoffMaxMs: params.settings.deep.failureBackoffMaxMs });
+    const cursors = params.tier1.getSessionCursors({ sessionId, nowMs });
+    params.tier1.recordMemorySessionIndexState({ sessionId, status: 'failed',
+      lastErrorAtMs: nowMs, lastErrorCode: 'deep_index_failed',
+      consecutiveFailures: cursors.consecutiveDeepFailures, nextEligibleAtMs: cursors.nextDeepEligibleAtMs,
+      lastObservedSeq: cursors.lastObservedSeq, lastDeepIndexedSeq: cursors.lastDeepIndexedSeq, updatedAtMs: nowMs });
+    run.sessionsFailed += 1;
+  };
 
   for (const rawSessionId of params.sessionIds) {
     params.signal?.throwIfAborted();
@@ -106,13 +117,7 @@ export async function syncDeepIndexForSessionsOnce(params: Readonly<{
       params.signal?.throwIfAborted();
     } catch (error) {
       params.signal?.throwIfAborted();
-      params.tier1.markDeepIndexFailure({
-        sessionId,
-        nowMs,
-        backoffBaseMs: params.settings.deep.failureBackoffBaseMs,
-        backoffMaxMs: params.settings.deep.failureBackoffMaxMs,
-      });
-      run.sessionsFailed += 1;
+      recordFailure(sessionId);
       if (params.settings.forceSnapshot === true) throw error;
       continue;
     }
@@ -241,39 +246,33 @@ export async function syncDeepIndexForSessionsOnce(params: Readonly<{
         }
       }
 
-      if (rows.length > 0) {
-        params.tier1.markDeepIndexSuccess({ sessionId, seqTo: lastScannedSeq, nowMs });
-      }
+      // Empty is a successful source read too: it must retire the previous
+      // read failure rather than leaving a recovered Session in error forever.
+      params.tier1.markDeepIndexSuccess({ sessionId, seqTo: lastScannedSeq, nowMs });
       if (chunks.length > 0) {
         run.sessionsIndexed += 1;
-        params.tier1.recordMemorySessionIndexState({
-          sessionId,
-          coveragePolicyJson: JSON.stringify(params.settings.coveragePolicy ?? { type: 'full' }),
-          status: 'indexed',
-          lastSuccessAtMs: nowMs,
-          lastAttemptAtMs: nowMs,
-          lastCompletedAtMs: nowMs,
-          lastObservedSeq: lastScannedSeq,
-          lastScannedSeq,
-          lastSemanticSeq: indexable[indexable.length - 1]!.seq,
-          lastDeepIndexedSeq: lastScannedSeq,
-          rawRowsFetched: rows.length,
-          semanticRowsFound: indexable.length,
-          semanticRowsIndexedDeep: indexable.length,
-          deepChunkCount: chunks.length,
-          updatedAtMs: nowMs,
-        });
       }
+      params.tier1.recordMemorySessionIndexState({
+        sessionId,
+        coveragePolicyJson: JSON.stringify(params.settings.coveragePolicy ?? { type: 'full' }),
+        status: chunks.length > 0 || params.deep.hasSessionChunks({ sessionId }) ? 'indexed' : 'empty',
+        lastSuccessAtMs: nowMs,
+        lastAttemptAtMs: nowMs,
+        lastCompletedAtMs: nowMs,
+        lastObservedSeq: lastScannedSeq,
+        lastScannedSeq,
+        lastSemanticSeq: indexable.at(-1)?.seq ?? 0,
+        lastDeepIndexedSeq: lastScannedSeq,
+        rawRowsFetched: rows.length,
+        semanticRowsFound: indexable.length,
+        semanticRowsIndexedDeep: indexable.length,
+        deepChunkCount: chunks.length,
+        updatedAtMs: nowMs,
+      });
       completedSessionIds.add(sessionId);
     } catch (error) {
       params.signal?.throwIfAborted();
-      params.tier1.markDeepIndexFailure({
-        sessionId,
-        nowMs,
-        backoffBaseMs: params.settings.deep.failureBackoffBaseMs,
-        backoffMaxMs: params.settings.deep.failureBackoffMaxMs,
-      });
-      run.sessionsFailed += 1;
+      recordFailure(sessionId);
       if (params.settings.forceSnapshot === true) throw error;
     }
   }

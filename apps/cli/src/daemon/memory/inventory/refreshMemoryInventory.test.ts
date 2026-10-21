@@ -61,6 +61,28 @@ describe('resolveMemoryInventoryScopes', () => {
 });
 
 describe('refreshMemoryInventoryOnce', () => {
+  it('reuses unchanged legacy and foreign owner locality, but reopens changed access or content', () => {
+    const secret = new Uint8Array(32).fill(19);
+    const credentials: StoredCredentials = { token: 'test', encryption: { type: 'legacy', secret } };
+    const metadata = (machineId: string) => encodeBase64(encryptLegacy({ machineId }, secret));
+    const local = row('legacy-local', { encryptionMode: 'e2ee', metadata: metadata('here'), share: null });
+    const foreign = row('legacy-foreign', { encryptionMode: 'e2ee', metadata: metadata('elsewhere'), share: null });
+    const read = createMemorySessionLocalityReader({ credentials, machineId: 'here' });
+    const opens = vi.spyOn(nacl.secretbox, 'open');
+    try {
+      for (let tick = 0; tick < 3; tick++) {
+        expect(read.isOnMachine({ ...local, updatedAt: tick }, 'e2ee')).toBe(true);
+        expect(read.isOnMachine({ ...foreign, updatedAt: tick }, 'e2ee')).toBe(false);
+      }
+      expect(opens).toHaveBeenCalledTimes(2);
+      expect(read.isOnMachine({ ...local, metadata: metadata('elsewhere') }, 'e2ee')).toBe(false);
+      expect(read.isOnMachine({ ...local, share: { accessLevel: 'view' } }, 'e2ee')).toBe(false);
+      expect(read.isOnMachine(local, 'e2ee')).toBe(true);
+      read.forget([local.id]);
+      expect(read.isOnMachine(local, 'e2ee')).toBe(true);
+      expect(opens).toHaveBeenCalledTimes(5);
+    } finally { opens.mockRestore(); }
+  });
   it('opens unchanged owner ciphertext once per worker locality lifetime and reopens changed or forgotten content', () => {
     const secret = new Uint8Array(32).fill(19);
     const credentials: StoredCredentials = { token: 'test', encryption: { type: 'legacy', secret } };
