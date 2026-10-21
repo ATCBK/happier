@@ -3570,6 +3570,10 @@ const es: typeof en = {
             title: 'Seguimiento',
             description: 'Sigue una sesión para recibir sus novedades y notificaciones.',
         },
+        autonomousExchange: {
+            title: 'Intercambios autónomos',
+            description: 'Registra los inicios aceptados y las comprobaciones de cuenta cuando los agentes inician sesiones unos para otros.',
+        },
         conversations: {
             title: 'Conversaciones',
             description: 'Las personas conversan y se mencionan dentro de una sesión compartida.',

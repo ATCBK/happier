@@ -3563,6 +3563,10 @@ const zhHant: typeof en = {
             title: '追蹤',
             description: '追蹤工作階段以接收其更新和通知。',
         },
+        autonomousExchange: {
+            title: '自主互動',
+            description: '當代理為彼此啟動工作階段時，記錄已接受的啟動請求與帳戶狀態確認。',
+        },
         conversations: {
             title: '對話',
             description: '成員在共享工作階段中交談並互相提及。',

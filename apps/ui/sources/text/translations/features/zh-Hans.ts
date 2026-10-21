@@ -3563,6 +3563,10 @@ const zhHans: typeof en = {
             title: '关注',
             description: '关注会话以接收其更新和通知。',
         },
+        autonomousExchange: {
+            title: '自主交互',
+            description: '当代理为彼此启动会话时，记录已接受的启动请求和账户状态确认。',
+        },
         conversations: {
             title: '对话',
             description: '成员在共享会话中交谈并互相提及。',

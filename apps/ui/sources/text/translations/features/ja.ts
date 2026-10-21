@@ -3568,6 +3568,10 @@ const ja: typeof en = {
             title: 'フォロー',
             description: 'セッションをフォローして更新や通知を受け取ります。',
         },
+        autonomousExchange: {
+            title: '自律的なやり取り',
+            description: 'エージェントが互いのためにセッションを開始した際の、受け付けられた開始要求とアカウントの状況確認を記録します。',
+        },
         conversations: {
             title: '会話',
             description: '共有セッションの中でメンバーが話し、互いにメンションします。',

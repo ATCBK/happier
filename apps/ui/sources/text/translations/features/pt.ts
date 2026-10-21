@@ -3570,6 +3570,10 @@ const pt: typeof en = {
             title: 'Seguir',
             description: 'Siga uma sessão para receber as suas novidades e notificações.',
         },
+        autonomousExchange: {
+            title: 'Trocas autónomas',
+            description: 'Acompanhe os inícios aceites e as verificações de conta quando os agentes iniciam sessões uns para os outros.',
+        },
         conversations: {
             title: 'Conversas',
             description: 'As pessoas conversam e mencionam-se dentro de uma sessão partilhada.',

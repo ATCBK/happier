@@ -3581,6 +3581,10 @@ const pl: typeof en = {
             title: 'Obserwowanie',
             description: 'Obserwuj sesję, aby dostawać jej aktualizacje i powiadomienia.',
         },
+        autonomousExchange: {
+            title: 'Autonomiczna wymiana',
+            description: 'Śledź zaakceptowane uruchomienia i meldunki konta, gdy agenci uruchamiają sesje dla siebie nawzajem.',
+        },
         conversations: {
             title: 'Rozmowy',
             description: 'Osoby rozmawiają i wspominają się nawzajem w udostępnionej sesji.',

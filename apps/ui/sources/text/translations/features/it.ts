@@ -3570,6 +3570,10 @@ const it: typeof en = {
             title: 'Seguire',
             description: 'Segui una sessione per riceverne aggiornamenti e notifiche.',
         },
+        autonomousExchange: {
+            title: 'Scambi autonomi',
+            description: 'Tieni traccia degli avvii accettati e delle verifiche dell’account quando gli agenti avviano sessioni gli uni per gli altri.',
+        },
         conversations: {
             title: 'Conversazioni',
             description: 'Le persone parlano e si menzionano all’interno di una sessione condivisa.',

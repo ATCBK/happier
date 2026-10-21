@@ -3568,6 +3568,10 @@ const fr: typeof en = {
             title: 'Suivi',
             description: 'Suis une session pour recevoir ses mises à jour et notifications.',
         },
+        autonomousExchange: {
+            title: 'Échanges autonomes',
+            description: 'Suis les démarrages acceptés et les vérifications de compte quand les agents démarrent des sessions les uns pour les autres.',
+        },
         conversations: {
             title: 'Conversations',
             description: 'Les personnes échangent et se mentionnent dans une session partagée.',

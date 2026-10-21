@@ -3570,6 +3570,10 @@ const ca: typeof en = {
             title: 'Seguiment',
             description: 'Segueix una sessió per rebre’n les novetats i notificacions.',
         },
+        autonomousExchange: {
+            title: 'Intercanvis autònoms',
+            description: 'Registra els inicis acceptats i les comprovacions de compte quan els agents inicien sessions els uns per als altres.',
+        },
         conversations: {
             title: 'Converses',
             description: 'Les persones conversen i es mencionen dins d’una sessió compartida.',

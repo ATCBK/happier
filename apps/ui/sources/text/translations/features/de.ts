@@ -3562,6 +3562,10 @@ const de: typeof en = {
             title: 'Folgen',
             description: 'Folge einer Session, um ihre Updates und Benachrichtigungen zu erhalten.',
         },
+        autonomousExchange: {
+            title: 'Autonome Austausche',
+            description: 'Verfolge angenommene Starts und Konto-Rückmeldungen, wenn Agenten Sessions füreinander starten.',
+        },
         conversations: {
             title: 'Unterhaltungen',
             description: 'Personen sprechen und erwähnen sich gegenseitig in einer geteilten Session.',
