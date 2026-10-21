@@ -2,14 +2,44 @@ import * as React from 'react';
 
 import { useOptionalUniversalSearchRuntime } from '@/components/appShell/search/UniversalSearchRuntimeContext';
 import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
-import { useLocalSetting, useWorkspaceScmSnapshot, useWorkspaceScmTouchedPathsForSession } from '@/sync/domains/state/storage';
+import { storage, useLocalSetting, useWorkspaceScmSnapshot, useWorkspaceScmTouchedPathsForSession } from '@/sync/domains/state/storage';
 import type { FileSearchItem } from '@/sync/domains/fileSystem/fileSearchItem';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { selectRecentWorkspaceFiles, workspacePathToFileSearchItem } from '@/sync/domains/workspaces/files/recentWorkspaceFiles';
 import { workspaceFileSearchCache } from '@/sync/domains/workspaces/files/workspaceFileSearch';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
 const NO_PATHS: readonly string[] = [];
+
+function projectQuickOpenRecentFiles(input: Readonly<{
+    storedPaths: readonly string[];
+    knownFiles: readonly FileSearchItem[] | null | undefined;
+    deletedPaths: readonly string[];
+    activeFilePath?: string | null;
+}>): FileSearchItem[] {
+    const deleted = new Set(input.deletedPaths);
+    const paths = selectRecentWorkspaceFiles(input.storedPaths, input.knownFiles?.filter(file => file.fileType === 'file').map(file => file.fullPath) ?? null)
+        .filter(path => !deleted.has(path));
+    if (input.activeFilePath && paths.includes(input.activeFilePath)) {
+        paths.splice(paths.indexOf(input.activeFilePath), 1);
+        paths.unshift(input.activeFilePath);
+    }
+    return paths.map(workspacePathToFileSearchItem);
+}
+
+/** Demand-time read of the same Recent source, without mounting a picker subscription or issuing RPCs. */
+export function readQuickOpenRecentFiles(scope: WorkspaceScopeBase | null): readonly FileSearchItem[] {
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!scope || !lifetime || lifetime.scope.serverId !== scope.serverId || !lifetime.isCurrent()) return [];
+    const key = tryBuildWorkspaceCacheKey(scope);
+    if (!key) return [];
+    const state = storage.getState();
+    const snapshot = state.getWorkspaceScmSnapshot(scope);
+    return projectQuickOpenRecentFiles({ storedPaths: state.localSettings.recentWorkspaceFilesV1[key] ?? NO_PATHS,
+        knownFiles: workspaceFileSearchCache.readFiles(scope, lifetime),
+        deletedPaths: snapshot?.entries.filter(entry => entry.kind === 'deleted').map(entry => entry.path) ?? NO_PATHS });
+}
 
 /** Device-local Recent and the canonical last SCM snapshot, shared by quick open and the empty editor column. */
 type QuickOpenEmptyStateInput = Readonly<{
@@ -30,14 +60,8 @@ export function useQuickOpenFileSources(input: QuickOpenEmptyStateInput) {
     const knownFiles = input.knownFiles ?? (input.scope && credentials.binding
         ? workspaceFileSearchCache.readFiles(input.scope, credentials.binding) : null);
     const recent = React.useMemo(() => {
-        const deleted = new Set(snapshot?.entries.filter(entry => entry.kind === 'deleted').map(entry => entry.path));
-        const paths = selectRecentWorkspaceFiles(storedPaths, knownFiles?.filter(file => file.fileType === 'file').map(file => file.fullPath) ?? null)
-            .filter(path => !deleted.has(path));
-        if (input.activeFilePath && paths.includes(input.activeFilePath)) {
-            paths.splice(paths.indexOf(input.activeFilePath), 1);
-            paths.unshift(input.activeFilePath);
-        }
-        return paths.map(workspacePathToFileSearchItem);
+        return projectQuickOpenRecentFiles({ storedPaths, knownFiles, activeFilePath: input.activeFilePath,
+            deletedPaths: snapshot?.entries.filter(entry => entry.kind === 'deleted').map(entry => entry.path) ?? NO_PATHS });
     }, [input.activeFilePath, knownFiles, snapshot, storedPaths]);
     const changed = React.useMemo(() => {
         if (!authorized || !snapshot) return [];
