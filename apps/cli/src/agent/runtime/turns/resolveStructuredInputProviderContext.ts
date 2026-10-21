@@ -315,17 +315,25 @@ async function resolveEntityMentions(params: Readonly<{
       ? { ref: reference.ref, available: true, label: result.data.metadata.title, readAction: 'workflow.definition.get' }
       : { ref: reference.ref, available: false };
   });
+  const widgetSurfaceReads = new Map<string, { instances: Promise<unknown>; catalog?: Promise<unknown> }>();
   const widgets = collectReferencedOpaques(params.mentions, MENTION_KIND_V1.widget).map(async reference => {
     const ref = parseWidgetInstanceRefKeyV1(reference.opaque);
     if (!ref) return { ref: reference.ref, available: false };
-    const result = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].safeParse(await read('widgets.item.list', { surface: ref.surface }));
-    if (!result.success || JSON.stringify(result.data.surface) !== JSON.stringify(ref.surface)) return { ref: reference.ref, available: false };
+    const surfaceKey = JSON.stringify(ref.surface);
+    let surfaceReads = widgetSurfaceReads.get(surfaceKey);
+    if (!surfaceReads) {
+      surfaceReads = { instances: read('widgets.item.list', { surface: ref.surface }) };
+      widgetSurfaceReads.set(surfaceKey, surfaceReads);
+    }
+    const result = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].safeParse(await surfaceReads.instances);
+    if (!result.success || JSON.stringify(result.data.surface) !== surfaceKey) return { ref: reference.ref, available: false };
     const instance = result.data.instances.find(entry => entry.instance.id === ref.instanceId)?.instance;
     if (!instance) return { ref: reference.ref, available: false };
     let label = instance.displayName;
     if (!label) {
-      const catalog = WidgetInstanceActionOutputSchemasV1['widgets.catalog.list'].safeParse(await read('widgets.catalog.list', { surface: ref.surface }));
-      if (catalog.success && JSON.stringify(catalog.data.surface) === JSON.stringify(ref.surface)) {
+      surfaceReads.catalog ??= read('widgets.catalog.list', { surface: ref.surface });
+      const catalog = WidgetInstanceActionOutputSchemasV1['widgets.catalog.list'].safeParse(await surfaceReads.catalog);
+      if (catalog.success && JSON.stringify(catalog.data.surface) === surfaceKey) {
         label = catalog.data.entries.find(entry => isSameWidgetDefinitionV1(entry.definition, instance.definition))?.title;
       }
     }
