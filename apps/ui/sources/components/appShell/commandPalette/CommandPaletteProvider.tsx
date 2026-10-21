@@ -49,6 +49,7 @@ import { useSessionMachineControlTarget } from '@/components/sessions/model/useS
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { getChangelogEntries } from '@/changelog';
 import { getFeatureBuildPolicyDecision } from '@/sync/domains/features/featureBuildPolicy';
 import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
@@ -94,7 +95,7 @@ export function readActiveSessionIdFromRoute(
  * never falls back to an unrelated app-scoped machine; doing so would turn a
  * contextual Action into a second execution target selector.
  */
-function useCommandPalettePluginActionPresentation(activeSessionId: string | null) {
+export function useCommandPalettePluginActionPresentation(activeSessionId: string | null) {
     const appShellProjection = useAppShellPluginUiProjection();
     const currentUiContextReader = useOptionalCurrentUiContextReader();
     const destinationNavigation = usePluginSurfaceDestinationNavigationBinding();
@@ -107,13 +108,17 @@ function useCommandPalettePluginActionPresentation(activeSessionId: string | nul
     const serverId = activeSessionId
         ? resolvePreferredServerIdForSessionId(activeSessionId) ?? null
         : appShellProjection.serverId;
+    const routedBindings = useServerCredentialAccountScopeBindings(serverId ? [serverId] : []);
+    const accountLifetime = serverId
+        ? routedBindings.values().next().value ?? null
+        : captureActiveServerAccountScopeLifetime();
     const projection = useDaemonMergedProjectionInputs({
+        accountLifetime,
         machineId,
         serverId,
         enabled: machineId !== null,
         staleMs: 60_000,
     });
-    const accountLifetime = captureActiveServerAccountScopeLifetime();
     const appShellProjectionRef = React.useRef(appShellProjection);
     appShellProjectionRef.current = appShellProjection;
     const snapshotRef = React.useRef<PluginContributedActionCurrentSnapshot | null>(null);
