@@ -6,6 +6,16 @@ import { bindHomeDomainActionHttpRequestV1 } from './homeDomainActionFamily.js';
 import { DeleteSessionOrganizationFolderRequestSchema, DeleteSessionOrganizationTagRequestSchema } from '../sessions/organization/mutations.js';
 
 describe('Home-domain HTTP binding', () => {
+  it('binds only the reviewed reclaim identity and notice through the closed Home Action', () => {
+    const input = { accountId: 'person/one', username: 'held_name', reason: 'Impersonation', notice: 'Contact this Home operator.' };
+    expect(bindHomeDomainActionHttpRequestV1('home.public_profiles.handle_reclaim', input)).toEqual({
+      method: 'POST', path: '/v1/home/public-profiles/person%2Fone/handle-reclaim',
+      body: { username: 'held_name', reason: 'Impersonation', notice: 'Contact this Home operator.' },
+    });
+    expect(() => bindHomeDomainActionHttpRequestV1('home.public_profiles.handle_reclaim', { ...input, isAdmin: true })).toThrow();
+    expect(() => bindHomeDomainActionHttpRequestV1('home.public_profiles.handle_reclaim', { ...input, reason: ' ' })).toThrow();
+    expect(() => bindHomeDomainActionHttpRequestV1('home.public_profiles.handle_reclaim', { ...input, notice: '' })).toThrow();
+  });
   it('recognizes only the exact confirmed transaction rollback response', () => {
     const body = { error: 'database_transaction_conflict_exhausted', statusCode: 503 };
     expect(readHomeDomainConfirmedRollbackV1(503, body)).toEqual({

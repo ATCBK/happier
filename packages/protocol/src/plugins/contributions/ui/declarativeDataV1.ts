@@ -71,14 +71,19 @@ export function readPluginDeclarativeDataRowsV1(value: unknown, path: readonly s
   return current;
 }
 
-/** Validate at document admission and again at the Resource output boundary. */
-export function validatePluginDeclarativeDataNodeV1(node: PluginDeclarativeDataNodeV1, output?: unknown): void {
-  const fields = node.kind === 'metric' ? [node.value, ...(node.comparison ? [node.comparison.value] : [])]
-    : node.kind === 'chart' ? [node.x, ...('y' in node ? [node.y] : [node.series, node.value])] : [...node.columns.map((entry) => entry.field), ...(node.mark ? [node.mark.field] : [])];
+/** Shared field semantics also apply before a symbolic public source has values. */
+export function validatePluginDeclarativeDataNodeFieldTypesV1(node: PluginDeclarativeDataNodeV1): void {
   if ((node.kind === 'rows' || node.kind === 'table') && node.mark && node.mark.field.type !== 'boolean') throw new Error('declarative_data_field_invalid');
   if (node.kind === 'chart' && (node.x.type === 'boolean' || ('y' in node ? node.y.type !== 'number'
     : node.series.type !== 'string' || node.value.type !== 'number'))) throw new Error('declarative_data_field_invalid');
   if ((node.kind === 'rows' || node.kind === 'table') && node.columns.some((entry) => entry.proportion && entry.field.type !== 'number')) throw new Error('declarative_data_field_invalid');
+}
+
+/** Validate at document admission and again at the Resource output boundary. */
+export function validatePluginDeclarativeDataNodeV1(node: PluginDeclarativeDataNodeV1, output?: unknown): void {
+  validatePluginDeclarativeDataNodeFieldTypesV1(node);
+  const fields = node.kind === 'metric' ? [node.value, ...(node.comparison ? [node.comparison.value] : [])]
+    : node.kind === 'chart' ? [node.x, ...('y' in node ? [node.y] : [node.series, node.value])] : [...node.columns.map((entry) => entry.field), ...(node.mark ? [node.mark.field] : [])];
   if (node.data.kind === 'resource') {
     const inputValidator = compilePluginJsonSchema(node.data.inputSchema);
     if (node.data.input !== undefined && !isValidPluginJsonSchemaValue(inputValidator, node.data.input)) throw new Error('declarative_data_input_invalid');

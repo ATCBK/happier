@@ -577,6 +577,10 @@ export type ActionExecutorContext = Readonly<{
   sessionTargetsV1?: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
   /** Host-only read admission for Coach mutations; ordinary usage.query remains progressive. Never wire input. */
   usageQueryReadiness?: 'coach_evidence';
+  /** Exact prepared public disclosure, retained only by the live host invocation. Never wire input. */
+  publicProfilePreparedAction?: import('./publicProfileActions.js').PreparedPublicProfileAction;
+  /** Prepared local public preview, under the same exact live invocation custody. */
+  publicProfilePreviewResult?: ActionExecuteResult;
   /** Content-free observer installed by the host; never parsed from Action/RPC input. */
   recordActionStartDiagnostic?: (event: import('./actionStartDiagnostics.js').ActionStartDiagnosticV1) => void;
   /** Host-captured Account identity for this invocation; never Action input or RPC authority. */
@@ -1129,6 +1133,7 @@ export type ActionExecutorDeps = Readonly<{
   /** Captured Account Artifact authority; memory content and approval decisions remain canonical. */
   memoryLibrary?: import('./memoryDocumentActions.js').MemoryLibraryActionPortV1;
   usageActions?: import('./usageActions.js').UsageActionPorts;
+  publicProfileActions?: import('./publicProfileActions.js').PublicProfileActionPorts;
   artifactFolders?: import('../../prompts/library/promptFolderActionsV1.js').ArtifactFolderActionPortV1;
   promptStacks?: import('../../prompts/library/promptLibraryCatalogV1.js').PromptLibraryStackActionPortV1;
   skillRules?: import('../../prompts/library/skillRulesActionsV1.js').SkillRulesActionPortV1;
@@ -2531,6 +2536,7 @@ export type ActionExecutorDeps = Readonly<{
   homeDomainAction?: (args: Readonly<{
     actionId: HomeDomainActionIdV1;
     input: unknown;
+    preparedRequest?: import('../../account/publicProfilePublication.js').PublicProfilePreparedRequestV1;
     context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<unknown>;

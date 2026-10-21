@@ -14831,6 +14831,7 @@ const ACTION_PLUGIN_CALLER_POLICY_BY_ID: Readonly<
   'usage.export': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'usage.recap.compose': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'usage.recap.export': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
+  'usage.recap.deliver': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'usage.calendar.export': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'usage.coach.apply': HOST_DOMAIN_PLUGIN_CALLER_POLICY,
   'usage.coach.undo': HOST_DOMAIN_PLUGIN_CALLER_POLICY,

@@ -75,6 +75,7 @@ import { ARTIFACT_FOLDER_ACTION_IDS_V1 } from '../prompts/library/artifactFolder
 import { USAGE_SOURCE_ACTION_IDS } from '../usage/usageSources.js';
 import { WORKFLOW_AUTHORING_ACTION_IDS } from './workflowAuthoringActionIds.js';
 import { PROMPT_INVOCATION_ACTION_IDS } from './promptInvocationActionIds.js';
+import { PUBLIC_PROFILE_ACTION_IDS_V1 } from '../account/publicProfileActionIds.js';
 
 export const WORKFLOW_ACTION_IDS_V1 = [
   'workflow.validate', 'workflow.run.start', 'workflow.run.list', 'workflow.run.summaries', 'workflow.run.get', 'workflow.run.wait',
@@ -137,7 +138,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
   project_execution: PROJECT_ACTION_IDS_V1,
   project_definitions: PROJECT_DEFINITION_ACTION_IDS,
   observation: ['wait'],
-  account_profile: ['account.profile.get', 'account.name.set', 'account.username.set'],
+  account_profile: ['account.profile.get', 'account.name.set', 'account.username.set', 'account.username.check', 'account.username.release', ...PUBLIC_PROFILE_ACTION_IDS_V1],
   friends: ['friends.add', 'friends.remove'],
   project_workers: PROJECT_WORKER_ACTION_IDS_V1,
   operation_output: ACTION_OPERATION_ACTION_IDS_V1,

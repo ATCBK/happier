@@ -9,6 +9,12 @@ function defineFeatureCatalog<
 }
 
 const FEATURE_CATALOG_DEFINITION = {
+  'account.publicProfiles': {
+    description: 'Opt-in public Account profiles and usage sharing.',
+    defaultFailMode: 'fail_closed',
+    dependencies: [],
+    representation: 'server',
+  },
   teams: {
     description: 'Team membership, governance, and administration surfaces.',
     defaultFailMode: 'fail_closed',

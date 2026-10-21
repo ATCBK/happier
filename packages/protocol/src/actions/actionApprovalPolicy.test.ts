@@ -41,6 +41,17 @@ async function loadRoutingResolver() {
 }
 
 describe('isApprovalRequiredByActionsSettings', () => {
+  it('admits explicit recap delivery gestures directly while automation asks and surface overrides still govern', () => {
+    const actionId = 'usage.recap.deliver';
+    expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, { surface: 'ui', authority: 'present_user' })).toBe(false);
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      expect(isApprovalRequiredByActionsSettings(actionId, EMPTY_SETTINGS, { surface, authority: 'account_automation' })).toBe(true);
+      expect(isApprovalRequiredByActionsSettings(actionId, normalizeActionsSettingsV1({ v: 1,
+        actions: {}, approvalWaivedSurfaces: { [actionId]: [surface] } }), { surface, authority: 'account_automation' })).toBe(false);
+    }
+    expect(isApprovalRequiredByActionsSettings(actionId, normalizeActionsSettingsV1({ v: 1,
+      actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }), { surface: 'ui', authority: 'present_user' })).toBe(true);
+  });
   it.each(['daemon.filesystem.download', 'daemon.filesystem.upload'] as const)(
     'admits %s directly only for the present UI user',
     (actionId) => {
@@ -545,6 +556,7 @@ describe('isApprovalRequiredByActionsSettings', () => {
     'session.public_link.remove',
     'home.accounts.delete',
     'home.accounts.signOutEverywhere',
+    'home.public_profiles.handle_reclaim',
   ] as const)(
     'keeps irreversible %s confirmation user-changeable on every exposed surface',
     (actionId) => {

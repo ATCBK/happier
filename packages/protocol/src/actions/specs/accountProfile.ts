@@ -2,9 +2,17 @@ import { z } from 'zod/mini';
 import {
   AccountNameUpdateRequestV1Schema, AccountNameUpdateResponseV1Schema,
   AccountUsernameUpdateRequestV1Schema, AccountUsernameUpdateResponseV1Schema,
+  AccountUsernameCheckRequestV1Schema, AccountUsernameCheckResponseV1Schema,
+  AccountUsernameReleaseRequestV1Schema, AccountUsernameReleaseResponseV1Schema,
   AccountSelfProfileV1Schema,
 } from '../../account/profile.js';
 import { homeDomainActionRow, homeDomainApprovalField } from './homeDomainRow.js';
+import { PublicProfileOwnerReadV1Schema, PublicProfileMutationResultV1Schema,
+  PublicProfileReportRequestV1Schema, PublicProfileReportResultV1Schema } from '../../account/publicProfilePublication.js';
+import { PublicProfilePreviewIntentV1Schema, PublicProfilePublishIntentV1Schema, PublicProfileUpdateIntentV1Schema,
+  PublicProfilePreviewResultV1Schema, PublicProfileUpdateResultV1Schema } from '../../account/publicProfileIntents.js';
+import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import { PublicEmbedInputV1Schema, PublicEmbedResultV1Schema } from '../../account/publicProfileEmbeds.js';
 
 /** Self-only profile intents; the answering Home owns policy and the authenticated Account. */
 export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
@@ -32,5 +40,86 @@ export const ACCOUNT_PROFILE_ACTION_SPECS_V1 = Object.freeze([
     path: '/v1/account/username', inputSchema: AccountUsernameUpdateRequestV1Schema,
     outputSchema: AccountUsernameUpdateResponseV1Schema,
     inputHints: { fields: [homeDomainApprovalField('username', 'Username', { required: true })] },
+  }),
+  homeDomainActionRow({
+    id: 'account.username.check', approval: { result: 'required' }, title: 'Check your username',
+    description: 'Check a username and available suggestions on this Home. A check does not reserve a name.',
+    safety: 'safe', sideEffectClass: 'read', cliPath: ['account', 'username', 'check'],
+    path: '/v1/account/username/check', inputSchema: AccountUsernameCheckRequestV1Schema,
+    outputSchema: AccountUsernameCheckResponseV1Schema,
+    inputHints: { fields: [homeDomainApprovalField('username', 'Username', { required: true })] },
+  }),
+  homeDomainActionRow({
+    id: 'account.username.release', approval: { result: 'required', flow: 'deferred' }, title: 'Release your username',
+    description: 'Clear your username on this Home and hold the released name for 30 days against all claims.',
+    safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'username', 'release'],
+    path: '/v1/account/username/release', inputSchema: AccountUsernameReleaseRequestV1Schema,
+    outputSchema: AccountUsernameReleaseResponseV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.get', approval: { result: 'required' }, title: 'Read your public profile',
+    description: 'Read the applied public edition, its consent and canonical service destination.',
+    safety: 'safe', sideEffectClass: 'read', cliPath: ['account', 'public-profile', 'get'],
+    method: 'GET', path: '/v1/account/public-profile', inputSchema: z.strictObject({}), outputSchema: PublicProfileOwnerReadV1Schema,
+  }),
+  {
+    id: 'account.public_profile.preview', approval: { result: 'required' }, title: 'Preview your public profile',
+    description: 'Prepare the exact allowed disclosure locally without uploading a public snapshot or image.',
+    safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account',
+    placements: [], surfaces: { ui: true, voice: false, agent: true, mcp: false, cli: true, rpc: false },
+    cli: { commands: [{ path: ['account', 'public-profile', 'preview'], visibility: 'canonical' }], acceptsServerId: true, requiresServerId: true },
+    inputHints: { fields: [] }, inputSchema: PublicProfilePreviewIntentV1Schema, outputSchema: PublicProfilePreviewResultV1Schema,
+  } as const satisfies PreNormalizedActionSpec,
+  homeDomainActionRow({
+    id: 'account.public_profile.publish', approval: { result: 'required', flow: 'blocking' }, title: 'Publish your public profile',
+    description: 'Publish reviewed plaintext facts and presentation on this Account service. Daily refresh requires its own Action authorization.',
+    safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'publish'],
+    method: 'POST', path: '/v1/account/public-profile/publish', inputSchema: PublicProfilePublishIntentV1Schema, outputSchema: PublicProfileMutationResultV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.resume', approval: { result: 'required', flow: 'blocking' }, title: 'Resume your public profile',
+    description: 'Refresh and resume the existing applied public edition without applying a draft or changing consent.',
+    safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'resume'],
+    path: '/v1/account/public-profile/resume', inputSchema: z.strictObject({}), outputSchema: PublicProfileMutationResultV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.update', approval: { result: 'required', flow: 'blocking' }, title: 'Update your public profile',
+    approvalPolicy: { uiConfirmation: 'direct' },
+    description: 'Apply reviewed fields, metadata, period or presentation. An acknowledged change survives any follow-on refresh failure.',
+    safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'update'],
+    method: 'PUT', path: '/v1/account/public-profile/policy', inputSchema: PublicProfileUpdateIntentV1Schema, outputSchema: PublicProfileUpdateResultV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.refresh', approval: { result: 'required', flow: 'blocking' }, title: 'Refresh your public profile',
+    description: 'Replace facts under the existing consent and prune previously selected project links. Never publish, resume or apply a private draft.',
+    safety: 'danger', sideEffectClass: 'external', cliPath: ['account', 'public-profile', 'refresh'],
+    method: 'PUT', path: '/v1/account/public-profile/snapshot', inputSchema: z.strictObject({}), outputSchema: PublicProfileMutationResultV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.pause', approval: { result: 'required', flow: 'deferred' }, title: 'Pause your public profile',
+    approvalPolicy: { uiConfirmation: 'direct' },
+    description: 'Hide public facts while retaining the applied edition for an explicit resume.',
+    safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'public-profile', 'pause'],
+    path: '/v1/account/public-profile/pause', inputSchema: z.strictObject({}), outputSchema: PublicProfileMutationResultV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.unpublish', approval: { result: 'required', flow: 'deferred' }, title: 'Unpublish your public profile',
+    description: 'Withdraw and erase the public edition, keeping your Account username and private layouts.',
+    safety: 'danger', sideEffectClass: 'write', cliPath: ['account', 'public-profile', 'unpublish'],
+    method: 'DELETE', path: '/v1/account/public-profile', inputSchema: z.strictObject({}), outputSchema: PublicProfileMutationResultV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.report.get', approval: { result: 'required' }, title: 'Read the public-profile report destination',
+    description: 'Read this service operator’s configured report link without sending a report.',
+    safety: 'safe', sideEffectClass: 'read', cliPath: ['account', 'public-profile', 'report', 'get'],
+    method: 'GET', path: '/v1/account/public-profile/report', inputSchema: PublicProfileReportRequestV1Schema,
+    outputSchema: PublicProfileReportResultV1Schema,
+  }),
+  homeDomainActionRow({
+    id: 'account.public_profile.embed.get', approval: { result: 'required' }, title: 'Read a public-profile embed',
+    description: 'Format a currently admitted public link, badge or server card. This does not copy, save or share it.',
+    safety: 'safe', sideEffectClass: 'read', cliPath: ['account', 'public-profile', 'embed', 'get'],
+    method: 'GET', path: '/v1/account/public-profile/embed', inputSchema: PublicEmbedInputV1Schema,
+    outputSchema: PublicEmbedResultV1Schema,
   }),
 ]);

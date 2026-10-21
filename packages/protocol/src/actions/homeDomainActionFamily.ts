@@ -1,6 +1,8 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AccountUsernameUpdateErrorV1Schema } from '../account/profile.js';
 import { z } from 'zod/mini';
+import { PublicProfilePreparedRequestV1Schema, PublicProfileMutationResultV1Schema,
+  type PublicProfilePreparedRequestV1 } from '../account/publicProfilePublication.js';
 import { ACTION_ID_FAMILIES_V1 } from './actionIds.js';
 import { FriendsMutationErrorSchema } from '../social/friends.js';
 
@@ -47,8 +49,9 @@ import {
  * table of its own: a parallel path or schema map is exactly the split-brain
  * that lets a route and its catalog entry drift apart.
  */
+type AccountProfileHomeDomainActionIdV1 = Exclude<typeof ACTION_ID_FAMILIES_V1.account_profile[number], 'account.public_profile.preview'>;
 export const HOME_DOMAIN_ACTION_IDS_V1 = [
-  ...ACTION_ID_FAMILIES_V1.account_profile,
+  ...ACTION_ID_FAMILIES_V1.account_profile.filter((id): id is AccountProfileHomeDomainActionIdV1 => id !== 'account.public_profile.preview'),
   ...ACTION_ID_FAMILIES_V1.friends,
   ...HOME_GOVERNANCE_ACTION_IDS_V1,
   ...HOME_IDENTITY_ACTION_IDS_V1,
@@ -63,7 +66,7 @@ export const HOME_DOMAIN_ACTION_IDS_V1 = [
 ] as const;
 
 export type HomeDomainActionIdV1 =
-  | typeof ACTION_ID_FAMILIES_V1.account_profile[number]
+  | AccountProfileHomeDomainActionIdV1
   | typeof ACTION_ID_FAMILIES_V1.friends[number]
   | HomeGovernanceActionIdV1
   | HomeIdentityActionIdV1
@@ -157,7 +160,11 @@ export function homeDomainActionTransportV1(
 }
 
 /** The strict domain result this intent declared on its Action row. */
-export function homeDomainActionOutputSchemaV1(actionId: HomeDomainActionIdV1): z.ZodMiniType {
+export function homeDomainActionOutputSchemaV1(actionId: HomeDomainActionIdV1, preparedRequest?: PublicProfilePreparedRequestV1): z.ZodMiniType {
+  if (preparedRequest) {
+    bindPublicProfilePreparedHttpRequestV1(actionId, preparedRequest);
+    return PublicProfileMutationResultV1Schema;
+  }
   const outputSchema = getActionSpec(actionId).outputSchema;
   if (!outputSchema) {
     throw new TypeError(`Home family Action declares no result schema: ${actionId}`);
@@ -179,5 +186,22 @@ export function bindHomeDomainActionHttpRequestV1(
     transport: homeDomainActionTransportV1(actionId),
     inputSchema: homeDomainActionInputSchemaV1(actionId),
     input,
+  });
+}
+
+/** Prepared disclosure bodies have a distinct closed grammar, using the same row's transport. */
+export function bindPublicProfilePreparedHttpRequestV1(
+  actionId: HomeDomainActionIdV1,
+  input: unknown,
+): HomeDomainHttpRequestV1 {
+  const prepared = PublicProfilePreparedRequestV1Schema.parse(input);
+  if (actionId !== `account.public_profile.${prepared.operation}`) {
+    throw new TypeError('Prepared public-profile operation does not match its Action');
+  }
+  return bindHomeDomainHttpRequestV1({
+    transport: homeDomainActionTransportV1(actionId),
+    // The union above strictly validates the operation and its exact body;
+    // the generic binder only consumes the already-validated object here.
+    inputSchema: z.unknown(), input: prepared.body,
   });
 }

@@ -21,6 +21,24 @@ export const AccountUsernameUpdateErrorV1Schema = lazyZodSchema(() => z.strictOb
   error: z.enum(['invalid-username', 'username-disabled', 'friends-disabled', 'username-taken']),
 }));
 
+export const AccountUsernameCheckRequestV1Schema = lazyZodSchema(() => z.strictObject({ username: z.string() }));
+export type AccountUsernameCheckRequestV1 = z.infer<typeof AccountUsernameCheckRequestV1Schema>;
+export const AccountUsernameCheckResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  username: z.string(),
+  availability: z.enum(['available', 'unavailable', 'invalid', 'reserved']),
+  suggestions: z.array(z.string()),
+}));
+export type AccountUsernameCheckResponseV1 = z.infer<typeof AccountUsernameCheckResponseV1Schema>;
+
+export const AccountUsernameReleaseRequestV1Schema = lazyZodSchema(() => z.strictObject({}));
+export type AccountUsernameReleaseRequestV1 = z.infer<typeof AccountUsernameReleaseRequestV1Schema>;
+export const AccountUsernameReleaseResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  username: z.null(),
+  released: z.boolean(),
+  reservedUntilMs: z.nullable(z.number().check(z.int(), z.nonnegative())),
+}));
+export type AccountUsernameReleaseResponseV1 = z.infer<typeof AccountUsernameReleaseResponseV1Schema>;
+
 import { ImageRefSchema } from '../common/imageRef.js';
 
 /** Self-profile read projection. Drop unrelated and future GET-profile fields before disclosure. */

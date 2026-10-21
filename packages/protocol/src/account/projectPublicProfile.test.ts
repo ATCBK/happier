@@ -1,0 +1,130 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfileSnapshotV1Schema, PublicProfileSnapshotV1StoredSchema,
+  PublicProfilePolicyV1StoredSchema, type PublicProfileSnapshotV1 } from './publicProfile.js';
+import { projectPublicProfile, projectPublicProfileSnapshot } from './projectPublicProfile.js';
+import { PublicProfileLayoutV1Schema, PublicProfileLayoutV1StoredSchema, WidgetPublicSnapshotDocumentV1Schema } from '../widgets/widgetPublicSnapshotV1.js';
+import { PublicProfileContextV1Schema } from './publicProfilePublication.js';
+import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
+import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
+import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '../plugins/actions/jsonSchemaValidation.js';
+
+const coverage = { status: 'partial', method: 'mixed' } as const;
+const facts = { tokens: 87654321, activeDays: 17, peakParallel: 6,
+  agentMix: [{ agentId: 'codex', share: 1, tokens: 87654321, coverage }],
+  sourceSplit: [{ execution: 'outside', share: 1, tokens: 87654321 }],
+  weeklyAgentMix: [{ startMs: 1, endMs: 7, mix: [{ agentId: 'codex', share: 1, coverage }] }],
+  weeklyPeakParallel: [{ startMs: 1, endMs: 7, peak: 6, coverage }],
+  highlights: [{ kind: 'active_days', count: 17 }, { kind: 'peak_parallel', count: 6 }],
+} as const;
+const snapshot: PublicProfileSnapshotV1 = PublicProfileSnapshotV1Schema.parse({ v: 1, computedAtMs: 10,
+  period: { startMs: 1, endMs: 9, timeZoneOffsetMinutes: 0 }, coverage,
+  facts, fieldCoverage: { tokens: coverage, activeDays: coverage, agentMix: coverage },
+  lenses: [{ execution: 'outside', facts }],
+});
+describe('public-profile disclosure projection', () => {
+  it('orders anonymous duration observations independently of their private input chronology', () => {
+    const durations = [{ agentId: 'codex', durationMs: 400 }, { agentId: 'claude', durationMs: 300 }, { agentId: 'claude', durationMs: 100 }];
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, sessionDurations: true } };
+    const project = (sessionDurations: typeof durations) => projectPublicProfileSnapshot({ ...snapshot, facts: { sessionDurations } }, policy).facts.sessionDurations;
+    expect(project(durations)).toEqual(project([...durations].reverse()));
+    expect(project(durations)).toEqual([{ agentId: 'claude', durationMs: 100 }, { agentId: 'claude', durationMs: 300 }, { agentId: 'codex', durationMs: 400 }]);
+    expect(durations[0]!.agentId).toBe('codex');
+  });
+  it('publishes the same inert source restriction to generated schema consumers', () => {
+    const schema = PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(WidgetPublicSnapshotDocumentV1Schema, { target: 'draft-7' }));
+    const validate = compilePluginJsonSchema(schema);
+    const metric = { kind: 'metric', label: 'Tokens', data: { kind: 'value', value: { kind: 'public_profile' } },
+      value: { path: ['snapshot', 'facts', 'tokens'], type: 'number' } };
+    expect(isValidPluginJsonSchemaValue(validate, { version: 1, root: metric })).toBe(true);
+    for (const root of [{ ...metric, data: { kind: 'value', value: 123 } }, { kind: 'markdown', text: '<script />' }]) {
+      expect(isValidPluginJsonSchemaValue(validate, { version: 1, root })).toBe(false);
+    }
+  });
+  it('drops an unknown stored presentation without hiding the remaining edition or accepting malformed known data', () => {
+    const future = { kind: 'widget', id: 'future', size: 'medium', frameStyle: 'plain', presentation: { kind: 'future_chart' } };
+    const layout = { v: 1, items: [future, { kind: 'group', id: 'group', width: 'full', frameStyle: 'plain', dividers: 'none', children: [future] }] };
+    expect(PublicProfileLayoutV1StoredSchema.parse(layout)).toEqual({ v: 1, items: [] });
+    expect(PublicProfileLayoutV1Schema.safeParse(layout).success).toBe(false);
+    expect(PublicProfileLayoutV1StoredSchema.safeParse({ v: 1, items: [{ ...future, presentation: { kind: 'declarative' } }] }).success).toBe(false);
+  });
+  it('prunes absolute token amounts recursively but keeps consented shares and unrelated highlights', () => {
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields,
+      tokens: false, activeDays: false, highlights: true, weeklyAgentMix: true, weeklyPeakParallel: true, peakParallel: false } };
+    const view = projectPublicProfileSnapshot(snapshot, policy);
+    expect(view.facts.agentMix).toEqual([{ agentId: 'codex', share: 1, coverage }]);
+    expect(view.lenses?.[0]?.facts.sourceSplit).toEqual([{ execution: 'outside', share: 1 }]);
+    expect(JSON.stringify(view)).not.toContain('87654321');
+    expect(view.fieldCoverage).not.toHaveProperty('tokens');
+    expect(view.facts).not.toHaveProperty('activeDays');
+    expect(view.facts).not.toHaveProperty('weeklyPeakParallel');
+    expect(view.facts.highlights).toEqual([]);
+    expect(PublicProfileSnapshotV1Schema.safeParse(view).success).toBe(true);
+    expect(snapshot.facts.tokens).toBe(87654321);
+  });
+  it('rejects nested authority, private facts, invalid calendar dates and duplicate categories', () => {
+    for (const input of [
+      { ...snapshot, policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1 },
+      { ...snapshot, facts: { ...facts, cost: 100 } },
+      { ...snapshot, facts: { ...facts, agentMix: [{ ...facts.agentMix[0], accountId: 'private' }] } },
+      { ...snapshot, facts: { calendar: [{ date: '2026-02-30', level: 1 }] } },
+      { ...snapshot, facts: { weeklyAgentMix: [{ startMs: 1, endMs: 7, mix: [{ agentId: 'codex', share: 1, coverage, tokens: 123 }] }] } },
+      { ...snapshot, lenses: [snapshot.lenses![0], snapshot.lenses![0]] },
+    ]) expect(PublicProfileSnapshotV1Schema.safeParse(input).success).toBe(false);
+  });
+  it('drops future stored field ids without granting consent and fails known malformed security facts closed', () => {
+    expect(PublicProfilePolicyV1StoredSchema.parse({ ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
+      fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, futureSecret: true } })).toEqual(DEFAULT_PUBLIC_PROFILE_POLICY_V1);
+    expect(PublicProfileSnapshotV1StoredSchema.parse({ ...snapshot, fieldCoverage: { ...snapshot.fieldCoverage, futureSecret: coverage },
+      facts: { ...snapshot.facts, futureSecret: 777 } })).toEqual(snapshot);
+    expect(PublicProfilePolicyV1StoredSchema.safeParse({ ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
+      fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: 'yes' } }).success).toBe(false);
+    expect(PublicProfileSnapshotV1StoredSchema.safeParse({ ...snapshot, facts: { tokens: -1 } }).success).toBe(false);
+  });
+  it('refuses malformed configured service and report URLs without escaping schema validation', () => {
+    const urls = { page: 'https://example.com/@person', json: 'https://example.com/v1/public/profiles/person',
+      badgeBase: 'https://example.com/@person/badge', card: 'https://example.com/@person/card.svg',
+      og: 'https://example.com/@person/og.png', report: 'mailto:operator@example.com' };
+    for (const input of [
+      { handle: 'person', identity: {}, service: { displayName: 'Service', publicBaseUrl: '-' }, urls },
+      { handle: 'person', identity: {}, service: { displayName: 'Service', publicBaseUrl: 'https://example.com' }, urls: { ...urls, report: '-' } },
+    ]) expect(PublicProfileContextV1Schema.safeParse(input).success).toBe(false);
+  });
+  it('compiles copies only after masking and strips hidden table columns, identity and empty groups', () => {
+    const metric = { kind: 'metric', label: 'Tokens', data: { kind: 'value', value: { kind: 'public_profile' } },
+      value: { path: ['snapshot', 'facts', 'tokens'], type: 'number' } };
+    const widget = (id: string, root: unknown) => ({ kind: 'widget', id, size: 'medium', frameStyle: 'plain',
+      presentation: { kind: 'declarative', document: { version: 1, root } } });
+    const layout = PublicProfileLayoutV1Schema.parse({ v: 1, items: [widget('one', metric),
+      { kind: 'group', id: 'group', width: 'full', frameStyle: 'plain', dividers: 'none', children: [widget('two', metric)] },
+      widget('mix', { kind: 'table', data: metric.data, rows: ['snapshot', 'facts', 'agentMix'], columns: [
+        { label: 'Agent', field: { path: ['agentId'], type: 'string' } },
+        { label: 'Share', field: { path: ['share'], type: 'number' }, proportion: true },
+        { label: 'Tokens', field: { path: ['tokens'], type: 'number' } },
+      ] }),
+    ] });
+    const policy = { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: false, name: false } };
+    const result = projectPublicProfile({ context: { handle: 'person', identity: { name: 'PRIVATE-NAME' },
+      service: { displayName: 'Service', publicBaseUrl: 'https://example.com/prefix' },
+      urls: { page: 'https://example.com/prefix/@person', json: 'https://example.com/prefix/v1/public/profiles/person',
+        badgeBase: 'https://example.com/prefix/@person/badge', card: 'https://example.com/prefix/@person/card.svg',
+        og: 'https://example.com/prefix/@person/og.png', report: 'mailto:operator@example.com' } },
+      metadata: {}, policy, snapshot, layout, appearance: { theme: 'auto', atmosphere: { source: 'none' } } });
+    expect(result?.layout.items.map(item => item.id)).toEqual(['mix']);
+    expect(JSON.stringify(result)).not.toContain('87654321');
+    expect(JSON.stringify(result)).not.toContain('PRIVATE-NAME');
+    expect(result?.layout.items[0]?.kind).toBe('widget');
+    const item = result!.layout.items[0]!;
+    if (item.kind !== 'widget' || item.presentation.document.root.kind !== 'table') throw new Error('Expected compiled table');
+    expect(item.presentation.document.root.columns.map(column => column.label)).toEqual(['Agent', 'Share']);
+    expect(item.presentation.document.root.data).toEqual({ kind: 'value', value: [{ c0: 'codex', c1: 1 }] });
+    expect(PublicProfileLayoutV1Schema.safeParse({ v: 1, items: [widget('bad', { ...metric,
+      value: { path: ['snapshot', 'facts', 'privateCost'], type: 'number' } })] }).success).toBe(false);
+    expect(PublicProfileLayoutV1Schema.safeParse({ v: 1, items: [widget('bad-chart', {
+      kind: 'chart', label: 'Mix', data: metric.data, style: 'area', rows: ['snapshot', 'facts', 'agentMix'],
+      x: { path: ['agentId'], type: 'string' }, series: { path: ['share'], type: 'number' }, value: { path: ['share'], type: 'number' },
+    })] }).success).toBe(false);
+    for (const root of [{ ...metric, data: { kind: 'value', value: 123 } },
+      { kind: 'stack', children: [{ kind: 'markdown', text: '<script>private()</script>' }] },
+    ]) expect(PublicProfileLayoutV1Schema.safeParse({ v: 1, items: [widget('bad', root)] }).success).toBe(false);
+  });
+});

@@ -3,9 +3,59 @@ import { ActionIdSchema } from './actionIds.js';
 import { getActionSpec } from './actionSpecs.js';
 import { bindHomeDomainActionHttpRequestV1, HomeDomainActionIdV1Schema } from './homeDomainActionFamily.js';
 import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
-import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { isApprovalRequiredByActionsSettings, resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { isActionEnabledByActionsSettings, normalizeActionsSettingsV1 } from './actionSettings.js';
 
 describe('self Account profile Actions', () => {
+  it.each([
+    { id: 'account.username.check', path: '/v1/account/username/check', input: { username: 'candidate' },
+      result: { username: 'candidate', availability: 'unavailable', suggestions: ['candidate1', 'candidate2'] }, safety: 'safe' },
+    { id: 'account.username.release', path: '/v1/account/username/release', input: {},
+      result: { username: null, released: true, reservedUntilMs: 30 * 24 * 60 * 60 * 1_000 }, safety: 'danger' },
+  ])('binds $id to its closed domain request and acknowledgement', ({ id, path, input, result, safety }) => {
+    const actionId = ActionIdSchema.parse(id);
+    const spec = getActionSpec(actionId);
+    expect(spec.safety).toBe(safety);
+    expect(spec.inputSchema.safeParse({ ...input, accountId: 'other' }).success).toBe(false);
+    expect(spec.outputSchema?.safeParse(result).success).toBe(true);
+    expect(spec.outputSchema?.safeParse({ ...result, ownerAccountId: 'other' }).success).toBe(false);
+    expect(bindHomeDomainActionHttpRequestV1(HomeDomainActionIdV1Schema.parse(id), input))
+      .toEqual({ method: 'POST', path, body: input });
+    // External MCP has no admitted Home-family approval transport yet.
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, cli: true, plugin: true, mcp: false });
+  });
+
+  it('asks before release on UI, Agent, CLI and plugin, with surface-specific waivers; checking is safe', () => {
+    const actionId = ActionIdSchema.parse('account.username.release');
+    const checkId = ActionIdSchema.parse('account.username.check');
+    for (const surface of ['ui', 'agent', 'cli', 'plugin'] as const) {
+      const context = { surface, authority: 'present_user' as const };
+      const settings = normalizeActionsSettingsV1({ v: 1, actions: {} });
+      expect(isApprovalRequiredByActionsSettings(actionId, settings, context)).toBe(true);
+      expect(isApprovalRequiredByActionsSettings(checkId, settings, context)).toBe(false);
+      const waived = normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: { [actionId]: [surface] } });
+      expect(isApprovalRequiredByActionsSettings(actionId, waived, context)).toBe(false);
+      const off = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { enabled: false } },
+        approvalWaivedSurfaces: { [actionId]: [surface] } });
+      expect(isActionEnabledByActionsSettings(actionId, off, { surface })).toBe(false);
+    }
+  });
+
+  it('refuses release when Off even if its CLI approval is waived', async () => {
+    let writes = 0;
+    // The answering HTTP service is the boundary; real Action admission decides whether it is reached.
+    const executor = createActionExecutor({ homeDomainAction: async () => {
+      writes += 1;
+      return { username: null, released: true, reservedUntilMs: 2_592_000_000 };
+    } } as unknown as ActionExecutorDeps);
+    const actionId = ActionIdSchema.parse('account.username.release');
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1,
+      actions: { [actionId]: { enabled: false } }, approvalWaivedSurfaces: { [actionId]: ['cli'] } });
+    expect(await executor.execute(actionId, {}, { surface: 'cli', authority: 'present_user', actionsSettings }))
+      .toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    expect(writes).toBe(0);
+  });
+
   it.each(['account.name.set', 'account.username.set'] as const)('returns durable approval custody for the Agent self-write %s', actionId => {
     const spec = getActionSpec(actionId);
     expect(resolveActionApprovalRouting({ actionId, spec, context: {

@@ -2,6 +2,7 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { asProtocolZod } from '../actions/internalProtocolZodAdapter.js';
 import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
+import { AtmosphereLookOverrideSchema } from '../../account/settings/homeAtmosphere.js';
 
 /** Closed data-only picture declaration; rendering remains with the host atmosphere owner. */
 export const PluginAtmospherePictureContributionV1Schema = lazyZodSchema(() => z.strictObject({
@@ -16,9 +17,9 @@ export const PluginAtmospherePictureContributionV1Schema = lazyZodSchema(() => z
     grades: z.strictObject({ light: z.number(), dusk: z.number(), night: z.number() }),
     dark: z.enum(['dusk', 'night']),
     look: z.strictObject({
-        effect: z.optional(z.enum(['original', 'fine', 'painted-fine', 'halftone', 'mosaic', 'painted', 'haze', 'engraving'])),
+        effect: AtmosphereLookOverrideSchema.shape.look,
         params: z.optional(z.record(z.string(), z.number())),
-        dissolve: z.optional(z.strictObject({ style: z.optional(z.enum(['ordered', 'gradient', 'haze', 'shrink', 'rows'])), from: z.optional(z.number()), to: z.optional(z.number()) })),
+        dissolve: z.optional(z.strictObject({ style: AtmosphereLookOverrideSchema.shape.dissolve, from: z.optional(z.number()), to: z.optional(z.number()) })),
         strength: z.optional(z.number()),
     }),
     adjust: z.optional(z.strictObject({ exposure: z.optional(z.number()), contrast: z.optional(z.number()), saturation: z.optional(z.number()), temperature: z.optional(z.number()) })),

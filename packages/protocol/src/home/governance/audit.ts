@@ -100,6 +100,9 @@ const DETAIL_SHAPES = {
   'account.delete': z.strictObject({ outcome: z.enum(['deleted', 'disabled_pending_completion']) }),
   /** An administrator ended every signed-in session of the target (D-9); API tokens are unaffected. */
   'account.sign_out_everywhere': z.strictObject({}),
+  'public_profile.restricted': z.strictObject({ reason: z.string() }),
+  'public_profile.restored': z.strictObject({ reason: z.string() }),
+  'public_profile.handle_reclaimed': z.strictObject({ username: z.string(), reason: z.string(), notice: z.string() }),
   /** One ended Team membership lifetime; the Account target is its subject. */
   'teams.members.remove': z.strictObject({ teamId: z.string().check(z.minLength(1)), membershipId: z.string().check(z.minLength(1)), teamName: z.string().check(z.minLength(1)) }),
   // Home-owned identity providers and GitHub Apps (Sign-in providers). The summary names the
@@ -141,6 +144,9 @@ export const HomeAdministrationEventV1Schema = lazyZodSchema(() => z.discriminat
   eventOption('account.status.set'),
   eventOption('account.delete'),
   eventOption('account.sign_out_everywhere'),
+  eventOption('public_profile.restricted'),
+  eventOption('public_profile.restored'),
+  eventOption('public_profile.handle_reclaimed'),
   eventOption('teams.members.remove'),
   eventOption('identity_provider.create'),
   eventOption('identity_provider.update'),

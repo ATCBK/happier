@@ -7,6 +7,21 @@ import { TeamRoleV1Schema } from '../../teams/team.js';
 import { HomeAdministrationEventV1Schema } from './audit.js';
 import { AccountStatusV1Schema, HomeRoleV1Schema } from './roles.js';
 
+/** Explicit identity reclaim: reason is audited and notice is disclosed to the target Account. */
+export const HomePublicProfileHandleReclaimInputV1Schema = lazyZodSchema(() => z.strictObject({
+  accountId: z.string().check(z.minLength(1)),
+  username: z.string().check(z.minLength(1)),
+  reason: z.string().check(z.trim(), z.minLength(1)),
+  notice: z.string().check(z.trim(), z.minLength(1)),
+}));
+export type HomePublicProfileHandleReclaimInputV1 = z.infer<typeof HomePublicProfileHandleReclaimInputV1Schema>;
+
+export const HomePublicProfileHandleReclaimResultV1Schema = lazyZodSchema(() => z.strictObject({
+  username: z.null(),
+  reclaimed: z.boolean(),
+}));
+export type HomePublicProfileHandleReclaimResultV1 = z.infer<typeof HomePublicProfileHandleReclaimResultV1Schema>;
+
 export const HomeAccountMutationUnavailableReasonV1Schema = lazyZodSchema(() => z.enum([
   'not_authorized',
   'last_active_owner',

@@ -231,7 +231,7 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
     if (field.path === 'relationshipId') return { kind: 'workspaceSyncRelationship', id: value };
     if (field.path === 'sourceWorkspaceRefId') return { kind: 'workspace', id: value };
   }
-  if (field.path === 'machineId' && (actionId.startsWith('mcp.') || actionId.startsWith('skills.') || actionId.startsWith('machines.terminal.'))) return { kind: 'machine', id: value };
+  if (field.path === 'machineId' && (actionId.startsWith('mcp.') || actionId.startsWith('skills.') || actionId.startsWith('machines.terminal.') || actionId.startsWith('providers.'))) return { kind: 'machine', id: value };
   if ((actionId === 'skills.rules.set' || actionId === 'mcp.rules.set') && field.path === 'change.write.agentId') return { kind: 'agent', id: value };
   if (actionId.startsWith('registries.sources.') && field.path === 'sourceId') return { kind: 'registrySource', id: value };
   if (field.path === 'anchor' && isSettingsDeclarationActionIdV1(actionId) && readBuiltInSettingDeclarationV1(value)) {

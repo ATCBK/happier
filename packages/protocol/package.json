@@ -7,6 +7,51 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./actions/executor/publicProfileActions": {
+      "happier-source": "./src/actions/executor/publicProfileActions.ts",
+      "types": "./dist/actions/executor/publicProfileActions.d.ts",
+      "default": "./dist/actions/executor/publicProfileActions.js"
+    },
+    "./account/publicProfileActionIds": {
+      "happier-source": "./src/account/publicProfileActionIds.ts",
+      "types": "./dist/account/publicProfileActionIds.d.ts",
+      "default": "./dist/account/publicProfileActionIds.js"
+    },
+    "./account/publicProfileIntents": {
+      "happier-source": "./src/account/publicProfileIntents.ts",
+      "types": "./dist/account/publicProfileIntents.d.ts",
+      "default": "./dist/account/publicProfileIntents.js"
+    },
+    "./account/publicProfile": {
+      "happier-source": "./src/account/publicProfile.ts",
+      "types": "./dist/account/publicProfile.d.ts",
+      "default": "./dist/account/publicProfile.js"
+    },
+    "./account/publicProfilePublication": {
+      "happier-source": "./src/account/publicProfilePublication.ts",
+      "types": "./dist/account/publicProfilePublication.d.ts",
+      "default": "./dist/account/publicProfilePublication.js"
+    },
+    "./account/publicProfileEmbeds": {
+      "happier-source": "./src/account/publicProfileEmbeds.ts",
+      "types": "./dist/account/publicProfileEmbeds.d.ts",
+      "default": "./dist/account/publicProfileEmbeds.js"
+    },
+    "./account/projectPublicProfile": {
+      "happier-source": "./src/account/projectPublicProfile.ts",
+      "types": "./dist/account/projectPublicProfile.d.ts",
+      "default": "./dist/account/projectPublicProfile.js"
+    },
+    "./widgets/widgetPublicSnapshotV1": {
+      "happier-source": "./src/widgets/widgetPublicSnapshotV1.ts",
+      "types": "./dist/widgets/widgetPublicSnapshotV1.d.ts",
+      "default": "./dist/widgets/widgetPublicSnapshotV1.js"
+    },
+    "./account/publicProfileAtmosphere": {
+      "happier-source": "./src/account/publicProfileAtmosphere.ts",
+      "types": "./dist/account/publicProfileAtmosphere.d.ts",
+      "default": "./dist/account/publicProfileAtmosphere.js"
+    },
     "./approvals/targetActionApprovalRequestTransition": {
       "happier-source": "./src/approvals/targetActionApprovalRequestTransition.ts",
       "types": "./dist/approvals/targetActionApprovalRequestTransition.d.ts",

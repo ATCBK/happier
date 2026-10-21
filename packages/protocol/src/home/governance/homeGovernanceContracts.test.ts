@@ -17,6 +17,20 @@ import { isActiveHomeAccountStatus } from './roles.js';
 import { HomeGovernanceEligibilityGetInputV1Schema } from './actionsV1.js';
 import { HomeGovernanceEligibilityV1Schema } from './projection.js';
 import { HomeGovernanceErrorV1Schema, homeGovernanceErrorHttpStatusV1 } from './errors.js';
+import { HomeAdministrationEventV1Schema, parseHomeAdministrationEventDetailV1 } from './audit.js';
+
+describe('public-profile moderation audit contract', () => {
+  it.each(['public_profile.restricted', 'public_profile.restored'])('retains the strict %s reason through audit reads', action => {
+    const detail = parseHomeAdministrationEventDetailV1(action, { reason: 'Operator review' });
+    expect(detail).toEqual({ action, summary: { reason: 'Operator review' } });
+    expect(HomeAdministrationEventV1Schema.safeParse({ ...detail, id: 'event-1', at: 1000,
+      actor: { kind: 'account', accountId: 'operator', profile: null },
+      target: { kind: 'account', id: 'owner', profile: null },
+    }).success).toBe(true);
+    expect(parseHomeAdministrationEventDetailV1(action, {})).toBeNull();
+    expect(parseHomeAdministrationEventDetailV1(action, { reason: 'Operator review', snapshot: 'private' })).toBeNull();
+  });
+});
 
 describe('Home governance error contract', () => {
   it('maps each refusal category to its canonical HTTP status', () => {

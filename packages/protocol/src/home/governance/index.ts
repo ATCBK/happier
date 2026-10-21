@@ -18,3 +18,4 @@ export * from './audit.js';
 export * from './retention.js';
 export * from './claim.js';
 export * from './reachability.js';
+export * from './publicProfiles.js';

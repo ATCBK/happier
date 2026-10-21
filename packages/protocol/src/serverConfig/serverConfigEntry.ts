@@ -70,6 +70,8 @@ export type ServerConfigEntryInput = Readonly<{
     aliases?: readonly string[];
     /** Legacy enum spellings; the codec still checks the result against bounds.values. Never projected. */
     normalizeEnumValue?: (raw: string) => string | null;
+    /** Domain-owned string admission/canonicalization, shared by env reads and Home writes. Never projected. */
+    normalizeStringValue?: (raw: string) => string | null;
     /** Historical env flags enabled by any nonempty value, including `false`; Off serializes as empty. */
     booleanEnvEncoding?: 'presence';
     description: string;
@@ -121,6 +123,7 @@ export function assertServerConfigEntry(key: string, entry: ServerConfigEntryInp
         fail(key, 'an enum entry must declare bounds.values');
     }
     if (entry.normalizeEnumValue && entry.type !== 'enum') fail(key, 'enum normalization applies only to enum entries');
+    if (entry.normalizeStringValue && entry.type !== 'string') fail(key, 'string normalization applies only to string entries');
     if (entry.booleanEnvEncoding && (entry.type !== 'boolean' || entry.default !== false)) {
         fail(key, 'presence encoding requires a boolean entry with default false');
     }

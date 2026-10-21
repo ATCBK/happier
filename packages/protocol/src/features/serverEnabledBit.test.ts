@@ -6,6 +6,15 @@ import { FEATURE_CATALOG } from './catalog.js';
 import { readServerEnabledBit, resolveServerEnabledBitPath, tryWriteServerEnabledBitInPlace } from './serverEnabledBit.js';
 
 describe('server enabled bit helpers', () => {
+  it('admits public profiles only with the explicit Account capability, independently of Friends', () => {
+    const present = FeaturesResponseSchema.parse({ features: { account: { publicProfiles: { enabled: true } },
+      social: { friends: { enabled: false } } }, capabilities: {} });
+    expect(readServerEnabledBit(present, 'account.publicProfiles')).toBe(true);
+    expect(readServerEnabledBit(FeaturesResponseSchema.parse({ features: {}, capabilities: {} }), 'account.publicProfiles')).not.toBe(true);
+    const malformed = FeaturesResponseSchema.safeParse({ features: { account: { publicProfiles: { enabled: 'true' } } }, capabilities: {} });
+    expect(malformed.success && readServerEnabledBit(malformed.data, 'account.publicProfiles') === true).toBe(false);
+  });
+
   it('preserves the Teams decision and defaults an absent projection to disabled', () => {
     const enabled = FeaturesResponseSchema.parse({ features: { teams: { enabled: true } }, capabilities: {} });
     const absent = FeaturesResponseSchema.parse({ features: {}, capabilities: {} });

@@ -23,12 +23,14 @@ export type PluginDeclarativeDocumentV1 = Readonly<{
   root: PluginDeclarativeNodeV2;
 }>;
 
-export const PluginDeclarativeDocumentV1Schema: z.ZodMiniType<PluginDeclarativeDocumentV1> = lazyZodSchema(() => z.strictObject({
+/** Shared structural grammar; audience owners specialize data sources before freezing. */
+export const PluginDeclarativeDocumentStructureV1Schema: z.ZodMiniType<PluginDeclarativeDocumentV1> = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
   // UI contribution schemas consume this document while their Action grammar
   // is still initializing. Defer the reverse edge until a document is parsed.
   root: z.lazy(() => PluginDeclarativeNodeV2Schema),
-}).check(z.superRefine((document, context) => {
+}));
+export const PluginDeclarativeDocumentV1Schema: z.ZodMiniType<PluginDeclarativeDocumentV1> = lazyZodSchema(() => PluginDeclarativeDocumentStructureV1Schema.check(z.superRefine((document, context) => {
   const pending = [document.root];
   while (pending.length > 0) {
     const node = pending.pop()!;

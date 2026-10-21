@@ -169,13 +169,15 @@ function parseWithMode<E extends ServerConfigEntryInput>(
                 return invalid('invalid_type');
             }
         }
-        case 'string':
+        case 'string': {
             if (entry.bounds?.noControlChars && /\p{Cc}/u.test(trimmed)) return invalid('invalid_type');
             if (entry.bounds?.maxUtf8Bytes !== undefined
                 && new TextEncoder().encode(trimmed).byteLength > entry.bounds.maxUtf8Bytes) {
                 return invalid('out_of_bounds');
             }
-            return ok(trimmed);
+            const normalized = entry.normalizeStringValue ? entry.normalizeStringValue(trimmed) : trimmed;
+            return normalized === null ? invalid('invalid_type') : ok(normalized);
+        }
     }
 }
 

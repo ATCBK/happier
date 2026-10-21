@@ -109,6 +109,8 @@ import { PrivateSecretContinuationV1Schema, type PrivateSecretContinuationV1 } f
 import { SecretFillSettlementV1Schema } from '../computer/v1.js';
 import { executeWaitActionV1 } from './executor/waitAction.js';
 import { executeUsageAction } from './executor/usageActions.js';
+import { isPublicProfilePreparationActionIdV1 } from '../account/publicProfileActionIds.js';
+import { preparePublicProfileAction, executePublicProfileAction, PublicProfileAccountScopeError } from './executor/publicProfileActions.js';
 import { executeUsageCoachAction } from './executor/usageCoachActions.js';
 import { isWorkspaceActionId } from './workspaceActionFamily.js';
 import { isFilesystemActionId } from './filesystemActionFamily.js';
@@ -1422,6 +1424,9 @@ async function prepareApprovalRequest(params: Readonly<{
     summary: buildApprovalPreviewSummary(spec, summaryInput, widgetPresentation ? { widgetPresentation } : undefined),
     ...(widgetPresentation ? { widgetPresentation } : {}),
     ...(widgetLibraryName ? { widgetLibraryName } : {}),
+    ...(params.context.publicProfilePreparedAction?.actionId === params.actionId
+      ? { publicProfileRequest: params.context.publicProfilePreparedAction.request, destination: { serverId: params.context.serverId,
+          accountId: params.context.expectedAccountId } } : {}),
   } as const;
   if (params.actionId === 'computer.secret.fill' || params.actionId === 'browser.automation.secret.fill') {
     return { actionArgs: observedInput, preview: { actionId: params.actionId, actionArgs: observedInput } };
@@ -2249,6 +2254,7 @@ function projectApprovalRequestPluginCaller(
 const RPC_ERROR_CODE_SET: ReadonlySet<string> = new Set(Object.values(RPC_ERROR_CODES));
 
 function normalizeActionExecutorThrownError(error: unknown): Readonly<{ errorCode: string; error: string; details?: unknown }> {
+  if (error instanceof PublicProfileAccountScopeError) return { errorCode: error.code, error: error.code };
   if (error instanceof RegistryFetchErrorV1) {
     const status = RegistrySourceStatusV1Schema.safeParse(error.status);
     if (status.success && status.data.state !== 'ok') {
@@ -3077,6 +3083,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     retainedPluginSettingsIntent?: () => boolean;
     /** Page values stay with the original blocking invocation, never durable approval replay. */
     retainedWidgetAreaContext?: ActionExecutorContext['widgetAreaContext'];
+    retainedPublicProfileAction?: ActionExecutorContext['publicProfilePreparedAction'];
+    retainedPublicProfilePreview?: ActionExecutorContext['publicProfilePreviewResult'];
     privateSecretContinuation?: PrivateSecretContinuationV1;
   }>): Promise<
     | Readonly<{ ok: true; request: ApprovalRequest; exec: ActionExecuteResult }>
@@ -3474,6 +3482,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ...(args.retainedPluginSettingsIntent
         ? { isPluginSettingsIntentCurrent: args.retainedPluginSettingsIntent } : {}),
       ...(args.retainedWidgetAreaContext ? { widgetAreaContext: args.retainedWidgetAreaContext } : {}),
+      ...(args.retainedPublicProfileAction ? { publicProfilePreparedAction: args.retainedPublicProfileAction } : {}),
+      ...(args.retainedPublicProfilePreview ? { publicProfilePreviewResult: args.retainedPublicProfilePreview } : {}),
       ...(actionId !== null && (actionId === 'plugins.install'
         || requiresPresentUserExecutionAuthorityForActionInputV1(getActionSpec(actionId), replayInput))
         && resolveHostStampedAuthority(args.ctx) === 'present_user'
@@ -4043,6 +4053,24 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       ?? (actionId === 'session.spawn_new' && readRecord(parsed.data).discussionParticipant !== undefined
         ? projectDiscussionModelParticipantLaunchV1(SessionSpawnNewInputV2Schema.parse(parsed.data)) : undefined);
     let admittedInput = redactMemoryActionInput(actionId, parsed.data);
+    if (isPublicProfilePreparationActionIdV1(actionId)) {
+      if (ctx.publicProfilePreparedAction && ctx.publicProfilePreparedAction.actionId !== actionId) {
+        return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+      }
+      if (!ctx.publicProfilePreparedAction && !ctx.publicProfilePreviewResult) {
+        if (options?.approvalReplay) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        let prepared: Awaited<ReturnType<typeof preparePublicProfileAction>>;
+        try { prepared = await preparePublicProfileAction(actionId, admittedInput, deps.publicProfileActions, ctx); }
+        catch (error) {
+          if (ctx.signal?.aborted) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+          return { ok: false, ...normalizeActionExecutorThrownError(error) };
+        }
+        if (prepared.kind === 'settled') {
+          if (!prepared.result.ok) return prepared.result;
+          ctx = { ...ctx, publicProfilePreviewResult: prepared.result };
+        } else ctx = { ...ctx, publicProfilePreparedAction: prepared.effect };
+      }
+    }
     if (spec.sessionTarget && !options?.sessionTargetLeaf) {
       if (ctx.sessionTargetsV1) {
         const snapshot = ActionResolvedSessionTargetsV1Schema.safeParse(ctx.sessionTargetsV1);
@@ -4981,6 +5009,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
                 ctx: continuationContext,
                 ...liveOnlyCustody,
                 ...(ctx.widgetAreaContext ? { retainedWidgetAreaContext: ctx.widgetAreaContext } : {}),
+                ...(ctx.publicProfilePreparedAction ? { retainedPublicProfileAction: ctx.publicProfilePreparedAction } : {}),
+                ...(ctx.publicProfilePreviewResult ? { retainedPublicProfilePreview: ctx.publicProfilePreviewResult } : {}),
                 ...(tokenExecution ? { tokenExecution } : {}),
                 ...retainedFieldIntent,
               }).finally(() => tokenExecution?.dispose());
@@ -4995,6 +5025,8 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ctx: continuationContext,
             ...liveOnlyCustody,
             ...(ctx.widgetAreaContext ? { retainedWidgetAreaContext: ctx.widgetAreaContext } : {}),
+            ...(ctx.publicProfilePreparedAction ? { retainedPublicProfileAction: ctx.publicProfilePreparedAction } : {}),
+            ...(ctx.publicProfilePreviewResult ? { retainedPublicProfilePreview: ctx.publicProfilePreviewResult } : {}),
             ...(tokenExecution ? { tokenExecution } : {}),
             ...retainedFieldIntent,
           }).finally(() => tokenExecution?.dispose());
@@ -5077,9 +5109,10 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         }
         // The recap explicitly serves headless callers with compose data. Only a declared
         // no-client result falls back; denied or uncertain issued requests stay terminal.
-        if (actionId === 'usage.recap.export' && !delivered.ok && delivered.errorCode === 'unavailable'
+        if ((actionId === 'usage.recap.export' || actionId === 'usage.recap.deliver') && !delivered.ok && delivered.errorCode === 'unavailable'
           && delivered.error === 'noClient' && deps.usageActions) {
-          return await executeUsageAction(actionId, admittedInput, { query: deps.usageActions.query }, ctx);
+          return await executeUsageAction(actionId, admittedInput, { query: deps.usageActions.query,
+            readPublicProfile: deps.usageActions.readPublicProfile }, ctx);
         }
         if (!delivered.ok && delivered.errorCode === 'unavailable' && delivered.error === 'noClient') {
           if (actionId === 'usage.coach.apply' || actionId === 'usage.coach.undo'
@@ -5119,7 +5152,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
 
       // Switch by actionId; keep substrate generic.
-      if (actionId === 'usage.query' || actionId === 'usage.export' || actionId === 'usage.calendar.export' || actionId === 'usage.recap.compose' || actionId === 'usage.recap.export'
+      if (actionId === 'usage.query' || actionId === 'usage.export' || actionId === 'usage.calendar.export' || actionId === 'usage.recap.compose' || actionId === 'usage.recap.export' || actionId === 'usage.recap.deliver'
         || actionId === 'usage.prices.get' || actionId === 'usage.prices.refresh') {
         return executeUsageAction(actionId, admittedInput, deps.usageActions, ctx);
       }
@@ -6445,6 +6478,16 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       // hosts to keep in step.
       if (actionId === 'teams.credentials.usage.export') {
         return await executeTeamCredentialUsageExport(admittedInput, deps.homeDomainAction, ctx);
+      }
+      if (isPublicProfilePreparationActionIdV1(actionId)) {
+        if (actionId === 'account.public_profile.preview') {
+          return ctx.publicProfilePreviewResult ?? { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        }
+        const effect = ctx.publicProfilePreparedAction;
+        if (!effect || !deps.publicProfileActions) return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+        return await executePublicProfileAction(effect, deps.publicProfileActions, ctx, () => executeInvocation(
+          'account.public_profile.refresh', {}, { ...ctx, bypassApprovals: false, publicProfilePreparedAction: undefined,
+            publicProfilePreviewResult: undefined, presentUserConfirmation: undefined, approvedActionReplay: undefined }, true));
       }
       if (isHomeDomainActionIdV1(actionId)) {
         if (!deps.homeDomainAction) {

@@ -38,6 +38,25 @@ const TEST_CONFIG = defineServerConfigRegistry({
 });
 
 describe('readServerConfig', () => {
+    it('validates and normalizes the same report contact through deployment and Home configuration', () => {
+        const entry = SERVER_CONFIG.HAPPIER_PUBLIC_PROFILE_REPORT_URL;
+        expect(readServerConfig({}, entry)).toBeUndefined();
+        for (const [raw, normalized] of [
+            [' https://reports.example.test/profiles?source=profile ', 'https://reports.example.test/profiles?source=profile'],
+            [' MAILTO:operator@example.test?subject=Public%20profile ', 'mailto:operator@example.test?subject=Public%20profile'],
+        ]) {
+            expect(readServerConfig({ [entry.key]: raw }, entry)).toBe(normalized);
+            expect(validateServerConfigValue(entry, raw)).toEqual({ ok: true, value: normalized });
+            expect(readServerConfig({ [entry.key]: serializeServerConfigValue(entry, normalized) }, entry)).toBe(normalized);
+        }
+        for (const raw of ['http://reports.example.test', 'javascript:alert(1)', '/reports', 'not a url',
+            'https://user:password@reports.example.test', 'mailto:', 'mailto:operator', 'mailto://operator@example.test',
+            'mailto:operator%0A@example.test', 'https://reports.example.test/\nprivate']) {
+            expect(readServerConfig({ [entry.key]: raw }, entry), raw).toBeUndefined();
+            expect(validateServerConfigValue(entry, raw).ok, raw).toBe(false);
+        }
+    });
+
     it('falls back to the declared default when unset, blank, unparseable or out of bounds', () => {
         expect(readServerConfig({}, TEST_CONFIG.TEST_PORT)).toBe(587);
         expect(readServerConfig({ TEST_PORT: '  ' }, TEST_CONFIG.TEST_PORT)).toBe(587);
@@ -165,7 +184,7 @@ describe('registry declaration rules', () => {
                 }
                 expect(validateServerConfigValue(entry, 'not-a-config-choice'), entry.key).toEqual({ ok: false, reason: 'out_of_bounds' });
             }
-            if (entry.type === 'string') {
+            if (entry.type === 'string' && !entry.normalizeStringValue) {
                 expect(parseServerConfigRaw(entry, 'not-a-config-choice'), entry.key).toEqual({ kind: 'value', value: 'not-a-config-choice' });
             }
         }

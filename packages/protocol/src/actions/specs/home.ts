@@ -9,6 +9,8 @@ import {
   HomeAccountSearchResultV1Schema,
   HomeAccountTargetInputV1Schema,
   HomeAccountDeleteInputV1Schema,
+  HomePublicProfileHandleReclaimInputV1Schema,
+  HomePublicProfileHandleReclaimResultV1Schema,
 } from '../../home/governance/accounts.js';
 import {
   HomeGovernanceEligibilityGetInputV1Schema,
@@ -52,6 +54,7 @@ import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { homeDomainActionRow, homeDomainApprovalField as approvalField } from './homeDomainRow.js';
+import { HomePublicProfileModerationInputV1Schema, HomePublicProfileModerationResultV1Schema } from '../../home/governance/publicProfiles.js';
 
 const ACCOUNT_ID_FIELD = approvalField('accountId', 'Account ID', { required: true });
 
@@ -67,6 +70,42 @@ const ACCOUNT_ID_FIELD = approvalField('accountId', 'Account ID', { required: tr
  * acknowledgement the caller would have to re-read to trust.
  */
 export const HOME_GOVERNANCE_ACTION_SPECS = Object.freeze([
+  homeDomainActionRow({
+    id: 'home.public_profiles.restrict', approval: { result: 'required', flow: 'deferred' },
+    title: 'Restrict a public profile',
+    description: 'Remove one Account’s public profile from this Home with an audited reason. The Home rechecks the operator’s authority.',
+    safety: 'danger', sideEffectClass: 'danger',
+    cliPath: ['home', 'public-profiles', 'restrict'],
+    path: '/v1/home/public-profiles/:accountId/restrict',
+    inputSchema: HomePublicProfileModerationInputV1Schema,
+    outputSchema: HomePublicProfileModerationResultV1Schema,
+    inputHints: { fields: [ACCOUNT_ID_FIELD, approvalField('reason', 'Reason', { required: true })] },
+  }),
+  homeDomainActionRow({
+    id: 'home.public_profiles.restore', approval: { result: 'required', flow: 'deferred' },
+    title: 'Restore a public profile',
+    description: 'Lift one Account’s public-profile restriction with an audited reason. Deleted disclosure is not republished; the Home rechecks the operator’s authority.',
+    safety: 'danger', sideEffectClass: 'danger',
+    cliPath: ['home', 'public-profiles', 'restore'],
+    path: '/v1/home/public-profiles/:accountId/restore',
+    inputSchema: HomePublicProfileModerationInputV1Schema,
+    outputSchema: HomePublicProfileModerationResultV1Schema,
+    inputHints: { fields: [ACCOUNT_ID_FIELD, approvalField('reason', 'Reason', { required: true })] },
+  }),
+  homeDomainActionRow({
+    id: 'home.public_profiles.handle_reclaim', approval: { result: 'required', flow: 'deferred' },
+    title: 'Reclaim a public-profile handle',
+    description: 'Reclaim the reviewed Account username with an audited reason and owner notice. Any publication restriction remains.',
+    safety: 'danger', sideEffectClass: 'danger', cliPath: ['home', 'public-profiles', 'handle-reclaim'],
+    path: '/v1/home/public-profiles/:accountId/handle-reclaim',
+    inputSchema: HomePublicProfileHandleReclaimInputV1Schema,
+    outputSchema: HomePublicProfileHandleReclaimResultV1Schema,
+    inputHints: { fields: [ACCOUNT_ID_FIELD,
+      approvalField('username', 'Current username', { required: true }),
+      approvalField('reason', 'Reason', { required: true }),
+      approvalField('notice', 'Notice to the Account owner', { required: true }),
+    ] },
+  }),
   {
     ...homeDomainActionRow({
       id: 'home.search.rebuild', approval: {result: 'required'}, title: 'Rebuild Home search index',

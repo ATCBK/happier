@@ -1,4 +1,5 @@
 import { defineServerConfigRegistry } from '../serverConfigEntry.js';
+import { normalizePublicProfileReportUrlV1 } from '../../account/publicProfileReportUrl.js';
 
 /**
  * Sign-in, identity-provider and account policy keys.
@@ -145,6 +146,17 @@ export const POLICIES_SERVER_CONFIG = defineServerConfigRegistry({
         group: 'accountService',
         description: 'Display name of the Account Service shown on sign-in screens.',
         docs: 'self-hosting/env#global-auth-policy',
+    },
+    HAPPIER_PUBLIC_PROFILE_REPORT_URL: {
+        type: 'string',
+        normalizeStringValue: normalizePublicProfileReportUrlV1,
+        sensitivity: 'plain',
+        apply: 'live',
+        editable: 'home',
+        section: 'policies',
+        group: 'accountService',
+        description: 'Operator contact for public-profile reports: an HTTPS URL or mailto address. Required before publishing.',
+        docs: 'self-hosting/env#public-profiles',
     },
     HAPPIER_AUTH_PUBLIC_PROVISION_DENY_METHODS: {
         type: 'list',

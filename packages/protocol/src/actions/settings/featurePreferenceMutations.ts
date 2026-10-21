@@ -19,6 +19,9 @@ type FeaturePreferenceDefinition = Readonly<{
 }>;
 
 export const UI_FEATURE_REGISTRY = {
+    'account.publicProfiles': {
+        settingsToggle: undefined,
+    },
     automations: {
         settingsToggle: {
             showInSettings: true,

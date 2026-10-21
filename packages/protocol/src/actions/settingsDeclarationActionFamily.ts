@@ -15,11 +15,13 @@ const SettingsDeclarationScalarChoiceV1Schema = lazyZodSchema(() => z.union([z.s
 const AnchorSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const SettingKeySchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const OperationIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
-export const SettingsDeclarationTargetKindV1Schema = lazyZodSchema(() => z.enum(['home', 'team', 'team_identity_connection', 'project']));
+export const SettingsDeclarationTargetKindV1Schema = lazyZodSchema(() => z.enum(['home', 'team', 'team_identity_connection', 'project', 'public_profile_draft']));
 /** Resource identity only; caller Account and authority come from Action admission. */
 export const SettingsDeclarationTargetV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('home'), serverId: OperationIdSchema }),
   z.strictObject({ kind: z.literal('project'), serverId: OperationIdSchema, projectKey: OperationIdSchema }),
+  // The answering host supplies the captured draft; callers name only its Home.
+  z.strictObject({ kind: z.literal('public_profile_draft'), serverId: OperationIdSchema }),
   z.strictObject({ kind: z.literal('team'), serverId: OperationIdSchema, teamId: OperationIdSchema }),
   z.strictObject({ kind: z.literal('team_identity_connection'), serverId: OperationIdSchema, teamId: OperationIdSchema, connectionId: OperationIdSchema }),
 ]));
@@ -28,6 +30,7 @@ export type SettingsDeclarationTargetKindV1 = SettingsDeclarationTargetV1['kind'
 /** Exact operation targets, never a settings path, credential value or caller confirmation. */
 export const SettingsDeclarationOperationInputV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('atmosphere_picture_add'), source: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('picked') }),
     z.strictObject({ kind: z.literal('url'), url: z.url().check(z.refine(value => /^https?:\/\//i.test(value))) }),
     z.strictObject({ kind: z.literal('machine_file'), machineId: OperationIdSchema, path: OperationIdSchema }),
   ]) }),
@@ -103,7 +106,7 @@ export const SettingsDeclarationActionInputSchemasV1 = {
     expectedSettingsVersion: z.optional(SettingsVersionSchema), reversal: z.optional(SettingReversalInputSchema) }),
   'settings.reset': z.strictObject({ anchor: AnchorSchema, target: z.optional(SettingsDeclarationTargetV1Schema),
     expected: z.optional(SettingsDeclarationResetExpectedV1Schema) }),
-  'settings.invoke': z.strictObject({ anchor: AnchorSchema, input: z.optional(SettingsDeclarationOperationInputV1Schema) }),
+  'settings.invoke': z.strictObject({ anchor: AnchorSchema, input: z.optional(SettingsDeclarationOperationInputV1Schema), target: z.optional(SettingsDeclarationTargetV1Schema) }),
 } as const;
 export const SettingsDeclarationActionOutputSchemasV1 = {
   'settings.list': z.strictObject({ items: z.array(SettingsDeclarationDescriptorV1Schema) }),
