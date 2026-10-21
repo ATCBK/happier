@@ -75,7 +75,7 @@ export function UsageSkyStyleBody(props: UsageChartStyleBodyProps) {
   useStyleCaption(t('usage.board.charts.inputSky'), metricName);
   if (!model) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.needsDataTitle')} reason={t('usage.board.charts.needsCalendarReason')} />;
   if (calendar && (isMeasureUnrecorded(calendar.coverage, metric) || !model.days.some((day) => day.state !== 'unknown')))
-    return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.needsDataTitle')} reason={t('usage.board.charts.metricNotRecordedReason', { metric: metricName })} />;
+    return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.metricNotRecordedTitle', { metric: metricName })} reason={t('usage.board.charts.metricNotRecordedHint')} />;
   return <View style={{ gap: 12 }} testID={`${props.testID}.sky`}>
     <UsageSkyOfDays theme={host.theme} paint={host.paint} agents={agents} model={model} testID={`${props.testID}.skyChart`}
       label={t('usage.board.charts.skyA11y', { metric: metricName, count: model.days.length })}
@@ -90,9 +90,9 @@ export function UsageWeekTideStyleBody(props: UsageChartStyleBodyProps) {
   const metric = resolveUsageChartMetric(props.query.metric, 'busy');
   const model = React.useMemo(() => calendar ? projectUsageWeekHours(calendar, metric) : null, [calendar, metric]);
   useStyleCaption(t('usage.board.charts.inputWeekTide'), usageChartMetricName(metric));
-  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.needsDataTitle')}
+  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID} title={calendar && isMeasureUnrecorded(calendar.coverage, metric) ? t('usage.board.charts.metricNotRecordedTitle', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.needsDataTitle')}
     reason={!calendar ? t('usage.board.charts.needsCalendarReason') : isMeasureUnrecorded(calendar.coverage, metric)
-      ? t('usage.board.charts.metricNotRecordedReason', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.metricNotByHourReason', { metric: usageChartMetricName(metric) })} />;
+      ? t('usage.board.charts.metricNotRecordedHint') : t('usage.board.charts.metricNotByHourReason', { metric: usageChartMetricName(metric) })} />;
   const weekdays = usageChartWeekdays();
   return <View style={{ gap: 12 }} testID={`${props.testID}.tide`}>
     <UsageWeekTide theme={host.theme} paint={host.paint} model={model} label={t('usage.board.charts.tideA11y', { metric: usageChartMetricName(metric) })} testID={`${props.testID}.tideChart`}
@@ -108,9 +108,9 @@ export function UsageDaylightStyleBody(props: UsageChartStyleBodyProps) {
   const metric = resolveUsageChartMetric(props.query.metric, 'busy');
   const model = React.useMemo(() => calendar ? projectUsageDaylight(calendar, metric, props.slice) : null, [calendar, metric, props.slice]);
   useStyleCaption(t('usage.board.charts.inputDaylight'), usageChartMetricName(metric));
-  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.needsDataTitle')}
+  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, metric))) return <UsageChartPending slice={props.slice} testID={props.testID} title={calendar && isMeasureUnrecorded(calendar.coverage, metric) ? t('usage.board.charts.metricNotRecordedTitle', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.needsDataTitle')}
     reason={!calendar ? t('usage.board.charts.needsCalendarReason') : isMeasureUnrecorded(calendar.coverage, metric)
-      ? t('usage.board.charts.metricNotRecordedReason', { metric: usageChartMetricName(metric) }) : t('usage.board.charts.metricNotByHourReason', { metric: usageChartMetricName(metric) })} />;
+      ? t('usage.board.charts.metricNotRecordedHint') : t('usage.board.charts.metricNotByHourReason', { metric: usageChartMetricName(metric) })} />;
   const window = (from: number, to: number) => `${usageChartClock(from)}–${usageChartClock(to)}`;
   return <View style={{ gap: 12 }} testID={`${props.testID}.daylight`}>
     <UsageDaylight theme={host.theme} paint={host.paint} model={model} label={t('usage.board.charts.daylightA11y', { metric: usageChartMetricName(metric) })} testID={`${props.testID}.daylightChart`}
@@ -155,8 +155,9 @@ export function UsageScoreBody(props: UsageChartStyleBodyProps) {
   const model = React.useMemo(() => calendar ? projectUsageScoreModel(calendar, props.presentation?.day) : null, [calendar, props.presentation?.day]);
   const agents = React.useMemo(() => (model?.rows ?? []).map((row) => host.agent(row.agentId)), [model, host.agent]);
   useWidgetFrameBodyCaption(model ? t('usage.board.charts.scoreSubtitle', { week: usageChartDateLabels(props.query).short(model.weekStart) }) : null);
-  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, 'busy'))) return <UsageChartPending slice={props.slice} testID={props.testID} title={t('usage.board.charts.needsDataTitle')}
-    reason={calendar && isMeasureUnrecorded(calendar.coverage, 'busy') ? t('usage.board.charts.metricNotRecordedReason', { metric: usageChartMetricName('busy') }) : t('usage.board.charts.needsCalendarReason')} />;
+  if (!model || (calendar && isMeasureUnrecorded(calendar.coverage, 'busy'))) return <UsageChartPending slice={props.slice} testID={props.testID}
+    title={calendar && isMeasureUnrecorded(calendar.coverage, 'busy') ? t('usage.board.charts.metricNotRecordedTitle', { metric: usageChartMetricName('busy') }) : t('usage.board.charts.needsDataTitle')}
+    reason={calendar && isMeasureUnrecorded(calendar.coverage, 'busy') ? t('usage.board.charts.metricNotRecordedHint') : t('usage.board.charts.needsCalendarReason')} />;
   const dates = usageChartDateLabels(props.query);
   const start = Date.parse(`${model.weekStart}T12:00:00Z`);
   const dayDate = (index: number) => new Date(start + index * 86_400_000).toISOString().slice(0, 10);
@@ -204,7 +205,8 @@ export function UsageCrewBody(props: UsageChartStyleBodyProps) {
     const coverage = new Map(calendar?.agentActiveDays.map((entry) => [entry.agentId, entry.coverage]) ?? []);
     const label = (status: string | undefined) => status === 'complete_for_supplied_facts' ? { long: t('usage.board.charts.coverageMeasured'), short: t('usage.board.charts.coverageMeasuredShort') }
       : status === 'partial' ? { long: t('usage.board.charts.coveragePartial'), short: t('usage.board.charts.coveragePartialShort') }
-      : { long: t('usage.board.charts.coverageUnknown'), short: t('usage.board.charts.coverageUnknownShort') };
+      // Unknown coverage makes no claim on the row; the page's own coverage line says why once.
+      : undefined;
     return (shares ?? []).map((share) => ({ ...share,
       coverage: share.share === null ? { long: t('usage.board.charts.coverageContextOnly'), short: t('usage.board.charts.coverageContextOnlyShort') } : label(coverage.get(share.agentId)) }));
   }, [shares, calendar]);
