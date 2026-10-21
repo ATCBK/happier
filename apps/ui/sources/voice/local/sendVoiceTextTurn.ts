@@ -1,7 +1,8 @@
 import { storage } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
 import { createTtsPlaybackController, type TtsSpeakHandle } from '@/voice/output/TtsController';
-import { speakAssistantText } from '@/voice/output/speakAssistantText';
+import { speakAssistantSpeech, speakAssistantText } from '@/voice/output/speakAssistantText';
+import { toSpeechText } from '@happier-dev/protocol/voice/speechText';
 import { resolveVoiceNetworkTimeoutMs } from '@/voice/runtime/fetchWithTimeout';
 import { captureAssistantTextMessageBaseline, waitForNextAssistantTextMessageEntry } from '@/voice/runtime/waitForNextAssistantTextMessage';
 import {
@@ -242,7 +243,7 @@ export async function sendVoiceTextTurn(params: {
       // turn share a `groupId`, advance only on a contiguous `chunkIndex` run,
       // and the queue serializes `playChunk` with per-chunk backpressure. This is
       // the single ordering owner — the previous ad-hoc serial promise chain is
-      // gone, and every provider TTS controller converges on `speakAssistantText`
+      // gone, and every provider TTS controller converges on `speakAssistantSpeech`
       // inside `playChunk` below.
       const playbackQueue = createTtsPlaybackController<{ text: string }>({
         playChunk: async (chunk) => {
@@ -251,13 +252,13 @@ export async function sendVoiceTextTurn(params: {
           if (!chunk.text) return;
           if (params.signal?.aborted) return;
           if (!params.playbackController.isEpochCurrent(playbackEpoch)) return;
-          // The provider playback registered by speakAssistantText is the one
+          // The provider playback registered by speakAssistantSpeech is the one
           // physical target. Registering this ordering queue as another target
           // would make the latest-wins playback owner stop the queue when the
           // first real chunk registers, discarding every later chunk. An
           // interrupt advances playbackEpoch and stops the active provider;
           // the checks above then retire every queued successor without audio.
-          await speakAssistantText({
+          await speakAssistantSpeech({
             sessionId,
             text: chunk.text,
             settings,
@@ -312,7 +313,7 @@ export async function sendVoiceTextTurn(params: {
 
       // Mark the end of the streamed turn and wait for the queue to drain. If
       // every real chunk was already emitted eagerly, enqueue a terminal sentinel
-      // (empty text → `speakAssistantText` no-ops) so the group retires and the
+      // (empty text → `speakAssistantSpeech` no-ops) so the group retires and the
       // speak handle's `done` resolves.
       const finalizeStreamedTurn = async () => {
         const handle = speakHandle;
@@ -402,7 +403,7 @@ export async function sendVoiceTextTurn(params: {
         if (streamingSpeechEnabled && currentOutputTurnId) {
           if (canonicalTurnFinalized) return;
           if (queuedChunkCount === 0) {
-            queueSpokenChunk(assistantText);
+            queueSpokenChunk(toSpeechText(assistantText));
           }
           await finalizeStreamedTurn();
           return;

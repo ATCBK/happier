@@ -16,6 +16,8 @@ describe('VoiceAgentOutputEventV1', () => {
     ['Set max_retry_count to 2 * 3, 2*3, 2 *3, and 2* 3.', 'Set max_retry_count to 2 * 3, 2*3, 2 *3, and 2* 3.'],
     ['Use *.ts and file* and **/*.ts and *test.ts, with max_retry_count and 2*3.', 'Use *.ts and file* and **/*.ts and *test.ts, with max_retry_count and 2*3.'],
     ['Read **file.ts** with *file.ts*.', 'Read file.ts with file.ts.'],
+    ['Call `f(*args, **kwargs)`, `__init__`, `~~value~~`, `max`_retry_count, and `https://example.test/a`. After `x` # keep. Then **done**.',
+      'Call f(*args, **kwargs), __init__, ~~value~~, max_retry_count, and https://example.test/a. After x # keep. Then done.'],
     ['```\nls -la\n```', ''],
     ['Before.\n~~~py\nprint(1)\n~~~\nAfter.', 'Before.\nAfter.'],
     ['Example:\n````md\n```ts\nconst a = 1;\n```\n````\nThat is all.', 'Example:\nThat is all.'],
@@ -162,6 +164,30 @@ describe('VoiceAgentOutputEventV1', () => {
       remaining = remaining.slice(length);
     }
     expect(spoken).toBe('a'.repeat(16_381));
+  });
+
+  it.each([
+    ['sentence', 'Call `f(*args, **kwargs). Still code` and **done**.', 'Call f(*args, **kwargs). Still code and done.'],
+    ['wire', `${'a'.repeat(16_383)}\`\`f(*args, \`literal\`, **kwargs)\`\` then **done**.`, `${'a'.repeat(16_383)}f(*args, \`literal\`, **kwargs) then done.`],
+  ])('preserves inline code across supported %s cuts', (boundary, text, expected) => {
+    let remaining = text;
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    let spoken = '';
+    while (remaining) {
+      const length = resolveVoiceAgentOutputSpeechSegmentLength(remaining, {
+        force: boundary === 'wire' || state.nextSeq !== 0, firstSegment: state.nextSeq === 0,
+      });
+      expect(length).toBeGreaterThan(0);
+      const result = ingestVoiceAgentOutputEventV1(state, {
+        v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text: remaining.slice(0, length),
+      });
+      state = result.state;
+      spoken += result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text).join('');
+      if (state.nextSeq === 1 && boundary === 'sentence') expect(spoken).toBe('Call f(*args, **kwargs).');
+      remaining = remaining.slice(length);
+    }
+    expect(spoken).toBe(expected);
   });
 
   it('accepts the four provider-neutral output channels and rejects unbounded identifiers/text', () => {

@@ -4,16 +4,24 @@ import type { VoiceMachineError } from '@/voice/runtime/machine/voiceMachineErro
 import { speakWithLocalTtsProvider } from '@/voice/backends/tts/runtime';
 import { parseLocalVoiceTtsSettings, resolveLocalVoiceAdapterSettings } from '@/voice/local/localVoiceSettings';
 
-export async function speakAssistantText(params: {
+type AssistantSpeechParams = {
   sessionId?: string | null;
   text: string;
-  settings: any;
+  settings: unknown;
   networkTimeoutMs: number;
   registerPlaybackStopper: VoicePlaybackStopperRegistrar;
   onSpeaking: () => void;
   onTtsFailed?: (error: VoiceMachineError) => void;
-}): Promise<void> {
-  const trimmed = toSpeechText(params.text);
+};
+
+/** Complete assistant text enters the shared Markdown speech policy exactly once. */
+export async function speakAssistantText(params: AssistantSpeechParams): Promise<void> {
+  await speakAssistantSpeech({ ...params, text: toSpeechText(params.text) });
+}
+
+/** Protocol speak effects already contain speech text; dispatch them without parsing it again. */
+export async function speakAssistantSpeech(params: AssistantSpeechParams): Promise<void> {
+  const trimmed = params.text.trim();
   if (!trimmed) return;
 
   const { config } = resolveLocalVoiceAdapterSettings(params.settings);

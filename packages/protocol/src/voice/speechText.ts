@@ -12,9 +12,10 @@ export type VoiceSpeechTextState = Readonly<{
   line: SpeechLine;
   emphasis: readonly string[];
   previousCharacter: string;
+  inlineCodeDelimiter: number;
 }>;
 
-type SpeechEmphasisContext = { emphasis: string[]; previousCharacter: string };
+type SpeechEmphasisContext = { emphasis: string[]; previousCharacter: string; inlineCodeDelimiter: number };
 
 function removeSpeechEmphasis(text: string, context: SpeechEmphasisContext): string {
   const normalized = text.replace(/\*{1,2}|_{1,2}|~~/g, (marker: string, offset: number) => {
@@ -43,17 +44,44 @@ function removeSpeechEmphasis(text: string, context: SpeechEmphasisContext): str
   return normalized;
 }
 
-function normalizeSpeechMarkup(prose: string, context: SpeechEmphasisContext): string {
+function normalizeSpeechProse(prose: string, context: SpeechEmphasisContext, atLineStart: boolean): string {
+  const removeBlockMarker = (marker: string, offset: number) => offset === 0 && !atLineStart ? marker : '';
   const text = prose
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/\bhttps?:\/\/(?:www\.)?([^\s/?#)]+)[^\s)]*/gi, '$1')
-    .replace(/`([^`\n]*)`/g, '$1')
-    .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
-    .replace(/^[ \t]*>[ \t]?/gm, '')
-    .replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, '')
-    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
+    .replace(/^[ \t]*#{1,6}[ \t]+/gm, removeBlockMarker)
+    .replace(/^[ \t]*>[ \t]?/gm, removeBlockMarker)
+    .replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, removeBlockMarker)
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, removeBlockMarker);
   return removeSpeechEmphasis(text, context);
+}
+
+function normalizeSpeechMarkup(prose: string, context: SpeechEmphasisContext): string {
+  let spoken = '';
+  let cursor = 0;
+  const append = (end: number) => {
+    const part = prose.slice(cursor, end);
+    if (context.inlineCodeDelimiter) {
+      spoken += part;
+      context.previousCharacter = part.at(-1) ?? context.previousCharacter;
+    } else {
+      const atLineStart = cursor === 0
+        ? !context.previousCharacter || context.previousCharacter === '\n'
+        : prose[cursor - 1] === '\n';
+      spoken += normalizeSpeechProse(part, context, atLineStart);
+    }
+  };
+  for (const match of prose.matchAll(/`+/gu)) {
+    append(match.index);
+    const length = match[0].length;
+    if (!context.inlineCodeDelimiter) context.inlineCodeDelimiter = length;
+    else if (context.inlineCodeDelimiter === length) context.inlineCodeDelimiter = 0;
+    else spoken += match[0];
+    cursor = match.index + length;
+  }
+  append(prose.length);
+  return spoken;
 }
 
 /**
@@ -70,6 +98,7 @@ export function normalizeVoiceSpeechTextChunk(
   const context: SpeechEmphasisContext = {
     emphasis: [...state?.emphasis ?? []],
     previousCharacter: state?.previousCharacter ?? '',
+    inlineCodeDelimiter: state?.inlineCodeDelimiter ?? 0,
   };
   let prose = '';
   const input = markdown.replace(/\r\n?/g, '\n') + (final ? '\n' : '');
@@ -197,7 +226,7 @@ export function speechTextEndAtOrBefore(text: string, end: number): number {
   const next = text.charCodeAt(end);
   const cut = previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff ? end - 1 : end;
   const marker = text[cut - 1];
-  if (marker === '*' || marker === '_' || marker === '~') {
+  if (marker === '*' || marker === '_' || marker === '~' || marker === '`') {
     let start = cut;
     while (start > 0 && text[start - 1] === marker) start -= 1;
     if (start > 0) return start;
