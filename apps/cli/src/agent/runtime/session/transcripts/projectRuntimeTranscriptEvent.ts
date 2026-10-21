@@ -39,12 +39,11 @@ type RuntimeMessageStreamArgs = Readonly<{
 type RuntimeMessageDeltaBridge = Readonly<{
   appendAssistantDelta: (args: RuntimeMessageStreamArgs & Readonly<{ deltaText: string }>) => void;
   appendThinkingDelta: (args: RuntimeMessageStreamArgs & Readonly<{ deltaText: string }>) => void;
-  discardStream: (args: RuntimeMessageStreamArgs) => void;
-  finalizeUnnamedSegment: (args: RuntimeMessageStreamArgs & Readonly<{
+  finalizeSegment: (args: RuntimeMessageStreamArgs & Readonly<{
     channel: 'assistant' | 'reasoning';
     text: string;
     sourceMessageId: string;
-    namedStreamKey: string;
+    unnamedStreamKey?: string;
     admission?: CommittedTranscriptAdmission;
   }>) => Promise<StreamedTranscriptFlushSummary | null>;
   flushAll: (args: Readonly<{
@@ -970,14 +969,16 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   const provider = params.provider;
   const channel = event.role === 'reasoning' ? 'reasoning' : 'assistant';
   const commit = async (): Promise<TranscriptMessageCommitResult> => {
-    if (isForegroundTurnRuntimeTranscriptEvent(event) && params.runtimeMessageDeltaBridge) {
+    if (params.runtimeMessageDeltaBridge) {
       assertRequiredTranscriptAdmission(params.admission, event.kind);
-      const summary = await params.runtimeMessageDeltaBridge.finalizeUnnamedSegment({
-        ...buildRuntimeMessageStreamArgs(event, channel, null),
+      const summary = await params.runtimeMessageDeltaBridge.finalizeSegment({
+        ...buildRuntimeMessageStreamArgs(event, channel),
         channel,
         text: event.text,
         sourceMessageId: event.messageId,
-        namedStreamKey: buildRuntimeMessageStreamArgs(event, channel).streamKey,
+        ...(isForegroundTurnRuntimeTranscriptEvent(event)
+          ? { unnamedStreamKey: buildRuntimeMessageStreamArgs(event, channel, null).streamKey }
+          : {}),
         ...(params.admission ? { admission: params.admission } : {}),
       });
       assertRequiredTranscriptAdmission(params.admission, event.kind);
@@ -1006,9 +1007,6 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
       ...(params.admission === undefined ? {} : { admission: params.admission }),
     });
     committedLocalIds.add(event.messageId);
-    if (event.role !== 'user') {
-      params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
-    }
     return result;
   };
   const publication = commit();

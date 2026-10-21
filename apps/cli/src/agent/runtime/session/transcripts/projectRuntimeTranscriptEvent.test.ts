@@ -79,13 +79,13 @@ describe('projectRuntimeTranscriptEvent', () => {
         live.set(opts.localId, body);
         try {
           const normalized = interpretTranscriptStreamSegment({
-          assembler,
-          rawMessageNormalizationState,
-          sessionId: 'codex-retry-session',
-          type: 'transcript-stream-segment',
-          record: rawRecordSchema.parse(buildAcpAgentMessageEnvelope({ provider: 'codex', body, meta: opts.meta })),
-          message: { localId: opts.localId, createdAt: opts.createdAt },
-        });
+            assembler,
+            rawMessageNormalizationState,
+            sessionId: 'codex-retry-session',
+            type: 'transcript-stream-segment',
+            record: rawRecordSchema.parse(buildAcpAgentMessageEnvelope({ provider: 'codex', body, meta: opts.meta })),
+            message: { localId: opts.localId, createdAt: opts.createdAt },
+          });
           expect(normalized).not.toBeNull();
           if (normalized) transcript = applyReducedMessages(transcript, reducer(reducerState, [normalized], null).messages);
         } catch (error) {
@@ -166,6 +166,7 @@ describe('projectRuntimeTranscriptEvent', () => {
       expect([...stored.values()].flatMap(body => body.type === 'message' && body.message ? [body.message] : []))
         .toEqual(['Earlier complete message', '1. able\n2. acid\n3. acre']);
       expect(renderedText()).toEqual(['Earlier complete message', '1. able\n2. acid\n3. acre']);
+      expect(liveErrors).toEqual([]);
       expect(requests.filter(method => method === 'turn/start')).toHaveLength(1);
       expect(events.some(event => event.kind === 'turn-failed' || event.kind === 'turn-cancelled')).toBe(false);
     } finally {
@@ -226,23 +227,27 @@ describe('projectRuntimeTranscriptEvent', () => {
     bridge.clear();
   });
 
-  it('keeps a named commit separate from a simultaneous unnamed stream in the same channel', async () => {
+  it.each([undefined, 'child'])('keeps a named commit separate from a simultaneous unnamed stream (sidechainId=%s)', async sidechainId => {
     const { createKeyedStreamedTranscriptBridge } = await import('@/api/session/createKeyedStreamedTranscriptBridge');
     const { projectRuntimeTranscriptEvent } = await import('./projectRuntimeTranscriptEvent');
     const stored = new Map<string, CommittedAgentMessageBody>();
+    const metas = new Map<string, unknown>();
     const session = { sessionId: 'session-1',
-      enqueueAgentMessageCommitted: async (_provider: unknown, body: CommittedAgentMessageBody, opts: { localId: string }) => {
-        stored.set(opts.localId, body); return { persisted: true, delivered: false };
+      enqueueAgentMessageCommitted: async (_provider: unknown, body: CommittedAgentMessageBody, opts: { localId: string; meta?: Record<string, unknown> }) => {
+        stored.set(opts.localId, body);
+        metas.set(opts.localId, opts.meta);
+        return { persisted: true, delivered: false };
       },
     };
     const bridge = createKeyedStreamedTranscriptBridge({ provider: 'agent', createSessionForStream: () => session });
     const project = async (event: Record<string, unknown>) => projectRuntimeTranscriptEvent({ session, provider: 'agent',
       runtimeMessageDeltaBridge: bridge, event: canonicalRuntimeEvent({ sessionId: session.sessionId, emittedAtMs: 1, turnId: 'turn-1', ...event }) });
     await project({ kind: 'message-delta', channel: 'assistant', text: 'Unnamed output' });
-    await project({ kind: 'message-delta', channel: 'assistant', messageId: 'named', text: 'Named draft' });
-    await project({ kind: 'transcript-message-committed', role: 'assistant', messageId: 'named', text: 'Named final' });
+    await project({ kind: 'message-delta', channel: 'assistant', messageId: 'named', sidechainId, text: 'Named draft' });
+    await project({ kind: 'transcript-message-committed', role: 'assistant', messageId: 'named', sidechainId, text: 'Named final' });
     await project({ kind: 'turn-complete' });
-    expect(stored.get('named')).toEqual({ type: 'message', message: 'Named final' });
+    expect(stored.get('named')).toEqual({ type: 'message', message: 'Named final', ...(sidechainId ? { sidechainId } : {}) });
+    expect(metas.get('named')).toMatchObject({ happierStreamSegmentV1: { segmentLocalId: 'named', segmentState: 'complete' } });
     expect([...stored.values()]).toHaveLength(2);
     expect([...stored.values()]).toContainEqual({ type: 'message', message: 'Unnamed output' });
     bridge.clear();

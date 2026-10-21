@@ -73,16 +73,21 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
       getOrCreateWriter(args).enableDurableCommits();
     },
 
-    async finalizeUnnamedSegment(args: TArgs & Readonly<{
+    async finalizeSegment(args: TArgs & Readonly<{
       channel: 'assistant' | 'reasoning';
       text: string;
       sourceMessageId: string;
-      namedStreamKey: string;
+      unnamedStreamKey?: string;
       admission?: CommittedTranscriptAdmission;
     }>) {
-      if (writerByStreamKey.has(args.namedStreamKey)) return null;
-      const entry = writerByStreamKey.get(args.streamKey);
-      if (!entry || entry.args.messageId) return null;
+      // A native identity takes precedence over the foreground unnamed handoff.
+      // Both paths finalize through the same writer, including empty corrections.
+      const streamKey = writerByStreamKey.has(args.streamKey)
+        ? args.streamKey
+        : args.unnamedStreamKey;
+      if (streamKey === undefined) return null;
+      const entry = writerByStreamKey.get(streamKey);
+      if (!entry || (streamKey !== args.streamKey && entry.args.messageId)) return null;
       const summary = await entry.writer.finalizeSegment({
         kind: args.channel === 'assistant' ? 'assistant' : 'thinking',
         sidechainId: args.sidechainId,
@@ -90,15 +95,8 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
         sourceMessageId: args.sourceMessageId,
         admission: args.admission,
       });
-      if (!entry.writer.hasPendingSegments()) writerByStreamKey.delete(args.streamKey);
+      if (!entry.writer.hasPendingSegments()) writerByStreamKey.delete(streamKey);
       return summary;
-    },
-
-    discardStream(args: TArgs) {
-      const writer = writerByStreamKey.get(args.streamKey)?.writer;
-      if (!writer) return;
-      writer.discard();
-      writerByStreamKey.delete(args.streamKey);
     },
 
     async flushAll(args: Readonly<{ reason: FlushReason; interruptedReason?: string; selectStream?: (stream: TArgs) => boolean }>) {
