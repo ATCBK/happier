@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type LayoutChangeEvent } from 'react-native';
+import { Platform, View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { HappierSeries } from '@happier-dev/plugin-ui/presentation';
 import type {
@@ -444,6 +444,10 @@ const styles = StyleSheet.create((theme) => ({
     paddingHorizontal: theme.space.s10,
     paddingVertical: theme.space.s6,
     flexShrink: 1,
+    minWidth: 0,
+    maxWidth: '100%',
+    // A path or hash in a command has no break opportunity; without this it runs past the page's right gutter.
+    ...(Platform.OS === 'web' ? ({ overflowWrap: 'anywhere' } as const) : {}),
   },
   chain: {
     flexDirection: 'row',
@@ -523,6 +527,8 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 1,
     minWidth: 0,
     gap: theme.space.s6,
+    // Wrapped chips grow the row past its single line; the padding keeps the first and last line off the card's edges.
+    paddingVertical: theme.space.s6,
   },
   mono: {
     ...Typography.mono(),

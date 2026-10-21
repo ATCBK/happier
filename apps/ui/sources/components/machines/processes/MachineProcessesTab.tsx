@@ -402,11 +402,8 @@ function MachineProcessesTree(
         );
         return;
       }
-      if (
-        item.kind === 'process' ||
-        item.kind === 'leftBehind' ||
-        item.kind === 'appMember'
-      )
+      // An external app's member has no detail to peek (its `peek` is null), so opening it would only leave an empty slot.
+      if (item.kind === 'process' || item.kind === 'leftBehind')
         model.actions.toggleExpanded(item.key);
     },
     [compact, props.params.sort, setParams],

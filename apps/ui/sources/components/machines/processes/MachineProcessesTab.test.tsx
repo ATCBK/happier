@@ -389,6 +389,20 @@ describe('MachineProcessesTab', () => {
     expect(textOf(screen.findByTestId('machine-processes-total-match'))).toContain('1');
     expect(textOf(screen.findByTestId('machine-processes-total-match'))).not.toContain('0 of');
   });
+  it('does not open an empty detail under an external app’s member (it has nothing to peek)', async () => {
+    const answer = createProcessesAnswer({
+      notHappier: [{ appGroup: 'Docker Desktop', members: [
+        { name: 'com.docker.backend', appGroup: 'Docker Desktop', pid: 900, ref: 'docker-backend', memoryBytes: 640, cpuPercent: 0.1 },
+      ] }],
+    });
+    const { screen } = await mount({ answer, machine: { metadata: { host: 'leeroy-mbp', platform: 'darwin', happyCliVersion: '0.3.0',
+      happyHomeDir: '/Users/leeroy/.happier', homeDir: '/Users/leeroy', resourcesPolicyV1: { v: 1, processes: { allProcessesVisible: true } } } as Machine['metadata'] } });
+    await act(async () => { screen.pressByTestId('machine-processes-scope:all'); });
+    await act(async () => { screen.changeTextByTestId('machine-processes-search', 'backend'); });
+    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-row-m:docker-backend')).not.toBeNull()); });
+    await act(async () => { screen.pressByTestId('machine-processes-row-m:docker-backend'); });
+    expect(screen.findByTestId('machine-processes-row-m:docker-backend:peek-cell')).toBeNull();
+  });
   it.each([
     { id: 'processes' as const },
     { id: 'processes' as const, page: 'owner' as const, owner: 'session:refactor' },

@@ -374,6 +374,8 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
     sort,
   });
   const root = level.root;
+  // A running scan that has listed nothing here yet is still reading: "Nothing here." would read as its result.
+  const reading = running && level.rows.length === 0;
   const targetName = root ? storageDiskNodeName(root)
     : 'folderPath' in scan.target ? formatPathRelativeToHome(scan.target.folderPath, facts.homeDir) : volumeName;
   const targetBytes = root?.size.allocatedBytes
@@ -579,6 +581,7 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
             volume={volume}
             root={root}
             homeDir={facts.homeDir}
+            reading={reading}
             onOpen={open}
           />
         ) : null}
@@ -613,6 +616,7 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
           compact={layout.compact}
           homeDir={facts.homeDir}
           loading={scanState.scanStatus === 'loading' && !scanState.page}
+          reading={reading}
           previousScanAt={scan.previousScanAt ?? null}
           onOpen={open}
           machineName={props.machineName}
@@ -768,6 +772,8 @@ function DiskPath(
     volume: StorageVolume | null;
     root: DiskNodeV1 | null;
     homeDir: string | undefined;
+    /** The level is still being read: its size and count so far are not a result, so no figures yet. */
+    reading: boolean;
     onOpen: (nodeId: string | undefined) => void;
   }>,
 ) {
@@ -793,7 +799,9 @@ function DiskPath(
   }, [mount, name, props.root]);
   const last = crumbs.length - 1;
   const meta = props.root
-    ? t('machineStorage.disk.levelMeta', {
+    ? props.reading
+      ? ''
+      : t('machineStorage.disk.levelMeta', {
         size: formatMachineBytes(props.root.size.allocatedBytes, 'storage'),
         count: props.root.childCount,
       })
@@ -1180,6 +1188,7 @@ function DiskList(
     compact: boolean;
     homeDir: string | undefined;
     loading: boolean;
+    reading: boolean;
     previousScanAt: number | null;
     onOpen: (nodeId: string) => void;
     machineName: string;
@@ -1418,11 +1427,20 @@ function DiskList(
         loading={props.loading}
         selection={{ isItemActivatable: (row) => row.drillable }}
         empty={
-          <SurfaceStateCard
-            kind="empty"
-            size="line"
-            title={t('machineStorage.disk.emptyLevel')}
-          />
+          props.reading ? (
+            <SurfaceStateCard
+              testID="machine-storage-disk-list-scanning"
+              kind="loading"
+              size="line"
+              title={t('common.loading')}
+            />
+          ) : (
+            <SurfaceStateCard
+              kind="empty"
+              size="line"
+              title={t('machineStorage.disk.emptyLevel')}
+            />
+          )
         }
       />
     </CoreCollectionScope>

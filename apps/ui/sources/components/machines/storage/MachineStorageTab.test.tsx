@@ -480,6 +480,36 @@ describe('MachineStorageTab', () => {
         expect(screen.findByTestId(`machine-storage-disk-row-${folder}/file`)).not.toBeNull();
         expect(screen.getTextContent()).toContain('qa8-owned-fixtures holds');
     });
+    it('reads a running folder scan with no folders yet as scanning, never as an empty result', async () => {
+        const folder = '/home/happier/.cache';
+        const running: DiskScanStateV1 = { scanId: 'folder-scan', target: { folderPath: folder }, status: 'running', startedAt: 3,
+            progress: { sizedBytes: 177 * 1024 * 1024, usedBytes: 0, items: 5215 },
+            unreadable: { counts: { permission: 0, os_private: 0, timeout: 0, io: 0 }, examples: [] },
+            fullDiskAccess: { state: 'not_applicable', binary: { name: 'happier-support', path: '/x' } } };
+        const summary = { ...SUMMARY, wholeDisk: { enabled: true, scans: [running] as DiskScanStateV1[] } };
+        const watches: ReturnType<typeof createDeferred<unknown>>[] = [];
+        const pages: ReturnType<typeof createDeferred<unknown>>[] = [];
+        const scanMachine = machine();
+        const { screen } = await mount({ id: 'storage', view: 'disk' }, { metadata: { ...scanMachine.metadata!,
+            resourcesPolicyV1: MachineResourcesPolicyV1Schema.parse({ v: 1, storage: { wholeDiskEnabled: true } }) } }, ({ method }) => {
+            if (method === RPC_METHODS.DAEMON_STORAGE_SUMMARY_GET) return summary;
+            if (method === RPC_METHODS.DAEMON_STORAGE_WATCH || method === RPC_METHODS.DAEMON_STORAGE_SCAN_GET) {
+                const pending = createDeferred<unknown>();
+                (method === RPC_METHODS.DAEMON_STORAGE_WATCH ? watches : pages).push(pending);
+                return pending.promise;
+            }
+            if (method === RPC_METHODS.DAEMON_STORAGE_PILE_GET) return { revision: 1, items: [], summary: SUMMARY.pile };
+            return undefined;
+        });
+        await act(async () => { await vi.waitFor(() => expect(pages.length).toBeGreaterThan(0)); });
+        const root = { nodeId: folder, name: '.cache', kind: 'folder', size: size(4096), logicalBytes: 4096, items: 0, changedAt: 1,
+            flags: { happier: false, protection: 'none', atLeast: false, inUse: false }, childCount: 0 };
+        await act(async () => { pages[0]!.resolve({ state: running, nodes: [], root, coverage: [], indexedAt: 4 }); });
+        expect(screen.findByTestId('machine-storage-disk-progress')).not.toBeNull();
+        expect(screen.findByTestId('machine-storage-disk-list-scanning')).not.toBeNull();
+        expect(screen.getTextContent()).not.toContain(t('machineStorage.disk.emptyLevel'));
+        expect(screen.getTextContent()).not.toContain(t('machineStorage.disk.levelMeta', { size: formatMachineBytes(4096, 'storage'), count: 0 }));
+    });
     it('opens weekly storage review as an ordinary scheduled Automation draft from Storage settings', async () => {
         const { screen } = await mount({ id: 'storage' });
         await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-storage-tidy-weekly-review')).not.toBeNull()); });
