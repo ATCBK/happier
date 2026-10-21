@@ -5,6 +5,49 @@ import { PromptRegistryInstallInputSchema } from './actionSpecs.js';
 import { ActionsSettingsV1Schema, isActionEnabledByActionsSettings, normalizeActionsSettingsV1 } from './actionSettings.js';
 
 describe('ActionsSettingsV1Schema', () => {
+  it('retains predecessor agent policy through the production Account reader', async () => {
+    const [{ accountSettingsParse }, { isApprovalRequiredByActionsSettings }, { resolveActionToolExposureMode }, { getActionSpec }] = await Promise.all([
+      import('../account/settings/accountSettings.js'),
+      import('./actionApprovalPolicy.js'),
+      import('./actionToolExposure.js'),
+      import('./actionSpecs.js'),
+    ]);
+    // Serialized by ../0.2 ActionsSettingsV1Schema.parse at clean HEAD
+    // 2761f397736b040394caecf7cbe57a44f31e4d6c; the live producer replay also
+    // verifies this retained vector, rather than reconstructing an old schema.
+    const predecessor = { v: 1, actions: {
+      'session.open': {
+        enabled: true, enabledPlacements: [], disabledSurfaces: ['cli'], disabledPlacements: [],
+        approvalRequiredSurfaces: ['session_agent'], toolExposureModes: { session_agent: 'direct' },
+      },
+      'session.stop': {
+        enabled: true, enabledPlacements: [], disabledSurfaces: ['session_agent'], disabledPlacements: [],
+        approvalRequiredSurfaces: [], toolExposureModes: {},
+      },
+    } };
+    const settings = accountSettingsParse({ actionsSettingsV1: JSON.parse(JSON.stringify(predecessor)) }).actionsSettingsV1;
+
+    expect(settings.actions['session.open']).toMatchObject({
+      enabled: true, disabledSurfaces: ['cli'], approvalRequiredSurfaces: ['agent'], toolExposureModes: { agent: 'direct' },
+    });
+    expect(isApprovalRequiredByActionsSettings('session.open', settings, { surface: 'agent' })).toBe(true);
+    expect(isActionEnabledByActionsSettings('session.open', settings, { surface: 'agent' })).toBe(true);
+    expect(isActionEnabledByActionsSettings('session.open', settings, { surface: 'cli' })).toBe(false);
+    expect(isActionEnabledByActionsSettings('session.stop', settings, { surface: 'agent' })).toBe(false);
+    expect(resolveActionToolExposureMode(getActionSpec('session.open'), 'agent', { settings })).toBe('direct');
+    expect(normalizeActionsSettingsV1(settings)).toEqual(settings);
+  });
+
+  it('prefers valid current tool exposure over the predecessor alias in either field order', () => {
+    for (const toolExposureModes of [
+      { session_agent: 'direct', agent: 'discoverable_only' },
+      { agent: 'discoverable_only', session_agent: 'direct' },
+    ]) {
+      const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.open': { toolExposureModes } } });
+      expect(settings.actions['session.open'].toolExposureModes).toEqual({ agent: 'discoverable_only' });
+    }
+  });
+
   it('accepts a predecessor registry install target without granting a native export', async () => {
     expect(PromptRegistryInstallInputSchema.parse({ machineId: 'machine', sourceId: 'source', itemId: 'item',
       installTarget: { assetTypeId: 'claude.skill', scope: 'user', targetName: 'skill' } }))

@@ -30,11 +30,13 @@ const LEGACY_UI_BUTTON_SURFACE = `ui_${'button'}`;
 const LEGACY_UI_SLASH_COMMAND_SURFACE = `ui_${'slash_command'}`;
 const LEGACY_VOICE_TOOL_SURFACE = `voice_${'tool'}`;
 const LEGACY_VOICE_ACTION_BLOCK_SURFACE = `voice_${'action_block'}`;
+const LEGACY_SESSION_AGENT_SURFACE = `session_${'agent'}`;
 const LEGACY_ACTION_SURFACE_ALIASES = new Map<string, ActionSurfaceKey>([
   [LEGACY_UI_BUTTON_SURFACE, 'ui'],
   [LEGACY_UI_SLASH_COMMAND_SURFACE, 'ui'],
   [LEGACY_VOICE_TOOL_SURFACE, 'voice'],
   [LEGACY_VOICE_ACTION_BLOCK_SURFACE, 'voice'],
+  [LEGACY_SESSION_AGENT_SURFACE, 'agent'],
 ]);
 
 function normalizeActionSurfaceList(raw: unknown): readonly ActionSurfaceKey[] {
@@ -60,10 +62,14 @@ function normalizeActionToolExposureModes(raw: unknown): Partial<Record<ActionTo
 
   const next: Partial<Record<ActionToolExposureSurface, ActionToolExposureMode>> = {};
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!ACTION_TOOL_EXPOSURE_MODE_KEY_SET.has(key)) continue;
+    const normalizedKey = LEGACY_ACTION_SURFACE_ALIASES.get(key) ?? key;
+    if (!ACTION_TOOL_EXPOSURE_MODE_KEY_SET.has(normalizedKey)) continue;
+    const surface = normalizedKey as ActionToolExposureSurface;
+    // A valid current spelling wins regardless of persisted property order.
+    if (key !== normalizedKey && next[surface] !== undefined) continue;
     const parsed = ActionToolExposureModeSchema.safeParse(value);
     if (!parsed.success) continue;
-    next[key as ActionToolExposureSurface] = parsed.data;
+    next[surface] = parsed.data;
   }
   return next;
 }
