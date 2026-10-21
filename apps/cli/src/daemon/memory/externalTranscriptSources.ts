@@ -1,4 +1,5 @@
 import type { Disposable } from '@happier-dev/plugin-sdk';
+import { createHash } from 'node:crypto';
 import type { MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
 import type { MemorySettingsV1 } from '@happier-dev/protocol/memory/memorySettings';
 import type { MemoryIndexSourceStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
@@ -27,7 +28,7 @@ type NativeInventory = {
   candidates: Map<string, MemoryExternalTranscriptCandidate>;
   pending: Map<string, MemoryExternalTranscriptCandidate> | null;
   cursor?: string;
-  seen: Set<string>;
+  seenCursorDigests: Set<string>;
   needsInventory: boolean;
   failed: boolean;
   initialInventoryComplete: boolean;
@@ -144,7 +145,9 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
   onChange(refreshSources: boolean): void;
 }>) {
   let observation: MemoryExternalObservation | null = null;
-  let records: ReadonlyArray<MemoryExternalSourceReader & { demand: Disposable | null }> = [];
+  // Observation handles own watch snapshots; only the executable reader may
+  // outlive a demand refresh in inventories and transcript candidates.
+  let records: ReadonlyArray<{ native: MemoryExternalSourceReader; demand: Disposable | null }> = [];
   const traversal = createMemoryExternalTranscriptTraversal();
   const inventories = new Map<string, NativeInventory>();
   let inventoryChanged = false;
@@ -251,8 +254,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
             input.onChange(refreshSources);
           },
         }) : null;
-        next.push({ agentId, sourceKey: descriptor.configuredSourceKey ?? descriptor.sourceKey, source: resolved.descriptor.source,
-          reader: boundary.externalSessions, demand });
+        next.push({ native: { agentId, sourceKey: descriptor.configuredSourceKey ?? descriptor.sourceKey,
+          source: resolved.descriptor.source, reader: boundary.externalSessions }, demand });
       }
       operationSignal.throwIfAborted();
     } catch (error) { await Promise.all(next.map(record => record.demand?.dispose())); throw error; }
@@ -260,7 +263,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     records = next;
     configuredSourceKeys = nextConfiguredSourceKeys;
     const retainedKeys = new Set<string>();
-    for (const native of records) {
+    for (const { native } of records) {
       const key = JSON.stringify([native.agentId, native.sourceKey]);
       retainedKeys.add(key);
       const previous = inventories.get(key);
@@ -268,7 +271,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       // A replaced reader or physical source does require fresh absence proof.
       if (previous?.native.reader === native.reader
         && JSON.stringify(previous.native.source) === JSON.stringify(native.source)) continue;
-      inventories.set(key, { native, candidates: new Map(), pending: null, seen: new Set(), needsInventory: true, failed: false, initialInventoryComplete: false });
+      inventories.set(key, { native, candidates: new Map(), pending: null, seenCursorDigests: new Set(), needsInventory: true, failed: false, initialInventoryComplete: false });
       inventoryChanged = true;
       completeSources.delete(key);
     }
@@ -286,13 +289,13 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       historyDays: indexSettings.conversationSearch.indexExternal.historyDays });
     let changed = inventoryChanged;
     inventoryChanged = false;
-    for (const native of records) {
+    for (const { native } of records) {
       const key = JSON.stringify([native.agentId, native.sourceKey]);
       const state = inventories.get(key)!;
       if (state.needsInventory && state.pending === null) {
         state.pending = new Map();
         state.cursor = undefined;
-        state.seen.clear();
+        state.seenCursorDigests.clear();
         state.needsInventory = false;
         completeSources.delete(key);
       }
@@ -327,9 +330,12 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
           state.pending.set(externalMemoryStorageId(source), { native: { ...native, source: identity.value.source }, source });
         }
         if (page.value.nextCursor) {
-          if (state.seen.has(page.value.nextCursor)) throw new Error('memory_external_inventory_cursor_stalled');
+          // Opaque cursors may carry a whole native directory snapshot. Keep
+          // only its digest for cycle detection, preserving JavaScript code units.
+          const digest = createHash('sha256').update(page.value.nextCursor, 'utf16le').digest('base64url');
+          if (state.seenCursorDigests.has(digest)) throw new Error('memory_external_inventory_cursor_stalled');
           state.cursor = page.value.nextCursor;
-          state.seen.add(state.cursor);
+          state.seenCursorDigests.add(digest);
         } else {
           // Preparation describes the native inventory chunk, including its
           // terminal page. Its exhausted cursor establishes inventory completion.
@@ -355,6 +361,11 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         logger.debug('[memoryWorker] Native inventory failed; retaining incomplete coverage', {
           agentId: native.agentId, ...state.failure,
         });
+      } finally {
+        if (state.pending === null) {
+          state.cursor = undefined;
+          state.seenCursorDigests.clear();
+        }
       }
     }
     if (!changed) return null;
@@ -383,9 +394,9 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         const inventory = inventories.get(key);
         const group = groups.get(key);
         return { source: { type: 'external_transcript', agentId, sourceKey },
-          state: !db ? 'indexing' : inventory?.failed ? 'error'
+          state: !inventory ? 'error' : !db ? 'indexing' : inventory.failed ? 'error'
             : !inventory?.initialInventoryComplete ? 'indexing' : group?.state ?? 'ready',
-          ...(db && inventory?.failed ? inventory.failure : group?.state === 'error'
+          ...(!inventory ? { errorCode: 'agent_unavailable' } : db && inventory.failed ? inventory.failure : group?.state === 'error'
             ? { errorCode: group.errorCode, errorReason: group.errorReason } : {}) };
       });
     },
@@ -399,7 +410,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     take: traversal.take,
     async readPage(request: Readonly<{ source: MemoryExternalTranscriptSourceV1; cursor?: string }>, settings: MemorySettingsV1, signal: AbortSignal) {
       if (!records.length) await refresh(settings, signal);
-      const native = records.find(record => record.agentId === request.source.agentId && record.sourceKey === request.source.sourceKey);
+      const native = records.find(({ native }) => native.agentId === request.source.agentId && native.sourceKey === request.source.sourceKey)?.native;
       if (!native) return null;
       const identity = await native.reader.resolveLinkIdentity({ source: native.source,
         remoteSessionId: request.source.nativeSessionId, signal });
