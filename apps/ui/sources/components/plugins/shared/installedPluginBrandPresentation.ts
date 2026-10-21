@@ -426,7 +426,7 @@ export async function readInstalledPluginBrandPresentation(
 export function useInstalledPluginBrandPresentation(
     input: InstalledPluginBrandPresentationInput,
 ): InstalledPluginBrandPresentation | null {
-    const availabilityReader = useActivePluginAccountAvailabilityReader();
+    const availabilityReader = useActivePluginAccountAvailabilityReader(input.installedPackage?.id);
     const effectiveInput = React.useMemo<InstalledPluginBrandPresentationInput>(() => {
         if (input.packageAssets !== undefined || input.installedPackage?.source.kind === 'localPath' || input.installedPackage?.source.kind === 'bundled') {
             return input;
