@@ -145,6 +145,7 @@ import { bindAutomationWorkflowInputs, isWorkflowJsonObject } from './input';
 import { createProductionWorkflowRunCoordinator } from './production';
 import { createWorkflowSessionStepExecutor, type WorkflowSessionStartup } from './sessionStepExecutor';
 import { runObservedWorkflowSessionStartup } from './workflowSessionStartup';
+import { readExecutionRunWorkflowObservationSink, type ExecutionRunWorkflowObservationSink } from '@/agent/runtime/bridges/executionRun/executionRunWorkflowObservation';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import { createMachineSessionSpawnRpcHandler } from '@/session/actions/sessionLifecycleActions';
 import { awaitTrackedRunnerAgentSessionOpen } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
@@ -378,6 +379,7 @@ function workflowDaemonProcess(input: Readonly<{
   readActualConversation?: boolean;
   onReviewEntered?: (entry: Readonly<{ runId: string }>) => Promise<void>;
   sessionStartup?: WorkflowSessionStartup;
+  detachedRun?: Parameters<typeof createProductionWorkflowRunCoordinator>[0]['execution']['detachedRun'];
 }>) {
   authorizedConversations.set(input.conversationSessionId ?? sessionId, input.directory);
   readinessCurrentness = input.encryption?.witness ?? currentness;
@@ -421,7 +423,7 @@ function workflowDaemonProcess(input: Readonly<{
         ? async params => await resolveWorkflowSessionConversation({ ...params, credentials: input.credentials ?? { token: 'token', encryption: null } })
         : async () => ({ sessionId: input.conversationSessionId ?? sessionId, machineId, directory: input.directory, agentTarget }),
       ...(input.sessionInput ? { sessionInput: input.sessionInput as never } : {}),
-      detachedRun: { actionExecutor: unusedRunActions as never, buildActionContext: actionContext as never },
+      detachedRun: input.detachedRun ?? { actionExecutor: unusedRunActions as never, buildActionContext: actionContext as never },
     },
     // The daemon-applied plugin process is a real boundary. Exercise its real
     // Git registration and SCM logic through the canonical workspace testkit.
@@ -1235,6 +1237,91 @@ it.each(['unavailable', 'missing-inventory', 'valid'] as const)(
     operations.runner.cancel(scope, 'native-mode-start');
     await settled;
     await openedRuntime?.operations.resetOrDisposeRuntime();
+  }
+});
+
+it('retires the old Judge observation writer on claim loss while the reclaimed owner commits the original result', async () => {
+  const directory = await projectDirectory();
+  const runId = '41414141-4141-4141-8141-414141414161';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: retainedConversationDefaults(),
+    blocks: [step('stage-one'), step('judge', { execution: { executionTarget: { kind: 'detached_run' },
+      conversation: { kind: 'fresh' } } })] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed',
+    origin: { kind: 'direct' }, acceptedEnvelope });
+  const interrupted = new AbortController();
+  let currentAttempt = 1;
+  const conflict = () => Object.assign(new Error('currentness_conflict'), {
+    response: { status: 409, data: { error: 'currentness_conflict' } },
+  });
+  // The HTTP/database boundary enforces the server's exact claimed-attempt
+  // predicate, which the in-memory boundary does not model itself.
+  const storage = { execute: async (operation: WorkflowRunStorageTestkitOperation) => {
+    if ('parentAttempt' in operation && operation.parentAttempt !== currentAttempt) throw conflict();
+    return kit.execute(operation);
+  } };
+  let sink: ExecutionRunWorkflowObservationSink | null = null;
+  let localInputId = '';
+  let starts = 0;
+  let observing!: () => void;
+  const entered = new Promise<void>(resolve => { observing = resolve; });
+  const sessionInput = sessionInputBoundary();
+  const detachedRun: NonNullable<Parameters<typeof workflowDaemonProcess>[0]['detachedRun']> = {
+    buildActionContext: () => ({ surface: 'agent', authority: 'account_automation' }),
+    actionExecutor: { execute: async (actionId, value, context) => {
+      if (actionId === 'execution.run.start') {
+        starts++;
+        expect(rowFor(kit, 'stage-one')?.lifecycle).toBe('completed');
+        localInputId = String((value as { localInputId: string }).localInputId);
+        sink = readExecutionRunWorkflowObservationSink(context?.executionRunWorkflowObservationSink);
+        if (!sink) throw new Error('Missing Judge observation writer');
+        await sink.commit({ kind: 'input_accepted', runId: 'judge-native', localInputId, acceptedAtMs: 1 });
+        return { ok: true, result: { runId: 'judge-native', callId: 'judge-call', sidechainId: 'judge-side' } };
+      }
+      if (actionId !== 'execution.run.get') throw new Error(`Unexpected Judge Action ${actionId}`);
+      if (currentAttempt === 1) {
+        observing();
+        return await new Promise<never>((_resolve, reject) => {
+          context?.signal?.addEventListener('abort', () => reject(new WorkflowRuntimeInterruption()), { once: true });
+        });
+      }
+      // Native events outlive the first Workflow claim. A retired observer
+      // must not turn a truthful storage refusal into a failed native input.
+      await sink!.commit({ kind: 'usage', runId: 'judge-native', localInputId, usage: { outputTokens: 2 } });
+      return { ok: true, result: { run: {
+        runId: 'judge-native', callId: 'judge-call', sidechainId: 'judge-side', intent: 'agent',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only',
+        retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response', status: 'running', startedAtMs: 1,
+        inputTurns: { occurrenceId: 'judge-occurrence', last: { turnId: 'judge-turn', inputIds: [localInputId],
+          state: 'completed', result: { kind: 'text', value: 'done' } } },
+      } } };
+    } },
+  };
+  const coordinate = workflowDaemonProcess({ directory, storage, sessionInput, detachedRun });
+  const claim = { runId, attempt: 1, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope };
+  const first = coordinate({ ...claim, signal: interrupted.signal });
+  void first.catch(() => undefined);
+  try {
+    await Promise.race([entered, first.then(() => { throw new Error('Judge did not enter native observation'); })]);
+    const judge = rowFor(kit, 'judge')!;
+    currentAttempt = 2;
+    // A live writer's refusal remains visible; no retry or conflict swallowing.
+    await expect(sink!.commit({ kind: 'usage', runId: 'judge-native', localInputId, usage: { outputTokens: 2 } }))
+      .rejects.toMatchObject({ response: { status: 409, data: { error: 'currentness_conflict' } } });
+    interrupted.abort(new WorkflowRuntimeInterruption());
+    await expect(first).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
+    await expect(sink!.commit({ kind: 'input_accepted', runId: 'judge-native', localInputId: 'foreign', acceptedAtMs: 1 }))
+      .rejects.toThrow('workflow_invocation_fact_conflict');
+    await expect(workflowDaemonProcess({ directory, storage, sessionInput, detachedRun })({ ...claim,
+      attempt: 2, expectedRevision: kit.run().revision })).resolves.toMatchObject({ state: 'succeeded' });
+    expect(rowFor(kit, 'judge')).toMatchObject({ id: judge.id, lifecycle: 'completed' });
+    expect(openRowProgress(kit, rowFor(kit, 'judge')!).result).toBe('done');
+    expect(kit.run()).toMatchObject({ state: 'succeeded', workflowCustodyState: 'settled' });
+    expect(starts).toBe(1);
+    expect(sessionInput.enqueue.mock.calls.map(([request]) => leafLabel(request.text))).toEqual(['stage-one']);
+  } finally {
+    interrupted.abort(new WorkflowRuntimeInterruption());
+    await first.catch(() => undefined);
   }
 });
 

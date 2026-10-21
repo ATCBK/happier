@@ -118,6 +118,10 @@ async function actionContextFor(
               if (value.localInputId !== observation.localInputId) {
                 throw new Error('workflow_invocation_fact_conflict');
               }
+              // Native input survives a lost Workflow claim; its old observer
+              // does not. Reclaim observes the same input with its current
+              // store. Cancellation still records late acceptance for cleanup.
+              if (classifyWorkflowAbort(params.signal) === 'interrupted') return;
               if (value.kind === 'project_setup') {
                 const operation = value.operation;
                 const target = operation.domainRef;
