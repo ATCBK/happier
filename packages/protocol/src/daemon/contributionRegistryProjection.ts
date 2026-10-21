@@ -2367,18 +2367,16 @@ export type DaemonPluginUiComposerSurfaceCatalogEntryV1 = z.infer<
  * Host-private target-filtered mount projection. It is emitted only from the
  * current admitted snapshot and is not an SDK authoring or Host API surface.
  */
-export const DaemonPluginUiTargetedSurfaceMountV1Schema =
+export const PluginUiTargetedSurfaceMountCoreV1Schema =
   lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(DaemonPluginUiTargetedSurfaceMountIdentityV1Schema, {
     inputSchema: PluginJsonSchemaV2Schema,
     /** Declaration-order provenance; consumers use selectedRenderer only. */
     rendererChain: z.array(PluginContributionIdentityV1Schema).check(z.minLength(1), z.maxLength(8)),
     selectedRenderer: DaemonPluginUiTargetedSurfaceSelectedRendererV1Schema,
-    executionOrigin: PluginMachineExecutionOriginV1Schema,
     resourceCapability: PluginUiResourceBindingCapabilityV1Schema,
     /** The contributor's own current cold snapshot, never inherited from its target. */
     contributorTargetedContributions: PluginUiTargetedContributionsV1Schema,
   })).check(z.superRefine((mount, context) => {
-    validateProjectedExecutionOrigin(mount.executionOrigin, mount.contributor, context);
     if (
       mount.contributorTargetedContributions.target.pluginId !== mount.contributor.pluginId
       || mount.contributorTargetedContributions.target.occurrenceId
@@ -2439,6 +2437,17 @@ export const DaemonPluginUiTargetedSurfaceMountV1Schema =
       });
     }
   })));
+export type PluginUiTargetedSurfaceMountCoreV1 = z.infer<
+  typeof PluginUiTargetedSurfaceMountCoreV1Schema
+>;
+
+/** Machine transport adds its origin to the same strict admitted mount facts. */
+export const DaemonPluginUiTargetedSurfaceMountV1Schema = lazyZodSchema(() => z.safeExtend(
+  PluginUiTargetedSurfaceMountCoreV1Schema,
+  { executionOrigin: PluginMachineExecutionOriginV1Schema },
+).check(z.superRefine((mount, context) => {
+  validateProjectedExecutionOrigin(mount.executionOrigin, mount.contributor, context);
+})));
 export type DaemonPluginUiTargetedSurfaceMountV1 = z.infer<
   typeof DaemonPluginUiTargetedSurfaceMountV1Schema
 >;
@@ -2485,7 +2494,7 @@ function sameTargetedSurfaceContributorV1(
  * a missing, stale, or ambiguous current candidate fails closed.
  */
 export function readDaemonPluginUiTargetedSurfaceMountV1<
-  TMount extends DaemonPluginUiTargetedSurfaceMountV1,
+  TMount extends PluginUiTargetedSurfaceMountCoreV1,
 >(input: Readonly<{
   mounts: readonly TMount[];
   target: TMount['target'];

@@ -31,6 +31,20 @@ import { projectPluginPortableUiDeclarationsV1 } from './declarationProjection.j
  * from drifting into a general data-binding surface.
  */
 describe('declarative node vocabulary v2', () => {
+  it('retains a standalone targeted renderer through the portable declaration projection', () => {
+    const projected = projectPluginPortableUiDeclarationsV1(PluginManifestV2Schema.parse({
+      schemaVersion: 2, id: 'acme.targeted-detail', version: '1.0.0', displayName: 'Targeted detail',
+      runtime: { apiVersion: 1 }, contributes: { ui: {
+        renderers: [{ id: 'detail', kind: 'declarative', root: { kind: 'text', text: 'Personal Account detail' } }],
+      } },
+    }));
+    expect(projected['uiRenderer:acme.targeted-detail:detail']).toMatchObject({
+      contributionKind: 'uiRenderer', pluginId: 'acme.targeted-detail', contributionId: 'detail',
+      renderer: { kind: 'declarative', contributionId: 'detail', model: { visible: true } },
+      availability: { state: 'available' },
+    });
+  });
+
   it('admits localized appPage descriptions in the parser and generated author schema only', () => {
     const page = { id: 'reviews', renderer: 'native', container: 'appPage', target: { kind: 'app' } };
     const description = { key: 'reviews.purpose', fallback: 'Review incoming work.' };

@@ -823,6 +823,25 @@ export function projectPluginUiDeclarationEntriesV1(params: Readonly<{
 }>): PluginDeclaredUiEntriesV1 {
     const entriesById: Record<string, PluginUiProjectedEntryCandidate> = {};
     for (const entry of params.artifactEntries ?? []) addEntry(entriesById, entry);
+    // Targeted-only renderers have no View or Settings placement to retain
+    // their normalized model. Keep their presentation in this same projection
+    // so mounted targets consume the canonical renderer and availability facts.
+    for (const renderer of params.registry.uiRenderersV2 ?? []) {
+        const pluginId = renderer.pluginId;
+        const declarativeModel = params.modelsByRendererKey?.[`${pluginId}\0${renderer.definition.id}`];
+        const projected = projectPluginUiRendererRef(renderer, declarativeModel);
+        addEntry(entriesById, {
+            id: `uiRenderer:${pluginId}:${renderer.definition.id}`,
+            pluginId,
+            contributionKind: 'uiRenderer',
+            contributionId: renderer.definition.id,
+            renderer: projected.rendererRef,
+            availability: projectPluginUiRendererAvailability({
+                pluginId, renderer, declarativeModel,
+                registryRendererRef: projected.registryRendererRef, entriesById,
+            }),
+        });
+    }
     projectPluginUiTranslationsV1(params.registry, entriesById, undefined);
     projectPluginUiPresentationEntriesV1({ ...params, entriesById });
     return PluginDeclaredUiEntriesV1Schema.parse(entriesById);

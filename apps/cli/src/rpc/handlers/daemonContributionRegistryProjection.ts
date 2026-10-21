@@ -33,7 +33,7 @@ import type { SecretsService } from '@happier-dev/plugin-sdk/secrets';
 import type { ScopedSettingsService } from '@happier-dev/plugin-sdk/settings';
 import { computePluginUiArtifactSha256DigestV1, isPluginUiHermesBytecodeArtifactV1, verifyPluginUiArtifactFileSetIntegrityV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { PluginUiSurfaceBindingV1Schema, selectPluginUiRendererChainMemberV1 } from '@happier-dev/protocol/plugins/contributions/ui/surfaceRegistry';
-import { PluginUiTargetedContributionsV1Schema } from '@happier-dev/protocol/plugins/ui/targetedContributions';
+import { projectPluginUiTargetedContributionIdentityV1, projectPluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui/targetedContributions';
 import type { PluginUiArtifactDigestV1, PluginUiArtifactsManifestEntryV2, PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
 import { DaemonPluginSettingsWatchRequestSchema, DaemonPluginSettingsWatchResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -469,65 +469,15 @@ function projectMountedTargetedContributionSnapshots(input: Readonly<{
     mountedTarget: Readonly<{ pluginId: string; occurrenceId: string }>;
     snapshots: readonly MountedTargetedContributionSnapshot[];
 }>): PluginUiTargetedContributionsV1 {
-    const pointsById = new Map<string, MountedTargetedContributionSnapshot[]>();
-    for (const snapshot of input.snapshots) {
-        const existing = pointsById.get(snapshot.point.pointId);
-        if (existing) existing.push(snapshot);
-        else pointsById.set(snapshot.point.pointId, [snapshot]);
-    }
-    const points = [...pointsById.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([pointId, snapshots]) => Object.freeze({
-            pointId,
-            protocols: Object.freeze(snapshots.map(({ point, snapshot }) => Object.freeze({
-                protocol: Object.freeze({ ...point.protocol }),
-                contributions: Object.freeze(snapshot.contributions.map((contribution) => Object.freeze({
-                    contributor: projectTargetedContributionIdentity(
-                        input.runtimeRegistry,
-                        contribution.contributor,
-                    ),
-                    protocol: Object.freeze({ ...contribution.protocol }),
-                    ...(contribution.descriptor === undefined
-                        ? {}
-                        : { descriptor: contribution.descriptor }),
-                    operations: Object.freeze(contribution.operations.map((operation) => Object.freeze({
-                        point: Object.freeze({
-                            pointId: point.pointId,
-                            protocol: Object.freeze({ ...point.protocol }),
-                        }),
-                        contributor: projectTargetedContributionIdentity(
-                            input.runtimeRegistry,
-                            contribution.contributor,
-                        ),
-                        role: operation.role,
-                        action: Object.freeze({ ...operation.action }),
-                    }))),
-                    surfaces: Object.freeze(contribution.surfaces.map((surface) => Object.freeze({
-                        point: Object.freeze({
-                            pointId: point.pointId,
-                            protocol: Object.freeze({ ...point.protocol }),
-                        }),
-                        contributor: projectTargetedContributionIdentity(
-                            input.runtimeRegistry,
-                            surface.contributor,
-                        ),
-                        role: surface.role,
-                        presentation: surface.presentation,
-                    }))),
-                }))),
-            }))),
-        }));
-    return PluginUiTargetedContributionsV1Schema.parse({
-        target: projectTargetedContributionIdentity(
-            input.runtimeRegistry,
-            input.mountedTarget,
-        ),
-        points,
+    return projectPluginUiTargetedContributionsV1({
+        target: input.mountedTarget,
+        snapshots: input.snapshots,
+        readSourceCustody: (pluginId) => readTargetedContributionSourceCustody(input.runtimeRegistry, pluginId),
     });
 }
 
 function projectTargetedContributionIdentity<
-    TIdentity extends Readonly<{ pluginId: string }>,
+    TIdentity extends Readonly<{ pluginId: string; occurrenceId: string }>,
 >(
     runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry,
     identity: TIdentity,
@@ -536,16 +486,24 @@ function projectTargetedContributionIdentity<
         NonNullable<ResolvedExecutablePluginRuntimeRegistry['readPluginSourceCustody']>
     >>;
 }> {
-    const sourceCustody = runtimeRegistry.readPluginSourceCustody?.(
-        identity.pluginId,
-    );
+    return projectPluginUiTargetedContributionIdentityV1({
+        identity,
+        readSourceCustody: (pluginId) => readTargetedContributionSourceCustody(runtimeRegistry, pluginId),
+    });
+}
+
+function readTargetedContributionSourceCustody(
+    runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry,
+    pluginId: string,
+) {
+    const sourceCustody = runtimeRegistry.readPluginSourceCustody?.(pluginId);
     if (!sourceCustody) {
         throw new PluginError({
             code: 'plugin_targeted_contributions_unavailable',
-            message: `Targeted contribution source custody is unavailable for '${identity.pluginId}'`,
+            message: `Targeted contribution source custody is unavailable for '${pluginId}'`,
         });
     }
-    return Object.freeze({ ...identity, sourceCustody });
+    return sourceCustody;
 }
 
 /**

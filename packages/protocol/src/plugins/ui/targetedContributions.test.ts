@@ -6,6 +6,7 @@ import {
   PLUGIN_UI_TARGETED_CONTRIBUTIONS_MAX_V1,
   PluginTargetedContributionSelectionV1Schema,
   PluginUiTargetedContributionsV1Schema,
+  projectPluginUiTargetedContributionsV1,
   selectPluginUiTargetedContributionOperationV1,
   selectPluginUiTargetedContributionSurfaceV1,
   selectPluginUiTargetedContributionV1,
@@ -79,6 +80,49 @@ const admittedSnapshot = {
 } as const;
 
 describe('targeted Host API contribution projection', () => {
+  it('projects each admitted role with its own physical occurrence and custody', () => {
+    const source = admittedSnapshot.points[0].protocols[0].contributions[0];
+    const accountCustody = {
+      kind: 'account_release', pluginId: source.contributor.pluginId,
+      version: '1.0.0', archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+    } as const;
+    const machineContributor = { ...source.contributor, occurrenceId: 'machine-source-current' };
+    const machineCustody = { kind: 'development', registeredRootId: 'machine-root' } as const;
+    const snapshot = projectPluginUiTargetedContributionsV1({
+      target: admittedSnapshot.target,
+      snapshots: [{
+        point: { pointId: 'connection', protocol: source.protocol },
+        snapshot: {
+          target: { ...admittedSnapshot.target, pointId: 'connection' },
+          contributions: [{
+            ...source,
+            descriptor: { providerId: 'github', kinds: ['personal', 'external'] as const },
+            operations: [{ ...source.operations[0], contributor: machineContributor }],
+            surfaces: [{ ...source.surfaces[0], contributor: machineContributor }],
+          }],
+        },
+      }],
+      readSourceCustody: (pluginId, occurrenceId) => pluginId === admittedSnapshot.target.pluginId
+        ? admittedSnapshot.target.sourceCustody
+        : occurrenceId === machineContributor.occurrenceId ? machineCustody : accountCustody,
+    });
+    const parsed = PluginUiTargetedContributionsV1Schema.parse(snapshot);
+    const selector = {
+      pointId: 'connection', protocol: source.protocol,
+      contributor: { pluginId: source.contributor.pluginId, contributionId: source.contributor.contributionId },
+    };
+    expect(selectPluginUiTargetedContributionV1(parsed, selector)?.contributor.sourceCustody).toEqual(accountCustody);
+    expect(selectPluginUiTargetedContributionV1(parsed, selector)?.descriptor).toEqual({
+      providerId: 'github', kinds: ['personal', 'external'],
+    });
+    expect(selectPluginUiTargetedContributionOperationV1(parsed, {
+      ...selector, role: source.operations[0].role,
+    })?.contributor).toEqual({ ...machineContributor, sourceCustody: machineCustody });
+    expect(selectPluginUiTargetedContributionSurfaceV1(parsed, {
+      ...selector, role: source.surfaces[0].role,
+    })?.contributor).toEqual({ ...machineContributor, sourceCustody: machineCustody });
+  });
+
   it('admits exact role occurrences distinct from their Account descriptor parent without crossing contribution identity', () => {
     const original = admittedSnapshot.points[0].protocols[0].contributions[0];
     const role = { ...original.operations[0], contributor: { ...original.contributor,

@@ -20,8 +20,10 @@ import { PluginIdSchema } from '../pluginId.js';
 import {
   PluginSourceCustodyV1ProtocolSchema,
   pluginSourceCustodyV1Equal,
+  type PluginSourceCustodyV1,
 } from '../runtime/sourceCustody.js';
 import type { PluginUiInstanceKeyV1 } from './semanticCommands.js';
+import type { JsonValue } from '../../json/strictJsonValue.js';
 
 /** One mounted target can expose at most this many admitted contributors. */
 export const PLUGIN_UI_TARGETED_CONTRIBUTIONS_MAX_V1 = 256;
@@ -415,6 +417,101 @@ export const PluginUiTargetedContributionsV1Schema = lazyZodSchema(() => z.stric
 export type PluginUiTargetedContributionsV1 = z.infer<
   typeof PluginUiTargetedContributionsV1Schema
 >;
+
+type TargetedContributorIdentity = Readonly<{
+  pluginId: string;
+  contributionId: string;
+  occurrenceId: string;
+}>;
+
+/** Host-private semantic facts already validated by targeted admission. */
+export type PluginUiTargetedContributionSemanticSnapshotV1 = Readonly<{
+  point: PluginUiTargetedContributionPointRefV1;
+  snapshot: Readonly<{
+    target: Readonly<{ pluginId: string; pointId: string; occurrenceId: string }>;
+    contributions: readonly Readonly<{
+      contributor: TargetedContributorIdentity;
+      protocol: PluginUiTargetedContributionProtocolV1;
+      descriptor?: JsonValue;
+      operations: readonly Readonly<{
+        role: string;
+        action: Readonly<{ pluginId: string; localId: string }>;
+        contributor: TargetedContributorIdentity;
+      }>[];
+      surfaces: readonly Readonly<{
+        role: string;
+        presentation: PluginUiTargetedContributionSurfacePresentationV1;
+        contributor: TargetedContributorIdentity;
+      }>[];
+    }>[];
+  }>;
+}>;
+
+type ReadTargetedSourceCustody = (
+  pluginId: string,
+  occurrenceId: string,
+) => PluginSourceCustodyV1 | null | undefined;
+
+/** Resolves exact physical custody without making an admission/currentness decision. */
+export function projectPluginUiTargetedContributionIdentityV1<
+  TIdentity extends Readonly<{ pluginId: string; occurrenceId: string }>,
+>(input: Readonly<{
+  identity: TIdentity;
+  readSourceCustody: ReadTargetedSourceCustody;
+}>): TIdentity & Readonly<{ sourceCustody: PluginSourceCustodyV1 }> {
+  const sourceCustody = input.readSourceCustody(input.identity.pluginId, input.identity.occurrenceId);
+  if (!sourceCustody) {
+    throw new TypeError(`Targeted contribution source custody is unavailable for '${input.identity.pluginId}'`);
+  }
+  return Object.freeze({ ...input.identity, sourceCustody });
+}
+
+/**
+ * The shared semantic projection for Account and Machine mounts. Admission owns
+ * selection; this only projects its exact identities through the strict public
+ * consumer, leaving private parsers, renderers and execution handles behind.
+ */
+export function projectPluginUiTargetedContributionsV1(input: Readonly<{
+  target: Readonly<{ pluginId: string; occurrenceId: string }>;
+  snapshots: readonly PluginUiTargetedContributionSemanticSnapshotV1[];
+  readSourceCustody: ReadTargetedSourceCustody;
+}>): PluginUiTargetedContributionsV1 {
+  const projectIdentity = <TIdentity extends Readonly<{ pluginId: string; occurrenceId: string }>>(
+    identity: TIdentity,
+  ) => projectPluginUiTargetedContributionIdentityV1({ identity, readSourceCustody: input.readSourceCustody });
+  const pointsById = new Map<string, PluginUiTargetedContributionSemanticSnapshotV1[]>();
+  for (const snapshot of input.snapshots) {
+    const existing = pointsById.get(snapshot.point.pointId);
+    if (existing) existing.push(snapshot);
+    else pointsById.set(snapshot.point.pointId, [snapshot]);
+  }
+  const points = [...pointsById.entries()]
+    .sort(([left], [right]) => compareText(left, right))
+    .map(([pointId, snapshots]) => ({
+      pointId,
+      protocols: snapshots.map(({ point, snapshot }) => ({
+        protocol: { ...point.protocol },
+        contributions: snapshot.contributions.map((contribution) => ({
+          contributor: projectIdentity(contribution.contributor),
+          protocol: { ...contribution.protocol },
+          ...(contribution.descriptor === undefined ? {} : { descriptor: contribution.descriptor }),
+          operations: contribution.operations.map((operation) => ({
+            point: { pointId: point.pointId, protocol: { ...point.protocol } },
+            contributor: projectIdentity(operation.contributor),
+            role: operation.role,
+            action: { ...operation.action },
+          })),
+          surfaces: contribution.surfaces.map((surface) => ({
+            point: { pointId: point.pointId, protocol: { ...point.protocol } },
+            contributor: projectIdentity(surface.contributor),
+            role: surface.role,
+            presentation: surface.presentation,
+          })),
+        })),
+      })),
+    }));
+  return PluginUiTargetedContributionsV1Schema.parse({ target: projectIdentity(input.target), points });
+}
 
 /**
  * The identity a target already knows about one contribution it can consume:
