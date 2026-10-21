@@ -1723,18 +1723,22 @@ export function createPluginAvailabilityOperations(options: Readonly<{
         }
 
         return await inTx(async (tx) => {
-            const machine = await tx.machine.findFirst({
-                where: {
-                    accountId: params.accountId,
-                    id: params.publisherMachineId,
-                },
-                select: { pluginMaterializationRevision: true },
-            });
-            if (!machine) {
-                throw new PluginAvailabilityOperationError(
-                    "plugin_materialization_machine_mismatch",
-                );
-            }
+            const readRevision = async () => {
+                const machine = await tx.machine.findFirst({
+                    where: {
+                        accountId: params.accountId,
+                        id: params.publisherMachineId,
+                    },
+                    select: { pluginMaterializationRevision: true },
+                });
+                if (!machine) {
+                    throw new PluginAvailabilityOperationError(
+                        "plugin_materialization_machine_mismatch",
+                    );
+                }
+                return machine.pluginMaterializationRevision;
+            };
+            const observedRevision = await readRevision();
             const currentRows = await tx.pluginMachineMaterialization.findMany({
                 where: {
                     accountId: params.accountId,
@@ -1755,9 +1759,9 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                     observedAt: true,
                 },
             });
-            const currentRevision = machine.pluginMaterializationRevision === null
+            const currentRevision = observedRevision === null
                 ? null
-                : Number(machine.pluginMaterializationRevision);
+                : Number(observedRevision);
             const parsedCurrentRows = currentRows.map((row) => ({
                 row,
                 parsed: safeMaterializationFromRow(row),
@@ -1787,12 +1791,33 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 && currentRevision !== null
                 && replacement.changedPluginIds.length === 0
             ) {
+                // A peer report may commit between the revision and body reads.
+                // Rejoins stay write-free but must describe one coherent body.
+                const latestRevision = await readRevision();
+                if (latestRevision !== observedRevision) {
+                    return { revision: latestRevision === null ? null : Number(latestRevision), outcome: "conflict" };
+                }
                 return { revision: currentRevision, outcome: "rejoined" };
             }
             if (input.expectedRevision !== currentRevision) {
                 return { revision: currentRevision, outcome: "conflict" };
             }
             const nextRevision = (currentRevision ?? 0) + 1;
+            // Claim this Machine revision before touching its body or dependent
+            // status rows. This row CAS excludes peer reporters without making
+            // unrelated Account cursor publications invalidate the transaction.
+            const claimed = await tx.machine.updateMany({
+                where: {
+                    accountId: params.accountId,
+                    id: params.publisherMachineId,
+                    pluginMaterializationRevision: observedRevision,
+                },
+                data: { pluginMaterializationRevision: BigInt(nextRevision) },
+            });
+            if (claimed.count !== 1) {
+                const latestRevision = await readRevision();
+                return { revision: latestRevision === null ? null : Number(latestRevision), outcome: "conflict" };
+            }
 
             const retainedMaterializationIds = new Set(
                 replacement.snapshot.materializations.map((row) => row.materializationId),
@@ -1840,17 +1865,6 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                     })),
                 });
             }
-            await tx.machine.update({
-                where: {
-                    accountId_id: {
-                        accountId: params.accountId,
-                        id: params.publisherMachineId,
-                    },
-                },
-                data: {
-                    pluginMaterializationRevision: BigInt(nextRevision),
-                },
-            });
             const changedPluginIds = new Set([
                 ...replacement.changedPluginIds,
                 ...unreadablePluginIds,
@@ -1859,7 +1873,7 @@ export function createPluginAvailabilityOperations(options: Readonly<{
                 await markAvailabilityChangedTx(tx, params.accountId, pluginId);
             }
             return { revision: nextRevision, outcome: "replaced" };
-        }, { /* Materialization expected revision is read before row replacement and Machine update. */ isolationLevel: "Serializable" });
+        });
     }
 
     async function readMaterializations(params: Readonly<{
