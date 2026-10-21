@@ -121,6 +121,32 @@ describe('createSessionTurnLifecycle', () => {
         } } });
     });
 
+    it('orders startup begin before failure persistence without daemon marker callbacks', async () => {
+        let releaseBegin!: () => void;
+        const begin = new Promise<void>(resolve => { releaseBegin = resolve; });
+        const mutations: SessionTurnMutationV1[] = [];
+        const lifecycle = createSessionTurnLifecycle({
+            session: { sessionId: 'startup-session', enqueueSessionTurnMutation: async mutation => {
+                // Persistence is the system boundary. A failed write cannot settle
+                // a turn until its begin exists in the durable projection.
+                if (mutation.action === 'begin') await begin;
+                mutations.push(mutation);
+            } },
+        });
+        const failure = lifecycle.failTurn({ allocateWhenIdle: true,
+            issue: classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new Error('Spawn failed') }),
+        });
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(mutations).toEqual([]);
+        } finally {
+            releaseBegin();
+            await failure;
+        }
+        expect(mutations.map(mutation => mutation.action)).toEqual(['begin', 'fail']);
+        expect(lifecycle.hasActiveTurn()).toBe(false);
+    });
+
     it('awaits startup failure persistence before draining without daemon marker callbacks', async () => {
         let releasePersistence!: () => void;
         const persistence = new Promise<void>((resolve) => { releasePersistence = resolve; });
@@ -442,7 +468,7 @@ describe('createSessionTurnLifecycle', () => {
         expect(mutations).toEqual([]);
     });
 
-    it('authors no broad terminal when runtime-ended clears an active runtime turn', () => {
+    it('authors no broad terminal when runtime-ended clears an active runtime turn', async () => {
         const mutations: SessionTurnMutationV1[] = [];
         const lifecycle = createSessionTurnLifecycle({
             session: {
@@ -467,6 +493,7 @@ describe('createSessionTurnLifecycle', () => {
             retryable: false,
         }));
 
+        await lifecycle.drainAcceptedLifecycle();
         expect(mutations.map((mutation) => mutation.action)).toEqual(['begin']);
         expect(lifecycle.hasActiveTurn()).toBe(false);
     });
@@ -491,12 +518,12 @@ describe('createSessionTurnLifecycle', () => {
             kind: 'turn-agent-id-observed', sessionId: 'session-1', emittedAtMs: 300,
             turnId: 'turn-1', agentTurnId: 'late-provider-turn',
         }));
-        await Promise.resolve();
+        await lifecycle.drainAcceptedLifecycle();
 
         expect(mutations.map((mutation) => mutation.action)).toEqual(['begin', 'complete']);
     });
 
-    it('maps active runtime turn progress to a durable touch mutation only while the turn is active', () => {
+    it('maps active runtime turn progress to a durable touch mutation only while the turn is active', async () => {
         const mutations: SessionTurnMutationV1[] = [];
         const lifecycle = createSessionTurnLifecycle({
             agentId: 'claude',
@@ -557,6 +584,7 @@ describe('createSessionTurnLifecycle', () => {
             agentTurnId: 'provider-turn-1',
         }));
 
+        await lifecycle.drainAcceptedLifecycle();
         expect(mutations.map((mutation) => mutation.action)).toEqual(['begin', 'touch_active', 'touch_active', 'complete']);
         expect(mutations[1]).toMatchObject({
             action: 'touch_active',
@@ -626,7 +654,7 @@ describe('createSessionTurnLifecycle', () => {
             emittedAtMs: 200,
             turnId: 'turn-1',
         }));
-        await Promise.resolve();
+        await lifecycle.drainAcceptedLifecycle();
 
         expect(enqueueSessionTurnMutation).toHaveBeenCalledTimes(2);
         expect(lifecycle.hasActiveTurn()).toBe(false);

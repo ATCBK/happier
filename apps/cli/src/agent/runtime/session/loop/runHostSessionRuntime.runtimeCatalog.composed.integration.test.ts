@@ -1,4 +1,5 @@
 import type { AgentSessionRuntimeEventV1 } from '@happier-dev/protocol/runtime';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -7333,32 +7334,6 @@ describe('runHostSessionRuntime', () => {
     },
   );
 
-  it('settles Stop while a typed native startup refusal is publishing', async () => {
-    const { SessionStartupInputRefusalError } = await import('@/agent/runtime/session/input/sessionStartupInputRefusal');
-    const harness = createHarness();
-    const publicationEntered = createDeferred<void>();
-    const releasePublication = createDeferred<void>();
-    let stop: (() => Promise<void>) | undefined;
-    harness.config.onRuntimeStopReady = value => { stop = value; };
-    harness.session.enqueueSessionTurnMutation = async (mutation: unknown) => {
-      if (SessionTurnMutationV1Schema.parse(mutation).action === 'fail') {
-        publicationEntered.resolve();
-        await releasePublication.promise;
-      }
-    };
-    setSessionRuntimeFactory(harness.config, () => {
-      throw new SessionStartupInputRefusalError({ code: 'native_agent_session_mode_unavailable', message: 'Mode unavailable' });
-    });
-    const running = runHostSessionRuntime(harness.opts, harness.config, harness.deps).then(() => null, error => error);
-    await publicationEntered.promise;
-    const stopping = stop?.();
-    releasePublication.resolve();
-    await running;
-    expect(harness.session.endSessionAndClose).toHaveBeenCalledOnce();
-    await stopping;
-    expect(harness.metrics.defaultReadyCalls).toBe(0);
-  });
-
   it('settles late originals after a typed native startup refusal without reporting Ready or dispatching them', async () => {
     const harness = createHarness();
     let contextReadyObservations = 0;
@@ -7372,7 +7347,6 @@ describe('runHostSessionRuntime', () => {
       import('@/agent/runtime/registry/engineRegistry/nativeAgentSession'),
       import('@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications'),
     ]);
-    const startupFailed = createDeferred<void>();
     let stop: (() => Promise<void>) | undefined;
     harness.config.onRuntimeStopReady = value => { stop = value; };
     const pending = new Set<string>();
@@ -7383,13 +7357,6 @@ describe('runHostSessionRuntime', () => {
       if (outcome.kind === 'rejected_before_effect' && !outcome.retryable) pending.delete(outcome.localId);
       return false;
     };
-    harness.session.enqueueSessionTurnMutation = vi.fn(async (mutation: unknown) => {
-      const parsed = SessionTurnMutationV1Schema.parse(mutation);
-      if (parsed.action === 'fail') {
-        expect(parsed.issue.code).toBe('native_agent_session_mode_unavailable');
-        startupFailed.resolve();
-      }
-    });
     setSessionRuntimeFactory(harness.config, () => {
       const publications = createNativeAgentSessionPublications({ agentId: 'acme.external', session: null,
         signal: new AbortController().signal, isCurrent: () => true, supportsInFlightSteer: false });
@@ -7405,7 +7372,6 @@ describe('runHostSessionRuntime', () => {
     let finished = false;
     const result = running.then(() => { finished = true; return null; }, error => { finished = true; return error; });
     try {
-      await Promise.race([startupFailed.promise, running]);
       for (const localId of ['late-protected-original', 'another-protected-original']) {
         pending.add(localId);
         harness.queue.pushIsolate({ text: 'Must not execute', localId }, { permissionMode: 'default' });
@@ -7419,6 +7385,7 @@ describe('runHostSessionRuntime', () => {
       expect(harness.metrics.defaultReadyCalls).toBe(0);
       expect(harness.metrics.onAfterStartCalls).toBe(0);
       expect(harness.session.close).not.toHaveBeenCalled();
+      expect(harness.session.enqueueSessionTurnMutation).not.toHaveBeenCalled();
     } finally {
       if (!finished) await stop?.();
       await result;
@@ -7429,6 +7396,28 @@ describe('runHostSessionRuntime', () => {
 
   it.each(['external', 'opencode', 'missing_inventory'] as const)('settles a Workflow parent from a native-open refusal only with bound mode evidence (%s)', async source => {
     const miswired = source === 'missing_inventory';
+    const [{ createLightSqliteHarness }, { db }, { createAuthenticatedTestApp },
+      { registerSessionTurnMutationRoute }, { createRuntimeSessionClientDurableMutationOutbox },
+      { SessionTurnsProjectionV1Schema }] = await Promise.all([
+      import('../../../../../../server/sources/testkit/lightSqliteHarness'),
+      import('../../../../../../server/sources/storage/db'),
+      import('../../../../../../server/sources/app/api/testkit/sqliteFastify'),
+      import('../../../../../../server/sources/app/api/routes/session/registerSessionTurnMutationRoute'),
+      import('@/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox'),
+      import('@happier-dev/protocol/sessions/turns/sessionTurnV1'),
+    ]);
+    const database = await createLightSqliteHarness({ tempDirPrefix: 'native-refusal-turns-', initAuth: false });
+    const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+    const storedSession = await db.session.create({ data: {
+      accountId: account.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
+    } });
+    const app = createAuthenticatedTestApp();
+    app.addHook('onRequest', async (request: import('fastify').FastifyRequest) => { request.headers['x-test-user-id'] = account.id; });
+    registerSessionTurnMutationRoute(app);
+    const serverUrl = await app.listen({ host: '127.0.0.1', port: 0 });
+    const turns = createRuntimeSessionClientDurableMutationOutbox({ token: 'fixture', serverUrl,
+      sessionId: storedSession.id, getSocket: () => null, requestReconnect: () => undefined });
+    onTestFinished(async () => { await turns.close(); await app.close(); await database.close(); });
     const [{ createNativeAgentRuntimeSessionPlan }, fixtures, { buildPluginSessionBindingInput },
       { PluginError }, { createTestWorkflowCoordinator, createInMemoryWorkflowCoordinatorStore }] = await Promise.all([
       import('@/agent/runtime/registry/engineRegistry/nativeAgentSession'),
@@ -7437,7 +7426,7 @@ describe('runHostSessionRuntime', () => {
       import('@happier-dev/plugin-sdk'),
       import('@/daemon/workflows/workflowCoordinator.testkit'),
     ]);
-    const harness = createHarness('c' + 'd'.repeat(24));
+    const harness = createHarness(storedSession.id);
     const credentials = { token: 'startup-refusal-fixture', encryption: null };
     harness.opts.credentials = credentials;
     const agentId = 'acme-startup-refusal';
@@ -7476,16 +7465,22 @@ describe('runHostSessionRuntime', () => {
     });
     if (!plan.config.createSessionRuntime) throw new Error('Native Session factory missing');
     setSessionRuntimeFactory(harness.config, plan.config.createSessionRuntime);
-    const startupFailed = createDeferred<void>();
-    const mutationSink = harness.session.enqueueSessionTurnMutation;
     harness.session.enqueueSessionTurnMutation = vi.fn(async (input: unknown) => {
       const mutation = SessionTurnMutationV1Schema.parse(input);
-      await mutationSink(input);
+      // HTTP authentication is the boundary fixture. Native open, host refusal,
+      // durable journal, mutation route, SQLite and the projection reader are real.
+      if (mutation.action === 'end_session') throw new Error('Expected a runtime turn mutation');
+      await turns.enqueueSessionTurnMutation(mutation);
       if (mutation.action === 'fail') {
         expect(mutation.issue.code).toBe(miswired ? 'agent_session_error' : failure.code);
-        startupFailed.resolve();
       }
     });
+    const readTurns = async () => {
+      await turns.flush('flush');
+      const response = await app.inject({ method: 'GET', url: `/v1/sessions/${storedSession.id}/turns` });
+      expect(response.statusCode).toBe(200);
+      return SessionTurnsProjectionV1Schema.parse(response.json());
+    };
     let stop: (() => Promise<void>) | undefined;
     harness.config.onRuntimeStopReady = value => { stop = value; };
     const blocked = new Set<string>();
@@ -7499,7 +7494,12 @@ describe('runHostSessionRuntime', () => {
     harness.session.observeProviderInputSettlement = custody.observeProviderInputSettlement.bind(custody);
     // Home is the boundary. Real native open, host failure service, Pending
     // settlement/transport, exact-input reader, step executor and coordinator remain composed.
-    const post = vi.spyOn(axios, 'post').mockImplementation(async (url, data) => {
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (url, data, options) => {
+      if (url.startsWith(serverUrl)) {
+        const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+        expect(response.status).toBe(200);
+        return { status: response.status, data: await response.json() };
+      }
       const match = new URL(url).pathname.match(/\/pending\/([^/]+)\/delivery\/block$/);
       if (!match || data.reason !== 'provider_rejected_before_acceptance') throw new Error(`Unexpected refusal write: ${url}`);
       blocked.add(decodeURIComponent(match[1]!));
@@ -7529,11 +7529,11 @@ describe('runHostSessionRuntime', () => {
     let finished = false;
     const result = running.then(() => { finished = true; }, error => { finished = true; return error; });
     try {
-      await Promise.race([startupFailed.promise, running]);
       if (miswired) {
         expect(await result).toMatchObject({ code: failure.code, retryable: false });
         expect(harness.session.close).toHaveBeenCalledOnce();
         expect(blocked.size).toBe(0);
+        expect((await readTurns()).turns).toEqual([expect.objectContaining({ status: 'failed' })]);
         return;
       }
       expect(finished).toBe(false);
@@ -7578,6 +7578,8 @@ describe('runHostSessionRuntime', () => {
       expect(harness.runtime.sendPrompt).not.toHaveBeenCalled();
       expect(harness.metrics.defaultReadyCalls).toBe(0);
       expect(harness.metrics.onAfterStartCalls).toBe(0);
+      expect(harness.session.enqueueSessionTurnMutation).not.toHaveBeenCalled();
+      expect((await readTurns()).turns).toEqual([]);
     } finally {
       if (!finished) await stop?.();
       await result;

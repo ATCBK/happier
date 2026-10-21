@@ -126,16 +126,17 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
         if (!enqueue) return;
 
         if (!params.onAcceptedTurnLifecycle) {
-            try {
-                const persistence = Promise.resolve(enqueue.call(params.session, mutation))
-                    .then(async () => {
-                        if (failedEvent) await params.onAcceptedTurnFailure?.(failedEvent);
-                    }, () => undefined);
-                acceptedLifecycleTail = Promise.all([acceptedLifecycleTail, persistence])
-                    .then(() => undefined);
-            } catch {
-                // Mutation persistence is best-effort; runtime lifecycle observation must keep progressing.
-            }
+            acceptedLifecycleTail = acceptedLifecycleTail.then(async () => {
+                try {
+                    // Construction has no daemon turn-marker callback, but its
+                    // begin must still enter durable custody before its terminal.
+                    await enqueue.call(params.session, mutation);
+                } catch {
+                    // Mutation persistence is best-effort; runtime lifecycle observation must keep progressing.
+                    return;
+                }
+                if (failedEvent) await params.onAcceptedTurnFailure?.(failedEvent);
+            });
             return;
         }
 

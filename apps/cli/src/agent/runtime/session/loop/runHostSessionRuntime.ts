@@ -4063,7 +4063,7 @@ export async function runHostSessionRuntime(
         const startupIssue = !runtimeStopRequested ? classifyPrimarySessionRuntimeIssue({
           cause: 'session_error', error: nativeStartupRefusal ?? error, provider: policyAgentId,
         }) : null;
-        if (startupIssue) {
+        if (startupIssue && !nativeStartupRefusal) {
           // Construction failures happen after Session custody but before the live
           // loop can own a turn. Publish through the same canonical lifecycle owner
           // before releasing durable delivery so the Session cannot become an
@@ -4075,6 +4075,9 @@ export async function runHostSessionRuntime(
           preparationFailurePublished = startupIssue.code === 'preparation_pending'
             && startupIssue.source === 'dependency_failure';
         }
+        // A proven native-open refusal precedes input admission. Its startup
+        // operation and Pending outcome carry the failure; allocating a turn
+        // here can leave a phantom begin when exact-runner Stop retires us.
         if (nativeStartupRefusal && await terminalizeBeforeAgentAdmission()) return;
         if (nativeStartupRefusal && serveRefusedStartupInputs && !runtimeStopRequested) {
           const serving = serveRefusedStartupInputs(nativeStartupRefusal);
