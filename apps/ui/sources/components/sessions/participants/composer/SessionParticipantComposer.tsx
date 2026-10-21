@@ -80,7 +80,7 @@ import { useComposerPresentationInputEffects } from '@/components/sessions/prese
 import { useComposerScopePluginPresentation } from '@/components/sessions/presentation/useComposerScopePluginPresentation';
 import { Modal } from '@/modal';
 import { randomUUID } from '@/platform/randomUUID';
-import { getSessionDraftSnapshot, subscribeSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { ensureSessionDraftAddressesHydrated, getSessionDraftSnapshot, subscribeSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveParticipantRoutedSend } from '@/sync/domains/input/participants/resolveParticipantRoutedSend';
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
@@ -297,18 +297,32 @@ function SessionParticipantComposerContent(props: SessionParticipantComposerProp
         () => (runDraftStatusBadge ? [runDraftStatusBadge] : []),
         [runDraftStatusBadge],
     );
-    const appliedInitialTextRef = React.useRef<string | null>(null);
+    const appliedInitialTextRef = React.useRef<Readonly<{
+        owner: typeof participantComposerDocumentOwner;
+        text: string;
+    }> | null>(null);
     React.useEffect(() => {
         const initialText = props.initialText;
-        if (!initialText || appliedInitialTextRef.current === initialText) return;
-        const current = participantComposerDocumentOwner.read().document;
-        if (current.text.length > 0 || current.structuredInputMentions.length > 0 || current.composerAttachments.length > 0) {
-            appliedInitialTextRef.current = initialText;
-            return;
+        if (!initialText || (appliedInitialTextRef.current?.owner === participantComposerDocumentOwner
+            && appliedInitialTextRef.current.text === initialText)) return;
+        let mounted = true;
+        const applyInitialText = () => {
+            if (!mounted || !isParticipantComposerCurrent()) return;
+            const current = participantComposerDocumentOwner.read().document;
+            if (current.text.length === 0 && current.structuredInputMentions.length === 0 && current.composerAttachments.length === 0) {
+                participantComposerDocumentOwner.replaceDocument({ ...current, text: initialText });
+            }
+            appliedInitialTextRef.current = { owner: participantComposerDocumentOwner, text: initialText };
+        };
+        if (runDraftScope && runDraftAddress) {
+            fireAndForget(ensureSessionDraftAddressesHydrated(runDraftScope, [runDraftAddress]).then((current) => {
+                if (current) applyInitialText();
+            }), { tag: 'SessionParticipantComposer.initialText' });
+        } else {
+            applyInitialText();
         }
-        participantComposerDocumentOwner.replaceDocument({ ...current, text: initialText });
-        appliedInitialTextRef.current = initialText;
-    }, [participantComposerDocumentOwner, props.initialText]);
+        return () => { mounted = false; };
+    }, [isParticipantComposerCurrent, participantComposerDocumentOwner, props.initialText, runDraftAddress, runDraftScope]);
     const readParticipantDocument = React.useCallback((): ParticipantComposerDocument => {
         const document = participantComposerDocumentOwner.read().document;
         return {
