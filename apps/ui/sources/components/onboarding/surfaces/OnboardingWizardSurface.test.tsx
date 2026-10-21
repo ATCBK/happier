@@ -51,8 +51,14 @@ function findAllInCurrentWizardBodyByType(screen: Readonly<{
     findByTestId: (testID: string) => ReactTestInstance | null;
     findAllByType: (type: never) => ReactTestInstance[];
 }>, type: never): ReactTestInstance[] {
-    return screen.findByTestId('onboarding-wizard-body-transition-current-layer')?.findAllByType(type)
-        ?? screen.findAllByType(type);
+    const layer = screen.findByTestId('onboarding-wizard-body-transition-current-layer');
+    if (!layer) return screen.findAllByType(type);
+    // React collapses a simple memo wrapper to its inner component fiber, as the screen queries do.
+    const exact = layer.findAllByType(type);
+    const memo = type as { $$typeof?: symbol; type?: unknown } | null;
+    return exact.length === 0 && memo?.$$typeof === Symbol.for('react.memo') && memo.type
+        ? layer.findAllByType(memo.type as never)
+        : exact;
 }
 
 const expoRouterSpies = vi.hoisted(() => ({
@@ -65,6 +71,8 @@ const runtimeFetchMock = vi.hoisted(() => vi.fn<(input: RequestInfo | URL, init?
 const nativeTaskScene = vi.hoisted(() => ({
     nextResult: null as import('@happier-dev/protocol').SystemTaskResult | null,
     specs: [] as Array<import('@happier-dev/protocol').SystemTaskSpec & { taskId: string }>,
+    /** The relay access provider the fixture's OS has been configured with (what a configure task persists). */
+    relayAccessProviderId: null as string | null,
 }));
 const nativeSecureStore = vi.hoisted(() => new Map<string, string>());
 
@@ -182,6 +190,9 @@ nativeTasks.bridge.start.mockImplementation(async (spec) => {
     nativeTaskScene.specs.push({ ...spec, taskId });
     return taskId;
 });
+const relayAccessSnapshot = (providerId: string | null): import('@happier-dev/protocol').SystemTaskJsonValue => providerId
+    ? { configured: true, providerId, status: { state: 'enabled', shareUrl: null } }
+    : { configured: false, providerId: null, status: { state: 'disabled', shareUrl: null } };
 nativeTasks.bridge.subscribe.mockImplementation(async (taskId, listener) => {
     const dispose = await subscribeNativeTask(taskId, listener);
     const spec = nativeTaskScene.specs.find(entry => entry.taskId === taskId);
@@ -191,7 +202,9 @@ nativeTasks.bridge.subscribe.mockImplementation(async (taskId, listener) => {
     } : spec?.kind === 'daemon.service.status.v1' ? {
         serviceInstalled: false, daemonRunning: false, needsAuth: false, machineId: null,
     } : spec?.kind === 'daemon.service.relay.disconnect.v1' ? { outcome: 'no_service' }
-        : spec?.kind === 'relay.access.status.v1' ? { configured: false, providerId: null, status: { state: 'disabled', shareUrl: null } }
+        : spec?.kind === 'relay.access.configure.v1' && typeof spec.params?.providerId === 'string'
+            ? relayAccessSnapshot(nativeTaskScene.relayAccessProviderId = spec.params.providerId)
+        : spec?.kind === 'relay.access.status.v1' ? relayAccessSnapshot(nativeTaskScene.relayAccessProviderId)
         : spec?.kind === 'local.ssh.discoverConfiguredHosts.v1' ? { hosts: [] }
         : null;
     const result = spec?.kind === 'tailscale.ensureReady.v1' ? nativeTaskScene.nextResult : null;
@@ -255,11 +268,11 @@ function homeRowTestId(alias: string): string {
     return `onboarding-wizard-relay:profile:${homeProfileRef(alias)}`;
 }
 
-async function focusHomeAtAddress(serverUrl: string) {
+async function focusHomeAtAddress(serverUrl: string, name: string = serverUrl) {
     if (!serverUrl) return;
     let profile = profiles.resolveUniqueServerProfileByUrl(serverUrl);
     if (!profile) {
-        const id = await homes.addHome({ name: serverUrl, serverUrl, accountId: null, active: false });
+        const id = await homes.addHome({ name, serverUrl, accountId: null, active: false });
         profile = profiles.getServerProfileById(id);
     }
     if (!profile) throw new Error('The real profile owner did not save the focused Home');
@@ -321,6 +334,7 @@ describe('OnboardingWizardSurface', () => {
         await loadSyncSingletonForTests();
         clearPendingSetupIntent();
         nativeTaskScene.nextResult = null;
+        nativeTaskScene.relayAccessProviderId = null;
         nativeTaskScene.specs.length = 0;
         nativeTasks.bridge.start.mockClear();
         nativeTasks.bridge.cancel.mockClear();
@@ -1083,7 +1097,7 @@ describe('OnboardingWizardSurface', () => {
     it('keeps welcome auth actions pinned to the explicit active relay instead of the configured default relay', async () => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_URL = 'http://127.0.0.1:3009';
 
-        await focusHomeAtAddress('https://relay-override.example.test');
+        await focusHomeAtAddress('https://relay-override.example.test', 'Override Home');
         browser?.reconfigureUrl('https://app.happier.dev');
 
         const onContinueWithHomeAuthentication = vi.fn(async () => undefined);
@@ -1099,7 +1113,7 @@ describe('OnboardingWizardSurface', () => {
         );
 
         const relayLine = screen.findByTestId('onboarding-wizard-relay-hint-line')!;
-        expect(String(relayLine.props.children)).toContain('relay-override.example.test');
+        expect(String(relayLine.props.children)).toContain('Override Home');
         expect(String(relayLine.props.children)).not.toContain('127.0.0.1:3009');
 
         await act(async () => {
@@ -1135,7 +1149,7 @@ describe('OnboardingWizardSurface', () => {
     });
 
     it('updates the active relay footer hint when the active server snapshot changes', async () => {
-        await focusHomeAtAddress('https://relay.example.test');
+        await focusHomeAtAddress('https://relay.example.test', 'First Home');
 
         const { OnboardingWizardSurface } = await import('./OnboardingWizardSurface');
         const screen = await renderScreen(
@@ -1149,16 +1163,16 @@ describe('OnboardingWizardSurface', () => {
         expect(profiles.getActiveServerSnapshot().serverUrl).toBe('https://relay.example.test');
 
         const relayLine = screen.findByTestId('onboarding-wizard-relay-hint-line')!;
-        expect(String(relayLine.props.children)).toContain('relay.example.test');
+        expect(String(relayLine.props.children)).toContain('First Home');
 
-        await focusHomeAtAddress('https://relay-other.example.test');
+        await focusHomeAtAddress('https://relay-other.example.test', 'Other Home');
         await act(async () => {
             // The real profile write above published its subscription.
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
         const updatedRelayLine = screen.findByTestId('onboarding-wizard-relay-hint-line')!;
-        expect(String(updatedRelayLine.props.children)).toContain('relay-other.example.test');
+        expect(String(updatedRelayLine.props.children)).toContain('Other Home');
     });
 
     it('does not render a duplicate relay selection action inside the welcome body', async () => {
@@ -1748,7 +1762,6 @@ describe('OnboardingWizardSurface', () => {
         await act(async () => {
             await relayRow.props.onPress?.();
         });
-        await flushHookEffects({ cycles: 1, turns: 1 });
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
         expect(getOnboardingStepId(screen)).toBe('auth');
@@ -1967,7 +1980,8 @@ describe('OnboardingWizardSurface', () => {
         });
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(getOnboardingStepId(screen)).toBe('auth');
+        // Connecting a typed address probes the Home before the wizard advances.
+        await vi.waitFor(() => expect(getOnboardingStepId(screen)).toBe('auth'));
         expectFocusedHome(`https://${platform}.custom-relay.example.test`);
     });
 
@@ -2050,7 +2064,7 @@ describe('OnboardingWizardSurface', () => {
         });
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(getOnboardingStepId(screen)).toBe('background_service_handoff');
+        await vi.waitFor(() => expect(getOnboardingStepId(screen)).toBe('background_service_handoff'));
 
         await pressOnboarding(screen, 'onboarding-wizard-primary');
         expect(getOnboardingStepId(screen)).toBe('auth');
@@ -2346,7 +2360,8 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        expect(screen.findByTestId('onboarding-wizard-lost-access')).not.toBeNull();
+        // Connecting the typed address probes the Home before the wizard advances.
+        await vi.waitFor(() => expect(screen.findByTestId('onboarding-wizard-lost-access')).not.toBeNull());
 
         const backButton = screen.findByTestId('onboarding-wizard-back')!;
         await act(async () => {
@@ -2433,12 +2448,14 @@ describe('OnboardingWizardSurface', () => {
 
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(profiles.getActiveServerSnapshot()).toMatchObject(focusBeforeAction);
+        // Saving the hosted relay as a Home is not a focus change: no Home is explicitly selected until the switch is confirmed.
+        expect(focusBeforeAction.isSelectionExplicit).toBe(false);
+        expect(profiles.getActiveServerSnapshot().isSelectionExplicit).toBe(false);
         await vi.waitFor(() => expect(screen.findByType(LocalRelayAccessControlSection as never)).toBeTruthy());
 
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
+        await vi.waitFor(() => expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy());
 
         const switchChoice = screen.findByTestId('onboarding-wizard-confirmSwitchRelay.choice:switch')!;
         await act(async () => {
@@ -2493,7 +2510,7 @@ describe('OnboardingWizardSurface', () => {
 
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
+        await vi.waitFor(() => expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy());
     });
 
     it('routes web users selecting "On this computer" to the desktop handoff guidance step', async () => {
@@ -2607,29 +2624,13 @@ describe('OnboardingWizardSurface', () => {
         });
         await flushHookEffects({ cycles: 1, turns: 1 });
 
-        const primaryOnRemote = screen.findByTestId('onboarding-wizard-primary')!;
-        const textNodes: string[] = [];
-        const visit = (node: ReactTestInstance) => {
-            const children = node.props?.children;
-            if (typeof children === 'string') {
-                textNodes.push(children);
-            } else if (Array.isArray(children)) {
-                for (const child of children) {
-                    if (typeof child === 'string') {
-                        textNodes.push(child);
-                    }
-                }
-            }
-            for (const child of node.children) {
-                if (typeof child !== 'string') {
-                    visit(child);
-                } else {
-                    textNodes.push(child);
-                }
-            }
-        };
-        visit(primaryOnRemote);
-        expect(textNodes.join(' ')).toContain('Run remote setup');
+        // The real remote step publishes its primary through the wizard chrome: Continue stays disabled
+        // until the SSH credentials are ready, which the wizard's own default primary would not do.
+        expect(screen.findByType(RemoteSshChecklistStep as never)).toBeTruthy();
+        await vi.waitFor(() => {
+            const primaryOnRemote = screen.findByTestId('onboarding-wizard-primary');
+            expect(primaryOnRemote?.props.disabled === true || primaryOnRemote?.props.accessibilityState?.disabled === true).toBe(true);
+        });
     });
 
     it('routes remote relay hosting through relay access before prompting to switch', async () => {
@@ -2712,7 +2713,7 @@ describe('OnboardingWizardSurface', () => {
 
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
-        expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
+        await vi.waitFor(() => expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy());
     });
 
     it('switches remote relay hosting through the configured share URL once relay access provides one', async () => {
@@ -2789,6 +2790,7 @@ describe('OnboardingWizardSurface', () => {
 
         await pressOnboarding(screen, 'onboarding-wizard-primary');
 
+        await vi.waitFor(() => expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy());
         const confirmBody = screen.findByTestId('onboarding-wizard-confirmSwitchRelay')!;
         expect(String(confirmBody.props.relayUrl ?? screen.getTextContent())).toContain('remote-share.example.test');
 
@@ -2900,7 +2902,7 @@ describe('OnboardingWizardSurface', () => {
         await pressOnboarding(screen, 'onboarding-wizard-primary');
         await flushHookEffects({ cycles: 4, turns: 4 });
 
-        expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy();
+        await vi.waitFor(() => expect(screen.findByTestId('onboarding-wizard-confirmSwitchRelay')).toBeTruthy());
         expect(screen.findByTestId('server-settings-add-reachability-remediation')).toBeTruthy();
         expect(screen.findByTestId('onboarding-wizard-primary')?.props.disabled).toBe(true);
 

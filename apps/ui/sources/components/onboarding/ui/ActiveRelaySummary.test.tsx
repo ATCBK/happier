@@ -15,10 +15,11 @@ describe('ActiveRelaySummary', () => {
             <ActiveRelaySummary relayUrl="http://happier-agent-qa-config-surfaces-c.localhost:3014" status="active" idPrefix="relay" />,
         );
         expect(active.getTextContent()).toContain('setupOnboarding.activeRelaySummaryTitle');
-        // The exact destination stays readable even when a Home address exceeds a phone row.
+        // A Home with no name is titled "this Home"; its address is never offered as its name.
         expect(active.findByTestId('relay-line')?.props.numberOfLines).toBeUndefined();
         expect(active.findByTestId('relay-line')?.props.ellipsizeMode).toBeUndefined();
-        expect(active.getTextContent()).toContain('http://happier-agent-qa-config-surfaces-c.localhost:3014');
+        expect(active.getTextContent()).toContain('settingsAccount.thisHomeTitle');
+        expect(active.getTextContent()).not.toContain('happier-agent-qa-config-surfaces-c.localhost');
 
         const selected = await renderScreen(
             <ActiveRelaySummary relayUrl="https://selected.example.test" status="selected" idPrefix="relay" />,

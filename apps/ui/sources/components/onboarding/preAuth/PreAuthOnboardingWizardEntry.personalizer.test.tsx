@@ -18,7 +18,7 @@ import { createWorkspaceState } from '@/components/appShell/workspace/workspaceS
 import { endOnboardingJourneySession } from '@/components/onboarding/tour/state/journeySession';
 
 installDisconnectedServerSocketBoundary();
-const state = vi.hoisted(() => ({ width: 390, push: vi.fn(), replace: vi.fn(), show: vi.fn(() => 'personalize-modal') }));
+const state = vi.hoisted(() => ({ width: 390, push: vi.fn(), replace: vi.fn(), openHref: vi.fn((_href: string, _options?: unknown) => true), show: vi.fn(() => 'personalize-modal') }));
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ useWindowDimensions: () => ({ width: state.width, height: 844, scale: 1, fontScale: 1 }) });
@@ -27,6 +27,17 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { push: state.push, replace: state.replace } }).module);
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ spies: { show: state.show } }).module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+// The tour is paused by local policy (featureLocalPolicy); this suite pins the completion handoff the retained
+// journey host performs, so only that one decision is enabled and every other feature resolves for real.
+vi.mock('@/hooks/server/useFeatureDecision', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@/hooks/server/useFeatureDecision')>();
+    return {
+        ...original,
+        useFeatureDecision: ((featureId, scope) => featureId === 'app.ui.onboardingTour'
+            ? { featureId, state: 'enabled', blockedBy: null, blockerCode: 'none', diagnostics: [], evaluatedAt: 0, scope: scope ?? { scopeKind: 'runtime' } }
+            : original.useFeatureDecision(featureId, scope)) satisfies typeof original.useFeatureDecision,
+    };
+});
 
 const initialStorageState = storage.getState();
 const initialServerId = getActiveServerId();
@@ -36,7 +47,7 @@ beforeEach(async () => {
     await loadSyncSingletonForTests();
     vi.stubEnv('EXPO_PUBLIC_DEBUG', '1');
     state.width = 390;
-    state.push.mockClear(); state.replace.mockClear(); state.show.mockClear();
+    state.push.mockClear(); state.replace.mockClear(); state.openHref.mockClear(); state.show.mockClear();
     const serverUrl = `https://personalizer-${++caseNumber}.example.test`;
     const features = createRootLayoutFeaturesResponse();
     const http = createHomeHubArtifactHttpBoundary('personalizer-account');
@@ -63,7 +74,7 @@ function OwnerShell({ children }: React.PropsWithChildren) {
     const workspace: WorkspaceNavigationContextValue = {
         active: true, state: createWorkspaceState({ id: 'home', target: { kind: 'home', params: {} }, pinned: false, preview: true }),
         phone: state.width === 390 ? { catalog: [], onTab: true, openHref: () => true, activateTab: () => {}, closeTab: () => {} } : null,
-        canGoBack: false, canGoForward: false, openHref: () => true, activateTab: () => {}, closeTab: () => {}, closeTabs: () => {}, dispatch: () => {},
+        canGoBack: false, canGoForward: false, openHref: state.openHref, activateTab: () => {}, closeTab: () => {}, closeTabs: () => {}, dispatch: () => {},
         navigationForTab: () => { throw new Error('Unexpected tab navigation'); }, registerBackStep: () => () => {}, back: () => {}, forward: () => {},
     };
     return <InjectedAuthProvider credentials={connection.credentials}><WorkspaceNavigationContext.Provider value={workspace}>{children}</WorkspaceNavigationContext.Provider></InjectedAuthProvider>;
@@ -76,6 +87,8 @@ async function completeJourney() {
     const screen = await renderScreen(<OwnerShell><PreAuthOnboardingWizardEntry /></OwnerShell>);
     await flushHookEffects({ cycles: 3, turns: 3 });
     const { OnboardingJourneyHost } = await import('@/components/onboarding/tour/OnboardingJourneyHost');
+    // The Journey host is a lazily imported surface; wait for that import to mount it.
+    await vi.waitFor(() => { expect(screen.tree.root.findAllByType(OnboardingJourneyHost)).toHaveLength(1); }, { timeout: 15_000 });
     const host = screen.tree.root.findByType(OnboardingJourneyHost);
     expect(host.props.onExit).toBeTypeOf('function');
     const onExit = host.props.onExit;
@@ -90,9 +103,12 @@ describe('PreAuth onboarding completion Personalize handoff', () => {
         await completeJourney();
         if (width === 390) {
             expect(state.show).toHaveBeenCalledWith(expect.objectContaining({ chrome: expect.objectContaining({ testID: 'personalize-sheet.modal', phonePresentation: 'sheet' }) }));
+            expect(state.openHref).not.toHaveBeenCalled();
             expect(state.push).not.toHaveBeenCalled();
         } else {
-            expect(state.push).toHaveBeenCalledWith('/personalize');
+            // On a computer Personalize is a workspace destination, opened through the workspace navigation owner.
+            expect(state.openHref).toHaveBeenCalledWith('/personalize');
+            expect(state.push).not.toHaveBeenCalled();
             expect(state.show).not.toHaveBeenCalled();
         }
     });

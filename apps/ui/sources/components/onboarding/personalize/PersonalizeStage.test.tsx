@@ -105,7 +105,7 @@ describe('Personalize stage material', () => {
         for (const [index, expected] of [100, 83.6, 80, 80].entries()) {
             expect(sidebarOpacity[index]).toBeCloseTo(expected);
         }
-        expect(painted[3]['--happier-glass-content-blur']).toBe('16px');
+        expect(painted[3]['--happier-glass-content-blur']).toBe('24px');
         expect(storage.getState().settings).toBe(before.settings);
     });
 

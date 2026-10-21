@@ -154,9 +154,11 @@ describe('RelayHostLocalChecklistStep', () => {
             throw new Error('Expected install relay runtime status slot');
         }
         const flattenedStyle = flattenStyle(installStatusSlot.props.style);
-        expect(flattenedStyle.borderWidth).toBe(1);
-        expect(Number(flattenedStyle.width)).toBeGreaterThan(26);
-        expect(Number(flattenedStyle.height)).toBeGreaterThan(26);
+        // The status slot is the shared step marker: a filled circle, ringed only for a current step.
+        expect(Number(flattenedStyle.width)).toBeGreaterThanOrEqual(20);
+        expect(Number(flattenedStyle.height)).toBe(Number(flattenedStyle.width));
+        expect(Number(flattenedStyle.borderRadius)).toBe(Number(flattenedStyle.width) / 2);
+        expect(flattenedStyle.borderWidth).toBe(0);
         expect(primaryState.label).toBe('common.continue');
 
         await act(async () => {
