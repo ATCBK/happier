@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { once } from 'node:events';
 import { cp, chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
@@ -888,7 +889,6 @@ describe('finalizeRuntimeArtifactPayload', () => {
         tempDirs.push(specialPayloadDir);
         const socketPath = join(specialPayloadDir, 'runtime.sock');
         const { createServer } = await import('node:net');
-        const { once } = await import('node:events');
         const server = createServer();
         try {
             server.listen(socketPath);
