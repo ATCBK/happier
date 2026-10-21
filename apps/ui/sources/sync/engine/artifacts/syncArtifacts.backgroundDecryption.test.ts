@@ -33,10 +33,11 @@ describe('background artifact decryption', () => {
             encryptionMode: 'e2ee', header: await codec.encryptHeader({ title: 'Exact receipt' }),
             body: await codec.encryptBody({ body: 'receipt body' }), dataEncryptionKey: encodeBase64(await encryption.encryptEncryptionKey(key)),
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
-        const request = async (path: string) => Response.json(path.endsWith('/recipients')
-            ? { artifactId: artifact.id, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee',
-                dataEncryptionKey: artifact.dataEncryptionKey, callerDataEncryptionKey: artifact.dataEncryptionKey, recipients: [] }
-            : artifact);
+        const census = { artifactId: artifact.id, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'e2ee',
+            dataEncryptionKey: artifact.dataEncryptionKey, callerDataEncryptionKey: artifact.dataEncryptionKey, recipients: [] };
+        const request = async (path: string) => Response.json(path === '/v1/artifacts/read'
+            ? { items: [{ artifactId: artifact.id, ok: true, artifact: { ...artifact, publicAudience: 'none' }, recipientCensus: census }] }
+            : path.endsWith('/recipients') ? census : artifact);
         try {
             const read = fetchArtifactWithBodyFromApi({ credentials: { token: 'fixture' }, encryption,
                 artifactDataKeys: new Map(), request, artifactId: artifact.id, signal: controller.signal });

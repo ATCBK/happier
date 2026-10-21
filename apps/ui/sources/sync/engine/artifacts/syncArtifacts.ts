@@ -921,14 +921,26 @@ export async function fetchArtifactWithBodyFromApi(params: {
     /** Signed decision preparation may read current content, never repair its audience. */
     prepareRecipientKeys?: boolean;
 }): Promise<DecryptedArtifact | null> {
-    try {
-        params.signal?.throwIfAborted();
-        const artifact = await fetchArtifactApi(params.credentials, params.artifactId, { request: params.request, signal: params.signal });
-        return await openArtifactWithRecipientKeyPreparation({ ...params, artifact });
-    } catch (error) {
-        if (error instanceof HappyError && error.status === 404) return null;
-        throw error;
+    // Keyless/inspection reads have no recipient preparation demand. Keep the
+    // opaque detail path so retained locked rows remain representable even
+    // when their unusable envelope cannot form a keyholding census.
+    if (!params.encryption || params.prepareRecipientKeys === false) {
+        try {
+            params.signal?.throwIfAborted();
+            const artifact = await fetchArtifactApi(params.credentials, params.artifactId, params);
+            return await openArtifactWithRecipientKeyPreparation({ ...params, artifact });
+        } catch (error) {
+            if (error instanceof HappyError && error.status === 404) return null;
+            throw error;
+        }
     }
+    // The authenticated batch owner returns the exact row and its matching
+    // recipient census together, including for a one-row content demand.
+    const [result] = await fetchArtifactsWithBodiesFromApi({ ...params, artifactIds: [params.artifactId] });
+    params.signal?.throwIfAborted();
+    if (!result) return null;
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
 }
 
 /** Both authenticated read forms open content and prepare keys through the same owner. */

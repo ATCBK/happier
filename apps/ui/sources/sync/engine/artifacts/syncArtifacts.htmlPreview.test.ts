@@ -14,6 +14,14 @@ const artifactId = '29c6d6dd-8a45-4b30-a362-acdc5c700247';
 const blobId = 'f3d86e48-5552-4b66-af88-709c083bd134';
 const html = '<!doctype html><h1>Private HTML</h1><script>document.title="Executed"</script>';
 
+function detailBatch(artifact: Artifact) {
+    return { items: [{ artifactId: artifact.id, ok: true, artifact: { ...artifact, publicAudience: 'none' },
+        recipientCensus: artifact.encryptionMode === 'e2ee' ? { artifactId: artifact.id,
+            ownerAccountId: artifact.ownerAccountId, access: artifact.access, encryptionMode: 'e2ee',
+            dataEncryptionKey: artifact.dataEncryptionKey, callerDataEncryptionKey: artifact.dataEncryptionKey,
+            recipients: [] } : null }] };
+}
+
 describe('Artifact HTML private preview', () => {
     it.each(['plain', 'e2ee'] as const)('retains %s approval replay custody while refusing generic Document and history reads', async mode => {
         const encryption = mode === 'e2ee' ? await Encryption.create(new Uint8Array(32).fill(12)) : null;
@@ -28,6 +36,7 @@ describe('Artifact HTML private preview', () => {
                 body: mode === 'plain' ? encodePlainArtifactStoredContent({ body }) : await codec.encryptBody({ body }),
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
             const request = async (path: string) => {
+                if (path === '/v1/artifacts/read') return Response.json(detailBatch(stored));
                 if (path === `/v1/artifacts/${artifactId}`) return Response.json(stored);
                 if (path.endsWith('/recipients')) return Response.json({ artifactId, ownerAccountId: 'owner', access: 'owner',
                     encryptionMode: mode, dataEncryptionKey: envelope, callerDataEncryptionKey: envelope, recipients: [] });
@@ -49,13 +58,14 @@ describe('Artifact HTML private preview', () => {
     });
     it('opens a saved text-bundle with its stored MIME and effective network policy', async () => {
         const bundle = { ...artifactHtmlBundleFromBodyV1(html), requestedCapabilities: { networkOrigins: ['https://api.example.com'] } };
-        const artifact = { id: artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+        const artifact: Artifact = { id: artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
             dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
             header: encodePlainArtifactStoredContent({ kind: 'html', title: 'HTML', mime: ARTIFACT_HTML_BUNDLE_MIME_V1 }),
             body: encodePlainArtifactStoredContent({ body: JSON.stringify(bundle) }),
             headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
         const request = async (path: string) => path.endsWith('/html-preview')
-            ? Response.json({ url: `https://${artifactId}.preview.test/a/${artifactId}` }) : Response.json(artifact);
+            ? Response.json({ url: `https://${artifactId}.preview.test/a/${artifactId}` })
+            : Response.json(path === '/v1/artifacts/read' ? detailBatch(artifact) : artifact);
         const view = await fetchArtifactForViewFromApi({ artifactId, credentials: { token: 'captured-token' }, request,
             encryption: null, artifactDataKeys: new Map() });
         expect(view?.htmlPreview?.bundle).toEqual(bundle);
@@ -111,7 +121,8 @@ describe('Artifact HTML private preview', () => {
         const request = async (path: string, init?: RequestInit) => {
             paths.push(path);
             expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer captured-token');
-            expect(init?.method ?? 'GET').toBe('GET');
+            expect(init?.method ?? 'GET').toBe(path === '/v1/artifacts/read' ? 'POST' : 'GET');
+            if (path === '/v1/artifacts/read') return Response.json(detailBatch(artifact));
             if (path === `/v1/artifacts/${artifactId}`) return Response.json(artifact);
             if (path.endsWith('/recipients')) return Response.json({ artifactId, ownerAccountId: 'owner', access: 'owner',
                 encryptionMode: mode, dataEncryptionKey: artifact.dataEncryptionKey,
@@ -130,8 +141,9 @@ describe('Artifact HTML private preview', () => {
             heads: paths.filter(path => path === `/v1/artifacts/${artifactId}`).length,
             preparations: paths.filter(path => path.endsWith('/recipients')).length,
             headerOpens: headerOpens.mock.calls.length, bodyOpens: bodyOpens.mock.calls.length });
-        expect(paths.filter(path => path === `/v1/artifacts/${artifactId}`)).toHaveLength(1);
-        expect(paths.filter(path => path.endsWith('/recipients'))).toHaveLength(mode === 'e2ee' ? 1 : 0);
+        expect(paths.filter(path => path === '/v1/artifacts/read')).toHaveLength(mode === 'e2ee' ? 1 : 0);
+        expect(paths.filter(path => path === `/v1/artifacts/${artifactId}`)).toHaveLength(mode === 'e2ee' ? 0 : 1);
+        expect(paths.filter(path => path.endsWith('/recipients'))).toHaveLength(0);
         expect(headerOpens).toHaveBeenCalledTimes(mode === 'e2ee' ? 1 : 0);
         expect(bodyOpens).toHaveBeenCalledTimes(mode === 'e2ee' ? 1 : 0);
         headerOpens.mockRestore();

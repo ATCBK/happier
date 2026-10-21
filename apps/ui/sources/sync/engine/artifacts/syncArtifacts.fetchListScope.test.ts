@@ -217,8 +217,9 @@ describe('fetchAndApplyArtifactsList', () => {
             paths.push(target.pathname);
             if (target.pathname === '/v1/artifacts') return json(rows.map(({ body: _body, ...head }) => head));
             if (target.pathname === '/v1/artifacts/read') {
-                expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: [...rows].reverse().map(row => row.id) });
-                return json({ items: [...rows].reverse().map(artifact => ({ artifactId: artifact.id, ok: true, artifact,
+                const { artifactIds } = JSON.parse(String(init?.body)) as { artifactIds: string[] };
+                const selected = artifactIds.map(id => rows.find(row => row.id === id)!);
+                return json({ items: selected.map(artifact => ({ artifactId: artifact.id, ok: true, artifact,
                     recipientCensus: census(artifact) })) });
             }
             if (target.pathname.endsWith('/key-envelopes')) {
@@ -243,6 +244,15 @@ describe('fetchAndApplyArtifactsList', () => {
         expect(paths.filter(path => !path.endsWith('/key-envelopes'))).toEqual(['/v1/artifacts', '/v1/artifacts/read']);
         expect(prepared.map(input => input.artifactId).sort()).toEqual(rows.map(row => row.id).sort());
         expect(applied.at(-1)?.map(row => row.body)).toEqual(['Profile body 2', 'Profile body 1']);
+        // An exact content demand needs the same live recipient census as the
+        // collection reader, not a separate GET after opening its detail.
+        paths.length = 0;
+        prepared.length = 0;
+        const { fetchArtifactWithBodyFromApi } = await import('./syncArtifacts');
+        await expect(fetchArtifactWithBodyFromApi({ ...params, artifactId: rows[0]!.id }))
+            .resolves.toMatchObject({ body: 'Profile body 1' });
+        expect(paths.filter(path => !path.endsWith('/key-envelopes'))).toEqual(['/v1/artifacts/read']);
+        expect(prepared.map(input => input.artifactId)).toEqual([rows[0]!.id]);
         changed = true;
         applied.length = 0;
         prepared.length = 0;

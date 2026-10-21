@@ -85,6 +85,13 @@ describe('artifact captured Home transport', () => {
             if (stored && target.pathname.endsWith('/recipients')) return json({ artifactId: stored.id,
                 ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: stored.encryptionMode,
                 dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] });
+            if (stored && target.pathname === '/v1/artifacts/read') {
+                expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: [stored.id] });
+                return json({ items: [{ artifactId: stored.id, ok: true, artifact: { ...stored, publicAudience: 'none' },
+                    recipientCensus: mode === 'e2ee' ? { artifactId: stored.id, ownerAccountId: stored.ownerAccountId,
+                        access: stored.access, encryptionMode: 'e2ee', dataEncryptionKey: stored.dataEncryptionKey,
+                        callerDataEncryptionKey: stored.dataEncryptionKey, recipients: [] } : null }] });
+            }
             if (stored && target.pathname === `/v1/artifacts/${stored.id}`) {
                 if (init?.method !== 'POST') return json(stored);
                 const update = JSON.parse(String(init.body)) as ArtifactUpdateRequest;

@@ -78,6 +78,11 @@ describe('createArtifactWithHeaderViaApi', () => {
         return Response.json(stored);
       }
       if (!stored) throw new Error('Read before create');
+      if (path === '/v1/artifacts/read') return Response.json({ items: [{ artifactId: stored.id, ok: true,
+        artifact: { ...stored, publicAudience: 'none' }, recipientCensus: { artifactId: stored.id,
+          ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, dataEncryptionKey: stored.dataEncryptionKey,
+          callerDataEncryptionKey: stored.dataEncryptionKey, provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
+          callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey, recipients: [] } }] });
       if (path === `/v1/artifacts/${stored.id}/access/recipients`) return Response.json({ artifactId: stored.id,
         ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, dataEncryptionKey: stored.dataEncryptionKey,
         callerDataEncryptionKey: stored.dataEncryptionKey, provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
@@ -102,8 +107,9 @@ describe('createArtifactWithHeaderViaApi', () => {
       expect(listed).toMatchObject({ id, isDecrypted: true, title: 'Saved document', provenance });
       expect(listed?.body).toBeUndefined();
     }
-    expect(calls.filter(call => call === `GET /v1/artifacts/${id}`)).toHaveLength(2);
-    if (mode === 'e2ee') expect(calls.filter(call => call.endsWith('/access/recipients')).length).toBeGreaterThanOrEqual(2);
+    expect(calls.filter(call => call === `GET /v1/artifacts/${id}`)).toHaveLength(mode === 'e2ee' ? 0 : 2);
+    expect(calls.filter(call => call === 'POST /v1/artifacts/read')).toHaveLength(mode === 'e2ee' ? 2 : 0);
+    expect(calls.filter(call => call.endsWith('/access/recipients'))).toHaveLength(0);
   });
   it('publishes content without actor disclosure to a recipient holding the public-share content key', async () => {
     const encryption = await Encryption.create(new Uint8Array(32).fill(9));
@@ -193,6 +199,12 @@ describe('createArtifactWithHeaderViaApi', () => {
           blob: { blobId: metadata.blobId, content: blob } };
       }
       if (!saved) throw new Error('Missing created Artifact');
+      if (path === '/v1/artifacts/read') return Response.json({ items: [{ artifactId: saved.id, ok: true,
+        artifact: { id: saved.id, header: saved.header, body: saved.body, dataEncryptionKey: saved.dataEncryptionKey,
+          ownerAccountId: 'owner', access: 'owner', encryptionMode: mode, publicAudience: 'none',
+          headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 0, updatedAt: 0 },
+        recipientCensus: { artifactId: saved.id, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+          dataEncryptionKey: saved.dataEncryptionKey, callerDataEncryptionKey: saved.dataEncryptionKey, recipients: [] } }] });
       if (path.endsWith('/recipients')) return new Response(JSON.stringify({ artifactId: saved.id, ownerAccountId: 'owner', access: 'owner',
         encryptionMode: mode, dataEncryptionKey: saved.dataEncryptionKey, callerDataEncryptionKey: saved.dataEncryptionKey, recipients: [] }));
       if (path.includes('/blobs/')) {
@@ -226,8 +238,9 @@ describe('createArtifactWithHeaderViaApi', () => {
       heads: request.mock.calls.filter(([path]) => path === `/v1/artifacts/${artifactId}`).length,
       preparations: request.mock.calls.filter(([path]) => path.endsWith('/recipients')).length,
       headerOpens: headerOpens.mock.calls.length, bodyOpens: bodyOpens.mock.calls.length });
-    expect(request.mock.calls.filter(([path]) => path === `/v1/artifacts/${artifactId}`)).toHaveLength(1);
-    expect(request.mock.calls.filter(([path]) => path.endsWith('/recipients'))).toHaveLength(mode === 'e2ee' ? 1 : 0);
+    expect(request.mock.calls.filter(([path]) => path === `/v1/artifacts/${artifactId}`)).toHaveLength(mode === 'e2ee' ? 0 : 1);
+    expect(request.mock.calls.filter(([path]) => path === '/v1/artifacts/read')).toHaveLength(mode === 'e2ee' ? 1 : 0);
+    expect(request.mock.calls.filter(([path]) => path.endsWith('/recipients'))).toHaveLength(0);
     expect(headerOpens).toHaveBeenCalledTimes(mode === 'e2ee' ? 1 : 0);
     expect(bodyOpens).toHaveBeenCalledTimes(mode === 'e2ee' ? 1 : 0);
     headerOpens.mockRestore();

@@ -31,6 +31,10 @@ describe('decryptArtifactListItem (artifact headers)', () => {
       headerVersion: 2, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2 };
     const firstMetadata = await sealArtifactPrivateRevisionMetadata({ mode, artifactId, bodyVersion: 1, provenance: firstActor, dataKey: privateKey });
     const request = async (path: string, init?: RequestInit) => {
+      if (path === '/v1/artifacts/read') return Response.json({ items: [{ artifactId, ok: true,
+        artifact: { ...row, publicAudience: 'none' }, recipientCensus: { artifactId, ownerAccountId: 'owner', access: 'owner', encryptionMode: mode,
+          dataEncryptionKey: row.dataEncryptionKey, callerDataEncryptionKey: row.dataEncryptionKey,
+          provenanceDataEncryptionKey: row.provenanceDataEncryptionKey, callerProvenanceDataEncryptionKey: row.provenanceDataEncryptionKey, recipients: [] } }] });
       if (path.endsWith('/revisions')) return Response.json({ retentionCount: 10, revisions: [
         { bodyVersion: 1, body: firstBody, provenance: firstMetadata, createdAt: 1, sizeBytes: 7 },
         { bodyVersion: 2, body: row.body, provenance: row.provenance, createdAt: 2, sizeBytes: 7 } ] });
