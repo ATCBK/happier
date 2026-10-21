@@ -10760,6 +10760,7 @@ localTailscale: {
         downloaded: string;
         totalBytes: string;
       }) => `ダウンロード中 ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: 'アップロードできませんでした',
     },
     upload: {
       conflicts: {

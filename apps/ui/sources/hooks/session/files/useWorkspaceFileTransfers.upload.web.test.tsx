@@ -159,6 +159,39 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         }
     });
 
+    it('keeps the first failure of a batch: the abort it raises in a sibling upload is not a second failure to word', async () => {
+        const broken = new File(['broken'], 'broken.txt', { type: 'text/plain' });
+        vi.spyOn(broken, 'slice').mockImplementation(() => { throw new Error('Upload source reader exploded'); });
+        const sibling = new File(['hello'], 'sibling.txt', { type: 'text/plain' });
+        const hook = await renderTransfers();
+        // The sibling is mid-flight (its first chunk is held) when the broken file fails and the batch aborts.
+        const chunk = harness.deferNextUploadChunk();
+        let pending!: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startUploads']>;
+        await act(async () => {
+            pending = hook.getCurrent().startUploads({ destinationDir: 'workspace/files', entries: [
+                { kind: 'web', file: broken, relativePath: 'broken.txt' }, { kind: 'web', file: sibling, relativePath: 'sibling.txt' },
+            ] });
+            await new Promise(resolve => setTimeout(resolve, 20));
+            chunk.release();
+            await pending;
+        });
+        await expect(pending).resolves.toEqual({ ok: false, error: 'Upload source reader exploded' });
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Upload source reader exploded' });
+    });
+
+    it('words a machine that stops answering as unreachable, never as the transport\'s own abort text', async () => {
+        const file = new File(['hello'], 'hello.txt', { type: 'text/plain' });
+        // An abort nothing the person did caused (the transport's own deadline, a retired scope): its text is the browser's, not ours.
+        vi.spyOn(file, 'slice').mockImplementation(() => { throw new DOMException('signal is aborted without reason', 'AbortError'); });
+        const hook = await renderTransfers();
+        await act(async () => {
+            await expect(hook.getCurrent().startUploads(uploadInput(file))).resolves.toMatchObject({ ok: false, unreachable: true });
+        });
+        expect(hook.getCurrent().uploadState).toMatchObject({ status: 'error', unreachable: true });
+        await act(async () => { hook.getCurrent().dismissUploadFailure(); });
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'idle' });
+    });
+
     it('finishes the exact staged file without starting a second upload', async () => {
         harness.requireNextUploadFinalizeRecovery();
         const prompt = observeRecoveryPrompt();

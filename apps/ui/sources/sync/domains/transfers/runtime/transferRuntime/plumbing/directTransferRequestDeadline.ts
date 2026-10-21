@@ -1,3 +1,5 @@
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
+
 const DEFAULT_DIRECT_TRANSFER_REQUEST_TIMEOUT_MS = 5_000;
 
 function parseOptionalPositiveInt(value: unknown): number | null {
@@ -44,7 +46,10 @@ export function createDirectTransferRequestAbortSignal(params: Readonly<{
     }
 
     const timeoutId = setTimeout(() => {
-        controller.abort(new Error('Direct transfer request timed out'));
+        // The Machine did not answer in time: the same typed timeout every Machine request carries, so a caller words it
+        // as "isn't answering" instead of the transport's own text.
+        controller.abort(Object.assign(new Error('Direct transfer request timed out'),
+            { code: MACHINE_RPC_TIMEOUT_ERROR_CODE, errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE }));
     }, params.timeoutMs);
 
     return {

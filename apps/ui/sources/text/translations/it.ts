@@ -10687,6 +10687,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
         downloaded: string;
         totalBytes: string;
       }) => `Download ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: 'Caricamento non riuscito',
     },
     upload: {
       conflicts: {

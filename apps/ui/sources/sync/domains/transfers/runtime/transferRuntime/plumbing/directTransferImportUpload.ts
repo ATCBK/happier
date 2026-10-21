@@ -20,6 +20,7 @@ import {
 } from './machineCarrierHttpLease';
 import type { MachineCarrierHttpLease } from './machineCarrierHttpLease';
 import { isRetryableDirectTransferEndpointError } from './directTransferEndpointRetry';
+import { readTransferFailureCode } from './transferFailureCode';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 export type { DirectTransferImportOpenRequest } from './directTransferImportClient';
@@ -258,11 +259,11 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
                 const transportFailure = requestingPeer && isRetryableDirectTransferEndpointError(error);
                 const cause = prepared.session.releaseCarrier && !params.signal?.aborted && transportFailure
                     ? createMachineCarrierTransportFailure(error) : error;
+                const causeCode = readTransferFailureCode(cause);
                 lastFailure = {
                     success: false,
                     error: cause instanceof Error ? cause.message : 'Direct import upload unavailable',
-                    ...(cause instanceof Error && 'errorCode' in cause && typeof cause.errorCode === 'string'
-                        ? { errorCode: cause.errorCode } : {}),
+                    ...(causeCode ? { errorCode: causeCode } : {}),
                 };
                 if (
                     params.signal?.aborted
@@ -279,9 +280,11 @@ export async function uploadBulkPayloadFromFileViaDirectImport<TResponse>(params
             error: 'Direct import upload unavailable',
         };
     } catch (error) {
+        const errorCode = readTransferFailureCode(error);
         lastFailure = {
             success: false,
             error: error instanceof Error ? error.message : 'Direct import upload unavailable',
+            ...(errorCode ? { errorCode } : {}),
         };
     }
 

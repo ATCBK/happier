@@ -36,7 +36,9 @@ describe('RepositoryTreeTransferStatusBar', () => {
         const screen = await renderScreen(<RepositoryTreeTransferStatusBar
             uploadState={{ status: 'idle' }}
             downloadState={{ status: 'downloading', name: 'recording.mp4', downloadedBytes: 4, totalBytes: 4, cancelable: false }}
+            machineName="devbox"
             onCancelUploads={vi.fn()}
+            onDismissUploadFailure={vi.fn()}
             onCancelDownload={vi.fn()}
         />);
         expect(screen.findByTestId('repository-tree-download-status')).not.toBeNull();
@@ -82,7 +84,9 @@ describe('RepositoryTreeTransferStatusBar', () => {
             <RepositoryTreeTransferStatusBar
                 uploadState={uploadState}
                 downloadState={downloadState}
+                machineName="devbox"
                 onCancelUploads={onCancelUploads}
+                onDismissUploadFailure={vi.fn()}
                 onCancelDownload={onCancelDownload}
             />,
         );
@@ -100,5 +104,33 @@ describe('RepositoryTreeTransferStatusBar', () => {
             screen.pressByTestId(cancelTestID);
         });
         expect(onCancel === 'uploads' ? onCancelUploads : onCancelDownload).toHaveBeenCalledTimes(1);
+    });
+
+    it('settles a failed upload on the surface in words, naming a Machine that stopped answering, until it is dismissed', async () => {
+        const { RepositoryTreeTransferStatusBar } = await import('./RepositoryTreeTransferStatusBar');
+        const onDismissUploadFailure = vi.fn();
+        const render = async (uploadState: Parameters<typeof RepositoryTreeTransferStatusBar>[0]['uploadState']) => await renderScreen(
+            <RepositoryTreeTransferStatusBar
+                uploadState={uploadState}
+                downloadState={{ status: 'idle' }}
+                machineName="devbox"
+                onCancelUploads={vi.fn()}
+                onDismissUploadFailure={onDismissUploadFailure}
+                onCancelDownload={vi.fn()}
+            />,
+        );
+        const words = (screen: Awaited<ReturnType<typeof render>>) => JSON.stringify(screen.tree.toJSON());
+
+        const unreachable = await render({ status: 'error', error: 'signal is aborted without reason', unreachable: true });
+        expect(words(unreachable)).toContain('files.transfers.uploadFailed');
+        expect(words(unreachable)).toContain('projects.checkouts.notAnswering');
+        expect(words(unreachable)).not.toContain('signal is aborted');
+        const other = await render({ status: 'error', error: 'Direct import request failed with status 409' });
+        expect(words(other)).toContain('files.transfers.uploadFailed');
+        expect(words(other)).not.toContain('409');
+        expect(words(other)).not.toContain('notAnswering');
+        await act(async () => { other.pressByTestId('repository-tree-upload-failure-dismiss'); });
+        expect(onDismissUploadFailure).toHaveBeenCalledTimes(1);
+        expect((await render({ status: 'canceled' })).findByTestId('repository-tree-upload-failure')).toBeNull();
     });
 });

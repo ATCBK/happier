@@ -10314,6 +10314,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
         downloaded: string;
         totalBytes: string;
       }) => `Скачивание ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: 'Не удалось загрузить',
     },
     upload: {
       conflicts: {

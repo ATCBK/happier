@@ -10466,6 +10466,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
         downloaded: string;
         totalBytes: string;
       }) => `Descargando ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: 'No se pudo subir',
     },
     upload: {
       conflicts: {

@@ -10302,6 +10302,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
         downloaded: string;
         totalBytes: string;
       }) => `Téléchargement de ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: 'Échec de l’envoi',
     },
     upload: {
       conflicts: {

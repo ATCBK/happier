@@ -117,20 +117,53 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
     );
 }
 
+/**
+ * A batch that ended in failure settles here, in words, and stays until dismissed: no dialog ever carries the
+ * transport's own error text. A Machine that stopped answering says so by name.
+ */
+function UploadFailureRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { status: 'error' }>; machineName: string; onDismiss: () => void }>) {
+    const styles = stylesheet;
+    const { theme } = useUnistyles();
+    const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
+    const label = props.state.unreachable
+        ? `${t('files.transfers.uploadFailed')} · ${t('projects.checkouts.notAnswering', { machine: props.machineName })}`
+        : t('files.transfers.uploadFailed');
+    return (
+        <View testID="repository-tree-upload-failure" style={styles.row}>
+            <Icon name={props.state.unreachable ? 'wifi-slash' : 'warning'} size={16} color={theme.colors.text.secondary} />
+            <Text numberOfLines={2} style={styles.label}>{label}</Text>
+            <IconButton
+                testID="repository-tree-upload-failure-dismiss"
+                accessibilityLabel={t('common.close')}
+                iconName="x"
+                iconSize={16}
+                size={28}
+                minimumInteractiveTargetSize={minimumInteractiveTargetSize}
+                interactiveTargetGapPx={20}
+                onPress={props.onDismiss}
+            />
+        </View>
+    );
+}
+
 export function RepositoryTreeTransferStatusBar(props: Readonly<{
     uploadState: WorkspaceUploadState;
     downloadState: WorkspaceDownloadState;
+    machineName: string;
     onCancelUploads: () => void;
+    onDismissUploadFailure: () => void;
     onCancelDownload: () => void;
 }>): React.ReactElement | null {
     const styles = stylesheet;
     const showUpload = props.uploadState.status === 'preflighting' || props.uploadState.status === 'uploading';
+    const failedUpload = props.uploadState.status === 'error' ? props.uploadState : null;
     const showDownload = props.downloadState.status === 'downloading';
 
-    if (!showUpload && !showDownload) return null;
+    if (!showUpload && !failedUpload && !showDownload) return null;
 
     return (
         <View testID="repository-tree-transfer-status" style={styles.container}>
+            {failedUpload ? <UploadFailureRow state={failedUpload} machineName={props.machineName} onDismiss={props.onDismissUploadFailure} /> : null}
             {showUpload ? <UploadRow state={props.uploadState as any} onCancel={props.onCancelUploads} /> : null}
             {showDownload ? <DownloadRow state={props.downloadState as any} onCancel={props.onCancelDownload} /> : null}
         </View>

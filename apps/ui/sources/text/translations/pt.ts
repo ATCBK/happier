@@ -10586,6 +10586,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
         downloaded: string;
         totalBytes: string;
       }) => `Baixando ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: 'Não foi possível enviar',
     },
     upload: {
       conflicts: {

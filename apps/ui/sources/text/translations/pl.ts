@@ -10294,6 +10294,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
         downloaded: string;
         totalBytes: string;
       }) => `Pobieranie ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: 'Nie udało się wysłać',
     },
     upload: {
       conflicts: {

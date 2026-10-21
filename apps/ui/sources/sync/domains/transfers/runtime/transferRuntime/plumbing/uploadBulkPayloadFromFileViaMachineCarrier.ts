@@ -13,14 +13,14 @@ import type {
 import { resolveMachineCarrierRoute } from './machineCarrierHttpLease';
 import { captureFilesystemTransferAccountScope } from './filesystemTransferAccountScope';
 import { isTransferFinalizeRecoveryFailure } from './directTransferFinalizeRecovery';
+import { readTransferFailureCode } from './transferFailureCode';
 
 function toDirectFailure(error: unknown): BulkTransferFailureResponse {
+    const errorCode = readTransferFailureCode(error);
     return {
         success: false,
         error: error instanceof Error ? error.message : 'Direct import upload unavailable',
-        ...(error && typeof error === 'object' && typeof (error as { errorCode?: unknown }).errorCode === 'string'
-            ? { errorCode: (error as { errorCode: string }).errorCode }
-            : {}),
+        ...(errorCode ? { errorCode } : {}),
     };
 }
 

@@ -10317,6 +10317,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
                     `Lädt hoch: ${completed}/${total} · ${uploaded} / ${totalBytes}`,
                 downloading: ({ name, downloaded, totalBytes }: { name: string; downloaded: string; totalBytes: string }) =>
                     `Lädt herunter: ${name} · ${downloaded} / ${totalBytes}`,
+                uploadFailed: 'Upload fehlgeschlagen',
             },
             upload: {
                 conflicts: {

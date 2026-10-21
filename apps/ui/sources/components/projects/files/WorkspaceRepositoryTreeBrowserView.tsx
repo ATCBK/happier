@@ -489,10 +489,8 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             file,
             relativePath: file.webkitRelativePath || file.name,
         }));
-        const res = await transfers.startUploads({ entries, destinationDir });
-        if (!res.ok && !res.canceled) {
-            Modal.alert(t('common.error'), res.error);
-        }
+        // A failed batch settles on the transfer surface in words; no dialog carries its error text.
+        await transfers.startUploads({ entries, destinationDir });
     }, [transfers]);
 
     const startNativeUploads = React.useCallback(async (destinationDir: string, isCurrent: () => boolean) => {
@@ -509,10 +507,8 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             mimeType: p.mimeType,
             relativePath: p.name,
         }));
-        const res = await transfers.startUploads({ entries, destinationDir });
-        if (!res.ok && !res.canceled) {
-            Modal.alert(t('common.error'), res.error);
-        }
+        // A failed batch settles on the transfer surface in words; no dialog carries its error text.
+        await transfers.startUploads({ entries, destinationDir });
         return 'requested' as const;
     }, [transfers]);
 
@@ -586,10 +582,7 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
                 file: entry.file,
                 relativePath: entry.relativePath,
             }));
-            const res = await transfers.startUploads({ entries, destinationDir });
-            if (!res.ok && !res.canceled) {
-                Modal.alert(t('common.error'), res.error);
-            }
+            await transfers.startUploads({ entries, destinationDir });
         },
     });
 
@@ -796,7 +789,9 @@ export const WorkspaceRepositoryTreeBrowserView = React.memo((props: WorkspaceRe
             <RepositoryTreeTransferStatusBar
                 uploadState={transfers.uploadState}
                 downloadState={transfers.downloadState}
+                machineName={reachability.machineName}
                 onCancelUploads={transfers.cancelUploads}
+                onDismissUploadFailure={transfers.dismissUploadFailure}
                 onCancelDownload={transfers.cancelDownload}
             />
         </WebDropTargetView>

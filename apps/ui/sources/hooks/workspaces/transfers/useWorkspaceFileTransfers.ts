@@ -9,6 +9,7 @@ import {
     downloadDaemonWorkspaceFileToDestination,
     uploadDaemonWorkspaceFileFromReader,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { isMachineStoppedAnsweringError, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 import { resolveLocalUploadSourceSizeBytes } from '@/sync/runtime/files/localUploadSourceReader';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -49,7 +50,8 @@ export type WorkspaceUploadState =
     }>
     | Readonly<{ status: 'done'; totalFiles: number; totalBytes: number }>
     | Readonly<{ status: 'canceled' }>
-    | Readonly<{ status: 'error'; error: string }>;
+    /** `unreachable`: the Machine stopped answering (a timeout or an abort not caused by the person); the surface words it, not `error`. */
+    | Readonly<{ status: 'error'; error: string; unreachable?: true }>;
 
 export type WorkspaceDownloadState =
     | Readonly<{ status: 'idle' }>
@@ -73,7 +75,7 @@ export type WorkspaceFileDownloadInput = Readonly<{
     cachedContent?: WorkspaceFileCachedContent | null;
 }>;
 
-export type WorkspaceTransferResult = { ok: true } | { ok: false; error: string; canceled?: true };
+export type WorkspaceTransferResult = { ok: true } | { ok: false; error: string; canceled?: true; unreachable?: true };
 
 function joinRepoPath(parentDir: string, relativePath: string): string {
     const cleanParent = String(parentDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
@@ -329,6 +331,8 @@ export function useWorkspaceFileTransfers(params: Readonly<{
     downloadState: WorkspaceDownloadState;
     startUploads: (input: Readonly<{ entries: readonly WorkspaceUploadEntry[]; destinationDir: string }>) => Promise<WorkspaceTransferResult>;
     cancelUploads: () => void;
+    /** Clears a settled upload failure from the surface that shows it. */
+    dismissUploadFailure: () => void;
     startDownload: (input: WorkspaceFileDownloadInput) => Promise<WorkspaceTransferResult>;
     cancelDownload: () => void;
 }> {
@@ -367,6 +371,9 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         uploadAbortReasonRef.current = 'user';
         uploadAbortRef.current?.abort();
     }, []);
+    const dismissUploadFailure = React.useCallback(() => {
+        setUploadState((prev) => prev.status === 'error' ? { status: 'idle' } : prev);
+    }, []);
 
     const cancelDownload = React.useCallback(() => {
         const operation = downloadOperationRef.current;
@@ -381,7 +388,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         const controller = new AbortController();
         uploadAbortRef.current = controller;
         uploadAbortReasonRef.current = null;
-        let uploadFailureError: string | null = null;
+        let uploadFailure: Readonly<{ error: string; unreachable: boolean }> | null = null;
         const isCurrentUpload = (): boolean => (
             mountedRef.current && uploadAbortRef.current === controller
         );
@@ -440,6 +447,15 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                 if (cancelled) return;
                 cancelled = true;
                 controller.abort();
+            };
+            // The first failure is the batch's. Aborting the controller makes every sibling upload raise an abort of
+            // its own (or the person cancelled): those are consequences of the first outcome, never another failure.
+            const recordFailure = (error: string, unreachable: boolean) => {
+                if (controller.signal.aborted) return;
+                uploadFailure = { error, unreachable };
+                uploadAbortReasonRef.current = 'error';
+                cancelOnce();
+                setCurrentUploadState({ status: 'error', error, ...(unreachable ? { unreachable: true as const } : {}) });
             };
 
             const workers = Array.from({ length: Math.min(resolvedMaxConcurrentUploads, tasks.length) }, () => (async () => {
@@ -514,22 +530,11 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                         }
 
                         if (result.success !== true) {
-                            uploadFailureError = result.error;
-                            if (uploadAbortReasonRef.current !== 'user') {
-                                uploadAbortReasonRef.current = 'error';
-                            }
-                            cancelOnce();
-                            setCurrentUploadState({ status: 'error', error: result.error });
+                            recordFailure(result.error, result.errorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE);
                             return;
                         }
                     } catch (error) {
-                        const errorMessage = error instanceof Error ? error.message : 'Upload failed';
-                        uploadFailureError = errorMessage;
-                        if (uploadAbortReasonRef.current !== 'user') {
-                            uploadAbortReasonRef.current = 'error';
-                        }
-                        cancelOnce();
-                        setCurrentUploadState({ status: 'error', error: errorMessage });
+                        recordFailure(error instanceof Error ? error.message : 'Upload failed', isMachineStoppedAnsweringError(error));
                         return;
                     } finally {
                         try {
@@ -557,9 +562,10 @@ export function useWorkspaceFileTransfers(params: Readonly<{
             }
 
             if (uploadAbortReasonRef.current === 'error') {
-                const error = uploadFailureError ?? 'Upload failed';
-                setCurrentUploadState({ status: 'error', error });
-                return { ok: false, error };
+                const failure = uploadFailure ?? { error: 'Upload failed', unreachable: false };
+                const unreachable = failure.unreachable ? { unreachable: true as const } : {};
+                setCurrentUploadState({ status: 'error', error: failure.error, ...unreachable });
+                return { ok: false, error: failure.error, ...unreachable };
             }
 
             if (controller.signal.aborted) {
@@ -882,11 +888,13 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         downloadState,
         startUploads,
         cancelUploads,
+        dismissUploadFailure,
         startDownload,
         cancelDownload,
     }), [
         cancelDownload,
         cancelUploads,
+        dismissUploadFailure,
         downloadState,
         startDownload,
         startUploads,

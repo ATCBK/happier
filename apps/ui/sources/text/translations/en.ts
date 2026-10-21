@@ -12267,6 +12267,7 @@ const enFiles = {
       downloaded: string;
       totalBytes: string;
     }) => `Downloading ${name} · ${downloaded} / ${totalBytes}`,
+    uploadFailed: "Couldn't upload",
   },
   upload: {
     conflicts: {

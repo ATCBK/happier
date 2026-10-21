@@ -10099,6 +10099,7 @@ const zhHansValues = {
         downloaded: string;
         totalBytes: string;
       }) => `正在下载 ${name} · ${downloaded} / ${totalBytes}`,
+      uploadFailed: '无法上传',
     },
     upload: {
       conflicts: {

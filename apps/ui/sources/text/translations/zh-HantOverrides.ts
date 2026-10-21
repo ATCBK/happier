@@ -8497,6 +8497,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
                 `正在上傳 ${completed}/${total} · ${uploaded} / ${totalBytes}`,
             downloading: ({ name, downloaded, totalBytes }: { name: string; downloaded: string; totalBytes: string }) =>
                 `正在下載 ${name} · ${downloaded} / ${totalBytes}`,
+            uploadFailed: '無法上傳',
         },
         upload: {
             conflicts: {

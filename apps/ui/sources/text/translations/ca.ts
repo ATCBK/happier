@@ -9620,6 +9620,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                 `Pujant ${completed}/${total} · ${uploaded} / ${totalBytes}`,
             downloading: ({ name, downloaded, totalBytes }: { name: string; downloaded: string; totalBytes: string }) =>
                 `Descarregant ${name} · ${downloaded} / ${totalBytes}`,
+            uploadFailed: "No s'ha pogut pujar",
         },
         upload: {
             conflicts: {
