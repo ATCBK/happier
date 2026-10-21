@@ -192,6 +192,9 @@ export function computeSessionModePickerControl(params: {
     return computeDynamicSessionModePickerControlInternal(params)
         ?? (supportsSessionModeOverrides(params.agentId) ? computeStaticSessionModePickerControl(params) : null)
         ?? (() => {
+            // A catalog owned by another Agent means the stored override cannot be this Agent's intent.
+            const catalogAgentId = readSessionModesState(params.metadata)?.agentId;
+            if (catalogAgentId && catalogAgentId !== params.agentId) return null;
             const modeId = readSessionModeOverride(params.metadata)?.modeId;
             return modeId && supportsSessionModeOverrides(params.agentId)
                 ? createExplicitSessionModePickerControl({ agentId: params.agentId, modeId })
