@@ -101,27 +101,35 @@ function appendBucketPopulation(target: BucketPopulation, source: BucketPopulati
 }
 
 type CoverageSource = NonNullable<UsageAnalyticsQueryResponse['coverage']>['sources'][number];
-const coverageSourceKey = (source: string, path: string, machineId: string | null) => JSON.stringify([source, path, machineId]);
+const coverageSourceKey = (source: string | null, path: string, machineId: string | null) => JSON.stringify([source, path, machineId]);
 
-/** One lookup per source member: the projection asks for coverage per Agent in every bucket of every granularity. */
-function indexCoverageSources(accounting: UsageAnalyticsQueryResponse | undefined): ReadonlyMap<string, CoverageSource> {
+/** Each contribution's source member, resolved once: coverage is asked per Agent in every bucket of every granularity. */
+function createCoverageSourceLookup(accounting: UsageAnalyticsQueryResponse | undefined): (row: UsageAnalyticsContribution) => CoverageSource | undefined {
     const index = new Map<string, CoverageSource>();
     for (const source of accounting?.coverage?.sources ?? []) {
         const key = coverageSourceKey(source.source, source.path, source.machineId ?? null);
         // The first matching entry wins, as the previous linear search did.
         if (!index.has(key)) index.set(key, source);
     }
-    return index;
+    const byRow = new WeakMap<UsageAnalyticsContribution, CoverageSource | null>();
+    return row => {
+        let source = byRow.get(row);
+        if (source === undefined) {
+            source = index.get(coverageSourceKey(row.source, row.sourceContext?.path ?? 'unknown', row.machineId)) ?? null;
+            byRow.set(row, source);
+        }
+        return source ?? undefined;
+    };
 }
 
 /** Completeness belongs to the actual source members, never a global badge copied to each Agent. */
 function accountingCoverage(rows: readonly UsageAnalyticsContribution[] | undefined, accounting: UsageAnalyticsQueryResponse | undefined,
-    sourceIndex: ReadonlyMap<string, CoverageSource>): CalendarCoverage {
+    sourceOf: (row: UsageAnalyticsContribution) => CoverageSource | undefined): CalendarCoverage {
     if (rows === undefined) return 'unavailable';
     if (rows.length === 0) return accounting?.coverage?.status === 'complete' && accounting.coverage.range.complete
         ? 'complete_for_supplied_facts' : 'unknown';
     const coverage = accounting?.coverage;
-    const sources = rows.map(row => sourceIndex.get(coverageSourceKey(row.source, row.sourceContext?.path ?? 'unknown', row.machineId)));
+    const sources = rows.map(sourceOf);
     if (sources.some(source => source === undefined || source.status === 'unknown' || source.status === 'unsupported')) return 'unknown';
     return coverage?.range.complete && sources.every(source => source?.status === 'available' && source.historyComplete === true)
         ? 'complete_for_supplied_facts' : 'partial';
@@ -158,7 +166,7 @@ export function projectUsageAgentCalendar(input: UsageAgentCalendarInput): Usage
         : input.detailStatus === 'partial' || intervals.coverage === 'partial' ? 'partial' : 'complete_for_supplied_facts';
     const steering = input.detailStatus === 'unknown' ? null : input.steering;
     const steeringCoverage: CalendarCoverage = steering?.inputsObserved ? steering.coverage : 'unavailable';
-    const sourceIndex = indexCoverageSources(input.accounting);
+    const sourceIndex = createCoverageSourceLookup(input.accounting);
     const coverage: UsageAgentCalendar['coverage'] = { accounting: accountingCoverage(rows, input.accounting, sourceIndex), busy: busyCoverage, steering: steeringCoverage };
 
     const metrics = (rows: readonly UsageAnalyticsContribution[], busy: readonly UsageWorkIntervalSegment[], steers: readonly (number | null)[]): CalendarMetrics => {
