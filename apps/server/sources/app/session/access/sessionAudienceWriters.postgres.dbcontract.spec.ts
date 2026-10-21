@@ -341,9 +341,16 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
                     await expect(db.$queryRawUnsafe(
                         'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE NOWAIT', owner.id,
                     )).rejects.toMatchObject({ meta: { code: '55P03' } });
-                    await expect(db.$queryRawUnsafe(
+                    const cursorWriter = db.$queryRawUnsafe(
                         'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', owner.id,
-                    )).resolves.toEqual([{ id: owner.id }]);
+                    );
+                    if (transition === "direct_grant") {
+                        // Grant admission excludes cursor writers before it reads
+                        // authority; native membership paths retain content admission.
+                        await expect(cursorWriter).rejects.toMatchObject({ meta: { code: '55P03' } });
+                    } else {
+                        await expect(cursorWriter).resolves.toEqual([{ id: owner.id }]);
+                    }
                 } finally {
                     release();
                     for (const outcome of await writerOutcome) if (outcome.status === "rejected") throw outcome.reason;
