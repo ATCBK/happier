@@ -219,8 +219,11 @@ async function prepareDirectTransferExport(params: Readonly<{
         let prepare: DirectTransferExportPrepareResponse;
         if (params.request.t === 'workspace_file_download_v1') {
             filesystemDestinationId = randomUUID();
+            // Preparing the admitted operation follows its caller, not an individual byte
+            // request's default deadline. Preserve an explicitly supplied caller deadline.
             const response = await (params.callAdmittedAction ?? callFilesystemTransferAction)({ actionId: 'daemon.filesystem.download', machineId: params.machineId,
-                serverId: params.serverId, timeoutMs: requestTimeoutMs, signal: params.signal,
+                serverId: params.serverId, signal: params.signal,
+                ...(params.timeoutMs == null ? {} : { timeoutMs: requestTimeoutMs }),
                 accountId: params.accountId,
                 input: { rootPath: params.request.workingDirectory, path: params.request.path, asZip: params.request.asZip,
                     destination: { destinationId: filesystemDestinationId } },
@@ -452,6 +455,7 @@ export async function downloadBulkPayloadViaDirectExportToDestination(params: Re
     destination: BulkTransferFileDestination;
     cleanupOnFailure?: boolean;
     onInit?: ((init: Readonly<{ name: string; sizeBytes: number; manifestHash?: string }>) => Promise<void | DirectTransferFailureResponse>) | null;
+    /** Byte-request budget; filesystem acceptance borrows it only when explicitly supplied. */
     timeoutMs?: number | null;
     onProgress?: ((progress: ChunkDownloadProgress) => void) | null;
     signal?: AbortSignal | null;

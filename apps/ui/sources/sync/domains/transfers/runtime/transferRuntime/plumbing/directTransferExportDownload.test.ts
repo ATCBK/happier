@@ -1250,49 +1250,6 @@ describe('directTransferExportDownload', () => {
         expect(close).not.toHaveBeenCalled();
     });
 
-    it('uses the default direct-export timeout for prepare when callers omit timeoutMs', async () => {
-        const previousTimeout = process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_REQUEST_TIMEOUT_MS;
-        process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_REQUEST_TIMEOUT_MS = '10';
-
-        try {
-            callGuardedMachineRpcWithPolicyMock.mockImplementationOnce(async (input: { timeoutMs?: number }) => {
-                expect(input.timeoutMs).toBe(10);
-                throw new Error('prepare timed out');
-            });
-
-            const cleanup = vi.fn(async () => {});
-            const close = vi.fn(async () => {});
-            const result = await downloadBulkPayloadViaDirectExportToDestination({
-                machineId: 'machine-1',
-                serverId: 'server-a',
-                request: {
-                    t: 'workspace_file_download_v1',
-                    workingDirectory: '/repo',
-                    path: '/repo/hello.txt',
-                    asZip: false,
-                },
-                destination: {
-                    writeBytes: async () => {},
-                    close,
-                    cleanup,
-                },
-            });
-
-            expect(result).toEqual({
-                ok: false,
-                error: 'prepare timed out',
-            });
-            expect(runtimeFetchMock).not.toHaveBeenCalled();
-            expect(cleanup).toHaveBeenCalledTimes(1);
-            expect(close).not.toHaveBeenCalled();
-        } finally {
-            if (previousTimeout === undefined) {
-                delete process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_REQUEST_TIMEOUT_MS;
-            } else {
-                process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_DIRECT_PEER_REQUEST_TIMEOUT_MS = previousTimeout;
-            }
-        }
-    });
 
     it('abandons a timed-out direct-export candidate and retries the next destination endpoint', async () => {
         vi.useFakeTimers();

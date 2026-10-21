@@ -117,6 +117,7 @@ export async function createWorkspaceFileDownloadHarness(options: Readonly<{
     let failChunk = false;
     let deferredChunk: DeferredChunkBoundary | null = null;
     let deferredUploadChunk: DeferredChunkBoundary | null = null;
+    let deferredUploadPreparation: DeferredChunkBoundary | null = null;
     let deferredDownloadPreparation: DeferredChunkBoundary | null = null;
     let nextUploadFinalizeResponse: { body: unknown; status: number } | null = null;
     const uploads: {
@@ -236,17 +237,22 @@ export async function createWorkspaceFileDownloadHarness(options: Readonly<{
                 const envelope = TargetedActionRpcRequestV1Schema.parse(payload);
                 if (envelope.target.kind !== 'machine' || envelope.target.machineId !== machineId) throw new Error('Wrong upload Machine target');
                 const input = FilesystemUploadInputSchema.parse(envelope.input);
-                const uploadId = `workspace-upload-${uploads.length + 1}`;
-                const recipient = createTransferRecipientKeyPair();
-                importRecipients.set(uploadId, recipient);
-                uploads.push({ uploadId, input, bytes: new Uint8Array(), finalized: false, aborted: false, finalizeAttempts: 0 });
-                return FilesystemUploadOutputSchema.parse({ success: true, status: 'accepted',
-                    operationId: `workspace-upload-operation-${uploads.length}`, sourceId: input.source.sourceId,
-                    prepared: { uploadId, destDisplayPath: input.path, expectedSizeBytes: input.source.sizeBytes,
-                        chunkSizeBytes: 64 * 1024, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
-                        expiresAt: Date.now() + 60_000,
-                        endpointCandidates: [{ kind: 'http', url: `http://127.0.0.1:46001/machine-transfers/direct/imports/${uploadId}`,
-                            expiresAt: Date.now() + 60_000 }] } });
+                const deferred = deferredUploadPreparation;
+                deferredUploadPreparation = null;
+                if (deferred) { deferred.enter(); await deferred.wait; }
+                try {
+                    const uploadId = `workspace-upload-${uploads.length + 1}`;
+                    const recipient = createTransferRecipientKeyPair();
+                    importRecipients.set(uploadId, recipient);
+                    uploads.push({ uploadId, input, bytes: new Uint8Array(), finalized: false, aborted: false, finalizeAttempts: 0 });
+                    return FilesystemUploadOutputSchema.parse({ success: true, status: 'accepted',
+                        operationId: `workspace-upload-operation-${uploads.length}`, sourceId: input.source.sourceId,
+                        prepared: { uploadId, destDisplayPath: input.path, expectedSizeBytes: input.source.sizeBytes,
+                            chunkSizeBytes: 64 * 1024, recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
+                            expiresAt: Date.now() + 60_000,
+                            endpointCandidates: [{ kind: 'http', url: `http://127.0.0.1:46001/machine-transfers/direct/imports/${uploadId}`,
+                                expiresAt: Date.now() + 60_000 }] } });
+                } finally { deferred?.settle(); }
             }
             if (method === 'daemon.filesystem.download') {
                 const envelope = TargetedActionRpcRequestV1Schema.parse(payload);
@@ -342,6 +348,16 @@ export async function createWorkspaceFileDownloadHarness(options: Readonly<{
             const wait = new Promise<void>((resolve) => { release = resolve; });
             const settled = new Promise<void>((resolve) => { settle = resolve; });
             deferredDownloadPreparation = { enter, wait, settle };
+            return { entered, release, settled };
+        },
+        deferNextUploadPreparation() {
+            let enter!: () => void;
+            let release!: () => void;
+            let settle!: () => void;
+            const entered = new Promise<void>((resolve) => { enter = resolve; });
+            const wait = new Promise<void>((resolve) => { release = resolve; });
+            const settled = new Promise<void>((resolve) => { settle = resolve; });
+            deferredUploadPreparation = { enter, wait, settle };
             return { entered, release, settled };
         },
         requireNextUploadFinalizeRecovery() {

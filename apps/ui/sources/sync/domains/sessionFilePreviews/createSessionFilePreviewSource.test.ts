@@ -64,6 +64,56 @@ describe('createSessionFilePreviewSource', () => {
         expect(revokeObjectURL).toHaveBeenCalledWith('blob:preview-1');
     });
 
+    it('keeps cold workspace download preparation alive beyond the byte-request deadline', async () => {
+        harness = await createWorkspaceFileDownloadHarness({ name: 'hero.png', bytes: new Uint8Array([1, 2, 3, 4]) });
+        const preparation = harness.deferNextDownloadPreparation();
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:cold-preview');
+        vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const pending = createSessionFilePreviewSource({
+            scope: harness.scope, filePath: 'assets/hero.png', mimeType: 'image/png', maxBytes: 16,
+        });
+        try {
+            await preparation.entered;
+            const request = harness.requests.find(request => request.url.endsWith('/v1/actions/daemon.filesystem.download'));
+            expect(request?.signal).toBeDefined();
+            await vi.advanceTimersByTimeAsync(5_001);
+            expect(request?.signal?.aborted).toBe(false);
+            expect(createObjectURL).not.toHaveBeenCalled();
+            preparation.release();
+            const result = await pending;
+            expect(result).toMatchObject({ ok: true, source: { uri: 'blob:cold-preview', byteLength: 4 } });
+            if (result.ok && result.source.kind === 'object-url') result.source.revoke();
+        } finally {
+            preparation.release();
+            await pending;
+            vi.useRealTimers();
+        }
+    });
+
+    it('cancels workspace download preparation when the preview caller retires', async () => {
+        harness = await createWorkspaceFileDownloadHarness({ name: 'hero.png', bytes: new Uint8Array([1, 2, 3, 4]) });
+        const preparation = harness.deferNextDownloadPreparation();
+        const controller = new AbortController();
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:retired-preview');
+        const pending = createSessionFilePreviewSource({
+            scope: harness.scope, filePath: 'assets/hero.png', mimeType: 'image/png', maxBytes: 16, signal: controller.signal,
+        });
+        try {
+            await preparation.entered;
+            const request = harness.requests.find(request => request.url.endsWith('/v1/actions/daemon.filesystem.download'));
+            expect(request?.signal?.aborted).toBe(false);
+            controller.abort();
+            expect(request?.signal?.aborted).toBe(true);
+            preparation.release();
+            expect(await pending).toMatchObject({ ok: false });
+            expect(createObjectURL).not.toHaveBeenCalled();
+        } finally {
+            preparation.release();
+            await pending;
+        }
+    });
+
     it('creates a bounded preview from an exact opaque staged-media inspection without a workspace path', async () => {
         harness = await createWorkspaceFileDownloadHarness({
             name: 'incident.png', bytes: new Uint8Array([1, 2, 3, 4]), composerInspection: { id: 'stage_42' },

@@ -414,6 +414,7 @@ export async function prepareDirectImportSession(params: Readonly<{
     filesystemCopyInput?: FilesystemPreparedCopyInput;
     /** An actual accepted record; the enclosing copy owner prepared it once. */
     preparedImport?: Extract<FilesystemUploadOutput, { success: true; status: 'accepted' }>['prepared'];
+    /** Byte-request budget; filesystem acceptance borrows it only when explicitly supplied. */
     timeoutMs?: number | null;
     signal?: AbortSignal | null;
     preferScoped?: boolean;
@@ -428,8 +429,11 @@ export async function prepareDirectImportSession(params: Readonly<{
     if (params.preparedImport) prepare = { success: true, ...params.preparedImport };
     else if (params.request.t === 'session_file_upload_v1') {
         const sourceId = params.filesystemCopyInput?.source.sourceId ?? randomUUID();
+        // Upload/copy acceptance shares its containing Action's lifetime. The byte-request
+        // default must not become an implicit preparation deadline.
         const response = await (params.callAdmittedAction ?? callFilesystemTransferAction)({ actionId: params.filesystemCopyInput ? 'daemon.filesystem.copy' : 'daemon.filesystem.upload', machineId: params.machineId,
-            serverId: params.serverId, timeoutMs, signal: params.signal,
+            serverId: params.serverId, signal: params.signal,
+            ...(params.timeoutMs == null ? {} : { timeoutMs }),
             accountId: params.accountId,
             input: params.filesystemCopyInput ?? { rootPath: params.request.workingDirectory, path: params.request.path,
                 overwrite: params.request.overwrite,

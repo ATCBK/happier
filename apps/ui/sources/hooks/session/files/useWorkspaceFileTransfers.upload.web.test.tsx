@@ -78,6 +78,29 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         }));
     });
 
+    it('keeps cold upload preparation alive beyond the byte-request deadline', async () => {
+        const hook = await renderTransfers();
+        const preparation = harness.deferNextUploadPreparation();
+        let pending: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startUploads']> | undefined;
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        try {
+            await act(async () => { pending = hook.getCurrent().startUploads(uploadInput()); await preparation.entered; });
+            const request = harness.requests.find(request => request.url.endsWith('/v1/actions/daemon.filesystem.upload'));
+            expect(request?.signal).toBeDefined();
+            await act(async () => { await vi.advanceTimersByTimeAsync(5_001); });
+            expect(request?.signal?.aborted).toBe(false);
+            expect(hook.getCurrent().uploadState.status).toBe('uploading');
+            await act(async () => { preparation.release(); await expect(pending).resolves.toEqual({ ok: true }); });
+            expect(harness.uploads[0]).toMatchObject({ finalized: true, aborted: false });
+            expect(hook.getCurrent().uploadState.status).toBe('done');
+        } finally {
+            preparation.release();
+            await act(async () => { await pending; });
+            vi.useRealTimers();
+            await hook.unmount();
+        }
+    });
+
     it('keeps the idle transfer API stable when the same workspace scope is passed again', async () => {
         const hook = await renderHook(
             (props: Parameters<typeof useWorkspaceFileTransfers>[0]) => useWorkspaceFileTransfers(props),
