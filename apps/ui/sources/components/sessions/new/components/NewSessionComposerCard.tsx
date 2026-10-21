@@ -56,6 +56,7 @@ export function NewSessionComposerCard(input: Readonly<{
         hasSendableAttachments,
         agentInputAttachments,
         addWebFiles,
+        attachmentDropHint,
         addPickedAttachments,
         actionChips,
         attachmentRowItems,
@@ -187,6 +188,7 @@ export function NewSessionComposerCard(input: Readonly<{
                         agentPickerProbe={props.agentPickerProbe}
                         onAgentPickerVisibilityChange={props.onAgentPickerVisibilityChange}
                         onAttachmentsAdded={attachmentsUploadsEnabled ? addWebFiles : undefined}
+                        attachmentDropHint={attachmentDropHint}
                         hasSendableAttachments={composerHasSendableAttachments}
                         permissionMode={props.permissionMode}
                         allowedPermissionModes={props.allowedPermissionModes}

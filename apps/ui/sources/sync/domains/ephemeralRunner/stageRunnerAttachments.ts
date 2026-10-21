@@ -4,6 +4,7 @@ import type { AttachmentDraft } from '@/components/sessions/attachments/attachme
 import type { AttachmentsUploadFileSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
 import { openLocalUploadSourceReader } from '@/sync/runtime/files/localUploadSourceReader';
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { admitRunnerAttachmentSource } from './runnerAttachmentSourceAdmission';
 import {
     createRunnerArtifactAcquisitionSink,
     openRunnerArtifactAcquisitionCustody,
@@ -13,7 +14,7 @@ import {
 
 export class RunnerAttachmentStagingError extends Error {
     readonly code: 'runner_attachment_unavailable' | 'runner_attachment_too_large';
-    constructor(code: RunnerAttachmentStagingError['code']) {
+    constructor(code: RunnerAttachmentStagingError['code'], readonly reason?: 'folder') {
         super(code);
         this.name = 'RunnerAttachmentStagingError';
         this.code = code;
@@ -81,12 +82,14 @@ export async function stageRunnerAttachments(
     try {
         for (const draft of drafts) {
             signal?.throwIfAborted();
-            const reader = await openLocalUploadSourceReader(draft.source);
+            const admitted = admitRunnerAttachmentSource(draft.source);
+            if (!admitted.ok) throw new RunnerAttachmentStagingError(admitted.code, admitted.reason);
+            const reader = await openLocalUploadSourceReader(admitted.source);
             try {
                 const sizeBytes = reader.sizeBytes;
                 if (sizeBytes === null) throw new RunnerAttachmentStagingError('runner_attachment_unavailable');
                 if (sizeBytes > limits.maxFileBytes) throw new RunnerAttachmentStagingError('runner_attachment_too_large');
-                const described = describeSource(draft.source);
+                const described = describeSource(admitted.source);
                 const sink = await createRunnerArtifactAcquisitionSink({
                     artifactName: described.name,
                     sizeBytes,

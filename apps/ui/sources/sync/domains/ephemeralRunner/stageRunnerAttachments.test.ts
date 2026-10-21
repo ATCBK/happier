@@ -74,6 +74,16 @@ describe('creator-local Runner attachment staging', () => {
         expect(mocks.cleanup).toHaveBeenCalledOnce();
     });
 
+    it('refuses a folder at source admission with the existing typed error before acquiring file custody', async () => {
+        await expect(stageRunnerAttachments([{
+            id: 'folder-a', status: 'pending',
+            source: { kind: 'folder', name: 'project', mimeType: 'inode/directory', entries: [] },
+        }], { maxFileBytes: 1024 })).rejects.toMatchObject({
+            code: 'runner_attachment_unavailable', reason: 'folder',
+        });
+        expect(mocks.createSink).not.toHaveBeenCalled();
+    });
+
     it('registers the exact custody handle before writing its first durable byte', async () => {
         const events: string[] = [];
         mocks.createSink.mockResolvedValue({

@@ -50,6 +50,7 @@ import { normalizeReviewCommentDrafts } from '@/sync/domains/input/reviewComment
 import { useWorkspaceReviewCommentsDrafts } from '@/sync/domains/state/storage';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { admitRunnerAttachmentSource } from '@/sync/domains/ephemeralRunner/runnerAttachmentSourceAdmission';
 
 import {
     clearAcceptedNewSessionAttachmentDrafts,
@@ -113,6 +114,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
     hasSendableAttachments: boolean;
     agentInputAttachments: ReturnType<typeof useAttachmentDraftManager>['agentInputAttachments'];
     addWebFiles: ReturnType<typeof useAttachmentDraftManager>['addWebFiles'];
+    attachmentDropHint?: string;
     addPickedAttachments: ReturnType<typeof useAttachmentDraftManager>['addPickedAttachments'];
     actionChips: readonly AgentInputExtraActionChip[];
     attachmentRowItems: readonly AgentInputAttachmentsRowItem[];
@@ -147,13 +149,23 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         drafts,
         hasSendableAttachments,
         agentInputAttachments,
-        addWebFiles,
+        addWebFiles: addWebFilesToDrafts,
         addPickedAttachments,
         applyDraftPatch,
         replaceDrafts,
         getDraftsSnapshot,
         getSendableDraftsSnapshot,
     } = attachmentDraftManager;
+    const attachmentDropHint = params.isTemporaryComputer ? t('entityDragDrop.runner.filesOnly') : undefined;
+    const addWebFiles = React.useCallback<ReturnType<typeof useAttachmentDraftManager>['addWebFiles']>((files, options) => {
+        if (!params.isTemporaryComputer) return addWebFilesToDrafts(files, options);
+        const sources = options?.sources ?? files.map(file => ({ kind: 'web' as const, file }));
+        const admissions = sources.map(admitRunnerAttachmentSource);
+        if (admissions.some(admission => !admission.ok)) {
+            Modal.alert(t('common.error'), attachmentDropHint);
+        }
+        return addWebFilesToDrafts([], { sources: admissions.flatMap(admission => admission.ok ? [admission.source] : []) });
+    }, [addWebFilesToDrafts, params.isTemporaryComputer, attachmentDropHint]);
     const bindAttachmentPicker = params.composerDocument?.bindAttachmentPicker;
     React.useEffect(() => bindAttachmentPicker?.(() => {
         if (!attachmentsUploadsEnabled || params.isCreating || !filePickerRef.current) return false;
@@ -567,6 +579,7 @@ export function useNewSessionAttachmentsController(params: Readonly<{
         hasSendableAttachments,
         agentInputAttachments,
         addWebFiles,
+        attachmentDropHint,
         addPickedAttachments,
         actionChips: actionPresentation.actionChips,
         attachmentRowItems: actionPresentation.attachmentRowItems,

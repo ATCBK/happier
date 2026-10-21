@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { EntityDragItemV1, EntityDropAdmissionV1, EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
 import { createEntityDragDropRuntime } from '../entityDragDropRuntime';
 import type { EntityDropTarget } from '../entityDragDropTypes';
+import type { WindowPointer } from '../treeDragDropTypes';
 import { createEntityDragGestureAdapter } from '../entityDragGestureAdapter';
 import { installEntityDragCancellation } from '../entityDragCancellation';
 import { dispatchEscapeToLayerStack, ESCAPE_LAYER_PRIORITIES, registerEscapeLayer } from '@/keyboard/escape';
@@ -26,7 +27,7 @@ function fixture() {
 describe('mounted entity drag owner', () => {
     it('measures the release pointer before the final resolver and dispatches only the innermost target', async () => {
         const f = fixture();
-        let measured: unknown = null;
+        let measured: WindowPointer | null = null;
         const seen: unknown[] = [];
         f.runtime.registerTarget({ ...f.target, id: 'inner', parentId: 'target',
             measureBounds: async pointer => { measured = pointer; },

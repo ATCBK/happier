@@ -301,6 +301,32 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         deferOnWebSpy.mockImplementation((callback: () => void) => callback());
     });
 
+    it.each([true, false])('admits only reviewed files when the temporary launch flag is %s', async (isTemporaryComputer) => {
+        const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
+        const hook = await renderHook(() => useNewSessionAttachmentsController({
+            flowId: 'flow-runner-folder-admission', isCreating: false,
+            promptStore: createNewSessionPromptStore(''), handleCreateSession: vi.fn(),
+            selectedProfileId: null, targetServerId: 'server-a', isTemporaryComputer,
+        }));
+        await act(async () => {
+            hook.getCurrent().addWebFiles([], { sources: [
+                { kind: 'folder', name: 'project', mimeType: 'inode/directory', entries: [] },
+                { kind: 'memory', name: 'notes.txt', bytes: new Uint8Array([1]) },
+            ] });
+        });
+        expect(hook.getCurrent().drafts.map(draft => draft.source.kind)).toEqual(
+            isTemporaryComputer ? ['memory'] : ['folder', 'memory'],
+        );
+        if (isTemporaryComputer) {
+            expect(hook.getCurrent().attachmentDropHint).toBeTruthy();
+            expect(modalAlertSpy).toHaveBeenCalledWith(expect.any(String), hook.getCurrent().attachmentDropHint);
+        } else {
+            expect(hook.getCurrent().attachmentDropHint).toBeUndefined();
+            expect(modalAlertSpy).not.toHaveBeenCalled();
+        }
+        await hook.unmount();
+    });
+
     it('passes a live input text override through simple sends before prompt state catches up', async () => {
         const { useNewSessionAttachmentsController } = await import('./useNewSessionAttachmentsController');
         const handleCreateSession = vi.fn();
