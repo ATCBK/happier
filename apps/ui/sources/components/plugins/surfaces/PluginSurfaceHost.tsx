@@ -32,7 +32,7 @@ import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef
 import type { ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
 import type { PluginUiTargetedSurfaceMountCoreV1, DaemonContributionRegistryProjectionMountedTargetV1, PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginDeclarativePreparedTargetedSurfaceInventoryEntryV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDocument';
-import { getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
 import { isPluginSurfaceMachineBound, usePluginSurfaceExecutionOrigin } from './pluginSurfaceExecutionOrigin';
 import {
@@ -150,6 +150,7 @@ import type {
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import {
     readPluginUiContributionOrigin,
+    readPluginUiContributionSupplies,
     readPluginUiProjectionEntryExecutionOrigin,
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
@@ -205,7 +206,7 @@ import {
     type PluginSurfaceEnvironment,
     type PluginSurfaceTargetResolution,
 } from './pluginSurfaceContext';
-import { projectPluginUiHostPalette } from './pluginUiThemeProjection';
+import { usePluginUiHostPalette } from './pluginUiThemeProjection';
 import { useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { useNavigationChromeShowsBack } from '@/components/ui/layout/navigationTitleChrome';
 import { usePluginPageBackStepArmed } from '@/components/plugins/shared/PluginPageBackStep';
@@ -261,6 +262,7 @@ import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { usePluginUiEphemeralSharedScopeBinding } from './pluginUiEphemeralSharedScope';
 import {
     pluginUiProjectionAdmissionTargetKey,
@@ -1663,7 +1665,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     const canonicalTargetAuthorityKey = getPluginSurfaceTargetAuthorityKey(canonicalRenderIdentity.target);
     const { theme: hostTheme } = useUnistyles();
     const resolveMaterialColor = useGlassMaterialColorResolver(useContainingGlassSurfaceGroup());
-    const projectedHostPalette = projectPluginUiHostPalette(hostTheme);
+    const projectedHostPalette = usePluginUiHostPalette(hostTheme);
     const hostPaletteRef = React.useRef(projectedHostPalette);
     if (stableJsonStringify(projectedHostPalette) !== stableJsonStringify(hostPaletteRef.current)) {
         hostPaletteRef.current = projectedHostPalette;
@@ -2394,7 +2396,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     const ordinaryResourceContext = React.useMemo(() => mountedInstanceKey ? Object.freeze({
         kind: 'surface' as const, mountInstanceKey: mountedInstanceKey, launchInput: ordinaryLaunchInput ?? null,
     }) : undefined, [mountedInstanceKey, ordinaryLaunchInput]);
-    const availabilityReader = useActivePluginAccountAvailabilityReader();
+    const availabilityReader = useActivePluginAccountAvailabilityReader(mountedPluginId);
     // Registry projections are immutable for the lifetime of one render input.
     // Parse that exact input once rather than cloning its normalized binding on
     // every unrelated host render. Object identity is only the React cache key:
@@ -2442,12 +2444,24 @@ function PluginSurfaceHostMount(props: Readonly<(
         includeMachineCandidates: showsExecutionOriginSelector,
         contextualTarget: props.contextualExecutionTarget,
     });
+    // A host-only renderer still has a real mounted caller. Retain only the
+    // producer already stamped on this declaration, never elect a Machine for
+    // presentation or turn generic executeAction into a daemon requirement.
+    const presentationSupply = React.useMemo(() => {
+        if (!accountUnionMount || needsMachineExecution || !descriptor) return null;
+        const producer = readPluginUiContributionOrigin(descriptor);
+        const producerOrigin = producer?.executionOrigin;
+        if (!producerOrigin || !descriptor.occurrenceId) return null;
+        return readPluginUiContributionSupplies(descriptor).find(supply => supply.executionOrigin
+            && supply.occurrenceId === descriptor.occurrenceId
+            && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, producerOrigin)) ?? null;
+    }, [accountUnionMount, descriptor, needsMachineExecution]);
     // Producer snapshots are immutable; preserve their derived origin between
     // unrelated parent and Availability-only updates.
     const origin = React.useMemo(() => accountUnionMount
-        ? needsMachineExecution ? pluginExecution.selectedSupply : null
+        ? needsMachineExecution ? pluginExecution.selectedSupply : presentationSupply
         : descriptor ? readPluginUiContributionOrigin(descriptor) : null,
-    [accountUnionMount, descriptor, needsMachineExecution, pluginExecution.selectedSupply]);
+    [accountUnionMount, descriptor, needsMachineExecution, pluginExecution.selectedSupply, presentationSupply]);
     // The same producer-stamped origin backs both unioned and direct machine
     // projections. A mounted action never reconstructs this ref from UI facts.
     const executionOrigin = React.useMemo(() => targetedBinding?.mount.executionOrigin
@@ -2530,16 +2544,19 @@ function PluginSurfaceHostMount(props: Readonly<(
     const daemonSettingsInteraction = usePluginSurfaceDaemonInteraction({
         machineId: props.daemonSettingsTarget?.machineId ?? machineId,
     });
-    // Capture the incumbent Account lifetime once for this mount. It remains an
+    // Acquire the exact routed Account lifetime once for this mount. It remains an
     // opaque cancellation/currentness input: neither the surface host nor the
     // artifact learns an Account id or creates another epoch.
     //
     // Refresh on retirement so presentation fails closed synchronously even if
-    // no unrelated parent state happens to rerender this host first. The active
-    // Account-scope owner remains the only lifecycle owner; this mount merely
+    // no unrelated parent state happens to rerender this host first. The existing
+    // credential-scope owner remains the only lifecycle owner; this mount merely
     // observes its existing retirement callback.
     const [, refreshAfterAccountRetirement] = React.useReducer((revision: number) => revision + 1, 0);
-    const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const routedAccountBindings = useServerCredentialAccountScopeBindings(serverId ? [serverId] : []);
+    const accountLifetime: ActiveServerAccountScopeLifetime | null = serverId
+        ? routedAccountBindings.values().next().value ?? null
+        : captureActiveServerAccountScopeLifetime();
     const reactNativeFeatureEnabled = useFeatureEnabled('plugins.ui.reactNativeBundles', {
         scopeKind: 'spawn', serverId: serverId ?? accountLifetime?.scope.serverId ?? '',
     });
@@ -2555,9 +2572,9 @@ function PluginSurfaceHostMount(props: Readonly<(
     const mountedTarget = React.useMemo(() => readMountedTarget({
         pluginId: mountedTargetPluginId,
         occurrenceId: accountExecutionOrigin?.custodyId ?? (accountUnionMount
-            ? needsMachineExecution ? pluginExecution.selectedSupply?.occurrenceId : undefined
+            ? needsMachineExecution ? pluginExecution.selectedSupply?.occurrenceId : presentationSupply?.occurrenceId
             : readOptionalString(descriptor?.occurrenceId)),
-    }), [accountExecutionOrigin?.custodyId, accountUnionMount, descriptor?.occurrenceId, mountedTargetPluginId, needsMachineExecution, pluginExecution.selectedSupply?.occurrenceId]);
+    }), [accountExecutionOrigin?.custodyId, accountUnionMount, descriptor?.occurrenceId, mountedTargetPluginId, needsMachineExecution, pluginExecution.selectedSupply?.occurrenceId, presentationSupply?.occurrenceId]);
     // Every current public SurfaceContext carries this target-scoped snapshot;
     // an admitted empty point list is valid, but an absent snapshot is not
     // silently rewritten into a legacy context.
@@ -2574,7 +2591,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     // The Account catalog may retain another installation's package row. Its
     // presentation cannot stamp the selected Machine's mounted caller custody.
     const mountedTargetSourceCustody = accountExecutionOrigin?.sourceCustody ?? (accountUnionMount
-        ? pluginExecution.selectedSupply?.sourceCustody
+        ? (needsMachineExecution ? pluginExecution.selectedSupply : presentationSupply)?.sourceCustody
         : executionOrigin && 'sourceRef' in executionOrigin
             ? executionOrigin.sourceRef.sourceCustody
             : mountedTargetRow?.sourceCustody);
@@ -2587,6 +2604,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         setMountedTargetRefreshKey((current) => current + 1);
     }, []);
     const mountedTargetRead = useMountedTargetedContributions({
+        accountLifetime,
         accountExecutionOrigin: accountExecutionOrigin ?? undefined,
         machineId,
         serverId,
@@ -2598,6 +2616,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     // The per-machine projection the shell already holds: actions, composer
     // attachments and child mounts come from it, never from the target read.
     const mountedMachineProjection = useDaemonMergedProjectionInputs({
+        accountLifetime,
         machineId,
         serverId,
         enabled: mountedTargetSnapshotRequired,
