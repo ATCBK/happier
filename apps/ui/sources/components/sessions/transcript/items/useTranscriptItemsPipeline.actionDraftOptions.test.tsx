@@ -119,6 +119,7 @@ function deps(resolveActionDraftFieldOptions: Deps['resolveActionDraftFieldOptio
         sessionThinking: false,
         targetWindowActiveRef: { current: false },
         transcriptToolCallsCollapsedPreviewCountSetting: 3,
+        toolCallsGroupChromeVariant: 'feed_background',
     };
 }
 async function renderPipeline(card = false, expectedStatus: 'ready' | 'failed' = 'ready') {
