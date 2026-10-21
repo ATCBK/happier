@@ -1,4 +1,5 @@
 /** @vitest-environment jsdom */
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import * as React from 'react';
 import { resolveHref } from 'expo-router/build/link/href';
 import { act } from 'react-test-renderer';
@@ -167,7 +168,7 @@ async function restoreAttemptAccount() {
     const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
     sessionHttp = createSessionMetadataHttpBoundary(() => getStorage().getState().sessions);
     connection = await restoreServerAccountForTest({ serverUrl: 'https://voice-attempt.test', serverIdentityId: 'srv_voice_attempt_work',
-        accountId: 'attempt-account', credentialScope: 'restored-home', activation: 'switch', request: async (url, init) => {
+        accountId: 'attempt-account', credentialScope: 'restored-home', activation: 'switch', request: createSessionReadBatchFetchBoundary(async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/features') return Response.json(features);
             if (path.endsWith('/messages')) return Response.json(SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false }));
@@ -180,7 +181,7 @@ async function restoreAttemptAccount() {
                 bindingNonce: 'hosted-nonce', expiresAtMs: Date.now() + 60_000 });
             if (path === '/v1/voice/session/complete' || path === '/v1/voice/session/release') return Response.json({ ok: true });
             return null;
-        } });
+        }) });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     expect(await TokenStorage.getCredentials()).toEqual(connection.credentials);
     const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');

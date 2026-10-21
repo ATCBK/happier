@@ -14,6 +14,7 @@ import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindi
 import { storage } from '@/sync/domains/state/storage';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
@@ -1470,15 +1471,12 @@ describe('VoiceExecutionTransport (streaming)', () => {
     };
     setControllerState(() => sessionState);
     daemonStreamRead.mockImplementation(async () => {
-      sessionState.sessionMessages.sys_voice.messages = [
-        {
-          kind: 'agent-text',
-          id: 'm-agent-1',
-          localId: null,
-          createdAt: 123,
-          text: 'LOCAL_HELLO',
+      sessionState.sessionMessages.sys_voice = createSessionMessagesFixture({ isLoaded: true,
+        messageIdsOldestFirst: ['m-user-1', 'm-agent-1'], messagesById: {
+          'm-user-1': { kind: 'user-text', id: 'm-user-1', localId: 'voice-transcript-input', createdAt: 122, text: 'hello' },
+          'm-agent-1': { kind: 'agent-text', id: 'm-agent-1', localId: null, createdAt: 123, text: 'LOCAL_HELLO' },
         },
-      ];
+      });
       storage.setState({ sessionMessages: sessionState.sessionMessages });
       return {
         streamId: 'stream-1',
@@ -1490,7 +1488,9 @@ describe('VoiceExecutionTransport (streaming)', () => {
 
     const controller = createVoiceExecutionTransport();
 
-    await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).resolves.toMatchObject({
+    await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello', {
+      userTranscript: { mode: 'persist', localId: 'voice-transcript-input' },
+    })).resolves.toMatchObject({
       assistantText: 'LOCAL_HELLO',
       actions: [],
     });

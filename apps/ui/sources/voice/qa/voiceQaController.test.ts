@@ -1,4 +1,5 @@
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { SessionReadBatchRequestV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 const qaAddress = (sessionId: string): SessionAddress => ({ serverId: getActiveServerSnapshot().serverId, sessionId });
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -337,7 +338,10 @@ describe('voiceQaController', () => {
       starting = controller.start({ sessionAddress: qaAddress('s1') });
       await starting;
       expect(useVoiceQaStore.getState().status).toBe('running');
-      await vi.waitFor(() => expect(readLocalVoiceHttpRequests().some(request => request.path === '/v2/sessions/s1')).toBe(true));
+      await vi.waitFor(() => expect(readLocalVoiceHttpRequests().some(request => {
+        const input = SessionReadBatchRequestV1Schema.safeParse(request.body);
+        return request.path === '/v2/sessions/read-batch' && input.success && input.data.sessionIds.includes('s1');
+      })).toBe(true));
       expect(useVoiceQaStore.getState().entries.some(entry => entry.text.includes('user_action=1(actual_question)'))).toBe(false);
       held.resolve(response);
       await vi.waitFor(() => expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'system'
@@ -500,9 +504,10 @@ describe('voiceQaController', () => {
       } }, completedRequests: {} },
     });
     const remote = createSessionMetadataHttpBoundary(() => ({ s1: remoteTarget }));
-    setLocalVoiceHttpResponder(request => request.method === 'GET' && request.path === '/v2/sessions/s1'
+    const targetRefresh = vi.fn<NonNullable<Parameters<typeof setLocalVoiceHttpResponder>[0]>>(request => request.method === 'GET' && request.path === '/v2/sessions/s1'
       && useVoiceQaStore.getState().status === 'running'
       ? remote.handle('https://local-voice-actions.example.test/v2/sessions/s1') ?? undefined : undefined);
+    setLocalVoiceHttpResponder(targetRefresh);
     const controller = prepareLocalQaSession();
     onTestFinished(async () => {
       setLocalVoiceHttpResponder(null);
@@ -511,7 +516,7 @@ describe('voiceQaController', () => {
     await controller.start({ sessionAddress: qaAddress('s1') });
     await vi.waitFor(() => expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'system'
       && entry.text.includes('Pending requests detected in target-session context after refresh: yes'))).toBe(true));
-    expect(readLocalVoiceHttpRequests().some(request => request.path === '/v2/sessions/s1')).toBe(true);
+    expect(targetRefresh).toHaveBeenCalledWith(expect.objectContaining({ method: 'GET', path: '/v2/sessions/s1' }));
     const breakdowns = useVoiceQaStore.getState().entries.filter(entry => entry.kind === 'system'
       && entry.text.includes('Pending request breakdown:')).map(entry => entry.text);
     expect(breakdowns, breakdowns.join('\n')).toContain(

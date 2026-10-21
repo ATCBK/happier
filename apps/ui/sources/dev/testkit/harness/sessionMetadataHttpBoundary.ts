@@ -5,6 +5,7 @@ import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtur
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
 export interface SessionMetadataHttpBoundary {
     writes: string[];
@@ -47,6 +48,16 @@ export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<R
         rejectNextPatch(sessionId: string) { rejectPatchFor = sessionId; },
         handle(input: URL | RequestInfo, init?: RequestInit): Response | null {
             const path = new URL(String(input)).pathname;
+            const turns = /^\/v1\/sessions\/([^/]+)\/turns$/.exec(path);
+            if (turns) {
+                const id = decodeURIComponent(turns[1]!);
+                const session = readSessions()[id];
+                const stored = records.get(id);
+                if (!session && !stored) return Response.json({ error: 'Session not found' }, { status: 404 });
+                return Response.json(SessionTurnsProjectionV1Schema.parse(session?.sessionTurns ?? {
+                    v: 1, sessionId: id, updatedAt: session?.updatedAt ?? stored!.updatedAt, turns: [],
+                }));
+            }
             if (path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
                 snapshot: { schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0,
                     pins: [], folders: [], folderAssignments: [], tags: [], tagAssignments: [], orderEntries: [], labels: [] },

@@ -1,4 +1,5 @@
 import React from 'react';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 // Genuine browser persistence SDK; Sync/outbox admission and codecs stay real.
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
@@ -27,7 +28,7 @@ import { SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { installVoiceWebRtcBrowserBoundary, TestVoiceAudioContext } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import type { VoiceAttemptControlProjection } from '@/components/voice/attempt/useVoiceAttemptControl';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createAccountSettingsHttpBoundary } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 
@@ -119,7 +120,7 @@ async function applyAccountScope(scope: AccountScope | null, retiringSession?: R
   accountConnection = await restoreServerAccountForTest({ serverUrl, accountId: scope.accountId,
     ...(previousConnection ? { activation: 'switch' as const } : {}),
     ...(previousConnection ? { additionalRequestOrigins: [previousConnection.home.serverUrl] } : {}),
-    request: async (url, init) => {
+    request: createSessionReadBatchFetchBoundary(async (url, init) => {
       const requested = new URL(String(url));
       const path = requested.pathname;
       if (previousConnection && requested.origin === new URL(previousConnection.home.serverUrl).origin
@@ -161,7 +162,7 @@ async function applyAccountScope(scope: AccountScope | null, retiringSession?: R
       if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: scope.accountId });
       if (path === '/v1/account/saved-secrets/resources/materials') return Response.json({ resources: resourceMaterials });
       return Response.json({}, { status: 404 });
-    },
+    }),
   });
   serverUrlsById.set(accountConnection.home.id, serverUrl);
   const appliedScope = { serverId: accountConnection.home.id, accountId: scope.accountId };
@@ -269,7 +270,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
       for (const listener of socket.listeners('connect')) listener();
       return socket;
     });
-    socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value; return socket; });
+    socket.timeout = vi.fn<typeof socket.timeout>(value => { timeoutMs = value ?? null; return socket; });
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
       if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
       // Socket.IO's payload is untyped; the framed DTO is narrowed here and each
@@ -337,7 +338,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
     serverUrl, accountId: 'account-a', credentialScope: 'restored-home',
     activation: 'switch',
     ...(input.codex ? { configureSocket } : {}),
-    request: async (url, init) => {
+    request: createSessionReadBatchFetchBoundary(async (url, init) => {
       const path = new URL(String(url)).pathname;
       const preparation = settingsHttp.handle(url, init) ?? answerVoiceRealtimePreparationHttpRequest(url, {});
       let settingsPost: typeof httpRequests[number]['settingsPost'];
@@ -355,6 +356,8 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
       if (preparation) return preparation;
       if (path === '/v1/account/profile') return Response.json(profile);
       if (input.codex && path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' })]);
+      if (input.codex && path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+        id => id === machineId ? createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
       if (input.codex && path === `/v1/machines/${machineId}`) return Response.json({ machine: createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }) });
       if (input.codex && path === `/v1/machines/${machineId}/access`) {
         const row = createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' });
@@ -389,7 +392,7 @@ async function prepareGeneratedVoiceRuntime(input: Readonly<{ currentUi?: boolea
       const sessionResponse = sessionHttp.handle(url, init);
       if (sessionResponse) return sessionResponse;
       return Response.json({}, { status: 404 });
-    },
+    }),
   });
   const account = accountConnection;
   if (input.codex) {
