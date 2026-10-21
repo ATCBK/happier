@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { LocalServiceNativePrerequisiteV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 
@@ -99,6 +99,19 @@ describe('useLocalServiceActionRunner', () => {
     afterEach(standardCleanup);
     beforeEach(() => modalSpies.alert.mockReset());
 
+    it('does not settle an unknown Stop from the binding that was already running', async () => {
+        const value: { current: ReturnType<typeof useLocalServiceActionRunner> | null } = { current: null };
+        function Harness() {
+            value.current = useLocalServiceActionRunner({ presentation: 'inline', observedNativeBinding: true });
+            return React.createElement('View');
+        }
+        await renderScreen(<Harness />);
+        await act(async () => { await value.current?.run({ id: 'stop', failureTitle: 'Could not stop',
+            action: async () => projectUnexpectedActionFailureV1(null) }); });
+        expect(value.current?.failure?.reasonCode).toBe('action_outcome_unknown');
+        expect(value.current?.failure?.retry).toBeNull();
+    });
+
     it.each(['approval_canceled', 'approval_rejected', 'cancelled'])('clears pending without success or failure presentation when shared policy is declined (%s)', async errorCode => {
         const { value, Harness } = renderRunner();
         await renderScreen(<Harness />);
@@ -139,7 +152,7 @@ describe('useLocalServiceActionRunner', () => {
         expect(value.current?.failure).toMatchObject({ title: 'Could not start api', reasonCode: 'native_tool_unavailable' });
         expect(value.current?.failure?.body).toContain('Docker');
         expect(value.current?.failure?.details).toContain('native_tool_unavailable');
-        await act(async () => { value.current?.failure?.retry(); });
+        await act(async () => { value.current?.failure?.retry?.(); });
         expect(action).toHaveBeenCalledTimes(2);
         expect(value.current?.failure).not.toBeNull();
         await act(async () => { value.current?.dismissFailure(); });

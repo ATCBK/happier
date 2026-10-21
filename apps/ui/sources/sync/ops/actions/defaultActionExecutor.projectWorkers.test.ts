@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -34,6 +35,21 @@ beforeEach(async () => {
 afterEach(async () => { await homes.reset(); });
 
 describe('worker Actions through the captured UI Home', () => {
+  it.each(['ui', 'agent', 'voice'] as const)('requires the native Service review before publishing the %s approval', async surface => {
+    await homes.requireUiApproval(serverId, 'localServices.launcher.start');
+    const request = { machineId: 'worker-machine', targetId: 'web',
+      workspace: { serverId: 'srv_worker_actions', machineId: 'source', workspaceId: 'checkout', rootPath: '/source' },
+      declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'web' } } };
+    rpc.machine.mockResolvedValueOnce({ protocolVersion: 1, snapshot: { v: 1, machineId: 'worker-machine', updatedAt: 1, targets: [] },
+      startReview: { ok: false, errorCode: 'project_service_effect_changed', error: 'project_service_effect_changed' } });
+    expect(await createDefaultActionExecutor().execute('localServices.launcher.start', request, {
+      serverId, expectedAccountId: 'owner', surface,
+    })).toMatchObject({ ok: false, errorCode: 'project_service_effect_changed' });
+    expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId: 'srv_worker_actions', accountId: 'owner',
+      machineId: 'worker-machine', method: RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT,
+      payload: { machineId: 'worker-machine', startReview: { request, surface } } }));
+  });
+
   it.each(['ui', 'agent'] as const)('lists Sync relationships from the %s Action surface on the exact controller', async surface => {
     const result = WorkspaceSyncRelationshipsListRpcResultV1Schema.parse({ controllerMachineId: 'controller', sets: [], relationships: [], remoteRelationships: [],
       membership: { workspaceRefId: null, found: null }, discoveryAvailable: true });

@@ -29,6 +29,7 @@ type UnknownRecord = Record<string, unknown>;
 export type LocalServiceActionOutcome =
     | Readonly<{ kind: 'succeeded' }>
     | Readonly<{ kind: 'cancelled' }>
+    | Readonly<{ kind: 'outcome_unknown'; reasonCode: 'action_outcome_unknown' }>
     | Readonly<{ kind: 'approval_pending'; artifactId: string; actionId: string }>
     /**
      * `reasonCode` is `null` only when the action never dispatched — a guard in the action hook
@@ -68,15 +69,16 @@ export function readLocalServiceActionFailureReason(result: unknown): string | n
  *
  *  1. `undefined` — the hook's own guard refused to dispatch (unaddressable target, missing
  *     machineId). No code, but a failure.
- *  2. `{ ok: false, errorCode }` — the action-executor front door refused before the daemon saw it.
+ *  2. `{ ok: false, errorCode }` — the Action refused, failed, or cannot confirm its outcome.
  *  3. `{ status: 'denied' | 'failed', reasonCode }` — the daemon refused or tried and failed. The
  *     protocol guarantees a `reasonCode` on both (`LocalServiceActionResultV1Schema` superRefine),
  *     and the launcher/public-preview responses carry the same `status` discriminator.
  *
  * Anything else is a success payload the caller already knows how to parse.
  */
-function readFailureOutcome(result: unknown): Extract<LocalServiceActionOutcome, { kind: 'failed' | 'cancelled' }> {
+function readFailureOutcome(result: unknown): Extract<LocalServiceActionOutcome, { kind: 'failed' | 'cancelled' | 'outcome_unknown' }> {
     const reasonCode = readLocalServiceActionFailureReason(result);
+    if (reasonCode === 'action_outcome_unknown') return { kind: 'outcome_unknown', reasonCode };
     if (isActionApprovalDeclinedErrorCode(reasonCode) || reasonCode === 'cancelled') return { kind: 'cancelled' };
     const record = asRecord(result);
     const prerequisite = LocalServiceNativePrerequisiteV1Schema.safeParse(reasonCode === 'native_tool_unavailable'
@@ -151,7 +153,7 @@ export function presentLocalServiceActionFailure(input: Readonly<{
     ] : undefined);
 }
 
-/** A failed run kept for the owner to draw in place (see `LocalServiceActionFailureNotice`). */
+/** An action needing attention, drawn in place (see `LocalServiceActionFailureNotice`). */
 export type LocalServiceActionFailure = Readonly<{
     title: string;
     reasonCode: string | null;
@@ -160,14 +162,17 @@ export type LocalServiceActionFailure = Readonly<{
     refusal: boolean;
     prerequisite?: LocalServiceNativePrerequisiteV1;
     establishmentFailure?: LocalServiceEstablishmentFailureV1;
-    /** Runs the same action again. */
-    retry: () => void;
+    /** This Start can settle when its real native binding is observed. Other actions cannot. */
+    awaitingNativeStart?: boolean;
+    /** Repeats a definitively failed action; unknown outcomes must be inspected instead. */
+    retry: (() => void) | null;
 }>;
 
 type LocalServiceActionRunInput = Readonly<{
     id: string;
     failureTitle: string;
     action: () => Promise<unknown>;
+    observeNativeStart?: boolean;
 }>;
 
 export type LocalServiceActionRunner = Readonly<{
@@ -192,10 +197,15 @@ export type LocalServiceActionRunner = Readonly<{
  * A failure opens a dialog, unless the owner has a place to read it in (`presentation: 'inline'`, a
  * row): then the runner keeps it as `failure` and the owner draws it where the action was taken.
  */
-export function useLocalServiceActionRunner(options?: Readonly<{ presentation?: 'dialog' | 'inline' }>): LocalServiceActionRunner {
+export function useLocalServiceActionRunner(options?: Readonly<{ presentation?: 'dialog' | 'inline'; observedNativeBinding?: boolean }>): LocalServiceActionRunner {
     const inline = options?.presentation === 'inline';
     const [pendingId, setPendingId] = React.useState<string | null>(null);
     const [failure, setFailure] = React.useState<LocalServiceActionFailure | null>(null);
+    // Only a real managed binding settles a lost Start acknowledgement; a
+    // refreshed scan or another absent projection cannot prove nonacceptance.
+    React.useEffect(() => {
+        if (options?.observedNativeBinding) setFailure(current => current?.awaitingNativeStart ? null : current);
+    }, [options?.observedNativeBinding, failure?.awaitingNativeStart]);
     const mountedRef = React.useRef(true);
     // Re-arm on mount, not only disarm on cleanup. React replays effects in development, so a
     // guard that is only ever set to `false` never recovers — and the row it belongs to would
@@ -218,16 +228,19 @@ export function useLocalServiceActionRunner(options?: Readonly<{ presentation?: 
                 setPendingId((current) => (current === input.id ? null : current));
             }
         }
-        if (outcome.kind === 'failed') {
+        if (outcome.kind === 'failed' || outcome.kind === 'outcome_unknown') {
+            const unknown = outcome.kind === 'outcome_unknown';
             const cause = {
                 reasonCode: outcome.reasonCode,
-                ...(outcome.prerequisite ? { prerequisite: outcome.prerequisite } : {}),
-                ...(outcome.establishmentFailure ? { establishmentFailure: outcome.establishmentFailure } : {}),
+                ...(outcome.kind === 'failed' && outcome.prerequisite ? { prerequisite: outcome.prerequisite } : {}),
+                ...(outcome.kind === 'failed' && outcome.establishmentFailure ? { establishmentFailure: outcome.establishmentFailure } : {}),
             };
-            if (!inline) presentLocalServiceActionFailure({ title: input.failureTitle, ...cause });
+            const title = unknown ? t('localServices.rowStatus.unknown') : input.failureTitle;
+            if (!inline) presentLocalServiceActionFailure({ title, ...cause });
             else if (mountedRef.current) {
-                setFailure({ title: input.failureTitle, ...describeLocalServiceActionFailure(cause), ...cause,
-                    retry: () => { void run(input); } });
+                setFailure({ title, ...describeLocalServiceActionFailure(cause), ...cause,
+                    ...(unknown && input.observeNativeStart ? { awaitingNativeStart: true } : {}),
+                    retry: unknown ? null : () => { void run(input); } });
             }
             return false;
         }

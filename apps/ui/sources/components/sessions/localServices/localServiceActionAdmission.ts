@@ -1,7 +1,7 @@
 import type { RuntimeActionExecuteArgs } from '@happier-dev/protocol/actions/executor/types';
 import * as React from 'react';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { readProjectSetupConsentFailureV1, type ProjectSetupConsentFailureDetailsV1 } from '@happier-dev/protocol/actions/projectActionFamily';
 
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
@@ -86,13 +86,17 @@ export async function executeLocalServiceActionWithAdmission(input: Readonly<{
         ...(admission.expectedAccountId ? { expectedAccountId: admission.expectedAccountId } : {}),
         ...(admission.signal ? { signal: admission.signal } : {}),
     };
+    let dispatched = false;
+    const retired = () => dispatched && request.actionId === 'localServices.launcher.start'
+        ? projectUnexpectedActionFailureV1(null, context.actionRequestId ?? undefined) : cancelled();
     const outcome = await awaitActionApprovalResult<unknown, Readonly<{ value: unknown }>>({
         async execute(callbacks) {
             const args = { ...request, context };
+            dispatched = true;
             const value = await (input.confirmation
                 ? input.execute(args, { presentUserActionConfirmation: input.confirmation })
                 : input.execute(args));
-            if (!isLocalServiceActionAdmissionCurrent(admission)) return { value: cancelled() };
+            if (!isLocalServiceActionAdmissionCurrent(admission)) return { value: retired() };
             const approval = ActionApprovalRequestCreatedResultSchema.safeParse(value);
             if (!approval.success) return { value };
             if (approval.data.actionId !== request.actionId) return { value: { ok: false, errorCode: 'approval_binding_mismatch', error: 'approval_binding_mismatch' } };
@@ -109,9 +113,9 @@ export async function executeLocalServiceActionWithAdmission(input: Readonly<{
             }));
             return { approvalPending: true };
         },
-        succeeded: value => ({ value: isLocalServiceActionAdmissionCurrent(admission) ? value : cancelled() }),
+        succeeded: value => ({ value: isLocalServiceActionAdmissionCurrent(admission) ? value : retired() }),
         failed: (code, failure) => ({ value: failure ?? { ok: false, errorCode: code, error: code } }),
-        aborted: () => ({ value: cancelled() }),
+        aborted: () => ({ value: retired() }),
         ...(admission.signal ? { signal: admission.signal } : {}),
     });
     return outcome.value;

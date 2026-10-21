@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { Platform, View } from 'react-native';
+import { isLocalServiceStateRunningV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -405,12 +406,14 @@ export function ServiceRowView(props: Readonly<{
     const relocating = relocation.relocating;
     const operationText = recoverable ? t('localServices.rowStatus.stopped') : relocating ? relocation.progressText : null;
     // A refused action reads in place under its own row, never in a dialog over the page.
-    const runner = useLocalServiceActionRunner({ presentation: 'inline' });
+    const runner = useLocalServiceActionRunner({ presentation: 'inline',
+        observedNativeBinding: row.target.sourceClass?.kind === 'managed_service'
+            && isLocalServiceStateRunningV1(row.target.serviceState) && !hasUnsettledLocalServiceCustody(row) });
     const primary = row.primaryAction;
     // The one decision of what this entry offers, shared with the Processes port menu (plan 30 RU-3).
     const offered = resolveLocalServiceEntryActions(row, props);
     const canOpen = !relocating && offered.open !== null;
-    const canStart = !relocating && offered.start !== null;
+    const canStart = !relocating && !runner.failure?.awaitingNativeStart && offered.start !== null;
     const startLabel = t('localServices.actions.startA11y');
     const canTerminate = !relocating && offered.terminateDetected;
     const canForget = offered.forget;
@@ -439,14 +442,15 @@ export function ServiceRowView(props: Readonly<{
     }, [inlinePendingId, primary, props, row.title, runner]);
 
     const handleStart = React.useCallback(() => {
-        if (primary?.kind !== 'start') return undefined;
+        if (!canStart || primary?.kind !== 'start') return undefined;
         if (recoverable) relocation.clear();
         return runner.run({
             id: inlinePendingId,
             failureTitle: t('localServices.actions.failureTitle.start', { service: row.title }),
+            observeNativeStart: true,
             action: async () => props.onStartLauncherTarget?.(primary.target),
         });
-    }, [inlinePendingId, primary, props, recoverable, relocation.clear, row.title, runner]);
+    }, [canStart, inlinePendingId, primary, props, recoverable, relocation.clear, row.title, runner]);
 
     const handleTerminate = React.useCallback(() => {
         void (async () => {

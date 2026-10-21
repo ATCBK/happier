@@ -31,7 +31,7 @@ export type LocalServiceLauncherStartClientInput = Readonly<{
 
 export type LocalServiceLauncherStartClientResult =
     | Readonly<{ ok: true; response: DaemonLocalServiceLauncherStartResponseV1 }>
-    | Readonly<{ ok: false; reason: LocalServiceLauncherRouteFailureReason }>;
+    | Readonly<{ ok: false; reason: LocalServiceLauncherRouteFailureReason | 'outcome_unknown' }>;
 
 // LSV-1 launcher leaves (UI → daemon machine-RPC). `openPreview`/`registerPreview` are bound to
 // a launch target; `history.clear` is target-less. They mirror the launcher.start client shape.

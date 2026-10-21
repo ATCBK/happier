@@ -122,6 +122,43 @@ describe('ServiceRowView', () => {
     const portInUse = { status: 'denied', reasonCode: 'plugin_managed_service_establishment_failed',
         establishmentFailure: { cause: 'port_in_use', port: 5173, exitCode: 1, sameProject: true, lastStderrLine: 'Error: listen EADDRINUSE :::5173' } };
 
+    it('keeps an unconfirmed Start inspect-only until the native feed observes the actual binding', async () => {
+        const { row, target } = declaredStartRow();
+        const start = vi.fn(async () => ({ ok: false, errorCode: 'action_outcome_unknown', error: 'action_outcome_unknown' }));
+        const screen = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={start} testID="row" />);
+        await pressTestInstanceAsync(screen.findByTestId('row-start'), 'row-start');
+        expect(screen.getTextContent()).toContain('outcome is unknown');
+        expect(screen.getTextContent()).not.toContain('Could not start');
+        expect(screen.findByTestId('row-failure.action')).toBeNull();
+        expect(screen.findByTestId('row-start')).toBeNull();
+        await screen.update(<ServiceRowView row={{ ...row, target: { ...target } }} onStartLauncherTarget={start} testID="row" />);
+        expect(screen.findByTestId('row-start')).toBeNull();
+        const [running] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [{ ...target,
+            sourceClass: { kind: 'managed_service', managedServiceId: 'actual-instance' }, state: 'available',
+            serviceState: 'running', readiness: 'ready', actions: ['manage'], unavailableReason: undefined,
+        }], sessionId: null, scope: 'workspace' });
+        await screen.update(<ServiceRowView row={running!} onStartLauncherTarget={start} testID="row" />);
+        expect(screen.findByTestId('row-failure')).toBeNull();
+        expect(start).toHaveBeenCalledTimes(1);
+    });
+
+    it('settles a lost Start acknowledgement when the native binding was observed before the result', async () => {
+        const { row, target } = declaredStartRow();
+        let settle!: (value: unknown) => void;
+        const start = vi.fn(() => new Promise(resolve => { settle = resolve; }));
+        const screen = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={start} testID="row" />);
+        let pending!: Promise<unknown>;
+        await act(async () => { pending = pressTestInstanceAsync(screen.findByTestId('row-start'), 'row-start'); });
+        const [running] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [{ ...target,
+            sourceClass: { kind: 'managed_service', managedServiceId: 'actual-instance' }, state: 'available',
+            serviceState: 'running', readiness: 'ready', actions: ['manage'], unavailableReason: undefined,
+        }], sessionId: null, scope: 'workspace' });
+        await screen.update(<ServiceRowView row={running!} onStartLauncherTarget={start} testID="row" />);
+        await act(async () => { settle({ ok: false, errorCode: 'action_outcome_unknown', error: 'action_outcome_unknown' }); await pending; });
+        expect(screen.findByTestId('row-failure')).toBeNull();
+        expect(start).toHaveBeenCalledTimes(1);
+    });
+
     it('reads a refused Start in place on its own row, with the codes behind Details and no dialog', async () => {
         const { row } = declaredStartRow();
         const screen = await renderScreen(<ServiceRowView row={row} onStartLauncherTarget={vi.fn(async () => portInUse)} testID="row" />);

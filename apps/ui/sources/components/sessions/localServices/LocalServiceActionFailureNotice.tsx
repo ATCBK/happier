@@ -41,14 +41,14 @@ export function LocalServiceActionFailureNotice(
                 onPress: props.nextAction.onPress,
                 testID: `${props.testID}.action`,
               }
-            : {
+            : failure.retry ? {
                 label: t('common.retry'),
                 onPress: failure.retry,
                 testID: `${props.testID}.action`,
-              }
+              } : undefined
         }
         announce="alert"
-        onDismiss={props.onDismiss}
+        onDismiss={failure.retry ? props.onDismiss : undefined}
       />
     </View>
   );

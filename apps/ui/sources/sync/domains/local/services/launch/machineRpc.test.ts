@@ -1,6 +1,7 @@
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonLocalServiceLauncherStartRequestV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { markRpcRequestDisposition } from '@happier-dev/sync-client';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 
@@ -47,6 +48,43 @@ const startResponse = {
 describe('local service launcher machine RPC client', () => {
     afterEach(() => {
         machineRpcWithServerScopeMock.mockReset();
+    });
+
+    it.each(['outcomeUnknown', 'unclassified', 'invalid_response'] as const)
+    ('preserves uncertain native Start custody through the real Action-to-RPC composition (%s)', async disposition => {
+        if (disposition === 'invalid_response') machineRpcWithServerScopeMock.mockResolvedValueOnce({ ...startResponse, targetId: 'wrong-target' });
+        else machineRpcWithServerScopeMock.mockRejectedValueOnce(disposition === 'outcomeUnknown'
+            ? markRpcRequestDisposition(new Error('acknowledgement_lost'), disposition)
+            : new Error('acknowledgement_lost'));
+        const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
+        await expect(createDefaultRuntimeActionExecutor()({ actionId: 'localServices.launcher.start',
+            input: { machineId: 'machine_1', targetId: 'target_1' },
+            context: { surface: 'ui', serverId: 'server_1', actionRequestId: 'start-request' },
+        })).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown', details: { requestId: 'start-request' } });
+        expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps positive Start nonacceptance distinct from uncertain native custody', async () => {
+        machineRpcWithServerScopeMock.mockRejectedValueOnce(markRpcRequestDisposition(new Error('not_connected'), 'notSent'));
+        const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
+        await expect(createDefaultRuntimeActionExecutor()({ actionId: 'localServices.launcher.start',
+            input: { machineId: 'machine_1', targetId: 'target_1' }, context: { surface: 'ui', serverId: 'server_1' },
+        })).resolves.toMatchObject({ ok: false, errorCode: 'runtime_action_disabled' });
+    });
+
+    it('does not turn a cancelled observation into proof that an issued native Start was cancelled', async () => {
+        const cancellation = new AbortController();
+        machineRpcWithServerScopeMock.mockImplementationOnce(async () => {
+            cancellation.abort();
+            throw markRpcRequestDisposition(new Error('native_cancellation_unconfirmed'), 'outcomeUnknown');
+        });
+        const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
+        const { executeLocalServiceActionWithAdmission } = await import('@/components/sessions/localServices/localServiceActionAdmission');
+        await expect(executeLocalServiceActionWithAdmission({ execute: createDefaultRuntimeActionExecutor(),
+            request: { actionId: 'localServices.launcher.start', input: { machineId: 'machine_1', targetId: 'target_1' },
+                context: { surface: 'ui', serverId: 'server_1' } },
+            admission: { signal: cancellation.signal },
+        })).resolves.toMatchObject({ ok: false, errorCode: 'action_outcome_unknown' });
     });
 
     it('routes the reviewed exact destination through the real launcher while preserving SOURCE declaration custody', async () => {

@@ -18,6 +18,7 @@ import {
     isRpcMethodNotAvailableError,
     isRpcMethodNotFoundError,
 } from '@happier-dev/protocol/rpcErrors';
+import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 
@@ -95,6 +96,7 @@ export async function startLocalServiceLauncherTargetViaMachineRpc(
     if (input.signal?.aborted) {
         return { ok: false, reason: 'request_failed' };
     }
+    let dispatched = false;
     try {
         const payload = DaemonLocalServiceLauncherStartRequestV1Schema.parse({
             machineId: input.machineId,
@@ -106,6 +108,7 @@ export async function startLocalServiceLauncherTargetViaMachineRpc(
             ...(input.declaration ? { declaration: input.declaration } : {}),
             ...(input.expectedEffectDigest ? { expectedEffectDigest: input.expectedEffectDigest } : {}),
         });
+        dispatched = true;
         const raw = await machineRpcWithServerScope<unknown, typeof payload>({
             machineId: payload.machineId,
             serverId: input.serverId,
@@ -132,7 +135,10 @@ export async function startLocalServiceLauncherTargetViaMachineRpc(
         if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) {
             return { ok: false, reason: 'unavailable' };
         }
-        return { ok: false, reason: 'request_failed' };
+        // A lost acknowledgement cannot prove that native preparation/start did
+        // not happen. Only the transport's positive nonacceptance permits failure.
+        return { ok: false, reason: dispatched && readRpcRequestDisposition(error) !== 'notSent'
+            ? 'outcome_unknown' : 'request_failed' };
     }
 }
 

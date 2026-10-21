@@ -148,7 +148,7 @@ describe('launcher start action helpers', () => {
         expect(runtimeActionExecute).toHaveBeenCalledOnce();
     });
 
-    it('releases a held policy approval when the initiating Service scope retires', async () => {
+    it('releases a held approval observation without declaring its admitted Start cancelled', async () => {
         const { useLocalServiceLauncherStartAction } = await import('./launcherStartAction');
         const cancellation = new AbortController();
         const runtimeActionExecute: RuntimeActionExecute = async () => ({ kind: 'approval_request_created',
@@ -160,7 +160,7 @@ describe('launcher start action helpers', () => {
         const pending = hook.getCurrent()!(startableTarget);
         await vi.waitFor(() => expect(onApprovalPending).toHaveBeenCalled());
         cancellation.abort();
-        expect(await pending).toMatchObject({ ok: false, errorCode: 'cancelled' });
+        expect(await pending).toMatchObject({ ok: false, errorCode: 'action_outcome_unknown' });
     });
     it('holds an Ask-first Start until its exact captured Account approval supplies the executed result', async () => {
         const { useLocalServiceLauncherStartAction } = await import('./launcherStartAction');

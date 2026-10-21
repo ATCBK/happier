@@ -28,6 +28,48 @@ afterEach(async () => { await home?.dispose(); home = undefined; resetLocalServi
   storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
 describe('Project Services source feed plus actual native binding', () => {
+  it('updates a mounted stopped declaration after an external Start advances the daemon watch', async () => {
+    home = await createPlainArtifactHomeFixture('https://project-services-external-start.test', { handleRequest: async path =>
+      path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify([
+        { id: 'source', revokedAt: null, replacedByMachineId: null },
+      ])) : null });
+    const serverId = home.home.id;
+    const scope = { serverId, accountId: 'artifact-account' };
+    const source = { id: 'source-ref', machineId: 'source', serverId, rootPath: '/source', createdAtMs: 1 };
+    storage.getState().activateProjectAccountRowsScope(scope);
+    storage.getState().applyProjectAccountRowsForScope(scope, { scope, status: 'ready', coverage: 'complete',
+      workspaceRefs: [source], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+    const declaration = LocalServiceLaunchTargetV1Schema.parse({ id: 'source-service', source: 'managed_service', machineId: source.machineId,
+      workspaceId: source.id, workspace: { serverId, machineId: source.machineId, workspaceId: source.id, rootPath: source.rootPath },
+      declaration: { workspaceRefId: source.id, selection: { kind: 'manifest', name: 'web' } }, cwd: source.rootPath,
+      title: 'web', confidence: 'high', state: 'unavailable', unavailableReason: 'launch_unavailable', actions: [] });
+    const actual = LocalServiceLaunchTargetV1Schema.parse({ ...declaration, id: 'native-instance',
+      sourceClass: { kind: 'managed_service', managedServiceId: 'native-instance' }, serviceState: 'healthy',
+      state: 'available', unavailableReason: undefined, readiness: 'ready', actions: ['manage'] });
+    const watches: Array<(value: unknown) => void> = [];
+    let running = false;
+    remote.mockImplementation(async ({ method, machineId, payload }: {
+      method: string; machineId: string; payload: { projection?: 'managed_bindings' };
+    }) => {
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise(resolve => watches.push(resolve));
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) return { protocolVersion: 1,
+        snapshot: { v: 1, machineId, updatedAt: running ? 2 : 1, targets: payload.projection ? running ? [actual] : [] : [declaration] } };
+      return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
+    });
+    const hook = await renderHook(() => useLocalServiceLiveFeeds({ machineId: source.machineId, serverId,
+      workspaceRefId: source.id, workspaceRoot: source.rootPath, scope: 'workspace' }));
+    const readRows = () => buildLocalServiceRows({ inventoryRows: [],
+      launchTargets: [...hook.getCurrent().launcherState!.targetsById.values()],
+      rowIdsByTargetId: hook.getCurrent().launcherState?.rowIdsByTargetId, sessionId: null, scope: 'workspace' });
+    try {
+      await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } }));
+      await vi.waitFor(() => expect(watches).toHaveLength(1));
+      running = true;
+      await act(async () => { watches[0]!({ protocolVersion: 1, changed: true,
+        snapshot: { v: 1, machineId: source.machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] } }); });
+      await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'running', target: actual }));
+    } finally { await hook.unmount(); }
+  });
   it.each([false, true])('isolates failed candidate reads from present SOURCE custody, while absence requires the full census (present=%s)', async hostPresent => {
     home = await createPlainArtifactHomeFixture('https://project-services-copy-binding.test', { handleRequest: async path =>
       path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify(

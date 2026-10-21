@@ -423,8 +423,8 @@ import { createUiPluginSettingsAdministrationAction } from './pluginSettingsAdmi
 import { invokeScopeAction } from './scopeActionFamily';
 import { invokeDiagnosticAction } from '@/components/settings/diagnosis/diagnosticsActionRuntime';
 import { signOutEverywhere } from '@/sync/api/account/signOutEverywhere';
-import {
 import { DaemonLocalServiceLauncherSnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
+import {
     createCurrentAccountApiToken,
     listCurrentAccountApiTokens,
     revokeAllCurrentAccountApiTokens,
@@ -1629,7 +1629,6 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     ...createUiExecutionRunActionDeps(accountContext?.accountLifetime.scope, accountContext),
     resolveSessionSpawnAgentInventorySelection: args => resolveSessionSpawnAgentInventorySelectionForActions({ ...args,
       signal: accountContext?.invocationSignal, accountLifetime: accountContext?.accountLifetime }),
-    runtimeActionExecute: async (args) => {
     prepareLocalServiceStartApproval: async ({ input, context }) => {
       const unavailable = { ok: false as const, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' };
       if (!accountContext || !context.surface) return unavailable;
@@ -1642,6 +1641,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       const response = DaemonLocalServiceLauncherSnapshotResponseV1Schema.safeParse(raw);
       return response.success && response.data.startReview ? response.data.startReview : unavailable;
     },
+    runtimeActionExecute: async (args) => {
       const featureId = getActionRequiredServerFeatureId(args.actionId, args.context);
       if (featureId === 'browser.automation') {
         const snapshot = await getServerFeaturesSnapshot({ serverId: accountContext?.serverId ?? args.context.serverId ?? undefined });

@@ -2,6 +2,7 @@ import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFa
 import { DaemonLocalServicePreviewOpenOrCreateRequestV1Schema, DaemonLocalServicePreviewOpenOrCreateResponseV1Schema, DaemonLocalServicePreviewRevokeRequestV1Schema, type LocalServicePreviewSnapshotV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import { DaemonLocalServicePublicPreviewCopyUrlRequestV1Schema, DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, redactLocalServicePublicPreviewCreateResponseForAgentEgress, redactLocalServicePublicPreviewRevokeResponseForAgentEgress, redactLocalServicePublicPreviewSnapshotForAgentEgress, type LocalServicePublicPreviewSnapshotV1 } from '@happier-dev/protocol/local/services/public/v1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
 import { DaemonLocalServiceLauncherLeafRequestV1Schema, DaemonLocalServiceLauncherSnapshotRequestV1Schema, DaemonLocalServiceLauncherStartRequestV1Schema, type DaemonLocalServiceLauncherLeafRequestV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 import { requiresAgentEgressRedaction } from '@happier-dev/protocol/actions/actionApprovalPolicy';
@@ -473,7 +474,9 @@ export function createLocalServicesRuntimeActionExecutor(
                 ...(request.expectedEffectDigest ? { expectedEffectDigest: request.expectedEffectDigest } : {}),
                 ...(args.context.signal ? { signal: args.context.signal } : {}),
             });
-            if (!result.ok) return routeFailureResult('launcher', result.reason);
+            if (!result.ok) return result.reason === 'outcome_unknown' || result.reason === 'invalid_response'
+                ? projectUnexpectedActionFailureV1(null, args.context.actionRequestId ?? undefined)
+                : routeFailureResult('launcher', result.reason);
             onLauncherSnapshot({ machineId, serverId, sessionId,
                 ...(request.workspace ? { scope: 'workspace' as const, workspaceRoot: request.workspace.rootPath } : {}),
                 snapshot: result.response.snapshot });
