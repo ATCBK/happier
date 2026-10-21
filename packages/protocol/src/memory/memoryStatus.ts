@@ -18,6 +18,11 @@ export const MemoryDocumentStatusV1Schema = lazyZodSchema(() => z.discriminatedU
 ]));
 export type MemoryDocumentStatusV1 = z.infer<typeof MemoryDocumentStatusV1Schema>;
 
+/** Content-free diagnostics from the bounded native-reader owner, never vendor prose. */
+export const MemoryNativeReadFailureReasonV1Schema = lazyZodSchema(() => z.string().check(z.regex(
+  /^external_sessions_(?:operation_(?:type_error|range_error|syntax_error|rejected)|(?:failure_byte_budget|result_envelope|result_value|result_byte_budget|native_cursor_too_large|transcript_read_failed|transcript_cursor_invalid|transcript_item_json|transcript_page_envelope|transcript_page_item|transcript_page_diagnostics|transcript_page_continuation|transcript_page_byte_budget))$/u,
+)));
+
 /** Read projection: external readiness covers a configured source, not one native conversation. */
 export const MemoryIndexSourceStatusV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.union([
@@ -26,6 +31,8 @@ export const MemoryIndexSourceStatusV1Schema = lazyZodSchema(() => z.strictObjec
   ]),
   state: z.enum(['ready', 'indexing', 'disabled', 'error']),
   indexedThroughMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+  errorCode: z.optional(z.string().check(z.minLength(1))),
+  errorReason: z.optional(MemoryNativeReadFailureReasonV1Schema),
 }));
 export type MemoryIndexSourceStatusV1 = z.infer<typeof MemoryIndexSourceStatusV1Schema>;
 

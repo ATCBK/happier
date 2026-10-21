@@ -216,7 +216,14 @@ with complete searchable coverage. Pending appends and routine inventory
 refreshes do not erase that initial coverage. Read failures, replacement,
 revisions, budget eviction and clearing still invalidate readiness; it is not
 a promise that every concurrent append is already searchable. Happier Session
-readiness continues to follow its latest observed sequence. The deep
+readiness follows the queue's completed `indexed` or `empty` outcome, unless a
+transcript revision or an active indexing operation is pending. Session inventory
+sequences can include non-message events; they do not reopen a completed
+transcript scan. Status reads do not create or update indexing cursors, so they
+can read the WAL snapshot while another connection owns the writer. Native
+error rows carry `errorCode` and an allowlisted, content-free `errorReason` from
+the bounded reader. Vendor exception text, paths and transcript content are
+excluded from that diagnostic; a successful retry clears it. The deep
 index retains native reader progress after eviction and records incomplete
 searchable coverage in that same source state; unchanged tails or new appends
 do not restore evicted history. Clear/rebuild or source replacement restores

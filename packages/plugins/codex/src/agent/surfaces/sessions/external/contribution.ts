@@ -161,7 +161,7 @@ function mapTranscriptPage(
 ): AgentExternalSessionsResult<AgentExternalSessionsTranscriptPage> {
   const projected = projectCodexExternalSessionTranscriptPageToAgent(page);
   if (!projected) {
-    return failed('agent_error', 'Codex produced a transcript item outside the public JSON contract.');
+    return failed('agent_error', 'external_sessions_transcript_item_json');
   }
   return ok(projected);
 }
@@ -277,7 +277,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         runtimeDescriptor: identity.runtimeDescriptor,
         codexBackendMode: identityBackendMode,
       }),
-    }, request.maxSerializedBytes, 'Codex link identity cannot fit the result byte bound.');
+    }, request.maxSerializedBytes, 'external_sessions_result_byte_budget');
   };
 
   return Object.freeze({
@@ -303,7 +303,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       if (request.includeAccountingSource === false) return bounded({
         source: validation.value.publicSource,
         transcriptMediaReadRoots: mediaReadRoots.value,
-      }, request.maxSerializedBytes, 'Codex source result cannot fit the result byte bound.');
+      }, request.maxSerializedBytes, 'external_sessions_result_byte_budget');
       const roots = mediaReadRoots.value.flatMap((home) => [join(home, 'sessions'), join(home, 'archived_sessions')]);
       const inventory = await discoverAgentAccountingJsonlSource(roots, request.signal);
       return bounded(
@@ -320,7 +320,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           },
         },
         request.maxSerializedBytes,
-        'Codex source result cannot fit the result byte bound.',
+        'external_sessions_result_byte_budget',
       );
     },
 
@@ -370,7 +370,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           ...(listed.searchIncomplete !== undefined ? { searchIncomplete: listed.searchIncomplete } : {}),
           ...(listed.preparation !== undefined ? { preparation: listed.preparation } : {}),
           ...(listed.contentCoverage !== undefined ? { contentCoverage: listed.contentCoverage } : {}),
-        }, request.maxSerializedBytes, 'Codex candidate page cannot fit the result byte bound.');
+        }, request.maxSerializedBytes, 'external_sessions_result_byte_budget');
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
@@ -384,7 +384,9 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         // an Agent fault, never evidence that Codex is missing.
         return failed(
           'agent_error',
-          error instanceof Error ? error.message : 'Codex external-session listing failed.',
+          error instanceof TypeError ? 'external_sessions_operation_type_error'
+            : error instanceof RangeError ? 'external_sessions_operation_range_error'
+              : error instanceof SyntaxError ? 'external_sessions_operation_syntax_error' : 'external_sessions_operation_rejected',
           true,
         );
       }
@@ -427,13 +429,13 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         const mapped = mapTranscriptPage(page);
         return fitsResult(mapped, request.maxSerializedBytes)
           ? mapped
-          : failed('agent_error', 'Codex transcript page cannot fit the result byte bound.', false);
+          : failed('agent_error', 'external_sessions_transcript_page_byte_budget', false);
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
         return failed(
           'agent_error',
-          error instanceof Error ? error.message : 'Codex external-session transcript operation failed.',
+          'external_sessions_transcript_read_failed',
           true,
         );
       }
@@ -464,7 +466,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         const mapped = mapReadAfterPage(page);
         return fitsResult(mapped, request.maxSerializedBytes)
           ? mapped
-          : failed('agent_error', 'Codex transcript page cannot fit the result byte bound.', false);
+          : failed('agent_error', 'external_sessions_transcript_page_byte_budget', false);
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;

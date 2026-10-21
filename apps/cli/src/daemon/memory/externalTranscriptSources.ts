@@ -11,7 +11,7 @@ import type { NativeUsageSourceBoundary } from '@/usage/collector/nativeUsageSou
 import type { discoverNativeUsageSourceMetadata as DiscoverNativeUsageSourceMetadata } from '@/usage/collector/nativeUsageSourceDiscovery';
 import type { createExternalSessionObservationDaemonProjection } from '@/api/session/external/leases/createExternalSessionObservationDaemonProjection';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY } from '@/session/external/agentExternalSessionsInvocation';
-import { externalMemoryStorageId, memoryExternalSourceReadError, type MemoryExternalSourceReader } from './externalTranscriptIndex';
+import { externalMemoryStorageId, memoryExternalSourceReadError, memoryExternalSourceFailure, type MemoryExternalSourceReader } from './externalTranscriptIndex';
 import { resolveMemoryCoverageCreatedAtCutoffMs } from './transcript/coveragePolicy';
 import { logger } from '@/ui/logger';
 
@@ -31,11 +31,13 @@ type NativeInventory = {
   needsInventory: boolean;
   failed: boolean;
   initialInventoryComplete: boolean;
+  failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>;
 };
 
 /** One ordered work list shares the existing allowance between refresh and backfill. */
 export function createMemoryExternalTranscriptTraversal() {
-  type Entry = { candidate: MemoryExternalTranscriptCandidate; state?: 'current' | 'more' | 'removed' | 'error'; refresh: boolean };
+  type Entry = { candidate: MemoryExternalTranscriptCandidate; state?: 'current' | 'more' | 'removed' | 'error'; refresh: boolean;
+    failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'> };
   const candidates = new Map<string, Entry>();
   let preferRefresh = true;
   return {
@@ -64,13 +66,13 @@ export function createMemoryExternalTranscriptTraversal() {
           && (nativeSessionIds ? nativeSessionIds.includes(source.nativeSessionId) : entry.state === 'current')) entry.refresh = true;
       }
     },
-    noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error') {
+    noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>) {
       const entry = candidates.get(externalMemoryStorageId(source));
-      if (entry) entry.state = state;
+      if (entry) { entry.state = state; entry.failure = state === 'error' ? failure : undefined; }
     },
     getIndexSources(db: Pick<DeepIndexDbHandle, 'getExternalSourceState'> | null): MemoryIndexSourceStatusV1[] {
       const groups = new Map<string, MemoryIndexSourceStatusV1>();
-      for (const { candidate, state: result } of candidates.values()) {
+      for (const { candidate, state: result, failure } of candidates.values()) {
         const { agentId, sourceKey } = candidate.source;
         const id = externalMemoryStorageId(candidate.source);
         const retained = result === 'current' || result === 'more' ? db?.getExternalSourceState({ sessionId: id }) : null;
@@ -82,7 +84,8 @@ export function createMemoryExternalTranscriptTraversal() {
         const key = JSON.stringify([agentId, sourceKey]);
         const previous = groups.get(key);
         if (!previous || state === 'error' || (previous.state !== 'error' && state !== 'ready')) {
-          groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state });
+          groups.set(key, { source: { type: 'external_transcript', agentId, sourceKey }, state,
+            ...(state === 'error' ? failure : {}) });
         }
       }
       return [...groups.values()];
@@ -309,6 +312,7 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         signal.throwIfAborted();
         if (!page.ok) throw memoryExternalSourceReadError(native, page);
         state.failed = false;
+        state.failure = undefined;
         for (const candidate of page.value.candidates) {
           // Native activity metadata is the source's last-update authority.
           // Unknown activity stays eligible; an expired source never needs a
@@ -346,9 +350,10 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
         state.pending = null;
         state.needsInventory = true;
         state.failed = true;
+        state.failure = memoryExternalSourceFailure(error);
         completeSources.delete(key);
         logger.debug('[memoryWorker] Native inventory failed; retaining incomplete coverage', {
-          agentId: native.agentId, sourceKey: native.sourceKey, message: error instanceof Error ? error.message : String(error),
+          agentId: native.agentId, ...state.failure,
         });
       }
     }
@@ -363,8 +368,8 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
     inventory,
     // A periodic inventory request does not invalidate an unfinished crawl.
     invalidate() { invalidateInventory(undefined, undefined, false); },
-    noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error') {
-      traversal.noteSyncResult(source, state);
+    noteSyncResult(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>) {
+      traversal.noteSyncResult(source, state, failure);
       if (state === 'removed') {
         invalidateInventory(source.agentId, source.sourceKey);
         input.onChange(true);
@@ -376,9 +381,12 @@ export function createMemoryExternalTranscriptSources(input: Readonly<{
       return [...configuredSourceKeys].map(key => {
         const [agentId, sourceKey] = JSON.parse(key) as [string, string];
         const inventory = inventories.get(key);
+        const group = groups.get(key);
         return { source: { type: 'external_transcript', agentId, sourceKey },
           state: !db ? 'indexing' : inventory?.failed ? 'error'
-            : !inventory?.initialInventoryComplete ? 'indexing' : groups.get(key)?.state ?? 'ready' };
+            : !inventory?.initialInventoryComplete ? 'indexing' : group?.state ?? 'ready',
+          ...(db && inventory?.failed ? inventory.failure : group?.state === 'error'
+            ? { errorCode: group.errorCode, errorReason: group.errorReason } : {}) };
       });
     },
     getReadySourceCount: traversal.size,

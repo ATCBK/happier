@@ -1,6 +1,8 @@
 import type { AgentExternalSessionTranscriptItem, AgentExternalSessionTerminalObservation } from '@happier-dev/plugin-sdk/sessions/external';
 import type { MemoryContentPolicyV1, MemorySettingsV1 } from '@happier-dev/protocol/memory/memorySettings';
 import type { MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
+import { MemoryNativeReadFailureReasonV1Schema, type MemoryIndexSourceStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
+import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
 import { EXTERNAL_SESSIONS_INVOCATION_POLICY, type BoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
 import type { AgentExternalSessionSource } from '@happier-dev/plugin-sdk/sessions/external';
 import type { DeepIndexDbHandle } from './deepIndex/deepIndexDb';
@@ -15,11 +17,18 @@ export function externalMemoryStorageId(source: MemoryExternalTranscriptSourceV1
 
 /** Keep the host's closed diagnostic tokens; never log a plugin's free text. */
 export function memoryExternalSourceReadError(source: Readonly<{ agentId: string; sourceKey: string }>, failure: Readonly<{ code: string; message?: string }>) {
-  const reason = failure.message && /^external_sessions_(?:operation_(?:type_error|range_error|syntax_error|rejected)|(?:failure_byte_budget|result_envelope|result_value|result_byte_budget|native_cursor_too_large|transcript_read_failed|transcript_cursor_invalid|transcript_item_json|transcript_page_envelope|transcript_page_item|transcript_page_diagnostics|transcript_page_continuation|transcript_page_byte_budget))$/u.test(failure.message)
-    ? failure.message : undefined;
-  logger.debug('[memoryWorker] Native source read failed', { agentId: source.agentId, sourceKey: source.sourceKey,
+  const parsed = MemoryNativeReadFailureReasonV1Schema.safeParse(failure.message);
+  const reason = parsed.success ? parsed.data : 'external_sessions_operation_rejected';
+  logger.debug('[memoryWorker] Native source read failed', { agentId: source.agentId,
     code: failure.code, ...(reason ? { reason } : {}) });
   return Object.assign(new Error(reason ? `${failure.code}:${reason}` : failure.code), { code: failure.code, reason });
+}
+
+export function memoryExternalSourceFailure(error: unknown): Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'> {
+  const record = error && typeof error === 'object' ? error as { code?: unknown; reason?: unknown } : null;
+  const reason = MemoryNativeReadFailureReasonV1Schema.safeParse(record?.reason);
+  return { errorCode: isAgentExternalSessionsFailureCode(record?.code) ? record.code : 'agent_error',
+    errorReason: reason.success ? reason.data : 'external_sessions_operation_rejected' };
 }
 
 export function resolveExternalMemoryIndexPolicy(settings: MemorySettingsV1): Readonly<{
@@ -61,7 +70,7 @@ type Frontier = Readonly<{ type: 'page' | 'tail'; cursor?: string; tailCursor?: 
 export async function syncExternalMemoryTranscriptsBatch(input: Readonly<
   Omit<Parameters<typeof syncExternalMemoryTranscriptOnce>[0], 'source' | 'native'> & {
     candidates: readonly Readonly<{ source: MemoryExternalTranscriptSourceV1; native: MemoryExternalSourceReader }>[];
-    onSourceResult?(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error'): void;
+    onSourceResult?(source: MemoryExternalTranscriptSourceV1, state: 'current' | 'more' | 'removed' | 'error', failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'>): void;
   }
 >): Promise<void> {
   const { candidates, onSourceResult, ...operation } = input;
@@ -74,7 +83,7 @@ export async function syncExternalMemoryTranscriptsBatch(input: Readonly<
       onSourceResult?.(candidate.source, result);
     }
     catch (error) {
-      onSourceResult?.(candidate.source, 'error');
+      onSourceResult?.(candidate.source, 'error', memoryExternalSourceFailure(error));
       operation.signal.throwIfAborted();
       errors.push(error);
     }
