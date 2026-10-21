@@ -104,26 +104,34 @@ export function useHunkDiscard(
   );
 
   const [latestResult, setLatestResult] = React.useState<DiscardChangeResult | null>(null);
+  // File/lifetime cleanup stays stable when a new inverse is remembered.
+  const latestResultRef = React.useRef(latestResult);
+  latestResultRef.current = latestResult;
   const currentNotice = React.useSyncExternalStore(subscribePresentationNotices, readPresentationNotice, readPresentationNotice);
   const undoAvailable = Boolean(latestResult?.ok && latestResult.undo && currentNotice?.undo?.run === latestResult.undo);
   React.useEffect(() => {
     if (!latestResult?.ok || !latestResult.undo || undoAvailable) return;
     latestResult.retire();
+    latestResultRef.current = null;
     setLatestResult(null);
   }, [latestResult, undoAvailable]);
   const retireUndo = React.useCallback(() => {
+    const result = latestResultRef.current;
+    latestResultRef.current = null;
     setLatestResult(null);
-    if (latestResult?.ok) latestResult.retire();
-  }, [latestResult]);
+    if (result?.ok) result.retire();
+  }, []);
   const remember = React.useCallback((result: DiscardChangeResult) => {
+    latestResultRef.current = result;
     setLatestResult(result);
   }, []);
   const undo = React.useCallback(() => {
-    const result = latestResult;
+    const result = latestResultRef.current;
     if (!result?.ok || !result.undo || readPresentationNotice()?.undo?.run !== result.undo) return;
+    latestResultRef.current = null;
     setLatestResult(null);
     void result.undo();
-  }, [latestResult]);
+  }, []);
 
   const discardDisabledReason = input.unreachable
     ? t('hunkReview.discardNeeds', { machine: machineName })
