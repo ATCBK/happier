@@ -46,11 +46,12 @@ export function MachineInstallablesSection(props: Readonly<{ machineId: string; 
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId: machineId ?? null,
         serverId,
-        enabled: Boolean(machineId && isOnline),
+        // Offline, the last projected metadata stays visible (read-only); only an online machine is asked.
+        enabled: Boolean(machineId),
+        load: isOnline,
     });
-    const daemonMergedProjectionInputs = daemonMergedProjection.phase === 'ready'
-        ? daemonMergedProjection.inputs
-        : null;
+    // Stale metadata labels the rows; installing stays gated on the live capabilities status.
+    const daemonMergedProjectionInputs = daemonMergedProjection.inputs;
 
     const capabilitiesSnapshot = React.useMemo(() => {
         const snapshot =

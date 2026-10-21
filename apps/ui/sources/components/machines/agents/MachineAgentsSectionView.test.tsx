@@ -101,15 +101,18 @@ describe('machine agent inventory recovery', () => {
         expect(screen.findByTestId('machine-agents.checkAgain')).toBeNull();
     });
 
-    it('shows only the offline line for a cold inventory that never observed absence', async () => {
+    it('shows the offline line with one Check again for a cold inventory that never observed absence', async () => {
+        const retry = vi.fn();
         const screen = await renderSettingsView(<ListPresentationProvider value="page"><MachineAgentsSectionView testID="machine-agents"
             agents={[]} status="offline" lastCheckedAt={null} machineName="Workstation"
             renderMark={() => null} sessionFor={() => null} renderForm={() => null}
-            expandedAgentIds={new Set()} onExpandedChange={() => {}} onAction={() => {}} onCheckAgain={() => {}} /></ListPresentationProvider>);
+            expandedAgentIds={new Set()} onExpandedChange={() => {}} onAction={() => {}} onCheckAgain={retry} /></ListPresentationProvider>);
         expect(screen.findByTestId('machine-agents.offline')).not.toBeNull();
         expect(screen.findByTestId('machine-agents.empty')).toBeNull();
         expect(screen.findByTestId('machine-agents.loading')).toBeNull();
-        expect(screen.findByTestId('machine-agents.checkAgain')).toBeNull();
+        // An offline inventory is recoverable from the section: the one Check again, not a Machine-wide retry.
+        await screen.pressByTestIdAsync('machine-agents.checkAgain');
+        expect(retry).toHaveBeenCalledOnce();
     });
 
     it('says no agent is installed only once the check finished and every agent resolved to not installed', async () => {
@@ -128,6 +131,7 @@ describe('machine agent inventory recovery', () => {
             expandedAgentIds={new Set()} onExpandedChange={() => {}} onAction={() => {}} onCheckAgain={() => {}} /></ListPresentationProvider>);
         expect(screen.findByTestId('machine-agents.offline')).not.toBeNull();
         expect(screen.findByTestId('machine-agents.empty')).toBeNull();
+        expect(screen.findByTestId('machine-agents.checkAgain')).not.toBeNull();
         expect(screen.findAllByType(MachineAgentRow).map(row => row.props.agent)).toEqual([held]);
     });
 });

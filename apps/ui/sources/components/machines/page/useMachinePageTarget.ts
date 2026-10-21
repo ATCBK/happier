@@ -2,7 +2,8 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
-import { useMachine, useMachineListByServerId } from '@/sync/domains/state/storage';
+import { useMachineListByServerId } from '@/sync/domains/state/storage';
+import { useServerScopedMachine } from '@/sync/store/hooks';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { areServerProfileIdentifiersEquivalent, getActiveServerId } from '@/sync/domains/server/serverProfiles';
 import { setActiveServerAndSwitch } from '@/sync/domains/server/activeServerSwitch';
@@ -62,7 +63,6 @@ export function useMachinePageTarget(): MachinePageTarget {
     const language = usePreferredLanguage();
     const params = useLocalSearchParams<{ id: string; serverId?: string }>();
     const machineId = typeof params.id === 'string' ? params.id : '';
-    const machine = useMachine(machineId) ?? null;
     const machineListByServerId = useMachineListByServerId();
     const activeServerId = getActiveServerId();
     const requestedServerId = typeof params.serverId === 'string' ? params.serverId.trim() : '';
@@ -70,6 +70,8 @@ export function useMachinePageTarget(): MachinePageTarget {
         activeServerId, machineId, machineListByServerId,
     }), [activeServerId, machineId, machineListByServerId]);
     const serverId = requestedServerId || machineListServerId || activeServerId;
+    // The Home that lists the machine owns its row, whether or not that Home is the focused one.
+    const machine = useServerScopedMachine(serverId, machineId);
     const presence = useMachinePresenceSummary(serverId, machineId);
     const [isServerSwitching, setIsServerSwitching] = React.useState(false);
     const [isHydratingMachine, setIsHydratingMachine] = React.useState(() => Boolean(machineId) && !machine);

@@ -37,7 +37,8 @@ export type MachineAgentsSectionViewProps = Readonly<{
 /**
  * The machine's Agents (lab M1): one row per installed agent — its state in one line and one action —
  * then "Add an agent" with what isn't installed but runs on this machine. Any row opens in place into the
- * setup form (M2). An offline machine shows what it last reported, without actions.
+ * setup form (M2). An offline machine shows what it last reported, without row actions, and keeps the section's
+ * one Check again: an inventory that could not be read is recoverable from where it is said.
  */
 export const MachineAgentsSectionView = React.memo(function MachineAgentsSectionView(props: MachineAgentsSectionViewProps) {
     const { installed, available: listed } = splitMachineAgents(props.agents);
@@ -74,7 +75,7 @@ export const MachineAgentsSectionView = React.memo(function MachineAgentsSection
             <ItemGroup
                 title={props.titled === false ? undefined : t('machineAgents.sectionTitle')}
                 description={t('machineAgents.sectionDescription')}
-                action={props.status === 'offline' || unreadable || checking ? undefined : (
+                action={unreadable || checking ? undefined : (
                     <RoundButton
                         testID={`${props.testID}.checkAgain`}
                         size="small"
