@@ -95,6 +95,48 @@ afterEach(() => {
 });
 
 describe('apiSocket inbound machine-scoped reverse RPC (RU2 G1)', () => {
+    it('withdraws a navigating client Action only after its accepted call has returned its receipt', async () => {
+        const { socket } = createSocketStub();
+        const machineEncryption = createMachineEncryption();
+        await bootApiSocket({ socket, getMachineEncryption: () => machineEncryption });
+        let began!: () => void;
+        const started = new Promise<void>(resolve => { began = resolve; });
+        let settle!: () => void;
+        let effectSignal: AbortSignal | undefined;
+        const method = 'machine-1:ui.navigation';
+        const dispose = apiSocket.registerMachineScopedRpcHandler('machine-1', 'ui.navigation', async (_raw, context) => {
+            effectSignal = context?.signal;
+            began();
+            await new Promise<void>(resolve => { settle = resolve; });
+            return { status: 'opened' };
+        }, { settleInFlight: true });
+        const receive = getRegisteredHandler(socket, SOCKET_RPC_EVENTS.REQUEST)!;
+        const order: string[] = [];
+        const emit = socket.emit.getMockImplementation();
+        socket.emit.mockImplementation((event, ...args) => {
+            if (event === SOCKET_RPC_EVENTS.UNREGISTER) order.push('unregistered');
+            return emit?.(event, ...args) ?? socket;
+        });
+        const params = await socketRpcCodec.encodeParams(callerContent, {}, { method, callId });
+        const ack = new Promise<unknown>(resolve => receive({ method, params }, (value: unknown) => {
+            order.push('receipt');
+            resolve(value);
+        }));
+        try {
+            await started;
+            dispose();
+            expect(effectSignal?.aborted).toBe(false);
+            expect(emittedMethods(socket, SOCKET_RPC_EVENTS.UNREGISTER)).not.toContain(method);
+            await expect(machineDecryptAck(await invokeMachineRpc(receive, method, {})))
+                .resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+        } finally {
+            settle();
+            expect(await machineDecryptAck(await ack)).toEqual({ status: 'opened' });
+            expect(order).toEqual(['receipt', 'unregistered']);
+            dispose();
+        }
+    });
+
     it('refuses redirected and unbound requests before invoking the reverse handler', async () => {
         const { socket } = createSocketStub();
         await bootApiSocket({ socket, getMachineEncryption: () => createMachineEncryption() });

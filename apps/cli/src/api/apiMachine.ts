@@ -2846,7 +2846,8 @@ export class ApiMachineClient {
                     }
                 },
             });
-            if (socket.connected === false) return { ok: false, errorCode: 'machine_socket_unavailable' };
+            // The decoded ACK is already a known receipt. A later socket state
+            // cannot turn that completion back into an uncertain effect.
             return { ok: true, result, ...(answeringClientId ? { answeringClientId } : {}), ...(answeringClientIds ? { answeringClientIds } : {}) };
         } catch (error) {
             if (resultDecodeFailed) return { ok: false, errorCode: 'machine_rpc_result_decrypt_failed' };

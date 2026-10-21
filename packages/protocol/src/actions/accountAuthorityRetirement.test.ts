@@ -9,6 +9,7 @@ describe('known Account authority retirement receipts', () => {
     ['account.credentials.forgetAll', 'forgotten'],
     ['account.delete', 'deleted'],
     ['account.delete', 'deleted_cleanup_pending'],
+    ['session.pending.next', 'opened'],
   ] as const)('preserves only the declared %s completion status', (actionId, status) => {
     expect(projectKnownAccountAuthorityRetirementReceipt(getActionSpec(actionId), { ok: true, result: { status } }))
       .toEqual({ ok: true, result: { status } });
@@ -27,5 +28,12 @@ describe('known Account authority retirement receipts', () => {
       result: { status: 'executed', execution: { ok: true, result: { status: 'signed_out' } } } })).toBeNull();
     expect(projectKnownAccountAuthorityRetirementReceipt(getActionSpec('account.name.set'), { ok: true,
       result: { status: 'signed_out' } })).toBeNull();
+  });
+
+  it('does not disclose an uncommitted or extended Next result after a Home switch', () => {
+    const spec = getActionSpec('session.pending.next');
+    for (const result of [{ status: 'none' }, { status: 'unavailable' }, { status: 'opened', privateData: 'hidden' }]) {
+      expect(projectKnownAccountAuthorityRetirementReceipt(spec, { ok: true, result })).toBeNull();
+    }
   });
 });

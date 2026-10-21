@@ -14,6 +14,9 @@ export const SESSION_PENDING_NEXT_ACTION_SPECS = [{
   description: 'Focus the oldest answerable pending request on the mounted client. Returns unavailable when no client can navigate.',
   safety: 'safe',
   sideEffectClass: 'external',
+  // A committed cross-Home navigation may retire its starting Account scope.
+  // Only this closed, status-only completion can survive that retirement.
+  accountAuthorityRetirementStatuses: ['opened'],
   executionPlacement: 'client',
   placements: ['command_palette'],
   surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: false, rpc: false },

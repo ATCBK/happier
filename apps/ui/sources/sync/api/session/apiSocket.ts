@@ -313,7 +313,9 @@ class ApiSocket {
     // socket; the server forwards it to whichever client joined the matching rpc room. Registering
     // here makes THIS user-scoped socket that client (room membership via `rpc-register`).
     private inboundMachineRpcHandlers: Map<string, InboundMachineRpcHandler> = new Map();
-    private activeInboundMachineRpcRequests = new Map<AbortController, Readonly<{ socket: Socket; method: string; requestId?: string }>>();
+    private activeInboundMachineRpcRequests = new Map<AbortController, Readonly<{
+        socket: Socket; method: string; requestId?: string; onResponseSettled?: () => void;
+    }>>();
 
     //
     // Initialization
@@ -757,6 +759,7 @@ class ApiSocket {
         machineId: string,
         method: string,
         handler: InboundMachineRpcHandler,
+        options?: Readonly<{ settleInFlight?: boolean }>,
     ): () => void {
         const prefixedMethod = `${machineId}:${method}`;
         if (this.inboundMachineRpcHandlers.has(prefixedMethod)) {
@@ -771,10 +774,25 @@ class ApiSocket {
         return () => {
             if (this.inboundMachineRpcHandlers.get(prefixedMethod) === handler) {
                 this.inboundMachineRpcHandlers.delete(prefixedMethod);
+                // Navigation withdraws admission, not custody of an accepted
+                // Action. Its ACK must precede room withdrawal, which otherwise
+                // tells the daemon to abandon the still-knowable receipt.
+                const unregister = () => {
+                    if (this.inboundMachineRpcHandlers.has(prefixedMethod)
+                        || [...this.activeInboundMachineRpcRequests.values()].some(request => request.method === prefixedMethod)) return;
+                    if (this.socketClientType === 'user-scoped') {
+                        this.socket?.emit(SOCKET_RPC_EVENTS.UNREGISTER, { method: prefixedMethod });
+                    }
+                };
+                let settling = false;
                 for (const [controller, request] of this.activeInboundMachineRpcRequests) {
-                    if (request.method === prefixedMethod) controller.abort('rpc-handler-retired');
+                    if (request.method !== prefixedMethod) continue;
+                    if (options?.settleInFlight) {
+                        settling = true;
+                        this.activeInboundMachineRpcRequests.set(controller, { ...request, onResponseSettled: unregister });
+                    } else controller.abort('rpc-handler-retired');
                 }
-                if (this.socketClientType === 'user-scoped') {
+                if (!settling && this.socketClientType === 'user-scoped') {
                     this.socket?.emit(SOCKET_RPC_EVENTS.UNREGISTER, { method: prefixedMethod });
                 }
             }
@@ -1543,7 +1561,11 @@ class ApiSocket {
                         ...(requestId.success ? { requestId: requestId.data } : {}),
                     });
                     try { callback(await this.handleInboundMachineRpcRequest(data, { signal: controller.signal })); }
-                    finally { this.activeInboundMachineRpcRequests.delete(controller); }
+                    finally {
+                        const request = this.activeInboundMachineRpcRequests.get(controller);
+                        this.activeInboundMachineRpcRequests.delete(controller);
+                        request?.onResponseSettled?.();
+                    }
                 },
             );
         }

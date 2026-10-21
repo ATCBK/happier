@@ -118,11 +118,15 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
     if (!socket) throw new Error('Account reverse receiver absent');
     const registered = new Set<string>();
+    const nextReceiptOrder: string[] = [];
     const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
       const payload: unknown = args[0];
       if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
         if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
-        if (event === SOCKET_RPC_EVENTS.UNREGISTER) registered.delete(payload.method);
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) {
+          registered.delete(payload.method);
+          nextReceiptOrder.push('unregistered');
+        }
       }
       return socket;
     });
@@ -154,7 +158,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     const viewed = { id: 'z-viewed-client', timeout: () => ({ emitWithAck: async (_event: string, payload: unknown) => {
       if (!payload || typeof payload !== 'object' || !('method' in payload) || !('params' in payload)) throw new Error('Malformed Socket request');
       return await new Promise<unknown>(resolve => {
-        for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) receive(payload, resolve);
+        for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) receive(payload, (result: unknown) => {
+          nextReceiptOrder.push('receipt');
+          resolve(result);
+        });
       });
     } }) };
     const reverse = createClientActionReverseDispatcher(() => ({
@@ -174,6 +181,13 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     }));
     const caller = createActionExecutor({ clientActionExecute: reverse } as unknown as ActionExecutorDeps);
     const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: sessionId } as const;
+    releases.push(registerPendingNavigationRuntime(async () => {
+      await act(async () => {
+        navigation.sessionId = 'next-question';
+        setFocusedSessionId('next-question', serverId);
+      });
+      return { status: 'opened' };
+    }));
     const runtime = await renderMountedCurrentUiContext(React.createElement(ClientActionReverseRuntime));
     try {
       expect(await caller.execute('ui.find', { op: 'set', query: 'needle' }, context))
@@ -194,6 +208,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       expect(model.status).toMatchObject({ current: 2 });
       expect(foreignEffects).toBe(0);
       alsoViewing = false;
+      nextReceiptOrder.length = 0;
+      expect(await caller.execute('session.pending.next', {}, context))
+        .toEqual({ ok: true, result: { status: 'opened' } });
+      expect(nextReceiptOrder[0]).toBe('receipt');
       await act(async () => { setFocusedSessionId(null); });
       expect(await caller.execute('ui.find', { op: 'read' }, context))
         .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
@@ -840,6 +858,20 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       .toMatchObject({ execution: { ok: false, errorCode: 'invalid_action_input' } });
     expect(await receive(request, { signal: new AbortController().signal }))
       .toMatchObject({ execution: { ok: false, errorCode: 'action_account_scope_changed' } });
+  });
+
+  it('withholds a retired Account read without claiming that an effect may have happened', async () => {
+    let current = true;
+    const state = createWorkspaceState(createWorkspaceEmptyTab('private-tab'));
+    releases.push(registerMountedWorkspaceAction(async ({ actionId }) => {
+      if (actionId !== 'workspace.tabs.list') throw new Error('Unexpected Action');
+      current = false;
+      return projectWorkspaceTabsList(state);
+    }));
+    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => current });
+    expect(await receive({ v: 1, actionId: 'workspace.tabs.list', input: {},
+      context: { surface: 'agent', authority: 'account_automation' } }, { signal: new AbortController().signal }))
+      .toEqual({ v: 1, execution: { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' } });
   });
 
   it('keeps a mounted Machine continuation current when another Machine appears, and retires it on unmount', async () => {

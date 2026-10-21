@@ -1,5 +1,6 @@
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { RPC_ERROR_CODES, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import {
   UiActionDispatchRequestV1Schema,
   clientActionUnavailable,
@@ -36,9 +37,10 @@ export function createClientActionReverseDispatcher(
     // These operations consume the addressed mounted UI. Other client Actions
     // (for example Account configuration) do not require its Session to be open.
     const sessionUiAction = actionId === 'ui.find' || actionId === 'ui.prompts.picker.open'
-      || actionId === 'ui.current_context.read' || actionId === 'session.pending.next'
+      || actionId === 'session.pending.next'
       || actionId === 'search.conversations' || actionId === 'composer.transaction.apply'
       || actionId === 'composer.attachments.pick';
+    const requireSingleAnsweringClient = sessionUiAction || actionId === 'ui.current_context.read';
     const composerRef = input && typeof input === 'object'
       ? Reflect.get(input, 'composerRef') ?? Reflect.get(input, 'ref') : undefined;
     const targetSessionId = composerRef
@@ -50,7 +52,7 @@ export function createClientActionReverseDispatcher(
     const originInput = originAction.success ? PluginExecutionOriginActionInputSchemas[originAction.data].parse(input) : null;
     const answeringClient = originInput ? { ...(originInput.clientId ? { clientId: originInput.clientId } : {}),
       ...(actionId === 'plugins.execution_origin.list' ? {} : { requireSingle: true as const }) }
-      : sessionUiAction ? { requireSingle: true as const } : undefined;
+      : requireSingleAnsweringClient ? { requireSingle: true as const } : undefined;
     // Project only the address from the already-admitted full Action input.
     const address = isWorkflowAuthoringActionId(actionId) && input && typeof input === 'object'
       ? WorkflowDraftGetInputV1Schema.safeParse({ scope: Reflect.get(input, 'scope'), draftId: Reflect.get(input, 'draftId') }) : null;
@@ -81,7 +83,11 @@ export function createClientActionReverseDispatcher(
     } });
     if (!request.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     let issued = false;
-    const unknownOutcome = () => ({ ok: false as const, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' });
+    const sideEffectClass = getActionSpec(actionId).sideEffectClass;
+    const mayHaveEffect = sideEffectClass !== 'read' && sideEffectClass !== 'none';
+    const unknownOutcome = () => mayHaveEffect
+      ? { ok: false as const, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' }
+      : machineTransportUnavailable('invalid_action_output');
     try {
       const response = await client.callConnectedClientRpc(method, request.data, {
         ...(answeringClient ? { answeringClient } : {}),
@@ -95,9 +101,16 @@ export function createClientActionReverseDispatcher(
         if (response.errorCode === RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE) return unavailable();
         if (answeringClient && response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) return { ok: false,
           errorCode: 'client_routing_update_required', error: 'Update the Home server to support answering-client routing' };
-        if (response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) return unavailable();
-        return issued ? unknownOutcome() : machineTransportUnavailable(response.errorCode);
+        if (response.errorCode === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+          || response.errorCode === RPC_ERROR_CODES.METHOD_NOT_FOUND) return unavailable();
+        return issued && mayHaveEffect ? unknownOutcome() : machineTransportUnavailable(response.errorCode);
       }
+      // The room may still be settling an accepted call after its receiver
+      // withdrew new admission. Its encrypted method-not-found is a known
+      // refusal, not a lost Action receipt.
+      const refusal = response.result && typeof response.result === 'object'
+        && 'errorCode' in response.result ? response.result.errorCode : undefined;
+      if (refusal === RPC_ERROR_CODES.METHOD_NOT_FOUND || refusal === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) return unavailable();
       const execution = parseClientActionDispatchResult(actionId, response.result);
       if (actionId === 'plugins.execution_origin.list' && execution?.ok && execution.result
         && typeof execution.result === 'object' && Reflect.get(execution.result, 'status') === 'available' && response.answeringClientId) {
@@ -105,8 +118,9 @@ export function createClientActionReverseDispatcher(
           ...(response.answeringClientIds ? { answeringClientIds: [...response.answeringClientIds] } : {}) } };
       }
       return execution ?? unknownOutcome();
-    } catch {
-      return issued ? unknownOutcome() : machineTransportUnavailable();
+    } catch (error) {
+      return issued && mayHaveEffect ? unknownOutcome()
+        : machineTransportUnavailable(context.signal?.aborted ? 'cancelled' : readRpcErrorCode(error) ?? undefined);
     }
   };
 }

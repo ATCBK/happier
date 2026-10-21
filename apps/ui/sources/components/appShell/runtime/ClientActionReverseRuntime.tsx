@@ -5,6 +5,8 @@ import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot'
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { createUiClientActionReverseHandler } from '@/sync/ops/actions/clientActionReverseDispatch';
 import { getMountedWorkflowDraftAddresses, subscribeMountedWorkflowDraftOwners } from '@/sync/ops/actions/workflowAuthoringAction';
 import { workflowDraftClientRpcMethod } from '@happier-dev/protocol/actions/workflowAuthoringAction';
@@ -34,10 +36,13 @@ function MachineClientActionBinding({ serverId, generation, accountId, machineId
         let mounted = true;
         const binding = { serverId, accountId, isCurrent: () => {
             const active = getActiveServerSnapshot();
-            return mounted && active.serverId === serverId && active.generation === generation
-                && storage.getState().profile?.id === accountId
-                && (sessionId === undefined || readCurrentSessionId?.() === sessionId);
-        } };
+            const state = storage.getState();
+            const machine = resolveServerScopedMachine(state, serverId, machineId);
+            return active.serverId === serverId && active.generation === generation
+                && state.profile?.id === accountId && Boolean(machine
+                    && isMachineSelectableForFleet({ serverId, accountId }, machine));
+        }, canExecute: () => mounted
+            && (sessionId === undefined || readCurrentSessionId?.() === sessionId) };
         const handler = method === RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE
             ? createCurrentUiContributedActionRpcHandler({
                 ...binding, machineId, readProjection: readCurrentAppShellPluginUiProjection,
@@ -48,7 +53,7 @@ function MachineClientActionBinding({ serverId, generation, accountId, machineId
             })
             : createUiClientActionReverseHandler(binding);
         const dispose = apiSocket.registerMachineScopedRpcHandler(
-            machineId, method, handler,
+            machineId, method, handler, { settleInFlight: true },
         );
         return () => {
             mounted = false;

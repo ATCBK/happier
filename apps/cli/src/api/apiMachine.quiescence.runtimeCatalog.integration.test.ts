@@ -26,8 +26,10 @@ vi.mock('axios', async (importOriginal) => {
     return { ...actual, default: { ...actual.default, get: axiosGetMock } };
 });
 
-vi.mock('@/configuration', () => ({
+vi.mock('@/configuration', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/configuration')>(),
     configuration: {
+        ...(await importOriginal<typeof import('@/configuration')>()).configuration,
         serverUrl: 'https://example.test',
         apiServerUrl: 'https://example.test',
         activeServerDir: '/tmp/happier-api-machine-quiescence-test',
@@ -46,7 +48,8 @@ vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
     createLoopbackReadinessProbe: () => probeReadinessMock,
 }));
 
-vi.mock('@/utils/time', () => ({
+vi.mock('@/utils/time', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/utils/time')>(),
     backoff: backoffMock,
 }));
 
@@ -100,6 +103,18 @@ function encryptForMachine(machine: Machine, value: unknown): string {
 }
 
 describe('ApiMachineClient daemon quiescence admission', () => {
+    it('keeps a received client receipt when the socket disconnects immediately afterwards', async () => {
+        const receipt = { v: 1, execution: { ok: true, result: { status: 'opened' } } };
+        const socket = createApiSessionSocketStub({ connected: true, emitWithAck: async () => {
+            socket.connected = false;
+            return { ok: true, result: receipt };
+        } });
+        const client = new ApiMachineClient('token', createPlainMachine());
+        Reflect.set(client, 'socket', socket);
+        expect(await client.callConnectedClientRpc('ui.navigation', {}, { timeoutMs: null }))
+            .toEqual({ ok: true, result: receipt });
+    });
+
     afterEach(() => {
         backoffMock.mockReset();
         backoffMock.mockImplementation(async (fn: () => Promise<unknown>) => await fn());
@@ -286,22 +301,33 @@ describe('ApiMachineClient daemon quiescence admission', () => {
     });
 
     it('fails a connected-client RPC closed when the machine socket disconnects before the acknowledgement settles', async () => {
+        let markIssued!: () => void;
+        const issued = new Promise<void>(resolve => { markIssued = resolve; });
+        let rejectAcknowledgement!: (error: Error) => void;
         const socket = createApiSessionSocketStub({
             connected: true,
-            emitWithAck: (_event, _payload, activeSocket) => {
-                activeSocket.connected = false;
-                return { ok: true, result: { hello: 'stale-client' } };
+            emitWithAck: () => {
+                markIssued();
+                return new Promise<unknown>((_resolve, reject) => { rejectAcknowledgement = reject; });
             },
         });
         const client = new ApiMachineClient('token', createPlainMachine());
         Reflect.set(client, 'socket', socket);
 
-        await expect(client.callConnectedClientRpc(
+        const pending = client.callConnectedClientRpc(
             'ui.demo',
             { hello: 'ui' },
-        )).resolves.toEqual({
+            { timeoutMs: null },
+        );
+        await issued;
+        socket.connected = false;
+        socket.trigger('disconnect', 'transport close');
+        // Socket.IO rejects its pending ACKs on disconnect; the boundary stub
+        // only dispatches listeners, so deliver that native rejection here.
+        rejectAcknowledgement(new Error('socket has been disconnected'));
+        await expect(pending).resolves.toMatchObject({
             ok: false,
-            errorCode: 'machine_socket_unavailable',
+            errorCode: 'RPC_OUTCOME_UNKNOWN',
         });
     });
 

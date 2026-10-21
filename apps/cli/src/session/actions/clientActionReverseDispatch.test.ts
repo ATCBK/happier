@@ -15,11 +15,37 @@ const disconnectedClient: ClientActionMachineRpc = {
 };
 
 describe('client Action reverse delivery', () => {
+  it('reports a failed conversation-search read without claiming an uncertain effect', async () => {
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, _request, options) => {
+        options.onIssued();
+        return { ok: false, errorCode: 'RPC_REQUEST_TIMEOUT' };
+      },
+    }));
+    expect(await dispatch({ actionId: 'search.conversations', input: {
+      query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'auto' },
+    }, context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
+      .toMatchObject({ ok: false, errorCode: 'RPC_REQUEST_TIMEOUT' });
+  });
+
+  it('recognizes an encrypted receiver refusal after its Session handler was withdrawn', async () => {
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: () => true,
+      callConnectedClientRpc: async (_method, _request, options) => {
+        options.onIssued();
+        return { ok: true, result: { error: 'RPC method not found', errorCode: 'RPC_METHOD_NOT_FOUND' } };
+      },
+    }));
+    expect(await dispatch({ actionId: 'session.pending.next', input: {},
+      context: { surface: 'agent', defaultSessionId: 'previous-session' } }))
+      .toEqual({ ok: true, result: { status: 'unavailable' } });
+  });
+
   it.each([
     { actionId: 'ui.find', input: { op: 'read' }, sessionId: 'invoking-session' },
     { actionId: 'ui.prompts.picker.open', input: {}, sessionId: 'invoking-session' },
     { actionId: 'ui.prompts.picker.open', input: { composerRef: { kind: 'session', sessionId: 'target-session' } }, sessionId: 'target-session' },
-    { actionId: 'ui.current_context.read', input: {}, sessionId: 'invoking-session' },
     { actionId: 'session.pending.next', input: {}, sessionId: 'invoking-session' },
     { actionId: 'search.conversations', input: { query: { v: 1, query: 'needle', scope: { type: 'global' }, mode: 'auto' } }, sessionId: 'invoking-session' },
     { actionId: 'composer.transaction.apply', input: { scope: { serverId: 'home', accountId: 'account' },
@@ -41,6 +67,36 @@ describe('client Action reverse delivery', () => {
     const result = await dispatch({ actionId, input, context: { surface: 'agent', defaultSessionId: 'invoking-session' } });
     expect(delivered).toEqual([method]);
     expect(result).not.toMatchObject({ errorCode: 'outcome_uncertain' });
+  });
+  it('keeps current UI context global when a Session-originated Agent carries its default Session', async () => {
+    const method = `${RPC_METHODS.UI_ACTION_EXECUTE}.current-context.read`;
+    const checked: string[] = [];
+    const delivered: string[] = [];
+    const dispatch = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: actual => {
+        checked.push(actual);
+        return actual === method;
+      },
+      callConnectedClientRpc: async (actual, payload, options) => {
+        delivered.push(actual);
+        expect(UiActionDispatchRequestV1Schema.parse(payload)).toMatchObject({
+          actionId: 'ui.current_context.read', context: {
+            surface: 'agent', defaultSessionId: 'invoking-session',
+          },
+        });
+        expect(options.answeringClient).toEqual({ requireSingle: true });
+        options.onIssued();
+        return { ok: true, result: { v: 1, execution: { ok: true, result: {
+          navigation: { area: 'settings', screen: 'usage' }, commands: [],
+        } } } };
+      },
+    }));
+
+    await expect(dispatch({ actionId: 'ui.current_context.read', input: {}, context: {
+      surface: 'agent', defaultSessionId: 'invoking-session',
+    } })).resolves.toMatchObject({ ok: true, result: { commands: [] } });
+    expect(checked).toEqual([method]);
+    expect(delivered).toEqual([method]);
   });
   it('does not replace an explicit new-session composer with the invoking Session', async () => {
     const methods: string[] = [];
