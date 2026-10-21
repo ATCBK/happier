@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.fr';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations, type WidenTranslationValues } from '../_types';
+import type { TranslationStructure } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/fr';
 
@@ -1242,7 +1242,7 @@ function plural({
  * Spanish translations for the Happier app
  * Must match the exact structure of the English translations
  */
-const frValues = {
+export const fr: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations['fr'],
     composerReferences: composerReferenceTranslations['fr'],
     hunkReview: hunkReviewTranslations['fr'],
@@ -18407,9 +18407,5 @@ settingsSession: {
             skipToContent: "Aller au contenu",
         },
   },} as const;
-
-
-export const fr: WidenTranslationValues<typeof frValues> = defineTranslations(frValues);
-
 
 export type TranslationsFr = typeof fr;

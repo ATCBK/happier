@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.zh-Hant';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations } from '../_types';
+import type { TranslationStructure } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/zh-Hant';
 
@@ -322,7 +322,6 @@ import { personalHomeBootstrapBlockedTranslations as feature_personalHomeBootstr
  * - Functions with typed object parameters for dynamic text
  */
 
-import type { zhHans } from './zh-Hans';
 
 import { settingsProvidersTranslations as feature_settingsProvidersTranslations } from './features/zh-Hant';
 
@@ -1242,7 +1241,7 @@ type DeepPartial<T> = {
                 : T[K] extends object
                     ? DeepPartial<T[K]>
                     : T[K];
-} & { readonly [key: string]: unknown };
+};
 
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -1276,7 +1275,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
 }
 
 
-const zhHantOverrides: DeepPartial<typeof zhHans> = {
+const zhHantOverrides: DeepPartial<TranslationStructure> = {
   panes: { mainColumn: paneMainColumnTranslations['zh-Hant'], emptyEditor: paneEmptyEditorTranslations['zh-Hant'], shortcutsSheet: paneShortcutsSheetTranslations['zh-Hant'] },
   capabilities: capabilityKitTranslations.zhHant,
     resourceProposal: resourceProposalTranslations.zhHant,
@@ -14191,6 +14190,6 @@ settingsSession: {
     },};
 
 
-export function createZhHant(base: typeof zhHans): typeof zhHans {
-    return defineTranslations(deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'], hunkReview: hunkReviewTranslations['zh-Hant'], composerReferences: composerReferenceTranslations['zh-Hant'] }));
+export function createZhHant(base: TranslationStructure): TranslationStructure {
+    return deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'], hunkReview: hunkReviewTranslations['zh-Hant'], composerReferences: composerReferenceTranslations['zh-Hant'] });
 }

@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.ru';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations, type WidenTranslationValues } from '../_types';
+import type { TranslationStructure } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/ru';
 
@@ -1299,7 +1299,7 @@ function plural({
  * Russian translations for the Happier app
  * Must match the exact structure of the English translations
  */
-const ruValues = {
+export const ru: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations['ru'],
     composerReferences: composerReferenceTranslations['ru'],
     hunkReview: hunkReviewTranslations['ru'],
@@ -18483,9 +18483,5 @@ settingsSession: {
             skipToContent: "Перейти к содержимому",
         },
   },} as const;
-
-
-export const ru: WidenTranslationValues<typeof ruValues> = defineTranslations(ruValues);
-
 
 export type TranslationsRu = typeof ru;

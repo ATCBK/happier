@@ -1216,6 +1216,23 @@ function callSampledTranslation(value: unknown, args: readonly unknown[]): strin
 }
 
 describe('i18n integrity', () => {
+    it('does not expose locale-only leaves through shared spreads or composition', () => {
+        const englishKeys = new Set(flattenTranslationLeaves(en).map(({ key }) => key));
+        const locales = [
+            { code: 'ru', root: ru }, { code: 'pl', root: pl }, { code: 'es', root: es },
+            { code: 'fr', root: fr }, { code: 'it', root: itLocale }, { code: 'pt', root: pt },
+            { code: 'ca', root: ca }, { code: 'de', root: de }, { code: 'zh-Hans', root: zhHans },
+            { code: 'zh-Hant', root: zhHant }, { code: 'ja', root: ja },
+        ];
+        // Structural assignment permits extra fields on shared references; only the
+        // composed locale sees those fields and Traditional Chinese's merged overrides.
+        for (const { code, root } of locales) {
+            const extraKeys = flattenTranslationLeaves(root).map(({ key }) => key)
+                .filter((key) => !englishKeys.has(key));
+            expect(extraKeys, code).toEqual([]);
+        }
+    });
+
     it('keeps machine resource Actions, suggestions and widget copy reachable at the public locale roots', () => {
         for (const locale of [en, ca, de, es, fr, itLocale, ja, pl, pt, ru, zhHans, zhHant]) {
             expect(locale.settingsActions.families.resources.reading.title.length).toBeGreaterThan(0);

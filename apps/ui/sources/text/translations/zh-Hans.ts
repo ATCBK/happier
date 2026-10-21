@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.zh-Hans';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations, type WidenTranslationValues } from '../_types';
+import type { TranslationStructure } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/zh-Hans';
 
@@ -1285,7 +1285,7 @@ function plural({
 }
 
 
-const zhHansValues = {
+export const zhHans: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations['zh-Hans'],
     composerReferences: composerReferenceTranslations['zh-Hans'],
     hunkReview: hunkReviewTranslations['zh-Hans'],
@@ -18142,6 +18142,3 @@ settingsSession: {
             skipToContent: "跳转到内容",
         },
   },} as const;
-
-
-export const zhHans: WidenTranslationValues<typeof zhHansValues> = defineTranslations(zhHansValues);

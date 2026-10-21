@@ -14,28 +14,17 @@ it('emits real locale declarations while retaining exact keys and interpolation 
     const consumer = `import { en } from ${JSON.stringify(join(uiDir, 'sources/text/translations/en'))};
 import { ca } from ${JSON.stringify(join(uiDir, 'sources/text/translations/ca'))};
 import { zhHans } from ${JSON.stringify(join(uiDir, 'sources/text/translations/zh-Hans'))};
-import { defineTranslations } from ${JSON.stringify(join(uiDir, 'sources/text/_types'))};
+import type { TranslationStructure } from ${JSON.stringify(join(uiDir, 'sources/text/_types'))};
 export const title: string = en.sessionBoard.views.reconciled({ title: 'Board' });
 export const key: keyof typeof en.sessionBoard.views = 'reconciled';
 export const installation: string = en.identityAdministration.githubRemoveInstallationFor({ name: 'installation' });
 export const identityKey: keyof typeof en.identityAdministration = 'githubRemoveInstallationFor';
 export const localizedInstallation: string = ca.identityAdministration.githubRemoveInstallationFor({ name: 'installation' });
 export const localizedIdentityKey: keyof typeof ca.identityAdministration = 'githubRemoveInstallationFor';
-const referenced: { value: string; optional?: string } = { value: 'initial' };
-const interpolate = ({ count }: { count: number }): number => count;
-const authoredValues = { label: 'initial', referenced, interpolate, tuple: ['first', 'second'] } as const;
-const authored = defineTranslations(authoredValues);
-type ExpectedCarrier = {
-    readonly label: string;
-    readonly referenced: { value: string; optional?: string };
-    readonly interpolate: typeof interpolate;
-    readonly tuple: readonly [string, string];
-};
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
-export const preservesCarrier: Equal<typeof authored, ExpectedCarrier> = true;
+export const sharedEnglishStructure: Equal<typeof en, TranslationStructure> = true;
+export const sharedLocalizedStructure: Equal<typeof ca, TranslationStructure> = true;
 export const preservesLocalizedFunctionReturn: Equal<ReturnType<typeof zhHans.newSession.worktree.statusPill.changesSuffix>, string> = true;
-authored.referenced.value = 'updated';
-authored.referenced.optional = 'present';
 `;
     try {
         const relativeFixture = relative(repoRoot, fixture);
@@ -85,15 +74,16 @@ en.identityAdministration.githubRemoveInstallationFor({ name: 42 });
 export const invalidIdentity: keyof typeof en.identityAdministration = 'not-a-key';
 ca.identityAdministration.githubRemoveInstallationFor({ name: 42 });
 export const invalidLocalizedIdentity: keyof typeof ca.identityAdministration = 'not-a-key';
-authored.interpolate({ count: 'one' });
-export const invalidInterpolationReturn: string = authored.interpolate({ count: 1 });
-authored.label = 'changed';
+ca.common.cancel = 'changed';
+const { common, ...missingNamespace } = ca;
+export const invalidStructure: TranslationStructure = missingNamespace;
 `);
         const rejected = run();
         expect(rejected.status).not.toBe(0);
-        expect((rejected.stdout + rejected.stderr).match(/consumer\.ts.*TS2322/gu)).toHaveLength(8);
+        expect((rejected.stdout + rejected.stderr).match(/consumer\.ts.*TS2322/gu)).toHaveLength(6);
         expect((rejected.stdout + rejected.stderr).match(/consumer\.ts.*TS2540/gu)).toHaveLength(1);
-        expect((rejected.stdout + rejected.stderr).match(/error TS\d+:/gu)).toHaveLength(9);
+        expect((rejected.stdout + rejected.stderr).match(/consumer\.ts.*TS2741/gu)).toHaveLength(1);
+        expect((rejected.stdout + rejected.stderr).match(/error TS\d+:/gu)).toHaveLength(8);
     } finally {
         rmSync(fixture, { recursive: true, force: true });
     }

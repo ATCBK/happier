@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.ja';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations, type WidenTranslationValues } from '../_types';
+import type { TranslationStructure } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/ja';
 
@@ -1269,7 +1269,7 @@ const settingsSessionHandoffTranslationExtensions = {
 } as const;
 
 
-const jaValues = {
+export const ja: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations['ja'],
     composerReferences: composerReferenceTranslations['ja'],
     hunkReview: hunkReviewTranslations['ja'],
@@ -18445,6 +18445,3 @@ settingsSession: {
             skipToContent: "コンテンツに移動",
         },
   },} as const;
-
-
-export const ja: WidenTranslationValues<typeof jaValues> = defineTranslations(jaValues);

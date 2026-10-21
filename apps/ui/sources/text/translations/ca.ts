@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.ca';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations, type WidenTranslationValues } from '../_types';
+import type { TranslationStructure } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/ca';
 
@@ -1252,7 +1252,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  * Catalan translations for the Happier app
  * Must match the exact structure of the English translations
  */
-const caValues = {
+export const ca: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations['ca'],
     composerReferences: composerReferenceTranslations['ca'],
     hunkReview: hunkReviewTranslations['ca'],
@@ -17282,9 +17282,5 @@ La meva pregunta: `,
             skipToContent: 'Vés al contingut',
         },
     },} as const;
-
-
-export const ca: WidenTranslationValues<typeof caValues> = defineTranslations(caValues);
-
 
 export type TranslationsCa = typeof ca;
