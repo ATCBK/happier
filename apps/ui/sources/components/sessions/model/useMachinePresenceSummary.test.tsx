@@ -1,7 +1,8 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import {
     clearMachineRequestReachabilityForTest,
     recordMachineRequestFailed,
@@ -12,6 +13,7 @@ const serverId = 'srv_presence';
 installHomeGovernanceBoundaries(home);
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { useMachinePresenceSummary, useMachinePresenceMembership } = await import('@/sync/domains/machines/reachability/useMachinePresenceSummary');
+const { useServerCredentialAccountScopeBinding, useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 
 beforeEach(async () => {
     await home.reset();
@@ -27,6 +29,59 @@ afterEach(async () => {
 });
 
 describe('reactive Machine presence', () => {
+    it('publishes membership immediately from an already admitted exact Home Account lifetime', async () => {
+        const previous = storage.getState();
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine', activeAt: Date.now() })], true,
+            { sourceServerId: serverId });
+        try {
+            const owner = await renderHook(() => useServerCredentialAccountScopeBinding(serverId));
+            await waitForHomeGovernance(() => expect(owner.getCurrent().binding).not.toBeNull());
+            const lifetime = owner.getCurrent().binding!;
+            const publications: ReturnType<typeof useMachinePresenceMembership>[] = [];
+            const hook = await renderHook(() => {
+                const membership = useMachinePresenceMembership(serverId, lifetime);
+                publications.push(membership);
+                return membership;
+            });
+            expect(publications[0]).toEqual({ onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
+            await hook.unmount();
+            await owner.unmount();
+        } finally { storage.setState(previous); }
+    });
+
+    it('keeps an explicitly missing, mismatched or retired supplied Account owner inert without routed fallback', async () => {
+        const previous = storage.getState();
+        await home.addHome({ name: 'Other Home', serverUrl: 'https://other-presence.example.test',
+            serverIdentityId: 'srv_other_presence', accountId: 'account-b' });
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine', activeAt: Date.now() })], true,
+            { sourceServerId: serverId });
+        try {
+            const owners = await renderHook(() => useServerCredentialAccountScopeBindings([serverId, 'srv_other_presence']));
+            await waitForHomeGovernance(() => expect(owners.getCurrent().size).toBe(2));
+            const lifetime = [...owners.getCurrent().values()].find(value => value.scope.accountId === 'account-a')!;
+            const foreignLifetime = [...owners.getCurrent().values()].find(value => value.scope.accountId === 'account-b')!;
+            expect(lifetime.isCurrent()).toBe(true);
+            expect(foreignLifetime.isCurrent()).toBe(true);
+            let supplied: ServerAccountScopeLifetime | null = null;
+            const hook = await renderHook(() => useMachinePresenceMembership(serverId, supplied));
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            supplied = lifetime;
+            await hook.rerender();
+            expect(hook.getCurrent().onlineMachineIds).toEqual(['machine']);
+            supplied = foreignLifetime;
+            await hook.rerender();
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            supplied = lifetime;
+            await hook.rerender();
+            expect(hook.getCurrent().onlineMachineIds).toEqual(['machine']);
+            await act(async () => { await home.switchAccount(serverId, 'account-c'); });
+            expect(lifetime.isCurrent()).toBe(false);
+            expect(hook.getCurrent()).toEqual({ onlineMachineIds: [], selectableMachineIds: [] });
+            await hook.unmount();
+            await owners.unmount();
+        } finally { storage.setState(previous); }
+    });
+
     it('keeps the captured presence snapshot until a source or the shared deadline clock advances', async () => {
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
         const now = Date.now();

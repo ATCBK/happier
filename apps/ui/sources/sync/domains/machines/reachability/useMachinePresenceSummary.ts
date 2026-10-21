@@ -5,6 +5,8 @@ import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServe
 import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import {
@@ -87,11 +89,26 @@ export type MachinePresenceMembership = Readonly<{
 }>;
 
 /** App-wide consumers need membership, not heartbeat timestamps or machine presentation. */
-export function useMachinePresenceMembership(serverId: string | null): MachinePresenceMembership {
+export function useMachinePresenceMembership(
+    serverId: string | null,
+    suppliedLifetime?: ServerAccountScopeLifetime | null,
+): MachinePresenceMembership {
     const store = getStorage();
     const targetServerId = serverId?.trim() || getActiveServerSnapshot().serverId;
-    const { binding } = useServerCredentialAccountScopeBinding(targetServerId);
-    const scope = binding?.isCurrent() ? binding.scope : null;
+    const { binding } = useServerCredentialAccountScopeBinding(suppliedLifetime === undefined ? targetServerId : null);
+    const subscribeSuppliedLifetime = React.useCallback((notify: () => void) => {
+        const retirement = suppliedLifetime?.onRetire(notify);
+        return () => retirement?.dispose();
+    }, [suppliedLifetime]);
+    const readSuppliedCurrentness = React.useCallback(() => suppliedLifetime?.isCurrent() === true, [suppliedLifetime]);
+    const suppliedCurrent = React.useSyncExternalStore(subscribeSuppliedLifetime, readSuppliedCurrentness, readSuppliedCurrentness);
+    // A composition owner can supply its already admitted exact Account. An
+    // explicit absent, retired or different-Home owner never borrows another one.
+    const scope = suppliedLifetime === undefined
+        ? binding?.isCurrent() ? binding.scope : null
+        : suppliedCurrent && suppliedLifetime
+            && areServerProfileIdentifiersEquivalent(suppliedLifetime.scope.serverId, targetServerId)
+            ? suppliedLifetime.scope : null;
     const cached = React.useRef<MachinePresenceMembership>({ onlineMachineIds: [], selectableMachineIds: [] });
     const readMachines = React.useCallback(() => {
         const state = store.getState();
