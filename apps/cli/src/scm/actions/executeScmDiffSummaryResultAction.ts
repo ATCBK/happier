@@ -5,13 +5,12 @@ import { SessionMessageSendResultV1Schema } from '@happier-dev/protocol/sessions
 import { SessionInputAdmissionRejectionCodeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmissionRejectionV1';
 import { resolveExecutionRunInteractionAffordances } from '@happier-dev/protocol/execution/runs/interactionAffordances';
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
-import { buildReviewCommentsOutboundMessage } from '@happier-dev/protocol/messages/structured/reviewCommentsInput';
 import { ScmDiffSummaryResultReadInputSchema, ScmDiffSummaryResultEditInputSchema, ScmDiffSummaryResultRevisionInputSchema, ScmDiffSummaryRefineInputSchema, ScmDiffSummaryAddOutputsInputSchema, ScmDiffSummaryDiscussInputSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
-import type { ScmActionExecute, ScmActionId, ScmDiffSummaryResultResponse, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryOutputKind, ReviewCommentDraftMessageV1, ActionExecutorContext, ScmReviewExplanationRequester, ScmDiffSummaryGeneratorSelection } from '@happier-dev/protocol';
+import type { ScmActionExecute, ScmActionId, ScmDiffSummaryResultResponse, ScmDiffSummaryResultDeleteResponse, ScmDiffSummaryOutputKind, ActionExecutorContext, ScmReviewExplanationRequester, ScmDiffSummaryGeneratorSelection } from '@happier-dev/protocol';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { buildDiffSummaryPrompt, buildDiffSummaryRefinementTask } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/buildDiffSummaryPrompt';
 import { presentScmDiffSummaryModelContext, scopeScmDiffSummaryComparison } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/presentScmDiffSummaryModelContext';
-import { findingCitationInstructions, presentReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
+import { findingCitationInstructions } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 
 type ExecuteCanonicalAction = Parameters<ScmActionExecute>[0]['executeCanonicalAction'];
 export type ScmDiffSummarySavedActionId = Extract<ScmActionId,
@@ -62,7 +61,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   const outputs: readonly ScmDiffSummaryOutputKind[] = params.actionId === 'scm.diffSummary.refine'
     ? [ScmDiffSummaryRefineInputSchema.parse(input).output]
     : params.actionId === 'scm.diffSummary.addOutputs' ? ScmDiffSummaryAddOutputsInputSchema.parse(input).outputs
-      : result.output.requestedOutputs ?? ['summary'];
+      : [];
   const stopIds = 'stopIds' in input ? input.stopIds : undefined;
   const reviewExplanation = params.actionId === 'scm.diffSummary.refine' ? ScmDiffSummaryRefineInputSchema.parse(input).reviewExplanation : undefined;
   const caller = params.actionContext?.actionCaller;
@@ -95,20 +94,7 @@ export async function executeScmDiffSummaryResultAction(params: Readonly<{
   const evidenceContext = `Saved result ${result.resultId}, revision ${result.revision}.\n${JSON.stringify(presentScmDiffSummaryModelContext(selectedStops
     ? { comparisonId: comparison.id, title: result.output.outputs?.walkthrough?.value?.title, stops: selectedStops, files: scopedComparison.inventory.files }
     : { comparisonId: comparison.id, outputs: result.output.outputs }, scopedComparison, citations))}`;
-  const drafts: ReviewCommentDraftMessageV1[] = selectedStops?.flatMap(stop => scopedComparison.inventory.files.flatMap(file => file.occurrences.flatMap(change => {
-    if (!stop.changeRefs.includes(change.id) || file.evidence.state !== 'available' || change.evidence?.state === 'unavailable') return [];
-    const oldLine = change.before.lineCount > 0 && change.before.startLine > 0 ? change.before.startLine : null;
-    const newLine = change.after.lineCount > 0 && change.after.startLine > 0 ? change.after.startLine : null;
-    if (newLine === null && oldLine === null) return [];
-    return [{ id: `${result.resultId}:${stop.id}:${change.alias}`, filePath: file.path, source: 'diff' as const,
-      anchor: { kind: 'diffLine' as const, startLine: newLine ?? oldLine!, side: newLine === null ? 'before' as const : 'after' as const, oldLine, newLine },
-      // Ranges prove coordinates, not selected bytes. Exact saved file evidence remains in context.
-      snapshot: { selectedLines: [], beforeContext: [], afterContext: [] }, body: String(presentReviewFindingCitations(`${stop.title}\n${stop.explanationMarkdown}`, citations)), createdAt: Date.now() }];
-  }))) ?? [];
-  const context = [taskInstructions, findingCitationInstructions, evidenceContext, userInstructions].filter(Boolean).join('\n');
-  const reviewInput = selectedStops && sessionId ? buildReviewCommentsOutboundMessage({ sessionId, drafts, additionalMessage: context }) : null;
-  const message = params.actionId === 'scm.diffSummary.discuss' ? reviewInput?.text ?? context
-    : buildDiffSummaryPrompt({ metadata: result.output.metadata ?? { source: comparison.source, sourceKey: comparison.id }, comparison: scopedComparison, outputs,
+  const message = buildDiffSummaryPrompt({ metadata: result.output.metadata ?? { source: comparison.source, sourceKey: comparison.id }, comparison: scopedComparison, outputs,
       instructions: userInstructions, taskInstructions: [taskInstructions, findingCitationInstructions].filter(Boolean).join('\n'), evidenceContext, outputLanguage,
       ...(reviewExplanation ? { reviewExplanation: true } : {}),
       files: scopedComparison.inventory.files.map(file => ({ path: file.path, changeKind: file.changeKind,

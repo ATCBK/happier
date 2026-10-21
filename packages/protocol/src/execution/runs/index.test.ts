@@ -1076,6 +1076,16 @@ describe('executionRuns protocol', () => {
     expect(parsed.intent).toBe('scm_diff_summary');
   });
 
+  it('admits an empty output scope only for discussion of a saved SCM result', () => {
+    const request = { kind: 'scm_diff_summary.v1', intent: 'scm_diff_summary',
+      backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only',
+      retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+      intentInput: { cwd: '/repo', source: { kind: 'workingTree' }, outputs: [], resultId: 'saved', expectedRevision: 7 } };
+    expect(ExecutionRunStartRequestSchema.safeParse(request)).toMatchObject({ success: true,
+      data: { intentInput: { outputs: [], resultId: 'saved', expectedRevision: 7 } } });
+    expect(ExecutionRunStartRequestSchema.safeParse({ ...request, intentInput: { ...request.intentInput, resultId: undefined } }).success).toBe(false);
+  });
+
   it('accepts checkpoint selectors and a captured comparison id without client-authored evidence', () => {
     const comparisonId = buildScmComparisonIdentity({
       source: { kind: 'turnCheckpoint' }, repositoryRootPath: '/repo',

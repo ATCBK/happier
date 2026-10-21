@@ -62,6 +62,19 @@ async function setupPartialApplication() {
 }
 
 describe('saved SCM result owner', () => {
+  it('retains a discussion input without granting any result publication', async () => {
+    const { directory, store, request } = await setup();
+    const before = await store.read(request);
+    expect(await store.beginInput({ ...request, inputId: 'discussion', expectedRevision: 0, outputs: [], stopIds: ['s1'] }))
+      .toMatchObject({ success: true });
+    const reopened = createScmDiffSummaryResultStore({ directory });
+    expect(await reopened.readInput({ ...request, inputIds: ['discussion'] })).toMatchObject({ outputs: [], stopIds: ['s1'] });
+    expect(await reopened.publish({ ...request, inputId: 'discussion', modelOutput: { walkthrough: modelWalkthrough } }))
+      .toMatchObject({ success: false, errorCode: 'invalid_output' });
+    expect(await reopened.publishProgress({ ...request, inputId: 'discussion', expectedRevision: 0, output }))
+      .toMatchObject({ success: false, errorCode: 'invalid_output' });
+    expect(await reopened.read(request)).toEqual(before);
+  });
   it('keeps PR drafting evidence private and requires the requested body before publishing a complete summary', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-scm-pr-draft-'));
     const store = createScmDiffSummaryResultStore({ directory });

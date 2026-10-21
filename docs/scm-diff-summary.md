@@ -729,7 +729,13 @@ and serializes writers with its owner-file lock. Successful changes increment
 revision. A stale write returns `revision_conflict` and the latest revision;
 clients keep their draft for reconciliation. A refinement binds its output scope
 and base before dispatch, so late model output cannot erase intervening edits.
-Ordinary conversation prose does not mutate saved output.
+Discussion admits an empty structured-output scope, including the initial turn
+of a seeded replacement conversation. The shared prompt requests a prose answer;
+the saved-result publisher rejects edits from that input even if the model
+returns result-shaped JSON. Selected stops are context, not review verify/fix
+instructions. Only an explicit structured request binds outputs for publication;
+its existing revision check still applies. Binding the replacement Run changes
+linkage and provenance while preserving the saved story and unrelated outputs.
 
 Rename, prose edit, reorder, merge, output addition and immediate Undo preserve
 unrelated outputs. Merge retains the chosen title and exact coverage. Undo is

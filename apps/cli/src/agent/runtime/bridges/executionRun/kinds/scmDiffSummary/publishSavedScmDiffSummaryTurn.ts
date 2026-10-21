@@ -71,6 +71,10 @@ export async function publishSavedScmDiffSummaryTurn(params: ExecutionRunProfile
   const inputIds = params.inputIds?.length ? params.inputIds : [`initial:${params.start.runId}`];
   const pending = await scmDiffSummaryResultStore.readInput({ ...saved.scope, inputIds });
   if (!pending) return null;
+  if (!pending.outputs.length) {
+    await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: pending.inputId });
+    return null;
+  }
   const currentParams = { ...params, start: { ...params.start, intentInput: { ...readScmDiffSummaryIntent(params.start.intentInput),
     outputs: [...new Set([...(saved.result.output.requestedOutputs ?? []), ...pending.outputs])] } },
     previousStructuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: saved.result.output } };

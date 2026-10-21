@@ -57,6 +57,7 @@ function buildCacheKeyInput(params: Readonly<{
   intentInput: Readonly<Record<string, unknown>>;
 }>): ScmDiffSummaryCacheKeyInput | null {
   const outputs = readRequestedOutputs(params.intentInput);
+  if (!outputs.length) return null;
   const comparison = ScmComparisonSchema.safeParse(params.intentInput.comparison);
   const selector = readNonEmptyString(readRecord(params.intentInput.resolvedSelector).catalogId);
   const scopeKey = readNonEmptyString(params.intentInput.cacheScopeKey);
@@ -317,8 +318,8 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
       'This conversation is a replacement generator, not a continuation of the previous native thread.',
       explanationInput?.reviewExplanation
         ? 'Explain the selected findings, without changing walkthrough prose or giving a verdict. Return only reviewExplanations, one {stopId, markdown} per selected stop.'
-        : 'Publish only the requested structured outputs; retain exact captured change references.',
-      ...(selectedStops && !explanationInput?.reviewExplanation ? [
+        : input.outputs?.length === 0 ? '' : 'Publish only the requested structured outputs; retain exact captured change references.',
+      ...(selectedStops && input.outputs?.length !== 0 && !explanationInput?.reviewExplanation ? [
         buildDiffSummaryRefinementTask({ stops: selectedStops,
           editedStopIds: saved.walkthroughProvenance?.stops.filter(stop => stop.titleEdited).map(stop => stop.stopId) ?? [] }),
       ] : []),
@@ -459,7 +460,13 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
   onBeforeRetainedInput: async ({ start, localId }) => {
     const saved = await readOrCreateSavedScmResult(start);
     if (saved.result.output.runId && saved.result.output.runId !== start.runId) throw new Error('This generator was replaced for the saved result');
-    const prepared = await scmDiffSummaryResultStore.beginInput({ ...saved.scope, inputId: localId });
+    // Structured Actions bind their output scope before Pending admission.
+    // Ordinary participant chat has none; automatic analysis parts retain the
+    // existing host-authored analysis scope.
+    const prepared = await scmDiffSummaryResultStore.beginInput({ ...saved.scope, inputId: localId,
+      outputs: hasActiveDiffSummaryAnalysis(start.intentInput)
+        && readRecord(readRecord(start.intentInput).scmAnalysis).expectedInputId === localId
+        ? readRequestedOutputs(readRecord(start.intentInput)) : [] });
     if (!prepared.success) throw new Error(prepared.error);
   },
   onRetainedInputAdmitted: async ({ start, localId }) => {
@@ -487,6 +494,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     : null,
   onTerminal: async ({ start, status, finishedAtMs, structuredMeta }) => {
     const input = readRecord(start.intentInput);
+    if (readRequestedOutputs(input).length === 0) return null;
     const previous = structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
       ? ScmDiffSummaryGenerateOutputSchema.safeParse(structuredMeta.payload) : null;
     if (!previous?.success && !ScmComparisonSchema.safeParse(input.comparison).success) return null;

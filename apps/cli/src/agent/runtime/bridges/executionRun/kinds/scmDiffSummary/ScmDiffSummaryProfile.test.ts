@@ -56,6 +56,59 @@ async function admitInitial(params: ExecutionRunProfileStartParams) {
 }
 
 describe('initial generation context', () => {
+  it('keeps seeded stop discussion prose-only and preserves the edited story even when the model returns JSON', async () => {
+    await withTempDir('happier-scm-seeded-discussion-', async cwd => {
+      execFileSync('git', ['init', '-q'], { cwd });
+      writeFileSync(join(cwd, 'a.ts'), 'const allowed = true;\n');
+      const captured = await captureScmComparison({ cwd, source: { kind: 'workingTree' } });
+      const refs = captured.comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.id));
+      const saved = await scmDiffSummaryResultStore.create({ cwd, output: ScmDiffSummaryGenerateOutputSchema.parse({
+        success: true, sourceKey: captured.comparison.id, comparison: captured.comparison, metadata: captured.metadata,
+        requestedOutputs: ['summary', 'walkthrough'], outputs: {
+          summary: { state: 'complete', value: { summaryMarkdown: 'Saved summary' } },
+          walkthrough: { state: 'complete', value: { title: 'Generated title', intro: 'Saved intro', otherChangeRefs: [],
+            stops: [{ id: 'authorization', title: 'Permission', explanationMarkdown: 'Saved explanation', changeRefs: refs },
+              { id: 'editorial', title: 'Editorial context', explanationMarkdown: 'Retain this stop', changeRefs: [] }] } },
+        }, runId: 'retired-generator',
+      }), generator: { backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, modelId: 'test-model' } });
+      const scope = { cwd, resultId: saved.resultId };
+      const edited = await scmDiffSummaryResultStore.edit({ ...scope, expectedRevision: 0,
+        edit: { kind: 'renameWalkthrough', title: 'My saved title' } });
+      if (!edited.success) throw new Error(edited.error);
+      let prompt = '';
+      let beforeTurn: unknown;
+      let completion: unknown;
+      const response = await executeScmActionOperation({ actionId: 'scm.diffSummary.discuss', workingDirectory: cwd,
+        actionContext: { surface: 'cli', executionRunTargetMachineId: 'machine' },
+        input: { ...scope, expectedRevision: edited.result.revision, stopIds: ['authorization'],
+          message: 'Why is this allowed?', startNew: true },
+        executeCanonicalAction: async (id, value) => {
+          if (id === 'execution.run.get') return { ok: false, errorCode: 'execution_run_not_found', error: 'Retired' };
+          if (id !== 'execution.run.start') throw new Error('Unexpected transport');
+          const request = ExecutionRunStartRequestSchema.parse(value);
+          const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request });
+          const admitted = ExecutionRunStartRequestSchema.parse({ ...request, ...prepared });
+          prompt = admitted.instructions ?? '';
+          const current = { ...start(admitted.intentInput), sessionId: null, runId: 'seeded-discussion', instructions: prompt };
+          const initial = await ScmDiffSummaryProfile.onStarted!({ start: current, rawText: '', finishedAtMs: 2 });
+          if (!request.localInputId) throw new Error('Seeded discussion must carry its admitted input identity');
+          await ScmDiffSummaryProfile.onBeforeRetainedInput!({ start: current, localId: request.localInputId });
+          beforeTurn = await scmDiffSummaryResultStore.read(scope);
+          completion = await ScmDiffSummaryProfile.onTurnComplete!({ start: current, previousStructuredMeta: initial?.structuredMeta,
+            turnId: 'native-answer', inputIds: [request.localInputId], finishedAtMs: 3, rawText: JSON.stringify({ walkthrough: { title: 'Unrequested replacement',
+              intro: '', stops: [{ id: 'authorization', title: 'Replacement', explanationMarkdown: 'Replace', changeRefs: ['c1'] }], otherChangeRefs: [] } }) });
+          return { ok: true, result: { runId: current.runId, callId: current.callId, sidechainId: current.sidechainId } };
+        } });
+      expect(response).toMatchObject({ success: true, runId: 'seeded-discussion', seededFromRunId: 'retired-generator' });
+      expect(await scmDiffSummaryResultStore.read(scope)).toEqual(beforeTurn);
+      expect(completion).toBeNull();
+      expect(prompt).toContain('Answer the user in prose');
+      expect(prompt).not.toContain('MUST return ONLY valid JSON');
+      expect(prompt).not.toContain('Publish only the requested structured outputs');
+      expect(prompt).toContain('Saved explanation');
+      expect(prompt).toContain('Why is this allowed?');
+    });
+  });
   it('does not turn fresh pending generation into discussion of an empty saved result', async () => {
     const admitted = await admitInitial(start(input(['walkthrough', 'commitPlan'])));
     expect(ScmDiffSummaryProfile.buildInitialInputContext?.({
@@ -592,6 +645,8 @@ describe('ScmDiffSummaryProfile', () => {
     expect(first?.toolResultOutput).toMatchObject({ outputs: { walkthrough: { value: { title: 'First' } } } });
     expect(await ScmDiffSummaryProfile.onTurnComplete?.({ start: params, turnId: 'unadmitted-native', finishedAtMs: 4,
       previousStructuredMeta: first?.structuredMeta, rawText })).toBeNull();
+    await scmDiffSummaryResultStore.beginRefinement({ ...scope, inputId: 'follow-up', output: 'walkthrough',
+      expectedRevision: ScmDiffSummaryGenerateOutputSchema.parse(first?.toolResultOutput).revision! });
     await ScmDiffSummaryProfile.onBeforeRetainedInput?.({ start: params, localId: 'follow-up' });
     const current = ScmDiffSummaryGenerateOutputSchema.parse(first?.toolResultOutput);
     await scmDiffSummaryResultStore.edit({ ...scope, expectedRevision: current.revision!, edit: { kind: 'renameWalkthrough', title: 'New manual edit' } });
@@ -788,6 +843,12 @@ describe('ScmDiffSummaryProfile', () => {
     await ScmDiffSummaryProfile.onBeforeRetainedInput?.({ start: followupStart, localId: 'chat' });
     expect(await ScmDiffSummaryProfile.onTurnComplete?.({ ...params, inputIds: ['chat'], previousStructuredMeta: second?.structuredMeta,
       rawText: 'An ordinary discussion answer.' })).toBeNull();
+    const beforeDiscussion = await scmDiffSummaryResultStore.read(scope);
+    await ScmDiffSummaryProfile.onBeforeRetainedInput?.({ start: followupStart, localId: 'json-chat' });
+    expect(await ScmDiffSummaryProfile.onTurnComplete?.({ ...params, inputIds: ['json-chat'], previousStructuredMeta: second?.structuredMeta,
+      rawText: JSON.stringify({ summaryMarkdown: 'An unrequested replacement' }) })).toBeNull();
+    expect(await scmDiffSummaryResultStore.read(scope)).toEqual(beforeDiscussion);
+    await scmDiffSummaryResultStore.beginInput({ ...scope, inputId: 'invalid', outputs: ['commitPlan'] });
     await ScmDiffSummaryProfile.onBeforeRetainedInput?.({ start: followupStart, localId: 'invalid' });
     const invalid = await ScmDiffSummaryProfile.onTurnComplete?.({ ...params, inputIds: ['invalid'], previousStructuredMeta: second?.structuredMeta,
       rawText: JSON.stringify({ commitPlan: { groups: [], leftOutChangeRefs: ['invented'] } }) });

@@ -70,6 +70,9 @@ describe('saved SCM result Action boundary', () => {
       .toMatchObject({ ok: true, result: { success: true, runId: run.runId } });
     expect(messages).toEqual([{ recipient: { kind: 'execution_run', runId: run.runId }, message: expect.stringContaining(question) }]);
     expect(messages[0]!.message).toContain('The selected change survives refresh.');
+    expect(messages[0]!.message).toContain('Answer the user in prose');
+    expect(messages[0]!.message).not.toContain('For each finding');
+    expect(messages[0]!.message).not.toContain('verdict');
     expect(await scmDiffSummaryResultStore.read({ cwd, resultId: saved.resultId })).toMatchObject({ success: true,
       result: { revision: saved.revision, output: { outputs: { walkthrough: { value: reading } } } } });
   });
@@ -310,7 +313,7 @@ describe('saved SCM result Action boundary', () => {
         }] } } } } } });
     } else if (operation === 'discuss') {
       expect(sent?.message).toContain('code.ts');
-      expect(sent?.message).toContain('after L2');
+      expect(sent?.message).toContain('"after":{"startLine":2,"lineCount":1}');
     } else if (operation === 'refine') {
       expect(sent?.message).toContain('Prose language: fr');
       if (!sent?.localId) throw new Error('Expected a retained refinement input');

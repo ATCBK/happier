@@ -29,6 +29,7 @@ import { LlmTaskRunnerConfigV1Schema } from '../../llm/tasks/llmTaskRunnerConfig
 import {
   ScmDiffSummaryGenerateInputSchema,
   ScmDiffSummaryGenerateOutputSchema,
+  ScmDiffSummaryOutputKindSchema,
 } from '../../scm/diffSummary.js';
 import { TurnChangeSetSchema } from '../../sessions/changes/schemas.js';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
@@ -355,7 +356,10 @@ export const ExecutionRunScmCommitMessageResultV1Schema = lazyZodSchema(() => z.
 }));
 export type ExecutionRunScmCommitMessageResultV1 = z.infer<typeof ExecutionRunScmCommitMessageResultV1Schema>;
 
-export const ExecutionRunScmDiffSummaryInputV1Schema = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.unknown() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$loose>)(zMini.extend(ScmDiffSummaryGenerateInputSchema, {
+export const ExecutionRunScmDiffSummaryInputV1Schema = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => zMini.core.clone(schema, { ...schema._zod.def, catchall: zMini.unknown() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$loose>)(zMini.safeExtend(ScmDiffSummaryGenerateInputSchema, {
+  // A saved-result conversation requests no structured output. Generation still
+  // requires a nonempty selection at ScmDiffSummaryGenerateInputSchema.
+  outputs: z.optional(z.array(ScmDiffSummaryOutputKindSchema)),
   turnChangeSet: zMini.optional(TurnChangeSetSchema),
   resultId: z.optional(z.string().check(z.minLength(1))),
   expectedRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
@@ -364,7 +368,7 @@ export const ExecutionRunScmDiffSummaryInputV1Schema = lazyZodSchema(() => (<T e
   seededFromRunId: z.optional(z.string().check(z.minLength(1))),
   /** Scoped saved-owner request reference, never caller-authored explanation provenance. */
   reviewExplanationInputId: z.optional(z.string().check(z.minLength(1))),
-})));
+})).check(z.refine(input => input.outputs?.length !== 0 || Boolean(input.resultId), 'Discussion requires a saved result')));
 export type ExecutionRunScmDiffSummaryInputV1 = z.infer<typeof ExecutionRunScmDiffSummaryInputV1Schema>;
 
 export const ExecutionRunScmDiffSummaryResultV1Schema = ScmDiffSummaryGenerateOutputSchema;

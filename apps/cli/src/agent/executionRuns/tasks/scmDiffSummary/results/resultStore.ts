@@ -25,7 +25,7 @@ const explanationRequestSchema = z.strictObject({ targets: ScmReviewExplanationT
 type InputScope = Readonly<{ inputId: string; expectedRevision?: number; outputs?: readonly ScmDiffSummaryOutputKind[]; stopIds?: readonly string[];
   reviewExplanation?: z.infer<typeof explanationRequestSchema>; reviewFindingCitations?: ReviewFindingCitations }>;
 const pendingInputSchema = z.strictObject({ inputId: z.string().check(z.minLength(1)), baseRevision: z.number().check(z.int(), z.nonnegative()),
-  outputs: z.array(ScmDiffSummaryOutputKindSchema).check(z.minLength(1)), stopIds: z.optional(z.array(z.string().check(z.minLength(1)))),
+  outputs: z.array(ScmDiffSummaryOutputKindSchema), stopIds: z.optional(z.array(z.string().check(z.minLength(1)))),
   reviewExplanation: z.optional(explanationRequestSchema),
   reviewFindingCitations: z.optional(reviewFindingCitationsSchema),
 });
@@ -444,7 +444,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         // A refinement Action has already bound this input's base before Pending admission.
         if (stored.inputs.some((pending) => pending.inputId === input.inputId)) return { success: true, result: stored.result };
         const outputs = input.outputs ?? stored.result.output.requestedOutputs ?? ['summary'];
-        if (input.stopIds && (!outputs.includes('walkthrough') || input.stopIds.some((id) => !stored.result.output.outputs?.walkthrough?.value?.stops.some((stop) => stop.id === id)))) {
+        if (input.stopIds && ((outputs.length > 0 && !outputs.includes('walkthrough')) || input.stopIds.some((id) => !stored.result.output.outputs?.walkthrough?.value?.stops.some((stop) => stop.id === id)))) {
           return failure('invalid_edit', 'Targeted stops must exist in the saved walkthrough.');
         }
         if (outputs.includes('commitPlan') && stored.result.output.comparison?.source.kind !== 'workingTree') return failure('invalid_edit', 'Commit proposals require a pending comparison.');
@@ -494,6 +494,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         if (isScmCommitPlanApplicationLocked(stored.result.application)) return failure('application_locked', 'Structured output cannot replace an accepted commit application.', stored.result.revision);
         const pending = stored.inputs.find((request) => request.inputId === input.inputId);
         if (!pending) return failure('invalid_output', 'The structured output has no admitted revision basis.');
+        if (!pending.outputs.length) return failure('invalid_output', 'Discussion does not request a saved result update.');
         const stale = conflict(stored, pending.baseRevision); if (stale) return stale;
         try {
           if (pending.reviewExplanation) {
@@ -569,7 +570,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         const walkthrough = input.output.outputs?.walkthrough?.value;
         const previous = stored.result.output.outputs?.walkthrough?.value;
         const pending = input.inputId ? stored.inputs.find(request => request.inputId === input.inputId) : undefined;
-        if (input.inputId && (!pending || pending.baseRevision !== input.expectedRevision)) {
+        if (input.inputId && (!pending || !pending.outputs.length || pending.baseRevision !== input.expectedRevision)) {
           return failure('invalid_output', 'Progressive output requires its exact admitted revision basis.');
         }
         const citations = pending?.reviewFindingCitations ?? stored.reviewFindingCitations ?? [];
