@@ -290,7 +290,15 @@ export function useWorkflowRunNowController(
     const retained = pendingAdmission?.request;
     const retainedUnresolved = pendingAdmission?.unresolved === true;
     const retainedRequest = React.useMemo(() => projectRetainedRequest(retained, retainedUnresolved), [retained, retainedUnresolved]);
-    const refusal = state.refusals.get(key) ?? null;
+    const recordedRefusal = state.refusals.get(key) ?? null;
+    // A remounted source observes the same retained intent even when its old
+    // invocation can no longer present a failure. Instance-only composers may
+    // dismiss that invocation, so they do not adopt its uncertainty implicitly.
+    const showRetainedUncertainty = intentKey !== undefined && retainedUnresolved
+        && pendingRunId !== null && command.stateFor(pendingRunId) === 'idle';
+    const refusal = React.useMemo(() => recordedRefusal
+        ?? (showRetainedUncertainty ? resolveWorkflowProblemPresentation(unresolvedAdmission()) : null),
+    [recordedRefusal, showRetainedUncertainty]);
 
     return React.useMemo(() => ({
         pendingRunId,
@@ -321,6 +329,9 @@ export function useWorkflowRunNowController(
             requestState.byRunId.set(admission.runId, admission);
             requestState.publish();
             const runId = admission.runId;
+            const canPresentRefusal = () => requestLifetime.isCurrent()
+                && request.isInvocationCurrent?.() !== false
+                && requestState.byIntent.get(key) === admission;
             let didSubmit = false;
             let accepted = false;
             let submitted: PreparedWorkflowRunNowRequest | null = null;
@@ -350,7 +361,7 @@ export function useWorkflowRunNowController(
                         if (submitted === null) throw unresolvedAdmission();
                         try { return await reconcileWorkflowRunStart(submitted, lifetime); }
                         catch (error) {
-                            if (requestState.byRunId.get(runId) === admission) {
+                            if (canPresentRefusal() && requestState.byRunId.get(runId) === admission) {
                                 requestState.refusals.set(key, resolveWorkflowProblemPresentation(unresolvedAdmission()));
                                 requestState.publish();
                             }
@@ -373,6 +384,7 @@ export function useWorkflowRunNowController(
                     ? { isInvocationCurrent: request.isInvocationCurrent }
                     : {}),
                 onError: async (error) => {
+                    if (!canPresentRefusal()) return;
                     // The Automation formatter knows no workflow code, so every
                     // admission refusal — no access, a conflicting rejoin, a
                     // definition that needs repair — read as one generic sentence.
@@ -385,7 +397,7 @@ export function useWorkflowRunNowController(
                 },
             });
             const state = command.stateFor(runId);
-            if (admission.unresolved && state === 'idle' && requestState.byRunId.get(runId) === admission
+            if (canPresentRefusal() && admission.unresolved && state === 'idle' && requestState.byRunId.get(runId) === admission
                 && requestState.refusals.get(key)?.code !== 'workflow_outcome_unresolved') {
                 requestState.refusals.set(key, resolveWorkflowProblemPresentation(unresolvedAdmission()));
                 requestState.publish();

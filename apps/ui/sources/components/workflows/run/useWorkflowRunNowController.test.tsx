@@ -469,6 +469,39 @@ describe('useWorkflowRunNowController', () => {
     ).toBe(RUN_ID);
   });
 
+  it('retains unknown admission custody without publishing a dismissed invocation refusal', async () => {
+    const rejoin = createDeferred<unknown>();
+    executeMock
+      .mockRejectedValueOnce(new Error('Start response lost'))
+      .mockReturnValueOnce(rejoin.promise);
+    homes.answer(homeA, '/v3/automations/runs/workflow-storage', {
+      status: 404,
+      body: { error: 'run_not_found' },
+    });
+    const { useWorkflowRunNowController } =
+      await import('./useWorkflowRunNowController');
+    const hook = await renderHook(() => useWorkflowRunNowController());
+    let invocationCurrent = true;
+    let pending!: ReturnType<ReturnType<typeof useWorkflowRunNowController>['runNow']>;
+    await act(async () => {
+      pending = hook.getCurrent().runNow({ runId: RUN_ID, source, refusal: 'inline',
+        isInvocationCurrent: () => invocationCurrent });
+    });
+    await vi.waitFor(() => expect(executeMock).toHaveBeenCalledTimes(2));
+    // Dismissing/reselecting keeps admitted custody, but retires this form's presentation.
+    await act(async () => {
+      invocationCurrent = false;
+      hook.getCurrent().clearRefusal();
+    });
+    await act(async () => {
+      rejoin.reject(new Error('Rejoin response lost'));
+      expect(await pending).toBeNull();
+    });
+    expect(hook.getCurrent().hasUnsettledAdmission(RUN_ID)).toBe(true);
+    expect(hook.getCurrent().refusal).toBeNull();
+    expect(modals.filter((entry) => entry.type === 'alert')).toEqual([]);
+  });
+
   it('surfaces a still-unknown rejoin and retains its immutable id and input for a later press', async () => {
     executeMock.mockRejectedValue(new Error('response lost'));
     homes.answer(homeA, '/v3/automations/runs/workflow-storage', {

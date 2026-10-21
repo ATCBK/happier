@@ -944,6 +944,43 @@ describe('editor workflow composer', () => {
         await screen.unmount();
     });
 
+    it('keeps a new Session workflow selection when an earlier start settles after dismissal', async () => {
+        const { createDeferred } = await import('@/dev/testkit');
+        const reply = createDeferred<unknown>();
+        runStart.mockImplementation(() => reply.promise);
+        const { useWorkflowComposerStart } = await import('../run/useWorkflowComposerStart');
+        const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
+        const onStarted = vi.fn();
+        let start: ReturnType<typeof useWorkflowComposerStart> | null = null;
+        const Host = () => {
+            start = useWorkflowComposerStart({ project: { machineId: 'machine-1', directory: '/repo/reviewed' },
+                originSession: { sessionId: 'session-origin' }, onStarted });
+            return null;
+        };
+        const screen = await renderScreen(<Host />);
+        await act(async () => { start!('builtin:plan-with-a-panel', { retainedDraft: 'First question' }); });
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(startRequests()).toHaveLength(1));
+        const first = startRequests()[0]!;
+        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onCancel(); });
+        await act(async () => { start!('builtin:plan-with-a-panel', { retainedDraft: 'Second question' }); });
+        await act(async () => reply.resolve({ admission: 'created', run: createWorkflowRunSummaryFixture({ id: first.runId }) }));
+        await vi.waitFor(() => expect(getStorage().getState().workflowRunsById[workflowRunStoreKey(first.runId)]).toBeDefined());
+        // The admitted Run remains a canonical fact, but an obsolete intent cannot navigate
+        // or clear the review the person deliberately selected in the meantime.
+        expect(onStarted).not.toHaveBeenCalled();
+        const nextReview = screen.root.findAllByType(WorkflowRunComposer).find((node) => node.props.values.request === 'Second question');
+        expect(nextReview).toBeDefined();
+        runStart.mockImplementation(async (request) => ({ admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId }) }));
+        await act(async () => { nextReview!.props.onRun({ request: 'Second question' }); });
+        await vi.waitFor(() => expect(onStarted).toHaveBeenCalledTimes(1));
+        expect(startRequests()).toHaveLength(2);
+        expect(startRequests()[1]!.runId).not.toBe(first.runId);
+        expect(onStarted.mock.calls[0]![0].run.id).toBe(startRequests()[1]!.runId);
+        await screen.unmount();
+    });
+
     it('reviews an unresolved New workflow start with its sent Where instead of the page controls', async () => {
         home.answer(appliedHome.serverId, storageRoute, { status: 404, body: { error: 'run_not_found' } });
         runFailure = { errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
