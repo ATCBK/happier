@@ -5,14 +5,15 @@ import { machineScmChangeDiscard, type MachineScmCallOptions } from '@/sync/ops/
 import { workspaceWriteFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import type { WorkspaceFileSystemTarget } from '@/sync/ops/workspaceFileSystem/directoryBrowsing';
 import { downloadBulkPayloadViaDirectExportToDestination } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferExportDownload';
-import { publishPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { publishPresentationNotice, readPresentationNotice, retirePresentationNotice, subscribePresentationNotices,
+  type PresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { sendFileReviewNote } from './sendFileReviewNote';
 
 type FailureReason = 'moved_on' | 'update_required' | 'unsupported' | 'unavailable' | 'unknown';
 export type DiscardChangeMessages = Readonly<Record<FailureReason | 'discarded' | 'restored' | 'kept_edited' | 'undone' | 'undo_conflict' | 'undo' | 'note_failed' | 'undo_unavailable', string>>;
 export type DiscardUndoResult = Readonly<{ success: false }> | Readonly<{ success: true; noteDelivery?: 'queued' | 'failed' }>;
 export type DiscardChangeResult =
-  | Readonly<{ ok: true; entry: ScmChangeDiscardResultEntry; undo?: () => Promise<DiscardUndoResult>; undoUnavailable?: true; retire: () => void; refreshFailed: boolean; noteDelivery?: 'queued' | 'failed' }>
+  | Readonly<{ ok: true; entry: ScmChangeDiscardResultEntry; fileReplaced: boolean; undo?: () => Promise<DiscardUndoResult>; undoUnavailable?: true; retire: () => void; refreshFailed: boolean; noteDelivery?: 'queued' | 'failed' }>
   | Readonly<{ ok: false; reason: FailureReason }>;
 export type DiscardChangeParams = Readonly<{
   target: WorkspaceFileSystemTarget;
@@ -53,7 +54,15 @@ export async function discardChange(params: DiscardChangeParams): Promise<Discar
   const key = `file-review:${params.target.serverId ?? ''}:${params.target.machineId}:${params.target.rootPath}:${params.entry.path}`;
   let previousBytes: Uint8Array | undefined;
   let retired = false;
-  const retire = () => { retired = true; previousBytes = undefined; retirePresentationNotice(key); };
+  let ownedNotice: PresentationNotice | null = null;
+  let unsubscribe: (() => void) | undefined;
+  const retire = () => {
+    retired = true;
+    previousBytes = undefined;
+    unsubscribe?.();
+    unsubscribe = undefined;
+    if (ownedNotice && readPresentationNotice() === ownedNotice) retirePresentationNotice(key);
+  };
   retirePresentationNotice(key);
   const notice = (message: string, severity: 'info' | 'error' = 'info') => publishPresentationNotice({ key, message, severity, sticky: true });
   const refresh = async () => { try { await params.refresh(); return true; } catch { return false; } };
@@ -130,9 +139,13 @@ export async function discardChange(params: DiscardChangeParams): Promise<Discar
   }
   const message = undoUnavailable ? params.messages.undo_unavailable : response.noteDelivery?.status === 'failed' ? params.messages.note_failed
     : entry.status === 'kept_edited' ? params.messages.kept_edited : restore ? params.messages.restored : params.messages.discarded;
-  publishPresentationNotice({ key, severity: undoUnavailable || response.noteDelivery?.status === 'failed' ? 'error' : 'info', sticky: true, message,
-    ...(undo ? { undo: { label: params.messages.undo, run: () => { void undo!(); } } } : {}) });
-  return { ok: true, entry, ...(undo ? { undo } : {}), retire, refreshFailed: !await refresh(),
+  ownedNotice = { key, severity: undoUnavailable || response.noteDelivery?.status === 'failed' ? 'error' : 'info', sticky: true, message,
+    ...(undo ? { undo: { label: params.messages.undo, run: undo } } : {}) };
+  publishPresentationNotice(ownedNotice);
+  if (undo) unsubscribe = subscribePresentationNotices(() => {
+    if (readPresentationNotice() !== ownedNotice) retire();
+  });
+  return { ok: true, entry, fileReplaced: entry.status !== 'kept_edited', ...(undo ? { undo } : {}), retire, refreshFailed: !await refresh(),
     ...(undoUnavailable ? { undoUnavailable: true } : {}),
     ...(response.noteDelivery ? { noteDelivery: response.noteDelivery.status } : {}) };
 }

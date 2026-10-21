@@ -11,6 +11,7 @@ import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite'
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { t } from '@/text';
 import type { HunkReviewActionTarget } from './useHunkReviewController';
+import { readPresentationNotice, subscribePresentationNotices } from '@/components/sessions/presentation/presentationNotices';
 
 function decodeUtf8(base64: string): string {
   return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(
@@ -102,25 +103,27 @@ export function useHunkDiscard(
     [sessionId, scope.serverId],
   );
 
-  const latestResult = React.useRef<DiscardChangeResult | null>(null);
-  const [undoAvailable, setUndoAvailable] = React.useState(false);
+  const [latestResult, setLatestResult] = React.useState<DiscardChangeResult | null>(null);
+  const currentNotice = React.useSyncExternalStore(subscribePresentationNotices, readPresentationNotice, readPresentationNotice);
+  const undoAvailable = Boolean(latestResult?.ok && latestResult.undo && currentNotice?.undo?.run === latestResult.undo);
+  React.useEffect(() => {
+    if (!latestResult?.ok || !latestResult.undo || undoAvailable) return;
+    latestResult.retire();
+    setLatestResult(null);
+  }, [latestResult, undoAvailable]);
   const retireUndo = React.useCallback(() => {
-    const previous = latestResult.current;
-    latestResult.current = null;
-    setUndoAvailable(false);
-    if (previous?.ok) previous.retire();
-  }, []);
+    setLatestResult(null);
+    if (latestResult?.ok) latestResult.retire();
+  }, [latestResult]);
   const remember = React.useCallback((result: DiscardChangeResult) => {
-    latestResult.current = result;
-    setUndoAvailable(result.ok && Boolean(result.undo));
+    setLatestResult(result);
   }, []);
   const undo = React.useCallback(() => {
-    const result = latestResult.current;
-    if (!result?.ok || !result.undo) return;
-    latestResult.current = null;
-    setUndoAvailable(false);
+    const result = latestResult;
+    if (!result?.ok || !result.undo || readPresentationNotice()?.undo?.run !== result.undo) return;
+    setLatestResult(null);
     void result.undo();
-  }, []);
+  }, [latestResult]);
 
   const discardDisabledReason = input.unreachable
     ? t('hunkReview.discardNeeds', { machine: machineName })

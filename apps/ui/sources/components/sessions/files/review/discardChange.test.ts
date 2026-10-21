@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { standardCleanup } from '@/dev/testkit';
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import { act } from 'react-test-renderer';
 import { createEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -28,8 +30,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
   },
 }));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 const { discardChange } = await import('./discardChange');
-const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
+const { useHunkDiscard } = await import('@/components/workspaces/scm/review/hunkReview/useHunkDiscard');
+const { readPresentationNotice, retirePresentationNotice, publishPresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
 
 const messages = { discarded: 'discarded', restored: 'restored', kept_edited: 'kept', undone: 'undone', undo_conflict: 'undo conflict',
   undo: 'undo', moved_on: 'moved on', update_required: 'update required', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown', note_failed: 'file changed; note delivery failed', undo_unavailable: 'file changed; Undo unavailable' };
@@ -43,7 +48,27 @@ describe('comparison Discard and guarded Undo', () => {
     transfer.fetch.mockReset(); transfer.fetch.mockRejectedValue(new Error('Unexpected transfer request'));
     retirePresentationNotice();
     await homes.reset(); await loadSyncSingletonForTests();
-    serverId = await homes.addHome({ name: 'Review Home', serverUrl: 'https://discard-review.test', accountId: 'review-account', currentAccount: true });
+    serverId = await homes.addHome({ name: 'Review Home', serverUrl: 'https://discard-review.test', serverIdentityId: 'srv_discard_review', accountId: 'review-account', currentAccount: true });
+    const boundary = await createExternalActionAccountHttpBoundary({ serverUrl: 'https://discard-review.test',
+      serverIdentityId: 'srv_discard_review', accountId: 'review-account', machineId: 'm1',
+      actionId: 'daemon.filesystem.writeFile', tokenEpoch: 0,
+      execute: (input, context) => {
+        expect(context.invocation).toMatchObject({ surface: 'ui', authority: 'present_user', caller: { kind: 'host' } });
+        rpc.requests.push({ payload: input });
+        const response = rpc.responses.shift();
+        if (response instanceof Error) throw response;
+        return response;
+      },
+    });
+    homes.answer(serverId, '/v1/machines', { body: [boundary.machine] });
+    homes.answer(serverId, 'GET /v1/machines/m1', { body: { machine: boundary.machine } });
+    for (const path of ['/v1/actions/daemon.filesystem.writeFile/execution-authorization', '/v1/actions/daemon.filesystem.writeFile']) {
+      homes.answer(serverId, path, { select: async (_input, request) => {
+        const response = await boundary.handle(new URL(request.url), request.init);
+        if (!response) throw new Error(`Unhandled Undo HTTP boundary: ${request.url}`);
+        return { status: response.status, body: await response.json() };
+      } });
+    }
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://discard-review.test')!.token! });
   });
@@ -95,6 +120,36 @@ describe('comparison Discard and guarded Undo', () => {
     expect(result.ok && result.undo).toBeTypeOf('function');
     expect(readPresentationNotice()).toMatchObject({ severity: 'error', message: messages.note_failed, undo: { label: 'undo' } });
     expect(rpc.responses).toHaveLength(0);
+  });
+
+  it.each(['dismissed', 'replaced', 'same-key replacement'] as const)('retires a %s notice inverse without removing its successor', async retirement => {
+    rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status: 'reverted', hashBefore: beforeHash, hashAfter: afterHash,
+      inverseEdits: [{ startUtf16: 1, deleteLength: 3, insertText: 'old', originalText: 'new' }] }] });
+    const result = await discardChange(input());
+    if (!result.ok || !result.undo) throw new Error('Undo must be available');
+    const original = readPresentationNotice()!;
+    if (retirement === 'dismissed') retirePresentationNotice(original.key);
+    else publishPresentationNotice({ key: retirement === 'same-key replacement' ? original.key : 'new-operation', message: 'new notice', severity: 'info' });
+    const successor = readPresentationNotice();
+    const requestsBeforeUndo = rpc.requests.length;
+    expect(await result.undo()).toEqual({ success: false });
+    expect(rpc.requests).toHaveLength(requestsBeforeUndo);
+    expect(readPresentationNotice()).toBe(successor);
+  });
+
+  it('removes keyboard Undo availability as soon as its notice is dismissed', async () => {
+    rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status: 'reverted', hashBefore: beforeHash, hashAfter: afterHash,
+      inverseEdits: [{ startUtf16: 1, deleteLength: 3, insertText: 'old', originalText: 'new' }] }] });
+    const result = await discardChange(input());
+    const hook = await renderHook(() => useHunkDiscard({ scope: { machineId: 'm1', rootPath: '/repo', serverId },
+      sessionId: null, machineName: 'Machine', unreachable: false, refresh: () => {} }));
+    await act(async () => { hook.getCurrent().remember(result); });
+    expect(hook.getCurrent().undoAvailable).toBe(true);
+    await act(async () => { retirePresentationNotice(); });
+    expect(hook.getCurrent().undoAvailable).toBe(false);
+    const count = rpc.requests.length;
+    await act(async () => { hook.getCurrent().undo(); });
+    expect(rpc.requests).toHaveLength(count);
   });
 
   it('reports Undo note failure separately from the successful one-shot file write', async () => {
@@ -164,6 +219,7 @@ describe('comparison Discard and guarded Undo', () => {
     rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status, hashBefore: null, hashAfter: afterHash }] });
     const result = await discardChange(input());
     expect(result).toMatchObject({ ok: true, entry: { status } });
+    expect(result.ok && result.fileReplaced).toBe(status !== 'kept_edited');
     expect(result).not.toHaveProperty('undo');
     expect(readPresentationNotice()?.undo).toBeUndefined();
   });
