@@ -8,6 +8,7 @@ import { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSh
     verifyPluginUiArtifactFileSetIntegrityV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui/uiArtifactsManifest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { readDeclaredConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
 import type { RpcHandler } from '@/api/rpc/types';
 import { reloadConfiguration } from '@/configuration';
 import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -61,6 +62,11 @@ describe('bundled daemon contribution describe cost', () => {
                 resolveServerFeaturesSnapshot: async () => { serverFeatureReads += 1; return undefined; },
             });
             const handler = handlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)!;
+            const readScmRegistrations = () => ({
+                backends: [...(runtime.scmBackendsById?.keys() ?? [])],
+                hostingProviders: [...runtime.scmHostingProvidersById.keys()],
+            });
+            const initialScmRegistrations = readScmRegistrations();
             const settings = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
                 machineId: 'test-machine', locale: 'fr-FR', selection: 'settings',
             }));
@@ -71,20 +77,27 @@ describe('bundled daemon contribution describe cost', () => {
             expect({ serverFeatureReads, installedPackageReads, executionOriginContextReads }).toEqual({
                 serverFeatureReads: 0, installedPackageReads: 0, executionOriginContextReads: 0,
             });
-            const admission = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
+            const initialAdmission = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
                 machineId: 'test-machine', locale: 'fr-FR', selection: 'connectedAccountAdmission',
             }));
-            expect(admission.projection).toMatchObject({ agentsById: {}, toolsById: {}, commandsById: {}, settingsById: {}, diagnostics: [] });
-            expect(admission.automationEligibleEvents).toBeUndefined();
-            expect(admission.composerSurfaceCatalog).toBeUndefined();
+            expect(initialAdmission.projection).toMatchObject({ agentsById: {}, toolsById: {}, commandsById: {}, settingsById: {}, diagnostics: [] });
+            expect(initialAdmission.automationEligibleEvents).toBeUndefined();
+            expect(initialAdmission.composerSurfaceCatalog).toBeUndefined();
             expect(serverFeatureReads).toBe(0);
             expect(installedPackageReads).toBe(1);
             expect(executionOriginContextReads).toBe(1);
+            expect(readScmRegistrations()).toEqual(initialScmRegistrations);
             serverFeatureReads = 0;
             installedPackageReads = 0;
             executionOriginContextReads = 0;
             const full = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
                 machineId: 'test-machine', locale: 'fr-FR',
+            }));
+            // Full SCM demand activates runtime leaves and changes their applied
+            // authorization facts. Compare projections of that same live state;
+            // admission-only demand must not activate unrelated SCM leaves.
+            const admission = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
+                machineId: 'test-machine', locale: 'fr-FR', selection: 'connectedAccountAdmission',
             }));
             const selected = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({ machineId: 'test-machine', selection: 'agents' }));
             expect(serverFeatureReads).toBeGreaterThan(0);
@@ -93,6 +106,21 @@ describe('bundled daemon contribution describe cost', () => {
             expect(settings.projection.settingsById).toEqual(full.projection.settingsById);
             expect(admission.projection.installedPackagesById).toEqual(full.projection.installedPackagesById);
             expect(admission.projection.actionsById).toEqual(full.projection.actionsById);
+            // Purpose setup/readiness consumes declared services and availability,
+            // not the applied-generation witness. Full SCM activation must not
+            // change any of those actual admission decisions.
+            let comparedPurposes = 0;
+            for (const action of Object.values(initialAdmission.projection.actionsById)) {
+                for (const declaration of action.connectedAccountPurposes ?? []) {
+                    comparedPurposes += 1;
+                    const purpose = { consumer: { pluginId: action.pluginId, localId: action.id }, purpose: declaration.purpose };
+                    const read = (projection: typeof admission.projection) => readDeclaredConnectedAccountPurposeV1({
+                        purpose, projection, machineProvisionersById: projection.familiesById.machineProvisioners?.entriesById ?? {},
+                    });
+                    expect(read(initialAdmission.projection)).toEqual(read(admission.projection));
+                }
+            }
+            expect(comparedPurposes).toBeGreaterThan(0);
             expect(admission.projection.resourcesById).toEqual(full.projection.resourcesById);
             expect(admission.projection.familiesById).toEqual({
                 connectedAccounts: full.projection.familiesById.connectedAccounts,
