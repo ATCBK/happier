@@ -60,8 +60,8 @@ function readNonEmptySessionId(value: unknown): string | undefined {
 }
 
 function matchingRolloutSessionIds(filePath: string, sessionMeta: Readonly<{ id?: string; session_id?: string }> | null,
-  requestedIds: ReadonlySet<string>, membership: CodexRolloutMembership): string[] {
-  const filename = parseCodexRolloutFilename(filePath);
+  requestedIds: ReadonlySet<string>, membership: CodexRolloutMembership,
+  filename = parseCodexRolloutFilename(filePath)): string[] {
   const candidates = [filename?.threadId ?? filename?.sessionId, sessionMeta?.id,
     ...(membership === 'root_session_family' ? [sessionMeta?.session_id] : [])];
   return [...requestedIds].filter(requestedId => candidates.some(candidate => {
@@ -401,10 +401,51 @@ async function collectCodexRolloutFilesByMembership(params: Readonly<{
   return matches;
 }
 
+type RolloutInventoryEntry = Readonly<{
+  kind: 'directory' | 'file' | 'other';
+  filePath: string;
+  fileRelPath: string;
+}> & {
+  fromName?: number | null;
+  filename?: ReturnType<typeof parseCodexRolloutFilename>;
+};
+
+async function readRolloutInventoryDirectory(codexHome: string, dir: string): Promise<RolloutInventoryEntry[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  entries.sort((left, right) => String(left.name) < String(right.name) ? -1 : String(left.name) > String(right.name) ? 1 : 0);
+  return entries.filter(entry => !entry.isSymbolicLink()).map(entry => {
+    const name = String(entry.name);
+    const filePath = join(dir, name);
+    return { kind: entry.isDirectory() ? 'directory' : entry.isFile() && name.startsWith('rollout-') && name.endsWith('.jsonl') ? 'file' : 'other',
+      filePath, fileRelPath: relative(codexHome, filePath).split(sep).join('/') };
+  });
+}
+
+/** Contribution-lifetime native directory facts, with no matching or transcript
+ * authority. Both observation and resumable callers use the inventory below. */
+export class CodexRolloutObservationInventory {
+  private readonly directories = new Map<string, Readonly<{ signature: string; entries: RolloutInventoryEntry[] }>>();
+
+  async readDirectory(codexHome: string, dir: string): Promise<RolloutInventoryEntry[]> {
+    const metadata = await stat(dir, { bigint: true });
+    const signature = `${metadata.dev}:${metadata.ino}:${metadata.birthtimeNs}:${metadata.mtimeNs}:${metadata.ctimeNs}`;
+    const remembered = this.directories.get(dir);
+    if (remembered?.signature === signature) return remembered.entries;
+    const entries = await readRolloutInventoryDirectory(codexHome, dir);
+    this.directories.set(dir, { signature, entries });
+    return entries;
+  }
+
+  retainDirectories(visited: ReadonlySet<string>): void {
+    for (const dir of this.directories.keys()) if (!visited.has(dir)) this.directories.delete(dir);
+  }
+}
+
 export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
   codexHome: string;
   remoteSessionIds: readonly string[];
   signal: AbortSignal;
+  observationInventory?: CodexRolloutObservationInventory;
 }> & CodexExternalSessionInvocationBounds): Promise<CodexRootSessionRolloutInventory> {
   throwIfCodexExternalSessionInvocationStopped(params);
   const requestedIds = new Set(params.remoteSessionIds);
@@ -453,6 +494,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
     return a.length - b.length;
   };
   const resumeAfter = progress?.afterPath;
+  const visitedDirectories = new Set<string>();
   const commitFile = (path: string) => {
     if (!progress || !preparation) return;
     progress.afterPath = path;
@@ -461,40 +503,36 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
   const walk = async (dir: string, depth: number): Promise<void> => {
     throwIfCodexExternalSessionInvocationStopped(nativeBounds);
     if (depth > 10) return;
-    let entries: Pick<Dirent, 'name' | 'isDirectory' | 'isFile' | 'isSymbolicLink'>[];
+    let entries: RolloutInventoryEntry[];
     try {
       await preparation?.authorize(dir);
-      entries = await readdir(dir, { withFileTypes: true });
+      entries = params.observationInventory
+        ? await params.observationInventory.readDirectory(params.codexHome, dir)
+        : await readRolloutInventoryDirectory(params.codexHome, dir);
+      visitedDirectories.add(dir);
     } catch (error) {
       throwIfCodexExternalSessionInvocationStopped(params);
       return;
     }
-    entries.sort((left, right) => String(left.name) < String(right.name) ? -1 : String(left.name) > String(right.name) ? 1 : 0);
     for (const entry of entries) {
       throwIfCodexExternalSessionInvocationStopped(nativeBounds);
-      if (entry.isSymbolicLink()) continue;
-      const name = typeof entry.name === 'string'
-        ? entry.name
-        : String(entry.name);
-      const full = join(dir, name);
-      const fileRelPath = relative(params.codexHome, full).split(sep).join('/');
+      const full = entry.filePath;
+      const fileRelPath = entry.fileRelPath;
       if (resumeAfter && comparePaths(fileRelPath, resumeAfter) <= 0
-        && !(entry.isDirectory() && resumeAfter.startsWith(`${fileRelPath}/`))) continue;
-      if (entry.isDirectory()) {
+        && !(entry.kind === 'directory' && resumeAfter.startsWith(`${fileRelPath}/`))) continue;
+      if (entry.kind === 'directory') {
         await walk(full, depth + 1);
         continue;
       }
-      if (
-        !entry.isFile()
-        || !name.startsWith('rollout-')
-        || !name.endsWith('.jsonl')
-      ) {
-        continue;
-      }
+      if (entry.kind !== 'file') continue;
+      // Parse only past the cursor frontier, retaining the facts for observed
+      // directories without redoing completed-prefix work on resumed scans.
+      if (entry.fromName === undefined) entry.fromName = parseRolloutTimestampFromFilename(full);
+      if (entry.filename === undefined) entry.filename = parseCodexRolloutFilename(full);
 
       let metadata: Readonly<{ birthtimeMs: number; mtimeMs: number }> | null = null;
       if (earliestRequestedStartMs !== null) {
-        const fromName = parseRolloutTimestampFromFilename(full);
+        const fromName = entry.fromName;
         if (
           fromName !== null
           && fromName
@@ -532,14 +570,14 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
       throwIfCodexExternalSessionInvocationStopped(nativeBounds);
       const sessionId = readNonEmptySessionId(sessionMeta?.id);
       const metadataRootSessionId = readNonEmptySessionId(sessionMeta?.session_id);
-      const matchingIds = matchingRolloutSessionIds(full, sessionMeta, inventoryIds, 'root_session_family');
+      const matchingIds = matchingRolloutSessionIds(full, sessionMeta, inventoryIds, 'root_session_family', entry.filename);
       if (matchingIds.length === 0) { commitFile(fileRelPath); continue; }
 
       try {
         const current = await stat(full);
         metadata ??= current;
         throwIfCodexExternalSessionInvocationStopped(nativeBounds);
-        const fromName = parseRolloutTimestampFromFilename(full);
+        const fromName = entry.fromName;
         const fromBirth = (
           Number.isFinite(metadata.birthtimeMs) && metadata.birthtimeMs > 0
         )
@@ -578,6 +616,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
     if (preparation) await preparation.control.prepare(scan);
     else await scan();
   }
+  params.observationInventory?.retainDirectories(visitedDirectories);
   throwIfCodexExternalSessionInvocationStopped(params);
   for (const file of progress?.files ?? []) {
     const filePath = join(params.codexHome, ...file.ref.path.split('/'));

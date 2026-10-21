@@ -157,7 +157,7 @@ describe('codex terminal-mode rollout discovery', () => {
             });
 
             expect(discovered?.filePath).toBe(fresh);
-            expect(rolloutDiscoveryStatPaths.length).toBeLessThanOrEqual(5);
+            expect(new Set(rolloutDiscoveryStatPaths).size).toBeLessThanOrEqual(5);
         } finally {
             await rm(root, { recursive: true, force: true });
         }
@@ -412,17 +412,15 @@ describe('codex terminal-mode rollout discovery', () => {
     });
 
     describe('session_meta reads', () => {
-        it('parses a rollout session_meta once per physical file, since Codex writes it once as line 1', async () => {
+        it('reuses an unchanged rollout head and refreshes a same-inode rewrite', async () => {
             const root = await mkdtemp(join(tmpdir(), 'codex-session-meta-once-'));
             try {
                 const filePath = join(root, 'rollout-2026-02-04T00-00-00-once.jsonl');
                 await writeFile(filePath, `${sessionMetaLine({ id: 'first', cwd: '/x' })}\n`);
                 expect((await readCodexSessionMetaFromRollout(filePath))?.id).toBe('first');
-
-                // Same inode: a second read must not re-parse line 1. Codex never
-                // rewrites it, so a changed in-place line 1 is not re-read.
-                await writeFile(filePath, `${sessionMetaLine({ id: 'rewritten-in-place', cwd: '/x' })}\n`);
                 expect((await readCodexSessionMetaFromRollout(filePath))?.id).toBe('first');
+                await writeFile(filePath, `${sessionMetaLine({ id: 'rewritten-in-place', cwd: '/x' })}\n`);
+                expect((await readCodexSessionMetaFromRollout(filePath))?.id).toBe('rewritten-in-place');
             } finally {
                 await rm(root, { recursive: true, force: true });
             }

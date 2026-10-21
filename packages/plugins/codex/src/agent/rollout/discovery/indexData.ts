@@ -342,16 +342,21 @@ function retainSessionMetaFields(payload: CodexSessionMetaPayload | null): Codex
 
 /**
  * Codex writes `session_meta` once, as line 1, when it creates a rollout; later
- * turns only append. Re-reading and parsing that line for every rollout on every
+ * turns normally append. Re-reading and parsing that line for every rollout on every
  * inventory was the dominant per-call cost of paging a long-lived Codex session
  * (thousands of files), so a parsed line is remembered per path and trusted only
- * while the path still names the same physical file. A line that does not parse
+ * while native identity, size and modification/change times remain unchanged.
+ * A same-inode rewrite must refresh membership too. A line that does not parse
  * yet — a rollout still being created — is never remembered.
  */
 const sessionMetaByRolloutPath = new Map<string, Readonly<{
-    physicalFile: string;
+    fileVersion: string;
     sessionMeta: CodexSessionMetaPayload;
 }>>();
+
+function sessionMetaFileVersion(metadata: Readonly<{ dev: number; ino: number; birthtimeMs: number; size: number; mtimeMs: number; ctimeMs: number }>): string {
+    return `${metadata.dev}:${metadata.ino}:${metadata.birthtimeMs}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`;
+}
 
 export async function readCodexSessionMetaFromRollout(
     filePath: string,
@@ -361,18 +366,19 @@ export async function readCodexSessionMetaFromRollout(
     if (bounds.preparation) return await bounds.preparation.readSessionIdentity(filePath,
         () => readCodexSessionMetaFromRollout(filePath, { ...bounds, preparation: undefined }));
     try {
+        const current = await stat(filePath);
+        throwIfCodexExternalSessionInvocationStopped(bounds);
+        const remembered = sessionMetaByRolloutPath.get(filePath);
+        if (remembered?.fileVersion === sessionMetaFileVersion(current)) return remembered.sessionMeta;
         const fh = await open(filePath, 'r');
         try {
             throwIfCodexExternalSessionInvocationStopped(bounds);
             const metadata = await fh.stat();
-            const physicalFile = `${metadata.dev}:${metadata.ino}:${Math.trunc(metadata.birthtimeMs)}`;
-            const remembered = sessionMetaByRolloutPath.get(filePath);
-            if (remembered?.physicalFile === physicalFile) return remembered.sessionMeta;
             const line = await readFirstLineFromHandle(fh, bounds);
             throwIfCodexExternalSessionInvocationStopped(bounds);
             const sessionMeta = line ? retainSessionMetaFields(parseCodexSessionMetaLine(line)) : null;
             if (sessionMeta) {
-                sessionMetaByRolloutPath.set(filePath, { physicalFile, sessionMeta });
+                sessionMetaByRolloutPath.set(filePath, { fileVersion: sessionMetaFileVersion(metadata), sessionMeta });
             } else {
                 sessionMetaByRolloutPath.delete(filePath);
             }

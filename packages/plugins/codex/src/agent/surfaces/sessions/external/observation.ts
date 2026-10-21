@@ -16,6 +16,7 @@ import {
 } from '../../../rollout/discovery/homeEntries.js';
 import {
   inventoryCodexRootSessionRolloutFiles,
+  CodexRolloutObservationInventory,
   type CodexRolloutFile,
 } from '../../../rollout/discovery/sessionsForHome.js';
 import {
@@ -246,6 +247,7 @@ export function createCodexExternalSessionObservationContribution(params: Readon
 }> = {}): AgentExternalSessionObservationContribution {
   const readEnv = () => params.env ?? process.env;
   const now = params.now ?? Date.now;
+  const inventories = new Map<string, CodexRolloutObservationInventory>();
 
   return Object.freeze({
     describeResource(request) {
@@ -333,7 +335,14 @@ export function createCodexExternalSessionObservationContribution(params: Readon
       const firstResolved = firstQualified.resolved;
       const home = firstQualified.home;
 
+      let observationInventory = inventories.get(home.codexHome);
+      if (!observationInventory) {
+        observationInventory = new CodexRolloutObservationInventory();
+        inventories.set(home.codexHome, observationInventory);
+      }
+
       const inventory = await inventoryCodexRootSessionRolloutFiles({
+        observationInventory,
         codexHome: home.codexHome,
         remoteSessionIds: qualifiedLinks.flatMap(({ resolved, home: linkHome }) => (
           resolved?.codexHome === firstResolved.codexHome

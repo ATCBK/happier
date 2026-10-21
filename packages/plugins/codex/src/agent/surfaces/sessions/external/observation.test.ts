@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import type {
   AgentExternalSessionsResolvedIdentity,
 } from '@happier-dev/plugin-sdk/sessions/external';
+import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fsBoundary = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ vi.mock('node:fs/promises', async () => {
 });
 
 import { createCodexExternalSessionObservationContribution } from './observation.js';
+import { inventoryCodexRootSessionRolloutFiles } from '../../../rollout/discovery/sessionsForHome.js';
 
 type CodexObservationContribution = ReturnType<
   typeof createCodexExternalSessionObservationContribution
@@ -381,10 +383,11 @@ describe('Codex External Session observation', () => {
       env: { CODEX_HOME: fixture.codexHome },
     });
     const before = contribution.describeResource(fixture.identity);
+    await reconcileDescriptor(contribution, fixture.identity);
     const replacement = `${fixture.rootFile}.replacement`;
     await writeFile(
       replacement,
-      JSON.stringify({ type: 'session_meta', payload: { id: 'session-a' } }),
+      JSON.stringify({ type: 'session_meta', payload: { id: 'another-session' } }),
       'utf8',
     );
     await rm(fixture.rootFile);
@@ -394,6 +397,7 @@ describe('Codex External Session observation', () => {
 
     expect(after.resourceKey).toBe(before.resourceKey);
     expect(after.linkKey).toBe(before.linkKey);
+    expect((await reconcileDescriptor(contribution, fixture.identity)).watchFileChanges.files).toEqual([fixture.sidechainFile]);
   });
 
   it('keeps authority-free grouping stable when a topology root is replaced at the same path', async () => {
@@ -402,6 +406,7 @@ describe('Codex External Session observation', () => {
       env: { CODEX_HOME: fixture.codexHome },
     });
     const before = contribution.describeResource(fixture.identity);
+    await reconcileDescriptor(contribution, fixture.identity);
     const replacementRoot = join(fixture.codexHome, 'sessions-replacement');
     const replacementSet = join(replacementRoot, 'rollout-set');
     await mkdir(replacementSet, { recursive: true });
@@ -419,6 +424,7 @@ describe('Codex External Session observation', () => {
     const after = contribution.describeResource(fixture.identity);
 
     expect(after).toEqual(before);
+    expect((await reconcileDescriptor(contribution, fixture.identity)).watchFileChanges.files).toEqual([fixture.rootFile]);
   });
 
   it('keeps the pooled resource key when the complete sidechain file set changes', async () => {
@@ -603,6 +609,99 @@ describe('Codex External Session observation', () => {
     expect(disposable).toEqual({ dispose: expect.any(Function) });
     expect(() => disposable.dispose()).not.toThrow();
     expect(() => disposable.dispose()).not.toThrow();
+  });
+
+  it('reconciles an unchanged rollout tree without reopening unrelated heads or relisting directories', async () => {
+    const fixture = await createRolloutSetFixture();
+    const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: fixture.codexHome,
+      HAPPIER_EXTERNAL_SESSIONS_RECENT_ACTIVITY_WINDOW_MS: '5000' }, now: () => 100_100 });
+    const unrelated = join(dirname(fixture.rootFile), 'rollout-unrelated.jsonl');
+    await writeFile(unrelated, JSON.stringify({ type: 'session_meta', payload: { id: 'unrelated-session' } }));
+    await utimes(fixture.rootFile, new Date(90_000), new Date(90_000));
+    await utimes(fixture.sidechainFile, new Date(90_000), new Date(90_000));
+    const before = await reconcileDescriptor(contribution, fixture.identity);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    // Filesystem boundaries reject redundant inventory I/O, while the real
+    // matching, directory invalidation and activity projection remain in use.
+    fsBoundary.readdir.mockRejectedValue(new Error('unchanged tree must not be listed again'));
+    fsBoundary.open.mockImplementation(async (...args: Parameters<typeof actual.open>) => {
+      if (String(args[0]) === unrelated) throw new Error('unrelated immutable head must not be reopened');
+      return actual.open(...args);
+    });
+    await utimes(fixture.sidechainFile, new Date(100_000), new Date(100_000));
+    expect(await reconcileDescriptor(contribution, fixture.identity)).toEqual(before);
+    const grouping = contribution.describeResource(fixture.identity);
+    const evidence = await contribution.reconcileResource({ purpose: 'observation_evidence', resourceKey: grouping.resourceKey,
+      links: [{ linkKey: grouping.linkKey, linkedSource: fixture.identity }], signal: new AbortController().signal });
+    expect(evidence.outcomes[0]?.facts).toContainEqual(expect.objectContaining({ kind: 'recent_activity' }));
+  });
+
+  it('measures repeated observation on a synthetic partitioned rollout tree', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-observation-measure-'));
+    try {
+      for (let day = 1; day <= 20; day += 1) {
+        const dir = join(codexHome, 'sessions', '2026', '10', String(day).padStart(2, '0'));
+        await mkdir(dir, { recursive: true });
+        await Promise.all(Array.from({ length: 100 }, (_, index) => writeFile(
+          join(dir, `rollout-2026-10-${String(day).padStart(2, '0')}T10-00-00-${day}-${index}.jsonl`),
+          JSON.stringify({ type: 'session_meta', payload: { id: index === 0 ? 'session-a' : `unrelated-${day}-${index}` } }),
+        )));
+      }
+      const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: codexHome } });
+      const identity = linkedSource({ codexHome });
+      await reconcileDescriptor(contribution, identity);
+      const baselineStarted = performance.now();
+      const baselineCpuBefore = process.cpuUsage();
+      for (let tick = 0; tick < 5; tick += 1) {
+        const inventory = await inventoryCodexRootSessionRolloutFiles({ codexHome, remoteSessionIds: ['session-a'], signal: new AbortController().signal });
+        expect(inventory.requested[0]?.files).toHaveLength(20);
+      }
+      const baselineCpu = process.cpuUsage(baselineCpuBefore);
+      const baseline = { elapsedMs: performance.now() - baselineStarted, cpuMs: (baselineCpu.user + baselineCpu.system) / 1000 };
+      const cpuBefore = process.cpuUsage();
+      const started = performance.now();
+      const readsBefore = fsBoundary.readdir.mock.calls.length;
+      const opensBefore = fsBoundary.open.mock.calls.length;
+      for (let tick = 0; tick < 5; tick += 1) expect((await reconcileDescriptor(contribution, identity)).watchFileChanges.files).toHaveLength(20);
+      const cpu = process.cpuUsage(cpuBefore);
+      console.info('CODEX_OBSERVATION_SYNTHETIC', JSON.stringify({ files: 2000, ticks: 5,
+        elapsedMs: performance.now() - started, cpuMs: (cpu.user + cpu.system) / 1000,
+        directoryReads: fsBoundary.readdir.mock.calls.length - readsBefore, headOpens: fsBoundary.open.mock.calls.length - opensBefore, baseline }));
+      const { listCodexSessionCandidates } = await import('./candidateSource.js');
+      const cursorBytes: number[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 5; page += 1) {
+        const result = await listCodexSessionCandidates({ source: { kind: 'codexHome', home: 'user' }, env: { CODEX_HOME: codexHome },
+          // Unsearched native-inventory pages never use the process boundary.
+          exec: {} as ExecService, limit: 50, includeTitles: false, ...(cursor ? { cursor } : {}) });
+        cursor = result.nextCursor ?? undefined;
+        cursorBytes.push(Buffer.byteLength(cursor ?? '', 'utf8'));
+      }
+      console.info('CODEX_SYNTHETIC_NATIVE_INVENTORY_CURSOR_BYTES', JSON.stringify(cursorBytes));
+    } finally { await rm(codexHome, { recursive: true, force: true }); }
+  }, 60_000);
+
+  it('retries an incomplete immutable head and admits a newly requested root from the retained inventory', async () => {
+    const fixture = await createRolloutSetFixture();
+    const incomplete = join(dirname(fixture.rootFile), 'rollout-incomplete.jsonl');
+    await writeFile(incomplete, '');
+    const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: fixture.codexHome } });
+    await reconcileDescriptor(contribution, fixture.identity);
+    await writeFile(incomplete, JSON.stringify({ type: 'session_meta', payload: { id: 'late-root' } }));
+    const lateRoot = linkedSource({ codexHome: fixture.codexHome, remoteSessionId: 'late-root' });
+    expect((await reconcileDescriptor(contribution, lateRoot)).watchFileChanges.files).toEqual([incomplete]);
+    const child = linkedSource({ codexHome: fixture.codexHome, remoteSessionId: 'thread-child' });
+    expect((await reconcileDescriptor(contribution, child)).watchFileChanges.files).toEqual([fixture.sidechainFile]);
+  });
+
+  it('refreshes root membership when an existing rollout is rewritten in place', async () => {
+    const fixture = await createRolloutSetFixture();
+    const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: fixture.codexHome } });
+    await reconcileDescriptor(contribution, fixture.identity);
+    await writeFile(fixture.sidechainFile, JSON.stringify({ type: 'session_meta', payload: { id: 'thread-child', session_id: 'another-root' } }));
+    expect((await reconcileDescriptor(contribution, fixture.identity)).watchFileChanges.files).toEqual([fixture.rootFile]);
+    const otherRoot = linkedSource({ codexHome: fixture.codexHome, remoteSessionId: 'another-root' });
+    expect((await reconcileDescriptor(contribution, otherRoot)).watchFileChanges.files).toEqual([fixture.sidechainFile]);
   });
 
   it('reuses the qualified connected-service home boundary', async () => {
