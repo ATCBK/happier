@@ -86,6 +86,21 @@ const SESSION_LIFECYCLE_RPC_CASES = [
 ] as const;
 
 describe('session lifecycle RPC handlers', () => {
+    it('accepts an already-committed Session attach while still requiring birth settlement for fresh creation', async () => {
+        const { handlers, rpcHandlerManager } = createRpcHarness();
+        registerPrivateSpawnSessionRpcHandlers({ rpcHandlerManager, requireSessionCreationOutcome: true,
+            spawnLifecycleHandler: createSpawnNewSessionLifecycleActionHandler({
+                // OS launch acknowledgement; the lifecycle and RPC settlement owners stay real.
+                spawnSession: async () => ({ type: 'success', sessionId: 'committed-session' }),
+            }) });
+        const spawn = handlers.get(RPC_METHODS.SPAWN_HAPPY_SESSION)!;
+        const request = { directory: '/repo/channels',
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+        await expect(spawn({ ...request, existingSessionId: 'committed-session', freshSessionCreation: true }))
+            .resolves.toMatchObject({ type: 'success', sessionId: 'committed-session' });
+        await expect(spawn(request)).resolves.toMatchObject({ type: 'error',
+            errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE });
+    });
     it.each([['transfer', true], ['existing', true], ['existing', false]] as const)('admits only the prepared native handoff identity and persists resume custody before physical launch (%s protected=%s)', async (stateTransfer, protectedResume) => {
         await withTempDir('handoff-native-resume-custody-', async activeServerDir => {
             const sessionId = `c${'a'.repeat(24)}`;

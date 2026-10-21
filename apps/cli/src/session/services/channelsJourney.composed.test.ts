@@ -58,6 +58,11 @@ import { ApiClient } from '@/api/api';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import type { Metadata } from '@/api/types';
+import { registerPrivateSpawnSessionRpcHandlers } from '@/rpc/handlers/sessionLifecycle';
+import { createSpawnNewSessionLifecycleActionHandler } from '@/session/actions/lifecycle/createSpawnNewSessionLifecycleActionHandler';
+import type { RpcHandler } from '@/api/rpc/types';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 
 // Only the child process's Socket.IO transport is replaced. Its attach owner,
 // Session client constructor and runtime-handler registration remain real.
@@ -94,7 +99,7 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean; failedBirth?: boolean } = {}) {
+async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean; failedBirth?: boolean; privateSpawnRpc?: boolean; refuseSecondCreation?: boolean } = {}) {
   const pending: ConversationObservationV1[] = [];
   const delivered: ConversationDeliveryInputV1[] = [];
   const roles = ConversationProvidersContributionProtocolV1.operations;
@@ -137,6 +142,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
   const turns: SessionTurnV1[] = [];
   const admissions: Array<SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2> = [];
   const creations = new Map<string, string>();
+  let refusedCreation = false;
   function addSession(id: string, attestedContext?: { externalPrincipalId: string; sourceMessageId: string }) {
     const session = V2SessionByIdResponseSchema.parse({ session: { id, seq: 0, createdAt: 1, updatedAt: 2,
       active: true, activeAt: 2, encryptionMode: 'plain', metadata: JSON.stringify({ v: 1 }), metadataVersion: 1, metadataLayoutVersion: 1,
@@ -184,6 +190,10 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
     }
     if (String(url).endsWith('/v1/sessions')) {
       const tag = String(request.tag);
+      if (input.refuseSecondCreation && creations.size === 1 && !refusedCreation) {
+        refusedCreation = true;
+        return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+      }
       const existingId = creations.get(tag);
       if (existingId) return { status: 200, data: { session: sessions.get(existingId), created: false } };
       const id = `session-born-${creations.size + 1}`;
@@ -201,6 +211,19 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
     }
     throw new Error(`Unexpected HTTP write ${String(url)}`);
   });
+  // The OS launch acknowledgement is the boundary. The private RPC settlement
+  // remains real, including its advertised fresh-create outcome requirement.
+  const privateSpawnHandlers = new Map<string, RpcHandler>();
+  registerPrivateSpawnSessionRpcHandlers({
+    rpcHandlerManager: { registerHandler(method, handler) { privateSpawnHandlers.set(method, handler); } },
+    requireSessionCreationOutcome: true,
+    spawnLifecycleHandler: createSpawnNewSessionLifecycleActionHandler({ spawnSession: async request => {
+      if (!request.existingSessionId || !sessions.has(request.existingSessionId)) throw new Error('Expected committed Session');
+      const session = sessions.get(request.existingSessionId)!;
+      sessions.set(session.id, { ...session, active: true, activeAt: Date.now() });
+      return { type: 'success', sessionId: request.existingSessionId };
+    } }),
+  });
   const { executor } = createCliActionExecutorHarness({ token: 'journey-token', credentials: { token: 'journey-token', encryption: null },
     sessionId: 'session-journey-1', mode: 'plain', ctx: null, rawSession: {}, serverId: 'server-1', serverHttpBaseUrl: 'https://channels-home.example.test',
     actionsSettingsProvider: createActionSettingsProvider({ getAccountSettings: () => accountSettingsParse({}) }),
@@ -210,6 +233,7 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         const request = SpawnDaemonSessionRequestSchema.parse(raw);
         spawnRequests.push(request);
         if (!request.existingSessionId || !sessions.has(request.existingSessionId)) throw new Error('Spawn must reach the real committed Session');
+        if (input.privateSpawnRpc) return await privateSpawnHandlers.get(RPC_METHODS.SPAWN_HAPPY_SESSION)!(request);
         // Process launch is acknowledged before native initialization. A later
         // failure leaves the birth committed without a published Agent view.
         if (input.failedBirth) return { type: 'success', sessionId: request.existingSessionId };
@@ -323,6 +347,41 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
 }
 
 describe('registered Channels composed journeys through real CLI Session admission', { timeout: 60_000 }, () => {
+  it('rejoins committed thread births and recovers the same creation key after rollback without resetting the checkpoint', async () => {
+    const fixture = await journey({ router: true, privateSpawnRpc: true, refuseSecondCreation: true });
+    try {
+      await fixture.poll();
+      const first = observation('b04', 'First thread', true);
+      fixture.pending.push(first);
+      await fixture.poll();
+      const firstTag = deriveSessionCreationTagV1({ callerCreationNamespace: 'plugin:happier.channels',
+        creationKey: 'channel-thread:binding-1:thread-1' });
+      const firstSessionId = fixture.creations.get(firstTag);
+      expect(firstSessionId).toBeDefined();
+      expect(fixture.admissions.map(request => request.sessionId)).toEqual([firstSessionId]);
+      const second = ConversationObservationV1Schema.parse({ ...observation('b05', 'Second thread', true),
+        endpoint: { ...first.endpoint, id: 'thread-2' } });
+      const checkpointBefore = [...fixture.state.rows.values()].find(row => row.value['record-kind'] === 'checkpoint');
+      expect(checkpointBefore).toBeDefined();
+      fixture.pending.push(second);
+      await expect(fixture.poll()).rejects.toMatchObject({ code: 'channels_thread_spawn_failed', retryable: true });
+      expect(fixture.creations.size).toBe(1);
+      expect([...fixture.state.rows.values()].find(row => row.rowId === checkpointBefore!.rowId)).toEqual(checkpointBefore);
+      // A checkpointed provider redelivers the retained batch after refusal.
+      fixture.pending.push(first, second);
+      await fixture.poll();
+      fixture.pending.push(ConversationObservationV1Schema.parse({ ...observation('follow-up', 'Original thread follow-up', true) }));
+      await fixture.poll();
+      const secondTag = deriveSessionCreationTagV1({ callerCreationNamespace: 'plugin:happier.channels',
+        creationKey: 'channel-thread:binding-1:thread-2' });
+      expect([...fixture.creations.keys()].sort()).toEqual([firstTag, secondTag].sort());
+      expect(fixture.spawnRequests.map(request => request.existingSessionId)).toEqual([firstSessionId, fixture.creations.get(secondTag)]);
+      expect(fixture.admissions.map(request => request.sessionId)).toEqual([firstSessionId, fixture.creations.get(secondTag), firstSessionId]);
+      expect([...fixture.state.rows.values()].filter(row => row.value['record-kind'] === 'binding'
+        && record(row.value.payload).parentBindingId === 'binding-1')).toHaveLength(2);
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
   it('retries transient Account currentness through the registered outward cycle and delivers once', async () => {
     const fixture = await journey({ router: true });
     let now = Date.now();
