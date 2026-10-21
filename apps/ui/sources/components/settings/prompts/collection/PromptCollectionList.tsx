@@ -247,6 +247,7 @@ const PromptCollectionEmpty = React.memo(function PromptCollectionEmpty(props: R
         <EmptyState
             testID={`${copy.testID}.empty`}
             variant="add"
+            scene={props.kind === 'bundle' ? undefined : 'ideas'}
             icon={<Icon name="plus" size={20} color={theme.colors.text.secondary} />}
             title={copy.emptyTitle}
             subtitle={copy.emptySubtitle}

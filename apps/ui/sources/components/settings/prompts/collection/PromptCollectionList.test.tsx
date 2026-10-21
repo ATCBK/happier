@@ -129,6 +129,7 @@ describe('PromptCollectionIndex', () => {
                 rawSettings: {}, sourceSettingsVersion: 7 }, true);
         });
         expect(screen.findByTestId('promptLibrary.collection.template.empty')).not.toBeNull();
+        expect(screen.findByTestId('promptLibrary.collection.template.empty-scene')).not.toBeNull();
     });
 
     it('does not report an empty authored collection before its artifact read completes', async () => {
@@ -139,6 +140,7 @@ describe('PromptCollectionIndex', () => {
         expect(screen.findByTestId('promptLibrary.collection.doc.readState-loading-spinner')).not.toBeNull();
         await act(async () => { storage.setState({ artifactsLoaded: true }); });
         expect(screen.findByTestId('promptLibrary.collection.doc.empty')).not.toBeNull();
+        expect(screen.findByTestId('promptLibrary.collection.doc.empty-scene')).not.toBeNull();
     });
 
     it('retains known templates during revalidation but withdraws them when access is refused', async () => {

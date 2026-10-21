@@ -368,9 +368,11 @@ describe('Artifacts browser recovery', () => {
         const retry = vi.fn();
         const screen = await renderScreen(<RecoveryBrowser loadFailed={false} onRetry={retry} />);
         expect(screen.findHostByTestId('artifacts:empty')).not.toBeNull();
+        expect(screen.findByTestId('artifacts:empty-scene')).not.toBeNull();
 
         await screen.update(<RecoveryBrowser loadFailed onRetry={retry} />);
         expect(screen.findHostByTestId('artifacts:empty')).toBeNull();
+        expect(screen.findByTestId('artifacts:empty-scene')).toBeNull();
         expect(screen.findHostByTestId('artifacts:failed')).not.toBeNull();
         const retryButton = screen.findAll((node) => typeof node.type === 'string'
             && node.props.accessibilityRole === 'button' && node.props.accessibilityLabel === 'common.retry').at(-1);

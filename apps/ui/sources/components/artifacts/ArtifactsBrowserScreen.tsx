@@ -56,7 +56,6 @@ import { ARTIFACT_KIND_ICONS, artifactKindFact, artifactKindFilterLabel } from '
 import { ArtifactProvenanceLabel } from './ArtifactProvenance';
 import { ArtifactQuotaNotice } from './ArtifactQuotaNotice';
 import { ArtifactView } from './ArtifactView';
-import { ArtifactsEmptyMark } from './ArtifactsEmptyMark';
 import { useArtifactOperations } from './useArtifactOperations';
 
 const SORTS: readonly ArtifactBrowserSort[] = ['updated_desc', 'created_desc', 'title_asc'];
@@ -203,7 +202,7 @@ export function ArtifactsBrowser(props: Readonly<{
         <EmptyState
             testID="artifacts:empty"
             layout="page"
-            icon={<ArtifactsEmptyMark />}
+            scene="noNotes"
             title={t('artifacts.browser.emptyTitle')}
             subtitle={t('artifacts.browser.emptyBody')}
             primaryAction={{ label: t('artifacts.browser.newDocument'), onPress: newDocument, testID: 'artifacts:empty:new' }}
