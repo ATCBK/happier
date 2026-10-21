@@ -13,7 +13,11 @@ export function WorkspaceAppShellProvider(props: Readonly<{ children: React.Reac
     }, [accountLifetime, ready]);
     // The first URL and restored tabs must see this exact source before their state initializes.
     // Once admitted, a current Account keeps its workspace and editors through source refreshes.
-    if ((accountLifetime && !accountLifetime.isCurrent()) || (!ready && admittedLifetime.current !== accountLifetime)) return null;
+    // A mounted unscoped catalog has no previous Account content to withdraw. Keep its navigator
+    // through the first Account publication: unmounting it resets an authenticated cold deep link
+    // to Expo's initial route. A retired or replaced scoped Account still requires readmission.
+    if ((accountLifetime && !accountLifetime.isCurrent())
+        || (!ready && admittedLifetime.current !== null && admittedLifetime.current !== accountLifetime)) return null;
     return <WorkspaceProvider enabled={presentation === 'shell'} phone={presentation === 'phone'}
         entry={presentation === 'entry'} deferred={presentation === 'deferred'} catalog={catalog}>
         {props.children}

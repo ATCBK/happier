@@ -194,6 +194,49 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it('retains the initial settings navigator while its first Account catalog is published, but withdraws a retired Account', async () => {
+        const { activateStorageAccountScope } = await import('@/dev/testkit/runtime/storageRuntime');
+        const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const runtime = await activateStorageAccountScope(boundary.scope, storage);
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Expected admitted Account');
+        boundary.platform = 'web';
+        boundary.pathname = '/settings/usage';
+        boundary.params = {};
+        installBrowserBoundary({ location: { pathname: boundary.pathname, search: '', hash: '' },
+            history: { state: null, replaceState() {}, pushState() {}, go() {} }, sessionStorage: { getItem: () => 'main' } });
+        const value = {
+            interactionEnabled: false, pluginBrowserProjection: null, phase: 'current' as const,
+            machineId: null, serverId: 'home-a', platform: 'web' as const,
+            clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {},
+            reloadConnectedAccountProjection: () => {}, pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION,
+        };
+        function Navigator() {
+            const [route, setRoute] = React.useState('/settings/usage');
+            return React.createElement('InitialAccountNavigator', { route, setRoute });
+        }
+        const render = (accountLifetime: typeof lifetime | null, ready = true) => (
+            <AppShellPluginUiProjectionValueProvider declarationReady={ready} value={{ ...value, accountLifetime }}>
+                <WorkspaceAppShellProvider><Navigator /></WorkspaceAppShellProvider>
+            </AppShellPluginUiProjectionValueProvider>
+        );
+        const screen = await renderScreen(render(null));
+        const navigator = () => screen.tree.findByType('InitialAccountNavigator' as never);
+        try {
+            await act(async () => { navigator().props.setRoute('/settings/usage?view=plans'); });
+            await screen.update(render(lifetime, false));
+            expect(navigator().props.route).toBe('/settings/usage?view=plans');
+            await screen.update(render(lifetime));
+            expect(navigator().props.route).toBe('/settings/usage?view=plans');
+            await act(async () => { retireActiveServerAccountScopeLifetime(); });
+            await screen.update(render(lifetime, false));
+            expect(screen.tree.findAllByType('InitialAccountNavigator' as never)).toHaveLength(0);
+        } finally {
+            await screen.unmount();
+            runtime.dispose();
+        }
+    });
+
     it.each(['web', 'ios'])('requires the exact initial declaration when a %s workspace mounts after another catalog was retained', async (platform) => {
         boundary.platform = platform;
         const value = {
@@ -231,6 +274,82 @@ describe('consumed workspace navigation owner', () => {
             <WorkspaceAppShellProvider><Probe /></WorkspaceAppShellProvider>
         </AppShellPluginUiProjectionValueProvider>);
         expect(firstTargets).toEqual([{ kind: 'plugin:acme.notes:notes', params: { pluginId: 'acme.notes', localId: 'notes' } }]);
+    });
+
+    it('admits the original plugin URL once when an unscoped navigator receives its first Account catalog', async () => {
+        const { activateStorageAccountScope } = await import('@/dev/testkit/runtime/storageRuntime');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const previousState = storage.getState();
+        const runtime = await activateStorageAccountScope({ serverId: 'home-a', accountId: 'alice' }, storage);
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Expected admitted Account');
+        storage.setState({ isDataReady: true, localSettings: { ...storage.getState().localSettings, workspaceLayoutV1: {} } });
+        boundary.platform = 'web';
+        boundary.pathname = '/plugins/acme.notes/notes';
+        boundary.params = { pluginId: 'acme.notes', localId: 'notes' };
+        const href = boundary.pathname;
+        const urlWrites: string[] = [];
+        const history = { state: null as unknown,
+            replaceState: (state: unknown, _title: string, url?: string | URL | null) => {
+                history.state = state;
+                if (url != null) urlWrites.push(String(url));
+            },
+            pushState: (state: unknown, _title: string, url?: string | URL | null) => {
+                history.state = state;
+                if (url != null) urlWrites.push(String(url));
+            }, go() {} };
+        installBrowserBoundary({ location: { pathname: href, search: '', hash: '' }, history,
+            sessionStorage: { getItem: () => 'first-account-plugin' } });
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId: 'acme.notes', destinationId: 'notes',
+            rendererId: 'notes-renderer', container: 'appPage', target: { kind: 'app' } });
+        if (!binding) throw new Error('Expected admitted app-page binding');
+        const placement: PluginUiSurfacePlacementProjection = {
+            id: 'surfacePlacement:acme.notes:notes', pluginId: 'acme.notes', contributionKind: 'surfacePlacement',
+            descriptorId: 'notes', binding, target: binding.target,
+            renderer: { kind: 'hostedWeb', contributionId: 'notes-renderer' }, display: { developerFallback: 'Notes' },
+            availability: { state: 'available', reason: 'available', diagnostics: [] }, headerActions: [],
+        };
+        const pluginProjection = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1,
+            surfacePlacementsById: { [placement.id]: placement } };
+        const admittedKinds: string[] = [];
+        let navigatorMounts = 0;
+        function Probe() {
+            const navigation = useOptionalWorkspaceNavigation();
+            if (!navigation) throw new Error('Expected workspace');
+            const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            React.useLayoutEffect(() => { navigatorMounts++; }, []);
+            React.useLayoutEffect(() => { admittedKinds.push(tab.target.kind); }, [tab.target.kind]);
+            return React.createElement('FirstAccountPluginWorkspace', { navigation });
+        }
+        const value = { interactionEnabled: false, pluginBrowserProjection: null, phase: 'current' as const,
+            machineId: null, serverId: 'home-a', platform: 'web' as const,
+            clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {},
+            reloadConnectedAccountProjection: () => {} };
+        const render = (accountLifetime: typeof lifetime | null, ready = true, hasPlugin = false) => (
+            <AppShellPluginUiProjectionValueProvider declarationReady={ready} value={{ ...value, accountLifetime,
+                pluginUiProjection: hasPlugin ? pluginProjection : EMPTY_PLUGIN_UI_PROJECTION }}>
+                <WorkspaceAppShellProvider><Probe /></WorkspaceAppShellProvider>
+            </AppShellPluginUiProjectionValueProvider>
+        );
+        const screen = await renderScreen(render(null));
+        try {
+            await screen.update(render(lifetime, false));
+            expect(navigatorMounts).toBe(1);
+            await screen.update(render(lifetime, true, true));
+            const navigation: WorkspaceNavigationContextValue = screen.tree.findByType('FirstAccountPluginWorkspace' as never).props.navigation;
+            const state = navigation.state;
+            expect(state.tabs[state.groups[state.focusedGroupId].activeTabId].target).toEqual({
+                kind: 'plugin:acme.notes:notes', params: { pluginId: 'acme.notes', localId: 'notes' },
+            });
+            expect(Object.values(state.tabs).some(tab => tab.target.kind === 'newTab')).toBe(false);
+            expect(admittedKinds.filter(kind => kind === 'plugin:acme.notes:notes')).toHaveLength(1);
+            expect(navigatorMounts).toBe(1);
+            expect(urlWrites.every(url => url === href)).toBe(true);
+        } finally {
+            await screen.unmount();
+            runtime.dispose();
+            storage.setState(previousState, true);
+        }
     });
 
     it.each(['web', 'ios'])('admits the initial URL before initializing %s workspace state and retains its editor through catalog publication', async (platform) => {
