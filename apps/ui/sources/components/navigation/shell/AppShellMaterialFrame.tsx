@@ -128,6 +128,11 @@ export function AppShellMaterialPlane(props: Readonly<{
 /** How much the column edge follows the pointer past its bounds while dragging (lab ade-shell D2). */
 const COLUMN_RUBBER_BAND_RESISTANCE = 0.55;
 
+/** The column's drawn width while a drag gives past a bound: a pure function of the core's overshoot. */
+export function resolveColumnDrawnWidthPx(widthPx: number, overshootPx: number): number {
+    return Math.max(0, widthPx + overshootPx * COLUMN_RUBBER_BAND_RESISTANCE);
+}
+
 /**
  * The armed collapse's hint (lab ade-shell D2): while the drag has passed half the column's minimum,
  * the rows fade and this capsule says what releasing does; moving back disarms it.
@@ -191,7 +196,7 @@ export function AppShellMaterialFrame(props: Readonly<{
                 {props.column ? <AppShellMaterialPlane key="column" testID="navigation-sidebar" group="sidebar" color={theme.colors.surface.inset}
                     translucentColor={theme.colors.surface.selected} style={[appShellColumnSurface.column, {
                         // Past either bound the edge gives a little (rubber band), a pure function of the drag.
-                        width: Math.max(0, props.sidebarWidth + (props.columnResizeState?.overshootPx ?? 0) * COLUMN_RUBBER_BAND_RESISTANCE),
+                        width: resolveColumnDrawnWidthPx(props.sidebarWidth, props.columnResizeState?.overshootPx ?? 0),
                     }, columnSpringBack]}>
                     <View style={[styles.columnContent, props.columnResizeState?.collapseArmed ? styles.columnArmed : null]}>
                         {props.column}

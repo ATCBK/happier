@@ -17,6 +17,11 @@ export type ResizableDockedPaneProps = Readonly<{
     onCollapse?: () => void;
     onResetRequest?: () => void;
     resizeEdge?: 'left' | 'right';
+    /**
+     * The width the host draws while a drag gives past a bound (its rubber band), when that differs
+     * from the size the core keeps. The content and the handle follow the drawn edge.
+     */
+    drawnWidthPx?: number;
     children: React.ReactNode;
     testID?: string;
 }>;
@@ -73,7 +78,7 @@ export const ResizableDockedPane = React.memo((props: ResizableDockedPaneProps) 
         <View
             testID={props.testID}
             style={{
-                width: effectiveSizePx,
+                width: props.drawnWidthPx ?? effectiveSizePx,
                 position: 'relative',
                 flexShrink: 0,
                 alignSelf: 'stretch',

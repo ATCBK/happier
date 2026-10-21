@@ -96,10 +96,13 @@ export const HappierResizeHandle = React.memo((props: Readonly<{
                     alignItems: 'center',
                     justifyContent: 'center',
                 },
-                // Use the shared RN/RNW cursor vocabulary; resize gestures still own the axis.
-                Platform.OS === 'web' ? {
-                    cursor: 'pointer',
-                } : null,
+                // The axis's resize cursor, no text selection and no browser touch panning while dragging. React
+                // Native Web supports these CSS properties; React Native's ViewStyle does not declare them.
+                Platform.OS === 'web' ? ({
+                    cursor: props.axis === 'x' ? 'col-resize' : 'row-resize',
+                    userSelect: 'none',
+                    touchAction: 'none',
+                } as object) : null,
                 props.style,
                 centeredNativeTargetStyle,
             ]}

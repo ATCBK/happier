@@ -20,7 +20,7 @@ import { isDesktopActivityOverlayWindowContext } from '@/activity/adapters/deskt
 import { usePaneRegionFocusBoundary } from '@/components/appShell/panes/paneRegion';
 import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
-import { AppShellMaterialFrame } from './AppShellMaterialFrame';
+import { AppShellMaterialFrame, resolveColumnDrawnWidthPx } from './AppShellMaterialFrame';
 import { InboxSummaryProvider } from '@/hooks/inbox/useInboxSummary';
 import { useOptionalWorkspaceNavigation } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import { useWorkspaceShellEnabled } from '@/components/appShell/workspace/useWorkspaceShellEnabled';
@@ -164,6 +164,8 @@ export const SidebarNavigator = React.memo(() => {
     const columnContent = (
         <ResizableDockedPane
             widthPx={sidebarWidth}
+            // The rows and the handle follow the column's rubber-banded edge, never paint past it.
+            drawnWidthPx={sidebarOvershootPx !== 0 ? resolveColumnDrawnWidthPx(sidebarWidth, sidebarOvershootPx) : undefined}
             minWidthPx={SIDEBAR_DOCK_MIN_WIDTH_PX}
             maxWidthPx={sidebarMaxWidthPx}
             resizeEdge="right"
