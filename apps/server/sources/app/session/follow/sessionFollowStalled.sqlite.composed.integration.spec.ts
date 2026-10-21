@@ -1122,8 +1122,10 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         expect(suffix?.workerUpdates?.[1]?.deliverables).toEqual([{ kind: 'artifact', artifactId }]);
         await original.accept(suffix!);
         expect(f.acceptedPrompts[1]).toContain(artifactId);
-        expect(await Promise.all(f.acknowledgements.slice(2))).toEqual([9, 10, 11].map(transcriptSeq =>
-            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq }) })));
+        const suffixAcknowledgements = await Promise.all(f.acknowledgements.slice(2));
+        expect(suffixAcknowledgements).toHaveLength(3);
+        expect(suffixAcknowledgements).toEqual(expect.arrayContaining([9, 10, 11].map(transcriptSeq =>
+            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq }) }))));
         expect(await inTx(tx => readSessionManagerInTx(tx, f.source.id))).toMatchObject({ deliveredTranscriptSeq: 11 });
         expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
         expect((await f.observe()).observations).toEqual([]);

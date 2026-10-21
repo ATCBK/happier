@@ -9,6 +9,8 @@ import {
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
 import { db } from '@/storage/db';
+import { getDbProviderFromEnv } from '@/storage/prisma';
+import { readDatabaseTransactionConfigFromEnv } from '@/config/databaseTransactions';
 import { createAuthenticatedFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from '@/app/api/testkit/socketHarness';
 import { sessionUpdateHandler } from '@/app/api/socket/sessionUpdateHandler';
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
@@ -96,11 +98,12 @@ export async function assertConcurrentFailedTurnRouteAcknowledgements(options: R
                 (value: unknown) => { response = value; });
             return SessionFollowAcknowledgeResponseV1Schema.parse(response);
         };
-        // Clock is a system boundary: expire the owning transaction budget
+        // Clock is a system boundary: exceed the owning acquisition budget
         // without sleeping or changing it. PostgreSQL may first exhaust the
         // feature-read snapshot; confirmed rollback must also remain retryable.
+        const { maxWaitMs } = readDatabaseTransactionConfigFromEnv(process.env, getDbProviderFromEnv(process.env, 'postgres'));
         let now = Date.now();
-        const clock = vi.spyOn(Date, 'now').mockImplementation(() => now += 5_001);
+        const clock = vi.spyOn(Date, 'now').mockImplementation(() => now += maxWaitMs + 1);
         try {
             expect(await acknowledge(requests[0]!)).toEqual({ ok: false, v: 1, error: 'retryable' });
         } finally { clock.mockRestore(); }

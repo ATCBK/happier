@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 
 import { db } from '@/storage/db';
-import { withSqliteReadSnapshot } from '@/storage/prisma';
+import * as serverLogging from '@/utils/logging/log';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
@@ -23,8 +23,14 @@ describe('Session id-batched reads (SQLite integration)', () => {
         const session = await db.session.create({ data: { accountId: owner.id, tag: crypto.randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
         await db.sessionTurn.create({ data: { sessionId: session.id, turnId: 'required-turn', status: 'completed',
             startedAt: 10n, updatedAt: 20n, terminalAt: 20n } });
-        // Observe the genuine SQLite query delegate; route/admission/serialization remain real.
-        const turnReads = await withSqliteReadSnapshot(async reader => vi.spyOn(reader.sessionTurn, 'findMany'));
+        // Observe real query diagnostics at the logging boundary. Spying on a
+        // Prisma model's virtual method changes its delegate and can poison the
+        // shared snapshot reader even after mockRestore.
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const queryLogs = vi.spyOn(serverLogging, 'log');
+        const turnReads = () => queryLogs.mock.calls.filter(([entry]) =>
+            typeof entry === 'object' && entry !== null
+            && 'phase' in entry && entry.phase === 'db.SessionTurn.findMany');
         try {
             await withAuthenticatedTestApp(sessionRoutes, async app => {
                 const headers = { 'x-test-user-id': owner.id, 'x-happier-account-stored-content-protocol': '4' };
@@ -36,8 +42,8 @@ describe('Session id-batched reads (SQLite integration)', () => {
                 expect(SessionReadBatchResponseV1Schema.parse(complete.json()).results[0]).toMatchObject({
                     turns: { status: 200, body: { turns: [{ turnId: 'required-turn' }] } },
                 });
-                expect(turnReads).toHaveBeenCalled();
-                turnReads.mockClear();
+                expect(turnReads().length).toBeGreaterThan(0);
+                queryLogs.mockClear();
                 const context = await read(false);
                 expect(context.statusCode, context.body).toBe(200);
                 const { results } = SessionReadBatchResponseV1Schema.parse(context.json());
@@ -46,9 +52,9 @@ describe('Session id-batched reads (SQLite integration)', () => {
                 expect(results[0]?.messages).toBeUndefined();
                 expect(results[1]).toMatchObject({ sessionId: 'unreadable', detail: { status: 404 } });
                 expect(results[1]?.turns).toBeUndefined();
-                expect(turnReads).not.toHaveBeenCalled();
+                expect(turnReads()).toEqual([]);
             });
-        } finally { turnReads.mockRestore(); }
+        } finally { queryLogs.mockRestore(); vi.unstubAllEnvs(); }
     });
 
     it('returns the existing admitted snapshot and first message page independently for mixed ids and modes', async () => {

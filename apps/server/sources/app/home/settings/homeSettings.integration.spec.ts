@@ -7,7 +7,7 @@ import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { resolveFeaturesFromEnv } from "@/app/features/registry";
 
-import { loadStartupHomeEnv } from "./startupHomeEnv";
+import { applyStartupHomeEnvToProcess, loadStartupHomeEnv } from "./startupHomeEnv";
 import {
     readHomeConfigEnv,
     readHomeSettingsInTx,
@@ -43,6 +43,7 @@ afterEach(async () => {
     await db.homeAdministrationEvent.deleteMany({});
     await db.homeSettings.deleteMany({});
     await db.account.deleteMany({});
+    harness.restoreEnv();
 });
 
 describe("Home settings owner", () => {
@@ -229,11 +230,13 @@ describe("Home settings owner", () => {
         });
 
         const lines: string[] = [];
+        harness.resetEnv({ METRICS_PORT: "9300" });
         const startup = await loadStartupHomeEnv({
             env: { METRICS_PORT: "9300" },
             readStored: () => readStoredHomeSettingsForStartup(),
             log: (line) => lines.push(line),
         });
+        applyStartupHomeEnvToProcess(startup, process.env);
         // The deployment's explicit METRICS_PORT wins over the stored value.
         expect(startup.env.METRICS_PORT).toBe("9300");
         expect(startup.env.S3_SECRET_KEY).toBe("s3-secret");
@@ -260,7 +263,10 @@ describe("Home settings owner", () => {
             write: { expectedRevision: 0, values: { METRICS_PORT: 9191 }, secrets: { S3_SECRET_KEY: { replace: "running-secret" } } },
         });
         expect(first.status).toBe("applied");
-        await loadStartupHomeEnv({ env: {}, readStored: () => readStoredHomeSettingsForStartup(), log: () => {} });
+        harness.resetEnv({ METRICS_PORT: undefined });
+        applyStartupHomeEnvToProcess(await loadStartupHomeEnv({
+            env: {}, readStored: () => readStoredHomeSettingsForStartup(), log: () => {},
+        }), process.env);
 
         // After the start: two restart values changed, one set that ran on its default, one live value.
         const edited = await setHomeSettings({
