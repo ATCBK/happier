@@ -6,8 +6,7 @@ import type { ExternalActionExecutionAuthorizationV1, ExternalActionRequestEnvel
 import { isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
 import { type SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/machines/machineAccessV1';
 import { type AnyClientUpgradeRequiredV1 } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
-import { MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
-import { isSocketIoAckTimeoutError } from '@happier-dev/sync-client';
+import { isSocketIoAckTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { type SocketRpcAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import {
@@ -445,7 +444,7 @@ export async function forwardRpcCall(params: Readonly<{
                 : params.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`)
                 ? { error: 'confidential_continuation_failed', errorCode: 'confidential_continuation_failed' }
                 : isSocketIoAckTimeoutError(error)
-                ? { error: error instanceof Error ? error.message : 'RPC call failed', errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE }
+                ? { error: error.message, errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE }
                 : { error: error instanceof Error ? error.message : "RPC call failed" }),
         };
     }

@@ -88,7 +88,7 @@ index d300b93..2210ac3 100644
              rooms: this.rooms,
              except: this.exceptRooms,
              flags: this.flags,
-@@ -206,11 +216,16 @@ class BroadcastOperator {
+@@ -206,11 +216,23 @@ class BroadcastOperator {
              expectedClientCount += clientCount;
              actualServerCount++;
              checkCompleteness();
@@ -98,6 +98,13 @@ index d300b93..2210ac3 100644
 +                finish(Object.assign(new Error("socket has been disconnected"), { code: error.code }));
 +                return;
 +            }
++            // RemoteSocket addresses one exact socket. Its reply is complete
++            // independently of client counts from unrelated cluster nodes.
++            if (this.flags.expectSingleResponse) {
++                finish(null, clientResponse);
++                return;
++            }
++
              // each client sends an acknowledgement
              responses.push(clientResponse);
              checkCompleteness();
@@ -106,7 +113,7 @@ index d300b93..2210ac3 100644
          this.adapter.serverCount().then((serverCount) => {
              expectedServerCount = serverCount;
              checkCompleteness();
-@@ -400,8 +415,8 @@ class RemoteSocket {
+@@ -400,8 +422,8 @@ class RemoteSocket {
       *
       * @param timeout
       */

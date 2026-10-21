@@ -71,7 +71,7 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
                 // The Home deadline is the controlled transport boundary; the
                 // client stays alive to consume its actual error envelope.
                 acknowledge(await forwardRpcCall({ io: source.io, targetUserId: 'account-one',
-                    method: request.method, callParams: request.params, timeoutMs: 10, callerSocketId: socket.id }));
+                    method: request.method, callParams: request.params, timeoutMs: hold ? 10 : null, callerSocketId: socket.id }));
             });
         source.io.on('connection', relay);
         const ui = connect(`http://127.0.0.1:${source.port}`, {

@@ -1,4 +1,5 @@
-import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
+import { createRpcCallError, createSocketIoAckTimeoutError } from '@happier-dev/protocol/rpcErrors';
+export { createSocketIoAckTimeoutError, isSocketIoAckTimeoutError } from '@happier-dev/protocol/rpcErrors';
 
 export function createSocketRpcRequestId(): string {
   const crypto = globalThis.crypto as { randomUUID?: () => string } | undefined;
@@ -9,11 +10,7 @@ export function createSocketRpcAbortError(): Error {
   return Object.assign(createRpcCallError({ error: 'Socket RPC was aborted by the caller', errorCode: 'SOCKET_RPC_ABORTED' }),
     { name: 'AbortError', code: 'SOCKET_RPC_ABORTED' });
 }
-export function createSocketIoAckTimeoutError(): Error { return new Error('operation has timed out'); }
 const MAX_NATIVE_TIMER_DELAY_MS = 2_147_483_647;
-export function isSocketIoAckTimeoutError(error: unknown): boolean {
-  return error instanceof Error && error.message === 'operation has timed out';
-}
 export async function raceSocketIoAckTimeout<T>(promise: Promise<T>, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
   if (!(typeof timeoutMs === 'number' && timeoutMs > 0)) return promise;
   return new Promise<T>((resolve, reject) => {
