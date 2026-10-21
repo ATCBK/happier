@@ -1670,7 +1670,7 @@ describe('thread router admission', () => {
     }
   });
 
-  it('preserves the typed Session refusal in the content-free supervisor diagnostic', async () => {
+  it('preserves the typed Session refusal in content-free direct and supervisor diagnostics', async () => {
     const harness = createIngressHarness({ connection: socketChannelConnection(), execute: (actionId, input) => {
       if (actionId === 'session.spawn_new') return { type: 'error', code: 'spawn_failed', retryable: true,
         launchError: { kind: 'launch_error', code: 'SPAWN_VALIDATION_FAILED',
@@ -1678,11 +1678,17 @@ describe('thread router admission', () => {
       return threadSpawnBoundary(actionId, input);
     } });
     routerFixture(harness.rows);
+    const warn = vi.spyOn(harness.context.services.logger, 'warn');
     const failure = await ingestConversationProviderObservationForInvocation(topicObservation('spawn-refused'), harness.context)
       .catch((error: unknown) => error);
     expect(classifySupervisorFailure(failure)).toEqual({ code: 'channels_thread_spawn_failed', retryable: true,
       sessionSpawnCode: 'spawn_failed', sessionSpawnReason: 'SPAWN_VALIDATION_FAILED' });
     expect(JSON.stringify(classifySupervisorFailure(failure))).not.toMatch(/private-message|sales@|secret-token/);
+    expect(warn).toHaveBeenCalledWith('[Channels] thread Session creation refused', {
+      code: 'channels_thread_spawn_failed', retryable: true,
+      sessionSpawnCode: 'spawn_failed', sessionSpawnReason: 'SPAWN_VALIDATION_FAILED',
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toMatch(/private-message|sales@|secret-token/);
     expect(JSON.stringify(failure)).not.toMatch(/private-message|sales@|secret-token/);
     expect(harness.send).not.toHaveBeenCalled();
     expect([...harness.rows.values()].filter(row => record(row.value.payload).parentBindingId === 'binding-1')).toHaveLength(0);

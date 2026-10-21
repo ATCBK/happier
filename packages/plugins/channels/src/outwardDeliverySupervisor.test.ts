@@ -1039,6 +1039,62 @@ describe('Channels outward-delivery supervisor', () => {
     } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
   });
 
+  it('rechecks a held publication page and projects its finalized answer through custody exactly once', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const generation = new AbortController();
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await seedProjectionState(state);
+    const binding = state.rows.get('binding-1');
+    if (binding === undefined || !isChannelStateJsonRecord(binding.value.payload)) throw new Error('Expected binding');
+    await state.put({ ...binding.value, payload: { ...binding.value.payload,
+      target: { ...sessionTarget, policy: { ...sessionTarget.policy, deliveryMode: 'repliesOnly' } },
+    } }, { expectedRevision: binding.revision });
+    let published = false;
+    const execute = vi.fn(async (action: string, input: Readonly<{ cursor?: string | null }>) => {
+      if (action === 'session.permission.remote.pending.list') return emptyPendingPermissionPage();
+      if (action !== 'session.transcript.get') throw new Error(`Unexpected Action ${action}`);
+      return {
+        ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
+        scannedThroughSeq: published ? 5 : 0, nextCursor: published ? '5' : '0', hasMore: !published,
+        items: published && input.cursor !== '5' ? [{
+          kind: 'assistantText', sessionId: 'session-1', seq: 5, itemId: 'held-final-answer',
+          turnId: 'turn-1', final: 'completed', text: 'Retained answer',
+          consumedInputs: [{ localId: 'retained-input', origin: {
+            v: 1, producer: 'pluginSession', actor: 'owner',
+            sourceAuthority: { mediatorPluginId: 'happier.channels', sourceRef: 'channels:binding:binding-1' },
+          } }],
+        }] : [],
+      };
+    });
+    const deliver = vi.fn(async () => ({
+      result: { kind: 'delivered', providerMessageIds: ['held-answer-receipt'] }, executionOrigin: providerTransportOrigin,
+    }));
+    const context = { ...backgroundContext({ state, deliveries, execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: deliver }), signal: generation.signal };
+    const supervisor = createConversationOutwardDeliverySupervisor();
+    const running = supervisor.run(context);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(deliveries.rows.size).toBe(0);
+      expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({ lastScannedSeq: 0 });
+      // Publication metadata can recover after the transcript write. No new
+      // Session/Collection invalidation accompanies release of this page.
+      published = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect([...deliveries.rows.values()].map(row => row.value.payload)).toEqual([
+        expect.objectContaining({ state: 'delivered', providerMessageIds: ['held-answer-receipt'] }),
+      ]);
+      expect(state.rows.get('projection-frontier:binding-1')?.value.payload).toMatchObject({
+        transcriptCursor: '5', lastScannedSeq: 5,
+      });
+      await runConversationOutwardDeliveryCycle({ context, now: () => Date.now() });
+      expect(deliveries.rows.size).toBe(1);
+      expect(deliver).toHaveBeenCalledTimes(1);
+    } finally { generation.abort(); await running; await supervisor.dispose(); vi.useRealTimers(); }
+  });
+
   it('subscribes before the bound transcript read and wakes on Session changes without a timer', async () => {
     vi.useFakeTimers();
     const generation = new AbortController();
