@@ -10689,6 +10689,12 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
         totalBytes: string;
       }) => `Download ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Caricamento non riuscito',
+      failureReasons: {
+          declined: "Non approvato",
+          tooLarge: "Troppo grande per il caricamento",
+          unconfirmed: "Non è certo che sia finito · controlla la cartella",
+          other: ({ machine }: { machine: string }) => `${machine} non ha potuto accettarlo`,
+      },
     },
     upload: {
       conflicts: {

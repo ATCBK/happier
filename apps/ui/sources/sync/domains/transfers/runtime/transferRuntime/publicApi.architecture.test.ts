@@ -30,6 +30,7 @@ describe('transferRuntime (public API)', () => {
             'callDaemonWorkspaceWriteFileRpc',
             'captureComposerContentSubmission',
             'claimComposerContent',
+            'classifyTransferFailure',
             'createSessionAttachmentTransferRouting',
             'createTransferManifestHasher',
             'downloadDaemonSessionAttachmentToDestination',

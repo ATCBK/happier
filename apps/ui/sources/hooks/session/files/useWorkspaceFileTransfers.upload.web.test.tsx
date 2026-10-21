@@ -1,6 +1,7 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 
 import { createDeferred, renderHook } from '@/dev/testkit';
 import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
@@ -123,7 +124,7 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
             });
         });
 
-        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Direct import request failed with status 409' });
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Direct import request failed with status 409', reason: 'other' });
         expect(harness.uploads).toHaveLength(1);
         expect(harness.uploads[0]).toEqual(expect.objectContaining({ finalized: false, aborted: true, finalizeAttempts: 1 }));
     });
@@ -139,7 +140,7 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
             });
         });
 
-        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Upload source reader exploded' });
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Upload source reader exploded', reason: 'other' });
         expect(harness.uploads).toHaveLength(1);
         expect(harness.uploads[0]).toEqual(expect.objectContaining({ bytes: new Uint8Array(), finalized: false, aborted: true }));
     });
@@ -148,7 +149,7 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         harness.setStatResponse({ success: true, exists: true });
         for (const [thrown, expected, state] of [
             [new DOMException('signal is aborted without reason', 'AbortError'), { ok: false, error: 'Upload canceled', canceled: true }, { status: 'canceled' }],
-            [new Error('Conflict prompt exploded'), { ok: false, error: 'Conflict prompt exploded' }, { status: 'error', error: 'Conflict prompt exploded' }],
+            [new Error('Conflict prompt exploded'), { ok: false, error: 'Conflict prompt exploded' }, { status: 'error', error: 'Conflict prompt exploded', reason: 'other' }],
         ] as const) {
             const hook = await renderTransfers({ onResolveUploadConflicts: async () => { throw thrown; } });
             await act(async () => {
@@ -176,7 +177,7 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
             await pending;
         });
         await expect(pending).resolves.toEqual({ ok: false, error: 'Upload source reader exploded' });
-        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Upload source reader exploded' });
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Upload source reader exploded', reason: 'other' });
     });
 
     it('words a machine that stops answering as unreachable, never as the transport\'s own abort text', async () => {
@@ -185,11 +186,31 @@ describe('useWorkspaceFileTransfers upload pipeline', () => {
         vi.spyOn(file, 'slice').mockImplementation(() => { throw new DOMException('signal is aborted without reason', 'AbortError'); });
         const hook = await renderTransfers();
         await act(async () => {
-            await expect(hook.getCurrent().startUploads(uploadInput(file))).resolves.toMatchObject({ ok: false, unreachable: true });
+            await expect(hook.getCurrent().startUploads(uploadInput(file))).resolves.toMatchObject({ ok: false });
         });
-        expect(hook.getCurrent().uploadState).toMatchObject({ status: 'error', unreachable: true });
+        expect(hook.getCurrent().uploadState).toMatchObject({ status: 'error', reason: 'unreachable' });
         await act(async () => { hook.getCurrent().dismissUploadFailure(); });
         expect(hook.getCurrent().uploadState).toEqual({ status: 'idle' });
+    });
+
+    it('settles at once, as the Machine not answering, when the preflight read of the destination gets no answer, instead of going on to a second long attempt', async () => {
+        harness.setStatResponse({ success: false, error: 'Machine RPC call timeout', errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE });
+        const hook = await renderTransfers();
+        await act(async () => {
+            await expect(hook.getCurrent().startUploads(uploadInput())).resolves.toMatchObject({ ok: false });
+        });
+        expect(hook.getCurrent().uploadState).toMatchObject({ status: 'error', reason: 'unreachable' });
+        expect(harness.uploads).toHaveLength(0);
+        expect(harness.requests.some(request => request.url.endsWith('/v1/actions/daemon.filesystem.upload'))).toBe(false);
+    });
+
+    it('still uploads when the preflight read fails for a reason that says nothing about reachability', async () => {
+        harness.setStatResponse({ success: false, error: 'Method not available', errorCode: 'RPC_METHOD_NOT_AVAILABLE' });
+        const hook = await renderTransfers();
+        await act(async () => {
+            await expect(hook.getCurrent().startUploads(uploadInput())).resolves.toEqual({ ok: true });
+        });
+        expect(harness.uploads).toHaveLength(1);
     });
 
     it('finishes the exact staged file without starting a second upload', async () => {

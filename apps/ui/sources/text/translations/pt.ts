@@ -10588,6 +10588,12 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
         totalBytes: string;
       }) => `Baixando ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Não foi possível enviar',
+      failureReasons: {
+          declined: "Não aprovado",
+          tooLarge: "Grande demais para enviar",
+          unconfirmed: "Não foi possível confirmar a conclusão · verifique a pasta",
+          other: ({ machine }: { machine: string }) => `${machine} não conseguiu aceitar`,
+      },
     },
     upload: {
       conflicts: {

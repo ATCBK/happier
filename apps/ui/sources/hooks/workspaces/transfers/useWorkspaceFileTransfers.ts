@@ -6,10 +6,11 @@ import { openLocalUploadSourceReader } from '@/sync/runtime/files/localUploadSou
 import { resolveKeepBothTargetPath } from '@/sync/domains/files/resolveKeepBothTargetPath';
 import {
     callDaemonWorkspaceStatFileRpc,
+    classifyTransferFailure,
+    type TransferFailureReason,
     downloadDaemonWorkspaceFileToDestination,
     uploadDaemonWorkspaceFileFromReader,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
-import { isMachineStoppedAnsweringError, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 import { isSafeWorkspaceRelativePath } from '@/utils/path/isSafeWorkspaceRelativePath';
 import { resolveLocalUploadSourceSizeBytes } from '@/sync/runtime/files/localUploadSourceReader';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
@@ -50,8 +51,8 @@ export type WorkspaceUploadState =
     }>
     | Readonly<{ status: 'done'; totalFiles: number; totalBytes: number }>
     | Readonly<{ status: 'canceled' }>
-    /** `unreachable`: the Machine stopped answering (a timeout or an abort not caused by the person); the surface words it, not `error`. */
-    | Readonly<{ status: 'error'; error: string; unreachable?: true }>;
+    /** `reason` is why it ended, in the surface's words; `error` is the transport's text and is never shown. */
+    | Readonly<{ status: 'error'; error: string; reason: TransferFailureReason }>;
 
 export type WorkspaceDownloadState =
     | Readonly<{ status: 'idle' }>
@@ -75,7 +76,7 @@ export type WorkspaceFileDownloadInput = Readonly<{
     cachedContent?: WorkspaceFileCachedContent | null;
 }>;
 
-export type WorkspaceTransferResult = { ok: true } | { ok: false; error: string; canceled?: true; unreachable?: true };
+export type WorkspaceTransferResult = { ok: true } | { ok: false; error: string; canceled?: true };
 
 function joinRepoPath(parentDir: string, relativePath: string): string {
     const cleanParent = String(parentDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
@@ -159,13 +160,49 @@ async function openWorkspaceUploadSourceReader(entry: WorkspaceUploadEntry): Pro
     };
 }
 
-export async function buildUploadEntryPlan(input: Readonly<{
+type UploadEntryPlanInput = Readonly<{
     workspaceScope: WorkspaceScopeBase | null;
     entries: readonly WorkspaceUploadEntry[];
     destinationDir: string;
     onResolveConflicts?: ((params: UploadConflictResolutionRequest) => Promise<UploadConflictStrategy>) | null;
     signal?: AbortSignal | null;
-}>): Promise<{ ok: true; tasks: Array<{ entry: WorkspaceUploadEntry; targetPath: string; overwrite: boolean; sizeBytes: number }> } | { ok: false; error: string }> {
+}>;
+type UploadEntryPlan =
+    | { ok: true; tasks: Array<{ entry: WorkspaceUploadEntry; targetPath: string; overwrite: boolean; sizeBytes: number }> }
+    | { ok: false; error: string; reason?: TransferFailureReason };
+
+/** The preflight read of a destination got no answer from the Machine: the batch has nothing to go on, and says so. */
+class UploadPreflightUnreachableError extends Error {}
+
+/**
+ * Whether a destination is taken. A read that fails for a reason that says nothing about the Machine (an older
+ * daemon without the read) leaves the answer to the upload itself; a Machine that does not answer ends the batch
+ * here, once, rather than starting a second long attempt against the same silence.
+ */
+async function statUploadDestination(scope: WorkspaceScopeBase, path: string, signal: AbortSignal | null | undefined) {
+    const stat = await callDaemonWorkspaceStatFileRpc({
+        machineId: scope.machineId,
+        serverId: scope.serverId,
+        rootPath: scope.rootPath,
+        request: { path },
+        ...(signal ? { signal } : {}),
+    });
+    if (stat.success !== true && !signal?.aborted && classifyTransferFailure({ errorCode: stat.errorCode }) === 'unreachable') {
+        throw new UploadPreflightUnreachableError(stat.error);
+    }
+    return stat;
+}
+
+export async function buildUploadEntryPlan(input: UploadEntryPlanInput): Promise<UploadEntryPlan> {
+    try {
+        return await planUploadEntries(input);
+    } catch (error) {
+        if (error instanceof UploadPreflightUnreachableError) return { ok: false, error: error.message, reason: 'unreachable' };
+        throw error;
+    }
+}
+
+async function planUploadEntries(input: UploadEntryPlanInput): Promise<UploadEntryPlan> {
     const destinationDir = String(input.destinationDir ?? '').trim().replace(/\\/g, '/').replace(/\/+$/g, '');
     const tasks: Array<{ entry: WorkspaceUploadEntry; targetPath: string; overwrite: boolean; sizeBytes: number }> = [];
 
@@ -226,13 +263,7 @@ export async function buildUploadEntryPlan(input: Readonly<{
             usedPaths,
             maxAttempts: 50,
             pathExists: async (candidatePath) => {
-                const stat = await callDaemonWorkspaceStatFileRpc({
-                    machineId: scope.machineId,
-                    serverId: scope.serverId,
-                    rootPath: scope.rootPath,
-                    request: { path: candidatePath },
-                    ...(input.signal ? { signal: input.signal } : {}),
-                });
+                const stat = await statUploadDestination(scope, candidatePath, input.signal);
                 return stat.success !== true || stat.exists === true;
             },
         }), input.signal);
@@ -245,13 +276,7 @@ export async function buildUploadEntryPlan(input: Readonly<{
 
     for (let i = 0; i < tasks.length; i += 1) {
         if (input.signal?.aborted) return uploadCanceledPlan();
-        const statResult = await awaitUploadPreflight(callDaemonWorkspaceStatFileRpc({
-            machineId: scope.machineId,
-            serverId: scope.serverId,
-            rootPath: scope.rootPath,
-            request: { path: tasks[i]!.targetPath },
-            ...(input.signal ? { signal: input.signal } : {}),
-        }), input.signal);
+        const statResult = await awaitUploadPreflight(statUploadDestination(scope, tasks[i]!.targetPath, input.signal), input.signal);
         if (statResult.status === 'aborted') return uploadCanceledPlan();
         const stat = statResult.value;
         if (stat.success === true && stat.exists === true) {
@@ -301,13 +326,7 @@ export async function buildUploadEntryPlan(input: Readonly<{
             usedPaths,
             maxAttempts: 50,
             pathExists: async (candidatePath) => {
-                const stat = await callDaemonWorkspaceStatFileRpc({
-                    machineId: scope.machineId,
-                    serverId: scope.serverId,
-                    rootPath: scope.rootPath,
-                    request: { path: candidatePath },
-                    ...(input.signal ? { signal: input.signal } : {}),
-                });
+                const stat = await statUploadDestination(scope, candidatePath, input.signal);
                 return stat.success !== true || stat.exists === true;
             },
         }), input.signal);
@@ -388,7 +407,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
         const controller = new AbortController();
         uploadAbortRef.current = controller;
         uploadAbortReasonRef.current = null;
-        let uploadFailure: Readonly<{ error: string; unreachable: boolean }> | null = null;
+        let uploadFailure: Readonly<{ error: string; reason: TransferFailureReason }> | null = null;
         const isCurrentUpload = (): boolean => (
             mountedRef.current && uploadAbortRef.current === controller
         );
@@ -417,7 +436,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                     setCurrentUploadState({ status: 'canceled' });
                     return uploadCanceledResult();
                 }
-                setCurrentUploadState({ status: 'error', error: plan.error });
+                setCurrentUploadState({ status: 'error', error: plan.error, reason: plan.reason ?? 'other' });
                 return { ok: false, error: plan.error };
             }
 
@@ -433,7 +452,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
 
             const scope = stableWorkspaceScope;
             if (!scope) {
-                setCurrentUploadState({ status: 'error', error: 'Workspace scope not available' });
+                setCurrentUploadState({ status: 'error', error: 'Workspace scope not available', reason: 'other' });
                 return { ok: false, error: 'Workspace scope not available' };
             }
 
@@ -450,12 +469,12 @@ export function useWorkspaceFileTransfers(params: Readonly<{
             };
             // The first failure is the batch's. Aborting the controller makes every sibling upload raise an abort of
             // its own (or the person cancelled): those are consequences of the first outcome, never another failure.
-            const recordFailure = (error: string, unreachable: boolean) => {
+            const recordFailure = (error: string, reason: TransferFailureReason) => {
                 if (controller.signal.aborted) return;
-                uploadFailure = { error, unreachable };
+                uploadFailure = { error, reason };
                 uploadAbortReasonRef.current = 'error';
                 cancelOnce();
-                setCurrentUploadState({ status: 'error', error, ...(unreachable ? { unreachable: true as const } : {}) });
+                setCurrentUploadState({ status: 'error', error, reason });
             };
 
             const workers = Array.from({ length: Math.min(resolvedMaxConcurrentUploads, tasks.length) }, () => (async () => {
@@ -508,7 +527,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                         });
 
                         if (isTransferFinalizeRecoveryFailure<WorkspaceFileUploadFinalizeResponse>(result)) {
-                            setCurrentUploadState({ status: 'error', error: result.error });
+                            setCurrentUploadState({ status: 'error', error: result.error, reason: 'unconfirmed' });
                             const recoveryResult = await runTransferFinalizeRecovery({
                                 recovery: result.recovery,
                                 signal: controller.signal,
@@ -520,6 +539,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                             } else {
                                 result = {
                                     success: false,
+                                    errorCode: result.errorCode,
                                     error: recoveryResult?.status === 'unavailable'
                                         ? t('transferRecovery.unavailable')
                                         : recoveryResult?.status === 'discarded'
@@ -530,11 +550,11 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                         }
 
                         if (result.success !== true) {
-                            recordFailure(result.error, result.errorCode === MACHINE_RPC_TIMEOUT_ERROR_CODE);
+                            recordFailure(result.error, classifyTransferFailure({ errorCode: result.errorCode }));
                             return;
                         }
                     } catch (error) {
-                        recordFailure(error instanceof Error ? error.message : 'Upload failed', isMachineStoppedAnsweringError(error));
+                        recordFailure(error instanceof Error ? error.message : 'Upload failed', classifyTransferFailure({ thrown: error }));
                         return;
                     } finally {
                         try {
@@ -562,10 +582,9 @@ export function useWorkspaceFileTransfers(params: Readonly<{
             }
 
             if (uploadAbortReasonRef.current === 'error') {
-                const failure = uploadFailure ?? { error: 'Upload failed', unreachable: false };
-                const unreachable = failure.unreachable ? { unreachable: true as const } : {};
-                setCurrentUploadState({ status: 'error', error: failure.error, ...unreachable });
-                return { ok: false, error: failure.error, ...unreachable };
+                const failure = uploadFailure ?? { error: 'Upload failed', reason: 'other' as const };
+                setCurrentUploadState({ status: 'error', error: failure.error, reason: failure.reason });
+                return { ok: false, error: failure.error };
             }
 
             if (controller.signal.aborted) {
@@ -583,7 +602,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                 return uploadCanceledResult();
             }
             const message = error instanceof Error ? error.message : 'Upload failed';
-            setCurrentUploadState({ status: 'error', error: message });
+            setCurrentUploadState({ status: 'error', error: message, reason: classifyTransferFailure({ thrown: error }) });
             return { ok: false, error: message };
         } finally {
             if (uploadAbortRef.current === controller) {

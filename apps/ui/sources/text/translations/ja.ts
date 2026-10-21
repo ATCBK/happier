@@ -10762,6 +10762,12 @@ localTailscale: {
         totalBytes: string;
       }) => `ダウンロード中 ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'アップロードできませんでした',
+      failureReasons: {
+          declined: "承認されませんでした",
+          tooLarge: "サイズが大きすぎます",
+          unconfirmed: "完了したか確認できません · フォルダを確認してください",
+          other: ({ machine }: { machine: string }) => `${machine} が受け付けられませんでした`,
+      },
     },
     upload: {
       conflicts: {

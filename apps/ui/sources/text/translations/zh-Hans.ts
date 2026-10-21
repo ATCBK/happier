@@ -10101,6 +10101,12 @@ const zhHansValues = {
         totalBytes: string;
       }) => `正在下载 ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: '无法上传',
+      failureReasons: {
+          declined: "未获批准",
+          tooLarge: "文件过大，无法上传",
+          unconfirmed: "无法确认是否完成 · 请检查文件夹",
+          other: ({ machine }: { machine: string }) => `${machine} 无法接收`,
+      },
     },
     upload: {
       conflicts: {

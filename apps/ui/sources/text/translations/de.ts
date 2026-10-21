@@ -10319,6 +10319,12 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
                 downloading: ({ name, downloaded, totalBytes }: { name: string; downloaded: string; totalBytes: string }) =>
                     `Lädt herunter: ${name} · ${downloaded} / ${totalBytes}`,
                 uploadFailed: 'Upload fehlgeschlagen',
+                failureReasons: {
+                    declined: "Nicht genehmigt",
+                    tooLarge: "Zu groß zum Hochladen",
+                    unconfirmed: "Unklar, ob es abgeschlossen wurde · Ordner prüfen",
+                    other: ({ machine }: { machine: string }) => `${machine} konnte es nicht annehmen`,
+                },
             },
             upload: {
                 conflicts: {

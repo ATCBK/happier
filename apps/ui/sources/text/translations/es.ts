@@ -10468,6 +10468,12 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
         totalBytes: string;
       }) => `Descargando ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'No se pudo subir',
+      failureReasons: {
+          declined: "No aprobado",
+          tooLarge: "Demasiado grande para subirlo",
+          unconfirmed: "No se sabe si terminó · revisa la carpeta",
+          other: ({ machine }: { machine: string }) => `${machine} no pudo aceptarlo`,
+      },
     },
     upload: {
       conflicts: {

@@ -10296,6 +10296,12 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
         totalBytes: string;
       }) => `Pobieranie ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Nie udało się wysłać',
+      failureReasons: {
+          declined: "Nie zatwierdzono",
+          tooLarge: "Za duży do wysłania",
+          unconfirmed: "Nie wiadomo, czy się zakończyło · sprawdź folder",
+          other: ({ machine }: { machine: string }) => `${machine} nie mógł go przyjąć`,
+      },
     },
     upload: {
       conflicts: {

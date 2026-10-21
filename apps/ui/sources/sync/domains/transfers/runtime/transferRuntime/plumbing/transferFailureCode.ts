@@ -1,4 +1,9 @@
 import { isMachineStoppedAnsweringError, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
+import {
+    DIRECT_IMPORT_FINALIZE_OUTCOME_INDETERMINATE_ERROR_CODE,
+    DIRECT_IMPORT_REMOTE_COMMITTED_RESULT_UNUSABLE_ERROR_CODE,
+    TRANSFER_FINALIZE_RECOVERY_REQUIRED_ERROR_CODE,
+} from './directTransferImportClient';
 
 /**
  * The typed code a thrown transfer error keeps when a layer flattens it into a failure response: its own, else the
@@ -9,4 +14,40 @@ export function readTransferFailureCode(error: unknown): string | undefined {
         return (error as { errorCode: string }).errorCode;
     }
     return isMachineStoppedAnsweringError(error) ? MACHINE_RPC_TIMEOUT_ERROR_CODE : undefined;
+}
+
+/**
+ * Why a finite transfer ended, in the words a transfer surface has for it. Every failure has exactly one reason, so a
+ * status line never says only that something failed: the Machine stopped answering, the person did not approve it, a
+ * permission refused it, it is too large, the result is not known, or the Machine could not take it.
+ */
+export type TransferFailureReason = 'unreachable' | 'declined' | 'permission' | 'tooLarge' | 'unconfirmed' | 'other';
+
+const REACHABILITY_CODES: ReadonlySet<string> = new Set([MACHINE_RPC_TIMEOUT_ERROR_CODE, 'server_unreachable', 'home_unreachable']);
+const DECLINED_CODES: ReadonlySet<string> = new Set(['approval_canceled', 'approval_rejected', 'approval_stale']);
+const PERMISSION_CODES: ReadonlySet<string> = new Set([
+    'credential_scope_denied', 'permission_denied', 'forbidden', 'access_denied', 'role_policy_denied',
+    'project_context_access_denied', 'EACCES', 'EPERM',
+]);
+// An acknowledgement that never arrived, or a finalize the Machine may have committed: the result is not known.
+const UNCONFIRMED_CODES: ReadonlySet<string> = new Set([
+    'outcome_uncertain', 'outcome_unknown', 'action_outcome_unknown', 'approval_execution_outcome_unknown', 'indeterminate',
+    DIRECT_IMPORT_FINALIZE_OUTCOME_INDETERMINATE_ERROR_CODE, DIRECT_IMPORT_REMOTE_COMMITTED_RESULT_UNUSABLE_ERROR_CODE,
+    TRANSFER_FINALIZE_RECOVERY_REQUIRED_ERROR_CODE,
+]);
+const TOO_LARGE_CODE = /too_large|max_bytes|quota_exceeded/i;
+
+/**
+ * The one place a transfer failure's typed code (a failure response's `errorCode`, or what a thrown transfer error
+ * keeps) becomes a reason. A transport's own abort or deadline that the person did not cause is the Machine not
+ * answering (the caller checks its own cancellation first); a code this does not name is `other`, never a guess.
+ */
+export function classifyTransferFailure(failure: Readonly<{ errorCode?: string | undefined; thrown?: unknown }>): TransferFailureReason {
+    const code = failure.errorCode ?? readTransferFailureCode(failure.thrown);
+    if (code === undefined) return 'other';
+    if (REACHABILITY_CODES.has(code)) return 'unreachable';
+    if (DECLINED_CODES.has(code)) return 'declined';
+    if (PERMISSION_CODES.has(code)) return 'permission';
+    if (UNCONFIRMED_CODES.has(code)) return 'unconfirmed';
+    return TOO_LARGE_CODE.test(code) ? 'tooLarge' : 'other';
 }

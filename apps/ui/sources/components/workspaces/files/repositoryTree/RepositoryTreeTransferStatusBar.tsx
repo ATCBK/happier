@@ -117,20 +117,31 @@ function DownloadRow(props: Readonly<{ state: Extract<WorkspaceDownloadState, { 
     );
 }
 
+function describeUploadFailureReason(reason: Extract<WorkspaceUploadState, { status: 'error' }>['reason'], machineName: string): string {
+    switch (reason) {
+        case 'unreachable': return t('projects.checkouts.notAnswering', { machine: machineName });
+        case 'declined': return t('files.transfers.failureReasons.declined');
+        case 'permission': return t('errors.permissionDenied');
+        case 'tooLarge': return t('files.transfers.failureReasons.tooLarge');
+        case 'unconfirmed': return t('files.transfers.failureReasons.unconfirmed');
+        case 'other': return t('files.transfers.failureReasons.other', { machine: machineName });
+    }
+}
+
 /**
  * A batch that ended in failure settles here, in words, and stays until dismissed: no dialog ever carries the
- * transport's own error text. A Machine that stopped answering says so by name.
+ * transport's own error text, and the line never says only that it failed. It says why: the Machine stopped
+ * answering (by name), the person did not approve it, a permission refused it, it is too large, the result is
+ * not known, or the Machine could not take it.
  */
 function UploadFailureRow(props: Readonly<{ state: Extract<WorkspaceUploadState, { status: 'error' }>; machineName: string; onDismiss: () => void }>) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const minimumInteractiveTargetSize = resolveMinimumInteractiveTargetSize(Platform.OS);
-    const label = props.state.unreachable
-        ? `${t('files.transfers.uploadFailed')} · ${t('projects.checkouts.notAnswering', { machine: props.machineName })}`
-        : t('files.transfers.uploadFailed');
+    const label = `${t('files.transfers.uploadFailed')} · ${describeUploadFailureReason(props.state.reason, props.machineName)}`;
     return (
         <View testID="repository-tree-upload-failure" style={styles.row}>
-            <Icon name={props.state.unreachable ? 'wifi-slash' : 'warning'} size={16} color={theme.colors.text.secondary} />
+            <Icon name={props.state.reason === 'unreachable' ? 'wifi-slash' : 'warning'} size={16} color={theme.colors.text.secondary} />
             <Text numberOfLines={2} style={styles.label}>{label}</Text>
             <IconButton
                 testID="repository-tree-upload-failure-dismiss"

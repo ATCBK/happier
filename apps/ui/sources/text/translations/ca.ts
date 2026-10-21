@@ -9622,6 +9622,12 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             downloading: ({ name, downloaded, totalBytes }: { name: string; downloaded: string; totalBytes: string }) =>
                 `Descarregant ${name} · ${downloaded} / ${totalBytes}`,
             uploadFailed: "No s'ha pogut pujar",
+            failureReasons: {
+                declined: "No aprovat",
+                tooLarge: "Massa gran per pujar-lo",
+                unconfirmed: "No es pot confirmar que s’hagi acabat · comprova la carpeta",
+                other: ({ machine }: { machine: string }) => `${machine} no l’ha pogut acceptar`,
+            },
         },
         upload: {
             conflicts: {

@@ -10304,6 +10304,12 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
         totalBytes: string;
       }) => `Téléchargement de ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Échec de l’envoi',
+      failureReasons: {
+          declined: "Non approuvé",
+          tooLarge: "Trop volumineux pour l’envoi",
+          unconfirmed: "Impossible de confirmer la fin · vérifiez le dossier",
+          other: ({ machine }: { machine: string }) => `${machine} n’a pas pu l’accepter`,
+      },
     },
     upload: {
       conflicts: {

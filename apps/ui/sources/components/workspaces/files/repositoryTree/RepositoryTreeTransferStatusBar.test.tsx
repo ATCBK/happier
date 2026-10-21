@@ -106,7 +106,7 @@ describe('RepositoryTreeTransferStatusBar', () => {
         expect(onCancel === 'uploads' ? onCancelUploads : onCancelDownload).toHaveBeenCalledTimes(1);
     });
 
-    it('settles a failed upload on the surface in words, naming a Machine that stopped answering, until it is dismissed', async () => {
+    it('settles a failed upload on the surface with its reason in words, never the transport\'s text and never bare, until it is dismissed', async () => {
         const { RepositoryTreeTransferStatusBar } = await import('./RepositoryTreeTransferStatusBar');
         const onDismissUploadFailure = vi.fn();
         const render = async (uploadState: Parameters<typeof RepositoryTreeTransferStatusBar>[0]['uploadState']) => await renderScreen(
@@ -121,14 +121,21 @@ describe('RepositoryTreeTransferStatusBar', () => {
         );
         const words = (screen: Awaited<ReturnType<typeof render>>) => JSON.stringify(screen.tree.toJSON());
 
-        const unreachable = await render({ status: 'error', error: 'signal is aborted without reason', unreachable: true });
-        expect(words(unreachable)).toContain('files.transfers.uploadFailed');
-        expect(words(unreachable)).toContain('projects.checkouts.notAnswering');
-        expect(words(unreachable)).not.toContain('signal is aborted');
-        const other = await render({ status: 'error', error: 'Direct import request failed with status 409' });
-        expect(words(other)).toContain('files.transfers.uploadFailed');
-        expect(words(other)).not.toContain('409');
-        expect(words(other)).not.toContain('notAnswering');
+        for (const [reason, key] of [
+            ['unreachable', 'projects.checkouts.notAnswering'],
+            ['declined', 'files.transfers.failureReasons.declined'],
+            ['permission', 'errors.permissionDenied'],
+            ['tooLarge', 'files.transfers.failureReasons.tooLarge'],
+            ['unconfirmed', 'files.transfers.failureReasons.unconfirmed'],
+            ['other', 'files.transfers.failureReasons.other'],
+        ] as const) {
+            const screen = await render({ status: 'error', error: 'Direct import request failed with status 409', reason });
+            expect(words(screen), reason).toContain('files.transfers.uploadFailed');
+            expect(words(screen), reason).toContain(key);
+            expect(words(screen), reason).not.toContain('409');
+        }
+        const other = await render({ status: 'error', error: 'signal is aborted without reason', reason: 'other' });
+        expect(words(other)).not.toContain('signal is aborted');
         await act(async () => { other.pressByTestId('repository-tree-upload-failure-dismiss'); });
         expect(onDismissUploadFailure).toHaveBeenCalledTimes(1);
         expect((await render({ status: 'canceled' })).findByTestId('repository-tree-upload-failure')).toBeNull();

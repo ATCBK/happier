@@ -10316,6 +10316,12 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
         totalBytes: string;
       }) => `Скачивание ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Не удалось загрузить',
+      failureReasons: {
+          declined: "Не одобрено",
+          tooLarge: "Слишком большой для загрузки",
+          unconfirmed: "Не удалось подтвердить завершение · проверьте папку",
+          other: ({ machine }: { machine: string }) => `${machine} не смог принять`,
+      },
     },
     upload: {
       conflicts: {

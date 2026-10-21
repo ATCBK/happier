@@ -8499,6 +8499,12 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             downloading: ({ name, downloaded, totalBytes }: { name: string; downloaded: string; totalBytes: string }) =>
                 `正在下載 ${name} · ${downloaded} / ${totalBytes}`,
             uploadFailed: '無法上傳',
+            failureReasons: {
+                declined: "未獲核准",
+                tooLarge: "檔案過大，無法上傳",
+                unconfirmed: "無法確認是否完成 · 請檢查資料夾",
+                other: ({ machine }: { machine: string }) => `${machine} 無法接收`,
+            },
         },
         upload: {
             conflicts: {

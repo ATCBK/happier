@@ -13,6 +13,7 @@ export { isTransferFinalizeRecoveryFailure, type TransferFinalizeRecoveryFailure
     type TransferFinalizeRecoveryAction, type TransferFinalizeRecoveryActionResult,
     type TransferFinalizeRecoveryContinuation } from './plumbing/directTransferFinalizeRecovery';
 export type { BulkTransferFileDestination } from './plumbing/bulkTransferFileDestination';
+export { classifyTransferFailure, type TransferFailureReason } from './plumbing/transferFailureCode';
 export { observeTransferOperation } from './plumbing/observeTransferOperation';
 export { callAdmittedFilesystemTransferActionRpc } from './plumbing/filesystemTransferActionClient';
 export { createTransferManifestHasher } from './plumbing/transferManifestHasher';

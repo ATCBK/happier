@@ -12269,6 +12269,12 @@ const enFiles = {
       totalBytes: string;
     }) => `Downloading ${name} · ${downloaded} / ${totalBytes}`,
     uploadFailed: "Couldn't upload",
+    failureReasons: {
+        declined: "Not approved",
+        tooLarge: "Too large to upload",
+        unconfirmed: "Not sure it finished · check the folder",
+        other: ({ machine }: { machine: string }) => `${machine} couldn’t take it`,
+    },
   },
   upload: {
     conflicts: {
