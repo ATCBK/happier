@@ -695,7 +695,7 @@ test('source-test native requirements belong to the selected package declaration
     vitest: 'vitest',
     'test:unit': 'yarn -s test:unit:vitest && yarn -s test:import-cycles',
     'test:unit:vitest': 'node scripts/runVitestShards.mjs --config vitest.config.ts',
-    'test:import-cycles': 'node scripts/checkImportCycles.mjs',
+    'test:import-cycles': 'node scripts/importCycleGuard.mjs',
   } };
   const owner = fileURLToPath(new URL('./remote_commands.mjs', import.meta.url));
   const requests = [
@@ -706,7 +706,16 @@ test('source-test native requirements belong to the selected package declaration
     { cwd: cliDir, args: ['yarn', 'test:unit'] },
     { cwd: cliDir, args: ['vitest', 'run', '--config', 'vitest.integration.config.ts', 'src/example.test.ts'] },
   ];
-  const nativePolicy = request => spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nrepo_root=$1; invoked_cwd=$2; projection_command_policy=$3; shift 3; resolve_native_command_policy "$@" || exit $?; printf '%s' "$policy_requiredTools"`,
+  const nativePolicy = request => spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}
+repo_root=$1; invoked_cwd=$2; projection_command_policy=$3; shift 3
+resolve_native_command_policy "$@" || exit $?
+# Workspace selection belongs to the launcher's canonical package-policy probe,
+# not the argv-only native classifier. Exercise that real projection too.
+if [ -n "$policy_workspace" ]; then
+  assignments=$(node "$projection_command_policy" --package-policy "$repo_root" "$invoked_cwd" "$@") || exit $?
+  eval "$assignments"
+fi
+printf '%s' "$policy_requiredTools"`,
     'policy', root, request.cwd, owner, ...request.args], { encoding: 'utf8' });
   for (const [declaration, expected] of [[undefined, ''], [['go'], 'go']]) {
     writeFileSync(join(cliDir, 'package.json'), JSON.stringify({ ...manifest,
@@ -717,7 +726,7 @@ test('source-test native requirements belong to the selected package declaration
       if (process.platform !== 'win32') {
         const native = nativePolicy(request);
         assert.equal(native.status, 0, native.stderr);
-        assert.equal(native.stdout, expected);
+        assert.equal(native.stdout, expected, request.args.join(' '));
       }
       if (declaration === undefined && policy.kind === 'source-test') {
         // A predecessor-shaped checkout has no native source owner or loader.
