@@ -208,6 +208,49 @@ describe('buildSessionModelPickerSections', () => {
         expect(suffixOf('Provider same', 'native')).toBe(t('agentInput.model.viaSource', { source: 'Claude: Work pool' }));
         expect(suffixOf('Provider same', 'connection:pc_work')).toBe(t('agentInput.model.viaSource', { source: 'Gateway · Work' }));
     });
+    it('names a Team model\'s source once, in its description, and still tells the native same-name row apart', () => {
+        const agentTargetKey = 'agent:happier.agent.codex/codex';
+        const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({
+            id: 'resource-1', teamId: 'team-1', displayName: 'Connected Pool', resourceRevision: 3,
+            readiness: { kind: 'available' }, recoveryAction: null,
+            mayBroker: true, mayReceiveDirect: false,
+            directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed',
+            providerModels: [{
+                selection: {
+                    kind: 'team_credential_provider_model', resourceId: 'resource-1', teamId: 'team-1',
+                    expectedResourceRevision: 3, deliveryMode: 'brokered', agentTargetKey, modelId: 'gpt-5.4',
+                },
+                descriptor: { id: 'gpt-5.4', name: 'gpt-5.4' },
+                application: {
+                    agentTargetKey,
+                    implementationIdentity: { pluginId: 'provider.openai', localId: 'openai' },
+                    endpointTemplateId: 'responses', protocol: 'openai-responses',
+                },
+                sourceRevision: 'source-v1',
+                availability: 'available',
+            }],
+            sourcePresentation: {
+                kind: 'provider',
+                provider: { identity: { pluginId: 'provider.openai', localId: 'openai' }, definitionRevision: 1 },
+            },
+        });
+        const sections = buildSessionModelPickerSections({
+            agentTargetKey, hiddenNativeModelKeys: new Set(),
+            nativeModels: [{ value: 'gpt-5.4', label: 'gpt-5.4' }], nativeSourceLabel: 'Codex',
+            providerProjectionAuthoritative: true, providerGroups: [], teamCredentialResources: [resource],
+        });
+        const favorites = { id: 'favorites', title: 'Favorites', options: sections.flatMap(section => section.options) };
+        const displayed = withSessionModelSourceSuffixes([favorites, ...sections], 'favorites');
+        const options = (id: string) => displayed.find(section => section.id === id)!.options;
+        // The native row is told apart by its suffix; the Team row says its source in its description, never twice.
+        expect(options('native')[0]?.labelSuffix).toBe(t('agentInput.model.viaSource', { source: 'Codex' }));
+        expect(options('team-resource:team-1:resource-1')[0]?.labelSuffix).toBeUndefined();
+        expect(options('favorites').map(option => option.labelSuffix)).toEqual([
+            t('agentInput.model.viaSource', { source: 'Codex' }),
+            undefined,
+        ]);
+        expect(options('team-resource:team-1:resource-1')[0]?.description).toContain('Connected Pool');
+    });
     it('projects an entitled direct Team resource into the canonical picker without exposing source authority', () => {
         const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({
             id: 'resource-1', teamId: 'team-1', displayName: 'Claude Enterprise',

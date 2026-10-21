@@ -63,8 +63,12 @@ export type SessionNativeModelOption = Readonly<{
     description?: string;
 }>;
 
-/** Where a picker row's model comes from; the picker shows it only where a name alone is ambiguous. */
-export type SessionModelPickerOptionSource = Readonly<{ label: string; native: boolean }>;
+/**
+ * Where a picker row's model comes from; the picker shows it only where a name alone is ambiguous.
+ * `inDescription` marks a row whose own description already names the source (a Team model), so the
+ * title never repeats it.
+ */
+export type SessionModelPickerOptionSource = Readonly<{ label: string; native: boolean; inDescription?: boolean }>;
 export type SessionModelPickerOption = OptionPickerOption<SessionModelPickerOptionValue> & Readonly<{
     source?: SessionModelPickerOptionSource;
 }>;
@@ -75,7 +79,8 @@ export type SessionModelPickerSection = Omit<OptionPickerSection<SessionModelPic
 /**
  * Design A labels: a model name that appears under more than one source, and a Provider or Team model
  * listed under Favorites (whose heading names no source), carry "· via <source>". Everything else is
- * already named by its section heading, so it stays plain. Equal names are never merged.
+ * already named by its section heading or its own description, so it stays plain. Equal names are
+ * never merged.
  */
 export function withSessionModelSourceSuffixes(
     sections: ReadonlyArray<SessionModelPickerSection>,
@@ -94,7 +99,7 @@ export function withSessionModelSourceSuffixes(
     return sections.map((section) => {
         let changed = false;
         const options = section.options.map((option) => {
-            if (!option.source) return option;
+            if (!option.source || option.source.inDescription) return option;
             const ambiguous = (sourcesByName.get(option.label.trim().toLowerCase())?.size ?? 0) > 1;
             if (!ambiguous && !(section.id === favoritesSectionId && !option.source.native)) return option;
             changed = true;
@@ -325,7 +330,7 @@ export function buildSessionModelPickerSections(input: Readonly<{
                 value: row.selection,
                 label: row.descriptor.name || row.selection.modelId,
                 searchText: row.selection.modelId,
-                source: { label: resource.displayName, native: false },
+                source: { label: resource.displayName, native: false, inDescription: true },
                 description: [resource.displayName, delivery, unavailableReason, recovery]
                     .filter((value): value is string => Boolean(value))
                     .join(' · '),
