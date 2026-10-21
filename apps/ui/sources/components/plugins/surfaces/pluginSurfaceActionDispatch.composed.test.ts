@@ -619,6 +619,43 @@ describe('Account Action placement through the executable dispatcher', () => {
         } finally { await activation.composition.unload(); accountLifetime.retire(); }
     });
 
+    it.each([false, true])('preserves the host Action branch before an identically named local daemon Action: explicit=%s', async (explicit) => {
+        const accountLifetime = clientAccountLifetime();
+        const target = definePlugin({ id: CALLER_PLUGIN_ID, version: '1.2.3', actions: {
+            'refresh-index': { title: 'Account entry', scopes: ['global'], surfaces: ['ui'], dangerLevel: 'safe',
+                execution: { target: 'account', account: { artifactId: CLIENT_ACTION_TARGET.artifactId,
+                    exportName: CLIENT_ACTION_TARGET.exportName } }, run: async () => null },
+            wait: { title: 'Local wait', surfaces: ['plugin'], dangerLevel: 'safe', execution: { target: 'daemon' }, run: async () => null },
+        } });
+        const parsed = ingestPluginManifestV2(target.manifest);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+        replacePluginAccountAvailabilityProjection({ scope: accountLifetime.scope, snapshot: { availabilityCursor: 1,
+            materializations: [], snapshots: [], intentReads: [{ pluginId: parsed.manifest.id, response: {
+                availabilityCursor: 1, hostingCapability: { enabled: false }, packageAssets: [], uiArtifacts: [],
+                intent: { pluginId: parsed.manifest.id, desiredVersion: parsed.manifest.version, enabled: true,
+                    offlineUiHosting: 'disabled', writableCollections: [], revision: 'one' },
+                release: { ref: { pluginId: parsed.manifest.id, version: parsed.manifest.version },
+                    archiveDigestSha256: `sha256:${'a'.repeat(64)}`, normalizedManifest: parsed.manifest,
+                    collectionContracts: [], uiSlots: [], packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+            } }] } });
+        const selected = readPluginAccountAvailability(accountLifetime.scope).readCurrentAccountExecution(CALLER_PLUGIN_ID);
+        if (selected.kind !== 'available') throw new Error('Expected current Account execution');
+        const activation = createClientActionActivation({ accountPlacement: true, accountLifetime,
+            accountManifest: target.manifest, occurrenceId: selected.custodyId, accountHandler: async (_value, context) => {
+                try { return await context.services.actions.execute(explicit ? { pluginId: CALLER_PLUGIN_ID, localId: 'wait' } : 'wait', {}); }
+                catch (error) { if (isPluginError(error)) return { code: error.code }; throw error; }
+            } });
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({}));
+        await activation.composition.unload();
+        try {
+            await activation.composition.reconcile([activation.activation]);
+            expect(await dispatchPluginSurfaceAction({ action: { pluginId: CALLER_PLUGIN_ID, localId: activation.action.id }, input: {},
+                clientAction: {}, pluginUiProjection: activation.projection, resolveContributedAction: resolveExactClientAction(activation.action),
+                hostAction: { execute: executor.execute, context: { serverId: accountLifetime.scope.serverId, runtimeAccountId: accountLifetime.scope.accountId } },
+            })).toEqual({ ok: true, result: { code: explicit ? 'plugin_action_machine_required' : 'invalid_parameters' } });
+        } finally { await activation.composition.unload(); accountLifetime.retire(); }
+    });
+
     it('retains the UI origin at the strict Machine boundary of a nested Account Action', async () => {
         const accountLifetime = clientAccountLifetime();
         const sourceId = 'acme.provider-source';

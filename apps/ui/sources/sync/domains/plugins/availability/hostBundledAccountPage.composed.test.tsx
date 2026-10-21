@@ -55,6 +55,12 @@ function AccountDetail() {
         React.createElement("Text", { testID: "account-detail-local-machine-invoke", onPress: async () => {
             setResult(await hostApi.executeAction("nested-local", {}));
         } }, "Read local source"),
+        React.createElement("Text", { testID: "account-detail-host-invoke", onPress: async () => {
+            setResult(await hostApi.executeAction("nested-host", {}));
+        } }, "Use host Action"),
+        React.createElement("Text", { testID: "account-detail-explicit-invoke", onPress: async () => {
+            setResult(await hostApi.executeAction("nested-explicit", {}));
+        } }, "Use local Action"),
         React.createElement("Text", { testID: "account-detail-local-invoke", onPress: async () => {
             setResult(await hostApi.executeAction("read", {}));
         } }, "Read Account"),
@@ -67,6 +73,12 @@ module.exports.activate = function(api) { api.actions.register("read", async (_i
     catch (error) { return { code: error.code }; }
 }); api.actions.register("nested-local", async (_input, context) => {
     try { return await context.services.actions.execute("local-machine", {}); }
+    catch (error) { return { code: error.code }; }
+}); api.actions.register("nested-host", async (_input, context) => {
+    try { return await context.services.actions.execute("wait", {}); }
+    catch (error) { return { code: error.code }; }
+}); api.actions.register("nested-explicit", async (_input, context) => {
+    try { return await context.services.actions.execute({ pluginId: "happier.fixture", localId: "wait" }, {}); }
     catch (error) { return { code: error.code }; }
 }); };`),
     machineRpc: vi.fn<(request: Readonly<{ method: string; payload: unknown }>) => unknown>(),
@@ -92,7 +104,13 @@ vi.mock('./generatedBundledPluginUiArtifacts', async () => {
                 execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
             'nested-local': { title: 'Read local source', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
                 execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
+            'nested-host': { title: 'Use host Action', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
+                execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
+            'nested-explicit': { title: 'Use local Action', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
+                execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
             'local-machine': { title: 'Local Machine source', scopes: ['global'], surfaces: ['plugin'], placementBindings: [], dangerLevel: 'safe',
+                execution: { target: 'daemon' }, run: async () => null },
+            wait: { title: 'Local wait', scopes: ['global'], surfaces: ['plugin'], placementBindings: [], dangerLevel: 'safe',
                 execution: { target: 'daemon' }, run: async () => null } },
         ui: { renderers: [{ id: 'account', kind: 'reactNative', artifact: 'account', requiredHostMethods: ['readStoredImage', 'executeAction'] },
             { id: 'account-detail', kind: 'reactNative', artifact: 'account', requiredHostMethods: ['executeAction'] }],
@@ -163,8 +181,13 @@ afterEach(async () => {
 });
 
 it.each([
-    ['qualified with Machine', true, false], ['qualified no Machine', false, false], ['bare local no Machine', false, true],
-] as const)('keeps Account child authority while routing its nested source: %s', async (_label, withMachine, local) => {
+    ['qualified with Machine', true, 'qualified'], ['qualified no Machine', false, 'qualified'], ['bare local no Machine', false, 'bare'],
+    ['bare host Action precedence', false, 'host'], ['explicit local host-name no Machine', false, 'explicit'],
+] as const)('keeps Account child authority while routing its nested source: %s', async (_label, withMachine, reference) => {
+    const nestedAction = reference === 'bare' ? 'nested-local' : reference === 'host' ? 'nested-host'
+        : reference === 'explicit' ? 'nested-explicit' : 'nested';
+    const invokeTestId = reference === 'bare' ? 'account-detail-local-machine-invoke' : reference === 'host'
+        ? 'account-detail-host-invoke' : reference === 'explicit' ? 'account-detail-explicit-invoke' : 'account-detail-invoke';
     const machineId = 'provider-machine';
     await account.restore({ machines: withMachine ? [createMachineFixture({ id: machineId, active: true, activeAt: Date.now() })] : [],
         features: enabledPluginFeatures, serverIdentityId: 'srv_account_child' });
@@ -216,14 +239,16 @@ it.each([
         await waitForHomeGovernance(async () => {
             await flushHookEffects();
             expect(screen.tree.root.findAllByProps({ testID: 'account-detail-invoke' })).toHaveLength(1);
-            const nested = readCurrentAppShellPluginUiProjection()?.actionsById[local ? 'happier.fixture/nested-local' : 'happier.fixture/nested'];
+            const nested = readCurrentAppShellPluginUiProjection()?.actionsById[`happier.fixture/${nestedAction}`];
             expect(nested).toBeDefined();
             expect(nested && resolvePluginUiClientActionRegistration({ action: nested, platform: resolvePluginUiClientExecutablePlatform() })).not.toBeNull();
         });
         packaged.machineRpc.mockClear();
-        await act(async () => { await screen.tree.root.findByProps({ testID: local ? 'account-detail-local-machine-invoke' : 'account-detail-invoke' }).props.onPress(); });
+        await act(async () => { await screen.tree.root.findByProps({ testID: invokeTestId }).props.onPress(); });
         const result = JSON.parse(screen.tree.root.findByProps({ testID: 'account-detail-result' }).props.children);
-        expect(result).toEqual(withMachine ? { rows: ['provider'] } : { code: 'plugin_action_machine_required' });
+        expect(result).toEqual(withMachine ? { rows: ['provider'] } : {
+            code: reference === 'host' ? 'invalid_parameters' : 'plugin_action_machine_required',
+        });
         expect(invocations).toHaveLength(withMachine ? 1 : 0);
         if (withMachine) {
             expect(invocations[0]).toMatchObject({ machineId, executionSurface: 'ui', invocation: {

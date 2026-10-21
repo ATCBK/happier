@@ -1204,7 +1204,8 @@ async function executeClientContributedAction(
                             }),
                             isCurrent: () => current.isCurrent() && options.isCurrent(),
                         };
-                        const nestedIdentity = resolveContributedActionIdentity(nestedInput);
+                        const nestedIdentity = typeof action === 'string' && PluginInvocableActionIdSchema.safeParse(action).success
+                            ? null : resolveContributedActionIdentity(nestedInput);
                         if (nestedIdentity && !nestedInput.contributedAction) {
                             const projected = resolveProjectedContributedAction(nestedInput, nestedIdentity);
                             const declaration = readPluginAccountAvailability(accountLifetime.scope).readCurrentAccountExecution(nestedIdentity.pluginId);
