@@ -74,6 +74,11 @@ export function readHomeAccountReadRevision(serverId: string): number {
     return homeAccountReadRevisions.get(resolveServerProfileScopeIdForIdentifier(serverId)) ?? 0;
 }
 
+/** Forget raw read joins without asserting that a domain mutation committed. */
+export function invalidateHomeAccountReadJoins(serverId: string): void {
+    homeAccountReadRevisions.set(resolveServerProfileScopeIdForIdentifier(serverId), readHomeAccountReadRevision(serverId) + 1);
+}
+
 type HomeCredentialChangeObserver = (event: HomeCredentialMutationEvent) => void;
 const homeCredentialChangeObservers = new Set<HomeCredentialChangeObserver>();
 let unsubscribeHomeCredentialMutations: (() => void) | null = null;
@@ -128,7 +133,7 @@ export function publishHomeAccountChange(
 ): void {
     // Advance before any consumer can synchronously start its refresh. An adapter
     // listener would depend on insertion order and could join a pre-wake read.
-    homeAccountReadRevisions.set(resolveServerProfileScopeIdForIdentifier(serverId), readHomeAccountReadRevision(serverId) + 1);
+    invalidateHomeAccountReadJoins(serverId);
     if (homeAccountChangeObservers.size === 0) return;
     const event = Object.freeze({
         serverId,
