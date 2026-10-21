@@ -11,6 +11,7 @@ import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverSc
 import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 
 export type MachineSessionCatalogProbeParams = Readonly<{
     machineId: string;
@@ -71,6 +72,8 @@ function hasCatalogSnapshot(metadata: unknown, key: 'sessionVendorPluginCatalogV
     const value = metadata[key];
     if (Array.isArray(value)) return true;
     if (!isRecord(value)) return false;
+    // A failed observation remains visible, but is not a successful snapshot.
+    if (typeof value.diagnostic === 'string') return false;
     if (value.unsupported === true) return true;
     if (key === 'sessionVendorPluginCatalogV1') {
         return Array.isArray(value.vendorPlugins) || Array.isArray(value.plugins) || Array.isArray(value.items);
@@ -116,12 +119,17 @@ async function listSkillCatalog(
                 payload: cwd ? { cwd } : {},
                 signal,
             });
+        if (isRecord(response) && response.ok === false) {
+            return SessionSkillCatalogListResponseV1Schema.parse({ skills: [], diagnostic: typeof response.errorCode === 'string'
+                ? response.errorCode : 'session_skill_catalog_unavailable' });
+        }
         const parsed = SessionSkillCatalogListResponseV1Schema.safeParse(response);
         if (parsed.success) return parsed.data;
-    } catch {
-        return undefined;
+        return SessionSkillCatalogListResponseV1Schema.parse({ skills: [], diagnostic: 'invalid_session_skill_catalog_response' });
+    } catch (error: unknown) {
+        if (signal?.aborted) return undefined;
+        return SessionSkillCatalogListResponseV1Schema.parse({ skills: [], diagnostic: readRpcErrorCode(error) ?? 'session_skill_catalog_unavailable' });
     }
-    return undefined;
 }
 
 async function listInactiveVendorPluginCatalog(sessionId: string, signal: AbortSignal | undefined): Promise<unknown> {
