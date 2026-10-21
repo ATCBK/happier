@@ -92,6 +92,12 @@ remains in its normal encrypted/plain message envelope. Explicit answers and
 passes name the original input; an unrelated later final or publication cannot
 fulfill it. A committed explicit publication wins over automatic final fallback.
 Failed, cancelled, passed, and terminal-without-result outcomes remain distinct.
+For a cancelled foreground turn with an exact committed assistant-message anchor,
+the outcome retains that result reference. The authorized result reader resolves
+its `partialText` and message reference for inline replies or late return;
+original-input progress contains no partial plaintext. A later assistant row
+cannot replace missing or unreadable partial content. Cancellation without a
+committed partial keeps its payload-free outcome.
 
 Protected Workflow V2 invocation inputs use that same reply intent and original
 custody, retaining their derived Workflow input localId through Pending retirement.
@@ -133,7 +139,10 @@ and `inline` or `release`; the current source Session delegates to its existing
 reply mutation. It cannot author an outcome or choose another return destination.
 
 Native Run Stop settles the exact admitted turn as cancelled using the host's
-existing terminal fact, even after its native transcript writer retires. A crash
+existing terminal fact, even after its native transcript writer retires. Native
+Run stopped-partial publication remains unimplemented: the current server cannot
+prove a native output row's exact turn from its encrypted metadata, so Stop
+continues to publish cancellation without a partial result reference. A crash
 between a native terminal transcript commit and the reply-custody callback can
 still leave the ask pending. Current Machine return recovery reads only fulfilled
 original custody and cannot author outcomes; re-asking remains the recovery for
