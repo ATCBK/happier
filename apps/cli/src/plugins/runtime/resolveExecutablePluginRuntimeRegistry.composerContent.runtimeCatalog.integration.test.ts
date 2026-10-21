@@ -15,6 +15,8 @@ import { projectLoadedPluginContributes } from '@/plugins/projection/registry/re
 import { createMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { createActiveDaemonComposerMediaStageStore } from '@/transfers/staging/composerMediaStageStore';
 import { createDaemonPluginTransferRpcResolver } from '@/plugins/daemon/runtimeOwner';
+import { releaseComposerMediaStageViaLocalRpc } from '@/transfers/rpc/uploadComposerMediaStageViaLocalRpc';
+import { createDirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 
 import { resolveExecutablePluginRuntimeRegistry } from './resolveExecutablePluginRuntimeRegistry';
 
@@ -45,10 +47,17 @@ describe('executable plugin Composer content invocation binding', () => {
         let stagedHandle: ReturnType<typeof ComposerContentHandleV1Schema.parse> | null = null;
         let apiMachine: ApiMachineClient | null = null;
         const previousWorkingDirectory = process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY;
+        const preparedTransfers = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
 
         try {
             process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = pluginRoot;
             apiMachine = new ApiMachineClient('token', createMachine(machineId));
+            apiMachine.setRPCHandlers({
+                spawnSession: async () => ({ type: 'error', errorMessage: 'No fixture Session launch' }),
+                stopSession: async () => true,
+                requestShutdown() {},
+                preparedMachineTransfer: { request: preparedTransfers.requestPreparedTransfer },
+            });
             await mkdir(join(pluginRoot, '.happier-plugin'), { recursive: true });
             await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify({
                 schemaVersion: 2,
@@ -145,9 +154,19 @@ describe('executable plugin Composer content invocation binding', () => {
                 executionTarget: stagedHandle.executionTarget,
                 owner: stagedHandle.owner,
             })).resolves.toMatchObject({ status: 'ready', handle: stagedHandle });
+            const rpc = createDaemonPluginTransferRpcResolver(() => apiMachine)();
+            if (!rpc) throw new Error('Daemon transfer owner is unavailable');
+            await releaseComposerMediaStageViaLocalRpc({ rpc, handle: stagedHandle });
+            await expect(createActiveDaemonComposerMediaStageStore({ machineId }).inspectForFinalization({
+                handle: stagedHandle,
+                executionTarget: stagedHandle.executionTarget,
+                owner: stagedHandle.owner,
+            })).resolves.toMatchObject({ status: 'unavailable', reason: 'notFound' });
+            stagedHandle = null;
         } finally {
             await runtime?.dispose();
             await apiMachine?.shutdown();
+            await preparedTransfers.stop();
             if (stagedHandle) {
                 await createActiveDaemonComposerMediaStageStore({ machineId }).release({
                     handle: stagedHandle,

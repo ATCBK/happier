@@ -6485,7 +6485,10 @@ export async function resolveExecutablePluginRuntimeRegistry(
             ?? readCurrentPluginSourceCustody(input.identity.pluginId);
         if (!bootstrapOccurrenceId || !bootstrapSourceCustody) return null;
         if (preparation === 'bootstrapOnly') {
-            if (bootstrapSourceCustody.kind === 'development' || !readsInvocationCurrent()) return null;
+            // A peer attests its current source, but borrows execution and
+            // request-auth custody from the hub. Development source admission
+            // is valid here too; retained reconstruction has its own attestation.
+            if (!readsInvocationCurrent()) return null;
             return Object.freeze({
                 identity: Object.freeze({ ...input.identity }),
                 occurrenceId: bootstrapOccurrenceId,

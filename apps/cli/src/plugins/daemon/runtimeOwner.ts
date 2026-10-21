@@ -88,13 +88,13 @@ const COLD_START_READINESS_STAGE_REASONS = Object.freeze({
 
 /** Bind plugin file materialization to the current daemon's transfer owner. */
 export function createDaemonPluginTransferRpcResolver(
-  resolveMachine: () => Pick<ApiMachineClient, 'invokeLocalMachineAction'> | null,
+  resolveMachine: () => Pick<ApiMachineClient, 'getHostLocalTransferRpcHandler'> | null,
 ): () => RpcHandlerInvoker | null {
   return () => {
     const machine = resolveMachine();
-    // Session/filesystem admission already ran in the plugin service owner.
-    // The peer carrier instead requires a verified remote Account grant.
-    return machine ? { invokeLocal: (method, input, options) => machine.invokeLocalMachineAction(method, input, options) } : null;
+    // The public Machine table serves prepared data-plane envelopes after startup.
+    // Session/filesystem admission still belongs to the same upload lifecycle.
+    return machine?.getHostLocalTransferRpcHandler() ?? null;
   };
 }
 
