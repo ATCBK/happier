@@ -216,12 +216,44 @@ export function MediaViewerSpecimen() {
           filePath="assets/planet.jpg"
           kind="image"
           alphaCapable={false}
-          before={{ kind: 'unreadable', reason: 'The revision bytes do not match their content hash.' }}
+          before={{ kind: 'unreadable', cause: 'unverified', reason: 'The revision bytes do not match their content hash.' }}
           after={{ kind: 'present', uri: assetUri(SAMPLES.planetLight), sizeBytes: null }}
           beforePreviewInput={planetDark}
           afterPreviewInput={planetLight}
           beforeLabel="turn 4"
           afterLabel="working tree"
+        />
+      </View>
+
+      <Text variant="heading" style={{ color: theme.colors.text.primary }}>Image compare · no preview, and why</Text>
+      <View style={[styles.compare, { borderColor: theme.colors.border.default }]}>
+        <ImageCompare
+          testID="dev-media-compare-too-large"
+          filePath="assets/merced-river.tiff"
+          kind="image"
+          alphaCapable={false}
+          before={{ kind: 'present', uri: assetUri(SAMPLES.planetDark), sizeBytes: null }}
+          after={{ kind: 'noPreview', reason: 'too_large', sizeBytes: 40_265_318 }}
+          beforePreviewInput={planetDark}
+          afterPreviewInput={planetLight}
+          beforeLabel="HEAD"
+          afterLabel="working tree"
+          onRetry={() => undefined}
+        />
+      </View>
+      <View style={[styles.compare, { borderColor: theme.colors.border.default }]}>
+        <ImageCompare
+          testID="dev-media-compare-missing"
+          filePath="assets/icon.heic"
+          kind="image"
+          alphaCapable={false}
+          before={{ kind: 'unreadable', cause: 'missing', reason: 'not_found' }}
+          after={{ kind: 'noPreview', reason: 'unsupported' }}
+          beforePreviewInput={planetDark}
+          afterPreviewInput={planetLight}
+          beforeLabel="turn 4"
+          afterLabel="working tree"
+          onRetry={() => undefined}
         />
       </View>
 

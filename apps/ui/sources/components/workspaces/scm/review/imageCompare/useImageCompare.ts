@@ -65,7 +65,9 @@ export function useImageCompare(input: Readonly<{
         : projectImageComparePreview(before);
     const afterPreview = captured && !afterAbsent && !afterBlobId
         ? { status: 'error' as const, error: 'blob_unavailable', errorCode: 'blob_unavailable' }
-        : projectImageComparePreview(captured ? capturedAfter : liveAfter);
+        // An over-budget live after says its size; the working-tree listing knows it.
+        : projectImageComparePreview(captured ? capturedAfter
+            : liveAfter.status === 'error' ? { ...liveAfter, sizeBytes: live?.sizeBytes ?? null } : liveAfter);
     const kind = viewer.kind === 'svg' ? 'svg' as const : 'image' as const;
     const beforeItem: MediaStageItem = { kind: beforeViewer.kind === 'svg' ? 'svg' : 'image', title: input.beforeTitle ?? input.filePath, source: before.previewInput,
         ...('sizeBytes' in before ? { sizeBytes: before.sizeBytes } : {}), ...(input.openFile ? { openFile: input.openFile } : {}) };

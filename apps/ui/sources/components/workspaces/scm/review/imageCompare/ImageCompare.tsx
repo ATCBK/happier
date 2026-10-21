@@ -6,6 +6,7 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import {
   ImageWell,
@@ -22,7 +23,7 @@ import { StatusPill } from '@/components/ui/status/StatusPill';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { t } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
 import type { ImageCompareSide } from './imageCompareModel';
 
 type Mode = 'sideBySide' | 'swipe' | 'onion';
@@ -55,13 +56,18 @@ function formatBytesDelta(
   return `${delta < 0 ? '−' : '+'}${kb} KB`;
 }
 
-function sideReason(side: ImageCompareSide): string | null {
-  if (side.kind === 'unreadable') return t('hunkReview.imageUnreadable');
-  if (side.kind === 'noPreview')
-    return side.reason === 'loading'
-      ? t('hunkReview.imageLoading')
-      : t('hunkReview.imageNoPreview');
-  return null;
+/** Why a side shows no picture, in one quiet line; none of these can be fixed by reading again. */
+function sideReason(side: ImageCompareSide): Readonly<{ title: string; reason?: string }> | null {
+  if (side.kind === 'unreadable')
+    return { title: side.cause === 'missing' ? t('hunkReview.imageMissing') : t('hunkReview.imageUnreadable') };
+  if (side.kind !== 'noPreview') return null;
+  switch (side.reason) {
+    case 'loading': return { title: t('hunkReview.imageLoading') };
+    case 'too_large': return { title: t('hunkReview.imageTooLarge'),
+      ...(side.sizeBytes !== null ? { reason: formatHappierDataBytes(side.sizeBytes, { kind: 'storage', locale: getPreferredLanguage() }) } : {}) };
+    case 'unsupported': return { title: t('hunkReview.imageUnsupported') };
+    default: return { title: t('hunkReview.imageNoPreview') };
+  }
 }
 
 /**
@@ -132,9 +138,12 @@ export function ImageCompare(props: ImageCompareProps) {
       return (
         <SurfaceStateCard
           testID={`image-compare-${side}-state`}
-          kind={state.kind === 'unreadable' ? 'error' : 'empty'}
+          // Only bytes that failed to verify are a failure; a side that is not there, too big or in an
+          // unsupported format is a fact about the file, so it stays quiet.
+          kind={state.kind === 'unreadable' && state.cause === 'unverified' ? 'error' : 'empty'}
           size="line"
-          title={reason}
+          title={reason.title}
+          {...(reason.reason ? { reason: reason.reason } : {})}
         />
       );
     }
