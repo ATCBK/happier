@@ -187,6 +187,10 @@ under the same exact runner and Agent-source custody as a committed open; it
 never projects refusal as a successful native open. A cold Session startup
 operation retires the runner it spawned through the daemon's normal Stop owner
 before reporting that original failure; it does not wait for a person to Stop.
+The observation retains that exact tracked runner and its copied birth identity
+for Stop's existing exact-runner selection. A replacement of the same Session
+does not inherit the refused runner's cleanup or Stop mark. Failed or incomplete
+retirement still reports the original typed startup refusal.
 Workflow consumes the failed operation before offering its first input. Native
 fork retains its existing child-retirement scope. A refused host without an
 observed startup operation retains the late-input consumer described above.
