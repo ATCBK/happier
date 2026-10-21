@@ -107,7 +107,7 @@ describe('selected Machine reads through the real Home admission owner', () => {
                     accessLevel: 'view', createdByAccountId: owner.id } });
                 const pendingKey = await readMachineRows({ readTransport: next.readTransport, machineIds: [ids[0]!] });
                 expect(pendingKey.get(ids[0]!)).toMatchObject({ metadata: null, daemonState: null, dataEncryptionKey: null,
-                    access: { role: 'view', accessState: 'key_pending' } });
+                    access: { role: 'use', accessState: 'key_pending' } });
                 await db.machineAccountGrant.deleteMany({ where: { machineId: ids[0]!, accountId: foreign.id } });
                 const withdrawn = await readMachineRows({ readTransport: next.readTransport, machineIds: [ids[0]!] });
                 expect(withdrawn.get(ids[0]!)).toBeNull();

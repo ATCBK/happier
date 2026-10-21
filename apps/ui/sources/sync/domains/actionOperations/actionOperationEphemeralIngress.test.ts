@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Socket } from 'socket.io-client';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineReadHttpResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import '@/sync/syncEngine';
@@ -40,7 +40,7 @@ describe('normalizeActionOperationEphemeralIngress', () => {
         const startedGet = new Promise<void>(resolve => { getStarted = resolve; });
         const heldGet = new Promise<void>(resolve => { releaseGet = resolve; });
         installDisconnectedServerSocketBoundary((socket, serverUrl) => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             if (serverUrl === 'https://secondary-operation.test') secondarySocket = socket;
             socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: SocketRpcRequestPayload) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error(`Unexpected socket event: ${event}`);
@@ -59,9 +59,12 @@ describe('normalizeActionOperationEphemeralIngress', () => {
             { key: 'focused', serverUrl: 'https://focused-operation.test', accountId: 'focused-account' },
         ], route: request => {
             if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-            if (request.path === '/v1/machines/machine-1') return Response.json({ machine: {
-                id: 'machine-1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            } });
+            if (request.path === '/v1/machines/read-batch' && request.method === 'POST') {
+                return createMachineReadBatchResponseFixture(request.body, id => createPlainMachineRowFixture({ id, accountId: 'secondary-account' }));
+            }
+            if (request.path === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({
+                id: 'machine-1', accountId: 'secondary-account',
+            }) });
             return undefined;
         } });
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
@@ -137,7 +140,7 @@ describe('normalizeActionOperationEphemeralIngress', () => {
                 script: { name: 'check', source: { kind: 'command', command: 'check' } } } };
         let rpcSnapshot = snapshot;
         installDisconnectedServerSocketBoundary(socket => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             sockets.push(socket);
             socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: SocketRpcRequestPayload) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error(`Unexpected socket event: ${event}`);
@@ -152,8 +155,9 @@ describe('normalizeActionOperationEphemeralIngress', () => {
         });
         const bridge = await loadSyncSingletonForTests();
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://plain-operation-restored.test',
-            accountId: 'plain-restored-account', request: async (url) => {
+            accountId: 'plain-restored-account', request: async (url, init) => {
                 const path = new URL(String(url)).pathname;
+                if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'plain-restored-account' }));
                 if (path === '/v1/account/encryption') {
                     modeReads += 1;
                     return Response.json({ mode: 'plain', updatedAt: 1 });
@@ -162,12 +166,13 @@ describe('normalizeActionOperationEphemeralIngress', () => {
                     currentnessReads += 1;
                     return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 }
-                if (path === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({
-                    id: 'machine-1', accountId: 'plain-restored-account',
-                }) });
+                const machineResponse = createPlainMachineReadHttpResponseFixture(path, init, 'plain-restored-account');
+                if (machineResponse) return machineResponse;
                 return Response.json({ error: 'not_found' }, { status: 404 });
             } });
         const { actionOperationStore } = await import('./actionOperationStore');
+        const { storage } = await import('@/sync/domains/state/storage');
+        await expect.poll(() => storage.getState().profileScope?.accountId).toBe('plain-restored-account');
         actionOperationStore.reset();
         const deliver = (value: ActionOperationSnapshotV1) => {
             rpcSnapshot = value;
@@ -184,7 +189,9 @@ describe('normalizeActionOperationEphemeralIngress', () => {
             deliver(snapshot);
             await vi.waitFor(() => expect([...actionOperationStore.getSnapshot().operationsByKey.values()])
                 .toEqual([{ serverId: connection.home.id, snapshot }]));
-            expect(modeReads).toBe(beforeMode);
+            // Initial descriptive mode borrows the warm Account observation;
+            // the independent qualified Machine RPC retains one fresh admission.
+            expect(modeReads).toBe(beforeMode + 1);
             expect(currentnessReads).toBe(beforeCurrentness);
             holdRead = true;
             deliver({ ...snapshot, operationId: 'late-retired-script' });
