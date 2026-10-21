@@ -4654,7 +4654,12 @@ export async function withDefaultActionExecuteContext<TResult>(
     settings: Awaited<ReturnType<typeof readActionAdmissionSettings>>) => Promise<TResult>,
   executedActionId?: ActionId,
 ): Promise<TResult> {
-  const account = await captureLazyActionAccountContext(context.serverId, context.signal);
+  // A retained host invocation may withdraw its pending approval after its
+  // intent signal ends. Its captured Account still owns that final Artifact
+  // CAS; actual credential/Account retirement continues to revoke the carrier.
+  const retained = opts?.hostActionApprovalLifetime;
+  const account = await captureLazyActionAccountContext(context.serverId,
+    retained?.signal === context.signal ? undefined : context.signal);
   const archiveInvocation = createSessionArchiveInvocation(executedActionId, context.archiveInput, context.archiveOperation, context.serverId, context.defaultSessionId);
   try {
     try {
@@ -4667,7 +4672,7 @@ export async function withDefaultActionExecuteContext<TResult>(
       // Return an effect's actual disposition to its captured invoker. Retirement
       // suppresses Account projection publication, but cannot rewrite an acknowledgement.
       // Reads still require current custody before disclosing Account content.
-      account.assertResultCurrent(effectClass);
+      account.assertResultCurrent(effectClass, context.signal);
       return result;
     } catch (error) {
       if (!context.onCurrentError) throw error;

@@ -8,7 +8,7 @@ import type {
   ActionSettingsOverride,
 } from './actionSettings.js';
 import { resolveActionApprovalFlow, type ActionApprovalFlow, type ActionApprovalResult } from './actionApprovalMetadata.js';
-import { getActionSpec, type ActionSpec } from './actionSpecs.js';
+import { getActionSpec, resolveActionExecutionPlacementForInput, type ActionSpec } from './actionSpecs.js';
 import { isAgentOrUnresolvedSurface, resolveApprovalSurface } from './actionApprovalSurface.js';
 export { isAgentOrUnresolvedSurface } from './actionApprovalSurface.js';
 
@@ -264,7 +264,14 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
       || args.context?.surface === 'ui'
       || args.defaultConfirmation === true
     );
-  const flow = required && (args.retainHostOperationApproval === true || retainPluginSettingsFieldIntent
+  // A mounted native read retains interest, not the Machine's replay authority.
+  // Its durable operands/result still belong to the exact daemon. The original
+  // host waits for that recorded receipt and can withdraw its abandoned intent.
+  const retainedNativeRead = args.retainHostOperationApproval === true
+    && args.context?.surface === 'ui' && (!args.context.actionCaller || args.context.actionCaller.kind === 'host')
+    && args.spec.sideEffectClass === 'read' && !custodyStaysOnLiveInvocation
+    && resolveActionExecutionPlacementForInput(args.spec, args.input) === 'machine';
+  const flow = required && (args.retainHostOperationApproval === true && !retainedNativeRead || retainPluginSettingsFieldIntent
     || custodyStaysOnLiveInvocation && args.spec.approval.flow === 'blocking')
     ? 'blocking'
     : required && (mustReturnApprovalCustody

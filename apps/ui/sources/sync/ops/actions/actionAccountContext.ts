@@ -95,7 +95,9 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             throwIfAborted(signal);
             assertAccountCurrent();
         };
-        const assertResultCurrent = (effectClass?: ActionEffectClass) => { if (!isEffectResult(effectClass)) assertCurrent(); };
+        const assertResultCurrent = (effectClass?: ActionEffectClass, invocationSignal = signal) => {
+            if (!isEffectResult(effectClass)) { throwIfAborted(invocationSignal); assertAccountCurrent(); }
+        };
         const unavailable = async (): Promise<never> => { throw new Error('Account content is unavailable in an embed Session'); };
         const artifactUnavailable = async (): Promise<never> => { assertCurrent(); throw artifactContentUnavailable(); };
         const workflowArtifacts: WorkflowDefinitionArtifactOperations = {
@@ -193,7 +195,9 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
         assertAccountCurrent();
     };
     // Disclose read content only in its current scope; an effect receipt stays true for its invoker.
-    const assertResultCurrent = (effectClass?: ActionEffectClass) => { if (!isEffectResult(effectClass)) assertCurrent(); };
+    const assertResultCurrent = (effectClass?: ActionEffectClass, invocationSignal = signal) => {
+        if (!isEffectResult(effectClass)) { throwIfAborted(invocationSignal); assertAccountCurrent(); }
+    };
     try {
         throwIfAborted(signal);
         const credentials = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId });

@@ -4914,7 +4914,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
 
         const res = await deps.approvalsCreate({ request, serverId: normalizeId(ctx.serverId) || null });
         const artifactId = normalizeId(res.artifactId);
-        if (approvalRouting.flow === 'blocking') {
+        // Retained native reads keep exact-daemon/deferred replay, but their
+        // original host still owns its interest until that recorded result.
+        if (approvalRouting.flow === 'blocking' || retainHostOperationApproval) {
           if (!deps.approvalsWaitForDecision || !deps.approvalsUpdate) {
             return { ok: false, errorCode: 'approvals_not_supported', error: 'approvals_not_supported' };
           }
@@ -4930,6 +4932,14 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               serverId: effectiveServerId,
               ...(ctx.signal ? { signal: ctx.signal } : {}),
             });
+          } catch (error) {
+            // Only an explicitly retained host intent owns withdrawal when it
+            // ends. Ordinary deferred approvals and accepted operations keep
+            // their durable custody. The incumbent transition/CAS below refuses
+            // cancellation if a decision or effect claim already won the race.
+            if (!retainHostOperationApproval || !hostApprovalLifetime || !('actionId' in hostApprovalLifetime)
+                || !ctx.signal?.aborted) throw error;
+            decision = { decision: 'canceled', request };
           } finally {
             // Consent, rejection, cancellation and failed observation all leave
             // this hold. The retained domain owner supplies its next progress.

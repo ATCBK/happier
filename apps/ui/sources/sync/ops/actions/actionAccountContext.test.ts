@@ -20,6 +20,10 @@ import { createWidgetDefinitionArtifactPortV1 } from '@happier-dev/protocol/widg
 import type { WidgetDefinitionV1 } from '@happier-dev/protocol/widgets/widgetDefinitionV1';
 import NativeAbortController from 'abort-controller';
 import { createArtifact as createArtifactApi, fetchArtifact as fetchArtifactApi } from '@/sync/api/artifacts/apiArtifacts';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+
+// Collect the real Action graph outside the finite operation's deadline.
+const { withDefaultActionExecuteContext } = await import('./defaultActionExecutor');
 
 let homes: Awaited<ReturnType<typeof serveAccountHomes>>;
 let accountMode: 'plain' | 'e2ee';
@@ -58,6 +62,41 @@ it('retains original Account-only cleanup custody after user cancellation, but n
         expect(account.accountOnlyLifetime.isCurrent()).toBe(false);
         expect(() => account.assertAccountCurrent()).toThrow('action_account_scope_changed');
     } finally { account.dispose(); }
+});
+
+it('withholds a retained read after intent abort while its Account-only cleanup still commits', async () => {
+    const cancellation = new AbortController();
+    const started = createDeferred<void>();
+    const release = createDeferred<void>();
+    const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+    let heldPath: string | null = null;
+    let artifactId = '';
+    network.mockImplementation(async (url, init) => {
+        // The genuine HTTP boundary deliberately ignores the read's abort.
+        if (url.pathname === heldPath) { started.resolve(); await release.promise; }
+        return await artifacts.handle(url.pathname, init) ?? homes.fetch(url, init);
+    });
+    const pending = withDefaultActionExecuteContext({ hostActionApprovalLifetime: {
+        actionId: 'workspace.files.replace.preview', signal: cancellation.signal, surface: 'ui',
+    } }, { serverId: homes.homes.a!.id, signal: cancellation.signal }, async (_executor, account) => {
+        artifactId = await account.createArtifact({ title: 'Pending intent' }, 'pending');
+        const basis = await account.fetchArtifact(artifactId);
+        if (!basis) throw new Error('Missing created Artifact');
+        heldPath = `/v1/artifacts/${artifactId}`;
+        const response = await account.request(heldPath);
+        heldPath = null;
+        await account.updateArtifact(artifactId, { title: 'Withdrawn intent' }, 'canceled', basis);
+        return response.json();
+    }, 'workspace.files.replace.preview');
+    const settled = Promise.allSettled([pending]);
+    try {
+        await started.promise;
+        cancellation.abort();
+        release.resolve();
+        const [result] = await settled;
+        expect(artifacts.readPlainBody(artifactId)).toBe('canceled');
+        expect(result).toMatchObject({ status: 'rejected' });
+    } finally { release.resolve(); await settled; }
 });
 
 describe('captureActionAccountContext encryption authority', () => {

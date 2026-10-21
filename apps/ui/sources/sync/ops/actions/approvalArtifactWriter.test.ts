@@ -28,6 +28,7 @@ import { writeApprovalRequestArtifact } from './approvalArtifactWriter';
 import { approvalArtifactBodyMatchesHeaderV1, buildTargetActionApprovalArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import { ApprovalRequestSchema, ApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { settleApprovalRequestReplayInputs } from '@happier-dev/protocol/approvals/approvalRequestTransition';
 
 const ARTIFACT_ID = 'approval-1';
 const CLIENT_SECRET = 'synthetic-provider-client-secret';
@@ -195,6 +196,27 @@ describe('UI approval Artifact writer', () => {
         // A client that reads the winner's claim cannot re-claim it either.
         await expect(second(claim(approved))).resolves.toMatchObject({ ok: false, errorCode: 'invalid_transition' });
         expect(stored()).toMatchObject({ status: 'executing' });
+    });
+
+    it.each(['approved', 'executing', 'executed'] as const)('does not let an abandoned open intent cancel a raced %s approval', async status => {
+        const open = openRequest();
+        await seed(open);
+        const write = uiWriter();
+        home.artifacts.beforeNextUpdate(async () => {
+            const approved = approve(open);
+            expect(await write(approved)).toEqual({ ok: true });
+            if (status === 'approved') return;
+            const executing = claim(approved);
+            expect(await write(executing)).toEqual({ ok: true });
+            if (status === 'executed') expect(await write({ ...settleApprovalRequestReplayInputs(executing),
+                status: 'executed', updatedAtMs: 4, execution: { ok: true, executedAtMs: 4, result: { ok: true } },
+            })).toEqual({ ok: true });
+        });
+        const canceled: ApprovalRequest = { ...settleApprovalRequestReplayInputs(open), status: 'canceled', updatedAtMs: 5 };
+        expect(await write(canceled)).toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+        expect(await write(canceled)).toMatchObject({ ok: false });
+        expect(stored().status).toBe(status);
+        expect(stored().decision?.kind).toBe('approve');
     });
 
     it('does not let an approval built from an open read overwrite a committed rejection', async () => {

@@ -2624,6 +2624,16 @@ describe('isApprovalRequiredByActionsSettings', () => {
     ).toBe(false);
   });
 
+  it('keeps exact-daemon replay custody for a retained UI Machine read', () => {
+    const actionId = 'workspace.files.replace.preview' as const;
+    const spec = getActionSpec(actionId);
+    const input = spec.inputSchema.parse({ machineId: 'machine', rootPath: '/repo', query: 'old', replacement: 'new' });
+    const settings = normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(resolveActionApprovalRouting({ actionId, spec, input, settings,
+      retainHostOperationApproval: true, context: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
+    })).toMatchObject({ required: true, flow: 'deferred', result: 'required' });
+  });
+
   it('retains guarded plugin Settings UI Ask with the existing live blocking approval owner', () => {
     const actionId = 'plugins.settings.set';
     const spec = getActionSpec(actionId);
