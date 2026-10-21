@@ -4133,8 +4133,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     approvalsUpdate: updateApprovalArtifact,
 
     targetActionApprovalReplay: createTargetActionApprovalDecision({
-      read: async artifactId => {
-        const parsed = TargetActionApprovalRequestV1Schema.safeParse(await deps.approvalsGet?.({ artifactId, serverId: null }));
+      read: async (artifactId, initialRead) => {
+        const parsed = TargetActionApprovalRequestV1Schema.safeParse(initialRead
+          ? initialRead.request : await deps.approvalsGet?.({ artifactId, serverId: null }));
         // This client records consent for an Account invocation, never replays
         // Machine-bound effects or asserts another process's waiter is stale.
         return parsed.success && parsed.data.approvalInputCustody === 'live_only'

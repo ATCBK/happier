@@ -11142,6 +11142,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const replay = await deps.targetActionApprovalReplay({
             artifactId,
             decision,
+            ...(requesterPreviewWasRead ? { initialRead: { request: requesterPreviewRead } } : {}),
             context: ctx,
             ...(ctx.externalActionCredential?.grant ? { callerGrant: ctx.externalActionCredential.grant } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),

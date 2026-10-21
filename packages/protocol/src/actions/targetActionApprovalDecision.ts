@@ -22,7 +22,7 @@ function failure(errorCode: string, error = errorCode): ActionExecuteResult {
 
 /** One target-Action decision owner; host adapters supply Artifact custody and durable execution. */
 export function createTargetActionApprovalDecision(deps: Readonly<{
-  read: (artifactId: string) => Promise<TargetActionApprovalRequestV1 | null>;
+  read: (artifactId: string, initialRead?: Readonly<{ request: unknown }>) => Promise<TargetActionApprovalRequestV1 | null>;
   update: (args: Readonly<{ artifactId: string; request: TargetActionApprovalRequestV1 }>) => Promise<TargetActionApprovalUpdateResult>;
   now?: () => number;
   /** Only the original execution host can make a process-local liveness assertion. */
@@ -37,12 +37,14 @@ export function createTargetActionApprovalDecision(deps: Readonly<{
     nextTimestamp: (request: TargetActionApprovalRequestV1) => number;
   }>) => Promise<ActionExecuteResult>;
 }>): NonNullable<ActionExecutorDeps['targetActionApprovalReplay']> {
-  return async ({ artifactId: rawArtifactId, decision, context, callerGrant, signal }) => {
+  return async ({ artifactId: rawArtifactId, decision, initialRead, context, callerGrant, signal }) => {
     const artifactId = rawArtifactId.trim();
     if (!artifactId) return null;
     signal?.throwIfAborted();
     let existing: TargetActionApprovalRequestV1 | null;
-    try { existing = await deps.read(artifactId); }
+    // Only the initial family probe may borrow the host's admitted body.
+    // Consent readback below still acquires the persisted decision independently.
+    try { existing = await deps.read(artifactId, initialRead); }
     catch { return failure('approval_context_unavailable'); }
     // Ordinary approval Artifacts remain with the generic Action owner.
     if (!existing) return null;

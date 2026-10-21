@@ -201,7 +201,6 @@ await import('./defaultActionExecutor');
 
 describe('createDefaultActionExecutor approvals', () => {
     it('acquires an ordinary built-in once for initial family routing, retaining the fresh CAS read', async () => {
-        await connectPermissionTransport();
         const result = await executor.execute('approval.request.decide', { artifactId: 'artifact-1', decision: 'reject' }, context());
         expect(result, JSON.stringify({ result, paths: homes.requests.map(request => request.path) }))
             .toMatchObject({ ok: true, result: { status: 'rejected' } });
@@ -215,11 +214,10 @@ describe('createDefaultActionExecutor approvals', () => {
     });
 
     it('rejects a malformed approval family after one initial acquisition without effects', async () => {
-        await connectPermissionTransport();
         const artifact = homes.artifacts(homeId).read('artifact-1');
         if (!artifact) throw new Error('Missing approval fixture');
         homes.artifacts(homeId).replaceStoredRow({ ...artifact,
-            body: encodePlainArtifactStoredContent({ body: JSON.stringify({ ...approvalRequest(), kind: 'plugin_target_action' }) }),
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify({ ...approvalRequest(), v: 99 }) }),
         });
         const result = await executor.execute('approval.request.decide', { artifactId: 'artifact-1', decision: 'approve' }, context());
         expect(result, JSON.stringify({ result, paths: homes.requests.map(request => request.path) }))
@@ -237,7 +235,6 @@ describe('createDefaultActionExecutor approvals', () => {
     });
 
     it.each([false, true])('rechecks Account custody after a held execution claim (retired: %s)', async retired => {
-        await connectPermissionTransport();
         const { artifactId } = await invitationApproval('account.name.set', false);
         homes.answer(homeId, '/v1/account/profile', { body: { name: 'Captain', firstName: 'Captain', lastName: null, timestamp: 10 } });
         let claimReached!: () => void;
@@ -265,7 +262,6 @@ describe('createDefaultActionExecutor approvals', () => {
     });
 
     it.each(['approve', 'reject'] as const)('records a public %s decision for a live Account Action without a Machine', async decision => {
-        await connectPermissionTransport();
         const artifactId = `account-target-${decision}`;
         const request = TargetActionApprovalRequestV1Schema.parse({
             v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
@@ -290,6 +286,10 @@ describe('createDefaultActionExecutor approvals', () => {
         const firstWrite = requests.findIndex(request => request.input !== null);
         expect(firstWrite).toBeGreaterThan(0);
         expect(requests.slice(0, firstWrite).filter(request => request.input === null)).toHaveLength(2);
+        if (decision === 'approve') {
+            // Consent readback is a later phase and must not reuse the open initial body.
+            expect(requests.slice(firstWrite + 1).filter(request => request.input === null).length).toBeGreaterThan(0);
+        }
         expect(outgoing).toEqual([]);
     });
 
@@ -612,6 +612,8 @@ describe('createDefaultActionExecutor approvals', () => {
         connection = await restoreServerAccountForTest({ serverUrl: 'https://approval-actions.test',
             serverIdentityId: 'srv_approval_home', accountId: 'account-a', request: homes.request,
             credentials: { token: accountCredential } });
+        // Captured approval reads require the real Account observation's connected lifetime.
+        await connectPermissionTransport();
         getStorage().getState().applySettingsForScope({ serverId: connection.serverId, accountId: 'account-a' }, getStorage().getState().settings, 0);
         const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
         getStorage().setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId: connection.serverId, active: true }) } });

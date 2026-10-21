@@ -1651,12 +1651,14 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<ActionExecuteResult | null>;
   /**
    * Host-owned replay for a contributed Action's durable API approval. It
-   * claims only artifacts whose strict target subject it can re-read; null
+   * claims only artifacts whose strict target subject its adapter admits; null
    * leaves ordinary ApprovalRequest handling on the existing path.
    */
   targetActionApprovalReplay?: (args: Readonly<{
     artifactId: string;
     decision: 'approve' | 'reject' | 'cancel';
+    /** Host-read body for initial family routing only, never Action input or later authority. */
+    initialRead?: Readonly<{ request: unknown }>;
     callerGrant?: ApiTokenGrantV1;
     context?: ActionExecutorContext;
     signal?: AbortSignal;
