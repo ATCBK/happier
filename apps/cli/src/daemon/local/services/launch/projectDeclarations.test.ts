@@ -40,6 +40,7 @@ import { LocalServiceActionRequestV1Schema, LocalServiceManagedServiceActionTarg
 import { computeWorkspaceSyncPolicyDigest, type WorkspaceSyncRelationshipV1 } from '@happier-dev/protocol';
 import type { ProjectAccountRowV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { ApiClient } from '@/api/api';
+import { createMachineFinitePolicyClient } from '@/api/machine/machineFinitePolicy';
 import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from '@/rpc/handlers/projectDefinitions';
 import { createProjectFiniteSourceManifestInspector } from '@/daemon/startup/createDaemonMachineBootstrapRuntime';
 import { createWorkspaceSyncWorkerPreparation, prepareWorkspaceSyncBetween } from '@/workspaces/sync/workspaceSyncPreparation';
@@ -114,6 +115,42 @@ class ObservedSetupPty implements PtyProcess {
 }
 
 describe('accepted Project Service declaration starter', () => {
+    it.each(['revoked', 'cancelled'] as const)('overlaps independent admission reads but never reviews a Service after %s admission', async scenario => {
+        const h = await fixture(false, undefined, false, 'portable');
+        const api = await ApiClient.create(h.runtime.credentials);
+        let policyRead = false;
+        let admissionRead = false;
+        let releaseAdmission!: (current: boolean) => void;
+        const pendingAdmission = new Promise<boolean>(resolve => { releaseAdmission = resolve; });
+        const transport = new AbortController();
+        const read = vi.mocked(axios.get).getMockImplementation()!;
+        vi.mocked(axios.get).mockImplementation(async (url, options) => {
+            if (new URL(String(url)).pathname === `/v1/machines/${h.targetWorkspace.machineId}`) policyRead = true;
+            return read(url, options);
+        });
+        const policy = createMachineFinitePolicyClient({ machineId: h.targetWorkspace.machineId,
+            readMachine: () => api.getMachine(h.targetWorkspace.machineId),
+            updateMetadata: async () => { throw new Error('Service review must not write finite policy'); } });
+        Object.assign(h.runtime, { workerAdmission: createProjectWorkerAdmission({ machineId: h.targetWorkspace.machineId,
+            admissionDrain: h.admissionDrain, readPolicy: () => policy.get() }) });
+        const review = h.starter.resolveStartTarget(h.request, { ...h.ingress, signal: transport.signal,
+            verifyMachineAdmissionCurrent: async () => { admissionRead = true; return pendingAdmission; } }, h.context);
+        try {
+            await vi.waitFor(() => expect(admissionRead).toBe(true));
+            // Finite load reads are independent of the in-flight Home admission
+            // read. SOURCE inspection/copy and effects must still wait for both.
+            await vi.waitFor(() => expect(policyRead).toBe(true));
+            expect(h.post.mock.calls.some(([url]) => String(url).endsWith('/v1/actions/projects.inspect'))).toBe(false);
+        } finally {
+            if (scenario === 'cancelled') transport.abort();
+            releaseAdmission(scenario === 'cancelled');
+            const result = await review;
+            expect(result).toMatchObject({ ok: false, reasonCode: scenario === 'revoked' ? 'machine_admission_changed' : 'cancelled' });
+            expect(h.copies()).toBe(0);
+            expect(h.owner.listProjectServices()).toEqual([]);
+        }
+    });
+
     const cleanups: Array<() => Promise<void>> = [];
     afterEach(async () => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); await Promise.all(cleanups.splice(0).map(cleanup => cleanup())); });
 

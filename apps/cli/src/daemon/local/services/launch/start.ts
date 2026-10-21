@@ -8,6 +8,7 @@ import type { LocalServiceNativePrerequisiteV1, LocalServiceEstablishmentFailure
 
 import type { LocalServiceLauncherFeed } from './feed';
 import type { LocalServiceLauncherHistoryStore } from './leaves';
+import { logger } from '@/ui/logger';
 
 export type LocalServiceLauncherStartTarget = (
     request: DaemonLocalServiceLauncherStartRequestV1,
@@ -149,7 +150,15 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
 ): LocalServiceLauncherStartTarget {
     const now = input.now ?? (() => Date.now());
     return async (request, ingress, actionContext, executeCanonicalAction) => {
-        const snapshotResult = await readSnapshot({ feed: input.feed, now }, request);
+        const phase = async <T>(name: string, read: () => T | Promise<T>): Promise<T> => {
+            const startedAt = performance.now();
+            let status: 'completed' | 'failed' = 'failed';
+            try { const result = await read(); status = 'completed'; return result; }
+            finally { logger.debug('[ProjectService] launch phase', { phase: name, status,
+                requestId: actionContext?.actionRequestId, machineId: request.machineId, targetId: request.targetId,
+                durationMs: Math.round(performance.now() - startedAt) }); }
+        };
+        const snapshotResult = await phase('launcher_snapshot', () => readSnapshot({ feed: input.feed, now }, request));
         if (!snapshotResult.ok) {
             return snapshotResult.response;
         }
@@ -164,7 +173,7 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
         }
 
         const target = snapshot.targets.find((candidate) => candidate.id === request.targetId);
-        const resolution = await input.resolveStartTarget?.(request, ingress, actionContext, executeCanonicalAction);
+        const resolution = await phase('declaration_review', () => input.resolveStartTarget?.(request, ingress, actionContext, executeCanonicalAction));
         if (resolution && !resolution.ok && resolution.reasonCode !== 'launcher_target_unknown') {
             return response({
                 request,
