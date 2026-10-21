@@ -97,6 +97,8 @@ export type SessionWidgetDensity =
 
 export type SessionWidgetHostProps = Readonly<{
     entityDrag?: SessionSurfaceEntityBinding;
+    /** Publishes the title this card shows (null, with the title it held, when it leaves) to the Board's drag descriptions. */
+    onDisplayTitle?: (title: string | null, previous?: string) => void;
     sessionId: string;
     serverId?: string | null;
     /** Exact Session projection captured by the route/shell owner. */
@@ -358,8 +360,15 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     // A widget card is named by the shared widget-name owner (its own name, else its definition's title) so an
     // installed surface never shows its local id; the stored title is the fallback for every other source.
     const title = (widgetInstance ? readWidgetInstanceName(widgetInstance, widgetDescriptor) : null) ?? resolveSessionBoardItemTitle(state);
-    // The carried card names the item as this card does, whatever the Board's stored title or id says.
-    const entityDrag = useSessionSurfaceEntityDrag(props.entityDrag ? { ...props.entityDrag, title } : null);
+    // The title this card shows is the one name the Board uses for it: the carried ghost and every drop place that
+    // describes it read it from here.
+    const onDisplayTitle = React.useRef(props.onDisplayTitle);
+    onDisplayTitle.current = props.onDisplayTitle;
+    React.useEffect(() => {
+        onDisplayTitle.current?.(title);
+        return () => onDisplayTitle.current?.(null, title);
+    }, [title]);
+    const entityDrag = useSessionSurfaceEntityDrag(props.entityDrag ?? null);
     const [hostWidth, setHostWidth] = React.useState(0);
     const narrow = hostWidth > 0 && hostWidth < NARROW_CARD_WIDTH_PX;
     const onHostLayout = React.useCallback((event: LayoutChangeEvent) => {

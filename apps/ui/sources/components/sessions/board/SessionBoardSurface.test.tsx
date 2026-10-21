@@ -516,6 +516,36 @@ describe('SessionBoardSurface', () => {
         } finally { await screen.unmount(); }
     });
 
+    it('names a card one way for its ghost and for every drop place that describes it: the title the card shows', async () => {
+        const serverUrl = 'https://board-title.example.test';
+        const serverId = 'srv_board_title';
+        await upsertServerProfile({ serverUrl, name: 'Board title Home' });
+        await setServerProfileIdentityForUrl(serverUrl, serverId);
+        expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'board-editor' })).toString('base64url')}.signature`,
+        })).toBe(true);
+        const screen = await renderScreen(<Harness serverId={serverId} snapshot={snapshot({
+            layout: MOVABLE,
+            items: [
+                { itemId: 'note-1', item: { ...note('counter'), source: { kind: 'widget', instance: {
+                    v: 1, id: 'note-1', displayName: 'Directory count', definition: { kind: 'builtin', id: 'machine_vitals' }, bindings: {},
+                } } } },
+                { itemId: 'note-2', item: note('Review') },
+            ],
+        })} />);
+        try {
+            await vi.waitFor(() => expect(screen.findHostByTestId('session-board-item-note-1-title')?.props.children).toBe('Directory count'));
+            const handles = screen.tree.root.findAllByType(SessionSurfaceEntityDragHandle);
+            const drags = handles.map(handle => handle.props.drag as React.ComponentProps<typeof SessionSurfaceEntityDragHandle>['drag']);
+            const widget = drags[0]!;
+            const other = drags[1]!;
+            expect(widget.runtime.describeSource(widget.sourceId)?.title).toBe('Directory count');
+            const labels = widget.runtime.getDestinations(other.sourceId).map(destination => destination.label ?? '');
+            expect(labels.some(label => label.includes('Directory count'))).toBe(true);
+            expect(labels.some(label => label.includes('counter'))).toBe(false);
+        } finally { await screen.unmount(); }
+    });
+
     it('admits a configured Board widget over the opposite visible view tab without waiting on transfer preflight', async () => {
         const serverUrl = 'https://board-view-drop.example.test';
         const serverId = 'srv_board_view_drop';

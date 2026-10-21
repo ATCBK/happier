@@ -53,6 +53,7 @@ import {
     resolveSessionBoardGridTier,
     resolveSessionBoardItemWidthPx,
 } from './sessionBoardGridLayout';
+import { resolveSessionBoardItemTitle } from './sessionBoardItemPresentation';
 import {
     resolveSessionBoardViewTitle,
     SessionBoardViewStrip,
@@ -616,6 +617,8 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
     const [renamingViewId, setRenamingViewId] = React.useState<string | null>(null);
     const [mobileQuery, setMobileQuery] = React.useState('');
     const placementRects = React.useRef(new Map<string, SessionBoardItemRect>());
+    // The title each mounted card shows, published by the card itself; drag descriptions read it, never a stored title or id.
+    const displayTitles = React.useRef(new Map<string, string>());
     // Recovered rows live in their own section below the grid, so their rects are measured
     // against that section's origin rather than the grid's.
     const recoveredRects = React.useRef(new Map<string, SessionBoardItemRect>());
@@ -1005,12 +1008,13 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
             // the same title resolver the view strip draws — a shared view title is
             // author copy that may be absent or blank, and `null` is not a label.
             .map((candidate) => ({ id: candidate.id, title: resolveSessionBoardViewTitle(candidate) }));
+        const displayTitleOf = () => displayTitles.current.get(itemId) ?? resolveSessionBoardItemTitle(projected.state);
         const entityDrag: SessionSurfaceEntityBinding | null = dragScope && dragAddress && props.retained !== true && placed && activeView && !activeView.synthetic ? {
             scope: dragScope.scope,
             admitWidgetMovement,
             isCurrent: () => dragScope.isCurrent() && controller.snapshot?.itemsById.get(itemId)?.state.kind === 'ready'
                 && controller.snapshot.views.some(view => view.id === activeView.id && view.placements.some(placement => placement.itemId === itemId)),
-            title: projected.state.kind === 'ready' ? projected.state.item.title : itemId,
+            get title() { return displayTitleOf(); },
             getItem: () => ({ kind: 'session-board-item', scope: dragScope.scope, address: dragAddress, viewId: activeView.id, itemId }),
             keyboardDestination: (intent, selected, destinations) => {
                 const live = controller.snapshot;
@@ -1059,11 +1063,11 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
                         const viewport = readWindowBounds(sessionSurfaceMeasurable(scrollRef.current)) ?? scrollWindow.current;
                         return !!viewport && pointer.y >= viewport.y && pointer.y <= viewport.y + viewport.height && pointer.x >= viewport.x && pointer.x <= viewport.x + viewport.width;
                     },
-                    listDestinations: () => (['before', 'after'] as const).map(side => ({ destination: { side, itemId, viewId: activeView.id }, group: `${t('sessionBoard.views.label')} · ${resolveSessionBoardViewTitle(activeView)}`, label: t(side === 'before' ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target: projected.state.kind === 'ready' ? projected.state.item.title : itemId }) })),
+                    listDestinations: () => (['before', 'after'] as const).map(side => ({ destination: { side, itemId, viewId: activeView.id }, group: `${t('sessionBoard.views.label')} · ${resolveSessionBoardViewTitle(activeView)}`, label: t(side === 'before' ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target: displayTitleOf() }) })),
                     resolve: ({ item, destination }: Parameters<NonNullable<SessionSurfaceEntityBinding['target']>['resolve']>[0]) => {
                         const anchor = SessionBoardDestinationSchema.safeParse(destination);
                         return anchor.success ? resolveSessionBoardEntityDrop({ item, scope: dragScope.scope, address: dragAddress, board: controller.snapshot, viewId: activeView.id, anchor: anchor.data, widgetSourceRef: widgetMovement.sourceRef,
-                            preview: { verb: t(anchor.data.side === 'before' ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target: projected.state.kind === 'ready' ? projected.state.item.title : itemId }), target: projected.state.kind === 'ready' ? projected.state.item.title : itemId } }) : sessionSurfaceDropRefused('same-position');
+                            preview: { verb: t(anchor.data.side === 'before' ? 'entityDragDrop.preview.moveAbove' : 'entityDragDrop.preview.moveBelow', { target: displayTitleOf() }), target: displayTitleOf() } }) : sessionSurfaceDropRefused('same-position');
                     },
                     execute: (effect: Parameters<typeof executeSessionBoardEntityDrop>[1]) => executeSessionBoardEntityDrop(controller, effect),
                     autoscroll: (pointer: Readonly<{ x: number; y: number }>) => { dragPointerContentY.value = pointer.y; },
@@ -1075,12 +1079,16 @@ export function SessionBoardSurface(props: SessionBoardSurfaceProps): React.Reac
             if (!item || !dragScope?.isCurrent() || !dragAddress) return;
             const admission = resolveSessionBoardEntityDrop({ item, scope: dragScope.scope, address: dragAddress,
                 board: controller.snapshot, viewId, ...(anchor ? { anchor } : {}),
-                preview: { verb: t('sessionBoard.item.moved.reordered', { title: itemId }), target: viewId } });
+                preview: { verb: t('sessionBoard.item.moved.reordered', { title: displayTitleOf() }), target: snapshot.views.filter(candidate => candidate.id === viewId).map(resolveSessionBoardViewTitle)[0] ?? viewId } });
             if (admission.status === 'allowed') void executeSessionBoardEntityDrop(controller, admission.effect);
         };
         return (
             <SessionWidgetHost
                 {...(entityDrag ? { entityDrag } : {})}
+                onDisplayTitle={(title, previous) => {
+                    if (title !== null) displayTitles.current.set(itemId, title);
+                    else if (displayTitles.current.get(itemId) === previous) displayTitles.current.delete(itemId);
+                }}
                 expanded={expanded}
                 sessionId={props.sessionId}
                 serverId={props.serverId}
