@@ -356,8 +356,11 @@ describe('semantic rename apply from the File page', () => {
   });
 });
 
-describe('ordinary mounted plugin Machine writes', () => {
+describe('ordinary mounted plugin Machine Actions', () => {
   it.each([
+    { actionId: 'code.rename.preview', ask: false },
+    { actionId: 'code.file.rename.preview', ask: false },
+    { actionId: 'code.codeActions.list', ask: false },
     { actionId: 'code.rename.apply', ask: false },
     { actionId: 'code.file.rename.apply', ask: false },
     { actionId: 'code.codeAction.apply', ask: false },
@@ -375,19 +378,40 @@ describe('ordinary mounted plugin Machine writes', () => {
         } }, version: 1 } });
         const input = actionId === 'workspace.files.replace'
           ? { machineId: 'machine', rootPath: '/repo', operation: buildWorkspaceFileRestoreOperation(receipt.results) }
+          : actionId === 'code.file.rename.preview'
+            ? { machineId: 'machine', rootPath: '/repo', path: 'src/retry.ts', newPath: 'src/attempt.ts' }
+          : actionId === 'code.rename.preview' || actionId === 'code.codeActions.list'
+            ? { machineId: 'machine', rootPath: '/repo', path: 'src/retry.ts', line: 3, symbol: 'formatRetryLabel',
+                ...(actionId === 'code.rename.preview' ? { newName: 'formatAttemptLabel' } : {}) }
           : actionId === 'code.codeAction.apply'
             ? { machineId: 'machine', rootPath: '/repo', path: 'src/retry.ts', operation: { kind: 'codeAction', expectedHash: hash,
                 action: { serverId: 'fixture/server', title: 'Rename fixture', hasCommand: false,
                   range: files[0].edits[0].range, files } } }
             : { machineId: 'machine', rootPath: '/repo', path: 'src/retry.ts', files };
         const sourceCustody = { kind: 'development' as const, registeredRootId: 'semantic-fixture-root' };
+        const queryKind = actionId === 'code.rename.preview' ? 'rename'
+          : actionId === 'code.file.rename.preview' ? 'willRenameFiles'
+          : actionId === 'code.codeActions.list' ? 'codeActions' : null;
+        const query = queryKind ? { rootPath: '/repo', path: 'src/retry.ts', text: 'disk', kind: queryKind,
+          ...(queryKind === 'willRenameFiles' ? { newPath: 'src/attempt.ts' }
+            : { position: { line: 2, symbol: 'formatRetryLabel' },
+                ...(queryKind === 'rename' ? { newName: 'formatAttemptLabel' } : {}) }) } : null;
+        const result = queryKind ? { status: 'ok', kind: queryKind, fileHash: hash,
+          ...(queryKind === 'codeActions' ? { actions: [] } : { files }) } : receipt;
         // Only the addressed daemon is scripted. Approval currentness consumes
         // its strict source projection, not a mocked internal origin predicate.
-        rpc.call.mockImplementation(async ({ method }: { method: string }) => method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
+        rpc.call.mockImplementation(async (request: { method: string; payload: unknown; serverId?: string; accountId?: string }) => {
+          if (request.method === RPC_METHODS.DAEMON_LSP_QUERY) {
+            expect(request).toMatchObject({ machineId: 'machine', serverId, accountId: 'alice', payload: query });
+            admitted.push(request.payload);
+            return result;
+          }
+          return request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
           ? { status: 'current', targetedContributions: { target: {
               pluginId: 'qa.semantic', occurrenceId: 'semantic-occurrence', sourceCustody,
             }, points: [] }, targetedSurfaceMounts: [] }
-          : { error: 'action_admission_required' });
+          : { error: 'action_admission_required' };
+        });
         const boundary = await createExternalActionAccountHttpBoundary({
           serverUrl: 'https://rename-action.test', serverIdentityId: 'srv_rename_action', accountId: 'alice',
           machineId: 'machine', actionId, tokenEpoch: 0,
@@ -442,13 +466,13 @@ describe('ordinary mounted plugin Machine writes', () => {
         }
         expect(await pending).toEqual(ask
           ? expect.objectContaining({ code: 'unavailable', diagnostics: ['approval_rejected'] })
-          : receipt);
-        expect(admitted).toEqual(ask ? [] : [input]);
+          : result);
+        expect(admitted).toEqual(ask ? [] : [query ?? input]);
         expect(homes.artifacts(serverId).list()).toHaveLength(ask ? 1 : 0);
         // The real mounted owner retires its old controller on occurrence replacement.
         await hook.rerender({ occurrenceId: 'replacement-occurrence' });
         expect(await mounted.hostApi.handleRequest(request)).toMatchObject({ code: 'stale_surface' });
-        expect(admitted).toEqual(ask ? [] : [input]);
+        expect(admitted).toEqual(ask ? [] : [query ?? input]);
         await hook.unmount();
       } finally {
         account?.dispose();

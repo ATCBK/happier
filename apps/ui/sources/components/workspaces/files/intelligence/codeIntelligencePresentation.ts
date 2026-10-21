@@ -50,8 +50,10 @@ export function readCodeHoverContent(
 /** The language server that speaks for this file, by its own label ("TypeScript"). */
 export function readLanguageServerLabel(
   servers: readonly LanguageIntelligenceServerStatus[] | undefined,
+  /** The server whose answer is shown (a hover names its own); it wins over the root's first server. */
+  answeredBy?: string | null,
 ): string | null {
-  return servers?.[0]?.label ?? null;
+  return answeredBy ?? servers?.[0]?.label ?? null;
 }
 
 export type LanguageStateNote = Readonly<{

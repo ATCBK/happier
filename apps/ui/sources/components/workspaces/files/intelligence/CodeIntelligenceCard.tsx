@@ -7,6 +7,7 @@ import type { LanguageIntelligenceDiagnostic } from '@happier-dev/protocol/machi
 import type { Rect } from '@/components/ui/code/editor/codeEditorTypes';
 import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { Icon } from '@/components/ui/icons/Icon';
+import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { SimpleSyntaxHighlighter } from '@/components/ui/media/SimpleSyntaxHighlighter';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
@@ -298,9 +299,8 @@ function CodeIntelligenceAnswer(
               : null,
           ]}
         >
-          <Text variant="meta" selectable style={styles.documentation}>
-            {model.hover.documentation}
-          </Text>
+          {/* Servers write their documentation in Markdown (bold, `code`, JSDoc tags): the canonical renderer draws it at the card's quiet meta step. */}
+          <MarkdownView markdown={model.hover.documentation} selectable textStyle={styles.documentation} />
         </View>
       ) : null}
       {model.outsidePath ? (
@@ -593,6 +593,7 @@ const styles = StyleSheet.create((theme) => ({
     color: theme.colors.text.primary,
   },
   documentation: {
+    ...Typography.variant('meta'),
     color: theme.colors.text.secondary,
   },
   progress: {

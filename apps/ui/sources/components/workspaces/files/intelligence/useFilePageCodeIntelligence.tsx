@@ -1058,7 +1058,7 @@ function FileCodeIntelligenceCardLayer(
       machineName: props.machineName,
       machineUnreachable: props.machineUnreachable,
     });
-    const server = readLanguageServerLabel(snapshot.servers);
+    const server = readLanguageServerLabel(snapshot.servers, hover?.serverLabel);
     const references =
       state?.references && snapshot.kind === 'references'
         ? {

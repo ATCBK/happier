@@ -294,6 +294,36 @@ describe('on-demand language intelligence controller', () => {
         } finally { controller.dispose(); }
     });
 
+    it('keeps the servers that speak for this file when the root watch reports every server in the root', async () => {
+        // A root watch lists every server running in the root; the document's own sync lists only the
+        // servers for its language. The file's label and state note must keep naming its own server.
+        let updateWatch!: (answer: LanguageIntelligenceWatchResult) => void;
+        const novel = { serverId: 'novel', label: 'QA Novel Language', state: 'ready' as const, loading: false, generation: 'g1' };
+        const ts = { serverId: 'ts', label: 'TypeScript', state: 'ready' as const, loading: false, generation: 'g1' };
+        const controller = createCodeIntelligenceController({
+            scope: { serverId: 'home', machineId: 'machine', rootPath: '/repo' }, path: 'src/a.happiernovel', languageId: 'happier-novel',
+            accountLifetime: { scope: { serverId: 'home', accountId: 'account' }, isCurrent: () => true, onRetire: () => ({ dispose() {} }) },
+            getText: () => 'use qaGreeting', query: async () => result, openLocation() {},
+            languageServer: {
+                sync: async () => ({ status: 'ok', generation: 'g1', version: 1, servers: [novel],
+                    capabilities: { hover: true, definition: true, references: true, documentSymbol: true, diagnostics: 'pull', acceptsExternalChanges: false } }),
+                query: async () => ({ status: 'ok', kind: 'hover', sections: [{ serverId: 'novel', label: 'QA Novel Language', markdown: 'signal' }] }),
+                watch: (_request, signal) => new Promise((resolve, reject) => {
+                    updateWatch = resolve;
+                    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+                }),
+                restart: async () => ({ status: 'ok' }),
+            },
+        });
+        try {
+            await controller.hover({ line: 0, character: 6 });
+            await vi.waitFor(() => expect(controller.getSnapshot().servers?.map(server => server.serverId)).toEqual(['novel']));
+            await vi.waitFor(() => expect(updateWatch).toBeTypeOf('function'));
+            updateWatch({ status: 'ok', revision: 1, servers: [ts, { ...novel, loading: true }], diagnostics: {} });
+            await vi.waitFor(() => expect(controller.getSnapshot().servers?.[0]?.loading).toBe(true));
+            expect(controller.getSnapshot().servers?.map(server => server.label)).toEqual(['QA Novel Language']);
+        } finally { controller.dispose(); }
+    });
     it('drops a pre-restart watch after the replacement snapshot without restoring old-root problems or consuming its revision', async () => {
         let generation = 'g1';
         const watches: Array<{ request: LanguageIntelligenceWatchInput; resolve(value: LanguageIntelligenceWatchResult): void }> = [];

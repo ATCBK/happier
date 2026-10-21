@@ -6,6 +6,7 @@ import {
   formatProblemsFact,
   groupCodeProblems,
   readCodeHoverContent,
+  readLanguageServerLabel,
   resolveLanguageStateNote,
 } from './codeIntelligencePresentation';
 
@@ -150,6 +151,16 @@ describe('language intelligence presentation', () => {
         sections: [],
       } as CodeIntelligenceSnapshot['result']),
     ).toBeNull();
+  });
+
+  it('names the server that answered over the first server running in the root', () => {
+    // The Machine reports every server in the root; a .happiernovel hover came from its own server.
+    const servers = [server('ready'), { ...server('ready'), serverId: 'novel', label: 'QA Novel Language' }];
+    const hover = readCodeHoverContent({ status: 'ok', kind: 'hover', sections: [
+      { serverId: 'novel', label: 'QA Novel Language', markdown: '```happier-novel\nsignal qaGreeting\n```' },
+    ] } as CodeIntelligenceSnapshot['result']);
+    expect(readLanguageServerLabel(servers, hover?.serverLabel)).toBe('QA Novel Language');
+    expect(readLanguageServerLabel(servers)).toBe(servers[0]!.label);
   });
 
   it('groups problems by server, then by file in reading order', () => {

@@ -104,10 +104,13 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
         diagnostics = EMPTY_CODE_DIAGNOSTICS;
         publish({ mode: 'fallback', status: 'unavailable', selection: null, querySelection: null, kind: null, result: null, reason: 'account_unavailable' });
     }
+    // The servers that speak for this file, as its own sync last named them (null before the first sync).
+    let documentServerIds: ReadonlySet<string> | null = null;
     const document: ReturnType<typeof createCodeIntelligenceDocument> | null = input.languageServer ? createCodeIntelligenceDocument({
         rootPath: input.scope.rootPath, path: input.path, languageId: input.languageId ?? 'text', port: input.languageServer,
         getText: input.getText, getUnsaved: () => input.getUnsaved?.() ?? false, isCurrent: available,
         onSync: response => {
+            documentServerIds = new Set(response.servers.map(server => server.serverId));
             const acknowledged = document?.getAcknowledged();
             // A startup watch can precede the first known document version.
             // Revalidate its retained root diagnostics as soon as sync supplies it.
@@ -128,8 +131,12 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
                 documentVersions: new Map(acknowledged ? [[input.path, acknowledged.version]] : []),
                 serverGenerations: new Map(response.servers.map(server => [server.serverId, server.generation])),
             });
-            publish({ ...snapshot, mode: 'server', servers: response.servers, diagnostics: selectCodeDiagnostics(diagnostics) });
-            if (becameReady(previousServers, response.servers) && loadingQuery) {
+            // The root watch lists every server in the root; the file keeps the ones its sync named.
+            const servers = documentServerIds
+                ? response.servers.filter(server => documentServerIds?.has(server.serverId))
+                : response.servers;
+            publish({ ...snapshot, mode: 'server', servers, diagnostics: selectCodeDiagnostics(diagnostics) });
+            if (becameReady(previousServers, servers) && loadingQuery) {
                 const retry = loadingQuery; loadingQuery = null;
                 void query(retry.kind, retry.position);
             }
