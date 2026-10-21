@@ -16,8 +16,12 @@ NS_ASSUME_NONNULL_BEGIN
                             jobId:(NSString *)jobId
                             error:(NSError **)error;
 
-/// Cancels a running synthesis, or the next one started with this job id if it has not begun yet.
+/// Cancels an accepted synthesis, queued or running. Unknown or finished job ids are ignored.
 + (void)cancelJob:(NSString *)jobId;
+/// Registers a synthesis when it is accepted, before it waits on the TTS queue, so a cancel is not lost.
++ (void)acceptJob:(NSString *)jobId;
+/// Drops an accepted job once it has ended, however it ended.
++ (void)forgetJob:(NSString *)jobId;
 
 @end
 

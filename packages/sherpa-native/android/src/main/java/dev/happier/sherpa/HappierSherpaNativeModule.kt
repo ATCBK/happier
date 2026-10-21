@@ -101,28 +101,49 @@ class HappierSherpaNativeModule : Module() {
       val sid = (params["sid"] as? Number)?.toInt() ?: 0
       val speed = ((params["speed"] as? Number)?.toDouble() ?: 1.0).toFloat()
 
-      runOn(ttsExecutor, promise) {
-        if (jobId.isBlank()) throw Exception("jobId is required")
-        if (text.isBlank()) throw Exception("text is required")
-        if (outWavPath.isBlank()) throw Exception("outWavPath is required")
+      val invalid = when {
+        jobId.isBlank() -> "jobId is required"
+        text.isBlank() -> "text is required"
+        outWavPath.isBlank() -> "outWavPath is required"
+        else -> null
+      }
+      if (invalid != null) {
+        reject(promise, Exception(invalid))
+        return@AsyncFunction
+      }
 
-        val engine = requireEngine(assetsDir)
-        when (HappierSherpaNativeJni.nativeSynthesizeToWavFile(engine, text, sid, speed, outWavPath, jobId)) {
-          HappierSherpaNativeJni.SYNTHESIS_OK -> Unit
-          HappierSherpaNativeJni.SYNTHESIS_CANCELLED -> throw SynthesisCancelledException()
-          else -> throw Exception("Synthesis failed")
+      // Registered here, on Expo's serial function queue, so a later `cancel` call always finds the job even
+      // while it waits behind another synthesis. Every path below ends by forgetting it.
+      HappierSherpaNativeJni.nativeAcceptSynthesis(jobId)
+      try {
+        ttsExecutor.execute {
+          try {
+            val engine = requireEngine(assetsDir)
+            when (HappierSherpaNativeJni.nativeSynthesizeToWavFile(engine, text, sid, speed, outWavPath, jobId)) {
+              HappierSherpaNativeJni.SYNTHESIS_OK -> Unit
+              HappierSherpaNativeJni.SYNTHESIS_CANCELLED -> throw SynthesisCancelledException()
+              else -> throw Exception("Synthesis failed")
+            }
+            promise.resolve(mapOf("wavPath" to outWavPath, "sampleRate" to HappierSherpaNativeJni.nativeGetSampleRate(engine)))
+          } catch (e: Throwable) {
+            reject(promise, e)
+          } finally {
+            HappierSherpaNativeJni.nativeForgetSynthesis(jobId)
+          }
         }
-
-        mapOf("wavPath" to outWavPath, "sampleRate" to HappierSherpaNativeJni.nativeGetSampleRate(engine))
+      } catch (e: RejectedExecutionException) {
+        HappierSherpaNativeJni.nativeForgetSynthesis(jobId)
+        reject(promise, e)
       }
     }
 
     AsyncFunction("cancel") { params: Map<String, Any?> ->
       val jobId = params["jobId"] as? String ?: ""
       if (jobId.isBlank()) return@AsyncFunction
-      // Synthesis polls an atomic flag, so cancelling it must not queue behind the synthesis it stops. A job
-      // still queued behind another synthesis is cancelled when it starts.
+      // TTS: flags an accepted job, queued or running, without waiting behind the synthesis it stops; unknown
+      // ids are ignored. Synthesis polls the flag.
       HappierSherpaNativeJni.nativeCancel(jobId)
+      // ASR: cancels the streaming job with this id, if any.
       // Streams are only touched on the ASR executor, so destroying one never races a frame being decoded.
       try {
         asrExecutor.execute { HappierSherpaNativeJni.nativeCancelStreaming(jobId) }
@@ -209,6 +230,8 @@ object HappierSherpaNativeJni {
   external fun nativeGetNumSpeakers(handle: Long): Int
   external fun nativeSynthesizeToWavFile(handle: Long, text: String, sid: Int, speed: Float, outWavPath: String, jobId: String): Int
   external fun nativeCancel(jobId: String)
+  external fun nativeAcceptSynthesis(jobId: String)
+  external fun nativeForgetSynthesis(jobId: String)
 
   external fun nativeCreateStreamingRecognizer(jobId: String, assetsDir: String, sampleRate: Int, channels: Int, language: String): Int
   external fun nativePushAudioFrame(jobId: String, pcm16le: ByteArray, sampleRate: Int, channels: Int): Map<String, Any?>

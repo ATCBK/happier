@@ -7,7 +7,6 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include <android/log.h>
@@ -33,11 +32,11 @@ int32_t ProgressCallback(const float * /*samples*/, int32_t /*n*/, float /*p*/, 
   return parg->state->cancelled.load() ? 0 : 1;
 }
 
-// Synthesis jobs by id across all engines. A cancel that arrives before its synthesis starts (still queued on
-// the TTS executor) is remembered in g_pendingCancels and consumed when that synthesis begins.
+// Accepted synthesis jobs by id, from acceptance (still queued on the TTS executor) until the job ends. Cancel
+// flags a queued or running job; ids it does not know (finished, never accepted, ASR jobs) are ignored, so the
+// map never outgrows the jobs actually in flight.
 std::mutex g_jobsMutex;
 std::unordered_map<std::string, std::shared_ptr<JobState>> g_jobs;
-std::unordered_set<std::string> g_pendingCancels;
 
 constexpr jint kSynthesisFailed = 0;
 constexpr jint kSynthesisOk = 1;
@@ -311,11 +310,16 @@ Java_dev_happier_sherpa_HappierSherpaNativeJni_nativeSynthesizeToWavFile(
   const std::string inputText = JStringToUtf8(env, text);
   if (jobKey.empty() || outPath.empty() || inputText.empty()) return kSynthesisFailed;
 
-  auto state = std::make_shared<JobState>();
+  std::shared_ptr<JobState> state;
   {
     std::lock_guard<std::mutex> lock(g_jobsMutex);
-    if (g_pendingCancels.erase(jobKey) > 0) return kSynthesisCancelled;
-    g_jobs[jobKey] = state;
+    auto &entry = g_jobs[jobKey];
+    if (!entry) entry = std::make_shared<JobState>();
+    if (entry->cancelled.load()) {
+      g_jobs.erase(jobKey);
+      return kSynthesisCancelled;
+    }
+    state = entry;
   }
 
   ProgressArg arg{state.get()};
@@ -353,11 +357,27 @@ Java_dev_happier_sherpa_HappierSherpaNativeJni_nativeCancel(JNIEnv *env, jclass 
   if (jobKey.empty()) return;
   std::lock_guard<std::mutex> lock(g_jobsMutex);
   auto it = g_jobs.find(jobKey);
-  if (it == g_jobs.end()) {
-    g_pendingCancels.insert(jobKey);
-    return;
-  }
+  if (it == g_jobs.end()) return;
   it->second->cancelled.store(true);
+}
+
+// Registers a synthesis job when it is accepted, before it waits on the TTS executor, so a cancel that arrives
+// while it is queued is not lost.
+extern "C" JNIEXPORT void JNICALL
+Java_dev_happier_sherpa_HappierSherpaNativeJni_nativeAcceptSynthesis(JNIEnv *env, jclass /*clazz*/, jstring jobId) {
+  const std::string jobKey = JStringToUtf8(env, jobId);
+  if (jobKey.empty()) return;
+  std::lock_guard<std::mutex> lock(g_jobsMutex);
+  g_jobs[jobKey] = std::make_shared<JobState>();
+}
+
+// Drops an accepted job that ended without running (failed before synthesis or could not be scheduled).
+extern "C" JNIEXPORT void JNICALL
+Java_dev_happier_sherpa_HappierSherpaNativeJni_nativeForgetSynthesis(JNIEnv *env, jclass /*clazz*/, jstring jobId) {
+  const std::string jobKey = JStringToUtf8(env, jobId);
+  if (jobKey.empty()) return;
+  std::lock_guard<std::mutex> lock(g_jobsMutex);
+  g_jobs.erase(jobKey);
 }
 
 extern "C" JNIEXPORT jint JNICALL

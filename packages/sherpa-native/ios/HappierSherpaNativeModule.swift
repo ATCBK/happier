@@ -78,7 +78,7 @@ public class HappierSherpaNativeModule: Module {
       }
     }.runOnQueue(self.ttsQueue)
 
-    AsyncFunction("synthesizeToWavFile") { (params: [String: Any]) -> [String: Any] in
+    AsyncFunction("synthesizeToWavFile") { (params: [String: Any], promise: Promise) in
       let jobId = (params["jobId"] as? String) ?? ""
       let assetsDir = (params["assetsDir"] as? String) ?? ""
       let text = (params["text"] as? String) ?? ""
@@ -91,20 +91,31 @@ public class HappierSherpaNativeModule: Module {
       if text.isEmpty { throw NSError(domain: "HappierSherpaNative", code: 105, userInfo: [NSLocalizedDescriptionKey: "text is required"]) }
       if outWavPath.isEmpty { throw NSError(domain: "HappierSherpaNative", code: 106, userInfo: [NSLocalizedDescriptionKey: "outWavPath is required"]) }
 
-      let engine = try self.getEngine(assetsDir: assetsDir)
-      try engine.synthesizeToWavFile(atPath: outWavPath, text: text, sid: Int32(sid), speed: Float(speed), jobId: jobId)
-      return [
-        "wavPath": outWavPath,
-        "sampleRate": Int(engine.sampleRate()),
-      ]
-    }.runOnQueue(self.ttsQueue)
+      // Registered here, on Expo's serial function queue, so a later `cancel` call always finds the job even
+      // while it waits behind another synthesis on ttsQueue.
+      HappierSherpaOfflineTtsEngine.acceptJob(jobId)
+      self.ttsQueue.async {
+        defer { HappierSherpaOfflineTtsEngine.forgetJob(jobId) }
+        do {
+          let engine = try self.getEngine(assetsDir: assetsDir)
+          try engine.synthesizeToWavFile(atPath: outWavPath, text: text, sid: Int32(sid), speed: Float(speed), jobId: jobId)
+          promise.resolve([
+            "wavPath": outWavPath,
+            "sampleRate": Int(engine.sampleRate()),
+          ])
+        } catch {
+          promise.reject(error)
+        }
+      }
+    }
 
     AsyncFunction("cancel") { (params: [String: Any]) in
       let jobId = (params["jobId"] as? String) ?? ""
       if jobId.isEmpty { return }
-      // Synthesis polls an atomic flag, so cancelling it must not queue behind the synthesis it stops. A job
-      // still queued behind another synthesis is cancelled when it starts.
+      // TTS: flags an accepted job, queued or running, without waiting behind the synthesis it stops; unknown
+      // ids are ignored. Synthesis polls the flag.
       HappierSherpaOfflineTtsEngine.cancelJob(jobId)
+      // ASR: cancels the streaming job with this id, if any.
       self.asrQueue.async {
         if let stream = self.asrStreams.removeValue(forKey: jobId) {
           stream.cancel()
