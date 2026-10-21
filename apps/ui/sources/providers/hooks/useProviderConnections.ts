@@ -81,7 +81,9 @@ export function useProviderConnections(input: Readonly<{
         : stateMatchesScope ? state.data : accountMatchesScope ? state.accountData ?? null : null;
     const error = stateMatchesScope ? state.error : null;
     const machineError = stateMatchesScope ? state.machineError ?? null : null;
-    const loading = active && scopeEnabled
+    // Account rows are already usable while optional Machine facts refresh.
+    // Consumers use loading to replace their values, so reserve it for the first answer.
+    const loading = data === null && active && scopeEnabled
         && (resolution.kind === 'resolving' || resolution.kind === 'bound')
         && (!ready || !stateMatchesScope || state.loading);
 
