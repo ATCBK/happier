@@ -8,6 +8,9 @@ import { createLocalServiceLauncherFeed } from './feed';
 import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
 import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
+import { createProjectServiceRelocation } from '@/workspaces/execution/projectServiceRelocation';
+import { LocalServiceManagedServiceActionTargetV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { join } from 'node:path';
 
 function inventoryEntry(
     overrides: Partial<NormalizedLocalServiceInventoryEntry> = {},
@@ -66,6 +69,125 @@ function inventoryEntry(
 }
 
 describe('createLocalServiceLauncherFeed', () => {
+    it.each([
+        ['Start', 'source'], ['Start', 'worker'], ['Move', 'source'], ['Move', 'worker'],
+    ] as const)('keeps a complete binding read pending through %s settlement on %s', async (operation, destination) => {
+        const createOwner = () => createManagedServicesOwner({
+            processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+            // Literal Project launches never install plugin dependencies.
+            dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+        });
+        const owner = createOwner();
+        const oldOwner = createOwner();
+        const workspace = { id: `${destination}-ref`, serverId: 'home', machineId: destination,
+            rootPath: process.cwd(), createdAtMs: 1 };
+        const oldWorkspace = { ...workspace, id: `${destination}-old-ref`, machineId: destination === 'source' ? 'worker' : 'source' };
+        let release!: () => void;
+        const launchGate = new Promise<void>(resolve => { release = resolve; });
+        let launchEntered = false;
+        const supervise = async (custodian: typeof owner, target: typeof workspace, pending: boolean) => custodian.superviseProject({
+            workspace: target, declaration: { workspaceRefId: target.id, selection: { kind: 'manifest', name: 'httpPort' } },
+            cwd: target.rootPath, serviceId: 'project-service:httpPort', specIdentity: 'httpPort', execution: 'portable', isCurrent: () => true,
+            requester: { serverId: 'home', accountId: 'owner', machineId: target.machineId, installationId: 'installation' },
+            processSpec: { mode: { kind: 'managedSpawn', host: '127.0.0.1' } },
+            // Hold the genuine process-launch boundary, with real native custody and feed logic beneath the read.
+            authorizeLaunch: async input => {
+                if (pending) { launchEntered = true; await launchGate; }
+                return { command: process.execPath,
+                    args: ['-e', `require('node:http').createServer((req,res)=>res.end('ok')).listen(${input.endpoint!.port},'127.0.0.1')`],
+                    env: {}, release: async () => undefined };
+            },
+        });
+        const targetFor = (handle: Awaited<ReturnType<typeof supervise>>) => LocalServiceManagedServiceActionTargetV1Schema.parse({
+            kind: 'managed_service', machineId: handle.workspace.machineId, workspaceId: handle.workspace.id,
+            managedServiceId: handle.instanceId, declaration: handle.declaration, cwd: handle.cwd,
+        });
+        const feed = createLocalServiceLauncherFeed({ machineId: destination, projectManagedServices: owner,
+            inventoryRegistry: createLocalServiceInventoryRegistry(), previewRegistry: createLocalServicePreviewRegistry() });
+        let completion: Promise<unknown> | undefined;
+        try {
+            if (operation === 'Start') completion = supervise(owner, workspace, true);
+            else {
+                const old = await supervise(oldOwner, oldWorkspace, false);
+                const currentTarget = targetFor(old);
+                const address = { serverId: 'home', refId: 'source-ref' };
+                const choice = destination === 'source' ? { kind: 'primary' as const }
+                    : { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: destination } };
+                const request = { workspace: address, serviceName: 'httpPort', requestId: `move-${destination}`, currentTarget,
+                    destination: choice, selectedTarget: { machineId: destination }, desiredPlacement: { workspace: address,
+                        serviceName: 'httpPort', expectedRevision: 'absent' as const, expected: { kind: 'absent' as const },
+                        value: { runsOn: choice, unavailable: 'fail' as const } } };
+                completion = createProjectServiceRelocation({
+                    readService: async () => ({ status: 'resolved', execution: 'portable', currentTarget,
+                        workspace: oldWorkspace, instanceId: old.instanceId, snapshot: old.snapshot() }),
+                    resolveDestination: async () => ({ status: 'resolved', workspace }),
+                    // Account/config and Sync transport are the boundaries; relocation and both native owners stay real.
+                    saveDesiredPlacement: async () => ({ status: 'applied', placement: request.desiredPlacement.value,
+                        revision: 1, provenance: 'saved' }),
+                    stopService: async () => old.stop(),
+                    revalidateDestination: async () => ({ status: 'admitted' }),
+                    reviewDestinationSetup: async () => ({ status: 'admitted' }),
+                    handoffPrepareBetween: async () => ({ ok: true, traversed: [] }),
+                    startService: async () => {
+                        expect(old.snapshot().state).toBe('stopped');
+                        return { status: 'succeeded', currentTarget: targetFor(await supervise(owner, workspace, true)) };
+                    },
+                })(request).then(result => { expect(result).toMatchObject({ ok: true, result: { status: 'moved' } }); });
+            }
+            void completion.catch(() => {});
+            await vi.waitFor(() => expect(launchEntered).toBe(true));
+            // An unrelated Workspace need not wait for this declaration's native publication.
+            expect((await feed.getSnapshot({ projection: 'managed_bindings', workspaceRoot: join(workspace.rootPath, 'unrelated') })).targets).toEqual([]);
+            const observations: unknown[] = [];
+            const bindingRead = feed.getSnapshot({ projection: 'managed_bindings', workspaceRoot: workspace.rootPath });
+            void bindingRead.then(value => observations.push(value), error => observations.push(error));
+            await new Promise<void>(resolve => setImmediate(resolve));
+            // Incomplete native custody is neither an unavailable Machine nor authoritative absence.
+            expect(observations).toEqual([]);
+            release();
+            await completion;
+            const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(await bindingRead);
+            const handle = owner.listProjectServices()[0]!;
+            expect(snapshot.targets).toEqual([expect.objectContaining({ machineId: destination,
+                sourceClass: { kind: 'managed_service', managedServiceId: handle.instanceId }, serviceState: 'healthy' })]);
+            expect(buildLocalServiceRows({ inventoryRows: [], launchTargets: snapshot.targets, sessionId: null, scope: 'workspace' }))
+                .toEqual([expect.objectContaining({ status: 'running' })]);
+        } finally { release(); await completion?.catch(() => {}); await owner.dispose(); await oldOwner.dispose(); }
+    });
+
+    it('settles a pending complete read as failed when native establishment fails, without reporting absence', async () => {
+        const owner = createManagedServicesOwner({
+            processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+            dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+        });
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        let launchEntered = false;
+        const start = owner.superviseProject({
+            workspace: { id: 'checkout', serverId: 'home', machineId: 'source', rootPath: process.cwd(), createdAtMs: 1 },
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'httpPort' } },
+            cwd: process.cwd(), serviceId: 'httpPort', specIdentity: 'httpPort', isCurrent: () => true,
+            requester: { serverId: 'home', accountId: 'owner', machineId: 'source', installationId: 'installation' },
+            processSpec: { mode: { kind: 'managedSpawn', endpointNone: true } },
+            authorizeLaunch: async () => {
+                launchEntered = true; await gate;
+                throw Object.assign(new Error('OS launch refused'), { code: 'EACCES' });
+            },
+        });
+        void start.catch(() => {});
+        const feed = createLocalServiceLauncherFeed({ machineId: 'source', projectManagedServices: owner,
+            inventoryRegistry: createLocalServiceInventoryRegistry(), previewRegistry: createLocalServicePreviewRegistry() });
+        try {
+            await vi.waitFor(() => expect(launchEntered).toBe(true));
+            const read = feed.getSnapshot({ projection: 'managed_bindings', workspaceRoot: process.cwd() });
+            const rejected = expect(read).rejects.toMatchObject({ code: 'plugin_managed_service_establishment_failed' });
+            release();
+            await expect(start).rejects.toMatchObject({ code: 'plugin_managed_service_establishment_failed' });
+            await rejected;
+            expect(owner.listProjectServices()).toEqual([]);
+        } finally { release(); await start.catch(() => {}); await owner.dispose(); }
+    });
+
     it.each(['inventory', 'declaration', 'move'] as const)('keeps native listener provenance through %s custody and preserves unrelated listeners', async scenario => {
         let current = true;
         const owner = createManagedServicesOwner({
@@ -142,6 +264,7 @@ describe('createLocalServiceLauncherFeed', () => {
             if (scenario === 'move') {
                 // Move retires serving authority before the old Machine finishes Stop.
                 current = false;
+                await expect(feed.getSnapshot({ projection: 'managed_bindings' })).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
                 const handoff = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
                 expect(handoff.targets.map(target => target.id)).toEqual([handle.serviceId, 'inventory:unrelated']);
                 expect(handoff.targets[0]?.actions).toEqual(['manage']);

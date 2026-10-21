@@ -1423,10 +1423,16 @@ describe('managed-services SVC09 owner', () => {
                 projectManagedServices: owner });
             const bindingRead = { projection: 'managed_bindings' as const, workspaceRoot: input.workspace.rootPath };
             expect((await feed.getSnapshot({ ...bindingRead, workspaceRoot: '/unrelated-workspace' })).targets).toEqual([]);
-            await expect(feed.getSnapshot(bindingRead)).rejects.toMatchObject({ code: 'plugin_managed_service_unavailable' });
+            const pendingRead = feed.getSnapshot(bindingRead);
+            let readSettled = false;
+            void pendingRead.then(() => { readSettled = true; }, () => { readSettled = true; });
+            const rejectedRead = expect(pendingRead).rejects.toBeInstanceOf(Error);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(readSettled).toBe(false);
             const loss = owner.stopForAccessLoss(input.requester);
             inspection.resolve();
             await failedEstablishment;
+            await rejectedRead;
             expect(await loss).toMatchObject([{
                 status: initiallyStoppable ? 'stopped' : 'termination_incomplete',
                 instanceId: 'owner-lifecycle-1',

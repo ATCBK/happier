@@ -2852,7 +2852,8 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         verifyCurrentMachineAdmission: () => Promise<boolean>;
     }>): Promise<readonly ProjectServiceAccessLossResult[]>;
     resolveProjectService(target: Extract<LocalServiceActionTargetV1, { kind: 'managed_service' }>): ProjectManagedServiceResolution;
-    listProjectServices(options?: Readonly<{ requireComplete?: true; workspaceRoot?: string }>): readonly ProjectManagedServiceHandle[];
+    listProjectServices(): readonly ProjectManagedServiceHandle[];
+    listProjectServices(options: Readonly<{ requireComplete: true; workspaceRoot?: string }>): Promise<readonly ProjectManagedServiceHandle[]>;
     bindScope(
         scope: ManagedServicesScope,
         exec: ExecService,
@@ -4071,15 +4072,29 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
     };
     const projectEntries = () => [...semanticEntries.values()]
         .filter(isProjectManagedServiceSemanticEntry);
-    const listProjectServices = (options?: Readonly<{ requireComplete?: true; workspaceRoot?: string }>): readonly ProjectManagedServiceHandle[] => {
-        const matching = projectEntries().filter(entry => !options?.workspaceRoot
-            || isWorkspacePathWithin(options.workspaceRoot, entry.project.cwd));
-        if (options?.requireComplete && (projectRetirementStarted
-            || matching.some(entry => !entry.project.handle || !entry.project.handle.isCurrent()))) {
-            return fail('plugin_managed_service_unavailable', 'Project service native custody is unsettled');
-        }
-        return Object.freeze(matching.flatMap(entry => entry.project.handle ? [entry.project.handle] : []));
-    };
+    function listProjectServices(): readonly ProjectManagedServiceHandle[];
+    function listProjectServices(options: Readonly<{ requireComplete: true; workspaceRoot?: string }>): Promise<readonly ProjectManagedServiceHandle[]>;
+    function listProjectServices(options?: Readonly<{ requireComplete: true; workspaceRoot?: string }>):
+        readonly ProjectManagedServiceHandle[] | Promise<readonly ProjectManagedServiceHandle[]> {
+        if (!options) return Object.freeze(projectEntries().flatMap(entry => entry.project.handle ? [entry.project.handle] : []));
+        return (async () => {
+            for (;;) {
+                const matching = projectEntries().filter(entry => !options.workspaceRoot
+                    || isWorkspacePathWithin(options.workspaceRoot, entry.project.cwd));
+                if (projectRetirementStarted || matching.some(entry => !readsCurrent(entry.scope.isOccurrenceCurrent)
+                    || (entry.project.handle ? !entry.project.handle.isCurrent()
+                        : entry.establishmentSettled || entry.terminal || entry.establishmentAbort.signal.aborted))) {
+                    return fail('plugin_managed_service_unavailable', 'Project service native custody is unsettled');
+                }
+                const establishing = matching.filter(entry => !entry.project.handle);
+                if (!establishing.length) return Object.freeze(matching.flatMap(entry => entry.project.handle ? [entry.project.handle] : []));
+                // A complete native read joins the lifecycle that will publish its handle.
+                // Do not turn an in-flight Start/Move into a cached Machine failure. Re-read
+                // after publication: another declaration may have entered while we waited.
+                await Promise.all(establishing.map(entry => entry.establishment));
+            }
+        })();
+    }
     const superviseProject = async (
         request: ProjectManagedServiceSupervisionInput,
     ): Promise<ProjectManagedServiceHandle> => {

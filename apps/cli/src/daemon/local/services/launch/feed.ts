@@ -202,8 +202,10 @@ export function createLocalServiceLauncherFeed(
             const inventoryTargets = new Map(snapshot.targets.flatMap(target => target.sourceClass?.kind === 'inventory_entry'
                 ? [[target.sourceClass.inventoryEntryId, target] as const] : []));
             const correlatedInventoryIds = new Set<string>();
-            const managed = (input.projectManagedServices?.listProjectServices(bindingsOnly ? { requireComplete: true,
-                ...(workspaceScopePaths?.length === 1 ? { workspaceRoot: workspaceScopePaths[0] } : {}) } : undefined) ?? [])
+            const handles = bindingsOnly ? await input.projectManagedServices!.listProjectServices({ requireComplete: true,
+                ...(workspaceScopePaths?.length === 1 ? { workspaceRoot: workspaceScopePaths[0] } : {}) })
+                : input.projectManagedServices?.listProjectServices() ?? [];
+            const managed = handles
                 .filter(handle => (!bindingsOnly || handle.isCurrent()) && handle.workspace.machineId === input.machineId
                     && (!workspaceScopePaths || workspaceScopePaths.some(root => isWorkspacePathWithin(root, handle.cwd))))
                 .map(handle => {

@@ -1269,6 +1269,14 @@ entries. Built-in Project services do not fabricate plugin identities. Their
 actual supervisor-issued instance id, not the stable declaration id, identifies
 current controls; feed and preview consumers project the same handle and snapshot.
 
+Complete Project binding reads join an in-flight establishment at this owner and
+re-read its published handle before returning. A pending Start or Move therefore
+keeps its native read pending rather than publishing a Machine-unavailable
+failure. Failed establishment, retired custody and lost currentness still refuse
+the complete read; an incomplete snapshot never establishes absence or Start
+permission. Ordinary diagnostic lists remain synchronous views of published
+handles. The existing native establishment lifetime governs the wait.
+
 The reload controller retains that one Project custody owner across registry
 replacement. Generation-scoped plugin bindings still retire normally. A native
 adapter lifecycle is captured for one exact instance while its selected
