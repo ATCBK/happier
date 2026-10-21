@@ -665,7 +665,8 @@ describe('InboxContent rows, attention sources and popover (ORC R-10, lab inbox-
         expect(runRow.props.title).not.toBe(describeWorkflowRunState('interrupted').label);
         const runWord = tree.findHostByTestId('inbox.run.library-run.summary:state:label')!;
         expect(runWord.props.children).toBe(describeWorkflowRunState('interrupted', { inAttentionWindow: false }).label);
-        expect(runWord.props.children).not.toBe(describeWorkflowRunState('interrupted', { inAttentionWindow: true }).label);
+        // Interrupted keeps its state word in either view; Updates supplies the neutral tone.
+        expect(NativeStyleSheet.flatten(runWord.props.style).color).toBe(workStatusWordStyle('neutral').color);
 
         // A stalled worker: its Session word beside the row's own explanation.
         const stalledStatus = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(stalledWorker, NOW) });
