@@ -322,6 +322,7 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     const accountSettingsContext = await trace('requester.settings', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => bootstrapAccountSettingsContext({
       credentials: input.credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
       allowCacheFallback: false,
+      ...(input.signal ? { signal: input.signal } : {}),
       expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false,
       minSettingsVersion: settingsWitness.settingsVersion, shouldCommit: () => live && !input.signal?.aborted,
     })));
