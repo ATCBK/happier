@@ -140,8 +140,8 @@ export const PluginMachineExecutionOriginV1JsonSchema: PluginJsonSchemaV2 = {
 export function resolveFleetSupplyAgreement<T>(params: Readonly<{
     supplies: readonly Readonly<{ value: T; selectable: boolean }>[];
     identity: (value: T) => string;
-    content: (value: T) => string;
-}>): Readonly<{
+}> & (Readonly<{ content: (value: T) => string; sameContent?: never }>
+    | Readonly<{ sameContent: (left: T, right: T) => boolean; content?: never }>)): Readonly<{
     variantsByIdentity: ReadonlyMap<string, ReadonlyMap<string, T>>;
     conflictingIdentities: readonly string[];
 }> {
@@ -150,8 +150,16 @@ export function resolveFleetSupplyAgreement<T>(params: Readonly<{
         if (!supply.selectable) continue;
         const identity = params.identity(supply.value);
         const variants = variantsByIdentity.get(identity) ?? new Map<string, T>();
-        const content = params.content(supply.value);
-        if (!variants.has(content)) variants.set(content, supply.value);
+        const sameContent = params.sameContent;
+        if (sameContent) {
+            // Semantic groups have opaque, publication-local keys, not content identities.
+            if (![...variants.values()].some(value => sameContent(value, supply.value))) {
+                variants.set(String(variants.size), supply.value);
+            }
+        } else {
+            const content = params.content(supply.value);
+            if (!variants.has(content)) variants.set(content, supply.value);
+        }
         variantsByIdentity.set(identity, variants);
     }
     return {

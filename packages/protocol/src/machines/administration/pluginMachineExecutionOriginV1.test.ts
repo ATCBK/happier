@@ -14,6 +14,28 @@ import {
 } from './pluginMachineExecutionOriginV1.js';
 
 describe('PluginMachineExecutionOriginV1', () => {
+  it('groups semantic fleet declarations without content serialization and excludes unavailable supplies', () => {
+    const first = { id: 'account', declaration: { title: 'Account' }, diagnostic: 'a' };
+    const equal = { ...first, declaration: { title: 'Account' }, diagnostic: 'b' };
+    const divergent = { ...first, declaration: { title: 'Changed' } };
+    const unavailable = { ...first, id: 'excluded' };
+    const agreement = origins.resolveFleetSupplyAgreement({
+      supplies: [first, equal, divergent, unavailable].map(value => ({ value, selectable: value !== unavailable })),
+      identity: value => value.id,
+      sameContent: (left: typeof first, right: typeof first) => left.declaration.title === right.declaration.title,
+    });
+    expect([...agreement.variantsByIdentity.get('account')!.values()]).toEqual([first, divergent]);
+    expect(agreement.variantsByIdentity.has('excluded')).toBe(false);
+    expect(agreement.conflictingIdentities).toEqual(['account']);
+    const stringAgreement = origins.resolveFleetSupplyAgreement({
+      supplies: [first, equal].map(value => ({ value, selectable: true })),
+      identity: value => value.id,
+      content: value => value.declaration.title,
+    });
+    expect([...stringAgreement.variantsByIdentity.get('account')!.entries()]).toEqual([['Account', first]]);
+    expect(stringAgreement.conflictingIdentities).toEqual([]);
+  });
+
   it('selects skill bytes by exact chosen source or agreeing current content without requiring executable placement', () => {
     const origin = (machineId: string) => ({ serverIdentityId: 'srv_account_one', sourceRef: {
       machineId, pluginId: 'acme.plugin', sourceCustody: { kind: 'development' as const, registeredRootId: machineId },
