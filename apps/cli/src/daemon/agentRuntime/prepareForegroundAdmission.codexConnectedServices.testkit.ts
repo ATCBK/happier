@@ -10,6 +10,8 @@ import {
 } from '@happier-dev/protocol';
 
 import { ApiClient } from '@/api/api';
+import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
+import { QualifiedConnectedAccountRefSchema } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { listQualifiedConnectedAccountsV4, readQualifiedConnectedAccountCredentialV4 } from '@/api/client/qualifiedConnectedAccountApi';
 import { configuration } from '@/configuration';
 import { createConnectedAccountRequestAuthSubjectRegistry } from '@/daemon/connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
@@ -20,7 +22,8 @@ import type { PrepareForegroundAgentRuntimeAdmissionDependencies } from './prepa
 import { createForegroundPurposeOwnerFixture } from './prepareForegroundAdmission.connectedServices.testkit';
 
 /** Real Codex codecs, revision parsing and launch materialization over Account HTTP. */
-export async function createCodexForegroundConnectedAccountFixture() {
+export async function createCodexForegroundConnectedAccountFixture(accountIds: readonly string[] = ['work']) {
+  const accountId = accountIds[0]!;
   const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' } as const;
   const revision = 'csr_0123456789ABCDEFGHJKMNPQRS';
   const content = sealQualifiedConnectedAccountContentEnvelope({ kind: 'credential', accountMode: 'plain',
@@ -28,23 +31,25 @@ export async function createCodexForegroundConnectedAccountFixture() {
     randomBytes: length => new Uint8Array(length),
   });
   const accounts = QualifiedConnectedAccountListResponseV4Schema.parse({
-    service, accounts: [{
-      ref: { service, accountId: 'work' }, status: 'connected', authenticationModeId: 'oauth',
+    service, accounts: accountIds.map(id => ({
+      ref: { service, accountId: id }, status: 'connected', authenticationModeId: 'oauth',
       revisionSemantics: 'revisioned', credentialRevision: revision,
       configurationReady: true, configurationRevision: 'configuration-1', scopes: [],
-    }],
+    })),
   });
   const requestPaths: string[] = [];
   vi.spyOn(axios, 'get').mockImplementation(async (url): Promise<AxiosResponse<unknown>> => {
-    const path = new URL(String(url)).pathname;
+    const parsedUrl = new URL(String(url));
+    const path = parsedUrl.pathname;
     requestPaths.push(path);
     const data = path === '/v4/connect/qualified/accounts' ? accounts
       : path === '/v1/account/encryption' ? { mode: 'plain', updatedAt: 0 }
         : path === '/v2/connect/openai-codex/profiles'
-          ? { serviceId: 'openai-codex', profiles: [{ profileId: 'work', status: 'connected', kind: 'oauth' }] }
+          ? { serviceId: 'openai-codex', profiles: accountIds.map(id => ({ profileId: id, status: 'connected', kind: 'oauth' })) }
           : path === '/v4/connect/qualified/credential'
             ? {
-                ref: { service, accountId: 'work' }, authenticationModeId: 'oauth', configurationRevision: null,
+                ref: parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountRefSchema, parsedUrl.searchParams.get('ref')),
+                authenticationModeId: 'oauth', configurationRevision: null,
                 content, metadata: { providerIdentity: { accountId: 'work-account' }, displayName: 'work', scopes: [] },
                 revisionSemantics: 'revisioned', credentialRevision: revision,
               }
@@ -54,26 +59,26 @@ export async function createCodexForegroundConnectedAccountFixture() {
   const credentials = { token: 'account-token', encryption: null } as const;
   const api = await ApiClient.create(credentials);
   const readAccounts = async () => await listQualifiedConnectedAccountsV4({ token: credentials.token, service });
-  const readCredential = async () => {
-    const credential = await readQualifiedConnectedAccountCredentialV4({ token: credentials.token, ref: { service, accountId: 'work' } });
+  const readCredential = async (selectedAccountId = accountId) => {
+    const credential = await readQualifiedConnectedAccountCredentialV4({ token: credentials.token, ref: { service, accountId: selectedAccountId } });
     if (!credential) throw new Error('Exact Account credential unavailable');
     if (credential.authenticationModeId !== 'oauth') throw new Error('Exact Account OAuth credential unavailable');
     return { ...credential, authenticationModeId: credential.authenticationModeId };
   };
   let registry: ResolvedExecutablePluginRuntimeRegistry | null = null;
   const account = createForegroundPurposeOwnerFixture({
-    consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, service, accountId: 'work',
+    consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, service, accountId,
     resolveTarget: async (target) => {
       if (target.kind !== 'account') return null;
       const found = (await readAccounts()).accounts.find(candidate => candidate.ref.accountId === target.account.accountId);
       return found ? { displayName: found.ref.accountId, account: found.ref } : null;
     },
-    resolveCredentialRevision: async () => {
-      const credential = await readCredential();
+    resolveCredentialRevision: async (selectedAccount) => {
+      const credential = await readCredential(selectedAccount.accountId);
       return credential.revisionSemantics === 'revisioned' ? credential.credentialRevision : null;
     },
     materializeAccount: async ({ account, credentialRevisionBasis, request, signal }) => {
-      const credential = await readCredential();
+      const credential = await readCredential(account.accountId);
       if (credential.revisionSemantics !== 'revisioned' || !credential.credentialRevision) throw new Error('Ongoing purpose authority requires a credential revision');
       const credentialRevision = credential.credentialRevision;
       credentialRevisionBasis?.captureCredentialRevision(credentialRevision);
@@ -91,7 +96,7 @@ export async function createCodexForegroundConnectedAccountFixture() {
           credentials: { get: async (key) => values[key] ?? null },
         },
         isConfigurationCurrent: async () => (await readAccounts()).accounts.some(candidate => candidate.ref.accountId === account.accountId && candidate.configurationRevision === 'configuration-1'),
-        isCredentialRevisionCurrent: async () => (await readCredential()).credentialRevision === credentialRevision,
+        isCredentialRevisionCurrent: async () => (await readCredential(account.accountId)).credentialRevision === credentialRevision,
         signal,
       });
     },
@@ -99,9 +104,9 @@ export async function createCodexForegroundConnectedAccountFixture() {
   const requestAuthRegistry = createConnectedAccountRequestAuthSubjectRegistry();
   const materializations: NonNullable<Awaited<ReturnType<typeof resolveConnectedServiceAuthForSpawn>>>[] = [];
   return {
-    ...account, service, revision, requestPaths, requestAuthRegistry,
+    ...account, service, revision, requestPaths, requestAuthRegistry, api, credentials,
     connectedServices: ConnectedServiceBindingsV2IngressSchema.parse({ v: 2, bindingsByServiceId: {
-      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'work' },
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: accountId },
     } }),
     runtimeOptions: {
       pluginIds: ['happier.agent.codex'], connectedAccounts: account.owner,
