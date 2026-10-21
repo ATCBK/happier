@@ -94,4 +94,16 @@ describe('TtsChunker', () => {
         const tildeChunks = [...tilde.push('Intro:\n~~~\nline one. line two. line three.\n~~~\nDone.'), ...tilde.flush()];
         expect(tildeChunks.some((chunk) => chunk.includes('~~~\nline one. line two. line three.\n~~~'))).toBe(true);
     });
+
+    it('never emits code from a reply that ends inside an unterminated fence', () => {
+        const chunker = createTtsChunker(32);
+        const code = Array.from({ length: 20 }, (_, i) => `const value${i} = compute(${i});`).join('\n');
+        const pushed = chunker.push(`Here is the fix.\n\`\`\`ts\n${code}\n`);
+        const chunks = [...pushed, ...chunker.flush()];
+
+        expect(chunks.join(' ')).toContain('Here is the fix.');
+        for (const chunk of chunks) {
+            expect(chunk).not.toContain('compute(');
+        }
+    });
 });

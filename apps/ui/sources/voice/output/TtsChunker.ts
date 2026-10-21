@@ -111,6 +111,11 @@ export function createTtsChunker(chunkChars: number): TtsChunker {
 
         while (buffer.trim().length > 0) {
             const fences = readFenceLayout(buffer);
+            if (force && fences.openStart !== null) {
+                // The reply ended inside an unterminated fence: its contents are code, not speech.
+                buffer = buffer.slice(0, fences.openStart);
+                continue;
+            }
             // While a fence is open, only the prose before it can be emitted.
             const readyLength = !force && fences.openStart !== null ? fences.openStart : buffer.length;
             if (!force && readyLength < bounded) {
