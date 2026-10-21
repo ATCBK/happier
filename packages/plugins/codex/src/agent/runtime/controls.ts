@@ -91,8 +91,10 @@ function createGoalControl(goalProjection: CodexGoalProjection): AgentSessionGoa
 
 const catalog: AgentSessionCatalogControl = {
   async list(request, context) {
+    let phase: 'startup' | 'request' = 'startup';
     try {
       return await withControlClient(context, async (client) => {
+        phase = 'request';
         if (request.kind === 'vendorPlugins') {
           const result = await listCodexVendorPlugins({ client, cwd: context.session.cwd });
           if (!result.supported) return { status: 'unsupported' as const, diagnostic: diagnostic('codex_vendor_catalog_unsupported') };
@@ -127,8 +129,12 @@ const catalog: AgentSessionCatalogControl = {
           })),
         };
       });
-    } catch {
-      return { status: 'unavailable', retryable: true, diagnostic: diagnostic('codex_catalog_read_failed') };
+    } catch (error) {
+      const { errorClass, errorCode, httpStatus } = readUnexpectedActionErrorDiagnosticV1(error);
+      const details = { phase, errorClass, errorCode, httpStatus };
+      context.services.logger.warn('codex_catalog_read_failed', details);
+      return { status: 'unavailable', retryable: true,
+        diagnostic: { ...diagnostic(`codex_catalog_${phase}_failed`), details } };
     }
   },
 };
