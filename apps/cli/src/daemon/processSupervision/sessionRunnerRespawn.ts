@@ -63,6 +63,7 @@ export type SessionRunnerRespawnTerminalReason =
   | 'resume_not_supported'
   | 'session_directory_missing'
   | 'startup_dependency_failure'
+  | 'startup_operation_failed'
   | 'startup_instructions_cold_resume_unproven'
   | 'terminal_follow_admission_failed'
   | 'stop_requested';
@@ -640,6 +641,16 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
           previousPid: trackedSession.pid,
           reason: 'terminal_follow_admission_failed',
         });
+        return 'terminal';
+      }
+
+      // Native open/refusal retires this exact startup context. Before that
+      // boundary, exit fails the original operation; its credential restart
+      // intent cannot authorize a successor after the parent has failed.
+      if (trackedSession.projectSetupOperation) {
+        endRespawnCycle(sessionId);
+        params.logWarn(`[DAEMON RUN] Respawn suppressed for session ${sessionId} (original startup exited before native open)`);
+        params.onRespawnTerminal?.({ sessionId, previousPid: trackedSession.pid, reason: 'startup_operation_failed' });
         return 'terminal';
       }
 
