@@ -47,6 +47,10 @@ export function createAccountSessionFollowRuleCache(input: Readonly<{
         return await cache.read(options, input.isCurrent);
       } catch { return { status: 'unavailable', reason: 'account-retired' } as const; }
     },
+    async hasEnabledSessionReceiver(sessionId: string): Promise<boolean> {
+      try { return await cache.hasEnabledSessionReceiver(sessionId, input.isCurrent); }
+      catch { return false; }
+    },
     dispose: cache.dispose,
   };
 }

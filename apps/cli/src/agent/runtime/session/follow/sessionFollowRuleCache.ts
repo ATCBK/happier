@@ -83,15 +83,27 @@ export function createSessionFollowRuleCache(input: Readonly<{
     try { return await work; }
     finally { if (refreshing === work) refreshing = null; }
   };
+  const readCurrent = async (options?: Readonly<{ refresh?: boolean }>, revalidateCurrent?: () => boolean | Promise<boolean>): Promise<SessionFollowRuleCacheSnapshot> => {
+    if (!current()) return { status: 'unavailable', reason: 'account-retired' };
+    const observation = await (options?.refresh ? refresh() : read());
+    // Account authority may itself await Home. Keep the observed revision
+    // until that check settles, without withdrawing another range's refresh.
+    if ((revalidateCurrent && !await revalidateCurrent()) || !current()) return { status: 'unavailable', reason: 'account-retired' };
+    if (observation.snapshot.status === 'available' && observation.revision !== revision) return { status: 'unavailable', reason: 'rules-changed' };
+    return observation.snapshot;
+  };
+  const hasEnabledSessionReceiver = (snapshot: SessionFollowRuleCacheSnapshot, sessionId: string): boolean =>
+    snapshot.status === 'available' && snapshot.rules.some(rule => rule.definition.enabled
+      && rule.receiver.kind === 'session' && rule.receiver.sessionId === sessionId);
   return {
-    async read(options?: Readonly<{ refresh?: boolean }>, revalidateCurrent?: () => boolean | Promise<boolean>): Promise<SessionFollowRuleCacheSnapshot> {
-      if (!current()) return { status: 'unavailable', reason: 'account-retired' };
-      const observation = await (options?.refresh ? refresh() : read());
-      // Account authority may itself await Home. Keep the observed revision
-      // until that check settles, without withdrawing another range's refresh.
-      if ((revalidateCurrent && !await revalidateCurrent()) || !current()) return { status: 'unavailable', reason: 'account-retired' };
-      if (observation.snapshot.status === 'available' && observation.revision !== revision) return { status: 'unavailable', reason: 'rules-changed' };
-      return observation.snapshot;
+    read: readCurrent,
+    async hasEnabledSessionReceiver(sessionId: string, revalidateCurrent?: () => boolean | Promise<boolean>): Promise<boolean> {
+      if (!current()) return false;
+      // A known absence only suppresses work; it grants no authority or data.
+      // The existing Account-feed invalidation clears this same observation
+      // when rules change or the connection loses continuity.
+      if (loaded?.snapshot.status === 'available' && !hasEnabledSessionReceiver(loaded.snapshot, sessionId)) return false;
+      return hasEnabledSessionReceiver(await readCurrent(undefined, revalidateCurrent), sessionId);
     },
     dispose,
   };
