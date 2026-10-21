@@ -199,6 +199,33 @@ describe('apiSocket reconnect semantics', () => {
         expect(onReconnected).toHaveBeenCalledTimes(1);
     });
 
+    it.each(['socket-drop', 'home-outage', 'first-connection'] as const)('recovers a demanded retired inventory watch through the focused Home connection (%s)', async recovery => {
+        const token = `e30.${Buffer.from(JSON.stringify({ sub: 'self' })).toString('base64')}.signature`;
+        const { socket, trigger } = await boot({ token });
+        if (recovery !== 'first-connection') await connect(socket);
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const inventory = await import('@/sync/domains/local/services/inventory/sharedStore');
+        const key = { serverId: getActiveServerSnapshot().serverId, machineId: 'inventory-machine' };
+        const snapshot = { v: 1 as const, machineId: key.machineId, generatedAt: 1,
+            refreshState: 'idle' as const, entries: [], diagnostics: [] };
+        let watches = 0;
+        const dispose = inventory.subscribeLocalServiceInventoryStore(key, () => {}, {
+            snapshotClient: async () => ({ ok: true, snapshot }),
+            watchClient: async () => {
+                if (++watches === 1) return { ok: false, reason: 'request_failed' };
+                if (watches === 2) return { ok: true, changed: true, snapshot: { ...snapshot, generatedAt: 2 } };
+                return new Promise(() => {});
+            },
+        });
+        try {
+            await vi.waitFor(() => expect(watches).toBe(1));
+            if (recovery === 'socket-drop') trigger('disconnect', 'transport close');
+            if (recovery !== 'first-connection') emitReachability('offline');
+            await connect(socket);
+            await vi.waitFor(() => expect(inventory.getLocalServiceInventoryState(key).generatedAt).toBe(2));
+        } finally { dispose(); inventory.resetLocalServiceInventoryStoreForTests(); }
+    });
+
     it('invalidates reachability when the network transport drops', async () => {
         const { socket, trigger } = await boot(); await connect(socket);
         trigger('disconnect', 'transport close');
