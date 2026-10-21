@@ -9329,6 +9329,10 @@ const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
     title: 'Get a second opinion',
     description: 'Preview the quoted source and actual source access, then explicitly Ask one ordinary reviewer in an anchored Discussion. Retry retains the original create, quote, question and participant identities. Multiple reviewers require Fresh opinions and report unavailable while that Workflow producer is unavailable.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account', requiredAuthority: 'present_user',
+    safetyForInput: (input: unknown) => {
+      const parsed = DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.second_opinion.start'].safeParse(input);
+      return parsed.success && parsed.data.intent === 'preview' ? 'safe' as const : 'danger' as const;
+    },
     approval: { result: 'optional', flow: 'deferred' }, approvalPolicy: { uiConfirmation: 'direct' },
     originalExecution: { accountRoot: 'allowed' }, placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },

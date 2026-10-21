@@ -8,6 +8,8 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { DiscussionSecondOpinionPreviewV1Schema } from '@happier-dev/protocol/discussions/secondOpinion';
 import { DiscussionCreateRequestV1Schema, DiscussionPostRequestV1Schema } from '@happier-dev/protocol/discussions/api';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 const homes = createHomeGovernanceHarness();
@@ -18,7 +20,10 @@ const { createDiscussionSecondOpinionController } = await import('@/components/d
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 const initial = getStorage().getState();
-beforeEach(async () => { await homes.reset(); });
+beforeEach(async () => {
+    await homes.reset();
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(homes.request));
+});
 afterEach(() => { getStorage().setState(initial, true); standardCleanup(); });
 
 async function sourceHome() {
@@ -52,6 +57,41 @@ it('previews the exact committed server answer independently of Voice privacy or
     const voice = await createDefaultActionExecutor().execute('session.transcript.get', { sessionId: 'source-session' },
         { surface: 'voice', serverId, expectedAccountId: 'alice' });
     expect(voice).toMatchObject({ ok: false, errorCode: 'recent_messages_disabled' });
+});
+
+it('previews one selected Session through the real default UI controller without preparing approval or a question', async () => {
+    const { serverId, source, preview } = await sourceHome();
+    const reviewers = [{ selection: { kind: 'session' as const, session: { serverId, sessionId: 'reviewer' } } }];
+    const selectedPreview = DiscussionSecondOpinionPreviewV1Schema.parse({ ...preview, reviewers: [{ ...reviewers[0], sourceAccess: 'read',
+        runtimeAccountId: 'alice', audienceAccountIds: ['alice'], missingSourceAccountIds: [], canGrantSource: true,
+        disclosure: { ok: true } }] });
+    homes.answer(serverId, 'POST /v1/discussions/second-opinion/preview', { body: { ok: true, value: selectedPreview } });
+    const controller = createDiscussionSecondOpinionController({ scope: { serverId, accountId: 'alice' },
+        availability: 'available', source, draft: { title: 'Review', question: 'What changes?', reviewers } });
+    await controller.preview();
+    expect(controller.getSnapshot()).toMatchObject({ working: false, submitted: false,
+        preview: { status: 'preview', preview: selectedPreview, sourceText: 'The source answer.' },
+        result: { outcome: { kind: 'succeeded' } } });
+    expect(homes.requests.filter(row => row.input !== null && row.path !== '/v1/discussions/second-opinion/preview')).toEqual([]);
+});
+
+it('retains explicit Require on a UI preview before disclosing the selected source', async () => {
+    const { serverId, source, preview } = await sourceHome();
+    const reviewers = [{ selection: { kind: 'session' as const, session: { serverId, sessionId: 'reviewer' } } }];
+    const selectedPreview = DiscussionSecondOpinionPreviewV1Schema.parse({ ...preview, reviewers: [{ ...reviewers[0], sourceAccess: 'read',
+        runtimeAccountId: 'alice', audienceAccountIds: ['alice'], missingSourceAccountIds: [], canGrantSource: true,
+        disclosure: { ok: true } }] });
+    homes.answer(serverId, 'POST /v1/discussions/second-opinion/preview', { body: { ok: true, value: selectedPreview } });
+    const input = { intent: 'preview' as const, source, title: 'Review', question: 'What changes?', reviewers,
+        retry: { creationLocalId: 'creation', quoteLocalId: 'quote', questionLocalId: 'question' } };
+    const executor = createDefaultActionExecutor();
+    const context = { surface: 'ui' as const, serverId, expectedAccountId: 'alice' };
+    await homes.requireUiApproval(serverId, 'discussion.second_opinion.start');
+    expect(await executor.execute('discussion.second_opinion.start', input, context))
+        .toMatchObject({ ok: true, result: { kind: 'approval_request_created', actionId: 'discussion.second_opinion.start' } });
+    expect(homes.requestsFor('/v1/sessions/source-session/messages')).toHaveLength(0);
+    expect(homes.requestsFor('/v1/discussions/second-opinion/preview')).toHaveLength(0);
+    expect(homes.requestsFor('/v1/discussions')).toHaveLength(0);
 });
 
 it('resolves an allowed Voice source through the real transcript Action when its rendered id differs from the committed id', async () => {
@@ -234,6 +274,34 @@ it('reports Fresh opinions unavailable before source reads or mutations for mult
     expect(controller.getSnapshot().result).toMatchObject({ operation: 'second_opinion', outcome: { kind: 'succeeded',
         value: { status: 'unavailable', reason: 'fresh_opinions_unavailable', mode: 'fresh_opinions' } } });
     expect(homes.requestsFor('/v1/discussions/second-opinion/preview')).toHaveLength(0);
+    expect(homes.requestsFor('/v1/discussions')).toHaveLength(0);
+});
+
+it('removes a configured model by its retained selection and refuses changes during its real preview', async () => {
+    const { serverId, source, preview } = await sourceHome();
+    const reading = createDeferred<void>();
+    const released = createDeferred<void>();
+    homes.answer(serverId, 'POST /v1/discussions/second-opinion/preview', { select: () => {
+        reading.resolve();
+        return { body: { ok: true, value: preview }, respondAfter: released.promise };
+    } });
+    const controller = createDiscussionSecondOpinionController({ scope: { serverId, accountId: 'alice' },
+        availability: 'available', source, draft: { title: 'Review', question: 'What changes?', reviewers: [] } });
+    const selection = { kind: 'model' as const, launch: { executionTarget: { serverId, machineId: 'review-machine' },
+        directory: { kind: 'path' as const, path: '/work' },
+        agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } } };
+    const retry = controller.getSnapshot().retry;
+    expect(controller.toggleReviewer(selection, 'Reviewed question')).toBe(true);
+    const reviewers = controller.getSnapshot().draft.reviewers;
+    expect(reviewers).toMatchObject([{ selection, participantSlotId: expect.any(String) }]);
+    const pending = controller.preview();
+    await reading.promise;
+    expect(controller.toggleReviewer(selection, 'Changed while loading')).toBe(false);
+    expect(controller.getSnapshot().draft).toMatchObject({ question: 'Reviewed question', reviewers });
+    released.resolve();
+    await pending;
+    expect(controller.toggleReviewer(selection, 'Reviewed question')).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({ retry, draft: { reviewers: [] }, preview: null });
     expect(homes.requestsFor('/v1/discussions')).toHaveLength(0);
 });
 

@@ -6,6 +6,8 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import type { SessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
 import { randomUUID } from '@/platform/randomUUID';
 import { buildDiscussionRouteHref } from './discussionRoutes';
+import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 type Draft = Pick<DiscussionSecondOpinionStartInputV1, 'title' | 'question' | 'reviewers' | 'participants'>;
 type Preview = Extract<DiscussionSecondOpinionStartResultV1, { status: 'preview' }>;
@@ -75,6 +77,16 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
         updateDraft(draft: Draft): boolean {
             if (snapshot.submitted) return false;
             publish({ draft, preview: null, result: null });
+            return true;
+        },
+        toggleReviewer(selection: ExecutableParticipantSelectionV1, question: string): boolean {
+            if (snapshot.working || snapshot.submitted) return false;
+            const selected = snapshot.draft.reviewers.some(reviewer => sameStrictJsonValue(reviewer.selection, selection));
+            const reviewers = selected
+                ? snapshot.draft.reviewers.filter(reviewer => !sameStrictJsonValue(reviewer.selection, selection))
+                : [...snapshot.draft.reviewers, { selection,
+                    ...(selection.kind === 'model' ? { participantSlotId: randomUUID() } : {}) }];
+            publish({ draft: { ...snapshot.draft, question, reviewers }, preview: null, result: null });
             return true;
         },
         async preview(signal?: AbortSignal) {

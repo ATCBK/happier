@@ -24,6 +24,7 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
   publisherSessionId?: string; publisherDisclosure?: boolean; noReviewers?: boolean } = {}) {
   const events: string[] = [];
   const creates: unknown[] = [], posts: unknown[] = [], invites: unknown[] = [];
+  const approvals: ApprovalRequestV2[] = [];
   const speakers = new Map<string, 'when_addressed' | 'reads_only' | 'drafts_for_approval' | 'watches_and_speaks_up'>();
   const births: Parameters<NonNullable<ActionExecutorDeps['sessionSpawnNew']>>[0][] = [];
   const reviewer = options.reviewer ?? request.reviewers[0];
@@ -54,6 +55,10 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
   // These are the host's HTTP/transcript transport ports. The real Action
   // executor, schemas, composition and semantic child builders remain intact.
   const executor = createActionExecutor({
+    approvalsCreate: async ({ request: approval }) => {
+      approvals.push(ApprovalRequestV2Schema.parse(approval));
+      return { artifactId: `opinion-approval-${approvals.length}` };
+    },
     discussionAction: async args => {
       events.push(args.actionId);
       if (args.actionId === 'discussion.second_opinion.start') return { ok: true, value: preview() };
@@ -104,10 +109,38 @@ function fixture(options: { needsGrant?: boolean; quoteOnly?: boolean; sourceRea
       'discussion.second_opinion.start': ['ui'], 'discussion.create': ['ui'], 'discussion.invite': ['ui'],
       'discussion.post': ['ui'], 'session.access.grant.set': ['ui'], 'session.transcript.get': ['ui'], 'session.spawn_new': ['ui'],
     } }) };
-  return { executor, context, events, creates, posts, preview, births, invites };
+  return { executor, context, events, creates, posts, preview, births, invites, approvals };
 }
 
 describe('Second opinion canonical Action composition', () => {
+  it('previews for a present CLI user under the default policy without weakening Ask or automation authority', async () => {
+    const f = fixture();
+    const context = { ...f.context, surface: 'cli' as const, bypassApprovals: false,
+      actionCaller: { kind: 'host' as const }, runtimeAccountId: 'alice', actionRequestId: 'cli-preview',
+      actionsSettings: normalizeActionsSettingsV1({ v: 1 }) };
+    const outcome = await f.executor.execute('discussion.second_opinion.start', request, context);
+    expect(outcome, JSON.stringify(outcome))
+      .toMatchObject({ ok: true, result: { status: 'preview', sourceText: 'Exact source answer' } });
+    expect(f.events).toEqual(['discussion.second_opinion.start', 'read-source']);
+    for (const surface of ['cli', 'agent', 'voice'] as const) {
+      const automation = await f.executor.execute('discussion.second_opinion.start', request,
+        { ...context, surface, authority: 'account_automation' });
+      if (surface === 'cli') expect(automation).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+      else expect(automation).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    }
+    expect(f.events).toEqual(['discussion.second_opinion.start', 'read-source']);
+    const ask = await f.executor.execute('discussion.second_opinion.start', { ...request, intent: 'ask', confirmedPreview: f.preview() }, context);
+    expect(ask).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(f.approvals.at(-1)).toMatchObject({ actionId: 'discussion.second_opinion.start', actionArgs: { intent: 'ask' } });
+    for (const surface of ['cli', 'ui'] as const) {
+      expect(await f.executor.execute('discussion.second_opinion.start', request, { ...context, surface,
+        actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: {
+          'discussion.second_opinion.start': { approvalRequiredSurfaces: [surface] },
+        } }) })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    }
+    expect(f.events).toEqual(['discussion.second_opinion.start', 'read-source']);
+    expect(f.creates).toEqual([]);
+  });
   it('previews a people-only Discuss source without requiring an unused reviewer question', async () => {
     const f = fixture({ noReviewers: true });
     const result = await f.executor.execute('discussion.second_opinion.start', { ...request, reviewers: [], question: '' }, f.context);

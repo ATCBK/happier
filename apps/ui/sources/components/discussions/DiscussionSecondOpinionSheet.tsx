@@ -6,6 +6,7 @@ import type {
   DiscussionSecondOpinionSourceV1,
   DiscussionSecondOpinionPreviewV1,
 } from '@happier-dev/protocol/discussions/secondOpinion';
+import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldItem } from '@/components/ui/forms/FieldItem';
@@ -27,8 +28,8 @@ import {
   createDiscussionSecondOpinionController,
   type DiscussionSecondOpinionSnapshot,
 } from './discussionSecondOpinionController';
-import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
-import type { DiscussionInviteCandidate } from './discussionInviteCandidates';
+import { executableParticipantOptionId, useExecutableParticipantSections } from './useExecutableParticipantSections';
+import { useExecutableParticipantLabel } from '@/components/sessions/authoring/useExecutableParticipantLabel';
 
 export type DiscussionSecondOpinionIntent = 'second_opinion' | 'discuss';
 
@@ -42,10 +43,6 @@ type SheetProps = Readonly<{
   onOpenDiscussion: (href: string) => void;
 }>;
 
-type ReviewerCandidate = Extract<
-  DiscussionInviteCandidate,
-  { kind: 'session' }
->;
 const NO_SERVER_IDS: readonly string[] = [];
 
 /**
@@ -156,63 +153,44 @@ function BoundForm(
     controller.getSnapshot,
   );
   const [question, setQuestion] = React.useState(snapshot.draft.question);
-  const candidateSource = useDiscussionInviteCandidates({
+  const [readinessSessionId, setReadinessSessionId] = React.useState<string | null>(null);
+  const toggleReviewer = React.useCallback((selection: ExecutableParticipantSelectionV1) => {
+    if (controller.toggleReviewer(selection, question) && controller.getSnapshot().draft.reviewers.length > 0) {
+      void controller.preview();
+    }
+  }, [controller, question]);
+  const candidateSource = useExecutableParticipantSections({
     accountLifetime: binding,
-    availability,
     enabled: !discuss,
+    busy: snapshot.working || snapshot.submitted,
+    readinessSessionId,
+    onReadinessSessionChange: setReadinessSessionId,
+    sessionsContext: t('session.collaboration.discussion.secondOpinion.yourSession'),
+    onChoose: toggleReviewer,
   });
   const reviewers = React.useMemo(
-    () =>
-      candidateSource.candidates.filter(
-        (candidate): candidate is ReviewerCandidate =>
-          candidate.kind === 'session' &&
-          candidate.selection.session.sessionId !== sourceSession.sessionId,
-      ),
-    [candidateSource.candidates, sourceSession.sessionId],
+    () => candidateSource.sections.flatMap(section => section.options)
+      .filter(option => option.id !== `session:${sourceSession.sessionId}`),
+    [candidateSource.sections, sourceSession.sessionId],
   );
   const selectedKeys = React.useMemo(
     () =>
       new Set(
         snapshot.draft.reviewers.map((reviewer) =>
-          reviewer.selection.kind === 'session'
-            ? reviewer.selection.session.sessionId
-            : '',
+          executableParticipantOptionId(reviewer.selection),
         ),
       ),
     [snapshot.draft.reviewers],
   );
-  const selected = reviewers.filter((candidate) =>
-    selectedKeys.has(candidate.selection.session.sessionId),
-  );
-  const reviewerLabel =
-    selected.length === 1
-      ? (selected[0]!.label ??
-        t('session.collaboration.discussion.heldParticipant'))
-      : null;
+  const reviewerLabel = useExecutableParticipantLabel(
+    snapshot.draft.reviewers.length === 1 ? snapshot.draft.reviewers[0]!.selection : undefined,
+    binding.scope.serverId,
+  ) ?? null;
 
   // Discuss… previews at once (people only); a second opinion previews per chosen reviewer set.
   React.useEffect(() => {
     if (discuss) void controller.preview();
   }, [controller, discuss]);
-  const toggleReviewer = (candidate: ReviewerCandidate) => {
-    const id = candidate.selection.session.sessionId;
-    const next = selectedKeys.has(id)
-      ? snapshot.draft.reviewers.filter(
-          (reviewer) =>
-            reviewer.selection.kind !== 'session' ||
-            reviewer.selection.session.sessionId !== id,
-        )
-      : [...snapshot.draft.reviewers, { selection: candidate.selection }];
-    if (
-      controller.updateDraft({
-        ...snapshot.draft,
-        question,
-        reviewers: next,
-      }) &&
-      next.length > 0
-    )
-      void controller.preview();
-  };
   const ask = async (sourceAccess?: 'quote_only') => {
     const draft = snapshot.draft;
     const reviewersFor = sourceAccess
@@ -257,7 +235,7 @@ function BoundForm(
     !unavailable &&
     !blocked &&
     preview !== null &&
-    (discuss || (selected.length === 1 && question.trim().length > 0));
+    (discuss || (snapshot.draft.reviewers.length === 1 && question.trim().length > 0));
 
   const subtitle = sourceTitle
     ? t('session.collaboration.discussion.secondOpinion.subtitle', {
@@ -394,33 +372,24 @@ function BoundForm(
             />
           ) : (
             reviewers.map((candidate) => {
-              const isSelected = selectedKeys.has(
-                candidate.selection.session.sessionId,
-              );
+              const isSelected = selectedKeys.has(candidate.id);
+              const isSessionChoice = candidate.id.startsWith('session:');
               return (
                 <Item
-                  key={candidate.key}
-                  testID={`second-opinion.reviewer:${candidate.selection.session.sessionId}`}
+                  key={candidate.id}
+                  testID={candidate.id.startsWith('session:')
+                    ? `second-opinion.reviewer:${candidate.id.slice('session:'.length)}` : candidate.testID}
                   density="compact"
                   showChevron={false}
                   showDivider={false}
                   selected={isSelected}
-                  accessibilityRole="checkbox"
-                  accessibilityChecked={isSelected}
-                  leftElement={
-                    <Icon
-                      name="robot"
-                      size={ICON_SIZE.md}
-                      color={theme.colors.text.secondary}
-                    />
-                  }
-                  title={
-                    candidate.label ??
-                    t('session.collaboration.discussion.heldParticipant')
-                  }
-                  subtitle={t(
-                    'session.collaboration.discussion.secondOpinion.yourSession',
-                  )}
+                  accessibilityRole={isSessionChoice ? 'checkbox' : 'button'}
+                  accessibilityChecked={isSessionChoice ? isSelected : undefined}
+                  accessibilityLabel={candidate.accessibilityLabel}
+                  disabled={candidate.disabled}
+                  leftElement={typeof candidate.icon === 'function' ? candidate.icon() : candidate.icon}
+                  title={candidate.label}
+                  subtitle={candidate.subtitle}
                   rightElement={
                     isSelected ? (
                       <Icon
@@ -430,22 +399,18 @@ function BoundForm(
                       />
                     ) : null
                   }
-                  onPress={() => toggleReviewer(candidate)}
+                  onHoverIn={candidate.onHighlight}
+                  onFocus={candidate.onHighlight}
+                  onPressIn={candidate.onPressIn}
+                  onPress={candidate.onSelect}
                 />
               );
             })
           )}
-          {!candidateSource.sessions.complete && reviewers.length > 0 ? (
-            <Item
-              density="compact"
-              showChevron={false}
-              showDivider={false}
-              title={t(
-                'session.collaboration.discussion.secondOpinion.moreSessions',
-              )}
-              onPress={() => void candidateSource.sessions.loadMore()}
-            />
-          ) : null}
+          {snapshot.draft.reviewers.map(reviewer => reviewer.selection.kind === 'model' ? (
+            <SelectedModelReviewer key={reviewer.participantSlotId} selection={reviewer.selection}
+              disabled={snapshot.working || snapshot.submitted} onRemove={() => toggleReviewer(reviewer.selection)} />
+          ) : null)}
         </View>
       ) : null}
       {unavailable ? (
@@ -472,6 +437,22 @@ function BoundForm(
       <ResultLine snapshot={snapshot} onRetry={() => void controller.retry()} />
     </SheetFrame>
   );
+}
+
+/** A chosen recipe is not an allocated Session; this is the retained selection, not another inventory. */
+function SelectedModelReviewer(props: Readonly<{
+  selection: Extract<ExecutableParticipantSelectionV1, { kind: 'model' }>;
+  disabled: boolean;
+  onRemove: () => void;
+}>) {
+  const { theme } = useUnistyles();
+  const label = useExecutableParticipantLabel(props.selection, props.selection.launch.executionTarget.serverId);
+  return <Item testID="second-opinion.selected-model" density="compact" showChevron={false} showDivider={false}
+    selected accessibilityRole="checkbox" accessibilityChecked disabled={props.disabled}
+    leftElement={<Icon name="sparkle" size={ICON_SIZE.md} color={theme.colors.text.secondary} />}
+    title={label ?? t('session.collaboration.discussion.heldParticipant')}
+    rightElement={<Icon name="check" size={ICON_SIZE.sm} color={theme.colors.text.primary} />}
+    onPress={props.onRemove} />;
 }
 
 function SheetFrame(
@@ -739,6 +720,7 @@ function ResultLine(
         kind="error"
         testID="second-opinion.failed"
         title={t('session.collaboration.discussion.secondOpinion.failed')}
+        diagnosticCode={outcome.kind === 'failed' ? outcome.errorCode : outcome.kind}
         action={
           props.snapshot.submitted
             ? {
@@ -759,6 +741,7 @@ function ResultLine(
         kind="warning"
         testID="second-opinion.pending"
         title={t('session.collaboration.discussion.secondOpinion.pending')}
+        diagnosticCode={value.errorCode}
         action={{
           label: t('session.collaboration.discussion.retry'),
           onPress: props.onRetry,
