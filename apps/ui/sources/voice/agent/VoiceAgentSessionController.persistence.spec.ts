@@ -32,7 +32,8 @@ import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/acc
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
@@ -249,7 +250,7 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
     return json({ session: current });
   }
   const machineDetail = /^\/v1\/machines\/([^/]+)$/.exec(path);
-  if (path === '/v1/machines' || machineDetail) {
+  if (path === '/v1/machines' || path === '/v1/machines/read-batch' || machineDetail) {
     await readMachines();
     const rows = Object.values(state.machines).map((machine: any) => ({
       ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
@@ -258,6 +259,8 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
       }) : null,
       daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
     }));
+    if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+      id => rows.find(machine => machine.id === id) ?? null);
     return json(machineDetail ? { machine: rows.find(machine => machine.id === decodeURIComponent(machineDetail[1])) } : rows);
   }
   return new Response('{}', { status: 404 });
@@ -405,7 +408,7 @@ async function loadVoiceAgentPersistenceHarness() {
   connection = await restoreServerAccountForTest({
     serverUrl: 'https://voice-persistence.example.test',
     credentialScope: 'restored-home',
-    request: respondToServerRequest,
+    request: createSessionReadBatchFetchBoundary(respondToServerRequest),
   });
   storage.setState({ ...state, profileScope: { serverId: homeId, accountId: 'account-a' } });
   state = storage.getState();

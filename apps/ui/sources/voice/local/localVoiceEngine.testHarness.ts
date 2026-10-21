@@ -21,7 +21,7 @@ import { VOICE_CONVERSATION_SYSTEM_SESSION_KEY } from '@/voice/persistence/voice
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import { voiceSettingsParse } from '@/sync/domains/settings/voiceSettings';
@@ -31,6 +31,7 @@ import { createVoiceSpeechOutputBoundary } from '@/dev/testkit/harness/voiceSpee
 import type { HappierAudioStreamNativeEventMap } from '../../../../../packages/audio-stream-native/src/HappierAudioStreamNative.types';
 import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
@@ -549,7 +550,7 @@ async function createLocalVoiceAccountHarness() {
             const homes = await serveAccountHomes({
                 homes: [{ key: 'voice', serverUrl: 'https://local-voice-actions.example.test', accountId: 'account-a',
                     currentAccount: true, settings: accountSettings }],
-                route: async request => {
+                route: createSessionReadBatchHttpBoundary(async request => {
                     if (localVoiceHttpResponder) {
                         const overridden = await localVoiceHttpResponder(request);
                         if (overridden !== undefined) return overridden;
@@ -609,6 +610,10 @@ async function createLocalVoiceAccountHarness() {
                             daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER };
                     });
                     if (path === '/v1/machines') return Response.json(machineRows);
+                    if (path === '/v1/machines/read-batch' && request.method === 'POST') {
+                        return createMachineReadBatchResponseFixture(request.body,
+                            id => machineRows.find(machine => machine.id === id) ?? null);
+                    }
                     const machineDetail = /^\/v1\/machines\/([^/]+)$/.exec(path);
                     if (machineDetail) {
                         const machine = machineRows.find(row => row.id === decodeURIComponent(machineDetail[1]));
@@ -628,7 +633,7 @@ async function createLocalVoiceAccountHarness() {
                         ])) ?? [], hasMore: false,
                     }));
                     return undefined;
-                },
+                }).handle,
             });
             const disconnect = await homes.restoreActiveConnection();
             activeAccountHomes = homes;

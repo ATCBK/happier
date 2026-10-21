@@ -22,11 +22,12 @@ import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creat
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionRunnerRuntimeStatusFixture } from '@/dev/testkit/fixtures/sessionRunnerRuntimeFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { restoreServerAccountForTest, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { resolveBundledAgentIdFromContributionIdentity } from '@/agents/catalog/catalog';
 import { buildVoiceSpawnUserAttemptId } from '@/voice/shared/voiceSpawnAttempt';
@@ -223,20 +224,28 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
     return json({ session: current });
   }
   const machineDetail = /^\/v1\/machines\/([^/]+)$/.exec(path);
-  if (path === '/v1/machines' || machineDetail) {
+  if (path === '/v1/machines' || path === '/v1/machines/read-batch' || machineDetail) {
+    const defaults = createMachineFixture().metadata!;
     const machines = Object.values(state.machines).map(machine => ({
     ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-1' }),
     ...machine, seq: machine.seq ?? 1, createdAt: 1, updatedAt: 1, activeAt: machine.activeAt ?? Date.now(),
-    metadataVersion: 1, daemonStateVersion: 0,
-    metadata: machine.metadata ? encodePlainMachineStoredContent(machine.metadata) : null,
+    metadataVersion: machine.metadataVersion ?? 1, daemonStateVersion: 0,
+    // Bootstrap can read before loadConversationSession normalizes the client
+    // fixture. Publish the same complete Machine content at both times.
+    metadata: machine.metadata ? encodePlainMachineStoredContent({
+      host: defaults.host, platform: defaults.platform, happyCliVersion: defaults.happyCliVersion,
+      homeDir: '', happyHomeDir: '', ...machine.metadata,
+    }) : null,
     daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
     }));
+    if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
+      id => machines.find(machine => machine.id === id) ?? null);
     return json(machineDetail ? { machine: machines.find(machine => machine.id === decodeURIComponent(machineDetail[1])) } : machines);
   }
   return new Response('{}', { status: 404 });
 }
 installDisconnectedServerSocketBoundary(socket => {
-  socket.connected = true;
+  configureConnectedServerSocketBoundary(socket);
   // Scoped pool sockets may survive restoreAllMocks; the cold transport owns these for its lifetime.
   socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
   socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
@@ -319,7 +328,7 @@ async function restoreAccount() {
   sessionOrganizationFailure = null;
   connection = await restoreServerAccountForTest({
     serverUrl: 'https://voice-conversation.example.test', accountId: 'account-1',
-    credentialScope: 'restored-home', activation: 'switch', request: respondToServerRequest,
+    credentialScope: 'restored-home', activation: 'switch', request: createSessionReadBatchFetchBoundary(respondToServerRequest),
   });
   homeId = connection.home.id;
   state.settingsScope = { serverId: homeId, accountId: 'account-1' };
@@ -336,6 +345,9 @@ async function loadConversationSession() {
     const defaults = createMachineFixture().metadata!;
     machine.metadata = machine.metadata ? { host: defaults.host, platform: defaults.platform,
       happyCliVersion: defaults.happyCliVersion, homeDir: '', happyHomeDir: '', ...machine.metadata } : null;
+    // Tests replace external Machine content after Account bootstrap. Publish
+    // its new revision so real selective hydration can observe that replacement.
+    machine.metadataVersion = (machine.metadataVersion ?? 1) + 1;
     machine.activeAt = machine.active ? Date.now() : 0;
   }
   const { sync } = await import('@/sync/sync');

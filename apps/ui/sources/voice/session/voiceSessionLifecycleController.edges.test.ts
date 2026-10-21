@@ -78,6 +78,7 @@ async function installSameIdHomeTargets(environment: Awaited<ReturnType<typeof c
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
     const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
+    const { createSessionReadBatchFetchBoundary } = await import('@/dev/testkit/harness/sessionReadBatchHttpBoundary');
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     const { answerVoiceRealtimePreparationHttpRequest } = await import('@/dev/testkit/harness/voiceRealtimePreparationHttpBoundary');
     const homeA = environment.accountConnection.home;
@@ -91,7 +92,7 @@ async function installSameIdHomeTargets(environment: Awaited<ReturnType<typeof c
             metadata: { path: '/repo', host: 'lifecycle-test', flavor: 'claude' } }),
     })));
     const reads: Array<{ serverUrl: string; path: string; authorization: string | null }> = [];
-    setRuntimeFetch(async (input, init) => {
+    setRuntimeFetch(createSessionReadBatchFetchBoundary(async (input, init) => {
         const url = new URL(String(input));
         const index = [homeA, homeB].findIndex(home => new URL(home.serverUrl).origin === url.origin);
         if (index === -1) throw new Error('Unexpected lifecycle Home HTTP origin');
@@ -109,7 +110,7 @@ async function installSameIdHomeTargets(environment: Awaited<ReturnType<typeof c
         // Never serve A's Profile/settings as B; unclaimed B routes fail closed.
         if (index === 1) return sessions[1]!.handle(input, init) ?? Response.json({}, { status: 404 });
         return await environment.homeRequest(input, init) ?? Response.json({}, { status: 404 });
-    });
+    }));
     return { targets, reads, homeA, homeB, credentialsB, async dispose() { await writeB.rollback(); } };
 }
 

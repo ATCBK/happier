@@ -20,7 +20,7 @@ import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/p
 import { createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createSessionViewerFixture, createToolCallMessageFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createMachineFixture, createPlainMachineRowFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { PLUGIN_UI_HOST_API_VERSION_V1, PLUGIN_UI_HOST_API_WIRE_VERSION_V1 } from '@happier-dev/protocol/plugins/ui';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -613,12 +613,7 @@ vi.mock('socket.io-client', async (importOriginal) => (
 ).createSocketIoClientBoundary(importOriginal));
 
 function installVoiceSocketBoundary() { installDisconnectedServerSocketBoundary((socket, serverUrl) => {
-  socket.connected = true;
-  socket.connect = vi.fn(() => {
-    socket.connected = true;
-    for (const listener of socket.listeners('connect')) listener();
-    return socket;
-  });
+  configureConnectedServerSocketBoundary(socket);
   socket.emitWithAck = vi.fn(async (event, payload) => {
     if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
     if (!serverUrl) throw new Error(`Unexpected Voice daemon event: ${event}`);

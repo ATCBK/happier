@@ -25,6 +25,7 @@ export async function withGeneratedElevenLabsVoiceRuntime(
     const { SessionStoredMessageContentSchema } = await import('@happier-dev/protocol/sessions/messages/sessionStoredMessageContent');
     const { serveAccountHomes } = await import('./actionHomesHttpHarness');
     const { createSessionMetadataHttpBoundary } = await import('./sessionMetadataHttpBoundary');
+    const { createSessionReadBatchHttpBoundary } = await import('./sessionReadBatchHttpBoundary');
     const { answerVoiceRealtimePreparationHttpRequest } = await import('./voiceRealtimePreparationHttpBoundary');
     const { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } = await import('@/voice/registry/generatedBundledVoiceRuntimeEntries');
     const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
@@ -49,7 +50,7 @@ export async function withGeneratedElevenLabsVoiceRuntime(
             currentAccount: true,
             settings: { voice: { ...previousStorage.settings.voice, providerId: entry.providerId,
                 providers: { [entry.providerId]: { schemaVersion: 1, config: ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } } } } }],
-        route: request => {
+        route: createSessionReadBatchHttpBoundary(request => {
             if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
             const preparation = answerVoiceRealtimePreparationHttpRequest(request.url, storage.getState().settings);
             if (preparation) return preparation;
@@ -74,7 +75,7 @@ export async function withGeneratedElevenLabsVoiceRuntime(
             if (request.method === 'POST' && /\/delivery\/handled$/.test(request.path)) return Response.json({});
             if (/\/messages$/.test(request.path)) return Response.json({ messages: [], hasMore: false });
             return metadata.handle(request.url, { method: request.method, body: request.body === undefined ? undefined : JSON.stringify(request.body) }) ?? undefined;
-        },
+        }).handle,
     });
     let disconnect: (() => Promise<void>) | undefined;
     const assembly = createBuiltinVoiceAdapterAssembly({ bundledEntries: [entry] });

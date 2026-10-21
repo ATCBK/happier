@@ -4,7 +4,7 @@ vi.mock('socket.io-client', async importOriginal =>
 import { FeaturesResponseSchema, ExecutionRunEnsureOrStartRequestSchema, ExecutionRunPublicStateSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { LlmTaskRunnerConfigV1Schema } from '@happier-dev/protocol/llm/tasks/llmTaskRunnerConfigV1';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { attachAgentPluginSettings } from '@/agents/registry/agentUiSettingLookup';
 import { createDeferred, flushHookEffects } from '@/dev/testkit';
@@ -15,6 +15,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -289,7 +290,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
     installSessionHttpSnapshot();
     connection = await restoreServerAccountForTest({
       serverUrl: 'https://voice-streaming.example.test',
-      request: async (url, init) => {
+      request: createSessionReadBatchFetchBoundary(async (url, init) => {
         const path = new URL(String(url)).pathname;
         requestedPaths.push(path);
         const json = (value: unknown) => Response.json(value);
@@ -297,6 +298,10 @@ describe('VoiceExecutionTransport (streaming)', () => {
         if (path === '/health') return json({ status: 'ok' });
         if (path === '/v2/cursor') return json({ cursor: 0, changesFloor: 0 });
         if (path === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+          return createMachineReadBatchResponseFixture(init.body,
+            id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
+        }
         const machineDetail = /^\/v1\/machines\/([^/]+)(\/access)?$/.exec(path);
         if (machineDetail) {
           const machineId = decodeURIComponent(machineDetail[1]);
@@ -312,7 +317,7 @@ describe('VoiceExecutionTransport (streaming)', () => {
         const sessionResponse = sessionHttp.handle(url, init);
         if (sessionResponse) return sessionResponse;
         return new Response('{}', { status: 404 });
-      },
+      }),
     });
     vi.useFakeTimers();
     setVoiceControllerState();
