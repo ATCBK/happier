@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import type { ProcessRowV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 
 import { useMachinePageState } from '@/components/machines/page/machinePageContext';
+import { MachineTabSubHead } from '@/components/machines/page/MachineTabSubHead';
 import type {
   MachinePageTabBodyProps,
   MachinePageTabParams,
@@ -12,7 +13,6 @@ import { readMachinePublishedResources } from '@/components/machines/summary/mac
 import { formatVitalsPercent } from '@/components/machines/vitals/vitalsFormat';
 import { VitalsMeterRow } from '@/components/machines/vitals/VitalsMeterRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -119,14 +119,8 @@ export function ProcessesOwnerPage(
     [answer, controller.hidden, params.page, params.sort],
   );
 
-  const backLink = (
-    <TextLinkButton
-      testID="machine-processes-back"
-      label={t('machineProcesses.phone.back')}
-      tone="strong"
-      onPress={back}
-    />
-  );
+  const backTo = { label: t('machineProcesses.phone.back'), onPress: back, testID: 'machine-processes-back' };
+  const backLink = <MachineTabSubHead title={null} back={backTo} />;
   if (!answer || !view)
     return (
       <View style={styles.page}>
@@ -156,8 +150,7 @@ export function ProcessesOwnerPage(
       );
     return (
       <View style={styles.page} testID="machine-processes-process-page">
-        {backLink}
-        <Text style={styles.title}>{describeProcessTitle(row)}</Text>
+        <MachineTabSubHead title={describeProcessTitle(row)} back={backTo} />
         <ProcessDetail
           row={row}
           owner={process?.owner.owner ?? left?.owner ?? null}
@@ -191,13 +184,8 @@ export function ProcessesOwnerPage(
     return (
       <ProcessesControllerContext.Provider value={controller}>
         <View style={styles.page} testID="machine-processes-app-page">
-          {backLink}
-          <View style={styles.header}>
-            <View style={styles.inline}>
-              <Icon name="desktop" size={20} color={theme.colors.text.secondary} />
-              <Text style={styles.title} numberOfLines={2}>{app.app.appGroup}</Text>
-            </View>
-          </View>
+          <MachineTabSubHead title={app.app.appGroup} back={backTo}
+            mark={<Icon name="desktop" size={20} color={theme.colors.text.secondary} />} />
           <OwnerMeters memoryBytes={app.memoryBytes} cpuPercent={app.cpuPercent} memoryTotal={memoryTotal} cores={cores} />
           <ItemGroup title={t('machineProcesses.phone.ownerProcesses', { count: members.length })}>
             {members.map((item) => <AppMemberRow key={item.key} item={item} />)}
@@ -224,10 +212,19 @@ export function ProcessesOwnerPage(
   const members = view.items.filter(
     (item) => item.kind === 'process' && item.ownerKey === owner.key,
   );
+  // An owner whose only top-level process is its root draws that root as the owner row, so the tree has no
+  // row for it; the phone page lists it first so the count above the list is true and the process can open.
+  const root = owner.rootRef ? owner.owner.members.find((row) => row.ref === owner.rootRef) : undefined;
+  const ownerProcesses: readonly Readonly<{ key: string; row: ProcessRowV1; cpuPercent: number | null; memoryBytes: number | null }>[] = [
+    ...(root && !members.some((item) => item.kind === 'process' && item.row.ref === root.ref)
+      ? [{ key: `p:${root.rowId}`, row: root, cpuPercent: root.cpuPercent ?? null, memoryBytes: root.memoryBytes }]
+      : []),
+    ...members.flatMap((item) => (item.kind === 'process' ? [item] : [])),
+  ];
   return (
     <View style={styles.page} testID="machine-processes-owner-page">
-      {backLink}
       <OwnerHeader
+        back={backTo}
         owner={owner}
         title={titles.get(owner.owner.rowId) ?? ''}
         serverId={serverId}
@@ -249,69 +246,69 @@ export function ProcessesOwnerPage(
           count: owner.processCount,
         })}
       >
-        {members.map((item) =>
-          item.kind === 'process' ? (
-            <Item
-              key={item.key}
-              testID={`machine-processes-owner-row-${item.key}`}
-              title={describeProcessTitle(item.row)}
-              subtitle={
-                <View style={styles.inline}>
-                  <ProcessIdentityText row={item.row} />
-                  <Text
-                    style={styles.quiet}
-                  >{`${formatProcessCpu(item.cpuPercent)} ${t('machineProcesses.columns.cpu')}`}</Text>
-                  <ProcessOwnershipPill level={item.row.level} />
-                </View>
-              }
-              detail={formatProcessMemory(item.memoryBytes)}
-              onPress={() =>
-                setParams({
-                  id: 'processes',
-                  page: 'process',
-                  process: item.row.ref,
-                  owner: owner.owner.rowId,
-                })
-              }
-            />
-          ) : null,
-        )}
-      </ItemGroup>
-      <View style={styles.actions}>
-        {owner.owner.owner.kind === 'session' ? (
-          <>
-            <RoundButton
-              size="small"
-              display="secondary"
-              title={t('machineProcesses.menu.openSession')}
-              onPress={() =>
-                owner.owner.owner.kind === 'session' &&
-                controller.openSession(owner.owner.owner.sessionId)
-              }
-            />
-            <RoundButton
-              size="small"
-              display="secondary"
-              title={t('machineProcesses.menu.stopSession')}
-              disabled={!online}
-              onPress={() => {
-                controller.stop(owner);
-                back();
-              }}
-            />
-          </>
-        ) : null}
-        {owner.owner.owner.kind !== 'happier' ? (
-          <RoundButton
-            size="small"
-            display="destructive"
-            title={t('machineProcesses.menu.killTree')}
-            disabled={!online}
-            onPress={() => controller.killTree(owner)}
+        {ownerProcesses.map((item) => (
+          <Item
+            key={item.key}
+            testID={`machine-processes-owner-row-${item.key}`}
+            title={describeProcessTitle(item.row)}
+            subtitle={
+              <View style={styles.inline}>
+                <ProcessIdentityText row={item.row} />
+                <Text
+                  style={styles.quiet}
+                >{`${formatProcessCpu(item.cpuPercent)} ${t('machineProcesses.columns.cpu')}`}</Text>
+                <ProcessOwnershipPill level={item.row.level} />
+              </View>
+            }
+            detail={formatProcessMemory(item.memoryBytes)}
+            onPress={() =>
+              setParams({
+                id: 'processes',
+                page: 'process',
+                process: item.row.ref,
+                owner: owner.owner.rowId,
+              })
+            }
           />
-        ) : null}
-      </View>
-      <Text style={styles.quiet}>{t('machineProcesses.phone.ownerFoot')}</Text>
+        ))}
+      </ItemGroup>
+      <ItemGroup surface="none" header="none">
+        <View style={styles.actions}>
+          {owner.owner.owner.kind === 'session' ? (
+            <>
+              <RoundButton
+                size="small"
+                display="secondary"
+                title={t('machineProcesses.menu.openSession')}
+                onPress={() =>
+                  owner.owner.owner.kind === 'session' &&
+                  controller.openSession(owner.owner.owner.sessionId)
+                }
+              />
+              <RoundButton
+                size="small"
+                display="secondary"
+                title={t('machineProcesses.menu.stopSession')}
+                disabled={!online}
+                onPress={() => {
+                  controller.stop(owner);
+                  back();
+                }}
+              />
+            </>
+          ) : null}
+          {owner.owner.owner.kind !== 'happier' ? (
+            <RoundButton
+              size="small"
+              display="destructive"
+              title={t('machineProcesses.menu.killTree')}
+              disabled={!online}
+              onPress={() => controller.killTree(owner)}
+            />
+          ) : null}
+        </View>
+        <Text style={styles.footnote}>{t('machineProcesses.phone.ownerFoot')}</Text>
+      </ItemGroup>
     </View>
   );
 }
@@ -396,22 +393,23 @@ function OwnerHeader(
     title: string;
     serverId: string;
     machineId: string;
+    back: Readonly<{ label: string; onPress: () => void; testID: string }>;
   }>,
 ) {
   const status = useProcessOwnerStatus(props.owner.owner.owner, props.serverId);
   return (
-    <View style={styles.header}>
-      <View style={styles.inline}>
+    <MachineTabSubHead
+      title={props.title}
+      back={props.back}
+      mark={
         <ProcessOwnerMark
           owner={props.owner.owner.owner}
           serverId={props.serverId}
           machineId={props.machineId}
           size={20}
         />
-        <Text style={styles.title} numberOfLines={2}>
-          {props.title}
-        </Text>
-      </View>
+      }
+    >
       {status ? (
         <Text
           style={[styles.quiet, status.color ? { color: status.color } : null]}
@@ -419,22 +417,13 @@ function OwnerHeader(
           {status.text}
         </Text>
       ) : null}
-    </View>
+    </MachineTabSubHead>
   );
 }
 
 const styles = StyleSheet.create((theme) => ({
   page: {
     gap: theme.space.s16,
-  },
-  header: {
-    gap: theme.space.s4,
-  },
-  title: {
-    ...Typography.default('semiBold'),
-    ...happierPageTextMetrics('pageTitle'),
-    color: theme.colors.text.primary,
-    flexShrink: 1,
   },
   meters: {
     gap: 14,
@@ -453,5 +442,10 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.space.s8,
+  },
+  footnote: {
+    marginTop: theme.space.s12,
+    ...Typography.variant('meta'),
+    color: theme.colors.text.secondary,
   },
 }));

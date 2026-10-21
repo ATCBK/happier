@@ -19,7 +19,10 @@ import { useClaimSettingsBack } from '@/components/settings/shell/SettingsModalF
  * the column edge are the same on every one.
  */
 export function MachineTabSubHead(props: Readonly<{
-    title: string;
+    /** Null for a page that could not be read (no name to give): the way back stands alone. */
+    title: string | null;
+    /** What the page is about, drawn before its name (an owner's mark). */
+    mark?: React.ReactNode;
     back: Readonly<{ label: string; onPress: () => void; testID: string }> | null;
     /** A quiet phrase after the name ("everything Happier did on nl2 by itself"); omitted on a phone. */
     aside?: string | null;
@@ -52,10 +55,13 @@ export function MachineTabSubHead(props: Readonly<{
                     )}
                 </HappierPressable>
             ) : null}
-            <View style={[styles.titleLine, back ? null : styles.titleLineAlone]}>
-                <Text accessibilityRole="header" style={styles.title}>{props.title}</Text>
-                {props.aside ? <Text style={styles.aside}>{props.aside}</Text> : null}
-            </View>
+            {props.title === null ? null : (
+                <View style={[styles.titleLine, back ? null : styles.titleLineAlone]}>
+                    {props.mark ? <View style={styles.mark}>{props.mark}</View> : null}
+                    <Text accessibilityRole="header" style={styles.title}>{props.title}</Text>
+                    {props.aside ? <Text style={styles.aside}>{props.aside}</Text> : null}
+                </View>
+            )}
             {props.description ? <Text style={styles.description}>{props.description}</Text> : null}
             {props.children}
         </ItemGroup>
@@ -86,6 +92,10 @@ const styles = StyleSheet.create((theme) => ({
         columnGap: theme.space.s12,
         rowGap: theme.space.s2,
         marginTop: theme.space.s4,
+    },
+    mark: {
+        alignSelf: 'center',
+        marginRight: -theme.space.s4,
     },
     page: {
         paddingTop: PAGE_LIST_METRICS.pageHeaderPaddingTopPx,

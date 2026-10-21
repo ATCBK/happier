@@ -1045,7 +1045,10 @@ const styles = StyleSheet.create((theme) => ({
   toolbarEnd: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.space.s16,
+    // On a phone "On for … only · Turn off" and the freshness chip do not fit one line: the chip drops under it.
+    flexWrap: 'wrap',
+    columnGap: theme.space.s16,
+    rowGap: theme.space.s4,
     marginLeft: 'auto',
   },
   inline: {
