@@ -24,6 +24,7 @@ import {
 import { machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFileReplace';
 import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import { t } from '@/text';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 
@@ -105,6 +106,7 @@ type Stage =
   | Readonly<{
       kind: 'result';
       receipts: readonly Receipt[];
+      target: Readonly<{ machineId: string; rootPath: string; options: EditSetOptions; scopeKey: string }>;
       undo:
         | 'idle'
         | 'running'
@@ -175,10 +177,20 @@ function useEditSetCommit(params: Readonly<{
   options: EditSetOptions;
 }>) {
   const { op, stage, setStage, latest, alive, options } = params;
+  // Reuse the mounted author's existing Account/interest and Inbox owner. The
+  // domain clients below retain their native, typed Machine receipts.
+  const author = useMountedActionExecution(options.serverId ?? latest.current.scope.serverId, { openOnRequest: true });
+  const scopeKey = JSON.stringify([author.binding?.scope, author.binding?.revision,
+    latest.current.scope.machineId, latest.current.scope.rootPath, latest.current.filePath, options.accountId, op]);
+  const currentScopeKey = React.useRef(scopeKey);
+  currentScopeKey.current = scopeKey;
   const apply = React.useCallback(async () => {
     if (stage.kind !== 'review' || stage.applying) return;
     setStage({ ...stage, applying: true });
     const current = latest.current;
+    const target = { machineId: current.scope.machineId, rootPath: current.scope.rootPath, scopeKey,
+      options: { serverId: options.serverId ?? current.scope.serverId, accountId: options.accountId ?? author.binding?.scope.accountId } };
+    const continuationSignal = author.getSignal();
     const operation =
       stage.action && stage.fileHash
         ? {
@@ -200,10 +212,10 @@ function useEditSetCommit(params: Readonly<{
           ...(current.languageId ? { languageId: current.languageId } : {}),
           operation,
         },
-        options,
+        { ...target.options, continuationSignal, onApprovalPending: author.approval.requestApproval },
       );
     } catch {
-      if (alive.current)
+      if (alive.current && !continuationSignal.aborted && author.isCurrent() && currentScopeKey.current === scopeKey)
         setStage({
           kind: 'note',
           text: t('files.pane.intelligence.outcomeUnknown'),
@@ -211,34 +223,35 @@ function useEditSetCommit(params: Readonly<{
         });
       return;
     }
-    if (!alive.current) return;
+    if (!alive.current || continuationSignal.aborted || !author.isCurrent() || currentScopeKey.current !== scopeKey) return;
     if ('ok' in response && response.ok) {
-      setStage({ kind: 'result', receipts: response.results, undo: 'idle' });
+      setStage({ kind: 'result', target, receipts: response.results, undo: 'idle' });
       return;
     }
     // A request that may have reached the Machine never claims nothing happened.
     const unknown = 'errorCode' in response
       && (response.errorCode === 'outcome_unknown' || response.errorCode === 'outcome_uncertain' || response.errorCode === 'transport_failed');
     setStage({ kind: 'note', text: unknown ? t('files.pane.intelligence.outcomeUnknown') : t('files.pane.intelligence.editFailed'), page: true });
-  }, [alive, latest, op, options, setStage, stage]);
+  }, [alive, author.approval.requestApproval, author.binding, author.getSignal, author.isCurrent, latest, op, options, scopeKey, setStage, stage]);
 
   const undo = React.useCallback(async () => {
-    if (stage.kind !== 'result' || stage.undo !== 'idle') return;
-    const receipts = stage.receipts;
-    setStage({ kind: 'result', receipts, undo: 'running' });
-    const current = latest.current;
+    if (stage.kind !== 'result' || stage.undo !== 'idle' || stage.target.scopeKey !== scopeKey || !author.isCurrent()) return;
+    const { receipts, target } = stage;
+    const continuationSignal = author.getSignal();
+    setStage({ kind: 'result', target, receipts, undo: 'running' });
     const operation = buildWorkspaceFileRestoreOperation(
       receipts as Parameters<typeof buildWorkspaceFileRestoreOperation>[0],
     );
     const response = await machineWorkspaceFileReplaceApply(
-      current.scope.machineId,
-      { rootPath: current.scope.rootPath, operation },
-      options,
+      target.machineId,
+      { rootPath: target.rootPath, operation },
+      { ...target.options, continuationSignal, onApprovalPending: author.approval.requestApproval },
     ).catch(() => null);
-    if (!alive.current) return;
+    if (!alive.current || continuationSignal.aborted || !author.isCurrent() || currentScopeKey.current !== scopeKey) return;
     if (!response || !response.ok) {
       setStage({
         kind: 'result',
+        target,
         receipts,
         undo: { restored: 0, changed: 0, failed: true },
       });
@@ -252,9 +265,9 @@ function useEditSetCommit(params: Readonly<{
       else if (result.status === 'changed') changed += 1;
       else failed = true;
     }
-    setStage({ kind: 'result', receipts, undo: { restored, changed, failed } });
-  }, [alive, latest, options, setStage, stage]);
-  return { apply, undo };
+    setStage({ kind: 'result', target, receipts, undo: { restored, changed, failed } });
+  }, [alive, author.approval.requestApproval, author.getSignal, author.isCurrent, scopeKey, setStage, stage]);
+  return { apply, undo, release: author.cancel };
 }
 
 /**
@@ -453,7 +466,8 @@ export function CodeEditSetPopover(
     [loadTexts],
   );
 
-  const { apply, undo } = useEditSetCommit({ op: request.op, stage, setStage, latest, alive, options });
+  const { apply, undo, release } = useEditSetCommit({ op: request.op, stage, setStage, latest, alive, options });
+  const close = React.useCallback(() => { release(); props.onRequestClose(); }, [release, props.onRequestClose]);
 
   const saveFirst = React.useCallback(async () => {
     setStage({ kind: 'unsaved', saving: true });
@@ -510,7 +524,7 @@ export function CodeEditSetPopover(
       onBack={back}
       onUndo={undo}
       onSave={saveFirst}
-      onClose={props.onRequestClose}
+      onClose={close}
     />
   );
   if (!phone && (stage.kind === 'review' || stage.kind === 'result' || (stage.kind === 'note' && stage.page)))
@@ -523,7 +537,7 @@ export function CodeEditSetPopover(
         onApply={apply}
         onBack={back}
         onUndo={undo}
-        onClose={props.onRequestClose}
+        onClose={close}
       />
     );
   return (
@@ -535,7 +549,7 @@ export function CodeEditSetPopover(
       backdrop={false}
       boundaryRef={null}
       horizontalBoundaryRef={pageBox.ref}
-      onRequestClose={props.onRequestClose}
+      onRequestClose={close}
       phonePresentation="sheet"
       sheetHeader="none"
       sheetMaterial="solid"
@@ -615,7 +629,8 @@ export function FileRenameEditSet(
     // The reviewed files are fixed for this review.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const { apply, undo } = useEditSetCommit({ op: 'fileRename', stage, setStage, latest, alive, options });
+  const { apply, undo, release } = useEditSetCommit({ op: 'fileRename', stage, setStage, latest, alive, options });
+  const close = React.useCallback(() => { release(); props.onRequestClose(); }, [release, props.onRequestClose]);
   if (stage.kind !== 'review' && stage.kind !== 'result' && stage.kind !== 'note') return <></>;
   return (
     <CodeEditSetPage
@@ -624,10 +639,10 @@ export function FileRenameEditSet(
       texts={texts}
       filePath={props.filePath}
       onApply={apply}
-      onBack={props.onRequestClose}
+      onBack={close}
       onUndo={undo}
-      onClose={props.onRequestClose}
-      onRenameOnly={props.onRenameOnly}
+      onClose={close}
+      onRenameOnly={() => { release(); props.onRenameOnly(); }}
     />
   );
 }

@@ -300,6 +300,22 @@ export type WorkspaceReplaceApproval = Readonly<{
   request: ActionApprovalRequestCreatedResult;
 }>;
 
+type RetainedReplaceResult = Readonly<{
+  key: string;
+  scope: WorkspaceScopeBase;
+  options: Readonly<{ serverId: string; accountId: string }>;
+  results: readonly WorkspaceReplaceFileResult[];
+}>;
+type ApplySettlement = Readonly<{
+  error: WorkspaceReplaceErrorCode | null;
+  approval: WorkspaceReplaceApproval | null;
+}>;
+export type WorkspaceReplaceCloseOutcome = ApplySettlement & Readonly<{
+  machineId: string;
+  results: readonly WorkspaceReplaceFileResult[];
+  undo: (() => Promise<WorkspaceReplaceUndoOutcome | null>) | null;
+}>;
+
 export type WorkspaceReplaceModel = Readonly<{
   /** The preview on screen; it stays while a newer one loads. */
   preview: Preview | null;
@@ -333,6 +349,8 @@ export type WorkspaceReplaceModel = Readonly<{
     results: readonly WorkspaceReplaceFileResult[];
     run: () => Promise<WorkspaceReplaceUndoOutcome | null>;
   }> | null;
+  /** Close cancels cooperatively and retains the same operation's terminal receipt, even after unmount. */
+  settleOnClose: () => Promise<WorkspaceReplaceCloseOutcome | null>;
   toggleFile: (path: string) => void;
   toggleMatch: (path: string, key: string) => void;
   loadMore: () => void;
@@ -353,6 +371,13 @@ function readReplaceApproval(response: unknown): ActionApprovalRequestCreatedRes
     || response.errorCode !== 'approval_required' || !('details' in response)) return null;
   const parsed = ActionApprovalRequestCreatedResultSchema.safeParse(response.details);
   return parsed.success ? parsed.data : null;
+}
+
+function undoableResults(results: readonly WorkspaceReplaceFileResult[]) {
+  return results.filter(
+    (result): result is WorkspaceReplaceFileResult & { status: 'replaced' } =>
+      result.status === 'replaced' && Boolean(result.hash && result.edits && (result.edits.length || result.renameTo)),
+  );
 }
 
 function previewError(
@@ -414,12 +439,25 @@ export function useWorkspaceReplace(
   const [loadingMore, setLoadingMore] = React.useState(false);
   const [excluded, setExcluded] =
     React.useState<WorkspaceReplaceExclusions>(NO_EXCLUSIONS);
-  const [resultState, setResultState] = React.useState<Readonly<{
+  // The operation closure outlives its mounted projection; there is still only one retained result.
+  const retainedResult = React.useRef<RetainedReplaceResult | null>(null);
+  const pendingRestoreApproval = React.useRef<string | null>(null);
+  const [resultState, projectResultState] = React.useState<RetainedReplaceResult | null>(null);
+  const setResultState = React.useCallback((next: React.SetStateAction<RetainedReplaceResult | null>) => {
+    const result = typeof next === 'function' ? next(retainedResult.current) : next;
+    retainedResult.current = result;
+    if (!result) pendingRestoreApproval.current = null;
+    projectResultState(result);
+  }, []);
+  const currentAccount = React.useRef(accountLifetime);
+  currentAccount.current = accountLifetime;
+  const pendingApply = React.useRef<Readonly<{
     key: string;
     scope: WorkspaceScopeBase;
     options: Readonly<{ serverId: string; accountId: string }>;
-    results: readonly WorkspaceReplaceFileResult[];
+    completion: Promise<ApplySettlement>;
   }> | null>(null);
+  const restoring = React.useRef(false);
   const results = resultState?.key === key ? resultState.results : null;
   const [applying, setApplying] = React.useState(false);
   const [undoing, setUndoing] = React.useState(false);
@@ -428,8 +466,14 @@ export function useWorkspaceReplace(
     code: WorkspaceReplaceErrorCode;
   }> | null>(null);
   const applyError = applyFailure?.key === key ? applyFailure.code : null;
+  const resultAccountIsCurrent = resultState !== null
+    && accountLifetime?.isCurrent() === true
+    && accountLifetime.scope.accountId === resultState.options.accountId
+    && accountLifetime.scope.serverId === resultState.options.serverId;
   const [approvalState, setApproval] = React.useState<Readonly<{ key: string; approval: WorkspaceReplaceApproval }> | null>(null);
-  const approval = approvalState?.key === key ? approvalState.approval : null;
+  const approval = approvalState && (approvalState.key === key
+    || approvalState.approval.operation === 'restore' && approvalState.key === resultState?.key && resultAccountIsCurrent)
+    ? approvalState.approval : null;
   const applyController = React.useRef<AbortController | null>(null);
   const options = React.useMemo(
     () => (scope && accountId ? { serverId: scope.serverId, accountId } : null),
@@ -516,6 +560,11 @@ export function useWorkspaceReplace(
       options,
     )
       .then((response) => {
+        const pendingApproval = readReplaceApproval(response);
+        if (pendingApproval) {
+          setApproval({ key: previewKey, approval: { operation: 'preview', request: pendingApproval } });
+          return;
+        }
         if (!response.ok) return;
         setPreview((previous) =>
           previous && previous.key === previewKey
@@ -606,13 +655,15 @@ export function useWorkspaceReplace(
     preview !== null &&
     totals.selectedMatches > 0;
   const apply = React.useCallback(async () => {
-    if (!canApply || !preview || !scope || !options) return;
+    if (!canApply || !preview || !scope || !options || pendingApply.current) return;
     const selection = buildReplaceApplyFiles(files, excluded, []);
     const controller = new AbortController();
     applyController.current = controller;
     setApplying(true);
     setApplyFailure(null);
     setApproval(null);
+    pendingRestoreApproval.current = null;
+    const completion = (async (): Promise<ApplySettlement> => {
     try {
       const response = await machineWorkspaceFileReplaceApply(
         scope.machineId,
@@ -629,21 +680,20 @@ export function useWorkspaceReplace(
       if (!response.ok) {
         const pendingApproval = readReplaceApproval(response);
         if (pendingApproval) {
-          setApproval({ key: preview.key, approval: { operation: 'replace', request: pendingApproval } });
-          return;
+          const approval: WorkspaceReplaceApproval = { operation: 'replace', request: pendingApproval };
+          setApproval({ key: preview.key, approval });
+          return { error: null, approval };
         }
         // The request may have reached the Machine: never claim nothing happened, never replay.
-        setApplyFailure({
-          key: preview.key,
-          code: 'errorCode' in response
+        const code: WorkspaceReplaceErrorCode = 'errorCode' in response
             ? 'outcome_unknown'
             : response.code === 'invalid_pattern'
               ? 'invalid_pattern'
               : response.code === 'root_not_allowed'
                 ? 'root_not_allowed'
-                : 'failed',
-        });
-        return;
+                : 'failed';
+        setApplyFailure({ key: preview.key, code });
+        return { error: code, approval: null };
       }
       const cancelled = new Set(response.cancelled ?? []);
       setResultState({ key: preview.key, scope, options, results: [
@@ -666,38 +716,41 @@ export function useWorkspaceReplace(
           reason: 'unsaved',
         })),
       ] });
+      return { error: null, approval: null };
     } catch {
       setApplyFailure({ key: preview.key, code: 'outcome_unknown' });
+      return { error: 'outcome_unknown', approval: null };
     } finally {
       applyController.current = null;
       setApplying(false);
     }
-  }, [canApply, excluded, files, options, preview, scope, unsavedFiles]);
+    })();
+    pendingApply.current = { key: preview.key, scope, options, completion };
+    try { await completion; }
+    finally { pendingApply.current = null; }
+  }, [canApply, excluded, files, options, preview, scope, setResultState, unsavedFiles]);
   const cancelApply = React.useCallback(() => {
     applyController.current?.abort();
   }, []);
 
   const undoable = React.useMemo(
-    () =>
-      (resultState?.results ?? []).filter(
-        (result): result is WorkspaceReplaceFileResult & { status: 'replaced' } =>
-          result.status === 'replaced' && Boolean(result.hash && result.edits && (result.edits.length || result.renameTo)),
-      ),
+    () => undoableResults(resultState?.results ?? []),
     [resultState],
   );
-  const resultAccountIsCurrent = resultState !== null
-    && accountLifetime?.isCurrent() === true
-    && accountLifetime.scope.accountId === resultState.options.accountId
-    && accountLifetime.scope.serverId === resultState.options.serverId;
   const canRestore = undoable.length > 0 && !undoing && !applying && !approval && resultAccountIsCurrent;
   const canUndo = results !== null && canRestore;
   const restore = React.useCallback(
     async (path?: string): Promise<WorkspaceReplaceUndoOutcome | null> => {
-      if (!canRestore || !resultState || !accountLifetime?.isCurrent()) return null;
-      const targets = undoable.filter(
+      const resultState = retainedResult.current;
+      const account = currentAccount.current;
+      if (!resultState || restoring.current || applyController.current || pendingRestoreApproval.current === resultState.key
+        || !account?.isCurrent() || account.scope.accountId !== resultState.options.accountId
+        || account.scope.serverId !== resultState.options.serverId) return null;
+      const targets = undoableResults(resultState.results).filter(
         (result) => path === undefined || result.path === path,
       );
       if (!targets.length) return null;
+      restoring.current = true;
       setUndoing(true);
       try {
         const response = await machineWorkspaceFileReplaceApply(
@@ -711,6 +764,7 @@ export function useWorkspaceReplace(
         if (!response.ok) {
           const pendingApproval = readReplaceApproval(response);
           if (pendingApproval) {
+            pendingRestoreApproval.current = resultState.key;
             setApproval({ key: resultState.key, approval: { operation: 'restore', request: pendingApproval } });
             setApplyFailure(null);
             return { restored: 0, changed: 0, error: 'approval_required', approval: pendingApproval };
@@ -763,10 +817,11 @@ export function useWorkspaceReplace(
         setApplyFailure({ key: resultState.key, code: 'outcome_unknown' });
         return { restored: 0, changed: 0, error: 'outcome_unknown' };
       } finally {
+        restoring.current = false;
         setUndoing(false);
       }
     },
-    [accountLifetime, canRestore, resultState, undoable],
+    [setResultState],
   );
   const undo = React.useCallback(
     (path?: string) => canUndo ? restore(path) : Promise.resolve(null),
@@ -778,6 +833,22 @@ export function useWorkspaceReplace(
     run: () => restore(),
   } : null, [canRestore, restore, resultState, undoable]);
 
+  const settleOnClose = React.useCallback(async (): Promise<WorkspaceReplaceCloseOutcome | null> => {
+    const operation = pendingApply.current;
+    applyController.current?.abort();
+    // Cancellation stops future files, not custody of the admitted operation's answer.
+    const settlement = operation ? await operation.completion : { error: null, approval: null };
+    const retained = retainedResult.current;
+    const target = operation ?? retained;
+    const account = currentAccount.current;
+    if (!target || !account?.isCurrent() || account.scope.accountId !== target.options.accountId
+      || account.scope.serverId !== target.options.serverId) return null;
+    const results = retained?.key === target.key ? retained.results : [];
+    return { ...settlement, machineId: target.scope.machineId, results,
+      undo: !restoring.current && pendingRestoreApproval.current !== target.key && undoableResults(results).length > 0
+        ? () => restore() : null };
+  }, [restore]);
+
   const resetResults = React.useCallback(() => {
     setResultState(null);
     setApplyFailure(null);
@@ -785,7 +856,7 @@ export function useWorkspaceReplace(
     setExcluded(NO_EXCLUSIONS);
     setLoadedKey(null);
     setRetryVersion((value) => value + 1);
-  }, []);
+  }, [setResultState]);
   const retry = React.useCallback(
     () => {
       setLoadedKey(null);
@@ -814,6 +885,7 @@ export function useWorkspaceReplace(
     canApply,
     canUndo,
     undoOnClose,
+    settleOnClose,
     toggleFile,
     toggleMatch,
     loadMore,
@@ -823,6 +895,6 @@ export function useWorkspaceReplace(
     resetResults,
     retry,
   }),
-    [apply, applyError, applying, approval, canApply, canUndo, cancelApply, currentError, excluded, files, loadMore, loading, loadingMore, preview, resetResults, results, retry, stale, toggleFile, toggleMatch, totals, undo, undoOnClose, undoing, unsavedFiles],
+    [apply, applyError, applying, approval, canApply, canUndo, cancelApply, currentError, excluded, files, loadMore, loading, loadingMore, preview, resetResults, results, retry, settleOnClose, stale, toggleFile, toggleMatch, totals, undo, undoOnClose, undoing, unsavedFiles],
   );
 }

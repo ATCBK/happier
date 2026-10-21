@@ -61,7 +61,7 @@ vi.mock('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrie
 }));
 type FilesystemBoundaryRequest = { method: string; requestId?: string; serverId?: string; accountId?: string;
     machineId: string; signal?: AbortSignal | null;
-    payload: { path?: string; from?: string; to?: string; destination?: { destinationId: string };
+    payload: { path?: string; from?: string; to?: string; offset?: number; length?: number; destination?: { destinationId: string };
         input?: { destination?: { destinationId: string } } } };
 
 // The physical Machine filesystem remains the boundary for authenticated HTTP
@@ -75,6 +75,13 @@ async function receiveFilesystemRequest(request: FilesystemBoundaryRequest, invo
             if (request.method === 'statFile') return { success: true, exists: true, kind: 'file', sizeBytes: bytes.length };
             if (request.method === 'daemon.filesystem.readFile') {
                 await filesystem.readGate;
+                if (request.payload.length !== undefined) {
+                    if (request.payload.length > 2_500_000) return { success: false, error: 'Requested range is too large to read' };
+                    const offset = request.payload.offset ?? 0;
+                    const range = bytes.slice(offset, offset + request.payload.length);
+                    return { success: true, content: Buffer.from(range).toString('base64'), sizeBytes: bytes.length,
+                        eof: offset + range.length >= bytes.length };
+                }
                 return bytes.length > 2_500_000
                     ? { success: false, error: 'File exceeds daemon inline read ceiling' }
                     : { success: true, content: Buffer.from(bytes).toString('base64') };
@@ -175,6 +182,28 @@ afterEach(async () => {
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it('reads exact ranged slices of a larger file through admission, including tail and past EOF', async () => {
+        const bytes = Uint8Array.from({ length: 3_000_019 }, (_, index) => index % 256);
+        filesystem.fileBytes = bytes;
+        filesystem.carrierUnavailable = true;
+        for (const range of [
+            { offset: 17, length: 300_000 },
+            { offset: bytes.length - 3, length: 7 },
+            { offset: bytes.length + 1, length: 7 },
+        ]) {
+            const expected = bytes.slice(range.offset, range.offset + range.length);
+            const read = await workspaceReadFile(target, 'large.log', { range });
+            expect(read.success, !read.success ? read.error : undefined).toBe(true);
+            if (!read.success) throw new Error('Expected an admitted byte range');
+            expect({ sizeBytes: read.sizeBytes, eof: read.eof }).toEqual({
+                sizeBytes: bytes.length, eof: range.offset + expected.length >= bytes.length,
+            });
+            expect(Buffer.from(read.content, 'base64').equals(Buffer.from(expected))).toBe(true);
+        }
+        expect(filesystem.calls).not.toContainEqual(expect.objectContaining({ method: 'daemon.filesystem.download' }));
+        expect(filesystem.deliveredBytes).toBe(0);
+    });
+
     it.each([3, 300_000])('reads a requested range of %i bytes inline and retains total size and EOF through Action admission', async length => {
         const content = Buffer.alloc(length, 0xa5).toString('base64');
         filesystem.response = { success: true, content, sizeBytes: 38_000_000, eof: false };

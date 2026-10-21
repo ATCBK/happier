@@ -4,10 +4,53 @@ import {
   publishPresentationNotice,
   retirePresentationNotice,
 } from '@/components/sessions/presentation/presentationNotices';
-import type { WorkspaceReplaceModel } from '@/sync/domains/workspaces/files/workspaceFileReplace';
+import { summarizeReplaceResults, type WorkspaceReplaceCloseOutcome, type WorkspaceReplaceModel } from '@/sync/domains/workspaces/files/workspaceFileReplace';
 import { t } from '@/text';
 
 const NOTICE_KEY = 'universal-search:replace-undo';
+
+function publishClosedOutcome(outcome: WorkspaceReplaceCloseOutcome, machine: string) {
+  // A deferred approval is known custody in its durable Artifact, not an unknown write or a failed Undo.
+  if (outcome.approval) return;
+  const summary = summarizeReplaceResults(outcome.results);
+  const details = [
+    summary.changed ? t('universalSearch.replace.summaryChanged', { count: summary.changed }) : null,
+    summary.failed ? t('universalSearch.replace.summaryFailed', { count: summary.failed }) : null,
+    summary.skipped ? t('universalSearch.replace.summarySkipped', { count: summary.skipped }) : null,
+    summary.cancelled ? t('universalSearch.replace.summaryCancelled', { count: summary.cancelled }) : null,
+  ].filter(Boolean).join(' ');
+  if (!outcome.error && !summary.replacedFiles && !details) return;
+  const undo = outcome.undo;
+  publishPresentationNotice({
+    key: NOTICE_KEY,
+    severity: outcome.error || summary.failed ? 'error' : 'info',
+    sticky: true,
+    message: outcome.error === 'outcome_unknown'
+      ? t('universalSearch.replace.outcomeUnknown', { machine })
+      : outcome.error ? t('universalSearch.replace.applyFailed', { machine })
+        : [summary.replacedFiles
+          ? t('universalSearch.replace.replacedTitle', { matches: summary.replacedMatches, files: summary.replacedFiles })
+          : t('universalSearch.replace.nothingReplaced'), details].filter(Boolean).join(' '),
+    ...(undo ? { undo: {
+      label: t('universalSearch.replace.undo'),
+      run: () => {
+        void undo().then((result) => {
+          if (!result) { retirePresentationNotice(NOTICE_KEY); return; }
+          if (result.approval) return;
+          publishPresentationNotice({
+            key: NOTICE_KEY,
+            severity: result.error ? 'error' : 'info',
+            message: result.error === 'outcome_unknown'
+              ? t('universalSearch.replace.outcomeUnknown', { machine })
+              : result.error ? t('universalSearch.replace.undoFailed', { machine })
+                : result.changed > 0 ? t('universalSearch.replace.undoneExceptChanged', { count: result.changed })
+                  : t('universalSearch.replace.undoneTitle'),
+          });
+        });
+      },
+    } } : {}),
+  });
+}
 
 /**
  * One Undo per state: while the surface is open its result row owns Undo; when the surface closes with
@@ -23,49 +66,7 @@ export function useReplaceUndoOnClose(
   React.useEffect(
     () => () => {
       const { model: closing, machineLabel: machine } = latest.current;
-      const offer = closing.undoOnClose;
-      if (!offer) return;
-      const undoable = offer.results;
-      if (!undoable.length) return;
-      const matches = undoable.reduce(
-        (sum, result) => sum + (result.matchCount ?? 0),
-        0,
-      );
-      const undo = offer.run;
-      publishPresentationNotice({
-        key: NOTICE_KEY,
-        severity: 'info',
-        sticky: true,
-        message: t('universalSearch.replace.replacedTitle', {
-          matches,
-          files: undoable.length,
-        }),
-        undo: {
-          label: t('universalSearch.replace.undo'),
-          run: () => {
-            void undo().then((outcome) => {
-              if (!outcome) {
-                retirePresentationNotice(NOTICE_KEY);
-                return;
-              }
-              publishPresentationNotice({
-                key: NOTICE_KEY,
-                severity: outcome.error ? 'error' : 'info',
-                message:
-                  outcome.error === 'outcome_unknown'
-                    ? t('universalSearch.replace.outcomeUnknown', { machine })
-                    : outcome.error
-                      ? t('universalSearch.replace.undoFailed', { machine })
-                      : outcome.changed > 0
-                        ? t('universalSearch.replace.undoneExceptChanged', {
-                            count: outcome.changed,
-                          })
-                        : t('universalSearch.replace.undoneTitle'),
-              });
-            });
-          },
-        },
-      });
+      void closing.settleOnClose().then(outcome => { if (outcome) publishClosedOutcome(outcome, machine); });
     },
     [],
   );

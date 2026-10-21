@@ -2,7 +2,7 @@ import { WorkspaceFilesReplaceActionOutputSchema } from '@happier-dev/protocol/a
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { ExternalActionRequesterInvocationV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
-import { DaemonWorkspaceFileReplaceApplyResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { DaemonWorkspaceFileReplaceApplyResponseSchema, type DaemonWorkspaceFileReplaceApplyResponse } from '@happier-dev/protocol/machines/workspaceFiles';
 import { DaemonLspApplyResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
@@ -14,6 +14,67 @@ import { withActionAccountRequestSignal, type LazyActionAccountContext } from '.
 const failure = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
 
 type MachineWriteContext = Parameters<NonNullable<ActionExecutorDeps['workspaceFilesReplace']>>[1];
+type WriteTarget = Readonly<{ machineId: string; rootPath: string }>;
+
+function acknowledgeResult(account: LazyActionAccountContext, input: WriteTarget,
+    result: Extract<DaemonWorkspaceFileReplaceApplyResponse, { ok: true }>) {
+    if (!account.accountOnlyLifetime.isCurrent()) return;
+    acknowledgeWorkspaceFileWrites({ serverId: account.serverId, accountId: account.accountId, machineId: input.machineId, rootPath: input.rootPath },
+        result.results.filter(file => file.status === 'replaced' || file.status === 'restored').flatMap(file => file.renameTo
+            ? [{ path: file.path, hash: null }, { path: file.renameTo, hash: file.hash ?? null }]
+            : [{ path: file.path, hash: file.hash ?? null }]));
+}
+
+/** One terminal owner for the immediate invocation and its later approval receipt. */
+export async function settleUiWorkspaceFileReplaceResult(account: LazyActionAccountContext, input: WriteTarget,
+    result: unknown, requestId: string, signal?: AbortSignal, cancelSignal?: AbortSignal) {
+    const output = WorkspaceFilesReplaceActionOutputSchema.safeParse(result);
+    if (!output.success) return failure('invalid_action_output');
+    let value: unknown = output.data;
+    if ('operation' in output.data) {
+        const operationId = output.data.operation.operationId;
+        let cancellation: Promise<unknown> | undefined;
+        const cancel = () => {
+            cancellation ??= (async () => {
+                const { executeDefaultActionInCapturedAccount } = await import('./defaultActionExecutor');
+                return await executeDefaultActionInCapturedAccount(account, 'action.operations.cancel', {
+                    serverId: account.serverId, machineId: input.machineId, operationId,
+                }, { surface: 'ui', authority: 'present_user', expectedAccountId: account.accountId, signal });
+            })().catch(() => undefined);
+        };
+        cancelSignal?.addEventListener('abort', cancel, { once: true });
+        try {
+            if (cancelSignal?.aborted) cancel();
+            const terminal = await getActionOperation({ serverId: account.serverId, accountId: account.accountId,
+                machineId: input.machineId, operationId, waitForTerminal: true, signal,
+                rpc: request => machineRpcWithServerScope({ ...request, operationTimeoutMs: null }),
+            });
+            if (terminal.kind !== 'found' || terminal.operation.operationId !== operationId
+                || terminal.operation.actionId !== 'workspace.files.replace'
+                || terminal.operation.requestId !== requestId
+                || terminal.operation.scope.accountId !== account.accountId
+                || terminal.operation.scope.machineId !== input.machineId) return failure('operation_scope_mismatch');
+            if (terminal.operation.state === 'failed') return failure(terminal.operation.error?.errorCode ?? 'workspace_file_replace_failed');
+            if (terminal.operation.state !== 'succeeded') return failure(terminal.operation.state === 'cancelled' ? 'cancelled' : 'outcome_uncertain');
+            value = terminal.operation.result;
+        } finally {
+            cancelSignal?.removeEventListener('abort', cancel);
+            await cancellation;
+        }
+    }
+    const parsed = DaemonWorkspaceFileReplaceApplyResponseSchema.safeParse(value);
+    if (!parsed.success) return failure('invalid_action_output');
+    if (parsed.data.ok) acknowledgeResult(account, input, parsed.data);
+    return parsed.data;
+}
+
+/** Immediate and approval-resumed semantic writes share one receipt projection. */
+export function settleUiLanguageIntelligenceApplyResult(account: LazyActionAccountContext, input: WriteTarget, value: unknown) {
+    const parsed = DaemonLspApplyResponseSchema.safeParse(value);
+    if (!parsed.success) return failure('invalid_action_output');
+    if ('ok' in parsed.data && parsed.data.ok) acknowledgeResult(account, input, parsed.data);
+    return parsed.data;
+}
 
 /**
  * The present user's admitted write to an exact Machine: the original Account, the requested Machine and
@@ -56,49 +117,7 @@ export function createUiWorkspaceFileReplaceAction(accountContext?: LazyActionAc
             if (!execution.ok) return execution;
             const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
             if (approval.success) return approval.data;
-            const output = WorkspaceFilesReplaceActionOutputSchema.safeParse(execution.result);
-            if (!output.success) return failure('invalid_action_output');
-            let result: unknown = output.data;
-            if ('operation' in output.data) {
-                const operationId = output.data.operation.operationId;
-                let cancellation: Promise<unknown> | undefined;
-                const cancel = () => {
-                    cancellation ??= (async () => {
-                        const { executeDefaultActionInCapturedAccount } = await import('./defaultActionExecutor');
-                        return await executeDefaultActionInCapturedAccount(account, 'action.operations.cancel', {
-                            serverId: account.serverId, machineId: input.machineId, operationId,
-                        }, { surface: 'ui', authority: 'present_user', expectedAccountId: account.accountId, signal });
-                    })().catch(() => undefined);
-                };
-                context.signal?.addEventListener('abort', cancel, { once: true });
-                try {
-                    if (context.signal?.aborted) cancel();
-                    const terminal = await getActionOperation({ serverId: account.serverId, accountId: account.accountId,
-                        machineId: input.machineId, operationId, waitForTerminal: true, signal,
-                        rpc: request => machineRpcWithServerScope({ ...request, operationTimeoutMs: null }),
-                    });
-                    if (terminal.kind !== 'found' || terminal.operation.operationId !== operationId
-                        || terminal.operation.actionId !== 'workspace.files.replace'
-                        || terminal.operation.requestId !== context.actionRequestId
-                        || terminal.operation.scope.accountId !== account.accountId
-                        || terminal.operation.scope.machineId !== input.machineId) return failure('operation_scope_mismatch');
-                    if (terminal.operation.state === 'failed') return failure(terminal.operation.error?.errorCode ?? 'workspace_file_replace_failed');
-                    if (terminal.operation.state !== 'succeeded') return failure(terminal.operation.state === 'cancelled' ? 'cancelled' : 'outcome_uncertain');
-                    result = terminal.operation.result;
-                } finally {
-                    context.signal?.removeEventListener('abort', cancel);
-                    await cancellation;
-                }
-            }
-            const parsed = DaemonWorkspaceFileReplaceApplyResponseSchema.safeParse(result);
-            if (!parsed.success) return failure('invalid_action_output');
-            if (parsed.data.ok && account.accountOnlyLifetime.isCurrent()) {
-                acknowledgeWorkspaceFileWrites({ serverId: account.serverId, accountId: account.accountId,
-                    machineId: input.machineId, rootPath: input.rootPath }, parsed.data.results
-                    .filter(item => item.status === 'replaced' || item.status === 'restored')
-                    .map(item => ({ path: item.path, hash: item.hash ?? null })));
-            }
-            return parsed.data;
+            return await settleUiWorkspaceFileReplaceResult(account, input, execution.result, admitted.requestId, signal, context.signal);
         });
     };
 }
@@ -125,16 +144,7 @@ export function createUiLanguageIntelligenceApplyAction(account?: LazyActionAcco
             if (!execution.ok) return execution;
             const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
             if (approval.success) return approval.data;
-            const parsed = DaemonLspApplyResponseSchema.safeParse(execution.result);
-            if (!parsed.success) return failure('invalid_action_output');
-            const result = parsed.data;
-            if ('ok' in result && result.ok && live.accountOnlyLifetime.isCurrent()) {
-                acknowledgeWorkspaceFileWrites({ serverId: live.serverId, accountId: live.accountId, machineId, rootPath: request.rootPath },
-                    result.results.filter(file => file.status === 'replaced').flatMap(file => file.renameTo
-                        ? [{ path: file.path, hash: null }, { path: file.renameTo, hash: file.hash ?? null }]
-                        : [{ path: file.path, hash: file.hash ?? null }]));
-            }
-            return result;
+            return settleUiLanguageIntelligenceApplyResult(live, { machineId, rootPath: request.rootPath }, execution.result);
         });
     };
 }

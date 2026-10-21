@@ -14,12 +14,19 @@ import {
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { classifyWorkspaceFileRpcError } from './machineWorkspaceFileRpcError';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { captureLazyActionAccountContext, withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
+import { resumeActionExecutionResult, type ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { settleUiLanguageIntelligenceApplyResult } from './actions/workspaceFileReplaceAction';
+import { randomUUID } from '@/platform/randomUUID';
 import { isActionAccountScopeChangedError } from '@/sync/domains/scope/actionAccountScopeError';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
-export type MachineLanguageIntelligenceOptions = Readonly<{ serverId?: string | null; accountId?: string | null; signal?: AbortSignal }>;
+export type MachineLanguageIntelligenceOptions = Readonly<{ serverId?: string | null; accountId?: string | null; signal?: AbortSignal;
+    /** Releases only this mounted caller's interest, never its durable approval. */
+    continuationSignal?: AbortSignal;
+    onApprovalPending?: (registration: ActionApprovalContinuation) => void;
+}>;
 type Unavailable = Extract<LanguageIntelligenceQueryResult, { status: 'unavailable' }>;
 async function callLanguageIntelligence<Input, Result>(
     machineId: string, method: string, input: Input,
@@ -64,13 +71,24 @@ export async function machineLanguageIntelligenceApplyAction(machineId: string, 
     const account = await captureLazyActionAccountContext(serverId);
     try {
         const { executeDefaultActionInCapturedAccount } = await import('./actions/defaultActionExecutor');
+        const requestId = randomUUID();
         const execution = await executeDefaultActionInCapturedAccount(account, actionId, actionInput, {
             surface: 'ui', authority: 'present_user', expectedAccountId: options?.accountId ?? account.accountId,
+            actionRequestId: requestId,
             externalActionTarget: { kind: 'machine', machineId }, ...(options?.signal ? { signal: options.signal } : {}),
         });
         if (!execution.ok) return execution;
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
-        if (approval.success) return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
+        if (approval.success) {
+            if (!options?.onApprovalPending) return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
+            return await withActionAccountRequestSignal({ accountLifetime: account.accountOnlyLifetime }, options.continuationSignal, async signal => {
+                const resumed = await resumeActionExecutionResult({ result: execution, actionId, actionInput,
+                    scope: { serverId: account.serverId, accountId: account.accountId }, requestId, signal,
+                    onApprovalPending: options.onApprovalPending!,
+                });
+                return resumed.ok ? settleUiLanguageIntelligenceApplyResult(account, { machineId, rootPath: payload.rootPath }, resumed.result) : resumed;
+            });
+        }
         const parsed = DaemonLspApplyResponseSchema.safeParse(execution.result);
         return parsed.success ? parsed.data : { status: 'unavailable', reason: 'invalid_response' };
     } catch (error) {

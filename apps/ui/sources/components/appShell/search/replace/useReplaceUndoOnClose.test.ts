@@ -13,7 +13,6 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
-import { useReplaceUndoOnClose } from './useReplaceUndoOnClose';
 import { t } from '@/text';
 
 // Stop is the existing Action's UI confirmation boundary; admission and the operation remain real.
@@ -25,6 +24,7 @@ installDisconnectedServerSocketBoundary();
 // Load the real Action graph during collection, outside the individual operation's test deadline.
 await import('@/sync/ops/actions/defaultActionExecutor');
 const { useWorkspaceReplace } = await import('@/sync/domains/workspaces/files/workspaceFileReplace');
+const { useReplaceUndoOnClose } = await import('./useReplaceUndoOnClose');
 
 const rpc = vi.hoisted(() => ({ call: vi.fn() }));
 // Machine RPC and admitted Action HTTP are transport boundaries; the state and notice owners stay real.

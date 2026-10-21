@@ -3,11 +3,18 @@ import { DaemonWorkspaceFileReplacePreviewRequestSchema, DaemonWorkspaceFileRepl
     type DaemonWorkspaceFileReplacePreviewRequest, type DaemonWorkspaceFileReplacePreviewResponse,
     type DaemonWorkspaceFileReplaceApplyRequest, type DaemonWorkspaceFileReplaceApplyResponse } from '@happier-dev/protocol/machines/workspaceFiles';
 import { classifyWorkspaceFileRpcError, type WorkspaceFileRpcErrorCode } from './machineWorkspaceFileRpcError';
-import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { captureLazyActionAccountContext, withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
+import { resumeActionExecutionResult, type ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { settleUiWorkspaceFileReplaceResult } from './actions/workspaceFileReplaceAction';
+import { randomUUID } from '@/platform/randomUUID';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
-type Options = Readonly<{ serverId?: string | null; accountId?: string | null; signal?: AbortSignal }>;
+type Options = Readonly<{ serverId?: string | null; accountId?: string | null; signal?: AbortSignal;
+    /** Releases only mounted result custody, not a durable approval or Machine write. */
+    continuationSignal?: AbortSignal;
+    onApprovalPending?: (registration: ActionApprovalContinuation) => void;
+}>;
 type TransportFailure = Readonly<{ ok: false; errorCode: WorkspaceFileRpcErrorCode }>;
 
 export async function machineWorkspaceFileReplacePreview(machineId: string, input: DaemonWorkspaceFileReplacePreviewRequest, options?: Options): Promise<DaemonWorkspaceFileReplacePreviewResponse | TransportFailure | ActionExecuteFailure> {
@@ -41,13 +48,25 @@ export async function machineWorkspaceFileReplaceApply(machineId: string, input:
     const account = await captureLazyActionAccountContext(serverId);
     try {
         const { executeDefaultActionInCapturedAccount } = await import('./actions/defaultActionExecutor');
-        const execution = await executeDefaultActionInCapturedAccount(account, 'workspace.files.replace', { machineId, ...payload }, {
+        const requestId = randomUUID();
+        const actionInput = { machineId, ...payload };
+        const execution = await executeDefaultActionInCapturedAccount(account, 'workspace.files.replace', actionInput, {
             surface: 'ui', authority: 'present_user', expectedAccountId: options?.accountId ?? account.accountId,
+            actionRequestId: requestId,
             externalActionTarget: { kind: 'machine', machineId }, signal: options?.signal,
         });
         if (!execution.ok) return execution;
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
-        if (approval.success) return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
+        if (approval.success) {
+            if (!options?.onApprovalPending) return { ok: false, errorCode: 'approval_required', error: 'approval_required', details: approval.data };
+            return await withActionAccountRequestSignal({ accountLifetime: account.accountOnlyLifetime }, options.continuationSignal, async signal => {
+                const resumed = await resumeActionExecutionResult({ result: execution, actionId: 'workspace.files.replace', actionInput,
+                    scope: { serverId: account.serverId, accountId: account.accountId }, requestId, signal,
+                    onApprovalPending: options.onApprovalPending!,
+                });
+                return resumed.ok ? await settleUiWorkspaceFileReplaceResult(account, actionInput, resumed.result, requestId, signal, options.signal) : resumed;
+            });
+        }
         const parsed = DaemonWorkspaceFileReplaceApplyResponseSchema.safeParse(execution.result);
         return parsed.success ? parsed.data : { ok: false, errorCode: 'transport_failed' };
     } catch (error) {

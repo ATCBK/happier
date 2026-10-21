@@ -17,6 +17,9 @@ type Execute = ReturnType<
     typeof import('@/sync/ops/actions/defaultActionExecutor')['createDefaultActionExecutor']
 >['execute'];
 type ExecuteResult = Awaited<ReturnType<Execute>>;
+/** Filesystem execution lives on the remote daemon, outside this UI process. */
+type MachineFilesystemEffects = Pick<import('@happier-dev/protocol/actions/executor/types').ActionExecutorDeps,
+    'languageIntelligenceApply' | 'workspaceFilesReplace'>;
 
 /**
  * Creates the durable approval request a present-user UI invocation of one
@@ -86,6 +89,7 @@ export async function replayApprovedAsDaemon(input: Readonly<{
     /** Runtime-native Actions use their real owner over the caller's daemon IO boundary. */
     runtimeActionExecute?: import('@happier-dev/protocol/actions/executor/types').RuntimeActionExecute;
     artifactAction?: import('@happier-dev/protocol/actions/executor/types').ActionExecutorDeps['artifactAction'];
+    machineFilesystemEffects?: MachineFilesystemEffects;
     /** The Home external-Action ingress decides before replaying at that daemon. */
     decision?: 'approve';
 }>): Promise<ExecuteResult> {
@@ -113,6 +117,7 @@ export async function replayApprovedAsDaemon(input: Readonly<{
     try {
         const read = (artifactId: string) => account.fetchArtifact(artifactId);
         const deps = {
+            ...input.machineFilesystemEffects,
             ...createMachineConnectionActionDeps(),
             resolveServerProfileScopeId: resolveServerProfileScopeIdForIdentifier,
             ...(input.runtimeActionExecute ? { runtimeActionExecute: input.runtimeActionExecute } : {}),
@@ -161,6 +166,7 @@ export async function installOwnMachineApprovalReplayBoundary(input: Readonly<{
     accountId: string;
     machineId: string;
     runtimeActionExecute?: import('@happier-dev/protocol/actions/executor/types').RuntimeActionExecute;
+    machineFilesystemEffects?: MachineFilesystemEffects;
 }>) {
     const [{ ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema },
         { MACHINE_PLAIN_DATA_KEY_MARKER }, { getActionSpec }] = await Promise.all([
@@ -186,6 +192,7 @@ export async function installOwnMachineApprovalReplayBoundary(input: Readonly<{
         const result = await replayApprovedAsDaemon({ serverId: input.serverId, machineId: input.machineId,
             artifactId: decision.artifactId, decision: 'approve', ...(request.signal ? { signal: request.signal } : {}),
             ...(input.runtimeActionExecute ? { runtimeActionExecute: input.runtimeActionExecute } : {}),
+            ...(input.machineFilesystemEffects ? { machineFilesystemEffects: input.machineFilesystemEffects } : {}),
         });
         return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide', requestId: envelope.requestId, execution: result }) };
     } });

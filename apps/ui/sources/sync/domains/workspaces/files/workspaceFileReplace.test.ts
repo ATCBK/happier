@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 import { WorkspaceFilesReplaceActionInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { DaemonWorkspaceFileReplacePreviewResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 
 import { act, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -10,7 +11,7 @@ import type {
   WorkspaceReplaceMatcher,
   WorkspaceReplacePreviewFile,
 } from './workspaceFileReplace';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
@@ -240,11 +241,14 @@ describe('useWorkspaceReplace', () => {
     it.each(['folder', 'machine', 'account'] as const)('retains late Apply custody across a %s switch and restores only the original target', async (changed) => {
         let completeApply: (value: unknown) => void = () => {};
         const edits = [{ startUtf16: 4, deleteLength: 19, insertText: 'useSettingsModalKey', originalText: 'useSettingsRouteKey' }];
-        rpc.call.mockResolvedValueOnce(previewOk)
-            .mockImplementationOnce(() => new Promise(resolve => { completeApply = resolve; }))
-            .mockResolvedValueOnce(previewOk)
-            .mockResolvedValueOnce(previewOk)
-            .mockResolvedValueOnce({ ok: true, results: [{ path: doc.path, status: 'restored', hash: hash('b') }] });
+        rpc.call.mockImplementation((request: { method: string; payload?: { operation?: { kind: string } } }) => {
+            if (request.method === 'daemon.workspaceFiles.replace.preview.v1') return previewOk;
+            if (request.payload?.operation?.kind === 'restore')
+                return { ok: true, results: [{ path: doc.path, status: 'restored', hash: hash('b') }] };
+            if (request.payload?.operation?.kind === 'replace')
+                return new Promise(resolve => { completeApply = resolve; });
+            throw new Error(`Unexpected replacement transport method: ${request.method}`);
+        });
         const hook = await renderHook((props: { scope: typeof scope; account: ServerAccountScopeLifetime }) => useWorkspaceReplace({
             scope: props.scope, accountLifetime: props.account, matcher, unsavedPaths: [],
         }), { initialProps: { scope, account } });
@@ -263,7 +267,10 @@ describe('useWorkspaceReplace', () => {
         if (changed === 'account') expect(hook.getCurrent().undoOnClose).toBeNull();
         else expect(hook.getCurrent().undoOnClose?.machineId).toBe('mac');
         await act(async () => { expect(await hook.getCurrent().undo()).toBeNull(); });
-        expect(rpc.call).toHaveBeenCalledTimes(3);
+        // A foreign projected Account is rejected by Action admission before Machine RPC.
+        // Neither it nor selecting another target may send the retained operation's Undo.
+        expect(rpc.call.mock.calls.filter(([request]) => request.payload?.operation?.kind === 'restore')).toHaveLength(0);
+        if (changed === 'account') expect(rpc.call).not.toHaveBeenCalledWith(expect.objectContaining({ accountId: 'other' }));
         await hook.rerender({ scope, account });
         expect(hook.getCurrent().results?.[0]?.status).toBe('replaced');
         expect(hook.getCurrent().canUndo).toBe(true);
@@ -325,11 +332,16 @@ describe('useWorkspaceReplace', () => {
     });
 
     it('retains preview approval from loading the next review page', async () => {
-        rpc.call.mockResolvedValueOnce({ ...previewOk, hasMore: true, cursor: { path: doc.path } });
+        rpc.call.mockResolvedValueOnce(DaemonWorkspaceFileReplacePreviewResponseSchema.parse({
+            ...previewOk, coverage: 'partial', hasMore: true, cursor: { path: doc.path },
+        }));
         const hook = await renderHook(() => useWorkspaceReplace({ scope, accountLifetime: account, matcher, unsavedPaths: [] }));
+        expect(hook.getCurrent().preview).toMatchObject({ hasMore: true, cursor: { path: doc.path }, coverage: 'partial' });
+        expect(hook.getCurrent().canApply).toBe(true);
         await homes.requireUiApproval(scope.serverId, 'workspace.files.replace.preview');
         await act(async () => { hook.getCurrent().loadMore(); });
-        await vi.waitFor(() => expect(hook.getCurrent().approval).toMatchObject({ operation: 'preview',
+        await waitForHomeGovernance(() => expect(homes.artifacts(scope.serverId).list()).toHaveLength(1));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().approval).toMatchObject({ operation: 'preview',
             request: { kind: 'approval_request_created', actionId: 'workspace.files.replace.preview' } }));
         expect(hook.getCurrent().canApply).toBe(false);
         expect(hook.getCurrent().preview?.files).toHaveLength(2);
