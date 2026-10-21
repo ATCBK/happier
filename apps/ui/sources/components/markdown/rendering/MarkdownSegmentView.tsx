@@ -91,6 +91,7 @@ export const MarkdownSegmentView = React.memo((props: MarkdownSegmentViewProps) 
                 testID="markdown-enriched-run"
                 contextMenuItems={contextMenuItems}
                 suppressLeadingTopMargin={props.segment.first}
+                keepTrailingMargin={!props.segment.last}
                 agentTexMath={props.agentTexMath}
                 inlineReferences={props.inlineReferences}
             />

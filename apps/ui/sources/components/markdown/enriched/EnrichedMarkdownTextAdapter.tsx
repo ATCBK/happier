@@ -116,6 +116,8 @@ type EnrichedMarkdownTextAdapterProps = Readonly<{
     streamingRevealPreset?: StreamingTextRevealPreset;
     testID?: string;
     suppressLeadingTopMargin?: boolean;
+    /** A run followed by another segment of the same document keeps its last block's bottom margin (the rhythm between them). */
+    keepTrailingMargin?: boolean;
     fillContainer?: boolean;
     agentTexMath: boolean;
     inlineReferences?: MarkdownInlineReferences;
@@ -281,7 +283,7 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
             onLinkPress={handleLinkPress}
             selectable={selectable}
             {...(props.contextMenuItems ? { contextMenuItems: props.contextMenuItems.map((item) => ({ text: item.text, onPress: item.onPress })) } : {})}
-            allowTrailingMargin={false}
+            allowTrailingMargin={props.keepTrailingMargin === true}
             flavor={flavor}
         />
     );
