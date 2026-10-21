@@ -946,6 +946,7 @@ export function useSessionComposerController({
         selection: providerModelSelection,
         selectionIntentPresent: providerModelSelectionIntent !== null,
         launchBinding: providerLaunchBinding,
+        completedTurnObservedAt: session.latestTurnStatus === 'completed' ? session.latestTurnStatusObservedAt : null,
     });
     const providerAgentTargetKey = resolveSessionActionDefaultTargetKey(sessionActionDefaultBackend);
     const [providerModelPickerDemanded, setProviderModelPickerDemanded] = React.useState(false);

@@ -29,6 +29,7 @@ export function useProviderBindingStatus(input: Readonly<{
     selection: SessionModelSelectionV1 | null;
     selectionIntentPresent?: boolean;
     launchBinding: SessionProviderBindingMetadataV1 | null;
+    completedTurnObservedAt?: number | null;
 }>) {
     const { describeProviderBindingStatus, ready, pendingApproval, accountScope: { resolution, binding } } = useProviderActionClient(input.serverId);
     const accountLifetime = captureActiveServerAccountScopeLifetime();
@@ -171,6 +172,17 @@ export function useProviderBindingStatus(input: Readonly<{
             pendingRead.current = null;
         };
     }, [accountLifetime, refresh, scopeKey]);
+
+    const previousCompletedTurnObservedAt = React.useRef(input.completedTurnObservedAt);
+    React.useEffect(() => {
+        const previous = previousCompletedTurnObservedAt.current;
+        previousCompletedTurnObservedAt.current = input.completedTurnObservedAt;
+        // A recovered turn invalidates an earlier transient read failure. Keep
+        // the existing attention state until its canonical binding read settles.
+        if (input.completedTurnObservedAt != null && input.completedTurnObservedAt !== previous) {
+            void refresh();
+        }
+    }, [input.completedTurnObservedAt, refresh]);
 
     return {
         status: stateMatchesScope ? state.status : null,

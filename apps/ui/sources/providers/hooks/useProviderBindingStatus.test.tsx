@@ -111,6 +111,33 @@ describe('useProviderBindingStatus', () => {
         expect(rendered.getCurrent()).toMatchObject({ status: { status: 'current' }, error: null, loading: false, banner: null });
     });
 
+    it.each([false, true])('rechecks attention after a completed turn without hiding an unresolved binding failure (persistent: %s)', async persistent => {
+        const failure = createProviderErrorV1('provider_catalog_unavailable', { connectionId: 'pc_launch', machineId: 'machine-a' });
+        let settle!: () => void;
+        const recoveredRead = new Promise<unknown>(resolve => {
+            settle = () => resolve(persistent ? { status: 'incompatible', error: failure } : { status: 'current' });
+        });
+        describeProviderBindingStatus.mockResolvedValueOnce({ status: 'incompatible', error: failure })
+            .mockReturnValueOnce(recoveredRead);
+        const rendered = await renderHook(({ completedTurnObservedAt }: { completedTurnObservedAt: number | null }) => {
+            const result = useProviderBindingStatus({ enabled: true, machineId: 'machine-a', serverId,
+                selection, launchBinding, completedTurnObservedAt });
+            return { ...result, banner: presentSessionProviderBinding({ binding: launchBinding, status: result.status, error: result.error }).banner };
+        }, { initialProps: { completedTurnObservedAt: 99 as number | null } });
+        expect(rendered.getCurrent()).toMatchObject({ loading: false, banner: { kind: 'status-error', action: 'retry' } });
+        await rendered.rerender({ completedTurnObservedAt: null });
+        expect(rendered.getCurrent()).toMatchObject({ loading: false, banner: { kind: 'status-error', action: 'retry' } });
+        await rendered.rerender({ completedTurnObservedAt: 100 });
+        expect(rendered.getCurrent()).toMatchObject({ loading: true, banner: { kind: 'status-error', action: 'retry' } });
+        await act(async () => { settle(); });
+        expect(rendered.getCurrent()).toMatchObject(persistent
+            ? { loading: false, banner: { kind: 'status-error', action: 'retry' } }
+            : { loading: false, status: { status: 'current' }, banner: null });
+        await rendered.rerender({ completedTurnObservedAt: 100 });
+        expect(rendered.getCurrent().loading).toBe(false);
+        expect(describeProviderBindingStatus).toHaveBeenCalledTimes(2);
+    });
+
     it('clears a successful binding status immediately when its machine scope changes', async () => {
         let resolveB!: (value: unknown) => void;
         describeProviderBindingStatus
