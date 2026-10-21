@@ -22,17 +22,21 @@ import type { ExternalProviderBrokerDispatch } from './registerExternalProviderA
 import { inTx } from '@/storage/inTx';
 import { admitTeamCredentialBrokerMachineForResourceInTx } from '@/app/teams/credentials/brokerPlacementResolver';
 import { authorizeTeamCredentialResourceTestActorInTx } from '@/app/teams/credentials/resourceTest';
+import { logger } from '@/utils/logging/log';
 
 function send(transport: ReturnType<PeerTcpTunnelRelayTransportFactory>, envelope: PeerTcpTunnelRelayEnvelope) {
     transport.send(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, envelope);
 }
+
+type ProviderBrokerCarrierDispatchResult = Awaited<ReturnType<ExternalProviderBrokerDispatch>>
+    | Readonly<{ ok: false; error: 'broker_unavailable'; reason: 'incompatible' }>;
 
 type ProviderBrokerCarrierDispatch = (input: Readonly<{
     request: unknown;
     binding: ProviderBrokerRelayApplicationBindingV1;
     target: Readonly<{ custodianAccountId: string; brokerMachineId: string }>;
     signal: AbortSignal;
-}>) => ReturnType<ExternalProviderBrokerDispatch>;
+}>) => Promise<ProviderBrokerCarrierDispatchResult>;
 
 /** Map only the closed denial detail emitted by the trusted broker application. */
 export function mapProviderBrokerApplicationFailure(
@@ -42,6 +46,7 @@ export function mapProviderBrokerApplicationFailure(
     error: 'invalid_request' | 'policy_denied' | 'broker_unavailable' | 'request_cancelled'
         | 'resource_unavailable' | 'team_credential_usage_limit' | 'cost_limit_unavailable' | 'upstream_unavailable';
     retryAtMs?: number;
+    reason?: 'incompatible';
 }> {
     const code = headers['x-happier-provider-broker-error-code'];
     if (statusCode === 499 && code === 'request_cancelled') return { error: 'request_cancelled' };
@@ -58,7 +63,8 @@ export function mapProviderBrokerApplicationFailure(
     if (statusCode === 403 && code === 'cost_limit_unavailable') return { error: 'cost_limit_unavailable' };
     if (statusCode === 403 && (code === 'resource_changed' || code === 'resource_unavailable'
         || code === 'operation_not_current' || code === 'session_not_active')) return { error: 'resource_unavailable' };
-    if (statusCode === 403 && (code === 'broker_unavailable' || code === 'update_required')) return { error: 'broker_unavailable' };
+    if (statusCode === 403 && code === 'update_required') return { error: 'broker_unavailable', reason: 'incompatible' };
+    if (statusCode === 403 && code === 'broker_unavailable') return { error: 'broker_unavailable' };
     if (statusCode === 400) return { error: 'invalid_request' };
     if (statusCode === 403) return { error: 'policy_denied' };
     return { error: 'upstream_unavailable' };
@@ -74,7 +80,7 @@ export type TeamCredentialResourceTestBrokerDispatch = (input: Readonly<{
     verifiedCredentialEvidence?: readonly AuthTokenAuthenticationEvidenceV1[];
     request: TeamCredentialResourceTestApplicationRequestV1;
     signal: AbortSignal;
-}>) => Promise<Awaited<ReturnType<ExternalProviderBrokerDispatch>>>;
+}>) => Promise<ProviderBrokerCarrierDispatchResult>;
 
 /**
  * `enabled` is asked on every dispatch: the relay's feature decision reads the Home-effective
@@ -92,7 +98,14 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
         const config = readMachineTunnelFeatureEnv(input.env);
         const signing = resolvePeerMediationGrantSigningConfig(input.env);
         const enabled = await input.enabled() === true;
-        if (!enabled || !signing.ok) return { ok: false, error: 'broker_unavailable' };
+        if (!enabled) {
+            logger.warn({ module: 'provider-broker-carrier', stage: 'feature', code: 'disabled' });
+            return { ok: false, error: 'broker_unavailable' };
+        }
+        if (!signing.ok) {
+            logger.warn({ module: 'provider-broker-carrier', stage: 'signing', code: signing.reasonCode });
+            return { ok: false, error: 'broker_unavailable' };
+        }
         const transport = input.createRelayTransport({ accountId: target.custodianAccountId });
         const tunnelId = `provider_broker_${randomUUID()}`;
         const substreamId = `provider_request_${randomUUID()}`;
@@ -110,7 +123,11 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
             },
             signingKey: { keyId: signing.keyId, secretKey: signing.secretKey },
         });
-        if (!authorization.ok) { transport.close(); return { ok: false, error: 'broker_unavailable' }; }
+        if (!authorization.ok) {
+            logger.warn({ module: 'provider-broker-carrier', stage: 'relay_authorization', code: authorization.reasonCode });
+            transport.close();
+            return { ok: false, error: 'broker_unavailable' };
+        }
         let relay: ReturnType<typeof createPeerTcpTunnelRelaySubstream> | null = null;
         const unsubscribe = transport.subscribe((envelope) => {
             if (envelope.scopeUserId !== target.custodianAccountId) return;
@@ -171,7 +188,11 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
         if (signal.aborted) { await relay.stream.abort('request_cancelled'); return { ok: false, error: 'request_cancelled' }; }
         signal.addEventListener('abort', abort, { once: true });
         const written = await relay.stream.write(wire);
-        if (!written.ok) { cleanup(); return { ok: false, error: 'broker_unavailable' }; }
+        if (!written.ok) {
+            logger.warn({ module: 'provider-broker-carrier', stage: 'request_write', code: 'write_failed' });
+            cleanup();
+            return { ok: false, error: 'broker_unavailable' };
+        }
         await relay.stream.endWrite();
         const iterator = relay.stream.read()[Symbol.asyncIterator]();
         let buffered = Buffer.alloc(0);
@@ -200,6 +221,11 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
         for (const line of lines) { const split = line.indexOf(':'); if (split > 0) headers[line.slice(0, split).toLowerCase()] = line.slice(split + 1).trim(); }
         if (statusCode >= 400) {
             await relay.stream.close();
+            if (statusCode === 403 && (headers['x-happier-provider-broker-error-code'] === 'broker_unavailable'
+                || headers['x-happier-provider-broker-error-code'] === 'update_required')) {
+                logger.warn({ module: 'provider-broker-carrier', stage: 'application_response',
+                    code: headers['x-happier-provider-broker-error-code'] });
+            }
             return { ok: false, ...mapProviderBrokerApplicationFailure(statusCode, headers) };
         }
         const initial = buffered.subarray(boundary + 4);

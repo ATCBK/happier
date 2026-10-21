@@ -3,7 +3,8 @@ import {
     encodePeerTcpTunnelBinaryFrameV2,
     type PeerTcpTunnelRelayEnvelope,
 } from '@happier-dev/protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { logger } from '@/utils/logging/log';
 
 import {
     createExternalProviderBrokerDispatcher,
@@ -11,6 +12,7 @@ import {
 } from './externalProviderBrokerDispatcher';
 
 describe('external Provider broker dispatcher', () => {
+    afterEach(() => vi.restoreAllMocks());
     it('maps only trusted broker denial codes to the closed public error vocabulary', () => {
         expect(mapProviderBrokerApplicationFailure(403, {
             'x-happier-provider-broker-error-code': 'team_credential_usage_limit',
@@ -32,16 +34,18 @@ describe('external Provider broker dispatcher', () => {
         })).toEqual({ error: 'policy_denied' });
     });
 
-    async function dispatchWithUpstreamResponse(response: Uint8Array) {
+    async function dispatchWithUpstreamResponse(response: Uint8Array, options: Readonly<{
+        enabled?: boolean; env?: NodeJS.ProcessEnv; relaySocketId?: string; closeOnOpen?: boolean;
+    }> = {}) {
         let receive: ((envelope: PeerTcpTunnelRelayEnvelope) => void) | undefined;
         let responseSent = false;
-        const relaySocketId = 'relay-socket-1';
+        const relaySocketId = options.relaySocketId ?? 'relay-socket-1';
         const machineId = 'broker-machine-1';
         const accountId = 'custodian-account-1';
         let transportCloseCount = 0;
         const dispatch = createExternalProviderBrokerDispatcher({
-            enabled: () => true,
-            env: {
+            enabled: () => options.enabled ?? true,
+            env: options.env ?? {
                 HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_KEY_ID: 'test-key',
                 HAPPIER_PEER_MEDIATION_ROUTE_GRANT_SIGNING_PRIVATE_KEY: Buffer.alloc(32, 7).toString('base64url'),
             },
@@ -50,6 +54,13 @@ describe('external Provider broker dispatcher', () => {
                 subscribe(handler) { receive = handler; return () => {}; },
                 close() { transportCloseCount += 1; },
                 send(_event, envelope) {
+                    if (options.closeOnOpen && envelope.v === 1 && envelope.frame.kind === 'open') {
+                        receive?.({ ...envelope, sender: { kind: 'machine', machineId },
+                            recipient: { kind: 'user', socketId: relaySocketId },
+                            frame: { v: 1, kind: 'close', tunnelId: envelope.frame.open.tunnelId,
+                                halfClose: false, reasonCode: 'completed' } });
+                        return;
+                    }
                     if (envelope.v !== 2 || responseSent) return;
                     const decoded = decodePeerTcpTunnelBinaryFrameV2({
                         frame: envelope.frame,
@@ -78,17 +89,16 @@ describe('external Provider broker dispatcher', () => {
                         }),
                     });
                     receive?.({
-                        v: 1,
+                        v: 2,
                         scopeUserId: accountId,
                         sender: { kind: 'machine', machineId },
                         recipient: { kind: 'user', socketId: relaySocketId },
-                        frame: {
-                            v: 1,
-                            kind: 'close',
-                            tunnelId: decoded.header.tunnelId,
-                            halfClose: false,
-                            reasonCode: 'completed',
-                        },
+                        encoding: 'binary_frame_v2',
+                        frame: encodePeerTcpTunnelBinaryFrameV2({ header: {
+                            version: 2, kind: 'close', tunnelId: decoded.header.tunnelId,
+                            substreamId: decoded.header.substreamId, direction: 'daemon_to_client',
+                            halfClose: true, reasonCode: 'upstream_eof', payloadLength: 0,
+                        } }),
                     });
                 },
             }),
@@ -125,6 +135,29 @@ describe('external Provider broker dispatcher', () => {
             `HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`,
         );
     }
+
+    it.each([
+        [{ enabled: false }, 'feature', 'disabled'],
+        [{ env: {} }, 'signing', 'missing_key_id'],
+        [{ relaySocketId: '' }, 'relay_authorization', 'invalid_scope'],
+        [{ closeOnOpen: true }, 'request_write', 'write_failed'],
+    ] as const)('records a content-free stage when carrier setup fails: %j', async (options, stage, code) => {
+        const diagnostics = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        const { result } = await dispatchWithUpstreamResponse(httpResponse('ok'), options);
+        expect(result).toEqual({ ok: false, error: 'broker_unavailable' });
+        expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage, code });
+    });
+
+    it.each(['broker_unavailable', 'update_required'])('records the trusted application refusal %s without response content', async code => {
+        const diagnostics = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        const { result } = await dispatchWithUpstreamResponse(new TextEncoder().encode(
+            `HTTP/1.1 403 Forbidden\r\nX-Happier-Provider-Broker-Error-Code: ${code}\r\nX-Private: private payload\r\n\r\nprivate body`,
+        ));
+        expect(result).toMatchObject({ ok: false, error: 'broker_unavailable' });
+        if (code === 'update_required') expect(result).toMatchObject({ reason: 'incompatible' });
+        expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage: 'application_response', code });
+        expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
+    });
 
     // The relay coalesces whatever it has: a small control response and a legal
     // 32 KiB body can both arrive in the dispatcher's first chunk. The header

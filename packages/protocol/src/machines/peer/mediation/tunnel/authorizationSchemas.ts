@@ -108,8 +108,6 @@ export const PeerTcpTunnelRelayAuthorizationPayloadV2Schema = lazyZodSchema(() =
       if (payload.maxIdleMs !== undefined || payload.maxDurationMs !== undefined || payload.maxTotalBytes !== undefined) {
         ctx.addIssue({ code: "custom", path: ['maxIdleMs'], message: 'TCP lifetime belongs to the consumer, not relay admission' });
       }
-    } else if (payload.flowKind === 'provider_broker' && (payload.maxIdleMs === undefined || payload.maxDurationMs === undefined)) {
-      ctx.addIssue({ code: "custom", path: ['maxIdleMs'], message: 'Application relay authorization requires explicit lifetime budgets' });
     }
     if (payload.exp <= payload.iat) {
       ctx.addIssue({

@@ -11,6 +11,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { parseProviderContributionIdentityV1 } from "@happier-dev/protocol/providers/contribution-identity";
 import { DaemonProviderConnectionsDescribeResponseV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderTeamCredentialBrokerEligibilityResponseV1Schema, DaemonProviderTeamCredentialResourceTestCandidateResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { z } from "zod/mini";
+import { logger } from "@/utils/logging/log";
 import type { Fastify } from "@/app/api/types";
 import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";
 import { inTx } from "@/storage/inTx";
@@ -957,6 +958,9 @@ export function registerTeamCredentialResourceRoutes(
         }));
         if (!prepared.ok) {
             if (prepared.error === "broker_unavailable" || prepared.error === "update_required") {
+                if (prepared.error === "broker_unavailable") {
+                    logger.warn({ module: "team-credential-resource-test", stage: "placement", code: "broker_unavailable" });
+                }
                 return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                     result: "needs_attention",
                     readiness: { kind: prepared.error },
@@ -1002,6 +1006,9 @@ export function registerTeamCredentialResourceRoutes(
             const brokerRefusalReason = readTeamCredentialBrokerRefusalReason(candidateResults.map(({ candidate }) => (
                 candidate?.status === "unavailable" ? candidate.reason : null
             )));
+            if (!sourceUnavailable && brokerRefusalReason === null) {
+                logger.warn({ module: "team-credential-resource-test", stage: "candidate", code: "candidate_unavailable" });
+            }
             return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                 result: "needs_attention",
                 readiness: sourceUnavailable
@@ -1028,6 +1035,7 @@ export function registerTeamCredentialResourceRoutes(
         }
         const dispatch = app.forwardTeamCredentialBrokerResourceTest;
         if (!dispatch) {
+            logger.warn({ module: "team-credential-resource-test", stage: "dispatch", code: "dispatcher_unavailable" });
             return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                 result: "needs_attention",
                 readiness: { kind: "broker_unavailable" },
@@ -1038,6 +1046,7 @@ export function registerTeamCredentialResourceRoutes(
         const abort = () => cancellation.abort();
         request.raw.once("aborted", abort);
         reply.raw.once("close", abort);
+        let stage: "dispatch" | "response_body" = "dispatch";
         try {
             const dispatched = await dispatch({
                 actorAccountId: request.userId,
@@ -1056,14 +1065,21 @@ export function registerTeamCredentialResourceRoutes(
                     : dispatched.error === "policy_denied"
                         ? "policy_denied" as const
                         : "source_unavailable" as const;
+                if (readiness === "broker_unavailable") {
+                    logger.warn({ module: "team-credential-resource-test", stage, code: dispatched.error });
+                }
                 return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                     result: "needs_attention",
-                    readiness: { kind: readiness },
+                    readiness: { kind: readiness, ...(readiness === "broker_unavailable" && "reason" in dispatched
+                        ? { reason: dispatched.reason } : {}) },
                     recovery: readiness === "broker_unavailable"
-                        ? "Reconnect the broker Machine and try again."
+                        ? "reason" in dispatched && dispatched.reason === "incompatible"
+                            ? "Update the broker Machine and try again."
+                            : "Reconnect the broker Machine and try again."
                         : "Review the credential source and policy, then try again.",
                 }));
             }
+            stage = "response_body";
             for await (const _chunk of dispatched.body) {
                 // Drain the bounded production response so the carrier closes.
             }
@@ -1072,6 +1088,8 @@ export function registerTeamCredentialResourceRoutes(
                 readiness: { kind: "available" },
             }));
         } catch {
+            logger.warn({ module: "team-credential-resource-test", stage,
+                code: cancellation.signal.aborted ? "request_cancelled" : "exception" });
             return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                 result: "needs_attention",
                 readiness: { kind: "broker_unavailable" },

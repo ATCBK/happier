@@ -124,7 +124,9 @@ describe("mintProviderBrokerRelayAuthorizationV2", () => {
             nowMs: 1_000,
             ttlMs: 30_000,
             serverGateEnabled: true,
-            serverCaps: { maxBytes: 1024, maxFrameBytes: 1024, maxIdleMs: 10_000, maxDurationMs: 30_000 },
+            // Production Provider dispatch supplies framing bounds; request/operation
+            // cancellation owns lifetime rather than an unrelated relay deadline.
+            serverCaps: { maxFrameBytes: 1024 },
             signingKey: { keyId: "test-key", secretKey: signing.secretKey },
         });
         expect(result.ok).toBe(true);
@@ -133,6 +135,8 @@ describe("mintProviderBrokerRelayAuthorizationV2", () => {
             targetMachineId: "broker-machine",
             providerBroker: binding,
         });
+        expect(result.relayAuthorization.payload).not.toHaveProperty('maxIdleMs');
+        expect(result.relayAuthorization.payload).not.toHaveProperty('maxDurationMs');
         const trustRoots = [{ keyId: "test-key", publicKeyBase64Url: Buffer.from(signing.publicKey).toString("base64url") }];
         expect(verifyPeerTcpTunnelRelayAuthorizationV2({
             authorization: result.relayAuthorization,

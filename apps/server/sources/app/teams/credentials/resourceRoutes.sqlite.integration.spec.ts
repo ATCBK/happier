@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
     TEAM_CREDENTIAL_MANUAL_CONNECTED_ACCOUNT_DIRECT_CONTRACT_V1,
@@ -20,6 +20,7 @@ import { getUserMachinesSocketRoom } from "@/app/api/socketRooms";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { peerMediationGrantSigningEnv } from "@/testkit/env";
+import { logger } from "@/utils/logging/log";
 
 import { registerTeamCredentialResourceRoutes } from "./registerTeamCredentialResourceRoutes";
 import { projectTeamCredentialResourceSummaryInTx } from "./resourceRead";
@@ -30,6 +31,7 @@ import { TEAM_CHANGE_ENTITY_ID } from "../teamChanges";
 import { recordTeamCredentialDirectDeliveryActivityInTx } from "./resourceActivity";
 
 describe("Team credential resource routes (SQLite integration)", () => {
+    afterEach(() => vi.restoreAllMocks());
     let harness: LightSqliteHarness;
     let app: ReturnType<typeof createAuthenticatedTestApp>;
 
@@ -2616,13 +2618,44 @@ describe("Team credential resource routes (SQLite integration)", () => {
         expect(invalidCandidate.body).not.toContain("private broker detail");
         expect(dispatch).toHaveBeenCalledOnce();
         app.forwardRpcForUser = async () => ({ ok: false, error: "RPC transport unavailable" });
+        const diagnostics = vi.spyOn(logger, "warn").mockImplementation(() => {});
         const unavailableTransport = await post("/v1/teams/credential-resources/test", manager.id, {
             teamId: team.id, resourceId: resource.id,
         }, evidence);
         expect(unavailableTransport.statusCode, unavailableTransport.body).toBe(200);
         expect(unavailableTransport.json().readiness).toEqual({ kind: "broker_unavailable" });
+        expect(diagnostics).toHaveBeenCalledWith({
+            module: "team-credential-resource-test", stage: "candidate", code: "candidate_unavailable",
+        });
         expect(dispatch).toHaveBeenCalledOnce();
         app.forwardRpcForUser = successfulCandidateRpc;
+        for (const [forward, stage, code] of [
+            [undefined, "dispatch", "dispatcher_unavailable"],
+            [async () => ({ ok: false as const, error: "broker_unavailable" as const }), "dispatch", "broker_unavailable"],
+            [async () => { throw new Error("private dispatch payload"); }, "dispatch", "exception"],
+            [async () => ({ ok: true as const, statusCode: 200, headers: {},
+                body: (async function* () { yield new Uint8Array(); throw new Error("private response payload"); })(),
+            }), "response_body", "exception"],
+        ] as const) {
+            app.forwardTeamCredentialBrokerResourceTest = forward;
+            diagnostics.mockClear();
+            const failed = await post("/v1/teams/credential-resources/test", manager.id, {
+                teamId: team.id, resourceId: resource.id,
+            }, evidence);
+            expect(failed.statusCode, failed.body).toBe(200);
+            expect(failed.json().readiness).toEqual({ kind: "broker_unavailable" });
+            expect(diagnostics).toHaveBeenCalledWith({ module: "team-credential-resource-test", stage, code });
+            expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private");
+            expect(failed.body).not.toContain("private");
+        }
+        app.forwardTeamCredentialBrokerResourceTest = async () => ({
+            ok: false, error: "broker_unavailable", reason: "incompatible",
+        });
+        const incompatible = await post("/v1/teams/credential-resources/test", manager.id, {
+            teamId: team.id, resourceId: resource.id,
+        }, evidence);
+        expect(incompatible.json().readiness).toEqual({ kind: "broker_unavailable", reason: "incompatible" });
+        app.forwardTeamCredentialBrokerResourceTest = dispatch;
         await db.teamMembership.delete({ where: {
             teamId_accountId: { teamId: team.id, accountId: custodian.id },
         } });
