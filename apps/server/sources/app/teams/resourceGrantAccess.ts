@@ -229,9 +229,15 @@ export async function applyResourceRecipientKeyEnvelopesInTx<Envelope extends Re
 ): Promise<ResourceRecipientKeyEnvelopeCommitResponseV1> {
     const appliedRecipientAccountIds: string[] = [];
     const skippedRecipientAccountIds: string[] = [];
+    const recipientIds = [...new Set(input.recipientKeyEnvelopes.map(envelope => envelope.recipientAccountId))];
+    const accounts = recipientIds.length === 0 ? [] : await tx.account.findMany({
+        where: { id: { in: recipientIds } }, select: RECIPIENT_READINESS_SELECT,
+    });
+    const facts = recipientIds.length === 0 ? null : await adapter.readAccessFactsInTx(tx, input.resourceId);
+    const accountsById = new Map(accounts.map(account => [account.id, account]));
     for (const envelope of input.recipientKeyEnvelopes) {
-        const account = await tx.account.findUnique({ where: { id: envelope.recipientAccountId }, select: RECIPIENT_READINESS_SELECT });
-        const access = await resolveResourceGrantAccessInTx(tx, adapter, { resourceId: input.resourceId, actorAccountId: envelope.recipientAccountId });
+        const account = accountsById.get(envelope.recipientAccountId);
+        const access = facts ? resolveResourceGrantAccessFromFacts(facts, envelope.recipientAccountId) : null;
         const readiness = account ? deriveAccountRecipientEnvelopeReadinessFromRow(account) : null;
         if (!access || access.level === 'owner' || readiness?.status !== 'available'
             || readiness.binding.contentPublicKeyFingerprint !== envelope.recipientContentPublicKeyFingerprint) {

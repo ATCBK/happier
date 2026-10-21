@@ -482,13 +482,21 @@ export async function readMachineRecipientCensusInTx(tx: Tx, input: MachineActor
     const recipients: MachineAccessRecipientCensusResponseV1['recipients'] = [];
     let nextCursor: string | null = null;
     if (encryptionMode === 'e2ee') {
-        const ids = await resolveCurrentMachineRecipientAccountIdsInTx(tx, row.id);
+        const ids = (await resolveCurrentMachineRecipientAccountIdsInTx(tx, row.id))
+            .filter(accountId => accountId !== row.accountId && (after === null || accountId > after));
+        const accounts = ids.length === 0 ? [] : await tx.account.findMany({
+            where: { id: { in: ids } }, select: RECIPIENT_READINESS_SELECT,
+        });
+        const envelopes = ids.length === 0 ? [] : await tx.machineKeyEnvelope.findMany({
+            where: { machineId: row.id, recipientAccountId: { in: ids } },
+        });
+        const accountsById = new Map(accounts.map(account => [account.id, account]));
+        const envelopesByAccountId = new Map(envelopes.map(envelope => [envelope.recipientAccountId, envelope]));
         for (const accountId of ids) {
-            if (accountId === row.accountId || (after !== null && accountId <= after)) continue;
-            const account = await tx.account.findUnique({ where: { id: accountId }, select: RECIPIENT_READINESS_SELECT });
+            const account = accountsById.get(accountId);
             if (!account) continue;
             const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
-            const envelope = await tx.machineKeyEnvelope.findUnique({ where: { machineId_recipientAccountId: { machineId: row.id, recipientAccountId: accountId } } });
+            const envelope = envelopesByAccountId.get(accountId);
             const publicFingerprint = readiness.status === 'available' ? readiness.binding.contentPublicKeyFingerprint : null;
             const current = readiness.status === 'available' && envelope?.machineOwnerEnvelopeFingerprint === fingerprint
                 && envelope.recipientContentPublicKeyFingerprint === publicFingerprint && parseEncryptedDataKeyEnvelopeV1(envelope.encryptedDataKey) !== null;
@@ -516,12 +524,18 @@ export async function commitMachineRecipientKeyEnvelopesInTx(tx: Tx, input: Mach
     if (fingerprint !== input.expectedMachineOwnerEnvelopeFingerprint || row.metadataVersion !== input.expectedMetadataVersion || row.daemonStateVersion !== input.expectedDaemonStateVersion) return refusal('machine_key_changed');
     const callerKey = await readMachineDataKeyForCallerInTx(tx, input);
     if (!callerKey || !isDeepStrictEqual(callerKey, decodeBase64(input.expectedCallerDataEncryptionKey))) return refusal('recipient_binding_changed');
+    const recipientIds = [...new Set(input.recipientKeyEnvelopes.map(envelope => envelope.recipientAccountId))];
+    const accounts = recipientIds.length === 0 ? [] : await tx.account.findMany({
+        where: { id: { in: recipientIds } }, select: RECIPIENT_READINESS_SELECT,
+    });
+    const accountsById = new Map(accounts.map(account => [account.id, account]));
+    const sources = contributions(row);
     const prepared: Array<{ recipientAccountId: string; encryptedDataKey: Uint8Array<ArrayBuffer>; recipientContentPublicKeyFingerprint: string }> = [];
     for (const envelope of input.recipientKeyEnvelopes) {
         const encryptedDataKey = new Uint8Array(decodeBase64(envelope.encryptedDataKey));
         if (!parseEncryptedDataKeyEnvelopeV1(encryptedDataKey)) return refusal('invalid_recipient_envelope');
-        if (envelope.recipientAccountId === row.accountId || !effectiveRole(row, envelope.recipientAccountId)) return refusal('access_denied');
-        const account = await tx.account.findUnique({ where: { id: envelope.recipientAccountId }, select: RECIPIENT_READINESS_SELECT });
+        if (envelope.recipientAccountId === row.accountId || !effectiveRole(row, envelope.recipientAccountId, sources)) return refusal('access_denied');
+        const account = accountsById.get(envelope.recipientAccountId);
         const readiness = account ? deriveAccountRecipientEnvelopeReadinessFromRow(account) : null;
         if (readiness?.status !== 'available' || readiness.binding.contentPublicKeyFingerprint !== envelope.recipientContentPublicKeyFingerprint) return refusal('recipient_binding_changed');
         prepared.push({ recipientAccountId: envelope.recipientAccountId, encryptedDataKey, recipientContentPublicKeyFingerprint: envelope.recipientContentPublicKeyFingerprint });
