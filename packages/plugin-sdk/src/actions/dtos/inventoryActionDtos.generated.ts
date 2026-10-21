@@ -235,7 +235,7 @@ export type InventoryActionInputById = {
         agentId?: string | undefined;
         backendTargetKey?: string | undefined;
         machineId?: string | undefined;
-        serverId?: string | undefined;
+        serverId?: undefined;
         limit?: number | undefined;
         probe?: {
             cwd?: string | undefined;
@@ -311,7 +311,7 @@ export type InventoryActionInputById = {
         machineId?: string | undefined;
         limit?: number | undefined;
         modelId?: string | undefined;
-        serverId?: string | undefined;
+        serverId?: undefined;
         probe?: {
             cwd?: string | undefined;
             timeoutMs?: number | undefined;
@@ -385,7 +385,7 @@ export type InventoryActionInputById = {
         backendTargetKey?: string | undefined;
         machineId?: string | undefined;
         limit?: number | undefined;
-        serverId?: string | undefined;
+        serverId?: undefined;
         probe?: {
             cwd?: string | undefined;
             timeoutMs?: number | undefined;
@@ -468,7 +468,7 @@ export type InventoryActionInputById = {
         machineId?: string | undefined;
         limit?: number | undefined;
         includeUnavailable?: boolean | undefined;
-        serverId?: string | undefined;
+        serverId?: undefined;
     };
     readonly "sessions.spawn.mcp_servers.preview": {
         [x: string]: unknown;

@@ -186,6 +186,7 @@ export const MUTATING_PUBLIC_ACTION_IDS: ReadonlySet<PublicActionId> = new Set([
   "discussion.pass",
   "discussion.post",
   "discussion.reply",
+  "discussion.settings.set",
   "doc.comment.reply",
   "doc.edit.propose",
   "execution.run.action",
@@ -1348,6 +1349,10 @@ export type GeneratedActions = Readonly<{
     readonly post: (input: PublicActionInputById["discussion.post"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.post">>;
     readonly read: (input: PublicActionInputById["discussion.read"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.read">>;
     readonly reply: (input: PublicActionInputById["discussion.reply"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.reply">>;
+    readonly settings: Readonly<{
+      readonly get: (input: PublicActionInputById["discussion.settings.get"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.settings.get">>;
+      readonly set: (input: PublicActionInputById["discussion.settings.set"], options?: ActionExecutionOptions) => Promise<PublicActionExecutionResult<"discussion.settings.set">>;
+    }> ;
   }> ;
   readonly doc: Readonly<{
     readonly comment: Readonly<{
@@ -3781,6 +3786,10 @@ export function createGeneratedActions(execute: RawActionExecute): GeneratedActi
       post: (input: PublicActionInputById["discussion.post"], options?: ActionExecutionOptions) => execute("discussion.post", input, options),
       read: (input: PublicActionInputById["discussion.read"], options?: ActionExecutionOptions) => execute("discussion.read", input, options),
       reply: (input: PublicActionInputById["discussion.reply"], options?: ActionExecutionOptions) => execute("discussion.reply", input, options),
+      settings: {
+        get: (input: PublicActionInputById["discussion.settings.get"], options?: ActionExecutionOptions) => execute("discussion.settings.get", input, options),
+        set: (input: PublicActionInputById["discussion.settings.set"], options?: ActionExecutionOptions) => execute("discussion.settings.set", input, options),
+      },
     },
     doc: {
       comment: {

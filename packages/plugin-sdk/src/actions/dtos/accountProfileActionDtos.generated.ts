@@ -95,6 +95,53 @@ export type AccountProfileActionInputById = {
                 presentation: {
                     kind: 'declarative';
                     document: unknown;
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_rhythm';
+                    inputs: {
+                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                        colourBy?: 'intensity' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_parallel';
+                    inputs: {
+                        style: 'peak';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_constellation';
+                    inputs: {
+                        style: 'agentMix';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_flow';
+                    inputs: {
+                        style: 'agentRiver';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_breakdowns';
+                    inputs: {
+                        style?: 'breakdowns' | 'crew' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_outcomes';
+                    inputs: {
+                        style?: 'outcomes' | 'shipped' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_recap';
+                    inputs: {
+                        style?: 'recap' | 'personalRecords' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                    inputs: Record<string, never>;
                 };
                 title?: string | undefined;
             } | {
@@ -102,7 +149,7 @@ export type AccountProfileActionInputById = {
                 id: string;
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     id: string;
@@ -111,6 +158,53 @@ export type AccountProfileActionInputById = {
                     presentation: {
                         kind: 'declarative';
                         document: unknown;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 }[];
@@ -265,6 +359,53 @@ export type AccountProfileActionInputById = {
                 presentation: {
                     kind: 'declarative';
                     document: unknown;
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_rhythm';
+                    inputs: {
+                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                        colourBy?: 'intensity' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_parallel';
+                    inputs: {
+                        style: 'peak';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_constellation';
+                    inputs: {
+                        style: 'agentMix';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_flow';
+                    inputs: {
+                        style: 'agentRiver';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_breakdowns';
+                    inputs: {
+                        style?: 'breakdowns' | 'crew' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_outcomes';
+                    inputs: {
+                        style?: 'outcomes' | 'shipped' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_recap';
+                    inputs: {
+                        style?: 'recap' | 'personalRecords' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                    inputs: Record<string, never>;
                 };
                 title?: string | undefined;
             } | {
@@ -272,7 +413,7 @@ export type AccountProfileActionInputById = {
                 id: string;
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     id: string;
@@ -281,6 +422,53 @@ export type AccountProfileActionInputById = {
                     presentation: {
                         kind: 'declarative';
                         document: unknown;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 }[];
@@ -435,6 +623,53 @@ export type AccountProfileActionInputById = {
                 presentation: {
                     kind: 'declarative';
                     document: unknown;
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_rhythm';
+                    inputs: {
+                        style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                        colourBy?: 'intensity' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_parallel';
+                    inputs: {
+                        style: 'peak';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_constellation';
+                    inputs: {
+                        style: 'agentMix';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_flow';
+                    inputs: {
+                        style: 'agentRiver';
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_breakdowns';
+                    inputs: {
+                        style?: 'breakdowns' | 'crew' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_outcomes';
+                    inputs: {
+                        style?: 'outcomes' | 'shipped' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_recap';
+                    inputs: {
+                        style?: 'recap' | 'personalRecords' | undefined;
+                    };
+                } | {
+                    kind: 'usage';
+                    widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                    inputs: Record<string, never>;
                 };
                 title?: string | undefined;
             } | {
@@ -442,7 +677,7 @@ export type AccountProfileActionInputById = {
                 id: string;
                 width: 'full' | 'half';
                 frameStyle: 'card' | 'plain';
-                dividers: 'hairline' | 'none';
+                dividers: 'none' | 'hairline';
                 children: {
                     kind: 'widget';
                     id: string;
@@ -451,6 +686,53 @@ export type AccountProfileActionInputById = {
                     presentation: {
                         kind: 'declarative';
                         document: unknown;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style?: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight' | undefined;
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 }[];
@@ -533,15 +815,15 @@ export type AccountProfileActionInputById = {
     };
     readonly "account.public_profile.embed.get": {
         theme: 'auto' | 'light' | 'dark';
-        syntax: 'url' | 'picture' | 'markdown' | 'html';
+        syntax: 'url' | 'html' | 'picture' | 'markdown';
         kind: 'profile_link';
     } | {
         theme: 'auto' | 'light' | 'dark';
-        syntax: 'url' | 'picture' | 'markdown' | 'html';
+        syntax: 'url' | 'html' | 'picture' | 'markdown';
         kind: 'card';
     } | {
         theme: 'auto' | 'light' | 'dark';
-        syntax: 'url' | 'picture' | 'markdown' | 'html';
+        syntax: 'url' | 'html' | 'picture' | 'markdown';
         kind: 'badge';
         metric: 'tokens' | 'agent-time' | 'merged-prs' | 'streak' | 'peak-parallel';
     };
@@ -900,6 +1182,53 @@ export type AccountProfileActionResultById = {
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 } | {
@@ -907,7 +1236,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -919,6 +1248,53 @@ export type AccountProfileActionResultById = {
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
                         };
                         title?: string | undefined;
                     }[];
@@ -1023,18 +1399,74 @@ export type AccountProfileActionResultById = {
     readonly "account.public_profile.preview": {
         kind: 'ready';
         view: {
-            v: 1;
-            handle: string;
-            service: {
-                displayName: string;
-                publicBaseUrl: string;
+            appearance: {
+                atmosphere: {
+                    source: 'none';
+                } | {
+                    source: 'planet';
+                    planet: {
+                        placement: 'corner' | 'side' | 'rise';
+                        style: 'airy' | 'balanced' | 'rich';
+                        digits: boolean;
+                    };
+                } | {
+                    source: 'picture';
+                    picture: {
+                        content: {
+                            mimeType: 'image/png' | 'image/webp';
+                            base64: string;
+                        };
+                        layout: 'horizon' | 'wallpaper';
+                        descriptor: {
+                            adaptiveHaze: boolean;
+                            look: {
+                                effect: 'original' | 'fine' | 'painted-fine' | 'halftone' | 'mosaic' | 'painted' | 'haze' | 'engraving';
+                                params: Record<string, number>;
+                                strength: number;
+                                dissolve: {
+                                    style: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows';
+                                    from: number;
+                                    to: number;
+                                };
+                            };
+                            credit: {
+                                author: string;
+                                source: string;
+                                licence: string;
+                                url?: string | undefined;
+                                note?: string | undefined;
+                            } | null;
+                            kind: 'photo' | 'painting';
+                            hour: number;
+                            title: string;
+                            horizon: {
+                                src?: number | undefined;
+                                at?: number | undefined;
+                            };
+                            focus: {
+                                x?: number | undefined;
+                                y?: number | undefined;
+                                zoom?: number | undefined;
+                            };
+                            grades: {
+                                light: number;
+                                dusk: number;
+                                night: number;
+                            };
+                            dark: 'dusk' | 'night';
+                            adjust?: {
+                                exposure?: number | undefined;
+                                contrast?: number | undefined;
+                                saturation?: number | undefined;
+                                temperature?: number | undefined;
+                            } | undefined;
+                            themes?: ('light' | 'dark')[] | undefined;
+                        };
+                    };
+                };
+                theme: 'auto' | 'light' | 'dark';
             };
-            state: 'published';
-            identity: {
-                name?: string | undefined;
-                sinceMs?: number | undefined;
-                avatarUrl?: string | undefined;
-            };
+            indexable: boolean;
             metadata: {
                 bio?: string | undefined;
                 links?: {
@@ -1049,6 +1481,7 @@ export type AccountProfileActionResultById = {
                     kind: 'account' | 'planet';
                 } | undefined;
             };
+            v: 1;
             snapshot: {
                 v: 1;
                 computedAtMs: number;
@@ -1265,100 +1698,139 @@ export type AccountProfileActionResultById = {
                     size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                     frameStyle: 'card' | 'plain';
                     presentation: {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
+                    } | {
                         kind: 'declarative';
                         document: Readonly<{
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
                         size: 'small' | 'medium' | 'wide' | 'full' | 'tall' | 'large';
                         frameStyle: 'card' | 'plain';
                         presentation: {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
+                        } | {
                             kind: 'declarative';
                             document: Readonly<{
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
             };
-            appearance: {
-                atmosphere: {
-                    source: 'none';
-                } | {
-                    source: 'planet';
-                    planet: {
-                        placement: 'corner' | 'side' | 'rise';
-                        style: 'airy' | 'balanced' | 'rich';
-                        digits: boolean;
-                    };
-                } | {
-                    source: 'picture';
-                    picture: {
-                        ref: {
-                            kind: 'publication';
-                            id: string;
-                        };
-                        layout: 'horizon' | 'wallpaper';
-                        descriptor: {
-                            adaptiveHaze: boolean;
-                            look: {
-                                effect: 'original' | 'fine' | 'painted-fine' | 'halftone' | 'mosaic' | 'painted' | 'haze' | 'engraving';
-                                params: Record<string, number>;
-                                strength: number;
-                                dissolve: {
-                                    style: 'haze' | 'ordered' | 'gradient' | 'shrink' | 'rows';
-                                    from: number;
-                                    to: number;
-                                };
-                            };
-                            credit: {
-                                author: string;
-                                source: string;
-                                licence: string;
-                                url?: string | undefined;
-                                note?: string | undefined;
-                            } | null;
-                            kind: 'photo' | 'painting';
-                            hour: number;
-                            title: string;
-                            horizon: {
-                                src?: number | undefined;
-                                at?: number | undefined;
-                            };
-                            focus: {
-                                x?: number | undefined;
-                                y?: number | undefined;
-                                zoom?: number | undefined;
-                            };
-                            grades: {
-                                light: number;
-                                dusk: number;
-                                night: number;
-                            };
-                            dark: 'dusk' | 'night';
-                            adjust?: {
-                                exposure?: number | undefined;
-                                contrast?: number | undefined;
-                                saturation?: number | undefined;
-                                temperature?: number | undefined;
-                            } | undefined;
-                            themes?: ('light' | 'dark')[] | undefined;
-                        };
-                    };
-                };
-                theme: 'auto' | 'light' | 'dark';
+            handle: string;
+            identity: {
+                name?: string | undefined;
+                sinceMs?: number | undefined;
+                avatarUrl?: string | undefined;
+            };
+            service: {
+                displayName: string;
+                publicBaseUrl: string;
             };
             urls: {
                 page: string;
@@ -1368,6 +1840,7 @@ export type AccountProfileActionResultById = {
                 og: string;
                 report: string;
             };
+            state: 'published';
         };
     } | {
         kind: 'unavailable';
@@ -1670,6 +2143,53 @@ export type AccountProfileActionResultById = {
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 } | {
@@ -1677,7 +2197,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -1689,6 +2209,53 @@ export type AccountProfileActionResultById = {
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
                         };
                         title?: string | undefined;
                     }[];
@@ -2070,6 +2637,53 @@ export type AccountProfileActionResultById = {
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 } | {
@@ -2077,7 +2691,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -2089,6 +2703,53 @@ export type AccountProfileActionResultById = {
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
                         };
                         title?: string | undefined;
                     }[];
@@ -2470,6 +3131,53 @@ export type AccountProfileActionResultById = {
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 } | {
@@ -2477,7 +3185,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -2489,6 +3197,53 @@ export type AccountProfileActionResultById = {
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
                         };
                         title?: string | undefined;
                     }[];
@@ -2872,6 +3627,53 @@ export type AccountProfileActionResultById = {
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 } | {
@@ -2879,7 +3681,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -2891,6 +3693,53 @@ export type AccountProfileActionResultById = {
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
                         };
                         title?: string | undefined;
                     }[];
@@ -3272,6 +4121,53 @@ export type AccountProfileActionResultById = {
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 } | {
@@ -3279,7 +4175,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -3291,6 +4187,53 @@ export type AccountProfileActionResultById = {
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
                         };
                         title?: string | undefined;
                     }[];
@@ -3672,6 +4615,53 @@ export type AccountProfileActionResultById = {
                             version: 1;
                             root: PluginDeclarativeNodeV2;
                         }>;
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_rhythm';
+                        inputs: {
+                            style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                            colourBy?: 'intensity' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_parallel';
+                        inputs: {
+                            style: 'peak';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_constellation';
+                        inputs: {
+                            style: 'agentMix';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_flow';
+                        inputs: {
+                            style: 'agentRiver';
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_breakdowns';
+                        inputs: {
+                            style?: 'breakdowns' | 'crew' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_outcomes';
+                        inputs: {
+                            style?: 'outcomes' | 'shipped' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_recap';
+                        inputs: {
+                            style?: 'recap' | 'personalRecords' | undefined;
+                        };
+                    } | {
+                        kind: 'usage';
+                        widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                        inputs: Record<string, never>;
                     };
                     title?: string | undefined;
                 } | {
@@ -3679,7 +4669,7 @@ export type AccountProfileActionResultById = {
                     id: string;
                     width: 'full' | 'half';
                     frameStyle: 'card' | 'plain';
-                    dividers: 'hairline' | 'none';
+                    dividers: 'none' | 'hairline';
                     children: {
                         kind: 'widget';
                         id: string;
@@ -3691,6 +4681,53 @@ export type AccountProfileActionResultById = {
                                 version: 1;
                                 root: PluginDeclarativeNodeV2;
                             }>;
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_rhythm';
+                            inputs: {
+                                style: 'weekdayHour' | 'heatmap' | 'sky' | 'weekTide' | 'daylight';
+                                colourBy?: 'intensity' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_parallel';
+                            inputs: {
+                                style: 'peak';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_constellation';
+                            inputs: {
+                                style: 'agentMix';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_flow';
+                            inputs: {
+                                style: 'agentRiver';
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_breakdowns';
+                            inputs: {
+                                style?: 'breakdowns' | 'crew' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_outcomes';
+                            inputs: {
+                                style?: 'outcomes' | 'shipped' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_recap';
+                            inputs: {
+                                style?: 'recap' | 'personalRecords' | undefined;
+                            };
+                        } | {
+                            kind: 'usage';
+                            widgetId: 'usage_daily' | 'usage_period_summary' | 'usage_footprint' | 'usage_source_coverage' | 'usage_orbit' | 'usage_planet' | 'usage_run_length';
+                            inputs: Record<string, never>;
                         };
                         title?: string | undefined;
                     }[];

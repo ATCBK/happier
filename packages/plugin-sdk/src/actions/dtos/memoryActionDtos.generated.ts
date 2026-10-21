@@ -1023,7 +1023,7 @@ export type MemoryActionResultById = {
         machines: {
             machineId: string;
             status: 'ok' | 'partial' | 'offline' | 'outdated' | 'disabled-by-settings';
-            standardSearchEnabled: boolean;
+            standardSearchEnabled?: boolean | undefined;
             documents?: 'ready' | 'pending' | 'partial' | 'unavailable' | undefined;
         }[];
         sources?: {

@@ -1328,6 +1328,19 @@ export type DiscussionActionInputById = {
         }[];
         discussionId?: string | undefined;
     };
+    readonly "discussion.settings.get": {
+        discussionId: string;
+    };
+    readonly "discussion.settings.set": {
+        settings: {
+            coordination?: {
+                autonomousCheckIn?: {
+                    afterTurns: number | null;
+                } | undefined;
+            } | undefined;
+        };
+        discussionId: string;
+    };
     readonly "discussion.invite": {
         participant: {
             kind: 'account';
@@ -6692,6 +6705,26 @@ export type DiscussionActionResultById = {
             } | null;
         })[];
         nextCursor: string | null;
+    };
+    readonly "discussion.settings.get": {
+        discussionId: string;
+        settings: {
+            coordination?: {
+                autonomousCheckIn?: {
+                    afterTurns: number | null;
+                } | undefined;
+            } | undefined;
+        };
+    };
+    readonly "discussion.settings.set": {
+        discussionId: string;
+        settings: {
+            coordination?: {
+                autonomousCheckIn?: {
+                    afterTurns: number | null;
+                } | undefined;
+            } | undefined;
+        };
     };
     readonly "discussion.invite": {
         access: 'view' | 'edit' | 'admin' | 'owner' | null;

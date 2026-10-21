@@ -2180,6 +2180,9 @@ export type SessionControlActionResultById = {
         reason?: string | undefined;
     };
     readonly "session.pending.next": {
-        status: 'none' | 'unavailable' | 'opened';
+        status: 'none' | 'opened';
+    } | {
+        status: 'unavailable';
+        reason?: 'cancelled' | 'noClient' | 'no_navigation_host' | 'not_ready' | 'scope_changed' | 'details_unavailable' | 'target_unavailable' | 'navigation_failed' | undefined;
     };
 };
