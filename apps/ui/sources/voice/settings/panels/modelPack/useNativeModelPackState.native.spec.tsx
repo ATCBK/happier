@@ -160,22 +160,36 @@ describe('useNativeModelPackState through device boundaries', () => {
     await act(async () => { started = starter.getCurrent().prepareModel(); });
     await vi.waitFor(() => expect(boundary.transfers).toHaveLength(2));
     await starter.unmount();
+    const otherInput = { ...input, packId: 'other-pack' };
+    boundary.fetch.mockResolvedValue(Response.json(modelPackManifest(otherInput.packId, 'stt')));
+    const otherStarter = await renderHook(useNativeModelPackState, { initialProps: otherInput });
+    let otherStarted!: Promise<void>;
+    await act(async () => { otherStarted = otherStarter.getCurrent().prepareModel(); });
+    await vi.waitFor(() => expect(boundary.transfers).toHaveLength(4));
+    await otherStarter.unmount();
     const follower = await renderHook(useNativeModelPackState, { initialProps: input });
     await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('downloading'));
     try {
-      await follower.rerender({ ...input, packId: 'other-pack' });
+      await follower.rerender(otherInput);
+      await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('downloading'));
+      await act(async () => { boundary.transfers[2]!.report(2, modelBytes.length); });
+      expect(follower.getCurrent().downloadProgress).toMatchObject({ loaded: 2 });
       await act(async () => { boundary.transfers[0]!.report(1, modelBytes.length); });
-      expect(follower.getCurrent().downloadProgress).toBeNull();
-      expect(follower.getCurrent().modelStatus).toBe('idle');
+      expect(follower.getCurrent().downloadProgress).toMatchObject({ loaded: 2 });
+      await act(async () => {
+        for (const transfer of boundary.transfers.slice(0, 2)) transfer.finish(modelBytes.slice());
+        await started;
+      });
+      expect(follower.getCurrent().modelStatus).toBe('downloading');
+      expect(follower.getCurrent().installed).toBe(false);
     } finally {
       await act(async () => {
         for (const transfer of boundary.transfers) transfer.finish(modelBytes.slice());
-        await started;
+        await Promise.all([started, otherStarted]);
       });
     }
-    await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('idle'));
-    expect(follower.getCurrent().installed).toBe(false);
-    expect(follower.getCurrent().installSummary?.manifest).toBeNull();
+    await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('ready'));
+    expect(follower.getCurrent().installSummary?.manifest?.packId).toBe(otherInput.packId);
     expect(boundary.files.has(`${root}/modelPacks/${packId}/pack.json`)).toBe(true);
     expect(boundary.alert).not.toHaveBeenCalled();
   });
