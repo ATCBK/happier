@@ -202,6 +202,7 @@ const ACTION_SPEC_RPC_METHOD_IDS = Object.freeze({
   [RPC_METHODS.SCM_REPOSITORY_INIT]: 'scm.repository.init',
   [RPC_METHODS.SCM_REPOSITORY_REMOVE_INDEX_LOCK]: 'scm.repository.removeIndexLock',
   [RPC_METHODS.SCM_HOSTING_REPOSITORY_RESOLVE_ADDRESS]: 'scm.hostingRepository.resolveAddress',
+  [RPC_METHODS.SCM_HOSTING_REPOSITORY_GET]: 'scm.hostingRepository.get',
   [RPC_METHODS.SCM_HOSTING_REPOSITORY_DESCRIBE_PUBLISH_TARGETS]: 'scm.hostingRepository.describePublishTargets',
   [RPC_METHODS.SCM_HOSTING_REPOSITORY_PUBLISH]: 'scm.hostingRepository.publish',
   [RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE]: 'scm.diffSummary.generate',

@@ -9629,6 +9629,7 @@ const DISCUSSION_ACTION_SPECS_V1 = Object.freeze(defineActionSpecs([
     examples: { mcp: { argsExample: '{"discussionId":"discussion-1"}' }, voice: { argsExample: '{"discussionId":"discussion-1"}' } },
     serverTransport: { method: 'GET', path: DISCUSSION_HTTP_PATHS_V1.settings },
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    inputHints: { fields: [{ path: 'discussionId', title: 'Discussion id', widget: 'text', required: true }] },
     inputSchema: DISCUSSION_ACTION_INPUT_SCHEMAS_V1['discussion.settings.get'],
     outputSchema: DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1['discussion.settings.get'],
     cli: { acceptsServerId: true, commands: [{ path: ['discussions', 'settings', 'get'], positionals: ['discussionId'], visibility: 'canonical' }] },
