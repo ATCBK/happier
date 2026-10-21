@@ -9,7 +9,8 @@ import {
   mergeConnectedAccountDescriptorProjections,
   readConnectedAccountDescriptorProjection,
 } from './connectedAccountDescriptorProjection';
-import { projectConnectedServiceRegistryEntries } from './connectedServiceRegistry';
+import { getConnectedAccountAuthentication, projectConnectedServiceRegistryEntries } from './connectedServiceRegistry';
+import { resolveConnectedAccountPurposeTargetEligibility } from './connectedAccountPurposeTargetEligibility';
 
 function descriptor(overrides: Partial<ConnectedAccountUiProjectionEntryV1> = {}): ConnectedAccountUiProjectionEntryV1 {
   return {
@@ -193,6 +194,58 @@ describe('connectedAccountDescriptorProjection', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ executable: false, supportsToken: false, supportsOauth: false });
     expect(entries[0]?.projectedDescriptorCandidates).toHaveLength(2);
+  });
+
+  it('keeps Account purpose targets usable when equal declarations carry different machine diagnostics', () => {
+    const healthy = descriptor({ occurrenceId: 'acme.accounts:41' });
+    const refused = descriptor({ occurrenceId: 'acme.accounts:52',
+      diagnostics: ['plugin_external_session_source_refused', 'plugin_activation_failed'],
+    });
+    const service = { pluginId: 'acme.accounts', localId: 'account' };
+    for (const descriptors of [[healthy, refused], [refused, healthy]]) {
+      const resolution = mergeConnectedAccountDescriptorProjections(descriptors.map(value => (
+        readConnectedAccountDescriptorProjection(projection({ account: value }))
+      )));
+      const state = advanceConnectedAccountDescriptorProjectionState(
+        createConnectedAccountDescriptorProjectionLoadingState('server-a'), resolution,
+      );
+      const entries = projectConnectedServiceRegistryEntries(state);
+      const authentication = getConnectedAccountAuthentication(service, {
+        scopeKey: state.scopeKey, status: state.status, errorReason: state.errorReason, entries,
+      });
+      expect(state.status).toBe('ready');
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ executable: true, projectionStatus: 'ready',
+        diagnostics: ['plugin_activation_failed', 'plugin_external_session_source_refused'],
+      });
+      expect(entries[0]?.projectedDescriptorCandidates).toHaveLength(1);
+      expect(resolveConnectedAccountPurposeTargetEligibility({
+        target: { kind: 'account', account: { service, accountId: 'work' } },
+        declaredServices: [service],
+        accounts: [{ ref: { service, accountId: 'work' }, status: 'connected',
+          authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+          credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
+          configurationReady: true, configurationRevision: null, scopes: [],
+        }],
+        groups: [],
+        resolveAuthentication: () => authentication,
+      })).toBe('usable');
+    }
+    expect(healthy.diagnostics).toEqual([]);
+    expect(refused.diagnostics).toEqual(['plugin_external_session_source_refused', 'plugin_activation_failed']);
+  });
+
+  it('keeps blocked declaration availability authoritative when diagnostics differ', () => {
+    const blocked = descriptor({ availability: { state: 'blocked', reason: 'plugin_declaration_unusable' },
+      diagnostics: ['plugin_untrusted'],
+    });
+    for (const descriptors of [[blocked], [blocked, descriptor()]]) {
+      const state = advanceConnectedAccountDescriptorProjectionState(
+        createConnectedAccountDescriptorProjectionLoadingState('server-a'),
+        mergeConnectedAccountDescriptorProjections(descriptors.map(value => ({ kind: 'ready', descriptors: [value] }))),
+      );
+      expect(projectConnectedServiceRegistryEntries(state)[0]).toMatchObject({ executable: false, supportsToken: false });
+    }
   });
 
   it('keeps divergent identity candidates visible as a fail-closed conflict', () => {

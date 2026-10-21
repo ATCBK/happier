@@ -90,7 +90,10 @@ function connectedAccountDescriptorIdentity(entry: ConnectedAccountUiProjectionE
 }
 
 function descriptorFingerprint(entry: ConnectedAccountUiProjectionEntryV1): string {
-  return JSON.stringify(entry);
+  // Diagnostics describe one machine's runtime, not the Account declaration.
+  // In particular, an External Sessions refusal cannot change its auth modes.
+  const { diagnostics, ...declaration } = entry;
+  return JSON.stringify(declaration);
 }
 
 /**
@@ -162,11 +165,25 @@ function unionReadyConnectedAccountDescriptorProjections(
   const { variantsByIdentity, conflictingIdentities } = resolveFleetSupplyAgreement({ supplies: visibleSupplies,
     identity: connectedAccountDescriptorIdentity, content: descriptorFingerprint });
 
+  // Preserve every answering supplier's diagnostics without making them a
+  // competing declaration. Excluded execution supplies cannot alter this view.
+  const diagnosticsByFingerprint = new Map<string, Set<string>>();
+  for (const supply of visibleSupplies) {
+    if (!supply.selectable) continue;
+    const fingerprint = descriptorFingerprint(supply.value);
+    const diagnostics = diagnosticsByFingerprint.get(fingerprint) ?? new Set<string>();
+    for (const diagnostic of supply.value.diagnostics) diagnostics.add(diagnostic);
+    diagnosticsByFingerprint.set(fingerprint, diagnostics);
+  }
+
   const descriptors = [...variantsByIdentity.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .flatMap(([, variants]) => [...variants.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([, entry]) => entry));
+      .map(([fingerprint, entry]) => {
+        const diagnostics = [...diagnosticsByFingerprint.get(fingerprint)!].sort();
+        return equalFacts(entry.diagnostics, diagnostics) ? entry : { ...entry, diagnostics };
+      }));
 
   const conflicts: ConnectedAccountDescriptorProjectionConflict[] = [];
   for (const identity of [...conflictingIdentities].sort((left, right) => left.localeCompare(right))) {
