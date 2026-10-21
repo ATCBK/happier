@@ -160,6 +160,7 @@ export function useNewSessionWizardProps(params: Readonly<{
     registerTemporaryComputerReplacementLaunch?: NewSessionWizardFooterProps['registerTemporaryComputerReplacementLaunch'];
     canCreate: boolean;
     isCreating: boolean;
+    isTemporaryComputer?: boolean;
     pendingLaunchAttempt?: NewSessionWizardFooterProps['pendingLaunchAttempt'];
     launchPendingPreviewVisible?: NewSessionWizardFooterProps['launchPendingPreviewVisible'];
     providerLaunchError?: NewSessionWizardFooterProps['providerLaunchError'];
@@ -535,6 +536,7 @@ export function useNewSessionWizardProps(params: Readonly<{
             registerTemporaryComputerReplacementLaunch: params.registerTemporaryComputerReplacementLaunch,
             canCreate: params.canCreate,
             isCreating: params.isCreating,
+            isTemporaryComputer: params.isTemporaryComputer,
             pendingLaunchAttempt: params.pendingLaunchAttempt,
             launchPendingPreviewVisible: params.launchPendingPreviewVisible,
             providerLaunchError: params.providerLaunchError,
@@ -577,6 +579,7 @@ export function useNewSessionWizardProps(params: Readonly<{
         params.handleCreateSession,
         params.registerTemporaryComputerReplacementLaunch,
         params.isCreating,
+        params.isTemporaryComputer,
         params.isResumeSupportChecking,
         params.machinePopover,
         params.pendingLaunchAttempt,

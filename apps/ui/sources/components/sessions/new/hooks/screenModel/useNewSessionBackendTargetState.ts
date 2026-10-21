@@ -13,7 +13,7 @@ import { useSettingsSelector } from '@/sync/store/hooks';
 import { backendTargetKeysMatch, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildLastUsedBackendTargetSettings } from '@/agents/backendCatalog/buildLastUsedBackendTargetSettings';
 import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
-import { findMachineAgentForBackendTarget } from '@/agents/machineAgents/machineAgentCatalog';
+import { findMachineAgentForBackendTargetKey } from '@/agents/machineAgents/machineAgentCatalog';
 import { isMachineAgentReady } from '@/agents/machineAgents/resolveMachineAgentState';
 
 function findEntryByTarget(
@@ -149,7 +149,7 @@ export function useNewSessionBackendTargetState(params: Readonly<{
     const preferredBackendTarget = React.useMemo(() => {
         if (!implicitDefault) return initialBackendTarget;
         const readyBackendTargets = params.entries.filter(entry => isMachineAgentReady(
-            findMachineAgentForBackendTarget(machineAgents.agents, entry.backendTarget),
+            findMachineAgentForBackendTargetKey(machineAgents.agents, entry.backendTargetKey),
         )).map(entry => entry.backendTarget);
         // Losing readiness during refresh does not invent another usable choice.
         if (readyBackendTargets.length === 0 && matched) return backendTarget;

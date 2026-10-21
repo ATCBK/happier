@@ -32,6 +32,39 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine launch readiness', () => {
+    it('looks up acquired catalog targets without revalidating them and withdraws removed inventory', async () => {
+        const { getResolvedBackendCatalogEntries } = await import('@/agents/backendCatalog/getResolvedBackendCatalogEntries');
+        const { createMachineAgentInventoryStore } = await import('@/agents/machineAgents/machineAgentInventoryStore');
+        const targets = await import('@happier-dev/protocol/backends/targets/backendTargetRefV2');
+        const entry = getResolvedBackendCatalogEntries({ enabledAgentIds: ['codex'] })[0]!;
+        const inventory = createMachineAgentInventoryStore();
+        inventory.publish('target-lookup', { status: 'ready', items: [], lastCheckedAt: 1,
+            descriptors: [{ agentId: 'codex', title: 'Codex' }],
+        });
+        const agents = inventory.read('target-lookup').agents;
+        const hook = await renderHook((currentAgents: typeof agents) => useNewSessionAvailabilityState({
+            machineAgents: { ...machineAgents, agents: currentAgents },
+            selectedMachineId: null, selectedMachine: null, capabilityServerId: 'target-lookup', machineProbesEnabled: false,
+            externalSessionsFeatureEnabled: false, settings: settingsDefaults, resumeSessionId: null,
+            backendNewSessionOptionStateByTargetKey: {}, resolvedBackendEntries: [entry], selectedBackendEntry: entry,
+            setBackendTarget: vi.fn(), machines: [], allProfiles: [],
+        }), { initialProps: agents });
+        expect(hook.getCurrent().getBackendEntryMachineAgent(entry)).toBe(agents[0]);
+        const parse = vi.spyOn(targets, 'readBackendTargetKeyV2');
+        try {
+            for (let index = 0; index < 100; index += 1) {
+                expect(hook.getCurrent().getBackendEntryMachineAgent(entry)).toBe(agents[0]);
+            }
+            expect(parse).not.toHaveBeenCalled();
+            inventory.publish('target-lookup', { status: 'ready', items: [], descriptors: [], lastCheckedAt: 2 });
+            await hook.rerender(inventory.read('target-lookup').agents);
+            expect(hook.getCurrent().getBackendEntryMachineAgent(entry)).toBeNull();
+        } finally {
+            parse.mockRestore();
+            await hook.unmount();
+        }
+    });
+
     it.each([false, true])('loads Windows Terminal facts on picker demand or selected launch (selected: %s)', async (selected) => {
         const machine = createMachineFixture({ id: `windows-terminal-demand-${selected}`, active: true, activeAt: Date.now(),
             metadata: { ...createMachineFixture().metadata!, platform: 'win32' } });

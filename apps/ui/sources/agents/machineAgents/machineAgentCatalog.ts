@@ -37,6 +37,13 @@ export function findMachineAgentForBackendTarget<T extends Pick<MachineAgentInve
 ): T | null {
     const targetKey = readBackendTargetKeyV2(backendTarget);
     if (targetKey === null) return null;
+    return findMachineAgentForBackendTargetKey(agents, targetKey);
+}
+
+/** Match a catalog's already-canonical key; this descriptive lookup grants no execution admission. */
+export function findMachineAgentForBackendTargetKey<T extends Pick<MachineAgentInventoryDescriptor, 'agentId' | 'definitionId'>>(
+    agents: readonly T[], targetKey: string,
+): T | null {
     let index = inventoryTargetIndexes.get(agents);
     if (!index && Object.isFrozen(agents) && agents.every(hasImmutableAgentIdentity)) {
         // The inventory producer freezes the array and each row's identity fields.

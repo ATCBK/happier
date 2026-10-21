@@ -15,7 +15,7 @@ import {
 import { backendTargetKeysMatch, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildAvailableReviewEngineOptions, resolveReviewEngineTarget, type ExecutionRunsBackendSnapshotEntry } from '@/sync/domains/reviews/reviewEngineCatalog';
 import { resolveExecutionRunAvailableBackends } from '@/sync/domains/executionRuns/resolveExecutionRunAvailableBackends';
-import { findMachineAgentForBackendTarget } from '@/agents/machineAgents/machineAgentCatalog';
+import { findMachineAgentForBackendTargetKey } from '@/agents/machineAgents/machineAgentCatalog';
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { resolveMachineAgentPickerPlacement } from '@/components/machines/agents/machineAgentPresentation';
 
@@ -125,7 +125,7 @@ function applyMachineFacts(
 ): readonly ExecutionRunLauncherBackendChoice[] {
     const unread = params.executionRunsBackends == null;
     return choices.map((choice) => {
-        const agent = findMachineAgentForBackendTarget(params.machineAgents ?? [], choice.backendTarget);
+        const agent = findMachineAgentForBackendTargetKey(params.machineAgents ?? [], choice.targetKey);
         const group = resolveMachineAgentPickerPlacement(agent).group;
         const unavailable = group === 'onMachine' ? undefined : group;
         return {

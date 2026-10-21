@@ -1,9 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
-import { buildMachineAgentInventoryDescriptors, findMachineAgentForBackendTarget } from './machineAgentCatalog';
+import { buildMachineAgentInventoryDescriptors, findMachineAgentForBackendTarget, findMachineAgentForBackendTargetKey } from './machineAgentCatalog';
 
 describe('machine agent catalog', () => {
+    it('revalidates new raw targets and does not trust a frozen carrier with mutable identity', () => {
+        const agents = Object.freeze([
+            Object.freeze({ agentId: 'acme.review/reviewer', title: 'Reviewer' }),
+            Object.freeze({ agentId: 'acme.review/other', title: 'Other' }),
+        ]);
+        const identity = { pluginId: 'acme.review', localId: 'reviewer' };
+        const target = Object.freeze({ kind: 'agent' as const, identity });
+        expect(findMachineAgentForBackendTarget(agents, target)).toBe(agents[0]);
+        identity.localId = 'other';
+        expect(findMachineAgentForBackendTarget(agents, target)).toBe(agents[1]);
+        identity.localId = '';
+        expect(findMachineAgentForBackendTarget(agents, target)).toBeNull();
+        expect(findMachineAgentForBackendTarget(agents, 'agent:malformed')).toBeNull();
+        expect(findMachineAgentForBackendTarget(agents, { kind: 'backend', backendId: 'not:an:agent' })).toBeNull();
+        expect(findMachineAgentForBackendTarget(agents, { kind: 'agent', identity: { pluginId: 'acme.absent', localId: 'reviewer' } })).toBeNull();
+    });
+
     it('normalizes immutable inventory candidates once across repeated option lookups and refreshes by identity', () => {
         let candidateReads = 0;
         const agents = Object.freeze(Array.from({ length: 16 }, (_, index) => new Proxy(Object.freeze({
@@ -55,9 +72,12 @@ describe('machine agent catalog', () => {
         const target = { kind: 'agent' as const, identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'second' };
         expect(findMachineAgentForBackendTarget(agents, target)).toBe(agents[3]);
         expect(findMachineAgentForBackendTarget(agents, buildBackendTargetKeyV2(target))).toBe(agents[3]);
+        expect(findMachineAgentForBackendTargetKey(agents, buildBackendTargetKeyV2(target))).toBe(agents[3]);
         expect(findMachineAgentForBackendTarget(agents, { kind: 'agent', identity: { pluginId: 'acme.review', localId: 'reviewer' } })).toBe(agents[1]);
+        expect(findMachineAgentForBackendTargetKey(agents, buildBackendTargetKeyV2({ kind: 'agent', identity: { pluginId: 'acme.review', localId: 'reviewer' } }))).toBe(agents[1]);
         expect(findMachineAgentForBackendTarget(agents, { kind: 'backend', backendId: 'custom-acp' })).toBeNull();
         expect(findMachineAgentForBackendTarget(agents, { kind: 'backend', backendId: 'second' })).toBeNull();
         expect(findMachineAgentForBackendTarget(agents, { ...target, definitionId: 'missing' })).toBeNull();
+        expect(findMachineAgentForBackendTargetKey(agents, buildBackendTargetKeyV2({ ...target, definitionId: 'missing' }))).toBeNull();
     });
 });

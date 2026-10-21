@@ -218,6 +218,7 @@ export interface NewSessionWizardMachineProps {
 }
 
 export interface NewSessionWizardFooterProps {
+    isTemporaryComputer?: boolean;
     machineName?: string;
     promptStore: NewSessionPromptStore;
     composerDocument?: NewSessionComposerDocument;
@@ -369,6 +370,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         hasSendableAttachments,
         agentInputAttachments,
         addWebFiles,
+        attachmentDropHint,
         addPickedAttachments,
         actionChips,
         attachmentRowItems,
@@ -380,6 +382,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         handleCreateSession: props.footer.handleCreateSession,
         selectedProfileId: props.profiles.selectedProfileId,
         targetServerId: props.machine.serverId,
+        isTemporaryComputer: props.footer.isTemporaryComputer,
         selectedMachineId: props.machine.selectedMachine?.id ?? null,
         selectedMachineHomeDir: props.machine.selectedMachine?.metadata?.homeDir ?? null,
         selectedPath: props.machine.selectedPath,
@@ -751,6 +754,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         extraActionChips={actionChips}
                                         attachmentRowItems={projectedAttachmentRowItems}
                                         onAttachmentsAdded={attachmentsUploadsEnabled ? addWebFiles : undefined}
+                                        attachmentDropHint={attachmentDropHint}
                                         hasSendableAttachments={hasSendableAttachments
                                             || props.footer.composerDocument?.hasSendableAttachments === true}
                                         inputMaxHeight={inputMaxHeight}

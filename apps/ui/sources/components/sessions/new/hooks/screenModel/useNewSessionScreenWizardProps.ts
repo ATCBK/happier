@@ -140,6 +140,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
     >;
     footer: Pick<
         NewSessionWizardParams,
+        | 'isTemporaryComputer'
         | 'promptStore'
         | 'composerDocument'
         | 'composerReferenceHost'

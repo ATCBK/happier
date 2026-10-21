@@ -11,7 +11,7 @@ import {
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
 import type { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
 import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
-import { findMachineAgentForBackendTarget } from '@/agents/machineAgents/machineAgentCatalog';
+import { findMachineAgentForBackendTargetKey } from '@/agents/machineAgents/machineAgentCatalog';
 import { projectMachineAgentsToCliAvailability } from '@/agents/machineAgents/machineAgentCliAvailability';
 import { useDaemonScopedMachineCapabilitiesCache } from '@/hooks/server/useDaemonScopedMachineCapabilitiesCache';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
@@ -94,7 +94,7 @@ export function useNewSessionAvailabilityState(params: Readonly<{
     // A configured definition is a distinct inventory row, even when its Agent is shared.
     const machineAgentsById = React.useMemo(() => Object.fromEntries(machineAgents.agents.map((agent) => [buildMachineAgentInventoryKey(agent), agent])), [machineAgents.agents]);
     const getBackendEntryMachineAgent = React.useCallback((entry: ResolvedBackendCatalogEntry) =>
-        findMachineAgentForBackendTarget(machineAgents.agents, entry.backendTarget), [machineAgents.agents]);
+        findMachineAgentForBackendTargetKey(machineAgents.agents, entry.backendTargetKey), [machineAgents.agents]);
     const tmuxRequested = resolveTerminalHost({ settings: params.settings, machineId: params.selectedMachineId }) === 'tmux';
     const relevantInstallableDepKeys = useSettingsSelector(React.useCallback((settings) => {
         if (!params.selectedMachineId || !behaviorAgentId) return [];
