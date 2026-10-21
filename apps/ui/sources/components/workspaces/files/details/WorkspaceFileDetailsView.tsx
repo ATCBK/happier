@@ -1499,6 +1499,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         hunks={surface?.hunks}
                         reviewUnits={surface?.reviewUnits}
                         reviewScrollToLineId={surface?.scrollToLineId}
+                        diffLeadingContent={surface?.leadingContent}
                         fileContent={fileContent?.isBinary ? null : (fileContent?.content ?? null)}
                         language={language}
                         syntaxHighlighting={syntaxHighlighting}
