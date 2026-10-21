@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod/mini';
 import { installDbModuleMock } from '../testkit/dbMocks';
 import { ExternalActionHttpErrorSchema } from '@happier-dev/protocol/actions/externalActionApi';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION } from '@happier-dev/protocol';
 
 const transaction = vi.fn();
 // Fail the database boundary, preserving real retry exhaustion and HTTP projection.
@@ -12,6 +14,7 @@ const { inTx } = await import('@/storage/inTx');
 const { enableErrorHandlers } = await import('./enableErrorHandlers');
 const { createAuthenticatedTestApp } = await import('../testkit/sqliteFastify');
 const { registerExternalActionRoutes } = await import('../routes/actions/registerExternalActionRoutes');
+const { pluginDataRoutes } = await import('../routes/plugins/data/pluginDataRoutes');
 
 describe('HTTP transaction conflict projection', () => {
     afterEach(() => { vi.unstubAllEnvs(); transaction.mockReset(); });
@@ -19,6 +22,9 @@ describe('HTTP transaction conflict projection', () => {
     it.each([
         { driver: 'P2034', expected: 'database_transaction_conflict_exhausted', meta: undefined },
         { driver: 'P2024', expected: 'database_connection_unavailable', meta: undefined },
+        { driver: 'P1017', expected: 'database_connection_unavailable', meta: undefined },
+        { driver: 'P1001', expected: 'database_connection_unavailable', meta: undefined },
+        { driver: 'P1002', expected: 'database_connection_unavailable', meta: undefined },
         { driver: 'P2028', expected: 'database_connection_unavailable',
             meta: { error: 'Unable to start a transaction in the given time.' } },
     ])('preserves $driver as typed $expected through the external Action route error handler', async ({ driver, expected, meta }) => {
@@ -64,6 +70,48 @@ describe('HTTP transaction conflict projection', () => {
         } finally {
             await app.close();
         }
+    });
+
+    it.each(['P1017', 'P1001', 'P1002'])('projects %s on a controller read without replaying an unknown transaction outcome', async code => {
+        transaction.mockRejectedValue(Object.assign(new Error('private connection diagnostic'), { code }));
+        const app = Fastify({ logger: false });
+        enableErrorHandlers(app as Parameters<typeof enableErrorHandlers>[0]);
+        app.post('/v1/machines/managed/controller/current', async () => inTx(async () => ({ machine: {} })));
+        try {
+            const response = await app.inject({ method: 'POST', url: '/v1/machines/managed/controller/current' });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toEqual({ error: 'database_connection_unavailable', statusCode: 503 });
+            expect(response.body).not.toContain('private');
+            expect(transaction).toHaveBeenCalledTimes(1);
+        } finally { await app.close(); }
+    });
+
+    it.each(['mutate', 'forget'] as const)('preserves confirmed rollback through the real Collection %s route and shared consumer', async (operation) => {
+        vi.stubEnv('HAPPIER_DB_PROVIDER', 'postgres');
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        // Only the database boundary fails; admission, mutation owner, global
+        // error handler and strict client refusal parser all remain real.
+        transaction.mockRejectedValue(Object.assign(new Error('private SQL contents'), { code: 'P2034' }));
+        const app = createAuthenticatedTestApp();
+        pluginDataRoutes(app);
+        try {
+            const response = await app.inject({ method: 'POST', url: `/v1/plugins/data/${operation}`,
+                headers: { 'x-test-user-id': 'account-1',
+                    'x-happier-account-stored-content-protocol': String(ACCOUNT_STORED_CONTENT_PLUGIN_DATA_PROTOCOL_VERSION) },
+                payload: { pluginId: 'example.tasks', collectionId: 'tasks',
+                    writerContext: { schemaVersion: 1, contractDigest: 'a'.repeat(43) },
+                    ...(operation === 'mutate'
+                        ? { operations: [{ kind: 'delete', rowId: 'task-1', expectedRevision: 1 }] }
+                        : { rowId: 'task-1', expectedRevision: 1 }),
+                },
+            });
+            expect(response.statusCode).toBe(503);
+            expect(readHomeDomainConfirmedRollbackV1(response.statusCode, response.json())).toEqual({
+                code: 'database_transaction_conflict_exhausted',
+                details: { error: 'database_transaction_conflict_exhausted', statusCode: 503 },
+            });
+            expect(response.body).not.toContain('private');
+        } finally { await app.close(); }
     });
 
     it.each(['P2034', 'P2028'])('does not classify an unqualified %s driver failure as rollback or acquisition exhaustion', async code => {
