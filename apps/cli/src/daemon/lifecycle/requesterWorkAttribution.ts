@@ -3,8 +3,24 @@ import { isPluginError } from '@happier-dev/plugin-sdk';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { rethrowRequesterHomeReadFailure } from '../sessionEncryption/requesterCurrentness';
+import { RequesterWorkAttributionV1Schema, type RequesterWorkAttributionV1 } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
 export { RequesterWorkAttributionV1Schema, RequesterWorkAttributionStoredReadV1Schema,
   type RequesterWorkAttributionV1 } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
+
+/** Carry already-admitted requester facts into host-owned work, never public RPC input. */
+export function projectRpcRequesterWorkAttribution(context: Readonly<Partial<Pick<RpcHandlerContext,
+  'signal' | 'machineAdmission' | 'localActionContext' | 'requesterSessionBootstrap'>> & {
+    requesterWorkAttributionV1?: RequesterWorkAttributionV1;
+  }> | undefined, serverId?: string): RequesterWorkAttributionV1 | undefined {
+  const admission = context?.machineAdmission;
+  // The authenticated Machine stamp wins over any in-process inherited context.
+  const candidate = admission ? { serverId, accountId: admission.actorAccountId,
+    machineId: admission.machineId, installationId: admission.installationId }
+    : context?.requesterWorkAttributionV1 ?? context?.localActionContext?.requesterWorkAttributionV1
+      ?? context?.requesterSessionBootstrap?.attribution;
+  const parsed = RequesterWorkAttributionV1Schema.safeParse(candidate);
+  return parsed.success ? Object.freeze(parsed.data) : undefined;
+}
 
 /** Principal equality only; the caller must still verify the admission's currentness. */
 export function isCustodianMachineAdmission(admission: Pick<NonNullable<RpcHandlerContext['machineAdmission']>,

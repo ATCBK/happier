@@ -7015,7 +7015,7 @@ export function createCliActionDeps(params: Readonly<{
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       try {
         const invoke = async () => DaemonLspQueryResponseSchema.safeParse(await callMachineAction({
-          machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_LSP_QUERY, request, timeoutMs: null,
+          machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_LSP_QUERY, request, timeoutMs: null, context,
           ...(context.signal ? { signal: context.signal } : {}),
         }));
         const result = await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());

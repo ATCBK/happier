@@ -6,6 +6,7 @@ import type { ProcessOwnerRef } from '@/processes/ownerTag';
 import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
 import { readSupervisedPluginProcessIdForHost } from '@/plugins/runtime/exec/processSupervisor';
 import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
+import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import { resolveCanonicalAbsolutePathComparisonIdentity } from '@/utils/path/expandHomeDirPath';
 import { logger } from '@/ui/logger';
 import { disposePluginProtocolClientGracefullyForHost } from '@/plugins/runtime/invocation/services/exec';
@@ -89,11 +90,16 @@ export type CreateServerSessionOptions = Readonly<{
     rootPath: string;
     workspaceRoot: string;
     openProtocol: OpenLanguageServerProtocol;
+    requesterWorkAttributionV1?: RequesterWorkAttributionV1;
     onChange(): void;
     onRetired?(): void;
     platform?: NodeJS.Platform;
 }>;
 export function createServerSession(options: CreateServerSessionOptions): ServerSession {
+    // Attribution follows the acquiring work for this session's whole lifetime;
+    // later shared queries must not relabel an existing native service.
+    const requesterWorkAttributionV1 = options.requesterWorkAttributionV1
+        ? Object.freeze({ ...options.requesterWorkAttributionV1 }) : undefined;
     const documents = new Map<string, LanguageServerDocument & {
         references: number;
     }>();
@@ -224,6 +230,7 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                 if (pid !== null) {
                     // Processes joins this live custody source to its native census and owner tag.
                     processRoot = { owner: processOwner, pid, live: true, ownerCreatedAtMs,
+                        ...(requesterWorkAttributionV1 ? { requesterWorkAttributionV1 } : {}),
                         workspacePath: options.workspaceRoot, stop: async () => { if (protocol === opened) await stop(); } };
                     invalidateProcessLaunchDiscovery();
                 }

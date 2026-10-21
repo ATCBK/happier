@@ -51,6 +51,7 @@ import { acquireRequesterAccountEncryptionCurrentness } from './client/accountEn
 import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
 import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
+import { projectRpcRequesterWorkAttribution } from '@/daemon/lifecycle/requesterWorkAttribution';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { classifyTransportErrorToProbeResult } from '@/api/connection/classifyTransportErrorToProbeResult';
 import { resolveMachinePendingResetStartCapability, resolveMachineSessionInputAdmissionCapability } from '@/api/clientCompatibility/sessionSyncPendingInputServerContract';
@@ -1433,6 +1434,7 @@ export class ApiMachineClient {
         });
         registerLanguageIntelligenceHandlers(this.rpcHandlerManager, this.machineRpcWorkingDirectory, {
             accessPolicy: this.filesystemAccessPolicy,
+            serverId: this.machineRuntimeServerId,
             machineId: this.machine.id, resolveActionExecutor: resolveWorkspaceMutationActionExecutor,
         });
         registerAutomationReplyHandoffRpcHandler(this.rpcHandlerManager, {
@@ -1997,7 +1999,9 @@ export class ApiMachineClient {
             const { getLanguageServerHost } = await import('@/lsp/languageServerHost');
             const root = authorizeFilesystemPath({ targetPath: request.rootPath, defaultDirectory: this.machineRpcWorkingDirectory, accessPolicy: this.filesystemAccessPolicy });
             if (!root.valid) return { status: 'error', errorCode: 'path_not_allowed' };
-            return getLanguageServerHost().apply({ ...request, rootPath: root.resolvedPath }, context.signal ? { signal: context.signal } : undefined);
+            return getLanguageServerHost().apply({ ...request, rootPath: root.resolvedPath }, {
+                signal: context.signal, requesterWorkAttributionV1: projectRpcRequesterWorkAttribution(context, this.machineRuntimeServerId),
+            });
         };
     }
 

@@ -23,8 +23,10 @@ import { resolveLanguageServerRoot } from './rootResolution';
 import { normalizeLspDocumentSymbols, normalizeLspHover, readLspObject, readLspRange } from './languageServerResults';
 import { LspWorkspaceEditError, normalizeWorkspaceEdit } from './workspaceEdit';
 import { applyWorkspaceFileReplace } from '@/rpc/handlers/workspaceFileReplace';
+import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 type RequestContext = Readonly<{
     signal?: AbortSignal;
+    requesterWorkAttributionV1?: RequesterWorkAttributionV1;
 }>;
 /** Native arguments can contain absolute URIs and remain inside the host. */
 function readCodeActionCommand(value: Record<string, unknown>) {
@@ -211,7 +213,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 error => logger.debug('[LSP] Idle cleanup failed', { error }));
         }, { unref: true });
     }
-    async function ensureSession(root: RootState, path: string, definition: LanguageServerDefinition, isCurrent?: () => boolean): Promise<{
+    async function ensureSession(root: RootState, path: string, definition: LanguageServerDefinition, context?: RequestContext, isCurrent?: () => boolean): Promise<{
         id: string;
         session: ServerSession;
     }> {
@@ -221,6 +223,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
         let hosted = sessions.get(id);
         if (!hosted) {
             const session = createServerSession({ definition, rootPath: nativeRoot, workspaceRoot: nativeRoot, platform, openProtocol,
+                requesterWorkAttributionV1: context?.requesterWorkAttributionV1,
                 onRetired: () => { void session.dispose().then(() => retireSession(id, session),
                     error => logger.debug('[LSP] Plugin retirement cleanup failed', { error })); },
                 onChange: () => { projectChange(id); touch(id); } });
@@ -311,7 +314,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                         document.references++;
                     const isCurrent = () => !disposed && root.documents.get(op.path) === document && document.references > 0;
                     for (const definition of matching) {
-                        const { id, session } = await ensureSession(root, op.path, definition, isCurrent);
+                        const { id, session } = await ensureSession(root, op.path, definition, context, isCurrent);
                         if (!isCurrent()) throw new LanguageServerSessionError('cancelled');
                         document.sessions.add(id);
                         const text = { path: localPath(session, root, op.path), languageId: op.languageId, text: op.text, version: op.version, unsaved: op.unsaved };
@@ -365,7 +368,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 const matching = definitions.findDefinitionsForDocument({ languageId: languageId || null, path: input.path }).filter(d => !input.serverId || d.id === input.serverId);
                 if (!matching.length)
                     return { status: 'unavailable', reason: 'no_capable_server' };
-                const selected = await Promise.all(matching.map(definition => ensureSession(root, input.path, definition)));
+                const selected = await Promise.all(matching.map(definition => ensureSession(root, input.path, definition, context)));
                 const absolute = resolveWorkspacePath({ rootPath: root.path, platform }, input.path);
                 let diskText: string | undefined, fileHash: string | undefined;
                 const existing = selected.flatMap(({ session }) => { const document = session.document(localPath(session, root, input.path)); return document ? [document] : []; })[0];
@@ -499,7 +502,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 const languageId = input.languageId ?? root.documents.get(input.path)?.languageId ?? getFileLanguageFromPath(input.path) ?? '';
                 const definition = definitions.findDefinitionsForDocument({ languageId, path: input.path }).find(item => item.id === operation.action.serverId);
                 if (!definition) return { status: 'unavailable', reason: 'no_capable_server' };
-                const { id, session } = await ensureSession(root, input.path, definition);
+                const { id, session } = await ensureSession(root, input.path, definition, context);
                 const path = localPath(session, root, input.path), previous = session.document(path);
                 await session.open({ path, languageId, text: bytes.toString('utf8'), version: previous?.version ?? 0, unsaved: false });
                 retained.push({ id, session, path });
