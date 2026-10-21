@@ -631,6 +631,8 @@ facts through `context.session.services.models.bind(source)` and
 per catalog and retires subscriptions with that scope. The host projects modes through the
 existing current-publisher metadata writer into `sessionModesV2`; plugins do not write owner
 metadata. Mode inventory is distinct from model Provider membership and selection policy.
+The replaceable Session adapter forwards both catalogs to those same host publishers and
+rebinds them on native replacement, ignoring callbacks from the retired runtime.
 `null` inventory means unknown or unbound, while a successful `[]` is an authoritative withdrawal.
 Current mode facts come from native observation or accepted application, never a desired override.
 The canonical V2 catalog permits an unknown current mode while preserving known selectable
@@ -659,6 +661,9 @@ use the exact native Session writers before reporting application. V1 selections
 until the next prompt. A fresh V1 Session seeds only its initial native default from the ordered,
 visible-primary Agent inventory; a resumed Session does not guess that default or treat staged
 intent as accepted current state. V1's local TUI selection is not an ongoing server observation.
+Before a Session exists, OpenCode's declared mode probe reads that same native Agent inventory
+through the scoped managed server and shared normalization. It does not invent a `default`
+mode. An ACP selection uses the host's existing ACP Session-controls probe instead.
 
 OpenCode prompt admission retains its authoritative native user-message identity while its
 storage write is pending. Native idle may project the exact-parent response during that write,

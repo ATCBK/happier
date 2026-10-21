@@ -1,6 +1,7 @@
 import type { AgentPreflightSessionControlsContributionV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { probeOpenCodePreflightCatalogs, resolveOpenCodePreflightProbeVariant, withOpenCodePreflightServer } from './catalogs.js';
+import { buildOpenCodeModesFromAgents } from './modes.js';
 import type { OpenCodeServerClient } from '../runtime/server/openCodeServerClient.js';
 import { resolveOpenCodeBackendMode } from '../runtime/mode.js';
 import { OPENCODE_CHILD_LAUNCH_ENV_KEYS } from '../runtime/server/spawnSpec.js';
@@ -85,6 +86,15 @@ export const OPENCODE_PREFLIGHT_SESSION_CONTROLS = Object.freeze({
   },
   resolveProbeVariant: resolveOpenCodePreflightProbeVariant,
   probeCatalogs: probeOpenCodePreflightCatalogs,
+  probeModes: async context => {
+    const backendMode = resolveOpenCodeBackendMode({ runtimeDescriptorV1: context.runtimeDescriptorV1,
+      configuredBackendMode: context.runtimeKindOverride, accountSettings: context.accountSettings });
+    if (backendMode === 'acp') {
+      const toolId = resolveOpenCodeSystemToolId(context.accountSettings?.opencodeCliGeneration);
+      return (await context.probeDeclaredAcpSessionControls?.({ toolId, args: ['acp'] }))?.modes ?? null;
+    }
+    return await withOpenCodePreflightServer(context, async client => buildOpenCodeModesFromAgents(await client.agentsList()));
+  },
   probeModels: async context => {
     const backendMode = resolveOpenCodeBackendMode({ runtimeDescriptorV1: context.runtimeDescriptorV1,
       configuredBackendMode: context.runtimeKindOverride, accountSettings: context.accountSettings });

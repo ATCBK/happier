@@ -28,6 +28,10 @@ function fixture(options: Readonly<{ generation?: string; version?: string; vers
             return { ok: true, status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify({ data: [] })).body };
           }
           if (options.failSkills && route.pathname.endsWith('/skill')) throw new Error('skill transport failed');
+          if (route.pathname === '/agent' || route.pathname === '/api/agent') {
+            const modes = [{ name: 'build', description: 'Native build mode' }, { name: 'custom-review', description: 'Project mode' }];
+            return { ok: true, status: 200, statusText: 'OK', headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(v2 ? { data: modes } : modes)).body };
+          }
           if (route.pathname === '/provider' || route.pathname === '/api/provider' || route.pathname === '/api/model') {
             const model = { id: 'native-selected', providerID: 'native', name: 'Selected account model', capabilities: { input: ['text'] } };
             const value = route.pathname === '/provider'
@@ -54,6 +58,29 @@ async function probe(context: AgentPreflightSessionControlsProbeContextV1) {
 }
 
 describe('OpenCode before-session native catalogs', () => {
+  it.each([{ generation: 'stable', version: '1.18.33' }, { generation: 'v2', version: '2.0.20' }])('reads native mode choices without inventing default ($generation)', async (selection) => {
+    const f = fixture(selection);
+    const contribution: AgentPreflightSessionControlsContributionV1 = OPENCODE_PREFLIGHT_SESSION_CONTROLS;
+    expect(contribution.probeModes).toBeTypeOf('function');
+    expect(await contribution.probeModes!(f.context)).toEqual([
+      { id: 'build', name: 'build', description: 'Native build mode' },
+      { id: 'custom-review', name: 'custom-review', description: 'Project mode' },
+    ]);
+    expect(f.requests.every(request => request.method === 'GET')).toBe(true);
+    expect(f.disposed()).toBe(true);
+  });
+
+  it('uses the selected ACP native modes and keeps missing inventory unavailable', async () => {
+    const f = fixture();
+    const contribution: AgentPreflightSessionControlsContributionV1 = OPENCODE_PREFLIGHT_SESSION_CONTROLS;
+    const context = { ...f.context, accountSettings: { opencodeBackendMode: 'acp' },
+      probeDeclaredAcpSessionControls: async () => ({ models: null, modes: [{ id: 'review', name: 'Review' }], configOptions: null }) };
+    expect(contribution.probeModes).toBeTypeOf('function');
+    expect(await contribution.probeModes!(context)).toEqual([{ id: 'review', name: 'Review' }]);
+    expect(await contribution.probeModes!({ ...context, probeDeclaredAcpSessionControls: undefined })).toBeNull();
+    expect(f.services).toEqual([]);
+  });
+
   it.each([{ generation: 'stable', version: '1.18.33' }, { generation: 'v2', version: '2.0.20' }])('reads the same native provider catalog as a bound Session ($generation)', async (selection) => {
     const f = fixture(selection);
     const contribution: AgentPreflightSessionControlsContributionV1 = OPENCODE_PREFLIGHT_SESSION_CONTROLS;

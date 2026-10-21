@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { normalizeOpenCodePaidUsage } from '../../usage/paidUsage.js';
 import { isOpenCodeModelSelectable } from '../../models/eligibility.js';
 import { buildOpenCodeModelsFromProviders } from '../../preflight/models.js';
+import { buildOpenCodeModesFromAgents } from '../../preflight/modes.js';
 import type { OpenCodeModelCatalogSnapshot, OpenCodeModeCatalogSnapshot } from './operations.js';
 import { publishOpenCodeNativeTodosWorkState } from '../workState.js';
 import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
@@ -437,7 +438,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
   const refreshModeCatalog = async (seedInitialNativeDefault = false): Promise<void> => {
     try {
       const agents = await client.agentsList();
-      const modes = agents.map(({ id, name, description }) => ({ id, name, ...(description ? { description } : {}) }));
+      const modes = buildOpenCodeModesFromAgents(agents);
       const observedAt = Date.now();
       // Released V1 Agent.list orders the configured default first; its TUI initializes
       // the first visible non-subagent. This is only a fresh-session startup fact,
