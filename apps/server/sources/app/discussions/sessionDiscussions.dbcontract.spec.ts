@@ -1,8 +1,17 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { DiscussionCreateRequestV1 } from "@happier-dev/protocol";
+import { buildDiscussionMutationRequestBodyV1, DiscussionCreateResponseV1Schema, DISCUSSION_HTTP_PATHS_V1 } from '@happier-dev/protocol/discussions/api';
+import { createAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
+import type { Fastify } from '@/app/api/types';
+import { registerDiscussionRoutes } from '@/app/api/routes/discussions/registerDiscussionRoutes';
+import { inTx } from '@/storage/inTx';
+import { observePendingSessionFollowForDestinationInTx, acknowledgeDiscussionFollowInputInTx } from '@/app/session/follow/sessionFollowEdgeService';
+import { deriveDiscussionFollowInputLocalIdV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { DEFAULT_PENDING_REQUESTED_ACTION_V1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { createSessionInputReplyProgressInTx } from '@/app/session/messages/sessionMessageReply';
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { db, initDbMysql, initDbPostgres, requireDbProviderFromEnv, shutdownDbClient } from "@/storage/db";
 
@@ -14,6 +23,9 @@ describe("Discussion provider contract", () => {
     let connected = false;
 
     beforeAll(async () => {
+        vi.stubEnv('HAPPIER_FEATURE_SESSIONS__ENABLED', '1');
+        vi.stubEnv('HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED', '1');
+        vi.stubEnv('HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY', 'optional');
         if (!process.env.DATABASE_URL) throw new Error("The disposable DB-contract DATABASE_URL is required");
         const provider = requireDbProviderFromEnv(process.env, "postgres");
         if (provider === "mysql") await initDbMysql();
@@ -25,6 +37,87 @@ describe("Discussion provider contract", () => {
 
     afterAll(async () => {
         if (connected) await shutdownDbClient();
+        vi.unstubAllEnvs();
+    });
+
+    it.each([false, true])('commits atomic first-message addressing through HTTP and Follow (addressed: %s)', async addressed => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const sessions = await Promise.all([0, 1, 2].map(() => db.session.create({ data: {
+            accountId: owner.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
+        } })));
+        const [selected, unaddressed, uninvited] = sessions;
+        const app: Fastify = createAuthenticatedTestApp();
+        registerDiscussionRoutes(app);
+        await app.ready();
+        const content = { v: 1 as const, parts: [...(addressed ? [{ t: 'mention' as const,
+            participant: { kind: 'session' as const, sessionId: selected.id } }] : []), { t: 'text' as const, text: 'Initial question' }] };
+        const request = buildDiscussionMutationRequestBodyV1({ kind: 'create', creationLocalId: randomUUID(),
+            titleContent: { t: 'plain', v: { v: 1, title: 'Atomic first addressing' } },
+            participants: [{ kind: 'session', sessionId: selected.id }, { kind: 'session', sessionId: unaddressed.id }],
+            firstMessage: { localId: randomUUID(), content: { t: 'plain', v: content }, authoredContent: content,
+                mentionedAccountIds: [], mentionedSessionIds: addressed ? [selected.id] : [] } });
+        const send = (payload: DiscussionCreateRequestV1) => app.inject({ method: 'POST', url: DISCUSSION_HTTP_PATHS_V1.collection,
+            headers: { 'x-test-user-id': owner.id }, payload });
+        try {
+            const response = await send(request);
+            expect(response.statusCode, response.body).toBe(200);
+            const created = DiscussionCreateResponseV1Schema.parse(response.json());
+            expect(created).toMatchObject({ discussion: { messageSeq: 1 }, firstMessage: { seq: 1,
+                addressingV1: { throughSeq: 1, participantSessionIds: addressed ? [selected.id] : [] } } });
+            const observe = (destinationSessionId: string) => inTx(tx => observePendingSessionFollowForDestinationInTx(tx, {
+                principal: { kind: 'destination_runtime', destinationRuntimeAccountId: owner.id, authentication }, destinationSessionId,
+            }));
+            const observations = (await observe(selected.id)).observations;
+            expect(observations).toEqual(addressed ? [expect.objectContaining({ addressing: { discussionId: created.discussion.id,
+                messageId: created.firstMessage.id, throughSeq: 1, participantSessionId: selected.id } })] : []);
+            expect((await observe(unaddressed.id)).observations).toEqual([]);
+            const cursor = (await db.account.findUniqueOrThrow({ where: { id: owner.id } })).seq;
+            const replay = await send(request);
+            expect(replay.statusCode, replay.body).toBe(200);
+            expect(DiscussionCreateResponseV1Schema.parse(replay.json())).toEqual(created);
+            expect((await db.account.findUniqueOrThrow({ where: { id: owner.id } })).seq).toBe(cursor);
+            expect((await observe(selected.id)).observations).toEqual(observations);
+            if (addressed) {
+                const addressing = { discussionId: created.discussion.id, messageId: created.firstMessage.id, throughSeq: 1,
+                    participantSessionId: selected.id };
+                const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
+                await inTx(async tx => {
+                    const progress = await createSessionInputReplyProgressInTx(tx, { accountId: owner.id, reply: { mode: 'return', discussion: addressing } });
+                    if (!progress) throw new Error('Initial original reply custody unavailable');
+                    await tx.sessionPendingMessage.create({ data: { sessionId: selected.id, localId, position: 1,
+                        content: { t: 'plain', v: {} }, requestedAction: DEFAULT_PENDING_REQUESTED_ACTION_V1, replyProgress: progress,
+                        inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing: addressing,
+                            admittedTarget: { homeId: 'home', accountId: owner.id, sessionId: selected.id, machineId: 'machine', installationId: 'installation' } } } });
+                    await acknowledgeDiscussionFollowInputInTx(tx, { addressing, localInputId: localId });
+                });
+                expect((await observe(selected.id)).observations).toEqual([]);
+                expect((await send(request)).statusCode).toBe(200);
+                expect((await observe(selected.id)).observations).toEqual([]);
+                expect(await db.sessionFollowEdge.findFirst({ where: { sourceDiscussionId: created.discussion.id,
+                    destinationSessionId: selected.id } })).toMatchObject({ deliveredTranscriptSeq: 1 });
+            }
+            for (const sessionId of [uninvited.id, randomUUID()]) {
+                const invalidContent = { v: 1 as const, parts: [{ t: 'mention' as const, participant: { kind: 'session' as const, sessionId } }] };
+                const invalid = buildDiscussionMutationRequestBodyV1({ kind: 'create', titleContent: request.titleContent,
+                    participants: request.participants, creationLocalId: randomUUID(),
+                    firstMessage: { localId: randomUUID(), content: { t: 'plain', v: invalidContent }, authoredContent: invalidContent,
+                        mentionedAccountIds: [], mentionedSessionIds: [sessionId] } });
+                const rejected = await send(invalid);
+                expect(rejected.statusCode, rejected.body).toBe(400);
+                expect(rejected.json()).toEqual({ error: 'discussion_invalid_mention' });
+                expect((await db.account.findUniqueOrThrow({ where: { id: owner.id } })).seq).toBe(cursor);
+            }
+            expect(await db.discussion.count({ where: { ownerAccountId: owner.id } })).toBe(1);
+            expect(await db.discussionMessage.count({ where: { discussion: { ownerAccountId: owner.id } } })).toBe(1);
+            expect(await db.discussionParticipant.count({ where: { discussion: { ownerAccountId: owner.id } } })).toBe(2);
+            expect(await db.sessionFollowEdge.count({ where: { sourceDiscussionId: created.discussion.id } })).toBe(2);
+            expect(await db.discussionKeyEnvelope.count({ where: { discussion: { ownerAccountId: owner.id } } })).toBe(0);
+            expect(await db.discussionReadState.count({ where: { discussion: { ownerAccountId: owner.id } } })).toBe(1);
+        } finally {
+            await app.close();
+            await db.session.deleteMany({ where: { accountId: owner.id } });
+            await db.account.delete({ where: { id: owner.id } });
+        }
     });
 
     it("allocates concurrent sequences, retains erased authors and survives source deletion", async () => {

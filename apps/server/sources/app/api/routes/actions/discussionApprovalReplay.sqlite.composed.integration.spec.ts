@@ -6,12 +6,13 @@ import Fastify from 'fastify';
 import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from 'fastify-type-provider-zod';
 import { Server, type Socket } from 'socket.io';
 import { decodeBase64 } from 'privacy-kit';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { ExternalActionExecutionAuthorizationVerifyRequestV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { DiscussionPostInputV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { DISCUSSION_AGENT_POST_EVENT_V1 } from '@happier-dev/protocol/discussions/api';
 import { encodePasswordCredentialFieldV1 } from '@happier-dev/protocol';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
@@ -73,6 +74,7 @@ import { configuration } from '../../../../../../cli/src/configuration';
 import { ConnectedServiceRuntimeRegistry } from '../../../../../../cli/src/daemon/connectedServices/runtimeRegistry/registry';
 import { createRequesterSessionControlRuntimeFixture } from '../../../../../../cli/src/daemon/testkit/requesterSessionControlRuntimeFixture';
 import { createCurrentMachineExecutionOriginContextResolver } from '../../../../../../cli/src/api/machine/resolveCurrentMachineExecutionOriginContext';
+import { createServerUrlServerFeaturesSnapshotStore } from '../../../../../../cli/src/features/serverFeaturesSnapshotStore';
 
 const document = (text: string) => ({ t: 'plain' as const, v: { v: 1 as const, parts: [{ t: 'text' as const, text }] } });
 
@@ -85,8 +87,11 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
             HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED: '1' } }); }, 300_000);
     afterAll(async () => { resetInMemoryAccountSettingsContextForTests(); await database?.close(); });
 
-    it.each(['none', 'session-access', 'participant', 'account-credential', 'home-unavailable', 'wrong-machine'] as const)(
+    it.each(['none', 'session-access', 'participant', 'account-credential', 'home-unavailable', 'wrong-machine',
+        'stop-during-publication', 'stop-after-commit-lost-ack', 'stop-during-preparation-read'] as const)(
         'posts the exact signed private draft after canonical Stop only without real revocation (%s)', async revocation => {
+        const stopDuringReplay = revocation === 'stop-during-publication' || revocation === 'stop-after-commit-lost-ack'
+            || revocation === 'stop-during-preparation-read';
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         await db.accountIdentity.create({ data: { accountId: account.id, provider: 'email', providerUserId: `${account.id}@review.test`, profile: {} } });
         await db.accountPasswordCredential.create({ data: { accountId: account.id, credential: { v: 1, kind: 'plain_password_hash', hash: {
@@ -149,9 +154,23 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
         const sessions = new Map([[pid, tracked]]);
         const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
         const httpOutcomes: string[] = [];
+        let phase = 'HTTP startup';
+        let interruptPreparationRead: (() => Promise<void>) | undefined;
+        let preparationReadInterrupted = false;
+        onTestFailed(() => console.error('Discussion Stop composition:', { revocation, phase, httpOutcomes }));
         app.addHook('onResponse', async (request, reply) => {
             // Boundary diagnostics exclude credentials, query strings and bodies.
             httpOutcomes.push(`${request.method} ${request.url.split('?')[0]} ${reply.statusCode}`);
+        });
+        app.addHook('preHandler', async (request, reply) => {
+            if (request.method !== 'GET' || request.url.split('?')[0] !== `/v1/discussions/${discussionId}`
+                || !interruptPreparationRead) return;
+            const interrupt = interruptPreparationRead;
+            interruptPreparationRead = undefined;
+            await interrupt();
+            preparationReadInterrupted = true;
+            reply.hijack();
+            reply.raw.destroy();
         });
         closeHttp = () => app.close();
         app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler); enableAuthentication(app);
@@ -168,6 +187,8 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
         const machineConnection = new Promise<Socket>((resolve, reject) => {
             resolveMachineConnection = resolve; rejectMachineConnection = reject;
         });
+        let beforePublication: (() => Promise<void>) | undefined;
+        let afterPublication: (() => Promise<void>) | undefined;
         io.use(async (socket, next) => {
             try {
                 const token: unknown = socket.handshake.auth.token;
@@ -201,6 +222,20 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
             // The canonical requester encryption observer uses this ordinary
             // authenticated user channel before reading currentness via HTTP.
             if (socket.data.clientType !== 'machine-scoped') return;
+            // Pause the real incoming publication or its committed ACK at the
+            // network boundary; the actual Stop and append owners stay real.
+            socket.use((packet, next) => {
+                if (packet[0] !== DISCUSSION_AGENT_POST_EVENT_V1) return next();
+                if (afterPublication) {
+                    const acknowledge = packet.at(-1);
+                    if (typeof acknowledge !== 'function') return next(new Error('Publication ACK unavailable'));
+                    packet[packet.length - 1] = async () => {
+                        await afterPublication?.();
+                        acknowledge({ committedButAcknowledgementUnavailable: true });
+                    };
+                }
+                void Promise.resolve().then(() => beforePublication?.()).then(() => next(), error => next(error));
+            });
             // The real token, installation and compatibility owners above
             // consume the actual ApiMachineClient handshake before dispatch.
             machineUpdateHandler(account.id, socket, { sessionPublisherPresence: presence,
@@ -208,6 +243,7 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
             resolveMachineConnection?.(socket);
         });
         const serverHttpBaseUrl = await app.listen({ host: '127.0.0.1', port: 0 });
+        const serverFeatures = createServerUrlServerFeaturesSnapshotStore({ serverUrl: serverHttpBaseUrl, token: credentials.token });
             await runWithServerHttpBaseUrl(serverHttpBaseUrl, async () => {
                 await bootstrapAccountSettingsContext({ credentials, mode: 'blocking' });
                 apiMachine = new ApiMachineClient(credentials.token, { id: machine.id, encryptionMode: 'plain', metadata: null,
@@ -239,6 +275,7 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                     postAgentDiscussionMessage: async () => { throw new Error('Only the actual startup replay owner may publish this private body'); } });
                 const executor = createExecutor(credentials);
                 const capture = createDaemonSessionAccountActionExecutor({ serverId, serverHttpBaseUrl, token: credentials.token, credentials, machineId: machine.id,
+                    resolveServerFeaturesSnapshot: () => serverFeatures.refresh(),
                     prepareExternalActionAuthorization: async ({ operation, sessionActionOrigin, isCallerCurrent }) => {
                         const target = { kind: 'machine' as const, machineId: machine.id };
                         const authorization = await prepareExternalActionRequesterAccountAuthorization({ actionId: operation.actionId, input: operation.input,
@@ -250,6 +287,7 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                         serverIdentityId: homeId, runtimeAccountId: account.id, signExternalActionApprovalInput: args => signExternalActionApprovalInputV1({
                             authorizationToken: args.authorization.token, actionId: args.actionId, input: args.input, target: args.target, privateKey: installation.privateKey }) }) }) });
                 const content = { v: 1, parts: [{ t: 'text', text: 'The exact privately approved answer' }] };
+                phase = 'actual signed draft capture';
                 const draft = await capture({ kind: 'action.execute', actionId: 'discussion.reply', requestId: randomUUID(),
                     input: { discussionId, content, replyTarget: { kind: 'message', messageId: addressing.messageId } }, witness: {
                         turnId, inputId, userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0, callerPermissionMode: 'default', discussionAddressing: addressing,
@@ -329,12 +367,16 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                 writeAccountStoredContentCompatibilityForSocket(caller as unknown as Socket,
                     evaluateAccountStoredContentSocketCompatibility(buildCurrentCliClientCompatibilitySocketAuth('daemon')));
                 registerSocketRpcHandlers({ userId: account.id, socket: caller as unknown as Socket, io: discovery, sessionPublisherPresence: presence });
-                const stopped: unknown[] = [];
-                await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method: `${machine.id}:${RPC_METHODS.STOP_SESSION}`,
-                    params: { sessionId: session.id }, authorization: { kind: 'session.write', sessionId: session.id } }, (value: unknown) => stopped.push(value));
-                expect(stopped).toEqual([{ ok: true, result: { status: 'stopped' } }]);
-                expect(sessions.size).toBe(0);
-                expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: { active: true } })).toEqual({ active: false });
+                const stopParticipant = async () => {
+                    const stopped: unknown[] = [];
+                    await triggerSocketHandler(caller, SOCKET_RPC_EVENTS.CALL, { method: `${machine.id}:${RPC_METHODS.STOP_SESSION}`,
+                        params: { sessionId: session.id }, authorization: { kind: 'session.write', sessionId: session.id } }, (value: unknown) => stopped.push(value));
+                    expect(stopped).toEqual([{ ok: true, result: { status: 'stopped' } }]);
+                    expect(sessions.size).toBe(0);
+                    expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: { active: true } })).toEqual({ active: false });
+                };
+                if (!stopDuringReplay) await stopParticipant();
+                phase = 'signed origin verification';
                 const authorization = approval.executionOriginV1.externalActionExecutionAuthorization;
                 const originalTarget = approval.executionOriginV1.target;
                 const originalSource = approval.executionOriginV1.sessionInputSource;
@@ -346,10 +388,11 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                     privateKey: installation.privateKey, installationId: installation.installationId, serverHttpBaseUrl };
                 // Retiring this source does not waive ordinary root currentness
                 // or accept an unrelated retained input under the same signer.
-                expect(await verifyExternalActionExecutionAuthorizationCurrent(verification)).toBe(false);
+                expect(await verifyExternalActionExecutionAuthorizationCurrent(verification)).toBe(stopDuringReplay);
                 expect(await verifyExternalActionExecutionAuthorizationCurrent({ ...verification,
                     retainedDiscussionSource: { ...originalSource, sourceInputId: 'not-the-original' } })).toBe(false);
                 const capturedInput = DiscussionPostInputV1Schema.parse(approval.actionArgs);
+                phase = 'open draft publication refusal';
                 // Neither a direct draft nor its still-open Artifact reference
                 // gains publication authority merely because the host stopped.
                 expect(await publisher({ v: 1, sessionId: session.id, discussionId, request: {
@@ -365,11 +408,36 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                 if (revocation === 'account-credential') await db.account.update({ where: { id: account.id }, data: { tokenEpoch: { increment: 1 } } });
                 if (revocation === 'home-unavailable') currentMachineId = null;
                 if (revocation === 'wrong-machine') currentMachineId = randomUUID();
+                if (stopDuringReplay) {
+                    const stopExecutingParticipant = async () => {
+                        phase = 'Stop during executing publication';
+                        expect(ApprovalRequestV2Schema.parse(await store.approvalsGet({ artifactId, serverId })).status).toBe('executing');
+                        expect(sessions.size).toBe(1);
+                        expect(await db.discussionMessage.count({ where: { discussionId, seq: { gt: addressing.throughSeq } } }))
+                            .toBe(revocation === 'stop-after-commit-lost-ack' ? 1 : 0);
+                        await stopParticipant();
+                    };
+                    if (revocation === 'stop-after-commit-lost-ack') afterPublication = stopExecutingParticipant;
+                    else if (revocation === 'stop-during-preparation-read') interruptPreparationRead = stopExecutingParticipant;
+                    else beforePublication = stopExecutingParticipant;
+                }
+                phase = 'person approval decision';
                 const result = await personExecutor.execute('approval.request.decide', { artifactId, decision: 'approve' },
                     { serverId, serverIdentityId: homeId, surface: 'cli' });
                 const rows = await db.discussionMessage.findMany({ where: { discussionId, seq: { gt: addressing.throughSeq } } });
-                if (revocation === 'none') {
-                    expect(result, JSON.stringify({ result, httpOutcomes, publishedRows: rows.length })).toMatchObject({ ok: true, result: { status: 'executed' } });
+                if (revocation === 'stop-during-preparation-read') {
+                    expect(preparationReadInterrupted).toBe(true);
+                    expect(rows).toHaveLength(0);
+                    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'failed',
+                        execution: { ok: false, errorCode: 'discussions_unavailable' } } });
+                    expect(await store.approvalsGet({ artifactId, serverId })).toMatchObject({ status: 'failed',
+                        execution: { errorCode: 'discussions_unavailable' } });
+                } else if (revocation === 'none' || stopDuringReplay) {
+                    const lostAcknowledgement = revocation === 'stop-after-commit-lost-ack';
+                    expect(result, JSON.stringify({ result, httpOutcomes, publishedRows: rows.length })).toMatchObject({ ok: true,
+                        result: lostAcknowledgement
+                            ? { status: 'failed', execution: { ok: false, errorCode: 'outcome_unknown', effectAttempted: true } }
+                            : { status: 'executed' } });
                     expect(rows).toHaveLength(1);
                     expect(rows[0]).toMatchObject({ content: { t: 'plain', v: content }, producerV1: { kind: 'agent', sessionId: session.id,
                         sourceSession: { sourceSessionId: session.id, sourceInputId: inputId, sourceTurnId: turnId } } });
@@ -377,7 +445,7 @@ describe.skipIf(process.platform !== 'linux')('signed private Discussion draft a
                     const settled = ApprovalRequestV2Schema.parse(await store.approvalsGet({ artifactId, serverId }));
                     expect(sameStrictJsonValue(settled.executionOriginV1, approval.executionOriginV1), 'Original signed provenance remains immutable').toBe(true);
                     expect(await personExecutor.replayApprovedApprovalRequest({ artifactId, callerAuthority: 'present_user' }))
-                        .toMatchObject({ ok: true, result: { status: 'executed' } });
+                        .toMatchObject({ ok: true, result: { status: lostAcknowledgement ? 'failed' : 'executed' } });
                     expect(await db.discussionMessage.count({ where: { discussionId, seq: { gt: addressing.throughSeq } } })).toBe(1);
                 } else {
                     expect(result).not.toMatchObject({ ok: true, result: { status: 'executed' } });

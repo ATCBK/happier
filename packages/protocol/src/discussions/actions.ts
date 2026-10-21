@@ -1,4 +1,5 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
+import { DiscussionSettingsV1Schema, DiscussionSettingsResponseV1Schema } from './settings.js';
 import { DiscussionSecondOpinionStartInputV1Schema, DiscussionSecondOpinionStartResultV1Schema } from './secondOpinionActions.js';
 import { z } from 'zod/mini';
 import { refineDiscussionAccountActor } from './accountActorConsistency.js';
@@ -85,6 +86,9 @@ export type DiscussionListInputV1 = z.infer<typeof DiscussionListInputV1Schema>;
 
 export const DiscussionGetInputV1Schema = lazyZodSchema(() => z.strictObject({
   discussionId: DiscussionIdSchema,
+}));
+export const DiscussionSettingsSetInputV1Schema = lazyZodSchema(() => z.strictObject({
+  ...DiscussionGetInputV1Schema.shape, settings: DiscussionSettingsV1Schema,
 }));
 export type DiscussionGetInputV1 = z.infer<typeof DiscussionGetInputV1Schema>;
 
@@ -328,6 +332,8 @@ export type DiscussionInviteResultV1 = z.infer<typeof DiscussionInviteResultV1Sc
 export const DISCUSSION_ACTION_INPUT_SCHEMAS_V1 = Object.freeze({
   'discussion.list': DiscussionListInputV1Schema,
   'discussion.get': DiscussionGetInputV1Schema,
+  'discussion.settings.get': DiscussionGetInputV1Schema,
+  'discussion.settings.set': DiscussionSettingsSetInputV1Schema,
   'discussion.read': DiscussionReadInputV1Schema,
   'discussion.create': DiscussionCreateInputV1Schema,
   'discussion.second_opinion.start': DiscussionSecondOpinionStartInputV1Schema,
@@ -353,6 +359,8 @@ export const DISCUSSION_ACTION_INPUT_SCHEMAS_V1 = Object.freeze({
 export const DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1 = Object.freeze({
   'discussion.list': DiscussionListResultV1Schema,
   'discussion.get': DiscussionDetailsResultV1Schema,
+  'discussion.settings.get': DiscussionSettingsResponseV1Schema,
+  'discussion.settings.set': DiscussionSettingsResponseV1Schema,
   'discussion.read': DiscussionReadResultV1Schema,
   'discussion.create': DiscussionCreateResultV1Schema,
   'discussion.second_opinion.start': DiscussionSecondOpinionStartResultV1Schema,

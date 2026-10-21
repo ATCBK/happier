@@ -24,6 +24,8 @@ describe('Home Discussion friendly CLI projection', () => {
       ['discussions reply', 'discussion.reply'],
       ['discussions participants list', 'discussion.participants.list'],
       ['discussions candidates list', 'discussion.candidates.list'],
+      ['discussions settings get', 'discussion.settings.get'],
+      ['discussions settings set', 'discussion.settings.set'],
       ['discussions invite', 'discussion.invite'],
       ['discussions participants policy set', 'discussion.participant.policy.set'],
       ['discussions participants remove', 'discussion.participant.remove'],

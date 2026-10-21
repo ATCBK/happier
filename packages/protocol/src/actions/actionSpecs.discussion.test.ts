@@ -50,6 +50,31 @@ const MANAGEMENT_ACTION_IDS = [
 ] as const;
 
 describe('Home Discussion Action catalog rows', () => {
+  it('publishes resource settings through the same family with strict override and inherited reset semantics', () => {
+    const get = getActionSpec(ActionIdSchema.parse('discussion.settings.get'));
+    const set = getActionSpec(ActionIdSchema.parse('discussion.settings.set'));
+    expect(get.serverTransport).toEqual({ method: 'GET', path: '/v1/discussions/:discussionId/settings' });
+    expect(set.serverTransport).toEqual({ method: 'PUT', path: '/v1/discussions/:discussionId/settings' });
+    for (const settings of [{}, { coordination: { autonomousCheckIn: { afterTurns: null } } },
+      { coordination: { autonomousCheckIn: { afterTurns: 7 } } }]) {
+      expect(set.inputSchema.safeParse({ discussionId: 'discussion', settings }).success).toBe(true);
+      expect(set.outputSchema?.safeParse({ discussionId: 'discussion', settings }).success).toBe(true);
+    }
+    expect(set.inputSchema.safeParse({ discussionId: 'discussion', settings: {
+      coordination: { autonomousCheckIn: { afterTurns: 0 } },
+    } }).success).toBe(false);
+    expect(set.inputSchema.safeParse({ discussionId: 'discussion', settings: { counter: 1 } }).success).toBe(false);
+    for (const spec of [get, set]) {
+      expect(spec.executionPlacement).toBe('account');
+      expect(spec.surfaces).toMatchObject({ ui: true, cli: true, mcp: true, agent: true, voice: true, plugin: true });
+      expect(spec.bindings?.mcpToolName).toBe(spec.id.replaceAll('.', '_'));
+      expect(spec.bindings?.voiceClientToolName).toBe(spec.id.replaceAll('.', '_'));
+      for (const surface of ['mcp', 'voice'] as const) {
+        expect(spec.inputSchema.safeParse(JSON.parse(spec.examples?.[surface]?.argsExample ?? '{}')).success).toBe(true);
+      }
+    }
+    expect(isAgentInitiatedApprovalRequiredByDefault(set.id)).toBe(true);
+  });
   it('exposes read-only candidate discovery through the same CLI, MCP, Voice and generated SDK catalog', () => {
     const spec = getActionSpec(ActionIdSchema.parse('discussion.candidates.list'));
     expect(spec.safety).toBe('safe');

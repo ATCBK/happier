@@ -1933,6 +1933,8 @@ model Discussion {
     creationEqualityEvidenceV1 Json
     createdByAccountId         String?
     titleContent               Json
+    /// Server-readable operational override; absent inherits Account settings.
+    settingsV1                 Json?
     /// Latest assigned message sequence and the transactional allocator.
     messageSeq                 Int      @default(0)
     /// Sidebar pagination key. Deliberately denormalized so the list can order

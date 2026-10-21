@@ -187,6 +187,59 @@ describe("Session discussion HTTP transport (SQLite)", () => {
         return { app, actor };
     }
 
+    it('stores the Discussion check-in override with live management authority and preserves inherit versus never pause', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const reader = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const outsider = await db.account.create({ data: { encryptionMode: 'plain' } });
+        const created = await createDiscussion({ authentication, actorAccountId: owner.id, request: {
+            creationLocalId: crypto.randomUUID(), titleContent: plainTitle('Check-in policy'),
+            participants: [{ kind: 'account', accountId: reader.id }],
+            firstMessage: { localId: crypto.randomUUID(), content: plainBody('Review'), mentionedAccountIds: [] },
+        } });
+        if (!created.ok) throw new Error(created.error);
+        const discussionId = created.value.discussion.id;
+        const { app, actor } = createApp(owner.id);
+        const url = `/v1/discussions/${discussionId}/settings`;
+        try {
+            const unattended = createApp(owner.id, 'api_token').app;
+            try {
+                expect((await unattended.inject({ method: 'PUT', url, payload: { settings: {} } })).statusCode).toBe(403);
+            } finally { await unattended.close(); }
+            expect((await app.inject({ method: 'GET', url })).json()).toEqual({ discussionId, settings: {} });
+            for (const afterTurns of [null, 9]) {
+                const settings = { coordination: { autonomousCheckIn: { afterTurns } } };
+                const response = await app.inject({ method: 'PUT', url, payload: { settings } });
+                expect(response.statusCode).toBe(200);
+                expect(response.json()).toEqual({ discussionId, settings });
+                expect((await app.inject({ method: 'GET', url })).json()).toEqual({ discussionId, settings });
+            }
+            actor.accountId = reader.id;
+            expect((await app.inject({ method: 'GET', url })).statusCode).toBe(200);
+            expect((await app.inject({ method: 'PUT', url, payload: { settings: {} } })).statusCode).toBe(403);
+            await db.discussionAccountGrant.update({ where: { discussionId_accountId: { discussionId, accountId: reader.id } },
+                data: { accessLevel: 'admin' } });
+            expect((await app.inject({ method: 'PUT', url, payload: { settings: {} } })).statusCode).toBe(200);
+            actor.accountId = outsider.id;
+            expect((await app.inject({ method: 'GET', url })).statusCode).toBe(404);
+            actor.accountId = owner.id;
+            expect((await app.inject({ method: 'GET', url: '/v1/discussions/missing/settings' })).statusCode).toBe(404);
+            for (const settings of [{ coordination: { autonomousCheckIn: { afterTurns: 0 } } }, { forged: true }]) {
+                expect((await app.inject({ method: 'PUT', url, payload: { settings } })).statusCode).toBe(400);
+            }
+            expect((await app.inject({ method: 'PUT', url, payload: { settings: {} } })).json())
+                .toEqual({ discussionId, settings: {} });
+            await db.discussion.update({ where: { id: discussionId }, data: { settingsV1: {
+                coordination: { autonomousCheckIn: { afterTurns: null, futureSetting: true } }, futureSetting: true,
+            } } });
+            expect((await app.inject({ method: 'GET', url })).json()).toEqual({ discussionId,
+                settings: { coordination: { autonomousCheckIn: { afterTurns: null } } } });
+            await db.discussion.update({ where: { id: discussionId }, data: { settingsV1: {
+                coordination: { autonomousCheckIn: { afterTurns: 0 } },
+            } } });
+            expect((await app.inject({ method: 'GET', url })).statusCode).toBe(409);
+        } finally { await app.close(); }
+    });
+
     it("creates and retries a Home Discussion without a Session", async () => {
         const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
         const { app } = createApp(owner.id);

@@ -142,6 +142,11 @@
       "types": "./dist/discussions/secondOpinionActions.d.ts",
       "default": "./dist/discussions/secondOpinionActions.js"
     },
+    "./discussions/settings": {
+      "happier-source": "./src/discussions/settings.ts",
+      "types": "./dist/discussions/settings.d.ts",
+      "default": "./dist/discussions/settings.js"
+    },
     "./actions/executor/discussionSecondOpinion": {
       "happier-source": "./src/actions/executor/discussionSecondOpinion.ts",
       "types": "./dist/actions/executor/discussionSecondOpinion.d.ts",

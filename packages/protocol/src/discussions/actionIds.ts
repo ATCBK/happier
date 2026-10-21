@@ -17,6 +17,8 @@ import { z } from 'zod/mini';
 export const DISCUSSION_ACTION_IDS_V1 = [
   'discussion.list',
   'discussion.get',
+  'discussion.settings.get',
+  'discussion.settings.set',
   'discussion.read',
   'discussion.create',
   'discussion.second_opinion.start',

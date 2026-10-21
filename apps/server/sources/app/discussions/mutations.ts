@@ -192,7 +192,6 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
     if ('error' in intent) return discussionFailure(intent.error);
     if ('error' in evidence) return discussionFailure(evidence.error);
     if (intent.replyTarget?.kind === 'message') return discussionFailure('discussion_invalid_reply_target');
-    if (intent.mentionedSessionIds.length > 0) return discussionFailure('discussion_invalid_mention');
     const readers = new Set([input.actorAccountId, ...initial.value.participantAccountIds]);
     if (intent.mentionedAccountIds.some(id => !readers.has(id))) return discussionFailure('discussion_invalid_mention');
     const source = intent.replyTarget?.kind === 'doc_passage' ? intent.replyTarget.doc : null;
@@ -214,7 +213,9 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
         ownerAccountId: input.actorAccountId, createdByAccountId: input.actorAccountId, encryptionMode: mode,
         dataEncryptionKey: initial.value.dataEncryptionKey,
         creationLocalId: request.creationLocalId, creationEqualityEvidenceV1: evidence,
-        titleContent: request.titleContent, messageSeq: 1, lastMessageAt: now,
+        // Initial Follow attachments must start before the first committed
+        // occurrence. The resource and seq1 become visible in one transaction.
+        titleContent: request.titleContent, messageSeq: 0, lastMessageAt: now,
         ...(request.anchor ? { anchorV1: request.anchor,
             ...(request.anchor.kind === 'session' ? { anchorSessionId: request.anchor.sessionId } : {}) } : {}),
     }, select: { id: true } });
@@ -227,7 +228,14 @@ export async function createDiscussionInTx(tx: Tx, input: Actor & Readonly<{
             authentication: creatorAuthentication, discussionId: row.id, request: { participant } });
         if (!invited.ok) throw new DiscussionCreationRejectedError(invited.error);
     }
-    const first = await insertMessageInTx(tx, { discussionId: row.id, actorAccountId: input.actorAccountId, seq: 1, intent, producer, at: now });
+    const addressed = await admitAddressedParticipantsInTx(tx, { ...input, authentication: creatorAuthentication,
+        discussionId: row.id, intent, producer });
+    if (!addressed.ok) throw new DiscussionCreationRejectedError(addressed.error);
+    const first = await insertMessageInTx(tx, { discussionId: row.id, actorAccountId: input.actorAccountId, seq: 1,
+        intent, producer, at: now, ...addressed.value });
+    await tx.discussion.update({ where: { id: row.id }, data: { messageSeq: 1 } });
+    // Initial attachment already queues C1's after-commit source hint; its
+    // receiver observes this committed seq1, never the uncommitted empty head.
     await initializeDiscussionReadBaselinesInTx(tx, { discussionId: row.id, accountIds: [...readers], lastReadSeq: 0 });
     const context = await resolveDiscussionContextInTx(tx, { discussionId: row.id, accountId: input.actorAccountId, authentication: creatorAuthentication });
     const discussion = await readDiscussionRowInTx(tx, { discussionId: row.id });

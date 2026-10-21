@@ -32,6 +32,8 @@ import { DISCUSSION_SECOND_OPINION_PREVIEW_HTTP_PATH_V1, DiscussionSecondOpinion
 import { previewDiscussionSecondOpinion } from '@/app/discussions/secondOpinion';
 import { DiscussionAttentionQueryV1Schema, DiscussionAttentionResponseV1Schema } from '@happier-dev/protocol/discussions/api';
 import { readDiscussionAttention } from '@/app/discussions/attentionFacts';
+import { DiscussionSettingsSetRequestV1Schema, DiscussionSettingsResponseV1Schema } from '@happier-dev/protocol/discussions/settings';
+import { getDiscussionSettings, setDiscussionSettings } from '@/app/discussions/settings';
 
 /**
  * The typed result → HTTP mapping.
@@ -118,6 +120,27 @@ export function registerDiscussionRoutes(app: Fastify) {
         { error: "discussions_unavailable" },
     );
     const rateLimit = resolveApiHotEndpointRateLimit(process.env, "session.discussions");
+
+    discussionsApp.get(DISCUSSION_HTTP_PATHS_V1.settings, {
+        preHandler: app.authenticate, config: { allowApiToken: true, rateLimit }, errorHandler: discussionRouteErrorHandler,
+        schema: { params: DiscussionRouteDiscussionParamsV1Schema,
+            response: { 200: DiscussionSettingsResponseV1Schema, ...DiscussionErrorResponses } },
+    }, async (request, reply) => {
+        const result = await getDiscussionSettings({ actorAccountId: request.userId, discussionId: request.params.discussionId,
+            authentication: readSessionAccessAuthenticationFromRequest(request) });
+        if (!result.ok) return reply.code(statusForDiscussionFailure(result.error)).send({ error: result.error });
+        return reply.send(result.value);
+    });
+    discussionsApp.put(DISCUSSION_HTTP_PATHS_V1.settings, {
+        preHandler: [app.authenticate, requireRouteActionAuthority('discussion.settings.set')], config: { rateLimit }, errorHandler: discussionRouteErrorHandler,
+        schema: { params: DiscussionRouteDiscussionParamsV1Schema, body: DiscussionSettingsSetRequestV1Schema,
+            response: { 200: DiscussionSettingsResponseV1Schema, ...PresentUserDiscussionErrorResponses } },
+    }, async (request, reply) => {
+        const result = await setDiscussionSettings({ actorAccountId: request.userId, discussionId: request.params.discussionId,
+            settings: request.body.settings, authentication: readSessionAccessAuthenticationFromRequest(request) });
+        if (!result.ok) return reply.code(statusForDiscussionFailure(result.error)).send({ error: result.error });
+        return reply.send(result.value);
+    });
 
     discussionsApp.get(DISCUSSION_HTTP_PATHS_V1.attention, {
         preHandler: app.authenticate, config: { allowApiToken: true, rateLimit }, errorHandler: discussionRouteErrorHandler,

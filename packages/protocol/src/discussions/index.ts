@@ -1,4 +1,5 @@
 export * from './content.js';
+export * from './settings.js';
 export * from './actionIds.js';
 export * from './actions.js';
 export * from './equality.js';

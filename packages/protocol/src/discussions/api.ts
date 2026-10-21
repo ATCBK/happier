@@ -98,6 +98,7 @@ export const DISCUSSION_HTTP_PATHS_V1 = Object.freeze({
   collection: '/v1/discussions',
   attention: '/v1/discussions/attention',
   discussion: '/v1/discussions/:discussionId',
+  settings: '/v1/discussions/:discussionId/settings',
   archive: '/v1/discussions/:discussionId/archive',
   restore: '/v1/discussions/:discussionId/restore',
   messages: '/v1/discussions/:discussionId/messages',
