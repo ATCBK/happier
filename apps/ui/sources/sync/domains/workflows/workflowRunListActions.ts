@@ -22,6 +22,7 @@ import { createWorkflowRunDetailActions, workflowRunDetailActions } from './work
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { sync } from '@/sync/sync';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 /**
  * The Workflows collection's Run **list** reader.
@@ -91,7 +92,7 @@ export async function listWorkflowRuns(params: Readonly<{
     if (accountLifetime?.isCurrent() === false) {
         throw new WorkflowActionError({ message: 'action_account_scope_changed', rawCode: 'action_account_scope_changed' });
     }
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     const request = WorkflowRunListRequestV1Schema.parse({
         ...(params.filter ?? {}),
         ...(params.projection === undefined ? {} : { projection: params.projection }),
@@ -133,9 +134,9 @@ export async function listAllWorkflowRuns(params: Readonly<{
     const callerAccessByRunId: Record<string, WorkflowRunGetResultV1['callerAccess']> = {};
     let cursor: string | undefined;
     do {
-        params.signal.throwIfAborted();
+        throwIfAborted(params.signal);
         const page = await listWorkflowRuns({ ...params, ...(cursor === undefined ? {} : { cursor }) });
-        params.signal.throwIfAborted();
+        throwIfAborted(params.signal);
         runs.push(...page.runs);
         Object.assign(metadataByRunId, page.metadataByRunId);
         Object.assign(supportsAnotherRoundByRunId, page.supportsAnotherRoundByRunId);

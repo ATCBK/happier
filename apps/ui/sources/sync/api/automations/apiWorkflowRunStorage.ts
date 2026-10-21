@@ -7,7 +7,7 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
-import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 
 const storageReads = createScopedResolutionSingleFlight<unknown>();
 // Admission and private opening remain at the Action owner. These operations
@@ -32,7 +32,7 @@ export function createWorkflowRunAccountStorage(params: Readonly<{
                 || options?.publisherMachineId !== undefined) {
                 throw Object.assign(new Error('run_access_denied'), { code: 'run_access_denied' });
             }
-            options?.signal?.throwIfAborted();
+            throwIfAborted(options?.signal);
             const path = '/v3/automations/runs/workflow-storage';
             const operationName = typeof operation.operation === 'string' ? operation.operation : '';
             const read = READ_OPERATIONS.has(operationName);

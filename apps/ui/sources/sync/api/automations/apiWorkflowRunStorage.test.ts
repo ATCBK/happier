@@ -43,7 +43,11 @@ it('shares only admitted read bytes across invocation transports and leaves canc
     // Native AbortSignal implementations need not expose this newer convenience method.
     Object.defineProperty(controller.signal, 'throwIfAborted', { value: undefined });
     const departed = first.execute({ operation: 'list', request: { projection: 'membership' } },
-        { signal: controller.signal }).catch(() => 'aborted');
+        { signal: controller.signal }).catch(error => {
+            if (error instanceof Error && error.name === 'AbortError') return 'aborted';
+            throw error;
+        });
+    void departed.catch(() => {});
     const live = second.execute({ operation: 'list', request: { projection: 'membership' } });
     try {
         await vi.waitFor(() => expect(reads).toBeGreaterThan(0));

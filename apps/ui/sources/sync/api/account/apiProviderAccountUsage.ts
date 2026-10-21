@@ -35,6 +35,7 @@ import { createCapturedServerReadTransport, type CapturedServerReadTransport } f
 import { createScopedResolutionSingleFlight, type ScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveActiveServerRuntimeOrigin } from '@/sync/runtime/nativeLoopbackTunnels/runtimeOrigin';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 type UsageHttpObservation = Readonly<{
     status: number; ok: boolean; json: unknown; jsonFailure?: Readonly<{ error: unknown }>;
@@ -117,7 +118,7 @@ export async function getProviderAccountUsageQuota(credentials: AuthCredentials,
         return { resolution, recordJson };
     })(), inputOptions.accountMode]);
     let options: ProviderAccountUsageQuotaReadOptions = { ...transportOptions, accountMode };
-    options.signal?.throwIfAborted(); options.assertCurrent?.();
+    throwIfAborted(options.signal); options.assertCurrent?.();
     const material = options.accountMode === 'e2ee' ? options.material ?? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : undefined;
     const progressive = options.readAllHistory && (request.history || request.projection) && resolution;
     if (!request.projection && !progressive && options.readPacingTargets) options = { ...options, targets: await options.readPacingTargets() };
@@ -135,7 +136,7 @@ export async function getProviderAccountUsageQuota(credentials: AuthCredentials,
         let targets = options.targets;
         const project = (appendHistory?: ConnectedServiceQuotaGetResultV1['history']) => projectProviderAccountUsageQuotaReadV1({ input: request, current, history, appendHistory, waitingWork,
             targets, nowMs: options.nowMs ?? Date.now() });
-        const publish = (appendHistory?: ConnectedServiceQuotaGetResultV1['history']) => { options.signal?.throwIfAborted(); options.assertCurrent?.(); const value = project(appendHistory); history = value.history; options.readAllHistory!.onProgress(value); return value; };
+        const publish = (appendHistory?: ConnectedServiceQuotaGetResultV1['history']) => { throwIfAborted(options.signal); options.assertCurrent?.(); const value = project(appendHistory); history = value.history; options.readAllHistory!.onProgress(value); return value; };
         // Current capacity is useful before either history or unrelated Pending work answers.
         publish();
         let active = true;
@@ -150,7 +151,7 @@ export async function getProviderAccountUsageQuota(credentials: AuthCredentials,
             });
         const price = current && options.readEnteredMonthlyPrice ? options.readEnteredMonthlyPrice().then(enteredMonthlyPrice => {
             if (!active) return;
-            options.signal?.throwIfAborted(); options.assertCurrent?.();
+            throwIfAborted(options.signal); options.assertCurrent?.();
             current = openProviderAccountUsageRecordV4({ recordId: resolution.recordId, enteredMonthlyPrice,
                 accountMode: options.accountMode, material, record: recordJson });
             publish();
@@ -190,7 +191,7 @@ export async function getProviderAccountUsageQuota(credentials: AuthCredentials,
 async function readProviderAccountUsageProjectedQuota(credentials: AuthCredentials, request: ConnectedServiceQuotaGetInputV1,
     options: ProviderAccountUsageQuotaReadOptions, recordId: string, initialCurrent: ProviderAccountUsageSnapshotV1 | null, recordJson: unknown): Promise<ConnectedServiceQuotaGetResultV1> {
     const demand = request.projection!;
-    const assertCurrent = () => { options.signal?.throwIfAborted(); options.assertCurrent?.(); };
+    const assertCurrent = () => { throwIfAborted(options.signal); options.assertCurrent?.(); };
     let current = initialCurrent;
     let history: ConnectedServiceQuotaGetResultV1['history'];
     let pageFacts: ConnectedServiceQuotaGetResultV1['pageFacts'];
@@ -407,7 +408,7 @@ async function requestProviderAccountUsageProjection(credentials: AuthCredential
     const path = `/v4/connect/qualified/provider-account-usage/history?${new URLSearchParams({
         query: encodeQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema, query),
     }).toString()}`;
-    options.signal?.throwIfAborted(); options.assertCurrent?.();
+    throwIfAborted(options.signal); options.assertCurrent?.();
     const held = heldOverride ?? options.projectionDocuments?.get(query.recordId);
     const heldCoverage = held ? { demand: held.projection.demand, frontier: held.projection.frontier,
         observationCount: held.projection.observationCount, contentMode: held.projection.content.t } : undefined;
@@ -421,7 +422,7 @@ async function requestProviderAccountUsageProjection(credentials: AuthCredential
             ...(held?.etag ? { 'If-None-Match': held.etag } : {}),
         },
     }, options);
-    options.signal?.throwIfAborted(); options.assertCurrent?.();
+    throwIfAborted(options.signal); options.assertCurrent?.();
     if (head.status === 401 || head.status === 403) throw new HappyError('Provider account usage authority refused', false,
         { status: head.status, kind: 'auth', code: 'denied' });
     if (head.status === 409) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_mode_mismatch');
@@ -471,7 +472,7 @@ async function requestProviderAccountUsageProjection(credentials: AuthCredential
 
 async function openHistoryPageWithYield(input: Parameters<typeof openProviderAccountUsageHistoryPageV4>[0],
     options: Pick<ProviderAccountUsageQuotaReadOptions, 'signal' | 'assertCurrent'>) {
-    const assertCurrent = () => { options.signal?.throwIfAborted(); options.assertCurrent?.(); };
+    const assertCurrent = () => { throwIfAborted(options.signal); options.assertCurrent?.(); };
     const entries = await mapCryptoBatchWithYield(input.page.entries, entry => {
         assertCurrent();
         // Preserve the Protocol opener's record, mode, timestamp and page-entry
@@ -536,7 +537,7 @@ async function observeProviderUsageHttp(response: Response, method?: string): Pr
 
 async function acquireProviderUsageHttp(credentials: AuthCredentials, path: string, init: RequestInit,
     options: UsageReadTransportOptions, fresh = false): Promise<UsageHttpObservation> {
-    options.signal?.throwIfAborted(); options.assertCurrent?.();
+    throwIfAborted(options.signal); options.assertCurrent?.();
     const consume = (response: Response) => observeProviderUsageHttp(response, init.method);
     const fetchOptions = { includeAuth: false, ...(options.expectedActiveServer ? { expectedActiveServer: options.expectedActiveServer } : {}) };
     const transport = options.readTransport;
@@ -547,7 +548,7 @@ async function acquireProviderUsageHttp(credentials: AuthCredentials, path: stri
             new Headers(init.headers).get('If-None-Match'), init.body ?? null]), signal => transport.read(path, { ...init, signal }, fetchOptions, consume),
             { scope, signal: options.signal, fresh })
         : await consume(await (options.request ?? createServerFetchForActiveServer(options.expectedActiveServer))(path, init, fetchOptions));
-    options.signal?.throwIfAborted(); options.assertCurrent?.();
+    throwIfAborted(options.signal); options.assertCurrent?.();
     return value;
 }
 
@@ -673,7 +674,7 @@ const sealedSnapshotReads = createScopedResolutionSingleFlight<EncryptedQualifie
 async function readProviderSnapshotWithOwner<T>(credentials: AuthCredentials, recordId: ProviderAccountUsageRecordId,
     opts: ProviderAccountUsageSnapshotReadOptions | undefined, pending: ScopedResolutionSingleFlight<T>,
     consume: (response: UsageHttpObservation) => T): Promise<T> {
-    opts?.signal?.throwIfAborted();
+    throwIfAborted(opts?.signal);
     const snapshot = getActiveServerSnapshot();
     const request = createServerFetchForActiveServer(opts?.expectedActiveServer ?? snapshot);
     const transport = opts?.readTransport ?? createCapturedServerReadTransport({ serverId: snapshot.serverId, credentials,
@@ -691,7 +692,7 @@ async function readProviderSnapshotWithOwner<T>(credentials: AuthCredentials, re
         : await pending.run(JSON.stringify([bindingKey, recordId]), signal => backoff(async () =>
             await transport.read(path, { ...init, signal }, options, async response => consume(await observeProviderUsageHttp(response, 'GET')))),
             { scope, signal: opts?.signal });
-    opts?.signal?.throwIfAborted();
+    throwIfAborted(opts?.signal);
     return value;
 }
 

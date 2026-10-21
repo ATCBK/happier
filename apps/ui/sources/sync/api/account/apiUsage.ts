@@ -3,6 +3,7 @@ import { backoff } from '@/utils/timing/time';
 import { HappyError } from '@/utils/errors/errors';
 import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import type {
     UsageAnalyticsQueryRequest,
@@ -105,7 +106,7 @@ export async function queryUsage(
 ): Promise<UsageResponse> {
     const requestUsage = options?.request ?? createServerFetchForActiveServer();
     const read = async () => {
-        options?.signal?.throwIfAborted();
+        throwIfAborted(options?.signal);
         const request: UsageAnalyticsQueryRequest = options?.analyticsRequest ?? {
             dateRange: typeof params.startTime === 'number' || typeof params.endTime === 'number'
                 ? {
@@ -178,7 +179,7 @@ export async function queryUsage(
             }
 
             const data: unknown = await response.json();
-            options?.signal?.throwIfAborted();
+            throwIfAborted(options?.signal);
             return options?.analyticsRequest ? UsageAnalyticsQueryResponseSchema.parse(data) : data as UsageResponse;
         };
         return options?.readTransport

@@ -33,6 +33,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { createScopedResolutionSingleFlight, type ScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 export type ConnectedMetadataAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 type CapturedRead = Pick<CapturedAccountSettingsRequest, 'request' | 'isCurrent'> & Readonly<{
@@ -51,7 +52,7 @@ function assertReadCurrent(captured: CapturedRead): void {
 async function rawRead<T>(captured: CapturedRead, route: string, parse: (value: unknown) => T,
     reads: ScopedResolutionSingleFlight<T>, signal?: AbortSignal): Promise<T> {
     assertReadCurrent(captured);
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     const consume = async (response: Response) => {
         if (!response.ok) throw new ConnectedMetadataRowOperationError(response.status === 401 ? 'unauthorized'
             : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
@@ -67,7 +68,7 @@ async function rawRead<T>(captured: CapturedRead, route: string, parse: (value: 
     } else {
         value = await consume(await captured.request(route, { method: 'GET', signal }, { retry: 'none' }));
     }
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     assertReadCurrent(captured);
     return value;
 }

@@ -9,6 +9,7 @@ import { captureActiveServerAccountScopeCurrentness, captureActiveServerAccountS
 import { WorkflowActionError } from './workflowActionError';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 /**
  * The trigger client: `workflow.trigger.list | add | update | remove` (03 §5.3–§5.5) and the
@@ -90,7 +91,7 @@ async function callTriggerAction<TResult>(
         ...(options.context === undefined ? {} : { context: options.context }),
     });
     if (!scope?.isCurrent()) throw new WorkflowActionError({ message: 'action_account_scope_changed', rawCode: 'action_account_scope_changed' });
-    options.signal?.throwIfAborted();
+    throwIfAborted(options.signal);
     const request = typeof input === 'object' && input !== null ? input : {};
     const workflow = 'workflow' in request && typeof request.workflow === 'string' ? request.workflow : null;
     const written = !actionId.endsWith('.list') && typeof result === 'object' && result !== null && 'set' in result
@@ -147,7 +148,7 @@ export async function listWorkflowTriggerSets(
     const lifetime = options.accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : options.accountLifetime;
     // A list result may predate a successful local write. Keep that publication
     // fence while every caller enters its own Action admission and cancellation.
-    options.signal?.throwIfAborted();
+    throwIfAborted(options.signal);
     const key = JSON.stringify(parsed);
     const publication: TriggerListPublication = { current: true };
     let publications = lifetime ? triggerListPublications.get(lifetime) : undefined;
@@ -160,7 +161,7 @@ export async function listWorkflowTriggerSets(
             value => WorkflowTriggerListResultV1Schema.parse(value), { ...options,
                 isTriggerListCurrent: () => publication.current && !options.signal?.aborted
                     && options.isTriggerListCurrent?.() !== false });
-        options.signal?.throwIfAborted();
+        throwIfAborted(options.signal);
         return result.sets;
     } finally {
         readers?.delete(publication);
