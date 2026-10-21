@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
 import type { TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
-import { AskSelectionControls } from '@/components/ui/code/selection/AskSelectionControls';
+import { AskSelectionControls, type AskSelectionControlsProps } from '@/components/ui/code/selection/AskSelectionControls';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
 const NO_SUBSCRIPTION = () => () => {};
@@ -19,6 +19,8 @@ export function FileEditorAskControls(
     savedText: string | undefined;
     sessionId: string | null;
     active: boolean;
+    /** Supplied only when the editor host can open its inline comment composer without leaving the engine. */
+    onCommentSelection?: AskSelectionControlsProps['onCommentSelection'];
   }>,
 ): React.ReactElement | null {
   const pane = useAppPaneScope(props.scopeId);
@@ -63,6 +65,7 @@ export function FileEditorAskControls(
       sessionTarget={sessionTarget}
       openDetailsTab={pane.openDetailsTab}
       active={props.active}
+      onCommentSelection={props.onCommentSelection}
       testID="file-editor-selection-toolbar"
     />
   );

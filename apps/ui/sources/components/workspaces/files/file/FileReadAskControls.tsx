@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
-import { AskSelectionControls } from '@/components/ui/code/selection/AskSelectionControls';
+import { AskSelectionControls, type AskSelectionControlsProps } from '@/components/ui/code/selection/AskSelectionControls';
 import { readCodeLineFromDomNode, resolveSourceLinesForText, useDomTextSelection } from '@/components/ui/code/selection/useDomTextSelection';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
@@ -23,8 +23,8 @@ export function FileReadAskControls(props: Readonly<{
     text: string;
     sessionId: string | null;
     active: boolean;
-    /** Comment opens the page's inline comment composer on the selected lines (code view only). */
-    onCommentRange?: (range: Readonly<{ startLine: number; endLine: number }>) => void;
+    /** Comment opens the page's inline composer with the selected source lines and diff side. */
+    onCommentRange?: AskSelectionControlsProps['onCommentSelection'];
 }>): React.ReactElement | null {
     const pane = useAppPaneScope(props.scopeId);
     const mainColumn = usePaneMainColumn();
