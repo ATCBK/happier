@@ -91,7 +91,7 @@ export function sameStrictJsonValue(left: unknown, right: unknown): boolean {
   }
 }
 
-export const StrictJsonValueSchema = lazyZodSchema(() => z.pipe(z.unknown(), z.transform((value, context): JsonValue => {
+const StrictJsonValueNormalizationSchema = z.transform((value, context): JsonValue => {
   try {
     return normalizeStrictJsonValue(value);
   } catch (error) {
@@ -100,4 +100,11 @@ export const StrictJsonValueSchema = lazyZodSchema(() => z.pipe(z.unknown(), z.t
       message: error instanceof Error ? error.message : 'Invalid strict JSON value', input: context.value });
     return z.NEVER;
   }
-})));
+});
+
+export const StrictJsonValueSchema = lazyZodSchema(() => z.pipe(z.unknown(), StrictJsonValueNormalizationSchema));
+
+/** Normalize before parsing while letting JSON Schema discovery see the typed input. */
+export function withStrictJsonInput<TSchema extends z.core.$ZodType<unknown, JsonValue>>(schema: TSchema): z.ZodMiniPipe<typeof StrictJsonValueNormalizationSchema, TSchema> {
+  return z.pipe(StrictJsonValueNormalizationSchema, schema);
+}

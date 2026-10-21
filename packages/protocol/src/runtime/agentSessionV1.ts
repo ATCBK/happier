@@ -15,7 +15,7 @@ import {
   type AgentPermissionIntentV1 as CanonicalAgentPermissionIntentV1,
 } from './permissionIntentV1.js';
 import { SESSION_RUNTIME_ACTIVITY_ACTIVE_COUNT_MAX } from '../sessions/runtime/activity/sessionRuntimeActivity.js';
-import { StrictJsonValueSchema, type JsonValue as StrictJsonValue } from '../json/strictJsonValue.js';
+import { StrictJsonValueSchema, withStrictJsonInput, type JsonValue as StrictJsonValue } from '../json/strictJsonValue.js';
 import { AGENT_SESSION_RUNTIME_EVENT_KINDS_V1 } from './eventKindsV1.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 import { AgentRuntimeDiagnosticDataV1Schema } from './agentRuntimeDiagnosticV1.js';
@@ -149,7 +149,7 @@ const AgentSessionConfigurationSnapshotCoreV1Schema = lazyZodSchema(() => z.stri
   providerSessionResume: z.optional(AgentSessionProviderResumeV1Schema),
 }));
 
-export const AgentSessionConfigurationSnapshotV1Schema = lazyZodSchema(() => zMini.pipe(AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotCoreV1Schema));
+export const AgentSessionConfigurationSnapshotV1Schema = lazyZodSchema(() => withStrictJsonInput(AgentSessionConfigurationSnapshotCoreV1Schema));
 
 export type AgentSessionConfigurationUpdateV1 = z.infer<
   typeof AgentSessionConfigurationSnapshotV1Schema
@@ -158,7 +158,7 @@ export type AgentSessionConfigurationUpdateV1 = z.infer<
   mcpToolPolicy?: Readonly<Record<string, McpToolLaunchPolicyV1>>;
 }>;
 export const AgentSessionConfigurationUpdateV1Schema =
-  zMini.pipe(AgentRuntimeJsonValueV1Schema, lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentSessionConfigurationSnapshotCoreV1Schema, {
+  withStrictJsonInput(lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(AgentSessionConfigurationSnapshotCoreV1Schema, {
       providerBinding: zMini.optional(AgentSessionProviderBindingV1Schema),
       mcpToolPolicy: zMini.optional(McpToolLaunchPoliciesV1Schema),
     })))) as z.ZodMiniType<AgentSessionConfigurationUpdateV1, AgentSessionConfigurationUpdateV1>;

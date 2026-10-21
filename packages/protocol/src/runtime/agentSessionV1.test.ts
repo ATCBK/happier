@@ -200,6 +200,21 @@ describe('Agent session VB4 open inputs', () => {
     expect(accessorInvoked).toBe(false);
   });
 
+  it('normalizes configuration before reading its typed fields', () => {
+    let accessorInvoked = false;
+    const unsafe = { ...configuration, get mode() {
+      accessorInvoked = true;
+      return configuration.mode;
+    } };
+    expect(AgentSessionConfigurationSnapshotV1Schema.safeParse(unsafe).success).toBe(false);
+    expect(AgentSessionConfigurationUpdateV1Schema.safeParse(unsafe).success).toBe(false);
+    expect(accessorInvoked).toBe(false);
+    const authored = { ...structuredClone(configuration), model: { value: 'sonnet', updatedAtMs: 12 } };
+    const parsed = AgentSessionConfigurationSnapshotV1Schema.parse(authored);
+    authored.model.value = 'changed';
+    expect(parsed.model.value).toBe('sonnet');
+  });
+
   it('does not invent an aggregate bound for generic launch data', () => {
     const formerAggregatePayload = Object.fromEntries(
       Array.from({ length: 5 }, (_, index) => [`ENV_${index}`, 'x'.repeat(220_000)]),
