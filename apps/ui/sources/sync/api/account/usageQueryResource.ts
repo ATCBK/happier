@@ -1455,12 +1455,13 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
         const opened = readOpenedQuotaScope(sharedContext);
         const poolMachineFilters: (readonly string[])[] = [];
         const sessionMachineIds = new Set<string>();
-        if (!opened) return { poolMachineFilters, sessionMachineIds: [] };
+        let includeMachineNames = false;
         // Read mounted demand and its already-admitted value from the Resource
         // owner. No acquisition or second response lifetime lives in this key.
-        const state = { ...opened.state, machines };
         const sessionIds = new Set<string>();
         for (const watched of listeners.values()) {
+            includeMachineNames ||= watched.queries.some(query => query.includeAccounting);
+            if (!opened) continue;
             if (opened.state.profile.connectedAccountGroupsV4.length) {
                 poolMachineFilters.push(...watched.queries.map(query => query.machines));
             }
@@ -1473,13 +1474,15 @@ export function getUsageQueryResourceStore(context: UsageQueryAccountContext): P
                 }
             }
         }
+        if (!opened) return { includeMachineNames, poolMachineFilters, sessionMachineIds: [] };
+        const state = { ...opened.state, machines };
         for (const sessionId of sessionIds) {
             const target = resolveMachineControlTargetForSessionFromState(state, { ...lifetime.scope, sessionId });
             const displayId = resolveDisplayMachineIdForSessionFromState({ state, serverId: lifetime.scope.serverId, sessionId });
             if (target) sessionMachineIds.add(target.machineId);
             if (displayId) sessionMachineIds.add(displayId);
         }
-        return { poolMachineFilters, sessionMachineIds: [...sessionMachineIds] };
+        return { includeMachineNames, poolMachineFilters, sessionMachineIds: [...sessionMachineIds] };
     });
     let observedSessions = readRegisteredStorageState()?.sessions;
     let observedSessionRows = readRegisteredStorageState()?.sessionListRowsByServerId;

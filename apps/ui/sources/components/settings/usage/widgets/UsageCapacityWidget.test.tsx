@@ -7,6 +7,7 @@ import * as usageCost from '@happier-dev/protocol/usage/usageCost';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore, invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
@@ -48,6 +49,7 @@ beforeEach(() => {
 });
 
 it('keeps standalone Capacity independent of accounting across unrelated Account and current-record wakes', async () => {
+  const previousMachines = storage.getState().machines;
   const scope = { period: { startMs: 1000 }, agents: [], machines: [], projects: [], sources: [], session: null, costBasis: 'auto' } as const;
   const now = Date.now();
   const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'capacity' };
@@ -133,6 +135,19 @@ it('keeps standalone Capacity independent of accounting across unrelated Account
     expect(home.requests.filter(request => request.path === '/v2/pending/reset-starts/read').map(request => request.path)).toEqual([]);
     expect(first.quota?.[0]?.pageFacts).toBeUndefined();
     expect(first.quota?.[0]?.history).toBeUndefined();
+    await expect.poll(() => seen.at(-1)?.pending).toBe(false);
+    const quotaReadsBeforeHydration = home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/')).length;
+    for (let index = 0; index < 6; index++) {
+      const machine = createMachineFixture({ id: 'unrelated-hydrating-machine', activeAt: now });
+      const hydrated = { ...machine, metadata: { ...machine.metadata!, host: `hydrated-${index}.test`, displayName: `Hydrated ${index}` } };
+      await act(async () => {
+        storage.setState({ machines: { ...previousMachines, [machine.id]: hydrated } });
+        await flushHookEffects({ cycles: 5 });
+      });
+      await expect.poll(() => seen.at(-1)?.pending).toBe(false);
+    }
+    expect(home.requests.filter(request => request.path.startsWith('/v4/connect/qualified/provider-account-usage/')))
+      .toHaveLength(quotaReadsBeforeHydration);
     const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
     const { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol/changes');
     for (let index = 0; index < 8; index++) {
@@ -214,7 +229,7 @@ it('keeps standalone Capacity independent of accounting across unrelated Account
         expect(seen.at(-1)?.slice).toBeNull();
       } finally { currentRead.resolve(); await reading; release(); }
     } finally { currentRead.resolve(); historyRead.resolve(); await refreshing; }
-  } finally { currentRead.resolve(); historyRead.resolve(); await screen.unmount(); }
+  } finally { currentRead.resolve(); historyRead.resolve(); await screen.unmount(); storage.setState({ machines: previousMachines }); }
 });
 afterEach(async () => {
   standardCleanup();

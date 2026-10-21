@@ -168,8 +168,12 @@ it('keys pool selection by its resolved machine and Session evidence by only its
     const nowMs = 1_900_000_000_000;
     const scope = { serverId: 'usage-machine-consumers.test', accountId: 'account-a' };
     const machines = Object.fromEntries(['a', 'b', 'c'].map(id => [id, createMachineFixture({ id, activeAt: nowMs })]));
-    const consumers = { poolMachineFilters: [[]], sessionMachineIds: [] };
+    const consumers = { includeMachineNames: false, poolMachineFilters: [[]], sessionMachineIds: [] };
     const key = getUsageQueryMachineInvalidationKey(machines, nowMs, scope, consumers);
+    expect(getUsageQueryMachineInvalidationKey({ ...machines,
+        a: { ...machines.a!, metadata: { ...machines.a!.metadata!, displayName: 'Renamed' } },
+        d: createMachineFixture({ id: 'd', activeAt: nowMs }),
+    }, nowMs, scope, consumers)).toBe(key); // The pool remains ambiguous; neither name is quota evidence.
     const two = { ...machines, c: { ...machines.c!, active: false, activeAt: 1 } };
     expect(getUsageQueryMachineInvalidationKey(two, nowMs, scope, consumers)).toBe(key);
     const one = { ...two, b: { ...machines.b!, active: false, activeAt: 1 } };

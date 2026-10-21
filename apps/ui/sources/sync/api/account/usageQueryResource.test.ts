@@ -1240,7 +1240,7 @@ describe('usage query captured Resource adapter', () => {
     await expect(readUiUsageQueryBatch(captured, { queries: [query] }, undefined, first))
       .rejects.toMatchObject({ code: 'stale_surface' });
   });
-  it('refreshes coverage names and Account facts while ignoring reachability without a machine-consuming read', async () => {
+  it('refreshes full-demand coverage names alongside quota-only demand while ignoring unrelated reachability', async () => {
     let observed: UsageAnalyticsQueryResponse = { ...value, coverage: { status: 'partial', reasons: [], missingDimensions: [],
       range: { complete: false }, ranked: [], sources: [{ source: 'native-history', path: 'native', status: 'available',
         eventCount: 1, machineId: 'labels-only', captureKind: 'from_logs' }] } };
@@ -1249,6 +1249,8 @@ describe('usage query captured Resource adapter', () => {
     storage.setState({ machines: { [machine.id]: { ...machine, metadata: { ...machine.metadata!, displayName: 'Before' } } } });
     const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });
     const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const quotaEntry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ ...query, includeAccounting: false }] }) });
+    const releaseQuota = quotaEntry.subscribe(() => {}, true);
     const release = entry.subscribe(() => {}, true);
     const slice = () => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
     const acquisitions = () => home!.requests.filter(request => request.path === '/v2/usage/query').length;
@@ -1268,7 +1270,7 @@ describe('usage query captured Resource adapter', () => {
       observed = { ...observed, totals: { ...observed.totals, eventCount: 9 } };
       publishHomeAccountChange(captured.accountLifetime.scope.serverId);
       await expect.poll(() => slice().accounting?.totals.eventCount).toBe(9);
-    } finally { release(); }
+    } finally { release(); releaseQuota(); }
   });
   it('shares admitted hypothetical selector reads and never relabels a live response as a future comparison', async () => {
     const captured = await context(() => undefined);

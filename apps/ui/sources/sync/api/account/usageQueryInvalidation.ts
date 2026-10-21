@@ -93,6 +93,8 @@ export function observeUsageProjection(input: Readonly<{
 }
 
 export type UsageQueryMachineConsumers = Readonly<{
+    /** Accounting source coverage consumes Machine names; quota and pool facts do not. */
+    includeMachineNames?: boolean;
     poolMachineFilters: readonly (readonly string[])[];
     sessionMachineIds: readonly string[];
 }>;
@@ -122,7 +124,7 @@ export function getUsageQueryPoolMachineSelection(machines: Readonly<Record<stri
 function consumedMachineKey(facts: ReturnType<typeof readUsageMachineFacts>, consumers: UsageQueryMachineConsumers): string {
     const byId = new Map(facts.map(machine => [machine.id, machine]));
     return JSON.stringify([
-        facts.map(machine => [machine.id, machine.name]),
+        consumers.includeMachineNames === false ? [] : facts.map(machine => [machine.id, machine.name]),
         consumers.poolMachineFilters.map(ids => selectUsagePoolMachine(facts, ids)),
         [...new Set(consumers.sessionMachineIds)].sort().map(id => [id, byId.get(id)?.replaced, byId.get(id)?.reachable]),
     ]);
