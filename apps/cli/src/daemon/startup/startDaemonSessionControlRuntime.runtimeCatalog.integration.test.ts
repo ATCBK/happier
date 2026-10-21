@@ -1,3 +1,9 @@
+import * as accountUsageControlTransport from '@/daemon/controlClient';
+import { createNativeAgentAccountUsageService } from '@/agent/runtime/registry/engineRegistry/nativeAgentAccountUsage';
+import { ConnectedServiceQuotasCoordinator } from '@/daemon/connectedServices/quotas/ConnectedServiceQuotasCoordinator';
+import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '@/daemon/connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
+import { computeConnectedServiceAccessTokenFingerprint } from '@/daemon/connectedServices/refresh/credentialFreshness/tokenFingerprint';
+import { recordClaudeRuntimeProviderAccountUsageSnapshot } from '../../../../../packages/plugins/claude/src/agent/runtime/accountUsage';
 import { createPersistedTakeoverAdmissionWaiter } from '../spawn/persistedTakeoverAdmission';
 import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
 import { createDaemonAdmissionDrain } from '../lifecycle/admissionDrain';
@@ -13736,15 +13742,19 @@ describe('startDaemonSessionControlRuntime', () => {
                 }],
             },
         };
+        const source = { serviceId: CODEX_QUALIFIED_SERVICE_KEY, profileId: 'work', bindingKind: 'profile' as const };
+        let listingResponse = async () => listedUsageAccounts;
+        let failCredentialAfterListing = false;
         const listQualifiedAccounts = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
             const path = new URL(String(url)).pathname;
-            if (path === '/v4/connect/qualified/accounts') return listedUsageAccounts;
+            if (path === '/v4/connect/qualified/accounts') return await listingResponse();
             if (path !== '/v4/connect/qualified/credential') throw new Error(`Unexpected usage HTTP read: ${path}`);
+            if (failCredentialAfterListing) { failCredentialAfterListing = false; throw new Error('Home credential read unavailable'); }
             return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
                 ref: { service: CODEX_QUALIFIED_SERVICE, accountId: 'work' },
                 authenticationModeId: 'oauth', configurationRevision: 'cfg-work',
                 revisionSemantics: 'revisioned', credentialRevision,
-                content: { t: 'plain', v: connectedCredential }, metadata: { scopes: [] },
+                content: { t: 'plain', v: connectedCredential }, metadata: { scopes: [], providerIdentity: { accountId: 'acct_123' } },
             }) };
         });
         const writeProviderAccountUsage = vi.spyOn(axios, 'post').mockResolvedValue({
@@ -13814,11 +13824,11 @@ describe('startDaemonSessionControlRuntime', () => {
             try {
                 // Replace only Home listing HTTP; startup qualification, recorder, store,
                 // persistence scheduler and control-route admission remain real.
-                listQualifiedAccounts.mockRejectedValueOnce(new Error('Home listing unavailable'));
+                listingResponse = async () => { throw new Error('Home listing unavailable'); };
                 const failed = await app.inject({
                     method: 'POST', url: '/provider-account-usage-snapshot',
                     headers: { 'x-happier-daemon-token': 'usage-intake-test' },
-                    payload: { sessionId: 'sess_usage', snapshot },
+                    payload: { sessionId: 'sess_usage', snapshot, source, credentialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access-token') },
                 });
                 expect(failed.statusCode).toBe(503);
                 expect(failed.json()).toEqual({ ok: false, errorCode: 'provider_account_usage_snapshot_intake_failed' });
@@ -13832,11 +13842,11 @@ describe('startDaemonSessionControlRuntime', () => {
                 expect(runtime.providerAccountUsageStore.resolveRecordId(snapshot.recordId)).toBeNull();
                 expect(writeProviderAccountUsage).not.toHaveBeenCalled();
 
-                listQualifiedAccounts.mockResolvedValueOnce({ status: 200, data: { service: CODEX_QUALIFIED_SERVICE, accounts: [] } });
+                listingResponse = async () => ({ status: 200, data: { service: CODEX_QUALIFIED_SERVICE, accounts: [] } });
                 const absent = await app.inject({
                     method: 'POST', url: '/provider-account-usage-snapshot',
                     headers: { 'x-happier-daemon-token': 'usage-intake-test' },
-                    payload: { sessionId: 'sess_usage', snapshot: { ...snapshot, observedAtMs: 999, fetchedAtMs: 999 } },
+                    payload: { sessionId: 'sess_usage', snapshot: { ...snapshot, observedAtMs: 999, fetchedAtMs: 999 }, source, credentialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access-token') },
                 });
                 expect(absent.statusCode).toBe(503);
                 expect(absent.json()).toEqual({ ok: false, errorCode: 'provider_account_usage_snapshot_intake_failed' });
@@ -13844,17 +13854,16 @@ describe('startDaemonSessionControlRuntime', () => {
                     '[CONTROL SERVER] Provider account usage snapshot canonical intake failed',
                     expect.objectContaining({ observation: {
                         status: 'snapshot_advanced', recordId: snapshot.recordId, persisted: false,
-                        persistence: { status: 'not_persisted', reason: 'no_current_qualified_source' },
+                        persistence: { status: 'not_persisted', reason: 'no_current_qualified_source' }, qualifiedSource: source,
                     } }),
                 );
                 expect(writeProviderAccountUsage).not.toHaveBeenCalled();
 
-                listQualifiedAccounts.mockResolvedValueOnce(listedUsageAccounts)
-                    .mockRejectedValueOnce(new Error('Home credential read unavailable'));
+                listingResponse = async () => { failCredentialAfterListing = true; return listedUsageAccounts; };
                 const credentialFailed = await app.inject({
                     method: 'POST', url: '/provider-account-usage-snapshot',
                     headers: { 'x-happier-daemon-token': 'usage-intake-test' },
-                    payload: { sessionId: 'sess_usage', snapshot },
+                    payload: { sessionId: 'sess_usage', snapshot, source, credentialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access-token') },
                 });
                 expect(credentialFailed.statusCode).toBe(503);
                 expect(logger.warn).toHaveBeenCalledWith(
@@ -13868,11 +13877,11 @@ describe('startDaemonSessionControlRuntime', () => {
                 expect(writeProviderAccountUsage).not.toHaveBeenCalled();
 
                 for (const cancellation of [new DOMException('Caller retired', 'AbortError'), new CanceledError('Caller retired')]) {
-                    listQualifiedAccounts.mockRejectedValueOnce(cancellation);
+                    listingResponse = async () => { throw cancellation; };
                     const cancelled = await app.inject({
                         method: 'POST', url: '/provider-account-usage-snapshot',
                         headers: { 'x-happier-daemon-token': 'usage-intake-test' },
-                        payload: { sessionId: 'sess_usage', snapshot },
+                        payload: { sessionId: 'sess_usage', snapshot, source, credentialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access-token') },
                     });
                     expect(cancelled.statusCode).toBe(503);
                     expect(logger.warn).toHaveBeenLastCalledWith(
@@ -13883,13 +13892,15 @@ describe('startDaemonSessionControlRuntime', () => {
             } finally {
                 await app.close();
             }
+            listingResponse = async () => listedUsageAccounts;
             await expect(controlServerInput?.handleProviderAccountUsageSnapshot?.({
                 sessionId: 'sess_usage',
                 snapshot,
+                source, credentialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access-token'),
             })).resolves.toEqual({
                 status: 'snapshot_advanced',
                 recordId: snapshot.recordId,
-                persisted: true,
+                persisted: true, qualifiedSource: source,
             });
             for (let attempt = 0; attempt < 20 && writeProviderAccountUsage.mock.calls.length === 0; attempt += 1) {
                 await new Promise((resolve) => setTimeout(resolve, 5));
@@ -13915,6 +13926,105 @@ describe('startDaemonSessionControlRuntime', () => {
         } finally {
             await runtime.stopControlServer();
         }
+    });
+
+    it.each([
+        { unbound: false, token: 'current-access', user: 'provider-user', bindingProfile: 'work', org: undefined, accepted: true },
+        { unbound: false, token: 'old-access', user: 'provider-user', bindingProfile: 'work', org: undefined, accepted: false },
+        { unbound: false, token: 'current-access', user: 'other-user', bindingProfile: 'work', org: undefined, accepted: false },
+        { unbound: false, token: 'current-access', user: 'provider-user', bindingProfile: 'other-profile', org: undefined, accepted: false },
+        { unbound: false, token: 'current-access', user: 'provider-user', bindingProfile: 'work', org: 'org-current', accepted: true },
+        { unbound: false, token: 'current-access', user: 'provider-user', bindingProfile: 'work', org: 'org-other', accepted: false },
+        { unbound: true, token: 'current-access', user: 'provider-user', bindingProfile: 'work', org: 'org-current', accepted: false },
+    ])('qualifies real native usage proof locally without a provisional account alias (%j)', async ({ unbound, token, user, bindingProfile, org, accepted }) => {
+        const service = { pluginId: 'happier.agent.claude', localId: 'claude-subscription' } as const;
+        const serviceId = buildQualifiedPluginContributionKey(service);
+        const credentialRevision = 'csr_0123456789ABCDEFGHJKMNPQRS';
+        const credential = buildConnectedServiceCredentialRecord({ now: 1_000, serviceId: 'claude-subscription', profileId: 'work',
+            kind: 'oauth', expiresAt: 100_000, oauth: { accessToken: 'current-access', refreshToken: 'refresh',
+                idToken: null, scope: null, tokenType: null, providerAccountId: 'provider-user', providerEmail: null,
+                raw: { claudeAiOauth: { organizationUuid: 'org-current' } },
+            },
+        });
+        const readCredential = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v4/connect/qualified/accounts') return { status: 200, data: { service, accounts: [{
+                ref: { service, accountId: 'work' }, status: 'connected', authenticationModeId: 'oauth',
+                revisionSemantics: 'revisioned', credentialRevision, configurationReady: true, configurationRevision: null,
+                kind: 'oauth', expiresAt: 100_000, providerIdentity: { accountId: 'provider-user', organizationId: 'org-current' }, scopes: [],
+            }] } };
+            if (path !== '/v4/connect/qualified/credential') throw new Error(`Unexpected native proof read: ${path}`);
+            return { status: 200, data: QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
+                ref: { service, accountId: 'work' }, authenticationModeId: 'oauth', configurationRevision: null,
+                revisionSemantics: 'revisioned', credentialRevision,
+                metadata: { providerIdentity: { accountId: 'provider-user', organizationId: 'org-current' }, scopes: [] },
+                content: { t: 'plain', v: credential },
+            }) };
+        });
+        const writeUsage = vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { success: true } });
+        const registry = new ConnectedServiceRuntimeRegistry();
+        const runtimeStore = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
+        const credentials = { unbound: false, token: 'native-proof-account', encryption: null };
+        const api = { getAccountEncryptionMode: async () => 'plain' as const,
+            getConnectedServiceQuotaSnapshotSealed: async () => null, getConnectedServiceCredentialSealed: async () => null };
+        const coordinator = new ConnectedServiceQuotasCoordinator({ api, credentials, quotaFetchers: [],
+            now: () => 2_000, randomBytes: (length) => new Uint8Array(length), discoveryEnabled: false, runtimeQuotaSnapshots: runtimeStore,
+        });
+        const bindings = { v: 2 as const, bindingsByServiceId: unbound ? {} : { [serviceId]: { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' } } };
+        const environment = unbound ? {} : { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId, profileId: 'work', credentialRevision }]) };
+        const runtime = await startDaemonSessionControlRuntime({ machineId: 'native-proof-machine', credentials, api: api as never,
+            connectedServicesMaterializationBaseDir: '/tmp/native-proof', getConnectedServiceRefreshCoordinator: () => null,
+            getConnectedServiceQuotasCoordinator: () => coordinator,
+            pidToTrackedSession: new Map<number, TrackedSession>([[1234, { startedBy: 'daemon', pid: 1234, happySessionId: 'native-proof-session',
+                spawnOptions: { directory: '/tmp/project', connectedServices: bindings, environmentVariables: environment } }]]),
+            pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+            getApiMachineForSessions: () => null, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+            connectedServicesRestartRequestedPids: new Set(), connectedServiceRuntimeRegistry: registry,
+            resolveQualifiedConnectedAccountV4Support: () => 'advertised', beforeShutdown: async () => {}, onHappySessionWebhook: async () => {}, requestShutdown: () => {}, processEnv: {},
+        });
+        if (!unbound) registry.registerTarget({ pid: 1234, sessionId: 'native-proof-session', agentId: 'claude',
+            connectedServicesBindingsRaw: { v: 2, bindingsByServiceId: { [serviceId]: { source: 'connected', selection: 'profile', profileId: bindingProfile } } },
+            connectedServiceSelectionsEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: JSON.stringify([{ kind: 'profile', serviceId, profileId: bindingProfile, credentialRevision }]) },
+        });
+        const input = vi.mocked(startDaemonControlServer).mock.calls.at(-1)![0];
+        // The daemon-control network is the boundary; producer, host, intake, proof and runtime store remain real.
+        let intakeResult: unknown;
+        const transport = vi.spyOn(accountUsageControlTransport, 'notifyDaemonProviderAccountUsageSnapshot').mockImplementation(async (body) => {
+            intakeResult = await input.handleProviderAccountUsageSnapshot!({ ...body, source: body.source ?? undefined });
+            return { ok: true, result: intakeResult };
+        });
+        const cancellation = new AbortController();
+        const host = createNativeAgentAccountUsageService({ sessionId: 'native-proof-session', signal: cancellation.signal,
+            session: { getMetadataSnapshot: () => ({ path: '/tmp/project', host: 'test', homeDir: '/tmp/home', happyHomeDir: '/tmp/happier',
+                happyLibDir: '/tmp/lib', happyToolsDir: '/tmp/tools', connectedServices: bindings }) },
+        });
+        try {
+            await recordClaudeRuntimeProviderAccountUsageSnapshot({ sessionId: 'native-proof-session', observedAtMs: 1_000,
+                launchEnv: environment, evidence: { rate_limits: { five_hour: { utilization: 20 } } },
+                ctx: { logger: { debug() {} }, agentRuntime: { nativeHome: { async readFiles() { return {
+                    '.claude.json': new TextEncoder().encode(JSON.stringify({ oauthAccount: { accountUuid: user, ...(org ? { organizationUuid: org } : {}) } })),
+                    '.credentials.json': new TextEncoder().encode(JSON.stringify({ claudeAiOauth: { accessToken: token, scopes: ['user:inference'] } })),
+                }; } }, accountUsage: {
+                    async resolveSourceContext(address) { const source = await host.resolveSourceContext(address); return source ? { ...source, serviceId: 'claude-subscription' as const } : null; },
+                    async recordSnapshot(observation) { return await host.recordSnapshot({ ...observation, sessionId: 'native-proof-session' }); },
+                } } },
+            });
+            const source = { serviceId, profileId: 'work', bindingKind: 'profile' as const };
+            expect(intakeResult).toMatchObject({ status: accepted || unbound ? 'snapshot_advanced' : 'credential_fingerprint_mismatch' });
+            if (unbound) expect(transport.mock.calls[0]?.[0]).not.toHaveProperty('credentialFingerprint');
+            if (accepted) {
+                await vi.waitFor(() => expect(runtimeStore.getSnapshotEntry({ serviceId, profileId: 'work' })).toMatchObject({
+                    verifiedCredentialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access'),
+                    snapshot: { serviceId, activeAccountId: 'provider-user', ...(org ? { providerOrganizationId: org } : {}) },
+                }));
+                const snapshot = runtimeStore.getSnapshotEntry({ serviceId, profileId: 'work' })!.snapshot;
+                const identity = { serviceId, profileId: 'work', groupId: null, groupGeneration: null,
+                    providerAccountId: 'provider-user', materialFingerprint: computeConnectedServiceAccessTokenFingerprint('current-access') };
+                expect(coordinator.resolveQuotaProbeFreshProof({ serviceId, profileId: 'work',
+                    expectedAppliedIdentity: identity, snapshotAppliedIdentity: identity, snapshot })).toEqual({ status: 'proof', proofKind: 'quota_probe_fresh' });
+            } else expect(runtimeStore.getSnapshotEntry({ serviceId, profileId: 'work' })).toBeNull();
+            expect(runtime.providerAccountUsageStore.resolveBySource(source) !== null).toBe(accepted && Boolean(org));
+        } finally { cancellation.abort(); transport.mockRestore(); readCredential.mockRestore(); writeUsage.mockRestore(); await runtime.stopControlServer(); }
     });
 
     it('normalizes qualified account usage to the current registered generation before persistence and quota policy', async () => {
@@ -13979,7 +14089,7 @@ describe('startDaemonSessionControlRuntime', () => {
         const readQualifiedUsageCredential = vi.fn(() => QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
             ref: { service: CODEX_QUALIFIED_SERVICE, accountId: 'primary' },
             authenticationModeId: 'oauth', configurationRevision: 'cfg-team',
-            metadata: { scopes: [] },
+            metadata: { scopes: [], providerIdentity: { accountId: 'acct_group_usage' } },
             content: { t: 'plain' as const, v: connectedCredential },
             ...(credentialRevisionSemantics === 'revisioned'
                 ? {
@@ -14014,6 +14124,13 @@ describe('startDaemonSessionControlRuntime', () => {
         const listQualifiedAccounts = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v4/connect/qualified/accounts') return listedGroupUsageAccounts;
+            if (path === '/v4/connect/qualified/group') return { status: 200, data: { group: {
+                v: 1, ref: { service: CODEX_QUALIFIED_SERVICE, groupId: 'team' }, incarnation: 'qualified-group-row-team',
+                displayName: 'Team', policy: {}, activeConnectedAccountId: 'primary', generation: 7,
+                runtimeStateRevision: 1, state: {}, createdAt: 1, updatedAt: 1,
+                members: [{ v: 1, connectedAccountId: 'primary', priority: 1, enabled: true, state: {}, createdAt: 1, updatedAt: 1 }],
+            } } };
+
             if (path !== '/v4/connect/qualified/credential') throw new Error(`Unexpected group usage HTTP read: ${path}`);
             return { status: 200, data: readQualifiedUsageCredential() };
         });
@@ -14132,7 +14249,7 @@ describe('startDaemonSessionControlRuntime', () => {
         ])).resolves.toEqual({
             status: 'snapshot_advanced',
             recordId: snapshot.recordId,
-            persisted: true,
+            persisted: true, qualifiedSource: { serviceId: CODEX_QUALIFIED_SERVICE_KEY, profileId: 'primary', bindingKind: 'group_member', groupId: 'team', groupGeneration: 7 },
         });
         expect(runtimeRegistry.getBySessionId('sess_usage_group')?.activeBindings).toContainEqual(
             expect.objectContaining({
@@ -14300,7 +14417,7 @@ describe('startDaemonSessionControlRuntime', () => {
                 computeConnectedServiceAccessTokenFingerprint(
                     'current-access-token',
                 ),
-        })).rejects.toThrow('Connected-account credential snapshot is unfenced');
+        })).resolves.toMatchObject({ status: 'credential_fingerprint_mismatch', persisted: false });
         await vi.waitFor(() => {
             expect(readQualifiedUsageCredential.mock.calls.length)
                 .toBeGreaterThan(credentialReadCount);
