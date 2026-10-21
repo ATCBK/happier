@@ -30,6 +30,8 @@ describe('usage number formatting', () => {
         expect(formatTokenCountLong(1_499_999)).toBe(
             new Intl.NumberFormat().format(1_499_999),
         );
+        expect(formatTokenCountLong(1_499_999, 'en-US')).toBe(new Intl.NumberFormat('en-US').format(1_499_999));
+        expect(formatTokenCountLong(1_499_999, 'de-DE')).toBe(new Intl.NumberFormat('de-DE').format(1_499_999));
     });
 
     it('uses one precision rule for usage cost', () => {

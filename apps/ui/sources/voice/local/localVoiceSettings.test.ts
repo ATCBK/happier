@@ -6,10 +6,23 @@ import {
   parseLocalVoiceTtsSettings,
   resolveLocalSttProvider,
   resolveLocalVoiceAdapterSettings,
+  resolveLocalVoiceAdapterSettingsFromVoice,
 } from './localVoiceSettings';
 import { createVoiceDictationRuntimeSettingsSnapshot } from '@/voice/dictation/voiceDictationRuntimeSettings';
+import { voiceSettingsDefaults, type VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 
 describe('localVoiceSettings', () => {
+  it('keeps provider config validation for normalized Voice inputs', () => {
+    const voice = { ...voiceSettingsDefaults, providerId: 'local_conversation', providers: {
+      ...voiceSettingsDefaults.providers,
+      local_conversation: { schemaVersion: 1, config: { networkTimeoutMs: 'invalid' } },
+    } } satisfies VoiceSettings;
+    expect(resolveLocalVoiceAdapterSettingsFromVoice(voice)).toEqual(resolveLocalVoiceAdapterSettings({ voice }));
+    expect(resolveLocalVoiceAdapterSettingsFromVoice(voice)).toMatchObject({
+      adapterId: 'local_conversation', config: { networkTimeoutMs: 15_000 },
+    });
+  });
+
   it('preserves Reply in while preparing the independent Dictation recognition snapshot', () => {
     const snapshot = createVoiceDictationRuntimeSettingsSnapshot({ voice: {
       providerId: 'local_direct', assistantLanguage: 'es',
