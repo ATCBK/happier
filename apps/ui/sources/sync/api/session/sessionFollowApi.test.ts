@@ -355,6 +355,58 @@ describe('Follow exact Home Action transport', () => {
         } finally { await hook.unmount(); }
     });
 
+    it.each([false, true])('refreshes Following to the written rule with an in-flight census (active Home: %s)', async (activeHome) => {
+        const env = await setup();
+        const serverId = activeHome ? env.active.id : env.target.id;
+        const { useSessionFollowing } = await import('@/components/sessions/follow/useSessionFollowing');
+        const { writeSessionFollowRuleDefinition } = await import('./sessionFollowRuleEdits');
+        const { SetSessionFollowRuleRequestV1Schema } = await import('@happier-dev/protocol/sessions/follow/sessionFollowRuleV1');
+        const { createDeferred } = await import('@/dev/testkit');
+        const receiver = { kind: 'session' as const, sessionId: 'coordinator' };
+        const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'important' as const } };
+        let rule: import('@happier-dev/protocol/sessions/follow/sessionFollowRuleV1').SessionFollowRuleV1 = {
+            ruleId: 'payments', receiver, version: 4, content: { t: 'plain', v: definition },
+        };
+        const censusStarted = createDeferred<void>();
+        const releaseCensus = createDeferred<void>();
+        let holdCensus = false;
+        env.request.mockImplementation(async (url, init) => {
+            if (url.endsWith('/session-follow-rules/payments')) {
+                const body = SetSessionFollowRuleRequestV1Schema.parse(JSON.parse(String(init?.body)));
+                if (body.content.t !== 'plain') throw new Error('Expected keyless plain rule fixture');
+                rule = { ...rule, version: body.expectedVersion + 1, content: body.content };
+                return Response.json({ rule });
+            }
+            if (!url.endsWith('/session-follow-rules')) return Response.json({ sources: [] });
+            const response = Response.json({ rules: [rule] });
+            if (holdCensus) {
+                holdCensus = false;
+                censusStarted.resolve();
+                await releaseCensus.promise;
+            }
+            return response;
+        });
+        const hook = await renderHook(() => useSessionFollowing({ serverId, sessionId: receiver.sessionId }, true));
+        try {
+            await act(async () => { await vi.waitFor(() => expect(hook.getCurrent().projection?.rules[0]?.version).toBe(4)); });
+            const previous = hook.getCurrent().projection!.rules[0]!;
+            const edited = { ...previous, definition: { ...previous.definition,
+                filter: normalizeSessionListFilterV1({ statuses: ['failed'] }) } };
+            holdCensus = true;
+            let reading: Promise<void>;
+            await act(async () => { reading = hook.getCurrent().refresh(); await censusStarted.promise; });
+            expect(await writeSessionFollowRuleDefinition(serverId, edited, previous.version)).toMatchObject({ kind: 'ok', value: { version: 5 } });
+            await act(async () => {
+                const refresh = hook.getCurrent().refresh();
+                releaseCensus.resolve();
+                await Promise.all([reading!, refresh]);
+            });
+            expect(hook.getCurrent().projection?.rules[0]).toMatchObject({ version: 5, definition: edited.definition });
+            expect(hook.getCurrent().loading).toBe(false);
+            expect(hook.getCurrent().error).toBeNull();
+        } finally { releaseCensus.resolve(); await hook.unmount(); }
+    });
+
     it('executes Account preferences and source mutations through their strict domain resources', async () => {
         const env = await setup();
         const api = await import('./sessionFollowApi');

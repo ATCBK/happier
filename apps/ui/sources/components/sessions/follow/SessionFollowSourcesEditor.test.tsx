@@ -940,6 +940,30 @@ describe('SessionFollowSourcesEditor', () => {
         });
     });
 
+    it('keeps the page frame when its source is gone or its list could not be read, with the way out', async () => {
+        api.list.mockResolvedValueOnce({ kind: 'ok', value: { sources: [], rules: [] } });
+        const onClose = vi.fn();
+        const frame = (parts: Readonly<{ title: string; body: React.ReactNode; footer: React.ReactNode }>) => <>{parts.body}{parts.footer}</>;
+        const screen = await renderPage(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+            page={{ sourceKey: 'source-a', onClose, frame }}
+        />);
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('session.follow.sources.sourceUnavailable'));
+        await act(async () => { screen.findByTestId('session-follow-source-page-done')?.props.onPress?.(); await Promise.resolve(); });
+        expect(onClose).toHaveBeenCalledTimes(1);
+        await screen.unmount();
+
+        api.list.mockResolvedValueOnce({ kind: 'failed', error: 'unavailable' });
+        const failed = await renderPage(<SessionFollowSourcesEditor
+            destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+            page={{ sourceKey: 'source-a', onClose, frame }}
+        />);
+        // A failed read is not "gone": it says so and retries the read.
+        await vi.waitFor(() => expect(failed.findByTestId('session-follow-sources-error')).not.toBeNull());
+        expect(failed.getTextContent()).not.toContain('session.follow.sources.sourceUnavailable');
+        await failed.unmount();
+    });
+
     it('places one source panel through a pushed page with the same policy writer, and leaves the page after Stop updates', async () => {
         api.list.mockResolvedValue({ kind: 'ok', value: { sources: [{
             sourceSessionId: 'source-a', destinationSessionId: 'destination-a', policy: { preset: 'quiet' },

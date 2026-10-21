@@ -177,7 +177,9 @@ function SourceRowAnchor(props: Readonly<{
  *
  * A row opens that source's Follow panel (title, how much it hears, Stop updates · Done): anchored to the row on
  * a wide window, a pushed page on a phone. `page` is that pushed page: the same editor, controller and writers
- * place one source's panel through its `frame` instead of the list.
+ * place one source's panel through its `frame` instead of the list. `sheet` is the list inside People's Following
+ * sheet (C1 R12): the sheet names the direction, so the rows and Add stand without a heading, and on a wide window
+ * the sheet steps to a row's panel in place (`onOpenSource`) rather than floating a second panel over itself.
  */
 export function SessionFollowSourcesEditor(props: Readonly<{
     /** The Session that follows: its identity is all the list needs, so it shows before the Session's own snapshot lands. */
@@ -192,12 +194,16 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         frame(parts: FollowSourcePanelParts): React.ReactNode;
         onClose(): void;
     }>;
+    sheet?: Readonly<{ onOpenSource?: (sourceKey: string) => void }>;
 }>) {
     const { theme } = useUnistyles();
     const router = useRouter();
     const anchored = useIsTablet();
-    const pane = useListPresentation() !== 'page';
-    const rowLook = pane ? { density: 'compact' as const, showDivider: false } : {};
+    const listPresentation = useListPresentation();
+    // The sheet lists sources the way the pane does (marks, names, what each wakes), in its grouped rows.
+    const pane = listPresentation !== 'page' || props.sheet !== undefined;
+    const paneSection = pane && props.sheet === undefined;
+    const rowLook = paneSection ? { density: 'compact' as const, showDivider: false } : {};
     const online = React.useSyncExternalStore(
         React.useCallback((listener) => subscribeServerReachabilityNetworkAllowed(() => listener()), []),
         isServerReachabilityNetworkAllowed,
@@ -543,7 +549,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const addSource = () => openSessionFollowSourcePicker({
         serverId,
         sessionId: props.destination.id,
-    }, pane ? paneAddRef : addSourceRef, async (change) => {
+    }, paneSection ? paneAddRef : addSourceRef, async (change) => {
         if (change?.preparation === 'prepared') {
             const preparationSourceKey = sourcePreparationKey(preparationTargetKey, change.sourceSessionId);
             setPreparedSourceKeys((current) => new Set(current).add(preparationSourceKey));
@@ -786,6 +792,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
 
     // A wide window anchors the panel to the row; a phone pushes the page, which mounts this editor for that source.
     const openSource = (sourceKey: string) => {
+        if (anchored && props.sheet?.onOpenSource) { props.sheet.onOpenSource(sourceKey); return; }
         if (anchored) { setOpenSourceId(sourceKey); return; }
         router.push(buildScopedSessionRouteHref({
             sessionId: props.destination.id,
@@ -802,13 +809,16 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         const pageRule = source ? undefined : rules.find((rule) => ruleKey(rule) === props.page?.sourceKey);
         if (pageRule) return <>{props.page.frame(rulePanelParts(pageRule))}</>;
         // While the list loads, the frame already stands (its header, a loading line, Done) so nothing jumps in later.
-        if (!source) return loading ? <>{props.page.frame({
+        // Once read, a source that isn't listed any more says so, and a failed read offers Retry: the page never blanks.
+        if (!source) return <>{props.page.frame({
             title: t('session.follow.sources.title'),
             subtitle: t('session.follow.sources.panelSubtitle'),
             mark: null,
-            body: <Item title={t('common.loading')} loading showChevron={false} mode="info" />,
-            footer: <SectionButtonRow trailing={<RoundButton title={t('common.done')} onPress={closePanel} />}>{null}</SectionButtonRow>,
-        })}</> : null;
+            body: loading ? <Item title={t('common.loading')} loading showChevron={false} mode="info" />
+                : failed ? <ItemGroup>{errorRow({})}</ItemGroup>
+                    : <Item testID="session-follow-source-page-gone" title={t('session.follow.sources.sourceUnavailable')} showChevron={false} mode="info" />,
+            footer: <SectionButtonRow trailing={<RoundButton testID="session-follow-source-page-done" title={t('common.done')} onPress={closePanel} />}>{null}</SectionButtonRow>,
+        })}</>;
         return <>{props.page.frame(panelPartsFor(source))}</>;
     }
 
@@ -857,7 +867,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
                 mode="info"
             /> : null}
             {loading && sources.length === 0 && rules.length === 0 ? <Item {...rowLook} title={t('common.loading')} loading showChevron={false} mode="info" /> : null}
-            {!loading && sources.length === 0 && rules.length === 0 && !failed ? (pane
+            {!loading && sources.length === 0 && rules.length === 0 && !failed ? (paneSection
                 ? <View style={styles.paneEmpty}><EmptyState testID="session-follow-sources-empty" layout="line" title={t('session.follow.sources.empty')} /></View>
                 : <Item {...rowLook} testID="session-follow-sources-empty" title={t('session.follow.sources.empty')} showChevron={false} mode="info" />) : null}
             {sources.map((source) => {
@@ -944,7 +954,23 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             {failed || (mutation.error !== null && !panelOpen) ? errorRow(rowLook) : null}
     </>;
 
-    if (pane) {
+    const addRow = <Item
+        pressableRef={addSourceRef}
+        testID="session-follow-source-add"
+        title={t('session.follow.sources.addSource')}
+        subtitle={t('session.follow.sources.includeNextTurn')}
+        disabled={!online || savingId !== null}
+        onPress={addSource}
+    />;
+
+    if (props.sheet) {
+        return <ItemGroup>
+            {sourceRows}
+            {addRow}
+        </ItemGroup>;
+    }
+
+    if (paneSection) {
         return <View testID="session-follow-sources-pane" style={styles.paneSection}>
             <PaneSectionHeader
                 title={t('session.follow.sources.title')}
@@ -971,14 +997,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             {sourceRows}
         </ItemGroup>
         <ItemGroup title={t('common.add')}>
-            <Item
-                pressableRef={addSourceRef}
-                testID="session-follow-source-add"
-                title={t('session.follow.sources.addSource')}
-                subtitle={t('session.follow.sources.includeNextTurn')}
-                disabled={!online || savingId !== null}
-                onPress={addSource}
-            />
+            {addRow}
         </ItemGroup>
     </>;
 }

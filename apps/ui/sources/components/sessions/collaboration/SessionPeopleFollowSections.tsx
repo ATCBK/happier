@@ -9,19 +9,22 @@ import { resolveFollowDeliveryV1, type FollowEventV1 } from '@happier-dev/protoc
 import { useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
 import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
 import { projectAccountSessionFollowPolicyEditor } from '@/components/sessions/follow/accountSessionFollowController';
+import { AccountSessionFollowControl } from '@/components/sessions/follow/AccountSessionFollowControl';
+import type { AccountSessionFollowEditorParts } from '@/components/sessions/follow/AccountSessionFollowEditor';
 import { SessionFollowSourcesEditor } from '@/components/sessions/follow/SessionFollowSourcesEditor';
+import { FollowEditorPage } from '@/components/sessions/follow/FollowEditorPage';
 import { FollowEditorPanel } from '@/components/sessions/follow/FollowEditorPanel';
+import { openFollowNotificationSettings } from '@/components/sessions/follow/openFollowNotificationSettings';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { useAccountSessionFollowController } from '@/components/sessions/follow/useAccountSessionFollowController';
-import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
 import { useSessionFollowers } from '@/components/sessions/follow/useSessionFollowers';
 import { useSessionFollowing } from '@/components/sessions/follow/useSessionFollowing';
 import { describeSessionFollowLevel } from '@/components/sessions/follow/sessionFollowLevelCopy';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
-import { PaneSectionHeader } from '@/components/ui/lists/PaneSectionHeader';
 import { Item } from '@/components/ui/lists/Item';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -139,30 +142,91 @@ export function projectSessionFollowerCensus(projection: Readonly<{
     };
 }
 
+export type SessionPeopleFollowDirection = 'followers' | 'following';
+
 /**
- * Who hears about this session, and what it hears about (coordination lab P1-P): Followers, then
- * Following, drawn flat under the Discussions in the same scroller, as the pane's sections are.
- *
- * Followers: your own level (the Follow editor's one controller), the sessions that follow it from
- * the authoritative reverse read (`useSessionFollowers`), and how many other people do — never who,
- * and never their levels. The pane header says both in one line (lab P1-CP: "Follows 2 rules · 1 session",
- * then "3 people · 2 sessions follow it"), from the same Following census the list below renders.
+ * Who hears about this session and what it hears about, read once for People's summary rows and the sheet they
+ * open: the Followers census from the authoritative reverse read (`useSessionFollowers`), the Following census
+ * (`useSessionFollowing`) and your own level (the Follow editor's one controller). Unknown stays null, never zero.
+ */
+export function useSessionPeopleFollow(target: SessionAddress) {
+    const featureEnabled = useFeatureEnabled('sessions.following', { scopeKind: 'spawn', serverId: target.serverId });
+    const enabled = Boolean(target.serverId?.trim()) && featureEnabled;
+    const followers = useSessionFollowers(target, enabled);
+    const census = React.useMemo(() => projectSessionFollowerCensus(followers.projection), [followers.projection]);
+    const following = useSessionFollowing(target, enabled);
+    const { state: you } = useAccountSessionFollowController(target, enabled);
+    const youLevel = React.useMemo((): FollowPreset | 'none' | null => {
+        if (!you.projection) return null;
+        const editor = projectAccountSessionFollowPolicyEditor(you);
+        return editor.following && editor.model ? editor.model.preset as FollowPreset : 'none';
+    }, [you]);
+    return { enabled, census, followersLoading: followers.loading, following, youLevel, youLoading: you.loading };
+}
+
+export type SessionPeopleFollow = ReturnType<typeof useSessionPeopleFollow>;
+
+/** Followers in one line: your own level, then how many sessions and other people (never who) also follow it. */
+function describeFollowersSummary(people: SessionPeopleFollow): string | null {
+    const you = people.youLevel === null ? null : joinHappierFacts(t('session.collaboration.pane.followersYou'),
+        people.youLevel === 'none' ? t('session.follow.level.none') : t(`session.follow.policy.${people.youLevel}`));
+    const { sessions, otherPeople } = people.census;
+    const facts = joinHappierFacts(
+        you,
+        sessions && sessions.length > 0 ? t('session.collaboration.pane.followersSessions', { count: sessions.length }) : null,
+        otherPeople ? t('session.collaboration.pane.followersPeople', { count: otherPeople }) : null,
+    );
+    return facts.length > 0 ? facts : null;
+}
+
+/** Following in one line: its rules, then the Sessions it follows; nothing yet says what belongs there. */
+function describeFollowingSummary(people: SessionPeopleFollow): string | null {
+    const projection = people.following.projection;
+    if (people.following.error !== null && !projection) return t('errors.unknownError');
+    if (!projection) return null;
+    const sessions = projection.sources.filter((source) => 'sourceSessionId' in source).length;
+    if (projection.rules.length === 0 && projection.sources.length === 0) return t('session.follow.sources.empty');
+    return joinHappierFacts(
+        projection.rules.length > 0 ? t('session.collaboration.pane.followingRules', { count: projection.rules.length }) : null,
+        sessions > 0 ? t('session.collaboration.pane.followersSessions', { count: sessions }) : null,
+    );
+}
+
+function countFollowing(people: SessionPeopleFollow): number | null {
+    const projection = people.following.projection;
+    return projection ? projection.rules.length + projection.sources.length : null;
+}
+
+function countFollowers(people: SessionPeopleFollow): number | null {
+    const { sessions, peopleCount } = people.census;
+    return sessions && peopleCount !== null ? sessions.length + peopleCount : null;
+}
+
+/**
+ * Who hears about this session, and what it hears about (C1 §6.1 R12): two summary rows under the
+ * Discussions, Followers then Following, each opening the same Follow sheet in its direction, where the rows,
+ * rules and their panels are. The sheet floats from its row on a wide window and is a pushed page on a phone.
+ * The pane header says both in one line (lab P1-CP: "Follows 2 rules · 1 session", then "3 people · 2 sessions
+ * follow it"), from the same censuses.
  */
 export const SessionPeopleFollowSections = React.memo(function SessionPeopleFollowSections(props: Readonly<{
     target: SessionAddress;
     session: Session | null;
-    /** Attached to the Following section so "Edit what it follows" can bring it into view. */
+    /** Attached to the Following row so "Edit what it follows" can bring it into view. */
     followingAnchorRef?: React.RefObject<View | null>;
 }>) {
-    const followEditor = useAccountSessionFollowEditorHost({ serverId: props.target.serverId, sessionId: props.target.sessionId });
-    const followers = useSessionFollowers(props.target, followEditor.enabled);
-    const census = React.useMemo(() => projectSessionFollowerCensus(followers.projection), [followers.projection]);
-    const { sessions, peopleCount, otherPeople } = census;
-    const followingEnabled = useFeatureEnabled('sessions.following', { scopeKind: 'spawn', serverId: props.target.serverId });
-    const following = useSessionFollowing(props.target, followingEnabled);
+    const people = useSessionPeopleFollow(props.target);
+    const { census, following } = people;
+    const { sessions, peopleCount } = census;
     const machineId = props.session ? (readSessionOwnerMetadataView(props.session)?.machineId ?? null) : null;
-    // Following reads this session's own relations by its identity: it stays whole while the session's snapshot loads.
-    const destination = React.useMemo(() => ({ id: props.target.sessionId }), [props.target.sessionId]);
+    const router = useRouter();
+    const anchored = useIsTablet();
+    const [openDirection, setOpenDirection] = React.useState<SessionPeopleFollowDirection | null>(null);
+    const followersAnchorRef = React.useRef<View>(null);
+    const ownFollowingAnchorRef = React.useRef<View>(null);
+    const followingAnchorRef = props.followingAnchorRef ?? ownFollowingAnchorRef;
+    const followersTriggerRef = React.useRef<React.ComponentRef<typeof Pressable>>(null);
+    const followingTriggerRef = React.useRef<React.ComponentRef<typeof Pressable>>(null);
 
     const followingProjection = following.projection;
     const headerLine = React.useMemo(() => {
@@ -174,14 +238,14 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
             followedSessions > 0 ? t('session.collaboration.pane.followersSessions', { count: followedSessions }) : null,
         );
         const sessionCount = sessions?.length ?? 0;
-        const people = peopleCount ?? 0;
-        const followedBy = sessions && sessionCount + people > 0
+        const peopleTotal = peopleCount ?? 0;
+        const followedBy = sessions && sessionCount + peopleTotal > 0
             ? t('session.collaboration.pane.followedBy', {
                 facts: joinHappierFacts(
-                    people > 0 ? t('session.collaboration.pane.followersPeople', { count: people }) : null,
+                    peopleTotal > 0 ? t('session.collaboration.pane.followersPeople', { count: peopleTotal }) : null,
                     sessionCount > 0 ? t('session.collaboration.pane.followersSessions', { count: sessionCount }) : null,
                 ),
-                count: sessionCount + people,
+                count: sessionCount + peopleTotal,
             })
             : null;
         const segments = [follows ? t('session.collaboration.pane.follows', { facts: follows }) : null, followedBy]
@@ -190,32 +254,164 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
     }, [followingProjection, peopleCount, sessions]);
     usePaneHeaderSlotContent(React.useMemo(() => ({ line: headerLine }), [headerLine]));
 
+    const close = React.useCallback(() => setOpenDirection(null), []);
+    const open = (direction: SessionPeopleFollowDirection) => {
+        if (anchored) { setOpenDirection(direction); return; }
+        router.push(buildScopedSessionRouteHref({
+            ...props.target,
+            suffix: '/follow-people',
+            query: { direction },
+        }) as Href);
+    };
+    if (!people.enabled) return null;
+    const followersSummary = describeFollowersSummary(people);
+    const followingSummary = describeFollowingSummary(people);
+    const followersCount = countFollowers(people);
+    const followingCount = countFollowing(people);
     return (
-        <>
-            {followEditor.enabled ? (
-                <View testID="session-people-followers" style={styles.section}>
-                    <PaneSectionHeader title={t('session.collaboration.pane.followersTitle')}
-                        count={sessions && peopleCount !== null ? sessions.length + peopleCount : undefined} />
-                    <SessionPeopleYouRow target={props.target} openEditor={followEditor.openEditor}
-                        anchorRef={followEditor.anchorRef} triggerRef={followEditor.triggerRef} />
-                    {sessions && sessions.length > 0 ? <SessionFollowerRows target={props.target} followers={sessions} /> : null}
-                    {otherPeople ? (
-                        <Item testID="session-people-followers-people" density="compact" showDivider={false} showChevron={false}
-                            icon={<FollowerMark name="users" />}
-                            title={t('session.collaboration.pane.followersPeople', { count: otherPeople })}
-                            subtitle={t('session.collaboration.pane.followersPeopleNote')} />
-                    ) : null}
-                </View>
-            ) : null}
-            {followEditor.editor}
-            <View ref={props.followingAnchorRef} tabIndex={-1} collapsable={false} testID="session-people-following">
-                <SessionFollowSourcesEditor destination={destination} serverId={props.target.serverId}
-                    destinationMachineId={machineId} following={following} />
+        <View style={styles.section}>
+            <View ref={followersAnchorRef} collapsable={false}>
+                <Item pressableRef={followersTriggerRef} testID="session-people-followers-summary" density="compact" showDivider={false}
+                    icon={<FollowerMark name="users" />}
+                    title={t('session.collaboration.pane.followersTitle')}
+                    subtitle={followersSummary ?? undefined}
+                    subtitleLines={2}
+                    detail={followersCount ? String(followersCount) : undefined}
+                    loading={followersSummary === null && (people.followersLoading || people.youLoading)}
+                    onPress={() => open('followers')} />
             </View>
-        </>
+            <View ref={followingAnchorRef} tabIndex={-1} collapsable={false} testID="session-people-following">
+                <Item pressableRef={followingTriggerRef} testID="session-people-following-summary" density="compact" showDivider={false}
+                    icon={<FollowerMark name="bell" />}
+                    title={t('session.follow.sources.title')}
+                    subtitle={followingSummary ?? undefined}
+                    subtitleLines={2}
+                    detail={followingCount ? String(followingCount) : undefined}
+                    loading={followingSummary === null && following.loading}
+                    onPress={() => open('following')} />
+            </View>
+            {openDirection ? (
+                <SessionPeopleFollowSheet target={props.target} machineId={machineId} direction={openDirection} people={people}
+                    host={{
+                        kind: 'panel',
+                        anchorRef: openDirection === 'followers' ? followersAnchorRef : followingAnchorRef,
+                        focusReturnRef: openDirection === 'followers' ? followersTriggerRef : followingTriggerRef,
+                        onClose: close,
+                    }} />
+            ) : null}
+        </View>
     );
 });
 
+type FollowSheetParts = AccountSessionFollowEditorParts;
+type FollowSheetStep =
+    | Readonly<{ kind: 'you' }>
+    | Readonly<{ kind: 'follower'; follower: SessionFollower; title: string }>
+    | Readonly<{ kind: 'source'; sourceKey: string }>;
+
+/**
+ * People's Follow sheet in one direction (C1 §6.1): Followers (you, the sessions that follow it, how many other
+ * people) or Following (its sources and rules, and Add). It is the shared Follow host: the anchored panel on a
+ * wide window, where a row's own panel replaces the list in place with a way Back (no panel over a panel), and the
+ * pushed page on a phone, where a row pushes its own page as everywhere else.
+ */
+export function SessionPeopleFollowSheet(props: Readonly<{
+    target: SessionAddress;
+    machineId: string | null;
+    direction: SessionPeopleFollowDirection;
+    people: SessionPeopleFollow;
+    host:
+        | Readonly<{
+            kind: 'panel';
+            anchorRef: React.RefObject<View | null>;
+            focusReturnRef: React.RefObject<React.ComponentRef<typeof Pressable> | null>;
+            onClose(): void;
+        }>
+        | Readonly<{ kind: 'page'; onClose(): void }>;
+}>) {
+    const { theme } = useUnistyles();
+    const router = useRouter();
+    const { host, people, target } = props;
+    const panel = host.kind === 'panel' ? host : null;
+    const [step, setStep] = React.useState<FollowSheetStep | null>(null);
+    const back = React.useCallback(() => setStep(null), []);
+
+    const frame = (parts: FollowSheetParts, stepBack?: () => void) => panel ? (
+        <FollowEditorPanel anchorRef={panel.anchorRef} focusReturnRef={panel.focusReturnRef} onRequestClose={panel.onClose}
+            testID="session-people-follow-sheet" accessibilityLabel={parts.title}
+            title={parts.title} subtitle={parts.subtitle} mark={parts.mark} footer={parts.footer}>
+            {stepBack ? <Item testID="session-people-follow-sheet-back" showChevron={false} showDivider={false}
+                icon={<Icon name="caret-left" size={18} color={theme.colors.text.secondary} />}
+                title={t('common.back')} onPress={stepBack} /> : null}
+            {parts.body}
+        </FollowEditorPanel>
+    ) : (
+        <FollowEditorPage title={parts.title} subtitle={parts.subtitle} footer={parts.footer} footerTestID="session-people-follow-sheet-footer">
+            {parts.body}
+        </FollowEditorPage>
+    );
+
+    if (panel && step?.kind === 'you') {
+        return <AccountSessionFollowControl address={target} onClose={back}
+            onOpenNotificationSettings={() => {
+                panel.onClose();
+                void openFollowNotificationSettings({ serverId: target.serverId, navigate: () => router.push('/settings/notifications') });
+            }}
+            frame={(parts) => frame(parts, back)} />;
+    }
+    if (panel && step?.kind === 'follower') {
+        return <SessionFollowerPanel target={target} follower={step.follower} title={step.title} onClose={back}
+            frame={(parts) => frame(parts, back)} />;
+    }
+    if (panel && step?.kind === 'source') {
+        return <SessionFollowSourcesEditor destination={{ id: target.sessionId }} serverId={target.serverId}
+            destinationMachineId={props.machineId} following={people.following}
+            page={{ sourceKey: step.sourceKey, onClose: back, frame: (parts) => frame(parts, back) }} />;
+    }
+
+    const followers = props.direction === 'followers';
+    const footer = <SectionButtonRow trailing={<RoundButton testID="session-people-follow-sheet-done" title={t('common.done')} onPress={host.onClose} />}>
+        {null}
+    </SectionButtonRow>;
+    const body = followers ? (
+        <ItemGroup>
+            <SessionPeopleYouRow level={people.youLevel} loading={people.youLoading}
+                onPress={() => {
+                    if (panel) { setStep({ kind: 'you' }); return; }
+                    router.push(buildScopedSessionRouteHref({ ...target, suffix: '/follow' }) as Href);
+                }} />
+            {people.census.sessions ? (
+                <SessionFollowerRows target={target} followers={people.census.sessions}
+                    onOpen={(follower, title) => {
+                        if (panel) { setStep({ kind: 'follower', follower, title }); return; }
+                        router.push(buildScopedSessionRouteHref({
+                            sessionId: follower.sessionId,
+                            serverId: target.serverId,
+                            suffix: '/follow-source',
+                            query: { source: target.sessionId },
+                        }) as Href);
+                    }} />
+            ) : people.followersLoading ? <Item title={t('common.loading')} loading showChevron={false} mode="info" /> : null}
+            {people.census.otherPeople ? (
+                <Item testID="session-people-followers-people" showChevron={false}
+                    icon={<FollowerMark name="users" />}
+                    title={t('session.collaboration.pane.followersPeople', { count: people.census.otherPeople })}
+                    subtitle={t('session.collaboration.pane.followersPeopleNote')} />
+            ) : null}
+        </ItemGroup>
+    ) : (
+        <SessionFollowSourcesEditor destination={{ id: target.sessionId }} serverId={target.serverId}
+            destinationMachineId={props.machineId} following={people.following}
+            sheet={{ onOpenSource: panel ? (sourceKey) => setStep({ kind: 'source', sourceKey }) : undefined }} />
+    );
+    return frame({
+        title: followers ? t('session.collaboration.pane.followersTitle') : t('session.follow.sources.title'),
+        subtitle: (followers ? describeFollowersSummary(people) : describeFollowingSummary(people)) ?? '',
+        mark: <FollowerMark name={followers ? 'users' : 'bell'} />,
+        body,
+        footer,
+    });
+}
 
 /**
  * A follower row's one line. One relation says its level and what that wakes. A receiver that is both its manager
@@ -243,104 +439,65 @@ export function describeSessionFollower(follower: Pick<SessionFollower, 'manager
 
 /**
  * The sessions that follow this one, named through the batched title projection. A row opens the same Follow
- * panel as the follower's own Following row (lab P2-S): "<follower> follows this", why, and how much it hears,
- * anchored to the row on a wide window and a pushed page on a phone. A receiver that hears only as this session's
- * manager has no ordinary follow to edit here, so its panel says where that is changed.
+ * panel as the follower's own Following row (lab P2-S), never the follower Session: the sheet steps to it in
+ * place on a wide window and pushes it on a phone.
  */
-export function SessionFollowerRows(props: Readonly<{ target: SessionAddress; followers: readonly SessionFollower[] }>) {
-    const router = useRouter();
-    const anchored = useIsTablet();
-    const [openId, setOpenId] = React.useState<string | null>(null);
+function SessionFollowerRows(props: Readonly<{
+    target: SessionAddress;
+    followers: readonly SessionFollower[];
+    onOpen(follower: SessionFollower, title: string): void;
+}>) {
     const addresses = React.useMemo(() => props.followers.map((follower) => ({ sessionId: follower.sessionId, serverId: props.target.serverId })),
         [props.target.serverId, props.followers]);
     const titles = useSessionDisplayTitles(addresses);
-    const open = (followerId: string) => {
-        if (anchored) { setOpenId(followerId); return; }
-        router.push(buildScopedSessionRouteHref({
-            sessionId: followerId,
-            serverId: props.target.serverId,
-            suffix: '/follow-source',
-            query: { source: props.target.sessionId },
-        }) as Href);
-    };
     return <>
         {props.followers.map((follower, index) => {
             const title = titles[index] ?? t('session.untitled');
-            return <SessionFollowerRow key={follower.sessionId} target={props.target} follower={follower} title={title}
-                open={anchored && openId === follower.sessionId} onOpen={() => open(follower.sessionId)} onClose={() => setOpenId(null)} />;
+            return <Item key={follower.sessionId} testID={`session-people-follower-session-${follower.sessionId}`}
+                title={title} icon={<FollowerMark name="stack" />}
+                subtitle={describeSessionFollower(follower)} subtitleLines={2} onPress={() => props.onOpen(follower, title)} />;
         })}
     </>;
 }
 
-function SessionFollowerRow(props: Readonly<{
+/**
+ * "<follower> follows this": why, and how much it hears, edited through the follower's own editor and writers for
+ * this one source. A receiver that hears only as this session's manager has no ordinary follow to edit here, so its
+ * panel says where that is changed.
+ */
+function SessionFollowerPanel(props: Readonly<{
     target: SessionAddress;
     follower: SessionFollower;
     title: string;
-    open: boolean;
-    onOpen(): void;
     onClose(): void;
+    frame(parts: FollowSheetParts): React.ReactNode;
 }>) {
-    const anchorRef = React.useRef<View>(null);
-    const triggerRef = React.useRef<React.ComponentRef<typeof Pressable>>(null);
     const why = describeSessionFollower(props.follower);
-    const panel = (parts: Readonly<{ body: React.ReactNode; footer: React.ReactNode }>) => (
-        <FollowEditorPanel anchorRef={anchorRef} focusReturnRef={triggerRef} onRequestClose={props.onClose}
-            testID={`session-people-follower-session-${props.follower.sessionId}-panel`}
-            accessibilityLabel={t('session.follow.sources.followsThis', { title: props.title })}
-            title={t('session.follow.sources.followsThis', { title: props.title })} subtitle={why}
-            mark={<FollowerMark name="stack" />} footer={parts.footer}>
-            {parts.body}
-        </FollowEditorPanel>
-    );
+    const heading = { title: t('session.follow.sources.followsThis', { title: props.title }), subtitle: why, mark: <FollowerMark name="stack" /> };
     const ordinary = props.follower.relations.some((relation) => relation.relation === 'follower');
-    return <>
-        <View ref={anchorRef} collapsable={false}>
-            <Item pressableRef={triggerRef} testID={`session-people-follower-session-${props.follower.sessionId}`}
-                density="compact" showDivider={false} title={props.title} icon={<FollowerMark name="stack" />}
-                subtitle={why} subtitleLines={2} onPress={props.onOpen} />
-        </View>
-        {props.open ? (ordinary
-            // The follower's own editor and writers, placing this one source's panel at this row.
-            ? <SessionFollowSourcesEditor destination={{ id: props.follower.sessionId }} serverId={props.target.serverId}
-                destinationMachineId={null}
-                page={{ sourceKey: props.target.sessionId, onClose: props.onClose, frame: panel }} />
-            : panel({
-                body: <Item density="compact" showDivider={false} showChevron={false} mode="info" titleLines={0}
-                    title={t('session.follow.sources.managerOnly')} />,
-                footer: <SectionButtonRow trailing={<RoundButton title={t('common.done')} onPress={props.onClose} />}>{null}</SectionButtonRow>,
-            })) : null}
-    </>;
+    if (!ordinary) {
+        return <>{props.frame({
+            ...heading,
+            body: <Item density="compact" showDivider={false} showChevron={false} mode="info" titleLines={0}
+                title={t('session.follow.sources.managerOnly')} />,
+            footer: <SectionButtonRow trailing={<RoundButton title={t('common.done')} onPress={props.onClose} />}>{null}</SectionButtonRow>,
+        })}</>;
+    }
+    return <SessionFollowSourcesEditor destination={{ id: props.follower.sessionId }} serverId={props.target.serverId}
+        destinationMachineId={null}
+        page={{ sourceKey: props.target.sessionId, onClose: props.onClose, frame: (parts) => props.frame({ ...parts, ...heading }) }} />;
 }
 
-type FollowEditorHost = ReturnType<typeof useAccountSessionFollowEditorHost>;
-
-/** Your own level and what it means; the row opens the same Follow editor the session header does. */
-function SessionPeopleYouRow(props: Readonly<{
-    target: SessionAddress;
-    openEditor: FollowEditorHost['openEditor'];
-    anchorRef: FollowEditorHost['anchorRef'];
-    triggerRef: FollowEditorHost['triggerRef'];
-}>) {
-    const { state } = useAccountSessionFollowController(props.target, true);
-    const level = React.useMemo(() => {
-        if (!state.projection) return null;
-        const editor = projectAccountSessionFollowPolicyEditor(state);
-        if (!editor.following || !editor.model) return t('session.follow.level.none');
-        return describePersonLevel(editor.model.preset as FollowPreset);
-    }, [state]);
-    const { openEditor, target } = props;
-    const open = React.useCallback(() => openEditor({ address: target }), [openEditor, target]);
-    return (
-        <View ref={props.anchorRef} collapsable={false}>
-            <Item pressableRef={props.triggerRef} testID="session-people-follower-you" density="compact" showDivider={false}
-                icon={<FollowerMark name="user-circle" />}
-                title={t('session.collaboration.pane.followersYou')}
-                subtitle={level ?? undefined}
-                subtitleLines={2}
-                loading={level === null && state.loading}
-                onPress={open} />
-        </View>
-    );
+/** Your own level and what it means; it opens the same Follow editor the session header does. */
+function SessionPeopleYouRow(props: Readonly<{ level: FollowPreset | 'none' | null; loading: boolean; onPress(): void }>) {
+    const level = props.level === null ? null : props.level === 'none' ? t('session.follow.level.none') : describePersonLevel(props.level);
+    return <Item testID="session-people-follower-you"
+        icon={<FollowerMark name="user-circle" />}
+        title={t('session.collaboration.pane.followersYou')}
+        subtitle={level ?? undefined}
+        subtitleLines={2}
+        loading={level === null && props.loading}
+        onPress={props.onPress} />;
 }
 
 const styles = StyleSheet.create((theme) => ({

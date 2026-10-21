@@ -85,6 +85,7 @@ export const workspaceRouteFiles: Readonly<Record<string, string>> = {
     "session/[id]/file": "./(app)/session/[id]/file.tsx",
     "session/[id]/files": "./(app)/session/[id]/files.tsx",
     "session/[id]/follow": "./(app)/session/[id]/follow.tsx",
+    "session/[id]/follow-people": "./(app)/session/[id]/follow-people.tsx",
     "session/[id]/follow-source": "./(app)/session/[id]/follow-source.tsx",
     "session/[id]/git": "./(app)/session/[id]/git.tsx",
     "session/[id]/info": "./(app)/session/[id]/info.tsx",
