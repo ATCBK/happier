@@ -5,6 +5,7 @@ import {
     rehydrateCanonicalProtocolComposableSchema,
     type DaemonPluginUiTargetedSurfaceMountV1,
 } from '@happier-dev/protocol';
+import { PluginUiTargetedSurfaceMountCoreV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import {
     defineProtocolJsonValue,
     defineProtocolObject,
@@ -140,6 +141,29 @@ function launchInputAtSerializedByteLength(byteLength: number): PluginUiJsonValu
 }
 
 describe('readTargetedPluginSurfaceMountRequest', () => {
+    it.each([null, 'scoped-machine'])('carries an admitted Account child with optional Machine transport %s without a Machine origin', (machineId) => {
+        const accountOrigin = { serverId: 'server-a', accountId: 'account-a', custodyId: 'account-review',
+            sourceCustody: { kind: 'account_release' as const, pluginId: 'acme.review', version: '1.0.0',
+                archiveDigestSha256: `sha256:${'a'.repeat(64)}` } };
+        const { executionOrigin: _machineOrigin, ...core } = rawMount;
+        const contributor = { ...surface.contributor, occurrenceId: accountOrigin.custodyId, sourceCustody: accountOrigin.sourceCustody };
+        const accountMount = { ...PluginUiTargetedSurfaceMountCoreV1Schema.parse({ ...core, contributor,
+            contributorTargetedContributions: { target: { pluginId: contributor.pluginId,
+                occurrenceId: contributor.occurrenceId, sourceCustody: contributor.sourceCustody }, points: [] },
+        }), accountExecutionOrigin: accountOrigin };
+        const request = readTargetedPluginSurfaceReactMountRequest({
+            presentation: { surface: { ...surface, contributor }, input: { reviewId: 'review-42' } },
+            target, mounts: prepareTargetedSurfaceMounts([accountMount]),
+        });
+        expect(request).not.toBeNull();
+        const facts = createTargetedPluginSurfaceBoundFacts({ request: request!, machineId, serverId: 'server-a', platform: 'web',
+            channel: 'internal', accountLifetime: null, interactionEnabled: true, daemonInteractionEnabled: false });
+        expect(facts.machineId ?? null).toBe(machineId);
+        expect(facts.executionOrigin).toBeUndefined();
+        expect(facts.accountExecutionOrigin).toEqual(accountOrigin);
+        expect(facts.occurrenceId).toBe(accountOrigin.custodyId);
+    });
+
     it('mounts each real Triage detail panel through its cold transported role schema', () => {
         const transportedMount = DaemonPluginUiTargetedSurfaceMountV1Schema.parse(JSON.parse(JSON.stringify({
             ...rawMount,

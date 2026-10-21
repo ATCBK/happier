@@ -10,7 +10,7 @@ import {
 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
-import { PluginReleaseFactsV1Schema, PluginMachineMaterializationV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginReleaseFactsV1Schema, PluginMachineMaterializationV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
 import { projectPluginPortableUiDeclarationsV1, projectPluginReactNativeArtifactEntryV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
@@ -57,6 +57,43 @@ it('retains proven installed declarations on a cold client without fabricating r
     expect(merged?.surfacePlacementsById[String(entry.id)]?.occurrenceId).toBeUndefined();
     expect(merged?.generation).toBeNull();
     expect(mergeInstalledPluginUiProjections([], null)).toBeNull();
+});
+
+it('retains current Account Actions through installed composition without replacing Machine Actions', () => {
+    const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: 'happier.fixture', version: '1.0.0',
+        displayName: 'Fixture', runtime: { apiVersion: 1 }, contributes: { actions: [{ id: 'read', title: 'Read',
+            scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
+            execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } } }],
+            ui: { renderers: [{ id: 'page', kind: 'declarative', root: { kind: 'text', text: 'Account page' } }],
+                views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, title: 'Account page', renderer: 'page' }] } } });
+    const reader = createPluginAccountAvailabilityReader({ scope: { serverId: 'server-1', accountId: 'account-1' },
+        snapshot: { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] },
+        hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+            packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, artifactGraphs: [],
+            entriesById: projectPluginPortableUiDeclarationsV1(manifest) }],
+    });
+    const installed = reader.readAccountUiProjection()!;
+    const action = installed.actionsById['happier.fixture/read']!;
+    expect(action).toBeDefined();
+    const runtimeAction = { ...action, id: 'machine-read', execution: { target: 'daemon' as const } };
+    const runtime = { ...EMPTY_PLUGIN_UI_PROJECTION, actionsById: {
+        'happier.fixture/read': { ...runtimeAction, id: 'read' }, 'happier.fixture/machine-read': runtimeAction,
+    } };
+    expect(mergeInstalledPluginUiProjections([installed], null)?.actionsById['happier.fixture/read']).toBe(action);
+    expect(mergeInstalledPluginUiProjections([installed], runtime)?.actionsById).toEqual({
+        'happier.fixture/read': action, 'happier.fixture/machine-read': runtimeAction,
+    });
+    expect(mergeInstalledPluginUiProjections([], runtime)?.actionsById).toEqual(runtime.actionsById);
+    const origin = selectedOrigin(manifest.id, 'machine-optional');
+    const entry = placementEntry({ pluginId: manifest.id, localId: 'page', container: 'appPage' });
+    const runtimeWithSupplier = unionPluginUiProjections([member({ machineId: 'machine-optional', generation: 1,
+        entriesById: { [String(entry.id)]: { ...entry, executionOrigin: origin } },
+        producerOriginsByPluginId: { [manifest.id]: origin },
+    })], selectedOrigins(origin)).pluginUiProjection;
+    const pageId = `surfacePlacement:${manifest.id}:page`;
+    const composedPage = mergeInstalledPluginUiProjections([installed], runtimeWithSupplier)?.surfacePlacementsById[pageId];
+    expect(composedPage).toMatchObject({ occurrenceId: action.occurrenceId, hostAccountOrigin: action.hostAccountOrigin });
+    expect(readPluginUiContributionSupplies(composedPage)).toMatchObject([{ machineId: 'machine-optional', executionOrigin: origin }]);
 });
 
 it('retains an external archive renderer only from its exact reported installation and artifact slot', () => {

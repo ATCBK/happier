@@ -22,6 +22,8 @@ import {
 import { getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import type { PreparedDaemonPluginUiTargetedSurfaceMountV1 } from './mountedTargetedContributions';
+import type { PluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
+import type { PluginUiTargetedSurfaceMountCoreV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -67,7 +69,8 @@ export type TargetedPluginSurfacePhysicalMountFacts = Readonly<{
     surfaceId: string;
     mountInstanceKey: PluginUiInstanceKeyV1;
     launchInput: PluginUiJsonValueV1;
-    executionOrigin: DaemonPluginUiTargetedSurfaceMountV1['executionOrigin'];
+    executionOrigin?: DaemonPluginUiTargetedSurfaceMountV1['executionOrigin'];
+    accountExecutionOrigin?: PluginUiAccountExecutableOrigin;
     resourceCapability: PluginUiResourceBindingCapabilityV1;
     targetedContributions: DaemonPluginUiTargetedSurfaceMountV1['contributorTargetedContributions'];
 }>;
@@ -78,7 +81,7 @@ export type TargetedPluginSurfacePhysicalMountFacts = Readonly<{
  * it is diagnostic text, never mount/currentness authority.
  */
 export function buildTargetedPluginSurfaceReadyTestId(
-    mount: DaemonPluginUiTargetedSurfaceMountV1,
+    mount: PluginUiTargetedSurfaceMountCoreV1,
 ): string {
     return [
         'plugin-targeted-surface-ready',
@@ -240,7 +243,9 @@ export function projectTargetedPluginSurfacePhysicalMountFacts(
         surfaceId: `targeted:${request.instanceKey}`,
         mountInstanceKey: request.instanceKey,
         launchInput: request.input,
-        executionOrigin: mount.executionOrigin,
+        ...(mount.accountExecutionOrigin
+            ? { accountExecutionOrigin: mount.accountExecutionOrigin }
+            : { executionOrigin: mount.executionOrigin }),
         resourceCapability: mount.resourceCapability,
         targetedContributions: mount.contributorTargetedContributions,
     });
@@ -253,6 +258,8 @@ export function projectTargetedPluginSurfacePhysicalMountFacts(
  */
 export function createTargetedPluginSurfaceBoundFacts(input: Readonly<{
     request: TargetedPluginSurfaceMountRequest;
+    /** Optional scoped transport; never the Account child's execution authority. */
+    machineId?: string | null;
     serverId?: string | null;
     sessionId?: string | null;
     /**
@@ -284,11 +291,12 @@ export function createTargetedPluginSurfaceBoundFacts(input: Readonly<{
         platform: input.platform,
         channel: input.channel,
         resourceScope: EMPTY_TARGETED_SURFACE_RESOURCE_SCOPE,
-        machineId: getPluginMachineExecutionOriginRef(physical.executionOrigin).machineId,
+        machineId: physical.executionOrigin ? getPluginMachineExecutionOriginRef(physical.executionOrigin).machineId : input.machineId ?? null,
         serverId: input.serverId,
         projectionGeneration: input.projectionGeneration,
         occurrenceId: physical.targetedContributions.target.occurrenceId,
         executionOrigin: physical.executionOrigin,
+        accountExecutionOrigin: physical.accountExecutionOrigin,
         resourceCapability: physical.resourceCapability,
         resourceContext: Object.freeze({
             kind: 'surface' as const,

@@ -1,8 +1,14 @@
 import * as React from 'react';
+import { isPluginError } from '@happier-dev/plugin-sdk';
 import type {
     DaemonPluginUiTargetedSurfaceMountV1,
     PreparedPluginJsonSchema,
 } from '@happier-dev/protocol';
+import type { PluginUiTargetedSurfaceMountCoreV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { PluginUiAccountExecutableOrigin } from '../reactNative/executableModuleHost';
+import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
+import { readMountedAccountTargetedContributions } from './mountedAccountTargetedContributions';
+
 import {
     preparePluginJsonSchema,
     rehydrateCanonicalProtocolComposableSchema,
@@ -25,20 +31,31 @@ import {
     savePluginUiProjectionTargetedAdmissionSnapshot,
 } from '@/sync/domains/plugins/ui/projectionWarmCache';
 
+export type MountedPluginUiTargetedSurfaceMountV1 = Readonly<DaemonPluginUiTargetedSurfaceMountV1 & {
+    accountExecutionOrigin?: never;
+}> | Readonly<
+    PluginUiTargetedSurfaceMountCoreV1 & {
+        accountExecutionOrigin: PluginUiAccountExecutableOrigin;
+        executionOrigin?: never;
+    }
+>;
+
 /**
  * One targeted embedded-Surface mount plus its prepared input validator and
  * Protocol normalizer. This is host-private executable state derived from one
  * target read response; it is never itself an RPC projection.
  */
-export type PreparedDaemonPluginUiTargetedSurfaceMountV1 = Readonly<
-    Omit<DaemonPluginUiTargetedSurfaceMountV1, 'inputSchema'> & {
+type PreparedTargetedSurfaceMount<TMount> = TMount extends MountedPluginUiTargetedSurfaceMountV1 ? Readonly<
+    Omit<TMount, 'inputSchema'> & {
         /** The canonical schema identity paired with `inputValidation`. */
         inputSchema: PreparedPluginJsonSchema['jsonSchema'];
         inputValidation: PreparedPluginJsonSchema;
         /** The sole Protocol rehydrator restores this target-owned normalizer. */
         inputNormalizer: NonNullable<ReturnType<typeof rehydrateCanonicalProtocolComposableSchema>>;
     }
->;
+> : never;
+
+export type PreparedDaemonPluginUiTargetedSurfaceMountV1 = PreparedTargetedSurfaceMount<MountedPluginUiTargetedSurfaceMountV1>;
 
 /**
  * Prepares each mount's input validator. A mount whose role schema is not
@@ -46,7 +63,7 @@ export type PreparedDaemonPluginUiTargetedSurfaceMountV1 = Readonly<
  * the rest of the response is unaffected.
  */
 export function prepareTargetedSurfaceMounts(
-    mounts: readonly DaemonPluginUiTargetedSurfaceMountV1[],
+    mounts: readonly MountedPluginUiTargetedSurfaceMountV1[],
 ): readonly PreparedDaemonPluginUiTargetedSurfaceMountV1[] {
     const prepared: PreparedDaemonPluginUiTargetedSurfaceMountV1[] = [];
     for (const mount of mounts) {
@@ -121,15 +138,22 @@ export function useMountedTargetedContributions(params: Readonly<{
     mountedOccurrenceId: string | null | undefined;
     enabled: boolean;
     refreshKey?: unknown;
+    accountExecutionOrigin?: PluginUiAccountExecutableOrigin;
 }>): MountedTargetedContributionsState {
     const machineId = normalizeKeyPart(params.machineId);
     const serverId = normalizeKeyPart(params.serverId);
     const pluginId = normalizeKeyPart(params.pluginId);
     const mountedOccurrenceId = normalizeKeyPart(params.mountedOccurrenceId);
-    const active = params.enabled && Boolean(machineId) && Boolean(pluginId);
+    const accountOriginKey = JSON.stringify(params.accountExecutionOrigin ?? null);
+    const accountOrigin = React.useMemo(() => params.accountExecutionOrigin, [accountOriginKey]);
+    const active = params.enabled && Boolean(machineId || accountOrigin) && Boolean(pluginId);
     const accountLifetime = active ? captureActiveServerAccountScopeLifetime() : null;
+    const accountAvailability = React.useMemo(() => accountOrigin && accountLifetime
+        ? readPluginAccountAvailability(accountLifetime.scope) : null, [accountOrigin, accountLifetime]);
+    const [accountRevision, refreshAccount] = React.useReducer((revision: number) => revision + 1, 0);
+    React.useEffect(() => accountAvailability?.subscribe(refreshAccount), [accountAvailability]);
     const projectionScope = React.useMemo(() => (
-        active ? { machineId, serverId: serverId || null } : null
+        active && machineId ? { machineId, serverId: serverId || null } : null
     ), [active, machineId, serverId]);
     const subscribe = React.useCallback((listener: () => void) => (
         projectionScope
@@ -142,7 +166,7 @@ export function useMountedTargetedContributions(params: Readonly<{
     const projectionRevision = React.useSyncExternalStore(subscribe, getRevision, getRevision);
     // The target identity. Revision, occurrence and retry only ask again; they
     // never discard the snapshot this target already showed.
-    const targetKey = active ? JSON.stringify([serverId, machineId, pluginId]) : '';
+    const targetKey = active ? JSON.stringify([serverId, machineId, pluginId, accountOrigin ?? null]) : '';
     // A read tagged with a newer occurrence than the mount means the plugin
     // reloaded and the machine projection has not caught up. Ask it once per
     // (mounted, current) pair to refresh; the mount then follows the new
@@ -176,12 +200,16 @@ export function useMountedTargetedContributions(params: Readonly<{
             };
         });
         const isCurrent = () => alive && accountLifetime.isCurrent();
-        void machinePluginUiTargetedContributionsRead(machineId, {
-            serverId: serverId || null,
-            pluginId,
-            accountLifetime,
-            signal: abort.signal,
-        }).then((result) => {
+        const read = accountOrigin
+            ? readMountedAccountTargetedContributions({ pluginId, origin: accountOrigin, accountLifetime,
+                signal: abort.signal, isCurrent,
+                ...(machineId ? { machine: { machineId, serverId: serverId || null } } : {}),
+            }).catch((error: unknown) => ({ supported: false as const, reason: 'unavailable' as const,
+                code: isPluginError(error) ? error.code : 'plugin_targeted_contributions_unavailable' }))
+            : machinePluginUiTargetedContributionsRead(machineId, {
+                serverId: serverId || null, pluginId, accountLifetime, signal: abort.signal,
+            });
+        void read.then((result) => {
             if (!isCurrent()) return;
             if (!result.supported) {
                 setLoaded((previous) => previous.requestKey !== targetKey
@@ -202,7 +230,7 @@ export function useMountedTargetedContributions(params: Readonly<{
             }
             // Recorded for the next fresh process: an offline mount may show
             // the last confirmed admission read-only.
-            savePluginUiProjectionTargetedAdmissionSnapshot({
+            if (!accountOrigin) savePluginUiProjectionTargetedAdmissionSnapshot({
                 scope: accountLifetime.scope,
                 targetKey: pluginUiProjectionAdmissionTargetKey({
                     machineId,
@@ -240,6 +268,8 @@ export function useMountedTargetedContributions(params: Readonly<{
         };
     }, [
         accountLifetime,
+        accountOrigin,
+        accountRevision,
         active,
         machineId,
         mountedOccurrenceId,

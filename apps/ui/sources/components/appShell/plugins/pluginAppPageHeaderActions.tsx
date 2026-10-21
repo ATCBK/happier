@@ -104,11 +104,15 @@ export async function dispatchPluginAppPageHeaderAction(input: Readonly<{
         ...(input.resolveContributedAction
             ? { resolveContributedAction: input.resolveContributedAction }
             : {}),
-        ...(projectedAction?.execution.target === 'daemon'
+        ...((projectedAction.execution.target === 'daemon'
+            || (projectedAction.execution.target === 'account' && machineId.length > 0
+                && input.isDaemonExecutionCurrent?.() !== false))
             ? {
                 contributedAction: {
                     machineId,
                     serverId: authority?.serverId ?? null,
+                    ...(projectedAction.execution.target === 'account' && authority?.accountLifetime
+                        ? { accountLifetime: authority.accountLifetime } : {}),
                     ...(input.execute ? { execute: input.execute } : {}),
                 },
             }

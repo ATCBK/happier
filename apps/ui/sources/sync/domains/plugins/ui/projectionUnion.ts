@@ -169,13 +169,14 @@ export function mergeInstalledPluginUiProjections(
                 declared[key] = entry;
                 continue;
             }
-            if (declaration && Array.isArray(declaration.hostSupplies) && !declaration.occurrenceId) {
+            if (declaration && Array.isArray(declaration.hostSupplies)
+                && (!declaration.occurrenceId || declaration.hostAccountOrigin)) {
                 declared[key] = Object.freeze(Object.assign({}, declared[key], {
                     hostSupplies: readPluginUiContributionSupplies(entry),
-                    // The union's selected producer owns launch custody and
-                    // Resource access even when presentation uses host bytes.
-                    // Unselected supplies still carry no executable identity.
-                    ...(declaration.contributionKind === 'surfacePlacement' || declaration.contributionKind === 'settingsPage'
+                    // Account surfaces retain their own custody; these supplies
+                    // are only optional scoped Machine transport. Other bundled
+                    // surfaces retain the selected producer's launch identity.
+                    ...(!declaration.hostAccountOrigin && (declaration.contributionKind === 'surfacePlacement' || declaration.contributionKind === 'settingsPage')
                         ? {
                             runtime: asRecord(entry)?.runtime ?? declaration.runtime,
                             occurrenceId: asRecord(entry)?.occurrenceId,
@@ -197,10 +198,15 @@ export function mergeInstalledPluginUiProjections(
         ...(runtime ?? EMPTY_PLUGIN_UI_PROJECTION),
         generation: runtime?.generation ?? null,
         installedPackagesById: Object.freeze(Object.assign({}, ...installed.map(model => model.installedPackagesById), runtime?.installedPackagesById)),
+        // Availability owns portable Account execution; Machine projections
+        // continue to own every other executable Action family.
+        actionsById: Object.freeze(Object.assign({}, runtime?.actionsById,
+            ...installed.map(model => Object.fromEntries(Object.entries(model.actionsById)
+                .filter(([, action]) => action.execution.target === 'account'))))),
         translationsByPluginId: merge(model => model.translationsByPluginId),
         sessionHeaderActionsById: merge(model => model.sessionHeaderActionsById),
         // Search binds the runtime Action's occurrence and origin, like
-        // actionsById above. Portable renderer declarations omit this family
+        // Machine Actions above. Portable renderer declarations omit this family
         // and cannot withdraw an admitted runtime provider from Home.
         searchProvidersById: runtime?.searchProvidersById ?? EMPTY_PLUGIN_UI_PROJECTION.searchProvidersById,
         hostedWebById: merge(model => model.hostedWebById, true),

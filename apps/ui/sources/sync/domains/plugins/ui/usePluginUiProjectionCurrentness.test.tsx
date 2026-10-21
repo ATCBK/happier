@@ -1242,6 +1242,7 @@ describe('usePluginUiProjectionCurrentness', () => {
     it('keeps a mounted target read and its selected occurrence through unrelated Machine publications', async ({ onTestFailed }) => {
         let phase = 'fixture';
         onTestFailed(() => console.info('Mounted target composition phase:', phase));
+        const { createDeferred } = await import('@/dev/testkit');
         const { artifactHtmlBundleFromBodyV1 } = await import('@happier-dev/protocol/artifacts/artifactHtmlV1');
         const { normalizePluginUiDestinationBindingV1 } = await import('@happier-dev/protocol/plugins/ui');
         const { PluginMachineExecutionOriginV1Schema } = await import('@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1');
@@ -1330,13 +1331,23 @@ describe('usePluginUiProjectionCurrentness', () => {
         expect(rendered.getCurrent().targeted.phase).toBe('loading');
         // An actual registry revision, unlike resource telemetry, retires the
         // old physical read through the shared writer/currentness lifecycle.
+        const replacementDescribe = createDeferred<unknown>();
+        projectionRuntime.describe.mockImplementationOnce(() => replacementDescribe.promise);
         phase = 'invalidate registry';
         await act(async () => {
             setMachine({ daemonStateVersion: 4,
                 daemonState: { ...daemonState, contributionRegistryProjectionRevision: 1 } });
         });
         phase = 'await replacement target read';
-        await waitForHomeGovernance(() => expect(signals).toHaveLength(2));
+        await flushHookEffects();
+        expect(rendered.getCurrent().currentness.phase).toBe('establishing');
+        expect(rendered.getCurrent().selected.selectedSupply).toMatchObject({
+            occurrenceId: firstSupply!.occurrenceId, generation: firstSupply!.generation,
+            phase: 'establishing', interactionEnabled: false,
+        });
+        expect(rendered.getCurrent().selected.selection.canExecute).toBe(false);
+        expect(rendered.getCurrent().selected.isExecutionOriginCurrent()).toBe(false);
+        expect(signals).toHaveLength(2);
         expect(signals[0]!.aborted).toBe(true);
         expect(signals[1]!.aborted).toBe(false);
         expect(rendered.getCurrent().selected.selectedSupply?.occurrenceId).toBe('occurrence-preview');
@@ -1344,6 +1355,13 @@ describe('usePluginUiProjectionCurrentness', () => {
         await act(async () => { deliver[0]!(); });
         await flushHookEffects();
         expect(rendered.getCurrent().targeted.phase).toBe('loading');
+        expect(rendered.getCurrent().targeted.targetedContributions).toBeNull();
+        phase = 'admit replacement projection';
+        await act(async () => { replacementDescribe.resolve(response); });
+        await flushHookEffects();
+        expect(signals).toHaveLength(2);
+        expect(signals[1]!.aborted).toBe(false);
+        expect(rendered.getCurrent().selected.isExecutionOriginCurrent()).toBe(true);
         phase = 'deliver current target reply';
         await act(async () => { deliver[1]!(); });
         await flushHookEffects();

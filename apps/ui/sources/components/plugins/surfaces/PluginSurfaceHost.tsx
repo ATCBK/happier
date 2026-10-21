@@ -10,6 +10,7 @@ import type { PluginUiResourceStore, PluginUiWidgetAreaPresentation } from '@hap
 import { PluginUiHostPresentationScope } from '@happier-dev/plugin-ui/advanced';
 import { useEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropHooks';
 import { getInstalledPluginUiClientExecutableComposition, resolvePluginUiClientDragSourceRegistration, resolvePluginUiClientDropTargetRegistration } from '@/components/plugins/reactNative/clientExecutableContributions';
+import { readPluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
 import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import { createHostedEntityDragDropHandlers } from '@/components/plugins/hostApi/hostedEntityDragDrop';
 import { createPluginEntityDragDropBinding, executeMountedPluginEntityDropAction, type PluginEntityDragDropBinding } from './entityDragDrop/pluginEntityDragDropBinding';
@@ -29,7 +30,7 @@ import { PluginHostedHtmlSourceV1Schema, type PluginHostedHtmlSourceV1 } from '@
 import { UiSurfaceNetworkRequestV1Schema, normalizeUiSurfaceCapabilityRequestV1, intersectUiSurfaceNetworkPoliciesV1, type UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
 import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef';
 import type { ComposerSnapshotV1 } from '@happier-dev/protocol/plugins/ui/composer';
-import type { DaemonPluginUiTargetedSurfaceMountV1, DaemonContributionRegistryProjectionMountedTargetV1, PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import type { PluginUiTargetedSurfaceMountCoreV1, DaemonContributionRegistryProjectionMountedTargetV1, PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import type { PluginDeclarativePreparedTargetedSurfaceInventoryEntryV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarativeDocument';
 import { getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginMachineExecutionOriginSelectorView } from '@/components/settings/machines/PluginMachineExecutionOriginSelector';
@@ -151,6 +152,7 @@ import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContri
 import {
     readPluginUiContributionOrigin,
     readPluginUiProjectionEntryExecutionOrigin,
+    mergeInstalledPluginUiProjections,
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     createPluginUiHostedWebArtifactRequestFactsKey,
@@ -307,7 +309,7 @@ const surfaceHostStyles = StyleSheet.create({
  * the bound controller remains the sole currentness publisher.
  */
 function TargetedPluginSurfaceReadyDiagnostic(props: Readonly<{
-    mount: DaemonPluginUiTargetedSurfaceMountV1;
+    mount: PluginUiTargetedSurfaceMountCoreV1;
     mountLifetime: BoundPluginSurfaceMountLifetime;
     children: React.ReactElement;
 }>): React.ReactElement | null {
@@ -2112,6 +2114,8 @@ export type PluginSurfaceTargetedMountProps = Readonly<{
      * unavailable until the next authoritative response settles.
      */
     daemonProjectionReady: boolean;
+    /** Borrowed currentness for the parent's optional scoped Machine transport. */
+    isExecutionOriginCurrent?: BoundPluginSurfaceBinding['isExecutionOriginCurrent'];
 }>;
 
 /**
@@ -2368,6 +2372,9 @@ function PluginSurfaceHostMount(props: Readonly<(
     // Daemon-selected embedded mounts already carry their exact contextual origin.
     const accountUnionMount = !hasEmbeddedRendererMount && selectedSurfaceBinding?.targetKind === 'app'
         && Array.isArray(descriptor?.hostSupplies);
+    const accountExecutionOrigin = React.useMemo(() => targetedBinding?.mount.accountExecutionOrigin
+        ?? (accountUnionMount ? readPluginUiAccountExecutableOrigin(descriptor) : null),
+    [accountUnionMount, descriptor, targetedBinding]);
     const needsMachineExecution = accountUnionMount && descriptor != null && isPluginSurfaceMachineBound({
         pluginId: mountedPluginId, surface: descriptor, projection: props.pluginUiProjection,
     });
@@ -2415,7 +2422,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         ? machineDisplayNamesById[machineId] ?? null
         : null;
     const serverId = hasEmbeddedRendererMount ? props.serverId : origin ? origin.serverId
-        : accountUnionMount ? pluginExecution.selection.storedTarget?.serverIdentityId ?? null : props.serverId;
+        : accountUnionMount ? accountExecutionOrigin?.serverId ?? pluginExecution.selection.storedTarget?.serverIdentityId ?? null : props.serverId;
     // The daemon byte route: the machine this mount reads from. It is
     // transport only; the lease verifies whatever bytes it returns.
     const exactArtifactSource = typeof machineId === 'string' && typeof serverId === 'string'
@@ -2433,15 +2440,18 @@ function PluginSurfaceHostMount(props: Readonly<(
             : ephemeralBinding
                 ? ephemeralBinding.surface.projectionGeneration
         : origin ? origin.generation : accountUnionMount ? null : props.pluginUiProjection?.generation;
+    const mountedAccountUiProjection = accountExecutionOrigin ? availabilityReader?.readAccountUiProjection() ?? null : null;
     const mountedPluginUiProjection = React.useMemo(() => (
         targetedBinding
-            ? normalizePluginUiProjection(targetedMount?.pluginProjectionV2 ?? null)
+            ? accountExecutionOrigin ? mergeInstalledPluginUiProjections(mountedAccountUiProjection ? [mountedAccountUiProjection] : [],
+                targetedMount?.pluginProjectionV2 ? normalizePluginUiProjection(targetedMount.pluginProjectionV2) : null)
+                : normalizePluginUiProjection(targetedMount?.pluginProjectionV2 ?? null)
             : composerBinding
                 ? normalizePluginUiProjection(composerMount?.pluginProjectionV2 ?? null)
                 : ephemeralBinding
                     ? normalizePluginUiProjection(ephemeralMount?.pluginProjectionV2 ?? null)
                 : props.pluginUiProjection ?? null
-    ), [composerBinding, composerMount?.pluginProjectionV2, ephemeralBinding, ephemeralMount?.pluginProjectionV2, props.pluginUiProjection, targetedBinding, targetedMount?.pluginProjectionV2]);
+    ), [accountExecutionOrigin, composerBinding, composerMount?.pluginProjectionV2, ephemeralBinding, ephemeralMount?.pluginProjectionV2, mountedAccountUiProjection, props.pluginUiProjection, targetedBinding, targetedMount?.pluginProjectionV2]);
     const installedPackagesById = mountedPluginUiProjection?.installedPackagesById;
     // The raw V2 Action map is the sole target source for the bound surface.
     // This closure is an exact lookup over that producer-owned snapshot, not a
@@ -2493,10 +2503,10 @@ function PluginSurfaceHostMount(props: Readonly<(
             : selectedSurfaceBinding?.surface.pluginId;
     const mountedTarget = React.useMemo(() => readMountedTarget({
         pluginId: mountedTargetPluginId,
-        occurrenceId: accountUnionMount
+        occurrenceId: accountExecutionOrigin?.custodyId ?? (accountUnionMount
             ? needsMachineExecution ? pluginExecution.selectedSupply?.occurrenceId : undefined
-            : readOptionalString(descriptor?.occurrenceId),
-    }), [accountUnionMount, descriptor?.occurrenceId, mountedTargetPluginId, needsMachineExecution, pluginExecution.selectedSupply?.occurrenceId]);
+            : readOptionalString(descriptor?.occurrenceId)),
+    }), [accountExecutionOrigin?.custodyId, accountUnionMount, descriptor?.occurrenceId, mountedTargetPluginId, needsMachineExecution, pluginExecution.selectedSupply?.occurrenceId]);
     // Every current public SurfaceContext carries this target-scoped snapshot;
     // an admitted empty point list is valid, but an absent snapshot is not
     // silently rewritten into a legacy context.
@@ -2512,11 +2522,11 @@ function PluginSurfaceHostMount(props: Readonly<(
         : undefined;
     // The Account catalog may retain another installation's package row. Its
     // presentation cannot stamp the selected Machine's mounted caller custody.
-    const mountedTargetSourceCustody = accountUnionMount
+    const mountedTargetSourceCustody = accountExecutionOrigin?.sourceCustody ?? (accountUnionMount
         ? pluginExecution.selectedSupply?.sourceCustody
         : executionOrigin && 'sourceRef' in executionOrigin
             ? executionOrigin.sourceRef.sourceCustody
-            : mountedTargetRow?.sourceCustody;
+            : mountedTargetRow?.sourceCustody);
     const mountedTargetDeclaresPoints = mountedTargetRow?.declaresContributionPoints !== false
         || !mountedTargetSourceCustody;
     // Bumping the refresh key re-asks the daemon for this target. It backs the
@@ -2526,6 +2536,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         setMountedTargetRefreshKey((current) => current + 1);
     }, []);
     const mountedTargetRead = useMountedTargetedContributions({
+        accountExecutionOrigin: accountExecutionOrigin ?? undefined,
         machineId,
         serverId,
         pluginId: mountedTarget?.pluginId,
@@ -2875,6 +2886,7 @@ function PluginSurfaceHostMount(props: Readonly<(
     const baseControllerFacts = targetedBinding
         ? createTargetedPluginSurfaceBoundFacts({
             request: targetedRequest!,
+            machineId,
             serverId,
             sessionId: props.sessionId,
             targetAuthorityKey: surfaceTargetAuthorityKey,
@@ -2965,7 +2977,8 @@ function PluginSurfaceHostMount(props: Readonly<(
             pluginDisplayName: installedPackagesById?.[mountedPluginId]?.displayName ?? null,
             serverId,
             projectionGeneration,
-            occurrenceId: mountedTarget?.occurrenceId ?? null,
+            occurrenceId: accountExecutionOrigin?.custodyId ?? mountedTarget?.occurrenceId ?? null,
+            ...(accountExecutionOrigin ? { accountExecutionOrigin } : {}),
             executionOrigin,
             resourceCapability,
             ...(ordinaryResourceContext ? { resourceContext: ordinaryResourceContext } : {}),
@@ -3169,8 +3182,10 @@ function PluginSurfaceHostMount(props: Readonly<(
     const controllerBindingWithConnectedAccounts = React.useMemo<BoundPluginSurfaceBinding>(() => Object.freeze({
         ...(controllerBinding ?? {}),
         openConnectedAccounts,
-        ...(needsMachineExecution ? { isExecutionOriginCurrent: pluginExecution.isExecutionOriginCurrent } : {}),
-    }), [controllerBinding, needsMachineExecution, openConnectedAccounts, pluginExecution.isExecutionOriginCurrent]);
+        ...(targetedMount?.isExecutionOriginCurrent
+            ? { isExecutionOriginCurrent: targetedMount.isExecutionOriginCurrent }
+            : needsMachineExecution ? { isExecutionOriginCurrent: pluginExecution.isExecutionOriginCurrent } : {}),
+    }), [controllerBinding, needsMachineExecution, openConnectedAccounts, pluginExecution.isExecutionOriginCurrent, targetedMount?.isExecutionOriginCurrent]);
     const baseCreateMountedHostApiHandlers = controllerBindingWithConnectedAccounts.createMountedHostApiHandlers;
     const createMountedHostApiHandlers = React.useCallback<BoundPluginSurfaceMountedHostApiHandlersFactory>((input) => {
         const mountedBundle = baseCreateMountedHostApiHandlers?.(input);
@@ -3571,8 +3586,11 @@ function PluginSurfaceHostMount(props: Readonly<(
                     projectionGeneration: mountedMachineInputs?.pluginProjectionV2?.generation,
                     pluginProjectionById: mountedMachineInputs?.pluginProjectionById,
                     pluginProjectionV2: mountedMachineInputs?.pluginProjectionV2,
-                    daemonProjectionReady: mountedTargetReady,
+                    daemonProjectionReady: machineExecutionReady,
+                    ...(needsMachineExecution && request.mount.mount.accountExecutionOrigin
+                        ? { isExecutionOriginCurrent: pluginExecution.isExecutionOriginCurrent } : {}),
                 }}
+                machineId={machineId}
                 serverId={serverId}
                 sessionId={props.sessionId}
                 localServicePreviewState={props.localServicePreviewState}
@@ -3588,8 +3606,12 @@ function PluginSurfaceHostMount(props: Readonly<(
     }, [
         controller,
         localControllerInteractionEnabled,
+        machineExecutionReady,
+        machineId,
         mountedMachineInputs,
         mountedTargetReady,
+        needsMachineExecution,
+        pluginExecution.isExecutionOriginCurrent,
         policyContext,
         props.localServicePreviewState,
         props.nowMs,

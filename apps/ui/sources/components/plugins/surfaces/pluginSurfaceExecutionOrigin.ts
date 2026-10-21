@@ -114,13 +114,15 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
         ? selection.candidates.find(candidate => arePluginMachineExecutionOriginsEqual(
             getPluginExecutionOriginCandidateOrigin(candidate), previous.supply.executionOrigin!,
         )) : null;
+    const sourceNotReady = offlineCandidate?.validation.kind === 'rejected'
+        && offlineCandidate.validation.reason === 'source_not_ready';
     const canRetainSupply = params.enabled && accountLifetime?.isCurrent() === true
         && previous?.accountLifetime === accountLifetime && previous.entryId === params.entry?.id
         && (!selection.selectedOrigin || arePluginMachineExecutionOriginsEqual(selection.selectedOrigin, previous.supply.executionOrigin!))
         && offlineCandidate?.validation.kind === 'rejected'
         && (offlineCandidate.validation.reason === 'offline' || offlineCandidate.validation.reason === 'stale'
             || offlineCandidate.validation.reason === 'home_unreachable' || offlineCandidate.validation.reason === 'daemon_unavailable'
-            || offlineCandidate.validation.reason === 'daemon_invalid_response');
+            || offlineCandidate.validation.reason === 'daemon_invalid_response' || sourceNotReady);
     const retainedSupply = canRetainSupply ? readPluginUiContributionSupplies(params.entry).find(supply => (
         supply.executionOrigin && previous?.supply.executionOrigin
         && arePluginMachineExecutionOriginsEqual(supply.executionOrigin, previous.supply.executionOrigin)
@@ -128,6 +130,11 @@ export function usePluginSurfaceExecutionOrigin(params: Readonly<{
         && supply.generation === previous.supply.generation
         && supply.pluginVersion === previous.supply.pluginVersion
         && supply.serverId === previous.supply.serverId
+        // A registry refresh withdraws authority, not this mounted identity.
+        // Otherwise its targeted replacement is immediately canceled and
+        // restarted when the same occurrence is admitted. A definitive
+        // source-not-ready answer is not an establishing refresh.
+        && (!sourceNotReady || supply.phase === 'establishing')
     )) ?? null : null;
     const selectedSupply = selectedSupplyFromSelection ?? retainedSupply;
     React.useLayoutEffect(() => {

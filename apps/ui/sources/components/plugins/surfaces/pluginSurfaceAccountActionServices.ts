@@ -2,20 +2,18 @@ import { PluginError, type JsonValue, type PluginContributionRef } from '@happie
 import type { PluginAccountActionContext, AdmittedTargetedOperationExecutionHandle, AdmittedTargetedOperationExecutionOptions } from '@happier-dev/plugin-sdk/actions';
 import {
     createManifestTargetedContributionsService,
-    mergeTargetedContributionManifestDeclarations,
     createPluginActionHandlerNotStartedError,
     requireAdmittedTargetedOperationExecutionBinding,
     resolveAdmittedTargetedOperationInput,
     validateTargetedOperationInput,
     validateTargetedOperationResult,
-    type TargetedContributionManifestDeclaration,
 } from '@happier-dev/plugin-sdk/host/registration';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { createPluginUiAccountStorageScope } from '@/sync/api/plugins/data/pluginUiDataClient';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
-import { machinePluginTargetedSourceDeclarationsRead, subscribeMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjection';
+import { createPluginSurfaceTargetedDeclarationSource } from './pluginSurfaceTargetedDeclarations';
 
 /** Physical UI services over the existing Account Data, Action and admission owners. */
 export function createPluginSurfaceAccountActionServices(input: Readonly<{
@@ -39,34 +37,12 @@ export function createPluginSurfaceAccountActionServices(input: Readonly<{
     const assertCurrent = () => {
         if (!isCurrent()) throw new PluginError({ code: 'plugin_action_generation_retired' });
     };
-    const accountDeclarations = (): readonly TargetedContributionManifestDeclaration[] => availability.readCurrentAccountExecutionDeclarations()
-        .map(row => ({ manifest: row.manifest, occurrenceId: row.custodyId, sourceCustody: row.sourceCustody }));
-    let machineDeclarations: readonly TargetedContributionManifestDeclaration[] = [];
-    const declarations = (): readonly TargetedContributionManifestDeclaration[] => mergeTargetedContributionManifestDeclarations({
-        targetPluginId: input.pluginId, accountDeclarations: accountDeclarations(), machineDeclarations,
-    });
-    const readCurrentDeclarations = async (signal: AbortSignal = invocation.signal) => {
-        assertCurrent();
-        if (input.machine) {
-            const result = await machinePluginTargetedSourceDeclarationsRead(input.machine.machineId, {
-                serverId: input.machine.serverId, pluginId: input.pluginId,
-                accountLifetime: input.accountLifetime, signal,
-            });
-            assertCurrent();
-            signal.throwIfAborted();
-            machineDeclarations = result.supported ? result.sourceDeclarations : [];
-        }
-        return declarations();
-    };
+    const declarationSource = createPluginSurfaceTargetedDeclarationSource({ ...input, signal: invocation.signal, isCurrent });
+    const declarations = declarationSource.readDeclarations;
+    const readCurrentDeclarations = declarationSource.readCurrentDeclarations;
     const targetedContributions = createManifestTargetedContributionsService({
         readCurrentDeclarations,
-        subscribeToCatalogChanges: listener => {
-            const unsubscribeAccount = availability.subscribe(listener);
-            const unsubscribeMachine = input.machine ? subscribeMachineContributionRegistryProjectionInvalidation({
-                machineId: input.machine.machineId, serverId: input.machine.serverId ?? input.accountLifetime.scope.serverId,
-            }, listener) : undefined;
-            return () => { unsubscribeAccount(); unsubscribeMachine?.(); };
-        },
+        subscribeToCatalogChanges: declarationSource.subscribe,
     }).bind({ pluginId: input.pluginId, signal: invocation.signal, isCurrent });
 
     const execute: PluginAccountActionContext['services']['actions']['execute'] = (async (

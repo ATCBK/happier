@@ -1623,13 +1623,24 @@ function createBoundReader(input: Readonly<{
                 && sameStrictJsonValue(cache.accountExecutionSelections, selections)) {
                 return cache.accountUi = cache.lastAccountUi ?? null;
             }
-            const entries = Object.assign({}, ...bundles.map(bundle => bundle.entriesById));
+            const entries = Object.assign({}, ...bundles.map(bundle => bundle.entriesById),
+                ...selections.map(selected => {
+                    const declarations = projectPluginPortableUiDeclarationsV1(
+                        selected.manifest, accountActionArtifactGraphs(selected, input.hostBundledUi ?? []),
+                    );
+                    return selected.release && selected.manifest.contributes.actions?.some(action => action.execution.target === 'account')
+                        ? declarations
+                        : Object.fromEntries(Object.entries(declarations).filter(([, entry]) => entry.contributionKind === 'uiRenderer'));
+                }));
+            const accountUiOrigins = new Map(selections.map(({ manifest, custodyId, sourceCustody }) => [manifest.id,
+                Object.freeze({ ...input.scope, custodyId, sourceCustody,
+                    ...(sourceCustody.kind === 'bundled_first_party'
+                        ? { declarationDigest: computePluginAccountBundledDeclarationDigestV1(manifest) } : {}) }),
+            ] as const));
             const actions: Record<string, PluginUiActionProjection> = {};
             for (const selected of selections) {
-                const { manifest, custodyId, sourceCustody } = selected;
-                const hostAccountOrigin = Object.freeze({ ...input.scope, custodyId, sourceCustody,
-                    ...(sourceCustody.kind === 'bundled_first_party'
-                        ? { declarationDigest: computePluginAccountBundledDeclarationDigestV1(manifest) } : {}) });
+                const { manifest, custodyId } = selected;
+                const hostAccountOrigin = accountUiOrigins.get(manifest.id)!;
                 const graphs = accountActionArtifactGraphs(selected, input.hostBundledUi ?? []);
                 for (const action of manifest.contributes.actions ?? []) {
                     if (action.execution.target !== 'account') continue;
@@ -1674,14 +1685,30 @@ function createBoundReader(input: Readonly<{
                 }
             }
             const projection = normalizePluginInstalledUiDeclarations(entries);
+            const withAccountOccurrence = <T extends Readonly<{ pluginId: string }>>(entry: T): T => {
+                const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
+                return hostAccountOrigin ? Object.freeze({ ...entry, occurrenceId: hostAccountOrigin.custodyId }) : entry;
+            };
             cache.accountUiBundles = bundles;
             cache.accountExecutionSelections = selections;
             return cache.accountUi = cache.lastAccountUi = Object.keys(entries).length > 0 || Object.keys(actions).length > 0 ? Object.freeze({ ...projection,
                 actionsById: Object.freeze(actions),
+                reactNativeBundlesById: Object.freeze(Object.fromEntries(Object.entries(projection.reactNativeBundlesById)
+                    .map(([key, entry]) => [key, withAccountOccurrence(entry)]))),
+                hostedWebById: Object.freeze(Object.fromEntries(Object.entries(projection.hostedWebById)
+                    .map(([key, entry]) => [key, withAccountOccurrence(entry)]))),
                 surfacePlacementsById: Object.freeze(Object.fromEntries(Object.entries(projection.surfacePlacementsById)
-                    .map(([key, entry]) => [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]) })]))),
+                    .map(([key, entry]) => {
+                        const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
+                        return [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]),
+                            ...(hostAccountOrigin ? { occurrenceId: hostAccountOrigin.custodyId, hostAccountOrigin } : {}) })];
+                    }))),
                 settingsPagesById: Object.freeze(Object.fromEntries(Object.entries(projection.settingsPagesById)
-                    .map(([key, entry]) => [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]) })]))),
+                    .map(([key, entry]) => {
+                        const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
+                        return [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]),
+                            ...(hostAccountOrigin ? { occurrenceId: hostAccountOrigin.custodyId, hostAccountOrigin } : {}) })];
+                    }))),
                 installedPackagesById: Object.freeze({ ...Object.fromEntries(bundles.map(bundle => [bundle.pluginId, {
                     id: bundle.pluginId, displayName: bundle.displayName,
                     version: bundle.pluginVersion, enabled: true, source: { kind: 'bundled' as const, locator: bundle.packageName },

@@ -7,6 +7,9 @@ import { createPluginDeclaredResourceStore } from './PluginContextualResourceSto
 import { createPluginSurfaceHostReadStore } from './pluginSurfaceHostReadStore';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
+import type { PluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
+import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
+import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 
 import type {
     ActionExecutorContext,
@@ -212,6 +215,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
     projectionGeneration?: number | string | null;
     /** Exact occurrence of the plugin that owns this mounted surface. */
     occurrenceId?: string | null;
+    /** Current Account-rendered surface custody from the Availability projection. */
+    accountExecutionOrigin?: PluginUiAccountExecutableOrigin;
     /**
      * The one CurrentUiContextProvider reader, borrowed at action-dispatch
      * time. A mounted surface never snapshots, stores, or resolves context on
@@ -554,6 +559,16 @@ function resolveDaemonBinding(facts: BoundPluginSurfaceFacts): Readonly<{
 function resolvePluginSurfaceCallerBinding(
     facts: BoundPluginSurfaceFacts,
 ): PluginSurfaceActionMountedBinding | null {
+    if (facts.accountExecutionOrigin) {
+        const selected = readCurrentAccountSurfaceSelection(facts);
+        return selected ? Object.freeze({
+            pluginId: facts.pluginId, pluginVersion: selected.manifest.version,
+            contributionLocalId: facts.contributionId, occurrenceId: selected.custodyId,
+            sourceCustody: selected.sourceCustody,
+            ...(facts.accountExecutionOrigin.declarationDigest
+                ? { declarationDigest: facts.accountExecutionOrigin.declarationDigest } : {}),
+        }) : null;
+    }
     const machineId = typeof facts.machineId === 'string' && facts.machineId.trim().length > 0
         ? facts.machineId
         : null;
@@ -579,6 +594,17 @@ function resolvePluginSurfaceCallerBinding(
         ...(materializationRef === undefined ? {} : { materializationRef }),
         ...(sourceRef === undefined ? {} : { sourceCustody: sourceRef.sourceCustody }),
     });
+}
+
+function readCurrentAccountSurfaceSelection(facts: BoundPluginSurfaceFacts) {
+    const origin = facts.accountExecutionOrigin;
+    const lifetime = facts.accountLifetime;
+    if (!origin || !lifetime?.isCurrent() || origin.accountId !== lifetime.scope.accountId
+        || !areServerProfileIdentifiersEquivalent(origin.serverId, lifetime.scope.serverId)
+        || origin.custodyId !== facts.occurrenceId) return null;
+    const selected = readPluginAccountAvailability(lifetime.scope).readCurrentAccountExecution(facts.pluginId);
+    return selected.kind === 'available' && selected.custodyId === origin.custodyId
+        && pluginSourceCustodyV1Equal(selected.sourceCustody, origin.sourceCustody) ? selected : null;
 }
 
 function createBoundPluginSurfaceActionDispatcher(input: Readonly<{
@@ -789,7 +815,8 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const isCurrent = (): boolean => !retired
         && accountLifetime?.isCurrent() === true
         && parentLifetime?.isCurrent() !== false
-        && input.facts.isHostCurrent?.() !== false;
+        && input.facts.isHostCurrent?.() !== false
+        && (!input.facts.accountExecutionOrigin || readCurrentAccountSurfaceSelection(input.facts) !== null);
     const isInteractionCurrent = (): boolean => isCurrent()
         && (input.facts.isInteractionEnabled?.() ?? input.facts.interactionEnabled);
     const binding = input.binding;
@@ -1255,7 +1282,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             if (method === 'watchResource') return canWatchResource;
             return true;
         }),
-        ...(targetedContributions
+        ...(callerBinding?.sourceCustody ? { callerSourceCustody: callerBinding.sourceCustody } : targetedContributions
             ? { callerSourceCustody: targetedContributions.target.sourceCustody }
             : {}),
         ...(interactionRequester ? { interactionRequester } : {}),
@@ -1530,6 +1557,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             facts.sessionId,
             facts.targetAuthorityKey,
             facts.occurrenceId,
+            stableJsonStringify(facts.accountExecutionOrigin ?? null),
             facts.readCurrentUiContext,
             stableJsonStringify(facts.executionOrigin ?? null),
             facts.resourceCapability?.readable,

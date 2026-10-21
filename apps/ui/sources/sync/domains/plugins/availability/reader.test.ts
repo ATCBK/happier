@@ -118,14 +118,17 @@ describe('Plugin Account Availability reader', () => {
             artifactId: 'account-actions', tier: 'reactNative', entry: 'react-native/account-actions/entry.cjs.bundle',
             digest: artifactDigest,
             files: [{ relativePath: 'react-native/account-actions/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
-            builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0',
+            builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate', 'renderSurface'] }, hostUiApiRange: '^1.0.0',
         });
         const manifest = PluginPortableReleaseManifestV1Schema.parse({
             ...intentRead().release!.normalizedManifest,
             contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui', 'cli'],
                 placementBindings: [], dangerLevel: 'safe', execution: {
                     target: 'account', account: { artifactId: artifactGraph.artifactId, exportName: 'activate' },
-                }, inputSchema: { type: 'object', additionalProperties: false }, resultSchema: { type: 'object' } }] },
+                }, inputSchema: { type: 'object', additionalProperties: false }, resultSchema: { type: 'object' } }],
+                ui: { renderers: [{ id: 'account-page-renderer', kind: 'reactNative', artifact: artifactGraph.artifactId,
+                    requiredHostMethods: ['executeAction'] }], views: [{ id: 'account-page', container: 'appPage',
+                    title: 'Account page', target: { kind: 'app' }, renderer: 'account-page-renderer' }] } },
         });
         const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
             ...intentRead(), release: { ...intentRead().release!, normalizedManifest: manifest,
@@ -143,6 +146,8 @@ describe('Plugin Account Availability reader', () => {
             authorization: { generation: { appliedGeneration: null } } });
         const custodyId = action?.occurrenceId;
         expect(custodyId).toBeTypeOf('string');
+        expect(first?.surfacePlacementsById[`surfacePlacement:${manifest.id}:account-page`])
+            .toMatchObject({ occurrenceId: custodyId, hostAccountOrigin: action?.hostAccountOrigin });
         expect(first?.reactNativeBundlesById[`reactNativeBundle:${manifest.id}:read`])
             .toMatchObject({ artifactGraph, generatedOwnerKind: 'clientContribution', contributionId: 'read',
                 occurrenceId: custodyId, runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' } } });
@@ -359,7 +364,11 @@ describe('Plugin Account Availability reader', () => {
             materializations: [], snapshots: [] }) };
         expect(createPluginAccountAvailabilityReader(portableInput).readCurrentArtifact(slot))
             .toMatchObject({ kind: 'available', artifact: { digest: portableDigest, releaseVersion: '2.0.0' } });
-        expect(createPluginAccountAvailabilityReader(portableInput).readAccountUiProjection()).toBeNull();
+        const portableUi = createPluginAccountAvailabilityReader(portableInput).readAccountUiProjection();
+        expect(portableUi?.surfacePlacementsById).toEqual({});
+        expect(portableUi?.actionsById).toEqual({});
+        expect(portableUi?.unknownEntriesById['uiRenderer:happier.fixture:fixture'])
+            .toMatchObject({ contributionKind: 'uiRenderer', contributionId: 'fixture' });
         const store = createPluginAccountAvailabilityReaderStore({ hostBundledUi: input.hostBundledUi });
         store.replace({ scope, snapshot: input.snapshot });
         const bound = store.bind(scope);

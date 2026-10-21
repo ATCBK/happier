@@ -74,7 +74,8 @@ describe('plugin surface execution requirement', () => {
         const sourceCustody = { kind: 'development' as const, registeredRootId: 'surface-source-root' };
         const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_surface_source',
             sourceRef: { machineId, pluginId, sourceCustody } });
-        const project = (occurrenceId: string, generation: number, phase: 'current' | 'establishing' | 'unavailable' = 'current') => {
+        const project = (occurrenceId: string, generation: number, phase: 'current' | 'establishing' | 'unavailable' = 'current',
+            unavailableReasonCode?: string) => {
             const model = normalizePluginUiProjection({ v: 2, generation, agentsById: {}, actionsById: {}, toolsById: {},
                 commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
                 installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Source surface', version: '1.0.0',
@@ -94,7 +95,8 @@ describe('plugin surface execution requirement', () => {
                 } } },
             });
             const union = unionPluginUiProjections([{ machineId, serverId: connection.home.id, serverIdentityId: 'srv_surface_source',
-                phase, interactionEnabled: phase === 'current', projection: model }]).pluginUiProjection;
+                phase, interactionEnabled: phase === 'current', projection: model,
+                ...(unavailableReasonCode ? { unavailableReasonCode } : {}) }]).pluginUiProjection;
             if (!union) throw new Error('Source projection failed admission');
             if (!union.surfacePlacementsById[entryId]) throw new Error('Source placement failed canonical admission');
             return union;
@@ -196,6 +198,25 @@ describe('plugin surface execution requirement', () => {
             expect(mounted.selectedSupply, JSON.stringify(mounted.selection.state)).toMatchObject({ occurrenceId: 'occurrence-a', generation: 1 });
             expect(mounted.selection.machineCandidates).toHaveLength(0);
             expect(mounted.isExecutionOriginCurrent()).toBe(true);
+            // Re-description preserves this exact mounted identity, never its
+            // executable authority. A definitive answer with the same refusal
+            // reason is not that transient refresh and must withdraw it.
+            committedProjection = projectionForRender = project('occurrence-a', 1, 'establishing');
+            pageEntryForRender = projectionForRender.surfacePlacementsById[entryId];
+            await hook.rerender();
+            expect(hook.getCurrent().selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a', generation: 1,
+                phase: 'establishing', interactionEnabled: false });
+            expect(hook.getCurrent().selection.canExecute).toBe(false);
+            expect(hook.getCurrent().isExecutionOriginCurrent()).toBe(false);
+            committedProjection = projectionForRender = project('occurrence-a', 1, 'current', 'plugin_source_not_ready');
+            pageEntryForRender = projectionForRender.surfacePlacementsById[entryId];
+            await hook.rerender();
+            expect(hook.getCurrent().selectedSupply).toBeNull();
+            expect(hook.getCurrent().selection.canExecute).toBe(false);
+            expect(hook.getCurrent().isExecutionOriginCurrent()).toBe(false);
+            committedProjection = projectionForRender = initialProjection;
+            pageEntryForRender = initialProjection.surfacePlacementsById[entryId];
+            await hook.rerender();
             // A published content hint can advance before its opened Machine
             // row. Keep the projection source constant to isolate inventory
             // readiness from genuine registry/occurrence replacement.

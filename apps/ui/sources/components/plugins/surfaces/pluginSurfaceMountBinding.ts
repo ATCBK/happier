@@ -11,9 +11,8 @@ import {
 import type {
     DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1,
     DaemonPluginUiComposerSurfaceCatalogEntryV1,
-    DaemonPluginUiTargetedSurfaceMountV1,
 } from '@happier-dev/protocol';
-import { readDaemonPluginUiTargetedSurfaceMountV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { readDaemonPluginUiTargetedSurfaceMountV1, type PluginUiTargetedSurfaceMountCoreV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { getPluginMachineExecutionOriginRef } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 /**
@@ -58,7 +57,7 @@ export type PluginSurfaceInlineMountBinding<
  * fallback, interpret input, or resolve an alternate contributor.
  */
 export type PluginSurfaceTargetedMountBinding<
-    TMount extends DaemonPluginUiTargetedSurfaceMountV1 = DaemonPluginUiTargetedSurfaceMountV1,
+    TMount extends PluginUiTargetedSurfaceMountCoreV1 = PluginUiTargetedSurfaceMountCoreV1,
 > = Readonly<{
     kind: 'targetedSurface';
     mount: TMount;
@@ -95,7 +94,7 @@ export type PluginSurfaceEphemeralMountBinding = Readonly<{
  */
 export type PluginSurfaceMountBinding<
     TDescriptor extends PluginSurfaceMountDescriptor = PluginSurfaceMountDescriptor,
-    TTargetedMount extends DaemonPluginUiTargetedSurfaceMountV1 = DaemonPluginUiTargetedSurfaceMountV1,
+    TTargetedMount extends PluginUiTargetedSurfaceMountCoreV1 = PluginUiTargetedSurfaceMountCoreV1,
     TComposerMount extends ComposerSurfaceMountBindingV1 = ComposerSurfaceMountBindingV1,
     TComposerCatalogEntry extends DaemonPluginUiComposerSurfaceCatalogEntryV1 = DaemonPluginUiComposerSurfaceCatalogEntryV1,
 > = PluginSurfaceDestinationMountBinding<TDescriptor>
@@ -146,7 +145,7 @@ export function createPluginSurfaceInlineMountContext<
  * embedded target can never enter destination navigation or restoration.
  */
 export function createPluginSurfaceTargetedMountContext<
-    TMount extends DaemonPluginUiTargetedSurfaceMountV1,
+    TMount extends PluginUiTargetedSurfaceMountCoreV1,
 >(
     mount: PluginSurfaceTargetedMountBinding<TMount>,
 ): PluginUiMountContextV1 {
@@ -238,7 +237,7 @@ function sameComposerRendererChain(
  * an arbitrary renderer/order after target admission.
  */
 export function readPluginSurfaceTargetedMountBinding<
-    TMount extends DaemonPluginUiTargetedSurfaceMountV1,
+    TMount extends PluginUiTargetedSurfaceMountCoreV1,
 >(input: Readonly<{
     mounts: readonly TMount[];
     target: TMount['target'];

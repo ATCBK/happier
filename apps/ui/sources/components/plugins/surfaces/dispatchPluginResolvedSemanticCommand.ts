@@ -156,11 +156,11 @@ export async function dispatchPluginResolvedSemanticCommand(
     if (!isPluginProjectedActionExecutable(projectedAction)) {
         return { ok: false, code: 'unavailable', reason: 'plugin_ui_action_unavailable' };
     }
-    const scopedAuthority = resolveProjectedActionExecutionScope(
-        projection,
-        projectedAction,
-        input.scopedLaunchFacts,
-    );
+    // Account code stays local; an explicit current Machine is only a borrowed
+    // address for nested source operations, never the Account artifact supplier.
+    const scopedAuthority = projectedAction.execution.target === 'account'
+        ? resolveCurrentPluginSemanticCommandScope(projection, input.scopedLaunchFacts)
+        : resolveProjectedActionExecutionScope(projection, projectedAction, input.scopedLaunchFacts);
     const scopedMachineId = scopedAuthority?.machineId;
     if (
         projectedAction.execution.target === 'daemon'
@@ -179,11 +179,14 @@ export async function dispatchPluginResolvedSemanticCommand(
         resolveContributedAction,
         pluginUiProjection: projection,
         ...(input.signal ? { signal: input.signal } : {}),
-        ...(projectedAction.execution.target === 'daemon'
+        ...((projectedAction.execution.target === 'daemon'
+            || (projectedAction.execution.target === 'account' && scopedMachineId))
             ? {
                 contributedAction: {
                     machineId: scopedMachineId!,
                     serverId: scopedAuthority!.serverId,
+                    ...(projectedAction.execution.target === 'account' && input.accountLifetime
+                        ? { accountLifetime: input.accountLifetime } : {}),
                     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
                     ...(input.execute ? { execute: input.execute } : {}),
                 },
