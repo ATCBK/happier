@@ -667,6 +667,30 @@ reason, while the earlier blocked row owns its explanation and repair controls.
 The per-row Retry Send control is for a failed local outbox operation, not a
 second recovery owner for uncertain server custody.
 
+For Discussion inputs in 0.3 development, the committed append owner selects
+the exact `(discussionId, messageId, participantSessionId, throughSeq)` tuple.
+Follow intake carries it in `discussionAddressing` and the original reply
+destination; the authenticated Machine receipt binds the same tuple to the
+admitted receiver. Materialization and the private host turn witness retain it.
+Injected question context and bounded `discussion.read` requests cannot advance
+to a later feed cutoff; a second question has its own original and cutoff.
+
+Before a provider effect, Pending's
+[settlement/readmission owner](../apps/server/sources/app/session/pending/pendingMessageService.ts)
+reopens the original reply progress and receipt, including for materialized input. It checks
+their exact tuple, the committed question, current participation, access and
+delivery mute; newly supplied request metadata is not replacement authority.
+A released or revoked original cannot dispatch. Participant removal or
+Discussion archive withdraws outstanding returns in that same original custody;
+reinvitation cannot revive a withdrawn ask. This does not override ordinary
+blocked-predecessor FIFO or the unknown-effect recovery above. The canonical
+checks are `validateInputSettlementDomainFactsInTx` with the
+[Session reply owner's](../apps/server/sources/app/session/messages/sessionMessageReply.ts)
+`isDiscussionReplyDestinationCurrentInTx` and `withdrawDiscussionInputRepliesInTx`;
+see [Discussion provenance](session-collaboration.md#discussion-provenance)
+for cutoff, explicit/final arbitration and private-review consequences. Native
+continuation isolation remains a separate composed-validation obligation.
+
 ## Current Queue V2 activation ownership
 
 This section describes development behavior that is not yet a released contract. Pending Queue V2 remains the sole durable owner of message custody, ordering, and exact-row actions. An inactive-session activation request is a small session-level authorization for one exact eligible queued row; it is not another message-delivery state machine and does not change that row's delivery priority.

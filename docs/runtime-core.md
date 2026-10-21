@@ -60,6 +60,27 @@ excludes inline-token ranges. Human readers share
 [`messageDisplayText.ts`](../apps/ui/sources/components/sessions/transcript/messageDisplayText.ts),
 while only the bound Markdown renderer consumes token-bearing source.
 
+## Discussion input and answer lifecycle
+
+In 0.3 development, a committed Discussion question enters the existing Follow
+and Pending owners, not a separate Agent runner or delivery queue. Its exact
+question, participant and `throughSeq` cutoff travel with protected input
+custody into the host turn witness. Injected context and bounded Discussion
+reads use that cutoff; this does not erase a native continuation's prior history.
+
+The existing Session reply owner arbitrates an explicit reply against the exact
+turn's final-result fallback. The Discussion append transaction commits the
+publication and settles that original together; a committed explicit reply
+suppresses later fallback, including after a lost acknowledgement. Watch-policy
+final outcomes are released without automatic Discussion publication. A private
+draft instead hands off to the existing person-only Action review: publication
+rechecks the approved body and current access; Decline settles the original
+without posting. See [Discussion provenance and answer custody](session-collaboration.md#discussion-provenance)
+for those owners, policy/review details and current integration limits, and
+[Pending delivery](pending-delivery.md#live-runner-wake-up-recovery-development)
+for receipt readmission and withdrawal. These are development-source contracts,
+not a claim that every native or loaded-runtime journey is verified.
+
 ## Session and turn lifecycle
 
 Codex app-server can finish a native turn while an already-started tool is still running. The

@@ -1409,6 +1409,17 @@ with the same key and identities. Initial Account grants commit atomically with 
 and first message; recipient envelopes are prepared through the existing authorized census
 and fenced commit. Envelope-delivery uncertainty does not authorize another create.
 
+Initial `participants` also accept concrete `{kind:'session',sessionId}` bindings,
+alongside `{kind:'account',accountId}` invitations. The `discussion.create` Action
+resolves SessionTarget selections before the HTTP boundary; the server receives concrete
+identities and reuses ordinary invitation/control/disclosure admission inside the atomic
+create. First-message typed Session mentions and `mentionedSessionIds` address only those
+admitted initial participants. The first occurrence has `seq:1` and `throughSeq:1`;
+an invitation without addressing does not start an agent. Invalid addressing rolls back
+the resource, invitations and first message together; retry rejoins the original occurrence,
+not a second post. These are development server contracts; the New Discussion selection
+controls and loaded UI journey have their separate implementation/validation boundary.
+
 Each message has one authenticated `authorAccountId`. Human-origin writes have no `producerV1`.
 An Agent-origin post is admitted only from the runtime's authenticated execution Account and
 carries mandatory host-stamped `producerV1` display provenance for that Session, optionally with

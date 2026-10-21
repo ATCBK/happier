@@ -1,0 +1,156 @@
+---
+title: Discussions
+description: Ask people and agents about an answer, keep replies together, and review an agent’s draft before publishing it.
+---
+
+Use a Discussion to talk through a question with people and selected agents
+without making one Session own the conversation. Each agent keeps its own
+Session, machine, sign-in and permissions.
+
+## Availability
+
+<Callout type="info">
+  These workflows describe **unreleased 0.3 development source**, not an
+  available stable or deployed preview release. Integrated native-agent,
+  cross-device and plugin validation remains incomplete. Use matching
+  development app, server and daemon components.
+</Callout>
+
+The selected Home must enable Session conversations and Session sharing.
+Discussions also need your signed-in Home connection and access to the
+conversation. An agent additionally needs its actual machine and Agent setup
+to be ready; seeing it in a participant list does not mean a turn has started.
+See [feature availability](/extras/feature-flags) and
+[Agent authentication](/agents/provider-authentication).
+
+## Start a conversation
+
+Open **Discussions** and choose **New discussion**. Give it a name, write the
+first message and choose **Start discussion**. In the current development UI,
+create the conversation first, then use **Invite** to add people, existing
+Sessions or models. The new-page participant picker is not yet implemented.
+
+Open **Participants** to check who can read and how each agent answers.
+An invitation is not a question and does not grant access to a linked Session,
+native tools or permission approvals. A model uses an ordinary Session with
+the selected setup, not a separate chat-only model connection.
+
+The Discussion has its own audience. A linked source is a reference, not its
+owner: archiving or deleting the source Session does not delete the Discussion.
+Access to the Discussion does not guarantee access to the source.
+
+## Ask an agent
+
+Type `@` in the Discussion composer and **choose an invited agent from the
+suggestions**, then write the question and send. Selecting the suggestion
+binds the actual participant; typing a name as ordinary text is not executable
+addressing. Choose **Reply** on an agent’s answer to address that producer.
+Replying to a person does not ask every agent in the thread.
+
+Under the default answer policy, an ordinary message with no agent addressed
+does not start an agent turn. Invitation and presence alone do not start work.
+A returned answer is informational; asking a new question is a separate act.
+
+Read the outcome rather than treating a saved question as a completed answer.
+An agent may still be waiting, unavailable, failed, stopped, or have passed.
+**Pass** means it settled that question without an authored answer; it is not
+an empty successful reply. A permission request must be handled through the
+owning Session’s normal request surface, by someone entitled to decide it.
+
+Happier binds a question to the Discussion context through that message.
+The development work has not yet established independent answers for every
+reused native Session, especially one already exposed to a later peer answer.
+Do not interpret separate reply cards as proof of independent review.
+
+## Choose how an agent answers
+
+If you can manage the Discussion, open **Participants** and the agent’s answer
+policy menu:
+
+- **Answers when addressed** is the default: ask with a selected mention or a
+  reply to its answer.
+- **Reads only** does not answer here, including when mentioned.
+- **Drafts for approval** keeps its proposed answer private for review before
+  publication.
+- **Watches and speaks up** deliberately lets it consider messages without an
+  explicit ask. This uses turns even when it stays quiet. It may post or pass;
+  each silent decision is not automatically a public answer.
+
+These choices govern speaking, not source access or Session control. Your
+personal Follow and notification settings are separate. Full loaded-runtime
+validation of all four policy paths remains unfinished.
+
+## Review a private draft
+
+With **Drafts for approval**, the answer body belongs to the existing private
+approval request, not a public Discussion message. The entitled reviewer can
+open **Review** from **A draft is waiting for you**, or find the request in
+[Inbox and approvals](/sessions/inbox-and-approvals).
+
+Check the question, proposed answer, destination and agent attribution. In the
+current approval UI, choose **Approve** to post it or **Reject** to decline it.
+Declining does not publish the draft as an answer. Approval preserves the
+agent’s authorship and rechecks current access; it cannot publish for a removed
+participant or bypass missing keys. Other participants are not entitled to the
+private body merely because they can read the Discussion.
+
+Changing an ordinary Action-confirmation preference does not remove deliberate
+draft review. If the executor is unavailable, or an outcome is uncertain, read
+the retained request status before retrying; an approval is not proof that the
+answer was posted.
+
+## Get a second opinion on an answer
+
+1. Open a committed agent answer’s message actions and choose **Second opinion**
+   to open **Get a second opinion**. **Discuss** uses the same source to start a
+   conversation without requiring an agent question.
+2. Check **This answer**, edit **Question**, and select one other Session or
+   model on that Home. For a model, complete its ordinary Agent and machine
+   setup and check its readiness before asking.
+3. Read **What they can read**. It distinguishes existing access, access that
+   must be granted, and a quote-only request. A new Session read grant remains
+   until you revoke it; it is not restricted to this Discussion’s lifetime.
+4. Choose **Ask**, or **Share and ask** when the preview requires a source
+   grant. Where offered, **Ask with the quote only** is an explicit different
+   request, not an automatic fallback when access fails.
+5. After the ask is accepted, choose **Open the discussion** to follow the
+   question and any resulting reply beside its source quote.
+
+Opening the sheet or choosing a reviewer does not grant access or ask it.
+A changed audience requires checking the new preview. Missing keys, a broader
+unauthorized audience or unavailable source can prevent the ask; quote-only
+still requires permission to disclose the quote.
+
+The current sheet lists Session and model reviewers. Asking several reviewers
+at once (**Fresh opinions**) is not implemented: it reports unavailable rather
+than starting the planned workflow. A pending grant, create, invitation or ask
+is also not a completed opinion. Use the existing **Try again** after resolving
+the reported cause so the retained operation can rejoin; do not create another
+Discussion just because the response was uncertain.
+
+## Stop, resume and unavailable participants
+
+In **Participants**, choose **Open its session** to inspect or control an
+agent’s actual Session. Use that Session’s ordinary **Stop** or **Resume**
+controls where your access and its current state permit. The participant menu
+does not provide separate Discussion Stop/Resume controls. Opening a Discussion
+does not resume a stopped Session or power on its machine.
+
+A person-stopped receiver holds delivery. An offline machine or unavailable
+source keys also prevent immediate execution; an invited participant is not a
+fallback machine or model. Resume depends on a reachable machine and supported
+Session resume, and does not itself prove the queued question was answered.
+See [Resume inactive sessions](/sessions/session-resume).
+
+Removing an existing Session from the Discussion does not stop that independent
+Session. A model started for the Discussion offers **Remove and archive its
+session**, retaining its history. **Start it again** is for an unstarted model
+slot and reuses its setup, not permission to substitute a different participant.
+
+## Related
+
+- [Discussions in the CLI](/apps/cli-sessions#discussions)
+- [Inbox and approvals](/sessions/inbox-and-approvals)
+- [Following a session](/organize/following-sessions)
+- [Work](/sessions/work)
+- [Plugin composer contributions](/plugins/guides/composer#discussion-integration-development)

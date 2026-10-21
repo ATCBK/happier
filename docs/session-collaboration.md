@@ -355,6 +355,16 @@ the original retry. It must not generate another data key. Initial invitations c
 the resource and first message; recipient key preparation then uses the existing census and
 fenced envelope commit owner. A pending key-delivery result is not a second creation.
 
+New Discussion's existing create input carries the selected initial people and concrete
+Session/Bot participants. After their ordinary invitation admission, the atomic first
+message uses the same addressing classifier as later posts. A typed Session mention must
+name an invited participant; it never enrolls one implicitly. That first question is the
+original message at sequence/cutoff1, available through the existing participant Follow
+relation. An unaddressed invitation creates no default agent request. Retrying create
+retains the same first occurrence and does not reset an acknowledged Follow frontier.
+This describes the development server seam; selection controls and the composed live
+New Discussion journey are not certified by the server tests.
+
 This remains work in progress, not shipped availability or completed package/live validation.
 The current resource contract includes same-Discussion message replies and distinct Account
 and Session participant references. Mentions carry that typed identity; labels and ordinary
@@ -370,6 +380,44 @@ envelopes remain unavailable through the existing `keyReadiness: false` state. O
 Session-addressed drafts remain stored and are not read at the new Discussion address.
 
 ### Discussion client data and controls
+
+#### Per-Discussion check-in and composer recipients (r0.3f development)
+
+The existing Discussion resource now carries optional operational `settingsV1`.
+Its closed shape is `coordination.autonomousCheckIn.afterTurns`, using the shared
+autonomous-exchange setting: a positive integer overrides the Account interval,
+`null` never pauses, and an absent override inherits the Account choice. These
+settings contain no message content or key material. An additive nullable JSON
+column leaves existing Discussions inheriting; no applied migration is rewritten.
+`discussion.settings.get` reads with current Discussion access, while
+`discussion.settings.set` requires its owner/admin authority and the ordinary
+Action HTTP admission. Empty settings restore inheritance. CLI commands are
+`discussions settings get <discussionId>` and `discussions settings set
+<discussionId> --settings <json>`; MCP/Voice use the catalog's
+`discussion_settings_get` / `discussion_settings_set` bindings. The canonical
+approval policy keeps in-app reversible changes direct and agent approval intact.
+
+The production Session client binds N1's
+`readDiscussionAutonomousCheckIn({serverId,discussionId})` to that captured-Account
+authorized read. `undefined` means inheritance, `{afterTurns:null}` means Never,
+and `null` means unavailable: the existing check-in owner holds rather than
+silently inheriting. A different Home, refused read or malformed known value is
+unavailable, not inheritance. No counter, mode or reducer lives in Discussion
+settings. UI data comes from `useDiscussionSettings`; `dontPause()`,
+`setOverride(value)` and `inherit()` feed the Discussion menu composition.
+
+The private Discussion draft's `recipients` field stores typed admitted Account
+or concrete Session references, not labels or a second roster. The shared
+`RecipientMultiSelectModel` and `useDiscussionRecipientSelection` supply controlled
+choices to the existing Send to chip. Bound model participants use their backing
+Session; unbound model slots cannot become routing targets. The selection survives
+draft reload and accepted-send clearing until explicitly changed. At send time,
+`useDiscussionDraft.prepareContent` supplies default typed mentions only when the
+existing content has no explicit participant mention and there is no Reply target.
+Any Reply (including a Doc or Task target) wins. The existing content/addressing
+owner remains the only parser, and admission still checks live membership.
+This is data-layer behavior; the visible menu/chip and live journey belong to the
+Discussion composition lane and are not certified by these owner tests.
 
 After observing a committed create, `NewDiscussion.finish` clears only the still-current
 submitted fields, retires the attempt and persists local draft custody before `onCreated`
@@ -620,6 +668,17 @@ The reference grants no Task access and selects no configured source connection.
 Task reads and navigation remain with the Tasks source owner; an unavailable source
 does not remove the private Discussion or its authored replies. `discussion.reply`
 publishes only into the Discussion, never into a tracker's provider comments.
+The retained entry identity alone is not a configured-source read target. Triage's
+current get operation requires an explicit configured instance; core must not
+guess one from the entry id or choose the first matching connection. Until the
+source owner supplies that qualified read/open handoff, Task headers and replies
+keep a shared unavailable source/quote state without a fabricated title or link.
+
+A retained Session anchor also remains visible when its authorized title is
+unavailable; that state supplies no navigation callback. An available anchor
+returns to its exact committed message, when present, through the shared
+Home-qualified Session route. Activation rechecks the captured Account lifetime
+and current source readability rather than spending a stale rendered link.
 
 ### Second-opinion composition (development integration)
 
@@ -650,6 +709,19 @@ read; another Account's Session defaults to quote-only, which still requires
 disclosure admission. Confirmed read grants use the ordinary whole-Session or
 Artifact view grant and remain until revoked through that resource's owner;
 they are not temporary Discussion-scoped grants.
+
+The shared Action policy classifies a valid `intent: preview` as read-only for
+default danger confirmation; `intent: ask` remains dangerous. Preview still
+returns source text to its caller, so it retains present-user authority, source
+admission and Voice privacy checks. Explicit Require settings still apply, and
+an automated CLI call cannot claim present-user authority. The sheet passes
+refusal or deferred-approval codes to the shared diagnostic state rather than
+turning an approval request into a successful preview.
+
+Reviewer selection consumes the shared executable-participant picker and its
+readiness/setup owners. A model choice retains its reviewed launch and participant
+slot through preview, Ask and retry; selecting or previewing it does not create a
+Session. Late setup from a retired Home/Account must not become a reviewer choice.
 
 One reviewer receives the ordinary U2 addressed question after an unaddressed
 anchored quote. Create, quote and question keep distinct retained retry ids;
@@ -916,7 +988,9 @@ review assertion on its trusted socket publication. Neither a public post nor
 an authored private publisher request accepts that assertion. Reviewed publication does
 not require a live Agent caller, but retains Home, Account, Machine, permission, source and
 participant currentness; ordinary Agent effects still require their live caller. Definite
-pre-publication refusals remain typed. An uncertain append acknowledgement remains an
+pre-publication refusals remain typed. A failed read-only preparation request returns
+`discussions_unavailable` (or `cancelled` when that read is aborted), not publication
+uncertainty: no append has been attempted. An uncertain append acknowledgement remains an
 unknown outcome under the same original retry identity, not another approval or a wake.
 
 Reviewed post/reply replay uses that same `discussion-agent-post-v1` event's closed
@@ -971,9 +1045,13 @@ through C3 addressing; there is no separate configurable delivery engine.
 In 0.3 development, Discussion Follow intake renders the addressed question
 through `sessionInputPromptContextV1.ts`. Its input-context block identifies the
 sender kind and available Account, Team, Session and display-name facts. These
-labels describe the request; they grant no authority. Background items, including
+labels describe the request; they grant no authority. A person uses the admitted
+Account profile's name; an Agent Session, Bot or model uses its authorized Session
+presentation, not its human Account owner's name. An unavailable name remains
+unavailable rather than borrowing a different actor's identity. Background items, including
 compact Doc cards, use that same owner's `<happier_discussion_context>` block:
 each item carries its author and escaped content marked as data, not instructions.
+Quoted mentions or commands in those items do not become addressed requests.
 Workflow inputs and digests must consume this shared renderer when their
 Discussion context is wired; this intake change does not certify those consumers.
 
@@ -1025,7 +1103,17 @@ settles the original obligation with its publication, so an uncertain explicit
 response must not create another final answer. A validated informational return
 does not ask the original producer again; explicit typed Session mentions still
 create new asks. Pass, failure and cancellation remain typed outcomes, not
-fabricated assistant answers. `discussion.pass` acts on the current protected
+fabricated assistant answers. The r0.3f development contract for a stopped answer
+uses C2's `cancelled.result` reference to its exact committed partial assistant
+row. The existing result reader opens that text and the same return publisher,
+subject to its existing answer-policy approval, posts it once, attributed to the answering Session and marked cancelled/stopped;
+a committed explicit reply still wins and suppresses fallback. No partial text
+means a bare cancellation, not an invented answer. Foreground Stop integration
+is not yet complete: its transcript flush currently omits the result anchor from
+the cancelled terminal mutation, so that producer must be corrected before this
+path can publish the retained partial. Native-result fulfillment is a distinct
+producer and does not establish foreground Stop coverage.
+`discussion.pass` acts on the current protected
 original through the existing Session reply owner. Automatic publication,
 approved replay and absent-host intake are still being validated; these
 development contracts do not establish a completed user-visible journey.

@@ -241,6 +241,20 @@ Deleting or archiving an anchored Session preserves the Discussion.
 Unread position is private to each admitted reader with an established cursor;
 fetching a page does not mark it read.
 
+In r0.3f development, a Discussion can override your Account's autonomous check-in
+interval. A turn count sets its interval, **Don't pause this Discussion** means
+never pause, and clearing the override uses your Account choice again. Only the
+Discussion owner or an admin can change it. If the setting cannot be read, the
+agent holds rather than assuming that pausing is disabled. This is development
+source, not a shipped control or a completed live-UI validation.
+
+The Discussion composer's **Send to** data supports selecting several existing
+participants. The selection stays with the private draft until you change it,
+including after sending. An explicit @mention or any Reply overrides that
+default for the message. Selection does not invite someone or grant access;
+models can receive messages only once their Session has been created and admitted.
+The visible multi-select control is still owned by the development UI work.
+
 Development Doc comments and edit proposals use this same Discussion. Its
 plaintext passage target carries only the Doc reference and revision; the quote
 and proposal text stay inside the message content, encrypted in E2EE mode.
@@ -252,7 +266,8 @@ still being built.
 In E2EE mode, titles and message bodies are encrypted on the client. The sync
 service still sees the identifiers, ordering, authorship, mentioned Account
 IDs, timestamps, archive state, read cursor, and ciphertext size needed to
-synchronize and present the feature. New Discussions use their own resource
+synchronize and present the feature, plus the operational check-in override.
+New Discussions use their own resource
 key and mode; a missing key or mismatched envelope fails closed. Earlier
 Session-owned Discussion data is an undeployed 0.3 intermediate. Its bytes are
 preserved without a rekey or draft migration: plain rows convert, while encrypted

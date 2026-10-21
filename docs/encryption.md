@@ -2145,6 +2145,14 @@ provenance. It cannot read E2EE title or body content. Agent posts are admitted 
 through the authenticated Session runtime carrier: public Account HTTP cannot forge
 Agent provenance, and `requestedBy` is not authorship or access authority.
 
+In r0.3f development, optional `Discussion.settingsV1` also exposes the
+operational `coordination.autonomousCheckIn.afterTurns` override to the server.
+It contains no content or encryption material and is read only with current
+Discussion access; owner/admin authority admits replacement. Absent means
+Account inheritance, explicit `null` means Never, and an unavailable read is not
+an inherited value. The private composer's multi-recipient selection remains in
+the existing Account-encrypted Discussion draft, not this operational column.
+
 Per-Account read cursors are private server state. Unread and mention counts are
 derived at read time from canonical rows; they are not copied into a materialized
 inbox or counter. Discussion mutations publish content-free AccountChange wakes to

@@ -356,11 +356,26 @@ outcome, retry with the original identities so the client can recover the
 accepted Discussion and its original key. Pending recipient-key delivery does
 not mean creation failed.
 
-Agent addressing and automatic replies, answer policies, model participants
-and second-opinion entry remain under development; owner-level contracts do
-not establish a completed live conversation. A Bot participates through its
-ordinary Session. Invitation alone does not start a turn, grant source access,
-or change its machine, login or permissions.
+For the app’s typed participant picker, four answer policies, private draft
+review and source-access preview before asking for a second opinion, see
+[Discussions](/organize/discussions). These are unreleased development
+workflows, not a completed live-conversation certification. A Bot participates
+through its ordinary Session; invitation does not start a turn, grant source
+access, or change its machine, login or permissions.
+
+The friendly `discussions post` spelling sends text and optional Account
+mentions. A literal `@name` in that text is not an executable Session mention.
+Use the app’s selected participant reference, or the canonical structured
+`discussion.post` / `discussion.reply` Action input in the
+[host Action reference](/plugins/api/host-actions). A human reply to an
+agent-authored message can address that agent, subject to speaking and delivery
+admission; it does not give you control of its Session.
+
+An agent with a current admitted Discussion question can use
+`happier discussions pass <discussion-id>` to pass on that exact question.
+This Session-bound operation cannot pass for an arbitrary participant. For
+private drafts, the entitled person uses the existing approval request to post
+or decline; ordinary Action-confirmation settings do not remove that review.
 
 ## History
 
