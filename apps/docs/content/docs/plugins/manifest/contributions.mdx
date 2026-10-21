@@ -168,7 +168,10 @@ while it is unavailable. Neutral widget fields may instead use an explicit
 `optionsSourceId`; its resolved choices also narrow the schema and declared
 Resource choices. Pickers, mounted values and
 headless contributed Action submissions share this validation, including
-disabled-choice rejection and comparison before host normalization. Workflow
+disabled-choice rejection and comparison before host normalization. Choices are
+needed to pick or submit a value, not to show one: a widget that already stores
+a value keeps showing it while its choices load or cannot be read, and only
+choices that are known and no longer contain it retire it. Workflow
 inputs retain their existing exclusion between a type and an explicit source or
 enum, and public plugin Action hints still reject arbitrary `optionsSourceId`.
 Choice discovery
