@@ -3,6 +3,7 @@ import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { ExternalActionRequesterInvocationV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { DaemonWorkspaceFileReplaceApplyResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { DaemonLspApplyResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -12,27 +13,42 @@ import { withActionAccountRequestSignal, type LazyActionAccountContext } from '.
 
 const failure = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
 
+type MachineWriteContext = Parameters<NonNullable<ActionExecutorDeps['workspaceFilesReplace']>>[1];
+
+/**
+ * The present user's admitted write to an exact Machine: the original Account, the requested Machine and
+ * request id, and the requester invocation the Home verifies. Shared by every UI Machine write Action.
+ */
+function admitUiMachineWrite(account: LazyActionAccountContext | undefined, machineId: string, context: MachineWriteContext) {
+    context.signal?.throwIfAborted();
+    if (!account || account.credentialAuthorityKind !== 'account' || context.externalActionCredential
+        || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization
+        || context.actionCaller && context.actionCaller.kind !== 'host') return null;
+    account.assertCurrent();
+    const target = context.externalActionTarget;
+    if (target?.kind !== 'machine' || target.machineId !== machineId || !context.actionRequestId
+        || context.serverId && !areServerProfileIdentifiersEquivalent(context.serverId, account.serverId)
+        || context.runtimeAccountId && context.runtimeAccountId !== account.accountId) return null;
+    const invocation = ExternalActionRequesterInvocationV1Schema.safeParse({
+        caller: context.actionCaller ?? { kind: 'host' }, surface: context.surface ?? 'rpc',
+        authority: context.authority ?? 'account_automation', callerPermissionMode: context.callerPermissionMode,
+        callerInputConstraints: context.callerInputConstraints, workspaceWrites: context.workspaceWrites,
+        defaultSessionId: context.defaultSessionId,
+    });
+    if (!invocation.success) return null;
+    return { account, target, requestId: context.actionRequestId, invocation: invocation.data };
+}
+
 /** Delivery only: Action admission owns policy; the Machine operation owns effects and cancellation. */
-export function createUiWorkspaceFileReplaceAction(account?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['workspaceFilesReplace']> {
+export function createUiWorkspaceFileReplaceAction(accountContext?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['workspaceFilesReplace']> {
     return async (input, context) => {
-        context.signal?.throwIfAborted();
-        if (!account || account.credentialAuthorityKind !== 'account' || context.externalActionCredential
-            || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization
-            || context.actionCaller && context.actionCaller.kind !== 'host') return failure('admission_unavailable');
-        account.assertCurrent();
-        const target = context.externalActionTarget;
-        if (target?.kind !== 'machine' || target.machineId !== input.machineId || !context.actionRequestId
-            || context.serverId && !areServerProfileIdentifiersEquivalent(context.serverId, account.serverId)
-            || context.runtimeAccountId && context.runtimeAccountId !== account.accountId) return failure('admission_unavailable');
-        const invocation = ExternalActionRequesterInvocationV1Schema.safeParse({
-            caller: context.actionCaller ?? { kind: 'host' }, surface: context.surface ?? 'rpc',
-            authority: context.authority ?? 'account_automation', callerPermissionMode: context.callerPermissionMode,
-            callerInputConstraints: context.callerInputConstraints, workspaceWrites: context.workspaceWrites,
-            defaultSessionId: context.defaultSessionId,
-        });
-        if (!invocation.success) return failure('admission_unavailable');
+        const admitted = admitUiMachineWrite(accountContext, input.machineId, context);
+        if (!admitted) return failure('admission_unavailable');
+        const { target } = admitted;
+        const invocation = { data: admitted.invocation };
         // User cancellation requests a stop between files. It must not abort
         // admission or the terminal observation and lose an already-written file's inverse.
+        const account = admitted.account;
         return await withActionAccountRequestSignal({ accountLifetime: account.accountOnlyLifetime }, undefined, async signal => {
             const execution = await executeOriginalAccountMachineAction({ account, actionId: 'workspace.files.replace', input,
                 machineId: input.machineId, machineTarget: target, requestId: context.actionRequestId!,
@@ -83,6 +99,42 @@ export function createUiWorkspaceFileReplaceAction(account?: LazyActionAccountCo
                     .map(item => ({ path: item.path, hash: item.hash ?? null })));
             }
             return parsed.data;
+        });
+    };
+}
+
+/**
+ * Semantic edits (P7 U7: rename, file rename, one code action) from the present user. Their RPC methods
+ * require canonical Action admission at the Home, so the UI delivers them exactly like replace: the
+ * admitted original-Account Machine Action, never a raw Machine RPC.
+ */
+export function createUiLanguageIntelligenceApplyAction(account?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['languageIntelligenceApply']> {
+    return async ({ machineId, request, actionId }, context) => {
+        const admitted = admitUiMachineWrite(account, machineId, context);
+        if (!admitted) return failure('admission_unavailable');
+        const input = request.operation.kind === 'codeAction' ? { machineId, ...request }
+            : { machineId, rootPath: request.rootPath, path: request.path,
+                ...(request.languageId ? { languageId: request.languageId } : {}), files: request.operation.files };
+        const live = admitted.account;
+        // Like replace: cancellation never abandons the terminal receipt and its inverse edits.
+        return await withActionAccountRequestSignal({ accountLifetime: live.accountOnlyLifetime }, undefined, async signal => {
+            const execution = await executeOriginalAccountMachineAction({ account: live, actionId, input,
+                machineId, machineTarget: admitted.target, requestId: admitted.requestId,
+                authority: admitted.invocation.authority, invocation: admitted.invocation, ...(signal ? { signal } : {}) });
+            if (!execution) return failure('admission_unavailable');
+            if (!execution.ok) return execution;
+            const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
+            if (approval.success) return approval.data;
+            const parsed = DaemonLspApplyResponseSchema.safeParse(execution.result);
+            if (!parsed.success) return failure('invalid_action_output');
+            const result = parsed.data;
+            if ('ok' in result && result.ok && live.accountOnlyLifetime.isCurrent()) {
+                acknowledgeWorkspaceFileWrites({ serverId: live.serverId, accountId: live.accountId, machineId, rootPath: request.rootPath },
+                    result.results.filter(file => file.status === 'replaced').flatMap(file => file.renameTo
+                        ? [{ path: file.path, hash: null }, { path: file.renameTo, hash: file.hash ?? null }]
+                        : [{ path: file.path, hash: file.hash ?? null }]));
+            }
+            return result;
         });
     };
 }

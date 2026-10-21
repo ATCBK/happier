@@ -12,11 +12,10 @@ import {
 } from './workspaceFileDetailsTestHelpers';
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
-const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn(), replace: vi.fn() }));
+const transport = vi.hoisted(() => ({ diff: vi.fn(), stat: vi.fn() }));
 // Remote filesystem/SCM and platform digest boundaries; the loader stays real.
 vi.mock('@/sync/ops/scm/machineScm', () => ({ machineScmDiffFile: transport.diff }));
 vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({ callDaemonWorkspaceStatFileRpc: transport.stat }));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: (request: unknown) => transport.replace(request) }));
 vi.mock('@/config', () => ({ config: { filesPreviewMaxBytes: 1000000 } }));
 vi.mock('@/platform/digest', () => ({ digest: async () => new Uint8Array(32) }));
 const patch = (text: string) => `diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+${text}\n`;
@@ -31,7 +30,7 @@ beforeEach(async () => {
     input.scope.serverId = await prepareWorkspaceFileDetailsActionBoundary(input.scope.machineId);
     transport.diff.mockReset().mockResolvedValue({ success: true, diff: patch('new') });
     transport.stat.mockReset().mockResolvedValue({ success: true, exists: true, sizeBytes: 4 });
-    transport.replace.mockReset();
+    workspaceFileDetailsActionBoundary.replace.mockReset();
     workspaceFileDetailsActionBoundary.read.mockReset().mockResolvedValue({ success: true, content: 'bmV3Cg==' });
 });
 afterEach(cleanupWorkspaceFileDetailsActionBoundary);
@@ -80,7 +79,7 @@ it('rereads acknowledged saved bytes without a snapshot change and rejects pre-w
     await act(async () => { oldRefresh = current.refreshAll(); });
     let finishReplacement!: (value: { success: true; content: string }) => void;
     workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(resolve => { finishReplacement = resolve; }));
-    transport.replace.mockResolvedValueOnce({ ok: true, results: [{ path: '/repo/file.txt', status: 'replaced', hash: 'replace-ack' }] });
+    workspaceFileDetailsActionBoundary.replace.mockResolvedValueOnce({ ok: true, results: [{ path: '/repo/file.txt', status: 'replaced', hash: 'replace-ack' }] });
     await act(async () => {
         expect(await machineWorkspaceFileReplaceApply(input.scope.machineId, {
             rootPath: input.scope.rootPath, operation: { kind: 'replace', matcher: { query: 'new', replacement: 'replaced' },
@@ -96,7 +95,7 @@ it('rereads acknowledged saved bytes without a snapshot change and rejects pre-w
     expect(current.fileContent?.content).toBe('replaced');
     workspaceFileDetailsActionBoundary.read.mockResolvedValue({ success: false, error: 'unreadable' });
     const retained = current.fileContent;
-    transport.replace.mockResolvedValueOnce({ ok: true, results: [{ path: input.filePath, status: 'restored', hash: 'undo-ack' }] });
+    workspaceFileDetailsActionBoundary.replace.mockResolvedValueOnce({ ok: true, results: [{ path: input.filePath, status: 'restored', hash: 'undo-ack' }] });
     await act(async () => {
         expect(await machineWorkspaceFileReplaceApply(input.scope.machineId, {
             rootPath: input.scope.rootPath, operation: { kind: 'restore', files: [{ path: input.filePath,

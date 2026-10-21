@@ -23,6 +23,7 @@ const workspaceFileDetailsModuleState = vi.hoisted(() => ({
 
 const workspaceFileDetailsActionBoundary = vi.hoisted(() => ({
     read: vi.fn(),
+    replace: vi.fn(),
     calls: [] as unknown[],
 }));
 
@@ -40,7 +41,7 @@ export function installWorkspaceFileDetailsActionBoundary() {
 export async function answerWorkspaceFileDetailsAccountActions(
     serverId: string, accountId: string, machineId = 'm1',
 ): Promise<void> {
-    for (const actionId of ['daemon.filesystem.readFile', 'daemon.filesystem.writeFile'] as const) {
+    for (const actionId of ['daemon.filesystem.readFile', 'daemon.filesystem.writeFile', 'workspace.files.replace'] as const) {
         const boundary = await createExternalActionAccountHttpBoundary({
             serverUrl: 'https://workspace-file-details.test', serverIdentityId: 'srv_workspace_file_details',
             accountId, machineId, actionId, tokenEpoch: 0,
@@ -50,6 +51,7 @@ export async function answerWorkspaceFileDetailsAccountActions(
                 const request = { machineId, serverId, accountId, method, payload: input,
                     requestId: context.requestId, signal: context.signal };
                 workspaceFileDetailsActionBoundary.calls.push(request);
+                if (actionId === 'workspace.files.replace') return await workspaceFileDetailsActionBoundary.replace(request);
                 return await workspaceFileDetailsActionBoundary.read(request);
             },
         });

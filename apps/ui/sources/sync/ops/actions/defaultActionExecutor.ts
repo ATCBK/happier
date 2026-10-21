@@ -146,7 +146,7 @@ import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowS
 import type { SessionFollowActionInputV1, SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
 import { machineContributionRegistryProjectionDescribe, machinePluginUiTargetedContributionsRead } from '@/sync/ops/machineContributionRegistryProjection';
 import { machineWorkspaceFileSearch } from '@/sync/ops/machineWorkspaceFileSearch';
-import { machineLanguageIntelligenceApply, machineLanguageIntelligenceQuery, machineLanguageIntelligenceRestart } from '@/sync/ops/machineLanguageIntelligence';
+import { machineLanguageIntelligenceQuery, machineLanguageIntelligenceRestart } from '@/sync/ops/machineLanguageIntelligence';
 import { machineWorkspaceFileReplacePreview } from '@/sync/ops/machineWorkspaceFileReplace';
 import { randomUUID } from '@/platform/randomUUID';
 import { executeCurrentUiContextAction, executeCurrentUiContextContributedAction } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
@@ -178,7 +178,7 @@ import { isModelRefGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { OpenProjectResultV1Schema } from '@happier-dev/protocol/projects/openProjectV1';
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
-import { createUiWorkspaceFileReplaceAction } from './workspaceFileReplaceAction';
+import { createUiLanguageIntelligenceApplyAction, createUiWorkspaceFileReplaceAction } from './workspaceFileReplaceAction';
 import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
 import { ExternalActionRequesterInvocationV1Schema } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { t } from '@/text';
@@ -3004,9 +3004,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     languageIntelligenceQuery: ({ machineId, request }, context) => machineLanguageIntelligenceQuery(machineId, request, {
       serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal,
     }),
-    languageIntelligenceApply: ({ machineId, request }, context) => machineLanguageIntelligenceApply(machineId, request, {
-      serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal,
-    }),
+    languageIntelligenceApply: createUiLanguageIntelligenceApplyAction(accountContext),
     languageIntelligenceRestart: ({ machineId, request }, context) => machineLanguageIntelligenceRestart(machineId, request, {
       serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal,
     }),
