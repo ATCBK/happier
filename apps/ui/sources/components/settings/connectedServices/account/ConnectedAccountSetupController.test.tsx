@@ -350,7 +350,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
 
     async function transferPurposeDefaults() {
         const result = await readConnectedAccountCatalog({ serverId: account.home.id, accountId: 'account-a' }, 'purposes');
-        expect(result.status).toBe('ready');
+        expect(result, JSON.stringify(result)).toMatchObject({ status: 'ready' });
         expect(purposeBoundary!.readSource()).not.toHaveProperty('connectedAccountPurposeBindingsV1');
     }
 
