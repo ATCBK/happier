@@ -210,7 +210,11 @@ export function CodeLineRow(props: {
           ? theme.colors.diff.removed.foreground
           : line.renderIsHeaderLine
             ? theme.colors.diff.hunk.foreground
-            : theme.colors.diff.context.foreground;
+            // A file's own text is the document, not a diff's unchanged context: it reads in the editor's
+            // default ink, so View and Edit draw the same code in the same colours (files lab ED1).
+            : line.kind === 'file'
+              ? theme.colors.syntax.default
+              : theme.colors.diff.context.foreground;
 
     const resolveTokenColorWithFallback = React.useCallback((fallback: string, tokenType: string): string => {
         if (tokenType === 'keyword') return theme.colors.syntax.keyword ?? fallback;

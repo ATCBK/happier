@@ -225,6 +225,14 @@ function applyMonacoModelValuePreservingViewState(editor: MonacoEditorViewLike |
     }
 }
 
+/**
+ * Monaco colours bracket pairs from its configuration, which it re-applies to every model whenever any editor
+ * option changes, and it accepts that setting only under the schema's dotted key: the nested
+ * `bracketPairColorization: { enabled }` option and a model-level option are both overwritten. The key is untyped in
+ * Monaco's option types, hence the narrow record here.
+ */
+const MONACO_BRACKET_COLOURS_OFF: Readonly<Record<string, unknown>> = { 'bracketPairColorization.enabled': false };
+
 export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditorProps>(function MonacoEditorSurface(
     props,
     ref,
@@ -605,8 +613,6 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 const initialEditorTheme = latestEditorThemeRef.current;
 
                 const model = monaco.editor.createModel(latestValueRef.current, initialLanguage);
-                // Bracket colours are a model option in Monaco; the editor option alone does not turn them off.
-                model.updateOptions?.({ bracketColorizationOptions: { enabled: false, independentColorPoolPerBracketType: false } });
                 modelRef.current = model;
                 applyMonacoEditorTheme(monaco, initialEditorTheme);
 
@@ -629,8 +635,12 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     // The current line is one quiet fill across numbers and text (files lab ED1), never a box.
                     renderLineHighlight: 'all',
                     // Only the caret and the current line differ from View (files lab ED1): no indent guides the
-                    // code view does not draw (bracket colours are switched off on the model above).
+                    // code view does not draw, and no bracket colours (see MONACO_BRACKET_COLOURS_OFF).
                     guides: { indentation: false },
+                    ...MONACO_BRACKET_COLOURS_OFF,
+                    // Placing the caret is not a search: no boxes on every other copy of the word under it
+                    // (nor their marks in the scrollbar). Selecting text still marks its other copies.
+                    occurrencesHighlight: 'off',
                     fontSize: initialFontMetrics.fontSize,
                     lineHeight: initialFontMetrics.lineHeight,
                     fontFamily: resolveCodeMonoFontFamily(),
