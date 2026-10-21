@@ -53,14 +53,9 @@ export function deriveSessionInputReadinessState(
 
     const foregroundBusy = hasFreshForegroundRuntimeActivity(input, nowMs);
     const optimisticPendingBusy = hasFreshOptimisticPendingUserMessage(input, nowMs);
-    const hasFreshPendingRequest = isFreshTimestamp(
-        normalizeRuntimeStatusTimestamp(input.pendingRequestObservedAt),
-        nowMs,
-        SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS,
-    );
-    const hasRequestGate =
-        (input.hasPendingPermissionRequests === true || input.hasPendingUserActionRequests === true)
-        && (foregroundBusy || optimisticPendingBusy || hasFreshPendingRequest);
+    // A pending request stays a gate while the runtime is live, however long it has waited;
+    // it ends through its durable settlement, not by elapsed time (session awareness owner).
+    const hasRequestGate = input.hasPendingPermissionRequests === true || input.hasPendingUserActionRequests === true;
 
     if (hasRequestGate) {
         return {
