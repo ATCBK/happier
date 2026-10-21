@@ -77,16 +77,17 @@ export function settleUiLanguageIntelligenceApplyResult(account: LazyActionAccou
 }
 
 /**
- * The present user's admitted write to an exact Machine: the original Account, the requested Machine and
- * request id, and the requester invocation the Home verifies. Shared by every UI Machine write Action.
+ * An admitted Account write to an exact Machine: the original Account, requested Machine and request id,
+ * and the host or mounted-plugin requester invocation the Home verifies. Admission still owns policy.
  */
 function admitUiMachineWrite(account: LazyActionAccountContext | undefined, machineId: string, context: MachineWriteContext) {
     context.signal?.throwIfAborted();
     if (!account || account.credentialAuthorityKind !== 'account' || context.externalActionCredential
-        || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization
-        || context.actionCaller && context.actionCaller.kind !== 'host') return null;
+        || context.externalActionExecutionAuthorization || context.rpcSessionAuthorization) return null;
     account.assertCurrent();
-    const target = context.externalActionTarget;
+    // These ports receive an already schema-admitted explicit Machine operand.
+    // A supplied target narrows it; ordinary mounted callers need no second selection.
+    const target = context.externalActionTarget ?? { kind: 'machine' as const, machineId };
     if (target?.kind !== 'machine' || target.machineId !== machineId || !context.actionRequestId
         || context.serverId && !areServerProfileIdentifiersEquivalent(context.serverId, account.serverId)
         || context.runtimeAccountId && context.runtimeAccountId !== account.accountId) return null;
@@ -113,6 +114,7 @@ export function createUiWorkspaceFileReplaceAction(accountContext?: LazyActionAc
         return await withActionAccountRequestSignal({ accountLifetime: account.accountOnlyLifetime }, undefined, async signal => {
             const execution = await executeOriginalAccountMachineAction({ account, actionId: 'workspace.files.replace', input,
                 machineId: input.machineId, machineTarget: target, requestId: context.actionRequestId!,
+                actionCaller: admitted.invocation.caller,
                 authority: invocation.data.authority, invocation: invocation.data, ...(signal ? { signal } : {}) });
             if (!execution.ok) return execution;
             const approval = ActionApprovalRequestCreatedResultSchema.safeParse(execution.result);
@@ -123,9 +125,9 @@ export function createUiWorkspaceFileReplaceAction(accountContext?: LazyActionAc
 }
 
 /**
- * Semantic edits (P7 U7: rename, file rename, one code action) from the present user. Their RPC methods
- * require canonical Action admission at the Home, so the UI delivers them exactly like replace: the
- * admitted original-Account Machine Action, never a raw Machine RPC.
+ * Semantic edits (P7 U7: rename, file rename, one code action) from admitted UI and plugin callers.
+ * Their RPC methods require canonical Action admission at the Home, so delivery is the same original-
+ * Account Machine Action as replace, never a raw Machine RPC or a host-caller impersonation.
  */
 export function createUiLanguageIntelligenceApplyAction(account?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['languageIntelligenceApply']> {
     return async ({ machineId, request, actionId }, context) => {
@@ -139,6 +141,7 @@ export function createUiLanguageIntelligenceApplyAction(account?: LazyActionAcco
         return await withActionAccountRequestSignal({ accountLifetime: live.accountOnlyLifetime }, undefined, async signal => {
             const execution = await executeOriginalAccountMachineAction({ account: live, actionId, input,
                 machineId, machineTarget: admitted.target, requestId: admitted.requestId,
+                actionCaller: admitted.invocation.caller,
                 authority: admitted.invocation.authority, invocation: admitted.invocation, ...(signal ? { signal } : {}) });
             if (!execution) return failure('admission_unavailable');
             if (!execution.ok) return execution;

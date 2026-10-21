@@ -30,6 +30,7 @@ import { parseToken } from '@/utils/auth/parseToken';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { waitForNetworkResponseForTests } from '../mocks/runtimeFetch';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
+import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import type { ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ActionExecutorContext, WorkflowActionExecute } from '@happier-dev/protocol';
 import { DiscussionCreateRequestV1Schema, DiscussionCreateResponseV1Schema, DiscussionPostRequestV1Schema,
@@ -629,6 +630,32 @@ function requireHarness(): HomeGovernanceHarness {
     return current;
 }
 
+async function selectHomeDomainAnswer(record: HomeRecord | null, path: string, method: string, input: unknown,
+    url: string, init: RequestInit | undefined): Promise<HomeDomainAnswer | undefined> {
+    const route = new URL(path, url).pathname;
+    const seed = record?.answers.get(`${method} ${path}`) ?? record?.answers.get(path)
+        ?? record?.answers.get(`${method} ${route}`) ?? record?.answers.get(route);
+    return await seed?.select?.(input, { signal: init?.signal, url, init }) ?? seed;
+}
+
+async function renderHomeDomainAnswer(answer: HomeDomainAnswer, path: string, method: string, input: unknown,
+    signal: AbortSignal | null | undefined): Promise<Response> {
+    if (answer.respondAfter) await waitForNetworkResponseForTests(answer.respondAfter, signal);
+    // A lost response retains its original whole-request failure semantics.
+    if (answer.dispatchThenFail) throw new TypeError('Failed to fetch');
+    const responseBody = path === ARTIFACT_CREATE_PATH
+        && method === 'POST'
+        && (answer.status ?? 200) >= 200 && (answer.status ?? 200) < 300
+        && input && typeof input === 'object'
+        && !Array.isArray(input)
+        && answer.body && typeof answer.body === 'object'
+        && !Array.isArray(answer.body)
+        ? { ...(answer.body as Record<string, unknown>), id: (input as { id?: unknown }).id }
+        : answer.body;
+    return new Response(responseBody === undefined ? '' : JSON.stringify(responseBody),
+        { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+}
+
 /**
  * Answers one request from whichever Home the endpoint belongs to.
  *
@@ -662,9 +689,27 @@ async function answerForEndpoint(
 
     const method = (init?.method ?? 'GET').toUpperCase();
     const route = new URL(path, serverUrl).pathname;
-    const pathAnswer = record?.answers.get(`${method} ${path}`) ?? record?.answers.get(path)
-        ?? record?.answers.get(`${method} ${route}`) ?? record?.answers.get(route);
-    const answer = await pathAnswer?.select?.(input, { signal: init?.signal, url, init }) ?? pathAnswer;
+    const answer = await selectHomeDomainAnswer(record, path, method, input, url, init);
+    if (!answer && record && method === 'POST' && route === '/v1/machines/read-batch') {
+        const demand = MachineReadBatchRequestV1Schema.parse(input);
+        const results: unknown[] = [];
+        for (const machineId of demand.machineIds) {
+            const exactPath = `/v1/machines/${encodeURIComponent(machineId)}`;
+            const exactUrl = new URL(exactPath, serverUrl).href;
+            const exactInit = { ...init, method: 'GET', body: undefined };
+            const selected = await selectHomeDomainAnswer(record, exactPath, 'GET', null, exactUrl, exactInit);
+            if (!selected) { results.push({ machineId, status: 'not_found' }); continue; }
+            const response = await renderHomeDomainAnswer(selected, exactPath, 'GET', null, init?.signal);
+            if (response.status === 404) { results.push({ machineId, status: 'not_found' }); continue; }
+            if (!response.ok) return response;
+            const body: unknown = await response.json();
+            const machine: unknown = body && typeof body === 'object' ? Reflect.get(body, 'machine') : undefined;
+            if (machine === null) results.push({ machineId, status: 'not_found' });
+            else results.push({ machineId, status: 'found', machine });
+        }
+        // Do not repair sparse fixtures or invent authority: validate the actual wire rows once.
+        return Response.json(MachineReadBatchResponseV1Schema.parse({ results }));
+    }
     if (!answer && path === '/v1/account/profile') {
         let accountId: string | null = null;
         try { accountId = token ? parseToken(token) : null; } catch { /* Invalid external bearer stays unauthenticated. */ }
@@ -678,23 +723,7 @@ async function answerForEndpoint(
     // A Home that was given no answer for this path behaves like one that does
     // not serve it, rather than silently succeeding.
     if (!answer) return new Response(JSON.stringify({ error: 'not_found' }), { status: 404 });
-    if (answer.respondAfter) await waitForNetworkResponseForTests(answer.respondAfter, init?.signal);
-    // No `code`, because a lost connection after dispatch carries none. That is
-    // precisely what makes the committed outcome unknowable to the client.
-    if (answer.dispatchThenFail) throw new TypeError('Failed to fetch');
-    const responseBody = path === ARTIFACT_CREATE_PATH
-        && method === 'POST'
-        && (answer.status ?? 200) >= 200 && (answer.status ?? 200) < 300
-        && input && typeof input === 'object'
-        && !Array.isArray(input)
-        && answer.body && typeof answer.body === 'object'
-        && !Array.isArray(answer.body)
-        ? { ...(answer.body as Record<string, unknown>), id: (input as { id?: unknown }).id }
-        : answer.body;
-    return new Response(
-        responseBody === undefined ? '' : JSON.stringify(responseBody),
-        { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } },
-    );
+    return renderHomeDomainAnswer(answer, path, method, input, init?.signal);
 }
 
 /**

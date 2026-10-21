@@ -31,6 +31,7 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
         execute(input: unknown, context: Readonly<{
             target: Extract<NonNullable<ExternalActionRequestEnvelopeV1['target']>, { kind: 'machine' }>;
             invocation: ExternalActionRequesterInvocationV1;
+            pluginInvocation?: ExternalActionRequestEnvelopeV1['pluginInvocation'];
             requestId?: string;
             signal?: AbortSignal | null;
         }>): Promise<unknown> | unknown;
@@ -92,6 +93,7 @@ export async function createExternalActionAccountHttpBoundary(params: Readonly<{
                     serverIdentityId: params.serverIdentityId, installationPrivateKey: installation.privateKey, includeInvocation: true });
                 if (!opened?.invocation) throw new Error('Invalid private requester Account carrier');
                 result = await params.execute(envelope.input, { target, invocation: opened.invocation,
+                    ...(envelope.pluginInvocation ? { pluginInvocation: envelope.pluginInvocation } : {}),
                     requestId: envelope.requestId, signal: init?.signal });
             }
             const failure = params.failure?.(result);

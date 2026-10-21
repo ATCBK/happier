@@ -4320,7 +4320,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       ...(actionCaller ? { actionCaller } : {}),
       ...(accountContext ? { managedMachineCreationEnabled: accountContext.settings.managedMachineCreationEnabled } : {}),
       ...(opts?.admittedClientActionId ? { bypassApprovals: actionId === opts.admittedClientActionId } : {}),
-      ...((surface === 'ui' || surface === 'voice') && (credential === 'account' || credential === 'terminal')
+      ...((surface === 'ui' || surface === 'voice' || surface === 'plugin') && (credential === 'account' || credential === 'terminal')
         ? { actionRequestId: context?.actionRequestId ?? (creationKey || randomUUID()) }
         : {}),
     };
