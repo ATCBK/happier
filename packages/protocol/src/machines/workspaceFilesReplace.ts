@@ -1,5 +1,5 @@
 import type { InverseEdit } from '../diff/hunks.js';
-import type { DaemonWorkspaceFileReplaceApplyRequest, DaemonWorkspaceFileReplaceApplyResponse } from './workspaceFiles.js';
+import type { DaemonWorkspaceFileReplaceApplyRequest, DaemonWorkspaceFileReplaceApplyResponse, WorkspaceFileEditSetFile } from './workspaceFiles.js';
 
 type WriterReceipt = Extract<DaemonWorkspaceFileReplaceApplyResponse, { ok: true }>['results'][number];
 /** Retained UI results may expose their inverse arrays as readonly. */
@@ -11,6 +11,65 @@ export function buildWorkspaceFileRestoreOperation(results: readonly ReadonlyWri
     result.status === 'replaced' && result.hash && result.edits && (result.edits.length > 0 || result.renameTo)
       ? [{ path: result.renameTo ?? result.path, expectedHash: result.hash, edits: [...result.edits],
         ...(result.renameTo ? { renameTo: result.path } : {}) }] : []) };
+}
+
+/** A text position outside its document; shared by the Machine's semantic writer and client previews. */
+export class WorkspaceTextPositionError extends Error {
+  constructor(readonly code: 'invalid_position' | 'symbol_not_found', readonly candidates?: readonly string[]) { super(code); this.name = 'LspDocumentTextError'; }
+}
+
+export function workspaceTextLineBounds(text: string, line: number): Readonly<{ start: number; end: number }> {
+  if (!Number.isInteger(line) || line < 0) throw new WorkspaceTextPositionError('invalid_position');
+  const breaks = /\r\n|\r|\n/gu;
+  let start = 0;
+  for (let currentLine = 0; ; currentLine++) {
+    const nextBreak = breaks.exec(text);
+    if (currentLine === line) return { start, end: nextBreak?.index ?? text.length };
+    if (!nextBreak) throw new WorkspaceTextPositionError('invalid_position');
+    start = nextBreak.index + nextBreak[0].length;
+  }
+}
+
+export function workspaceTextPositionToOffset(text: string, position: Readonly<{ line: number; character: number }>): number {
+  const { start, end } = workspaceTextLineBounds(text, position.line);
+  if (!Number.isInteger(position.character) || position.character < 0 || position.character > end - start) {
+    throw new WorkspaceTextPositionError('invalid_position');
+  }
+  return start + position.character;
+}
+
+/**
+ * The one edit-set text transform: the Machine's guarded writer applies it and clients preview it.
+ * Every range addresses the original text; inverse coordinates address the result.
+ */
+export function applyWorkspaceFileTextEdits(text: string, edits: WorkspaceFileEditSetFile['edits']): Readonly<{ text: string; edits: InverseEdit[] }> {
+  const spans = edits.map(edit => ({ start: workspaceTextPositionToOffset(text, edit.range.start), end: workspaceTextPositionToOffset(text, edit.range.end), text: edit.text }))
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const inverse: InverseEdit[] = [];
+  const parts: string[] = [];
+  let cursor = 0, delta = 0;
+  for (const span of spans) {
+    if (span.end < span.start) throw new WorkspaceTextPositionError('invalid_position');
+    if (span.start < cursor) throw Object.assign(new Error('Overlapping semantic edits'), { code: 'overlapping_edits' });
+    // Encoding must preserve the reviewed text exactly, including Unicode.
+    if (new TextDecoder('utf-8', { ignoreBOM: true }).decode(new TextEncoder().encode(span.text)) !== span.text)
+      throw new WorkspaceTextPositionError('invalid_position');
+    const originalText = text.slice(span.start, span.end);
+    parts.push(text.slice(cursor, span.start), span.text);
+    const startUtf16 = span.start + delta;
+    const previous = inverse.at(-1);
+    if (previous && previous.startUtf16 + previous.insertText.length === startUtf16) {
+      inverse[inverse.length - 1] = { ...previous, deleteLength: previous.deleteLength + originalText.length,
+        originalText: previous.originalText + originalText, insertText: previous.insertText + span.text };
+    } else inverse.push({ startUtf16, deleteLength: originalText.length, originalText, insertText: span.text });
+    delta += span.text.length - originalText.length;
+    cursor = span.end;
+  }
+  parts.push(text.slice(cursor));
+  const result = parts.join('');
+  if (new TextDecoder('utf-8', { ignoreBOM: true }).decode(new TextEncoder().encode(result)) !== result)
+    throw new WorkspaceTextPositionError('invalid_position');
+  return { text: result, edits: inverse };
 }
 
 export type ReplaceMatcher = Readonly<{ query: string; replacement: string; matchCase: boolean; regex: boolean }>;
