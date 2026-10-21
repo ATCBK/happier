@@ -21,7 +21,7 @@ import type { Credentials, StoredCredentials, TokenOnlyCredentials } from '@/per
 import * as persistence from '@/persistence';
 
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from './bootstrapAccountSettingsContext';
-import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from './activeAccountSettingsSnapshot';
+import { beginActivePromptLibraryCatalogRefresh, getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, setActiveAccountSettingsSnapshot } from './activeAccountSettingsSnapshot';
 import { createAccountSettingsScopeKey } from './accountSettingsScopeKey';
 import { resolveAccountSettingsCachePath, writeAccountSettingsCacheAtomic } from './accountSettingsCache';
 
@@ -137,11 +137,17 @@ describe('bootstrapAccountSettingsContext', () => {
     const initial = await bootstrapAccountSettingsContext({ ...options, nowMs: 1_000 });
     const snapshot = getActiveAccountSettingsSnapshot();
     const refreshed = await bootstrapAccountSettingsContext({ ...options, nowMs: 2_000 });
-    await bootstrapAccountSettingsContext({ ...options, nowMs: 2_100 });
-    await bootstrapAccountSettingsContext({ ...options, nowMs: 2_200 });
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(refreshed.settings).toBe(initial.settings);
     expect(getActiveAccountSettingsSnapshot()).toBe(snapshot);
+    if (!snapshot?.scopeKey) throw new Error('Expected the published Account scope');
+    beginActivePromptLibraryCatalogRefresh({ scopeKey: snapshot.scopeKey,
+      lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
+    const catalogSnapshot = getActiveAccountSettingsSnapshot();
+    await bootstrapAccountSettingsContext({ ...options, nowMs: 2_100 });
+    const warm = await bootstrapAccountSettingsContext({ ...options, nowMs: 2_200 });
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(warm.promptLibraryCatalog).toEqual({ status: 'loading' });
+    expect(refreshed.settings).toBe(initial.settings);
+    expect(getActiveAccountSettingsSnapshot()).toBe(catalogSnapshot);
     // The same existing TTL still expires; force and revision demands bypass freshness.
     await bootstrapAccountSettingsContext({ ...options, nowMs: 3_000 });
     expect(get).toHaveBeenCalledTimes(3);
@@ -153,7 +159,7 @@ describe('bootstrapAccountSettingsContext', () => {
     await bootstrapAccountSettingsContext({ ...options, nowMs: 4_001 });
     await bootstrapAccountSettingsContext({ ...options, nowMs: 4_100 });
     expect(get).toHaveBeenCalledTimes(7);
-    expect(getActiveAccountSettingsSnapshot()).toBe(snapshot);
+    expect(getActiveAccountSettingsSnapshot()).toBe(catalogSnapshot);
   });
 
   it('preserves a required network failure without a Settings floor while ordinary bootstrap retains cache fallback', async () => {
@@ -163,7 +169,7 @@ describe('bootstrapAccountSettingsContext', () => {
     const options = { credentials: createTokenOnlyCredentialsStub(), refresh: 'force' as const,
       deps: { resolveCachePath: () => '/tmp/happier-settings-network-required',
         readCache: async () => ({ version: 2 as const, cachedAt: 0, settingsVersion: 7,
-          settingsContent: { t: 'plain' as const, v: { preferredLanguage: 'fr' } } }),
+          settingsContent: null }),
         writeCache: async () => {}, applySideEffects: () => {} } };
     await expect(bootstrapAccountSettingsContext({ ...options, allowCacheFallback: false })).rejects.toBe(failure);
     expect(await bootstrapAccountSettingsContext(options)).toMatchObject({ source: 'cache', settingsVersion: 7 });

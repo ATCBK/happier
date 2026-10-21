@@ -45,6 +45,7 @@ import {
   getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken,
   resetActiveAccountSettingsSnapshotForTests,
+  type ActiveAccountSettingsSnapshot,
 } from './activeAccountSettingsSnapshot';
 import { resolveAccountSettingsHttpBaseUrl } from './resolveAccountSettingsHttpBaseUrl';
 import { AccountSettingsContentInvalidError, AccountSettingsStaleError, isAccountSettingsContentInvalidError } from './accountSettingsRefreshError';
@@ -414,7 +415,6 @@ function shouldTreatVersionAsFresh(current: number | null | undefined, minimum: 
 }
 
 type InMemoryAccountSettingsContext = Readonly<{
-  context: AccountSettingsContext;
   lifetimeToken: number;
   snapshot: NonNullable<ReturnType<typeof getActiveAccountSettingsSnapshot>>;
   /** Last accepted observation; equal revisions do not republish the snapshot. */
@@ -422,6 +422,14 @@ type InMemoryAccountSettingsContext = Readonly<{
 }>;
 
 const inMemoryByScopeKey = new Map<string, InMemoryAccountSettingsContext>();
+
+function sameSettingsPublication(left: ActiveAccountSettingsSnapshot, right: ActiveAccountSettingsSnapshot): boolean {
+  // Catalog refreshes replace the aggregate snapshot, not the accepted
+  // preference observation. They must not discard its existing freshness.
+  return left.scopeKey === right.scopeKey && left.source === right.source
+    && left.settingsVersion === right.settingsVersion && left.settings === right.settings
+    && left.rawSettings === right.rawSettings && left.settingsSecretsReadKeys === right.settingsSecretsReadKeys;
+}
 
 function activeSnapshotPublicationIsCurrent(params: Readonly<{
   snapshot: NonNullable<ReturnType<typeof getActiveAccountSettingsSnapshot>>;
@@ -439,9 +447,9 @@ function rememberInMemoryAccountSettingsContext(
   validatedAtMs?: number,
 ): void {
   const previous = inMemoryByScopeKey.get(scopeKey);
-  const previousValidation = previous?.snapshot === snapshot && previous.lifetimeToken === lifetimeToken
+  const previousValidation = previous?.lifetimeToken === lifetimeToken && sameSettingsPublication(previous.snapshot, snapshot)
     ? previous.validatedAtMs : context.loadedAtMs;
-  inMemoryByScopeKey.set(scopeKey, Object.freeze({ context, lifetimeToken, snapshot,
+  inMemoryByScopeKey.set(scopeKey, Object.freeze({ lifetimeToken, snapshot,
     validatedAtMs: Math.max(previousValidation, validatedAtMs ?? context.loadedAtMs) }));
 }
 
@@ -697,13 +705,10 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   const active = getActiveAccountSettingsSnapshot();
   const activeLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const inMemory = inMemoryByScopeKey.get(scopeKey);
-  const inMemoryIsCurrent = inMemory?.snapshot === active && inMemory.lifetimeToken === activeLifetimeToken;
+  const inMemoryIsCurrent = inMemory?.lifetimeToken === activeLifetimeToken
+    && active !== null && sameSettingsPublication(inMemory.snapshot, active);
   const existing = active?.scopeKey === scopeKey
-    ? (
-      inMemoryIsCurrent
-        ? inMemory.context
-        : contextFromActiveSnapshot(active)
-    )
+    ? contextFromActiveSnapshot(active)
     : null;
   if (
     refresh === 'auto'
