@@ -42,6 +42,7 @@ import { removeWorkflowBlock } from '@happier-dev/protocol/workflows/workflowDef
 import { WORKFLOW_STARTER_EXAMPLES_V1 } from '@happier-dev/protocol';
 import { t } from '@/text';
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
+import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { getActiveUnsavedChangesGuard, runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { CommonActions, StackActions, StackRouter } from '@react-navigation/native';
 import { createRequire } from 'node:module';
@@ -78,6 +79,7 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { createWorkflowActionHttpTransport } from '@/dev/testkit/fixtures/workflowActionHttpTransport';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createWorkflowAutomationDetailFixture, createWorkflowAutomationHttpBoundary } from '@/dev/testkit/harness/workflowAutomationHttpBoundary';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
@@ -163,6 +165,7 @@ function readArtifactMutation(raw: unknown, definitionId?: string) {
 }
 const focusPromptSpy = vi.fn<(inputProps: Record<string, unknown>) => void>();
 let rejectProjectMemoryWrite = false;
+let preparedMemorySettings = AccountSettingsV2GetResponseSchema.parse({ content: null, version: 0 });
 // As in Sync's owner tests, configure incumbent connection facts without
 // replacing any memory, encryption, persistence or currentness operation.
 type WorkflowMemoryRuntimeTestAccess = { credentials: AuthCredentials | undefined;
@@ -527,13 +530,14 @@ beforeEach(async () => {
     // The new Save consumer uses the real Account-memory runtime. Supply only
     // its prepared HTTP persistence boundary, sharing the canonical testkit CAS.
     rejectProjectMemoryWrite = false;
+    preparedMemorySettings = AccountSettingsV2GetResponseSchema.parse({ content: null, version: 0 });
     const memory = createAuthoringMemoryHttpBoundary();
     const prepareRequest = apiSocket.createRequestForPreparedTarget.bind(apiSocket);
     vi.spyOn(apiSocket, 'createRequestForPreparedTarget').mockImplementation((target) => {
         const request = prepareRequest(target);
         return async (path, init) => {
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-            if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
+            if (path === '/v2/account/settings') return Response.json(preparedMemorySettings);
             if (path.startsWith('/v1/account/authoring-memory')) {
                 if (rejectProjectMemoryWrite && init?.method === 'POST' && path.includes('workflowProject')) {
                     throw new Error('Personal Workflow target persistence unavailable');
@@ -591,7 +595,10 @@ it('opens a saved definition entered before Account readiness without a library 
 /** A Plain Account HTTP boundary; Workflow admission, codecs and Artifact CAS stay real. */
 async function serveMountedDraftActionHome(definition = createWorkflowDefinitionFixture({ defaults: {
     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
-} }), includeSavedArtifact = true, serverIdentityId?: string) {
+} }), includeSavedArtifact = true, serverIdentityId?: string, settings?: Readonly<Record<string, unknown>>) {
+    // The memory writer has a prepared HTTP boundary as well as the Home's
+    // ordinary transport. Both consume this fixture's same explicit policy.
+    if (settings) preparedMemorySettings = AccountSettingsV2GetResponseSchema.parse({ content: { t: 'plain', v: settings }, version: 1 });
     const [{ serveActionHomes }, { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent },
         { WorkflowDefinitionArtifactHeaderV1Schema }, { z }, { tryWriteServerEnabledBitInPlace }] = await Promise.all([
         import('@/dev/testkit/harness/actionHomesHttpHarness'), import('@happier-dev/protocol/storage/artifactStoredContent'),
@@ -621,7 +628,7 @@ async function serveMountedDraftActionHome(definition = createWorkflowDefinition
     let readGate: ReturnType<typeof createDeferred<void>> | null = null;
     let readIssued: ReturnType<typeof createDeferred<void>> | null = null;
     const boundary = await serveActionHomes({ homes: [{ key: 'home', serverUrl: 'https://workflow-mcp.test',
-        accountId: 'account-a', currentAccount: true, ...(serverIdentityId ? { serverIdentityId } : {}) }], route: async request => {
+        accountId: 'account-a', currentAccount: true, settings, ...(serverIdentityId ? { serverIdentityId } : {}) }], route: async request => {
         if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') return Response.json(features);
         if (request.path === '/v1/account/encryption/currentness') {
             const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
@@ -963,7 +970,7 @@ describe('WorkflowEditorHostScreen composition', () => {
             ]);
             const { scope } = boundary;
             getStorage().setState({ profile: { ...getStorage().getState().profile!, id: scope.accountId } });
-            setEditorMachines([createMachineFixture({ id: 'machine-1' })]);
+            setEditorMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now() })]);
             type Handler = Parameters<typeof apiSocket.registerMachineScopedRpcHandler>[2];
             const editorMethods = new Map<string, Handler>();
             // Only the socket registration/delivery boundary is substituted. The real
@@ -1267,6 +1274,11 @@ describe('WorkflowEditorHostScreen composition', () => {
         };
         await saveFromNativeControl();
         const acknowledged = await read();
+        expect(acknowledged.settings.triggers.rows, JSON.stringify({
+            saveStatus: readBodyProps()!.saveStatus,
+            creates: boundary.automationCreates,
+            requests: boundary.requests.map(request => ({ path: request.path, method: request.method })),
+        })).toHaveLength(1);
         const triggerId = acknowledged.settings.triggers.rows[0]!.identity.triggerId;
         expect(triggerId).toBeTruthy();
         expect(acknowledged.dirty).toBe(false);
@@ -1289,16 +1301,16 @@ describe('WorkflowEditorHostScreen composition', () => {
     });
 
     it.each(['trigger', 'definition'] as const)('mounted Agent Save preserves %s child approval while native Save uses its UI admission', async (child) => {
-        const boundary = await serveMountedDraftActionHome(undefined, true, 'srv_workflow-approval-home');
-        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { ActionsSettingsV1Schema } = await import('@happier-dev/protocol');
+        const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, actions: {
+            'workflow.definition.update': { approvalRequiredSurfaces: ['agent'] },
+        } });
+        // Serve the policy from its Account HTTP owner. A store-only override
+        // races bootstrap, which correctly replaces it with the Home's settings.
+        const boundary = await serveMountedDraftActionHome(undefined, true, 'srv_workflow-approval-home', { actionsSettingsV1 });
+        await (await import('@/sync/sync')).sync.awaitBootstrapForegroundAcquisition();
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1 } = await import('@happier-dev/protocol/account/settings/sessionAgentSpawnPolicyV1');
-        // Real scoped Account policy, not a caller-authored approval override.
-        getStorage().setState(state => ({ settings: { ...state.settings,
-            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
-                'workflow.definition.update': { approvalRequiredSurfaces: ['agent'] },
-            } }),
-        } }));
         const executor = createDefaultActionExecutor();
         const context = { surface: 'agent' as const, authority: 'account_automation' as const,
             serverId: boundary.scope.serverId, serverIdentityId: 'srv_workflow-approval-home',
@@ -2894,7 +2906,7 @@ describe('WorkflowEditorHostScreen composition', () => {
             await renderScreen(<WorkflowEditorHostScreen source={{ kind: 'new', reviewedRunSeedId: storeReviewedCopyFixture() }} />);
             expect(readBodyProps()).toHaveProperty('reviewNotice');
             act(() => readBodyProps()?.onBackToRun?.());
-            expect(routerSpy.push).toHaveBeenLastCalledWith({ pathname: '/workflows/runs/[runId]', params: { runId: 'run-1' } });
+            expect(routerSpy.push).toHaveBeenLastCalledWith(createWorkflowRunRoute('run-1', 'server-a'));
             expect(runStartSpy).not.toHaveBeenCalled();
             expect(definitionActions.create).not.toHaveBeenCalled();
         });

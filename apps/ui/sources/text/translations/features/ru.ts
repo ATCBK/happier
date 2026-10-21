@@ -3056,6 +3056,7 @@ const filesPaneTranslations = { ru: {
             showingFirst: ({ slice, size }) => "Первые " + slice + " из " + size,
             showingLast: ({ slice, size }) => "Последние " + slice + " из " + size,
             partialFact: ({ slice, size }) => slice + " из " + size,
+            plainText: "Обычный текст",
             fromMachine: ({ machine }) => "с " + machine,
         },
         intelligence: {

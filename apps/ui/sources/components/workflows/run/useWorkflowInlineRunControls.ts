@@ -26,7 +26,8 @@ export function useWorkflowInlineRunControls(params: Readonly<{
 }>) {
     const { run, definition, acceptedContext, accountLifetime, canEdit, cancelRequested, supportsAnotherRound } = params;
     const actions = React.useMemo(() => createWorkflowRunDetailActions({ accountLifetime }), [accountLifetime]);
-    const start = useWorkflowRunNowController(accountLifetime);
+    // The same Another round intent as the Run page's, so either surface rejoins one pending request.
+    const start = useWorkflowRunNowController(accountLifetime, `another-round:${run.id}`);
     const mounted = useMountedRef();
     const onStartedRef = React.useRef(params.onStarted);
     onStartedRef.current = params.onStarted;

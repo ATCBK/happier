@@ -19,8 +19,7 @@ import { buildWorkflowEditorDraftFromDefinition } from '@/sync/domains/workflows
 import { storeWorkflowDefinitionDraftSeed } from '@/sync/domains/workflows/workflowDefinitionDraftSeed';
 
 import { confirmWorkflowDocumentExport } from '../actions/confirmWorkflowDocumentExport';
-import { formatWorkflowWhereSummary, WorkflowProjectTargetControl } from '../editor/WorkflowProjectTargetControl';
-import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
+import { createWorkflowStartWhereChip } from '../run/workflowStartWhereChip';
 import { useWorkflowPluginSource } from '../library/workflowLibraryReads';
 import { useWorkflowRunComposerModal } from '../run/useWorkflowRunComposerModal';
 import { useWorkflowRunNowController } from '../run/useWorkflowRunNowController';
@@ -93,7 +92,7 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
     const [rawTextValues, setRawTextValues] = React.useState<Readonly<Record<string, string>>>({});
     // Run now anchors its composer under itself, as in the editor (convo-N7).
     const runAnchorRef = React.useRef<View | null>(null);
-    const runNow = useWorkflowRunNowController(accountLifetime);
+    const runNow = useWorkflowRunNowController(accountLifetime, `catalog:${plugin.workflow}:${plugin.version}`);
     const machine = machines.find((entry) => entry.id === target?.machineId);
     const draft = React.useMemo(() => buildWorkflowEditorDraftFromDefinition({
         draftId: `catalog:${plugin.workflow}:${plugin.version}`, name: plugin.title, definition: plugin.definition,
@@ -123,18 +122,20 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
         }
     };
     const inputPresentation = resolveWorkflowBuiltinInputPresentation(builtin?.id);
+    // While a start is unsettled, the review shows the Where it already sent, without a setter.
+    const retained = runNow.retainedRequest;
+    const shownTarget = retained?.project ?? target;
+    const shownMachine = machines.find((entry) => entry.id === shownTarget?.machineId);
     const runComposer = useWorkflowRunComposerModal({ open, anchorRef: runAnchorRef, props: {
         inputs: plugin.definition.inputs, definition: plugin.definition, workflowName: plugin.title,
         ...(inputPresentation === undefined ? {} : { inputPresentation }),
         preview: plugin.description ?? '', values, onChangeValues: setValues, rawTextValues, onChangeRawTextValues: setRawTextValues,
-        machineId: target?.machineId ?? null, directory: target && isWorkflowProjectTarget(target) ? target.directory : null, serverId: props.serverId,
-        extraActionChips: [{ ...createExecutionRunStartContentChip({
-            key: 'workflow-start-where', icon: 'folder', title: t('workflows.page.where.label'),
-            label: formatWorkflowWhereSummary({ target, machineName: machine ? getMachineDisplayName(machine) : null }) ?? t('workflows.page.where.choose'),
-            testID: `${prefix}:run-where`,
-            renderContent: <WorkflowProjectTargetControl purpose="workflow" target={target} machines={machines} onChange={setTarget}
-                machineName={machine ? getMachineDisplayName(machine) : null} testIDPrefix={`${prefix}:run`} />,
-        }), controlId: 'path' }],
+        machineId: shownTarget?.machineId ?? null, directory: shownTarget && isWorkflowProjectTarget(shownTarget) ? shownTarget.directory : null, serverId: props.serverId,
+        retainedRequest: retained,
+        extraActionChips: [createWorkflowStartWhereChip({ target: shownTarget, machines,
+            machineName: shownMachine ? getMachineDisplayName(shownMachine) : null,
+            ...(retained?.project ? {} : { onChange: setTarget }),
+            testID: `${prefix}:run-where`, testIDPrefix: `${prefix}:run`, controlId: 'path' })],
         onRun: (inputs, overrides) => { void admit(inputs, overrides); }, onCancel: () => { runNow.clearRefusal(); setOpen(false); },
         pending: runNow.isPending(runNow.pendingRunId ?? ''),
         startProblem: runNow.refusal?.message ?? null,

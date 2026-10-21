@@ -399,6 +399,34 @@ describe('workflow composer admission', () => {
         expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false);
     });
 
+    it.each([
+        ['another_round', 'workflows.start.retry.anotherRound'],
+        ['ordinary', 'workflows.start.retry.runAgain'],
+        ['start', 'workflows.start.retry.start'],
+    ] as const)('reviews an unresolved %s request exactly as sent, read-only, with Start meaning try that request again', async (kind, line) => {
+        const onRun = vi.fn();
+        const sent = { brief: 'Original brief', version: 2, announce: false };
+        const retainedRequest = { unresolved: true, input: {
+            runId: '00000000-0000-4000-8000-000000000001',
+            source: { kind: 'inline' as const, definition: { blocks: ['Build'] },
+                ...(kind === 'start' ? {} : { replay: { runId: '11111111-1111-4111-8111-111111111111',
+                    ...(kind === 'another_round' ? { intent: 'another_round' as const } : {}) } }) },
+            inputs: sent,
+        } };
+        const screen = await renderScreen(<WorkflowRunComposer inputs={inputs} values={{ brief: 'Edited brief', version: 9 }}
+            rawTextValues={{ brief: 'Typed after the lost reply' }} onChangeValues={() => {}} onRun={onRun} onCancel={() => {}}
+            startProblem="workflows.problem.unresolvedOutcome" retainedRequest={retainedRequest} />);
+        const input = screen.findByTestId('new-session-composer-input');
+        expect(input?.props.value).toBe('Original brief');
+        expect(input?.props.editable ?? !input?.props.disabled).toBe(false);
+        expect(screen.findByTestId('workflow-run-inputs-reason-text')?.props.children).toBe(line);
+        const start = screen.findByTestId('workflow-run-inputs-run');
+        expect(start?.props.accessibilityLabel).toBe('workflows.start.retry.action');
+        expect(start?.props.disabled).toBe(false);
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        expect(onRun).toHaveBeenCalledWith(sent);
+    });
+
     it('keeps a no-text workflow inspectable without a dead editable input', async () => {
         const screen = await renderScreen(<WorkflowRunComposer inputs={[]} values={{}} onChangeValues={() => {}} onRun={() => {}} onCancel={() => {}}
             definition={createWorkflowDefinitionFixture({ defaults: STARTABLE_DEFAULTS })} preview={'Build\nReview\nRelease'} />);

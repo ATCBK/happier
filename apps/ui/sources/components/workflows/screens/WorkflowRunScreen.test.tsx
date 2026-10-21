@@ -1512,6 +1512,171 @@ describe('WorkflowRunScreen', () => {
         expect(request.executionTarget).toEqual(ACCEPTED_CONTEXT.executionTarget);
     });
 
+    it('reuses an unresolved Another round identity after progress has stopped', async () => {
+        startResponse.mockRejectedValue(new Error('Start response lost'));
+        const rounds = { ...DEFINITION, inputs: [{ name: 'previousRoundContext', valueType: 'json' as const, required: false, default: null }] };
+        const screen = await renderRunScreen({ definition: rounds, acceptedContext: { ...ACCEPTED_CONTEXT, inputs: { previousRoundContext: null } } });
+        const readRun = detailActions.getRun.getMockImplementation()!;
+        detailActions.getRun.mockImplementation(async (id, signal) => {
+            if (id !== routeState.runId) throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+            return readRun(id, signal);
+        });
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(screen.findHostByTestId('workflow-run-again-refused')).not.toBeNull());
+        expect(screen.findHostByTestId('workflow-run-again-pending')).toBeNull();
+        const original = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[0]?.[1]);
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(runStartCalls()).toHaveLength(4));
+        expect(runStartCalls().map(([, input]) => WorkflowRunStartRequestV1Schema.parse(input))).toEqual([
+            original, original, original, original,
+        ]);
+        expect(routerSpy.push).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])('retains Another round across Run A to B to A and a remount without merging B intent (addressed: %s)', async (addressed) => {
+        routeState.serverId = addressed ? servedHomeId : undefined;
+        startResponse.mockRejectedValue(new Error('Start response lost'));
+        const rounds = { ...DEFINITION, inputs: [{ name: 'previousRoundContext', valueType: 'json' as const, required: false, default: null }] };
+        const acceptedContext = { ...ACCEPTED_CONTEXT, inputs: { previousRoundContext: null } };
+        const screen = await renderRunScreen({ definition: rounds, acceptedContext });
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-another-round')).not.toBeNull());
+        const runA = createWorkflowRunSummaryFixture({ id: routeState.runId, state: 'succeeded', origin: { kind: 'direct' } });
+        const runB = createWorkflowRunSummaryFixture({ id: '22222222-2222-4222-8222-222222222222', state: 'succeeded', origin: { kind: 'direct' } });
+        detailActions.getRun.mockImplementation(async (id) => {
+            const run = id === runA.id ? runA : id === runB.id ? runB : null;
+            if (!run) throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+            return { run, definition: rounds, authoredDefinition: rounds, acceptedContext, checkpoint: null, callerAccess: { canEdit: true } };
+        });
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(screen.findHostByTestId('workflow-run-again-refused')).not.toBeNull());
+        const original = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[0]?.[1]);
+        routeState.runId = runB.id;
+        await screen.update(createRunScreenElement());
+        await act(async () => {});
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(runStartCalls()).toHaveLength(4));
+        const fromB = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[2]?.[1]);
+        expect(fromB.runId).not.toBe(original.runId);
+        expect(fromB.source).toMatchObject({ replay: { runId: runB.id } });
+        routeState.runId = runA.id;
+        await screen.update(createRunScreenElement());
+        await act(async () => {});
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(runStartCalls()).toHaveLength(6));
+        expect(WorkflowRunStartRequestV1Schema.parse(runStartCalls()[4]?.[1])).toEqual(original);
+        await screen.unmount();
+        const remounted = await renderRunScreen({ run: runA, definition: rounds, acceptedContext });
+        await vi.waitFor(() => expect(remounted.findByTestId('workflow-run-another-round')).not.toBeNull());
+        detailActions.getRun.mockImplementation(async (id) => {
+            if (id !== runA.id) throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+            return { run: runA, definition: rounds, authoredDefinition: rounds, acceptedContext, checkpoint: null, callerAccess: { canEdit: true } };
+        });
+        await remounted.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(runStartCalls()).toHaveLength(8));
+        expect(WorkflowRunStartRequestV1Schema.parse(runStartCalls()[6]?.[1])).toEqual(original);
+        expect(routerSpy.push).not.toHaveBeenCalled();
+    });
+
+    it('retains addressed Another round when its binding unmounts before rejoin settles', async () => {
+        routeState.serverId = servedHomeId;
+        const rejoin = createDeferred<unknown>();
+        startResponse.mockRejectedValue(new Error('Start response lost'))
+            .mockRejectedValueOnce(new Error('Start response lost')).mockReturnValueOnce(rejoin.promise);
+        const rounds = { ...DEFINITION, inputs: [{ name: 'previousRoundContext', valueType: 'json' as const, required: false, default: null }] };
+        const acceptedContext = { ...ACCEPTED_CONTEXT, inputs: { previousRoundContext: null } };
+        const run = createWorkflowRunSummaryFixture({ id: routeState.runId, state: 'succeeded', origin: { kind: 'direct' } });
+        const readRun = async (id: string) => {
+            if (id !== run.id) throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+            return { run, definition: rounds, authoredDefinition: rounds, acceptedContext, checkpoint: null, callerAccess: { canEdit: true } };
+        };
+        const screen = await renderRunScreen({ run, definition: rounds, acceptedContext });
+        detailActions.getRun.mockImplementation(readRun);
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-another-round')).not.toBeNull());
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(runStartCalls()).toHaveLength(2));
+        const original = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[0]?.[1]);
+        await screen.unmount();
+        const remounted = await renderRunScreen({ run, definition: rounds, acceptedContext });
+        detailActions.getRun.mockImplementation(readRun);
+        await act(async () => { rejoin.reject(new Error('Rejoin response lost')); });
+        await vi.waitFor(() => expect(remounted.findHostByTestId('workflow-run-again-refused')).not.toBeNull());
+        expect(remounted.findHostByTestId('workflow-run-again-pending')).toBeNull();
+        expect(routerSpy.push).not.toHaveBeenCalled();
+        await remounted.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(runStartCalls()).toHaveLength(4));
+        expect(runStartCalls().map(([, input]) => WorkflowRunStartRequestV1Schema.parse(input))).toEqual([
+            original, original, original, original,
+        ]);
+    });
+
+    it('reviews an unresolved Run again as the request it re-sends, read-only, across leaving and returning to the Run', async () => {
+        startResponse.mockRejectedValue(new Error('Start response lost'));
+        const briefed = { ...DEFINITION, inputs: [{ name: 'brief', valueType: 'string' as const, required: true }] };
+        const acceptedContext = { ...ACCEPTED_CONTEXT, inputs: { brief: 'Accepted brief' } };
+        const runA = createWorkflowRunSummaryFixture({ id: routeState.runId, state: 'succeeded', origin: { kind: 'direct' } });
+        const runB = createWorkflowRunSummaryFixture({ id: '22222222-2222-4222-8222-222222222222', state: 'succeeded', origin: { kind: 'direct' } });
+        const readRun = async (id: string) => {
+            const run = id === runA.id ? runA : id === runB.id ? runB : null;
+            if (!run) throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+            return { run, definition: briefed, authoredDefinition: briefed, acceptedContext, checkpoint: null, callerAccess: { canEdit: true } };
+        };
+        const screen = await renderRunScreen({ run: runA, definition: briefed, acceptedContext });
+        detailActions.getRun.mockImplementation(readRun);
+        await screen.pressByTestIdAsync('workflow-run-run-again');
+        act(() => screen.changeTextByTestId('new-session-composer-input', 'Reviewed brief'));
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.accessibilityLabel).toBe('workflows.start.retry.action'));
+        const original = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[0]?.[1]);
+        expect(original.inputs).toEqual({ brief: 'Reviewed brief' });
+        // What the review shows is what Try again sends: an edit cannot silently diverge from it.
+        act(() => screen.changeTextByTestId('new-session-composer-input', 'Edited after the lost reply'));
+        expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Reviewed brief');
+        expect(screen.findByTestId('workflow-run-inputs-reason-text')?.props.children).toBe('workflows.start.retry.runAgain');
+        await screen.unmount();
+        // Another Run is its own intent, reviewed with its own editable values.
+        routeState.runId = runB.id;
+        const other = await renderRunScreen({ run: runB, definition: briefed, acceptedContext });
+        detailActions.getRun.mockImplementation(readRun);
+        await other.pressByTestIdAsync('workflow-run-run-again');
+        expect(other.findByTestId('new-session-composer-input')?.props.value).toBe('Accepted brief');
+        expect(other.findByTestId('workflow-run-inputs-run')?.props.accessibilityLabel).toBe('workflows.start.start');
+        await other.unmount();
+        routeState.runId = runA.id;
+        const returned = await renderRunScreen({ run: runA, definition: briefed, acceptedContext });
+        detailActions.getRun.mockImplementation(readRun);
+        await returned.pressByTestIdAsync('workflow-run-run-again');
+        expect(returned.findByTestId('new-session-composer-input')?.props.value).toBe('Reviewed brief');
+        const sent = runStartCalls().length;
+        await returned.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(runStartCalls().length).toBeGreaterThan(sent));
+        expect(WorkflowRunStartRequestV1Schema.parse(runStartCalls()[sent]?.[1])).toEqual(original);
+        expect(routerSpy.push).not.toHaveBeenCalled();
+    });
+
+    it('keeps Another round its own request while an ordinary Run again is unresolved', async () => {
+        startResponse.mockRejectedValue(new Error('Start response lost'));
+        const rounds = { ...DEFINITION, inputs: [{ name: 'previousRoundContext', valueType: 'json' as const, required: false, default: null }] };
+        const acceptedContext = { ...ACCEPTED_CONTEXT, inputs: { previousRoundContext: null } };
+        const screen = await renderRunScreen({ definition: rounds, acceptedContext });
+        const readRun = detailActions.getRun.getMockImplementation()!;
+        detailActions.getRun.mockImplementation(async (id, signal) => {
+            if (id !== routeState.runId) throw Object.assign(new Error('run_not_found'), { code: 'run_not_found' });
+            return readRun(id, signal);
+        });
+        await reviewRunAgain(screen);
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.accessibilityLabel).toBe('workflows.start.retry.action'));
+        const ordinary = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[0]?.[1]);
+        expect(ordinary.source).not.toMatchObject({ replay: { intent: 'another_round' } });
+        const sent = runStartCalls().length;
+        await screen.pressByTestIdAsync('workflow-run-another-round');
+        await vi.waitFor(() => expect(runStartCalls().length).toBeGreaterThan(sent));
+        // The pressed control names Another round, so Another round is what is sent, under its own id.
+        const round = WorkflowRunStartRequestV1Schema.parse(runStartCalls()[sent]?.[1]);
+        expect(round.source).toMatchObject({ replay: { intent: 'another_round' } });
+        expect(round.runId).not.toBe(ordinary.runId);
+    });
+
     it('does not let a late Run-again completion navigate after this mounted screen changes Runs', async () => {
         const admission = createDeferred<WorkflowRunStartResultV1>();
         startResponse.mockImplementationOnce(async () => admission.promise);

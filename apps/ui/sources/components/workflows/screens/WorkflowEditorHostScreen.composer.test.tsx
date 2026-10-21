@@ -791,6 +791,222 @@ describe('editor workflow composer', () => {
         expect(definitionWrites()).toHaveLength(0);
     });
 
+    it('reviews an unresolved Run now as the draft and Where it sent, not the draft as edited since', async () => {
+        appliedHome.serverUrl = 'https://workflow.example';
+        appliedHome.serverId = (await addComposerHome('Workflow Home', appliedHome.serverUrl)).id;
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        getStorage().setState({ profileScope: { serverId: getActiveServerSnapshot().serverId, accountId: 'account-a' } });
+        home.answer(appliedHome.serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
+        home.answer(appliedHome.serverId, storageRoute, { status: 404, body: { error: 'run_not_found' } });
+        const definitionId = '8fab3a81-5e64-4000-8000-000000000002';
+        const definition = createWorkflowDefinitionFixture({ inputs: [], blocks: [{ kind: 'wait', id: 'review',
+            document: { text: 'Saved contents', references: [], attachments: [] } }] });
+        await seedSavedDefinition(definitionId, definition, 'Lost reply draft');
+        home.answer(appliedHome.serverId, `/v1/artifacts/${definitionId}/access/grants`, { body: { artifactId: definitionId,
+            ownerAccountId: 'account-a', access: 'owner', grants: [] } });
+        runFailure = { errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
+        runStart.mockImplementation(async () => null);
+        const screen = await renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>, {
+            createNodeMock: () => ({ measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(600, 100, 160, 40) }),
+        });
+        const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
+        const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
+        const edit = async (text: string, directory: string) => act(async () => {
+            const body = screen.root.findByType(WorkflowEditorBody);
+            const block = body.props.draft.blocks[0];
+            if (block.kind !== 'wait') throw new Error('Expected the reviewed wait block');
+            body.props.onChange({ ...body.props.draft, blocks: [{ ...block, document: { ...block.document, text } }] });
+            body.props.onChangeProjectTarget?.({ machineId: 'machine-1', directory });
+        });
+        await edit('Reviewed contents', '/repo/reviewed');
+        await screen.pressByTestIdAsync('workflow-editor-run-now');
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(screen.root.findByType(WorkflowRunComposer).props.retainedRequest?.unresolved).toBe(true));
+        const original = startRequests()[0];
+        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onCancel(); });
+        await edit('Edited after the lost reply', '/repo/elsewhere');
+        await screen.pressByTestIdAsync('workflow-editor-run-now');
+        const review = screen.root.findByType(WorkflowRunComposer).props;
+        expect(review.retainedRequest?.input).toEqual(original);
+        expect(review.retainedRequest?.project).toEqual({ machineId: 'machine-1', directory: '/repo/reviewed' });
+        expect(review.definition?.blocks[0]).toMatchObject({ document: { text: 'Reviewed contents' } });
+        expect(review.directory).toBe('/repo/reviewed');
+        expect(review.includesUnsavedEdits).toBe(false);
+        expect(screen.findByTestId('workflow-run-inputs-run')?.props.accessibilityLabel).toBe('workflows.start.retry.action');
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(startRequests().length).toBeGreaterThan(2));
+        expect(startRequests().every((request) => JSON.stringify(request) === JSON.stringify(original))).toBe(true);
+
+        // Page-level authoring choices belong to the next start. Even an unavailable
+        // new runtime must not prevent recovery of the request already reviewed here.
+        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onCancel(); });
+        await act(async () => {
+            const changeExecutionTarget = screen.root.findByType(WorkflowEditorBody).props.onChangeExecutionTarget;
+            if (!changeExecutionTarget) throw new Error('Missing page-level runtime choice');
+            changeExecutionTarget('detached_run');
+        });
+        expect(screen.root.findByType(WorkflowEditorBody).props.executionTarget).toBe('detached_run');
+        await screen.pressByTestIdAsync('workflow-editor-run-now');
+        // The review names the runtime the sent request runs in, not the page's choice for the next start.
+        const runAs = screen.root.findByType(WorkflowRunComposer).props.extraActionChips?.find((chip) => chip.key === 'workflow-start-run-as');
+        expect(runAs?.collapsedContentPopover?.label).toBe('workflows.start.targetsSessions');
+        const beforeRuntimeChangeRetry = startRequests().length;
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(startRequests().length).toBeGreaterThan(beforeRuntimeChangeRetry));
+        expect(startRequests().every((request) => JSON.stringify(request) === JSON.stringify(original))).toBe(true);
+    });
+
+    it('reviews an unresolved saved-revision Test as the revision it sent, after leaving and a newer save', async () => {
+        home.answer(appliedHome.serverId, storageRoute, { status: 404, body: { error: 'run_not_found' } });
+        const definitionId = '8fab3a81-5e64-4000-8000-000000000003';
+        const waitDefinition = (text: string) => createWorkflowDefinitionFixture({ inputs: [], blocks: [{ kind: 'wait', id: 'review',
+            document: { text, references: [], attachments: [] } }] });
+        await seedSavedDefinition(definitionId, waitDefinition('Reviewed revision'), 'Tested draft');
+        runFailure = { errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
+        runStart.mockImplementation(async () => null);
+        const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
+        const { getWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+        const mount = () => renderScreen(<AppPaneProvider><WorkflowEditorHostScreen source={{ kind: 'saved', definitionId }} /></AppPaneProvider>, {
+            createNodeMock: () => ({ measureInWindow: (receive: (x: number, y: number, width: number, height: number) => void) => receive(600, 100, 160, 40) }),
+        });
+        const pressTest = async (screen: Awaited<ReturnType<typeof mount>>) => {
+            const pageMenu = screen.root.findAll((node) => node.props?.testID === 'workflow-editor-menu' && Array.isArray(node.props.actions))[0];
+            const testRun = (pageMenu?.props.actions as ReadonlyArray<{ id: string; onSelect: () => void }> | undefined)?.find((action) => action.id === 'test-run');
+            await act(async () => { testRun!.onSelect(); });
+        };
+        const screen = await mount();
+        const { WorkflowEditorBody } = await import('./WorkflowEditorBody');
+        await act(async () => { screen.root.findByType(WorkflowEditorBody).props.onChangeProjectTarget?.({ machineId: 'machine-1', directory: '/repo' }); });
+        await pressTest(screen);
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(screen.root.findByType(WorkflowRunComposer).props.retainedRequest?.unresolved).toBe(true));
+        const original = startRequests()[0]!;
+        expect(original.source).toMatchObject({ kind: 'saved', definitionId });
+        await screen.unmount();
+
+        // The saved definition moves on (revision N+1) while the Test of revision N is unknown.
+        const current = await getWorkflowDefinition({ definitionId });
+        const { updateWorkflowDefinition: update } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+        await update({ definitionId, definition: waitDefinition('Saved later'), metadata: { title: 'Tested draft' }, expectedRevision: current.revision });
+
+        const returned = await mount();
+        await vi.waitFor(() => expect(returned.root.findByType(WorkflowEditorBody).props.draft.blocks[0]).toMatchObject({ document: { text: 'Saved later' } }));
+        await pressTest(returned);
+        await vi.waitFor(() => expect(returned.root.findByType(WorkflowRunComposer).props.retainedRequest?.input).toEqual(original));
+        const review = returned.root.findByType(WorkflowRunComposer).props;
+        // The review is revision N as tested, never the newer save.
+        expect(review.definition?.blocks[0]).toMatchObject({ document: { text: 'Reviewed revision' } });
+        expect(review.notice).toBe('workflows.testRun.savedNotice');
+        expect(returned.findByTestId('workflow-run-inputs-run')?.props.accessibilityLabel).toBe('workflows.start.retry.action');
+        const sent = startRequests().length;
+        await returned.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(startRequests().length).toBeGreaterThan(sent));
+        expect(startRequests().every((request) => JSON.stringify(request) === JSON.stringify(original))).toBe(true);
+        await returned.unmount();
+    });
+
+    it('reviews an unresolved Session composer start as the request it sent; a new selection is its own start', async () => {
+        home.answer(appliedHome.serverId, storageRoute, { status: 404, body: { error: 'run_not_found' } });
+        runFailure = { errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
+        runStart.mockImplementation(async () => null);
+        const { useWorkflowComposerStart } = await import('../run/useWorkflowComposerStart');
+        const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
+        let start: ReturnType<typeof useWorkflowComposerStart> | null = null;
+        const Host = () => {
+            start = useWorkflowComposerStart({ project: { machineId: 'machine-1', directory: '/repo/reviewed' },
+                originSession: { sessionId: 'session-origin' }, onStarted: () => {} });
+            return null;
+        };
+        const screen = await renderScreen(<Host />);
+        await act(async () => { start!('builtin:plan-with-a-panel', { retainedDraft: 'Reviewed brief' }); });
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(screen.root.findByType(WorkflowRunComposer).props.retainedRequest?.unresolved).toBe(true));
+        const original = startRequests()[0]!;
+        expect(original.inputs).toMatchObject({ request: 'Reviewed brief' });
+        act(() => screen.changeTextByTestId('new-session-composer-input', 'Edited after the lost reply'));
+        expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Reviewed brief');
+        expect(screen.findByTestId('workflow-run-inputs-run')?.props.accessibilityLabel).toBe('workflows.start.retry.action');
+        const sent = startRequests().length;
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(startRequests().length).toBeGreaterThan(sent));
+        expect(startRequests().every((request) => JSON.stringify(request) === JSON.stringify(original))).toBe(true);
+
+        // Choosing a workflow again is a new start with its own values, never the unresolved one's review.
+        for (const workflow of ['builtin:review-and-converge', 'builtin:plan-with-a-panel'] as const) {
+            await act(async () => { start!(workflow, { retainedDraft: 'Another question' }); });
+            const fresh = screen.root.findByType(WorkflowRunComposer).props;
+            expect(fresh.retainedRequest ?? null).toBeNull();
+            expect(screen.findByTestId('workflow-run-inputs-run')?.props.accessibilityLabel).toBe('workflows.start.start');
+        }
+        await screen.unmount();
+    });
+
+    it('reviews an unresolved New workflow start with its sent Where instead of the page controls', async () => {
+        home.answer(appliedHome.serverId, storageRoute, { status: 404, body: { error: 'run_not_found' } });
+        runFailure = { errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
+        runStart.mockImplementation(async () => null);
+        const { useNewSessionWorkflowStart } = await import('@/components/sessions/new/hooks/useNewSessionWorkflowStart');
+        const { createNewSessionPromptStore } = await import('@/components/sessions/new/hooks/screenModel/newSessionPromptStore');
+        const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
+        type Panel = Parameters<typeof useNewSessionWorkflowStart>[0]['panelProps'];
+        const agentChip = { key: 'agent-chip', render: () => null } as unknown as NonNullable<Panel['agentInputExtraActionChips']>[number];
+        let chip: ReturnType<typeof useNewSessionWorkflowStart>['chip'] | null = null;
+        const Host = (props: Readonly<{ machineId: string; path: string }>) => {
+            const [prompt, setPrompt] = React.useState('Reviewed brief');
+            const panelProps = {
+                popoverBoundaryRef: React.createRef(), headerHeight: 0, safeAreaTop: 0, safeAreaBottom: 0,
+                newSessionTopPadding: 0, newSessionSidePadding: 0, newSessionBottomPadding: 0, containerStyle: {},
+                promptStore: createNewSessionPromptStore(prompt), setSessionPrompt: setPrompt,
+                handleCreateSession: () => {}, canCreate: true, isCreating: false,
+                emptyAutocompleteKinds: [], emptyAutocompleteSuggestions: async () => [],
+                agentType: 'codex', permissionMode: 'default', modelMode: 'default', modelOptions: [],
+                machineName: 'Current machine', selectedMachineId: props.machineId, selectedPath: props.path,
+                targetServerId: appliedHome.serverId, agentInputExtraActionChips: [agentChip],
+                useProfiles: false, selectedProfileId: null, showResumePicker: false, resumeSessionId: null, isResumeSupportChecking: false,
+            } as unknown as Panel;
+            const result = useNewSessionWorkflowStart({ panelProps, prompt });
+            chip = result.chip;
+            return result.composer;
+        };
+        const select = async (choice: string) => {
+            const content = chip!.collapsedContentPopover?.renderContent;
+            if (typeof content !== 'function') throw new Error('Workflow picker content is missing');
+            const picker = await renderScreen(content({ requestClose: () => {}, maxHeight: 420 }) as React.ReactElement);
+            await picker.pressByTestIdAsync(`workflow-choice:${choice}`);
+            await picker.unmount();
+        };
+        const screen = await renderScreen(<Host machineId="machine-1" path="/repo/reviewed" />);
+        await select('builtin:plan-with-a-panel');
+        await vi.waitFor(() => expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false));
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(screen.root.findByType(WorkflowRunComposer).props.retainedRequest?.unresolved).toBe(true));
+        const original = startRequests()[0]!;
+        // The page moves to another machine and folder; those belong to the next start.
+        await screen.update(<Host machineId="machine-2" path="/repo/elsewhere" />);
+        const review = screen.root.findByType(WorkflowRunComposer).props;
+        expect(review.retainedRequest?.input).toEqual(original);
+        expect(review.directory).toBe('/repo/reviewed');
+        expect(review.authoringControls).toBeUndefined();
+        expect(review.extraActionChips?.map((entry) => entry.key)).toEqual(['workflow-start-where']);
+        expect(review.extraActionChips?.[0]?.collapsedContentPopover?.label).toContain('/repo/reviewed');
+        expect(screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false);
+        const sent = startRequests().length;
+        await screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await vi.waitFor(() => expect(startRequests().length).toBeGreaterThan(sent));
+        expect(startRequests().every((request) => JSON.stringify(request) === JSON.stringify(original))).toBe(true);
+
+        // A deliberate new selection is its own start with the page's current controls.
+        await select('builtin:review-and-converge');
+        const fresh = screen.root.findByType(WorkflowRunComposer).props;
+        expect(fresh.retainedRequest ?? null).toBeNull();
+        expect(fresh.directory).toBe('/repo/elsewhere');
+        expect(fresh.extraActionChips).toEqual([agentChip]);
+        await screen.unmount();
+    });
+
     it('reads a builtin through the editor with settings, Run now and Duplicate instead of Save', async () => {
         const { getBuiltinWorkflowCatalogV1 } = await import('@happier-dev/protocol');
         const builtin = getBuiltinWorkflowCatalogV1().find(entry => entry.requiresOriginSession !== true)!;
@@ -820,10 +1036,9 @@ describe('editor workflow composer', () => {
         expect(screen.findByTestId('workflow-builtin-group-agent')).not.toBeNull();
     });
 
-    it('reopens the catalog composer with its unresolved admission and opens that exact Run after the feed settles it', async () => {
+    it('reopens the catalog composer with recovery enabled and rejoins its exact unresolved admission', async () => {
         const { getBuiltinWorkflowCatalogV1, WorkflowRunStartRequestV1Schema, WorkflowRunGetResultV1Schema } = await import('@happier-dev/protocol');
         const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
-        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
         const builtin = getBuiltinWorkflowCatalogV1().find(entry => entry.id === 'builtin:plan-with-a-panel')!;
         const inputs = { request: 'Plan the next release' };
         let startedId: string | null = null;
@@ -855,18 +1070,23 @@ describe('editor workflow composer', () => {
         });
         await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onRun(inputs); });
         expect(startedId).not.toBeNull();
-        expect(screen.root.findByType(WorkflowRunComposer).props.reconciling).toBe(true);
+        expect(screen.root.findByType(WorkflowRunComposer).props).toMatchObject({ pending: false, reconciling: false,
+            startProblem: 'workflows.problem.unresolvedOutcome' });
+        const original = startRequests()[0];
         await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onCancel(); });
         expect(screen.root.findAllByType(WorkflowRunComposer)).toHaveLength(0);
         await screen.pressByTestIdAsync('workflow-builtin-run-now');
-        expect(screen.root.findByType(WorkflowRunComposer).props).toMatchObject({ pending: true, reconciling: true });
-        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onRun(inputs); });
-        expect(startRequests()).toHaveLength(1);
+        expect(screen.root.findByType(WorkflowRunComposer).props).toMatchObject({ pending: false, reconciling: false });
+        expect(startRequests()).toEqual([original, original]);
         // Validate the boundary fixture outside the recovery catch, so malformed
         // transport data fails here rather than masquerading as an unknown outcome.
         await acceptedStorage(detailFor(startedId!));
-        await act(async () => { admitted = true; publishHomeAccountChange(appliedHome.serverId, [`workflow-run:${startedId}`]); });
+        admitted = true;
+        runFailure = null;
+        runStart.mockImplementation(async request => ({ admission: 'existing', run: detailFor(request.runId).run }));
+        await act(async () => { screen.root.findByType(WorkflowRunComposer).props.onRun({ request: 'Changed draft' }); });
         await vi.waitFor(() => expect(screen.root.findAllByType(WorkflowRunComposer)).toHaveLength(0));
+        expect(startRequests()).toEqual([original, original, original]);
         expect(getStorage().getState().workflowRunsById[workflowRunStoreKey(startedId!)]?.summary?.id).toBe(startedId);
         const { router } = await import('expo-router');
         const { createWorkflowRunRoute } = await import('@/sync/domains/workflows/workflowRunRoute');

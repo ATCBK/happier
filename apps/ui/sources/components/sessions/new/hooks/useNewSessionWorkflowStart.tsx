@@ -14,6 +14,9 @@ import { t } from '@/text';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { useMachineListForServer } from '@/sync/domains/state/storage';
+import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { createWorkflowStartWhereChip } from '@/components/workflows/run/workflowStartWhereChip';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { NewSessionSimplePanelProps } from '../components/NewSessionSimplePanel';
@@ -40,6 +43,12 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
     const [values, setValues] = React.useState<WorkflowRunComposerProps['values']>({});
     const [rawTextValues, setRawTextValues] = React.useState<Readonly<Record<string, string>>>({});
     const pendingRunId = React.useRef<string | null>(null);
+    // While this selection's start is unsettled, the review is the request it already sent: its inputs,
+    // Roles, Team and Where. A deliberate new selection resets the id, so it never shows another's request.
+    // (A first press still in flight keeps the page's controls in place: only an unknown outcome swaps them.)
+    const retained = runNow.retainedRequest?.unresolved === true && runNow.retainedRequest.input.runId === pendingRunId.current
+        ? runNow.retainedRequest : null;
+    const machines = useMachineListForServer(scope?.serverId ?? '');
     const select = React.useCallback((next: WorkflowStartSelection) => {
         setSelection({ value: next, lifetime: captureActiveServerAccountScopeLifetime() });
         setValues({}); setRawTextValues({}); pendingRunId.current = null; clearRefusal();
@@ -68,17 +77,23 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
         setRawTextValues(next);
     }, [main, props.setSessionPrompt]);
     const submit = React.useCallback(async (inputs: Readonly<Record<string, JsonValue>> | undefined, roleOverrides?: readonly RoleOverrideV1[]) => {
-        if (!selection || !props.selectedMachineId || !props.selectedPath) return;
-        if (workflowDecision?.state !== 'enabled' || !targetIsCurrent) return;
+        if (!selection || workflowDecision?.state !== 'enabled' || !targetIsCurrent) return;
+        // Try again re-sends the retained request; today's machine and folder belong to the next start.
+        const project = props.selectedMachineId && props.selectedPath
+            ? { machineId: props.selectedMachineId, directory: props.selectedPath } : null;
+        if (retained === null && project === null) return;
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) return;
         const runId = pendingRunId.current ?? randomUUID();
         pendingRunId.current = runId;
         const admitted = await runNow.runNow({
-            runId, source: selection.source, metadata: { title: selection.name, description: selection.description },
-            ...(inputs === undefined ? {} : { inputs: { ...inputs } }),
-            ...(roleOverrides === undefined ? {} : { roleOverrides: [...roleOverrides] }),
-            project: { machineId: props.selectedMachineId, directory: props.selectedPath },
+            runId,
+            ...(retained !== null ? { ...retained.input, ...(retained.project === undefined ? {} : { project: retained.project }) } : {
+                source: selection.source, metadata: { title: selection.name, description: selection.description },
+                ...(inputs === undefined ? {} : { inputs: { ...inputs } }),
+                ...(roleOverrides === undefined ? {} : { roleOverrides: [...roleOverrides] }),
+                ...(project === null ? {} : { project }),
+            }),
             isInvocationCurrent: () => lifetime.isCurrent() && selectionRef.current === selection,
             // New keeps its start form in place and says why beside Start (lab T4-ST).
             refusal: 'inline',
@@ -86,7 +101,13 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
         if (!admitted || !lifetime.isCurrent() || selectionRef.current !== selection) return;
         pendingRunId.current = null;
         router.push(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
-    }, [props.selectedMachineId, props.selectedPath, router, runNow, selection, targetIsCurrent, workflowDecision?.state]);
+    }, [props.selectedMachineId, props.selectedPath, retained, router, runNow, selection, targetIsCurrent, workflowDecision?.state]);
+    const retainedMachine = retained?.project ? machines.find((machine) => machine.id === retained.project?.machineId) : undefined;
+    const retainedWhere = React.useMemo(() => retained?.project === undefined ? null : [createWorkflowStartWhereChip({
+        target: retained.project, machineName: retainedMachine ? getMachineDisplayName(retainedMachine) : retained.project.machineId,
+        machineHomeDir: retainedMachine?.metadata?.homeDir ?? null,
+        testID: 'new-session-workflow-where-chip', testIDPrefix: 'new-session-workflow-where',
+    })], [retained, retainedMachine]);
     const composer = selection === null ? null : <WorkflowRunComposer key={selection.id}
         surfaceGroup={params.surfaceGroup}
         definition={selection.definition} sourceArtifactId={selection.source.kind === 'saved' ? selection.source.definitionId : null}
@@ -95,16 +116,21 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
             : selection.source.kind === 'catalog' ? { kind: 'workflow', workflow: selection.source.workflow } : undefined}
         onChangeValues={setValues} rawTextValues={main ? { ...rawTextValues, [main.name]: prompt } : rawTextValues}
         onChangeRawTextValues={changeRawTextValues} workflowName={selection.name} preview={selection.description}
-        workflowChip={chip} retainedText={main ? undefined : prompt} machineId={props.selectedMachineId} directory={props.selectedPath}
+        workflowChip={chip} retainedText={main ? undefined : prompt}
+        machineId={retained ? retained.project?.machineId ?? null : props.selectedMachineId}
+        directory={retained ? retained.project?.directory ?? null : props.selectedPath}
+        retainedRequest={retained}
         serverId={props.targetServerId} onRun={(inputs, roleOverrides) => { void submit(inputs, roleOverrides); }} onCancel={remove}
         startDisabled={!props.selectedMachineId || !props.selectedPath || props.isCreating
             || !targetIsCurrent || workflowDecision?.state !== 'enabled'}
         pending={runNow.isPending(pendingRunId.current ?? '')}
         reconciling={runNow.stateFor(pendingRunId.current ?? '') === 'reconciling'}
         startProblem={runNow.refusal?.message ?? null}
-        authoringControls={{ machineName: props.machineName, machinePopover: props.machinePopover,
+        // The page's machine, folder and Agent controls describe the next start, so the review of a
+        // request already sent shows its own Where instead of them.
+        authoringControls={retained ? undefined : { machineName: props.machineName, machinePopover: props.machinePopover,
             currentPath: props.selectedPath, folderChipState: props.folderChipState,
             onRemoveFolder: props.onRemoveFolder, pathPopover: props.pathPopover }}
-        extraActionChips={props.agentInputExtraActionChips} />;
+        extraActionChips={retained ? retainedWhere ?? undefined : props.agentInputExtraActionChips} />;
     return { chip, composer };
 }

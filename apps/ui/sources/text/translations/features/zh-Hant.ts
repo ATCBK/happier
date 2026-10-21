@@ -3029,6 +3029,7 @@ const filesPaneTranslations = { 'zh-Hant': {
             showingFirst: ({ slice, size }) => size + " 中的前 " + slice,
             showingLast: ({ slice, size }) => size + " 中的最後 " + slice,
             partialFact: ({ slice, size }) => slice + " / " + size,
+            plainText: "純文字",
             fromMachine: ({ machine }) => "來自 " + machine,
         },
         intelligence: {

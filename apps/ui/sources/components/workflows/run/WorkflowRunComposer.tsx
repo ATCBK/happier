@@ -42,6 +42,7 @@ import { useWorkflowRunVisibility } from './useWorkflowRunVisibility';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import { countWorkflowStepsV1, walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { useWorkflowAccountLifetime } from '../workflowAccountScope';
+import type { WorkflowRunNowRetainedRequest } from './useWorkflowRunNowController';
 
 const styles = StyleSheet.create((theme) => ({
     root: { minWidth: 0 },
@@ -67,6 +68,8 @@ const styles = StyleSheet.create((theme) => ({
     visibilityStatus: { color: theme.colors.text.secondary, flexShrink: 1 },
 }));
 
+const EMPTY_RAW_TEXT: Readonly<Record<string, string>> = {};
+const EMPTY_VALUES: Readonly<Record<string, JsonValue>> = {};
 const EMPTY_AUTOCOMPLETE_KINDS: React.ComponentProps<typeof AgentInput>['autocompleteKinds'] = [];
 const EMPTY_AUTOCOMPLETE_SUGGESTIONS: React.ComponentProps<typeof AgentInput>['autocompleteSuggestions'] = async () => [];
 
@@ -94,6 +97,12 @@ export type WorkflowRunComposerProps = Readonly<{
      */
     startProblem?: string | null;
     startDisabled?: boolean;
+    /**
+     * The request this surface already sent while its admission is unsettled
+     * (`WorkflowRunNowController.retainedRequest`). Start re-sends exactly it,
+     * so the review shows its values read-only instead of the editable ones.
+     */
+    retainedRequest?: WorkflowRunNowRetainedRequest | null;
     /** The opening launcher requests focus once its caller input and Start are ready. */
     autoFocusComposer?: boolean;
     /** Hangs from the control that already names the run key (Run now): Start does not repeat it. */
@@ -144,19 +153,31 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         ? validateWorkflowDefinition(props.definition) : null, [acceptedRepeat, props.definition]);
     const definitionIssue = definitionValidation?.issues.find((issue) => issue.severity === 'error') ?? null;
     const roleIds = React.useMemo(() => props.definition ? workflowUsedRoleIds(props.definition) : [], [props.definition]);
+    // While an earlier request is unsettled, the review is that request: its inputs, Roles and Team.
+    const retained = props.retainedRequest ?? null;
+    const retainedSource = retained?.input.source;
     const visibility = useWorkflowRunVisibility(acceptedRepeat ? null : props.sourceArtifactId);
-    const visibleTeamId = visibility.resolution.ok ? visibility.resolution.visibleTeamId : null;
+    const visibleTeamId = retainedSource !== undefined
+        ? retainedSource.kind === 'catalog' ? null : retainedSource.visibleTeamId ?? null
+        : visibility.resolution.ok ? visibility.resolution.visibleTeamId : null;
     const selectedTeam = visibility.teams.find((team) => team.id === visibleTeamId);
     const visibilityLabel = selectedTeam ? t('workflows.start.visibility.visibleTo', { team: selectedTeam.name ?? selectedTeam.id })
         : t('workflows.start.visibility.chooseTeam');
     const roleDraft = useWorkflowRunRolePrefill(!acceptedRepeat && roleIds.length > 0 ? props.sourceArtifactId : null);
-    const roleOverrides = props.roleOverrides ?? roleDraft.overrides;
+    const roleOverrides = retained ? retained.input.roleOverrides ?? props.roleOverrides ?? [] : props.roleOverrides ?? roleDraft.overrides;
     const [localRawTextValues, setLocalRawTextValues] = React.useState<Readonly<Record<string, string>>>({});
-    const rawTextValues = props.rawTextValues ?? localRawTextValues;
+    const rawTextValues = retained ? EMPTY_RAW_TEXT : props.rawTextValues ?? localRawTextValues;
     const setRawTextValues = props.onChangeRawTextValues ?? setLocalRawTextValues;
+    const values = retained ? retained.input.inputs ?? EMPTY_VALUES : props.values;
     const fields = React.useMemo(() => projectWorkflowRunInputFields({
-        inputs: props.inputs, values: props.values, rawTextValues, originSession: props.originSession,
-    }), [props.inputs, props.values, props.originSession, rawTextValues]);
+        inputs: props.inputs, values, rawTextValues, originSession: props.originSession,
+    }), [props.inputs, values, props.originSession, rawTextValues]);
+    // Nothing in the review can change while it re-sends the retained request.
+    const locked = props.pending === true || retained !== null;
+    // The line says which request it re-sends: this Run, Run again, or Another round.
+    const retainedLine = retained?.unresolved !== true ? null : retainedSource?.kind === 'inline' && retainedSource.replay
+        ? retainedSource.replay.intent === 'another_round' ? t('workflows.start.retry.anotherRound') : t('workflows.start.retry.runAgain')
+        : t('workflows.start.retry.start');
     // Host-bound inputs (the previous round, a trigger id, a diff fingerprint) are never asked; they keep their defaults.
     const personFields = React.useMemo(() => fields.filter((field) => !isWorkflowHostBoundInput(field.definition)), [fields]);
     const mainName = findWorkflowMainInput(props.inputs)?.name;
@@ -169,14 +190,15 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         ?? resolveWorkflowBuiltinInputPresentation(props.optionsConsumer?.workflow), [props.inputPresentation, props.optionsConsumer?.workflow]);
     const inputTitle = (definition: WorkflowInputDefinition) => workflowInputTitle(definition, inputPresentation?.[definition.name]);
     const blocked = fields.find((field) => field.blocking) ?? null;
-    const disabled = props.pending === true || props.startDisabled === true || blocked !== null || definitionIssue !== null
-        || (!acceptedRepeat && roleDraft.status !== 'ready') || visibility.status !== 'ready' || !visibility.resolution.ok;
+    // A retained request was reviewed when it was first sent; the canonical admission owner re-checks it.
+    const disabled = props.pending === true || (retained === null && (props.startDisabled === true || blocked !== null || definitionIssue !== null
+        || (!acceptedRepeat && roleDraft.status !== 'ready') || visibility.status !== 'ready' || !visibility.resolution.ok));
     const hasMainInput = main !== null;
     const presented = useLayoutPresentationActive();
     const [focusRef] = React.useState(() => Symbol('workflow-run-input'));
     const focusRequestRef = React.useRef<(() => void) | null>(null);
     const focusCurrentRef = React.useRef(false);
-    focusCurrentRef.current = hasMainInput && props.pending !== true && presented;
+    focusCurrentRef.current = hasMainInput && !locked && presented;
     const onComposerFocusRequestChange = React.useCallback((request: (() => void) | null) => {
         focusRequestRef.current = request;
     }, []);
@@ -196,14 +218,14 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         if (!props.autoFocusComposer || disabled || !presented || !hasMainInput || initialFocusApplied.current) return;
         initialFocusApplied.current = requestRegisteredComposerFocus(focusRef);
     }, [disabled, focusRef, hasMainInput, presented, props.autoFocusComposer]);
-    const reason = blocked === null ? (!acceptedRepeat && roleDraft.status !== 'ready'
+    const reason = retained !== null ? retainedLine : blocked === null ? (!acceptedRepeat && roleDraft.status !== 'ready'
         ? roleDraft.status === 'failed' ? t('workflows.start.rolesPrefillFailed') : t('common.loading')
         : definitionIssue !== null ? describeWorkflowCommandBlockedReason({ reason: 'definition_invalid', blockingIssue: definitionIssue })
         : props.startProblem ?? null) : blocked.errorCode === 'missing_required_input'
         ? t('workflows.start.addToStart', { name: inputTitle(blocked.definition) }) : t('workflows.issue.invalid_input');
     // 07 §3: an untouched missing value is readiness, not an error. It never interrupts as an alert.
-    const readinessOnly = blocked?.errorCode === 'missing_required_input' || (roleDraft.status === 'loading' && blocked === null);
-    const visibilityHint = visibility.status !== 'ready' ? visibility.status === 'failed'
+    const readinessOnly = retained !== null || blocked?.errorCode === 'missing_required_input' || (roleDraft.status === 'loading' && blocked === null);
+    const visibilityHint = retained !== null ? undefined : visibility.status !== 'ready' ? visibility.status === 'failed'
         ? t('workflows.start.visibility.loadFailed') : t('common.loading')
         : !visibility.resolution.ok ? t('workflows.start.visibility.chooseTeam') : undefined;
     const changeText = React.useCallback((name: string, text: string) => {
@@ -236,7 +258,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         ...(props.sourceArtifactId && !props.includesUnsavedEdits ? [t('workflows.page.saveStatus.saved')] : [])].join(' · ');
     // Start keeps its own word while it works: the spinner replaces it in place and the line beside it
     // says "Starting…", so the pressed button never changes width (DESIGN-16 D11).
-    const startLabel = t('workflows.start.start');
+    const startLabel = retained?.unresolved === true ? t('workflows.start.retry.action') : t('workflows.start.start');
     const chips = React.useMemo<readonly AgentInputExtraActionChip[]>(() => [
         ...(props.workflowChip ? [props.workflowChip] : [createExecutionRunStartContentChip({
             key: 'workflow-start-definition', icon: 'git-branch', label: workflowLabel,
@@ -248,15 +270,15 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
             label: missing === 1 ? t('workflows.start.neededNamed', { name: inputTitle(missingFields[0]!.definition) })
                 : missing > 1 ? t('workflows.start.needed', { count: missing }) : t('workflows.start.inputs'),
             title: t('workflows.start.inputs'), testID: `${prefix}-inputs-chip`,
-            revision: JSON.stringify([props.values, rawTextValues]),
+            revision: JSON.stringify([values, rawTextValues, locked]),
             renderContent: <View>
                 {main?.errorCode === 'missing_required_input' ? <View style={styles.mainReadiness}>
                     <FieldItem label={inputTitle(main.definition)}>
                         <Text style={styles.readinessText}>{t('workflows.start.required')}</Text>
                     </FieldItem>
                 </View> : null}
-                <WorkflowRunInputs fields={remaining} values={props.values} rawTextValues={rawTextValues}
-                onChangeText={changeText} onChangeValue={changeValue} pending={props.pending === true}
+                <WorkflowRunInputs fields={remaining} values={values} rawTextValues={rawTextValues}
+                onChangeText={changeText} onChangeValue={changeValue} pending={locked}
                 machineId={props.machineId ?? null} serverId={props.serverId ?? null} prefix={prefix}
                 optionsConsumer={props.optionsConsumer}
                 pickAgentParticipant={props.pickAgentParticipant}
@@ -266,11 +288,11 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
         ...(props.extraActionChips ?? []),
         ...(visibility.teams.length === 0 ? [] : [createExecutionRunStartContentChip({
             key: 'workflow-start-visibility', icon: 'users', label: visibilityLabel,
-            title: t('workflows.start.visibility.title'), testID: `${prefix}-visibility-chip`, revision: visibleTeamId ?? '',
+            title: t('workflows.start.visibility.title'), testID: `${prefix}-visibility-chip`, revision: `${visibleTeamId ?? ''}:${locked}`,
             renderContent: <View style={styles.fields}>
                 {visibility.teams.length === 1 ? <Text style={styles.body}>{visibilityLabel}</Text>
                     : <WorkflowRunVisibilityChoice teams={visibility.teams} selectedId={visibleTeamId}
-                        onSelect={visibility.onChange} pending={props.pending === true} />}
+                        onSelect={visibility.onChange} pending={locked} />}
                 <Text style={styles.secondary}>{t('workflows.start.visibility.transcripts')}</Text>
             </View>,
         })]),
@@ -278,17 +300,17 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
             && !props.materializedLeaves?.some((leaf) => leaf.role)) ? [] : [createExecutionRunStartContentChip({
             key: 'workflow-start-roles', icon: 'users', title: t('workflows.start.rolesTitle'),
             label: roleOverrides.length > 0 ? t('workflows.start.rolesChanged', { count: roleOverrides.length }) : t('workflows.start.rolesYour'),
-            testID: `${prefix}-roles-chip`, revision: JSON.stringify(roleOverrides),
+            testID: `${prefix}-roles-chip`, revision: JSON.stringify([roleOverrides, locked]),
             renderContent: <View style={styles.fields}>{acceptedRepeat
                 ? <WorkflowAcceptedRunRoles leaves={props.materializedLeaves ?? []} />
-                : roleDraft.status !== 'ready' ? <View>
+                : roleDraft.status !== 'ready' && retained === null ? <View>
                     <Text accessibilityRole={roleDraft.status === 'failed' ? 'alert' : undefined}>
                         {roleDraft.status === 'failed' ? t('workflows.start.rolesPrefillFailed') : t('common.loading')}
                     </Text>
                     {roleDraft.status === 'failed' ? <RoundButton size="small" title={t('common.retry')} onPress={roleDraft.retry} /> : null}
                 </View> : <WorkflowRunRoles definition={props.definition} roleIds={roleIds}
                     serverId={props.serverId} machineId={props.machineId ?? null} directory={props.directory ?? null}
-                    overrides={roleOverrides} onChange={roleDraft.onChange} pending={props.pending === true} prefix={prefix} />}</View>,
+                    overrides={roleOverrides} onChange={roleDraft.onChange} pending={locked} prefix={prefix} />}</View>,
         })]),
         ...(props.materializedLeaves === undefined ? [] : [createExecutionRunStartContentChip({
             key: 'workflow-start-targets', icon: 'stack',
@@ -313,7 +335,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                     : chip.key === 'workflow-start-targets' ? { controlId: 'workflowTargets' as const }
                         : chip.key === 'workflow-start-visibility' ? { controlId: 'sessionAccess' as const } : {}),
     })), [changeText, changeValue, main, missing, missingFields, inputPresentation, prefix, props.extraActionChips, props.machineId, props.directory, props.pending,
-        props.preview, props.serverId, props.optionsConsumer, props.pickAgentParticipant, props.values, props.workflowChip, props.workflowName, rawTextValues, remaining,
+        props.preview, props.serverId, props.optionsConsumer, props.pickAgentParticipant, values, locked, props.workflowChip, props.workflowName, rawTextValues, remaining,
         acceptedRepeat, props.definition, props.materializedLeaves, roleDraft.onChange, roleDraft.retry, roleDraft.status, roleIds, roleOverrides,
         visibility.teams, visibility.onChange, visibilityLabel, visibleTeamId, workflowLabel]);
     return (
@@ -334,7 +356,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                         placeholder={main === null ? t('workflows.start.preview') : main.definition.description ?? inputPresentation?.[main.definition.name]?.placeholder ?? inputTitle(main.definition)}
                         inputAccessibilityLabel={main === null ? t('workflows.start.preview') : inputTitle(main.definition)}
                         inputAccessibilityHint={main?.blocking ? reason ?? undefined : undefined}
-                        disabled={props.pending === true}
+                        disabled={locked}
                         onComposerFocusRequestChange={onComposerFocusRequestChange}
                         voiceAffordance="none"
                         autocompleteKinds={EMPTY_AUTOCOMPLETE_KINDS}
@@ -356,7 +378,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                     {visibility.shared ? <Text style={styles.secondary}>{t('workflows.start.visibility.machines')}</Text> : null}
                     {selectedTeam?.sessionCreationPolicy === 'team_required' ? <Text testID={`${prefix}-team-required`}
                         accessibilityLiveRegion="polite" style={styles.secondary}>{t('workflows.start.visibility.requiredSessionsEditable')}</Text> : null}
-                    {visibility.status !== 'ready' ? <View style={styles.readiness}>
+                    {retained !== null ? null : visibility.status !== 'ready' ? <View style={styles.readiness}>
                         <Text accessibilityRole={visibility.status === 'failed' ? 'alert' : undefined} style={styles.visibilityStatus}>
                             {visibility.status === 'failed' ? t('workflows.start.visibility.loadFailed') : t('common.loading')}
                         </Text>
@@ -367,7 +389,8 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                     {reason === null ? null : <View testID={`${prefix}-reason`} style={styles.readiness}
                         {...(readinessOnly ? {} : { accessibilityRole: 'alert' as const })}>
                         {blocked?.errorCode === 'missing_required_input' ? <Icon name="warning" size={ICON_SIZE.xs} color={theme.colors.state.warning.foreground} /> : null}
-                        <Text testID={`${prefix}-reason-text`} style={readinessOnly ? blocked === null ? styles.secondary : styles.readinessText : styles.required}>{reason}</Text>
+                        <Text testID={`${prefix}-reason-text`} style={retained !== null || (readinessOnly && blocked !== null) ? styles.readinessText
+                            : readinessOnly ? styles.secondary : styles.required}>{reason}</Text>
                     </View>}
                 </View>
                 {/* Start at the action size, with its key hint quietly beneath it (convo-N7). */}
@@ -375,7 +398,7 @@ export function WorkflowRunComposer(props: WorkflowRunComposerProps): React.Reac
                     <RoundButton testID={`${prefix}-run`} size="small"
                         title={startLabel}
                         accessibilityLabel={startLabel}
-                        leading={<Icon name="play" size={ICON_SIZE.xs}
+                        leading={<Icon name={retained?.unresolved === true ? 'arrow-clockwise' : 'play'} size={ICON_SIZE.xs}
                             color={disabled ? theme.colors.text.tertiary : theme.colors.button.primary.tint} />}
                         // A pending Start keeps the primary look under its spinner (as the hold card's does);
                         // `submit` ignores presses until it settles.

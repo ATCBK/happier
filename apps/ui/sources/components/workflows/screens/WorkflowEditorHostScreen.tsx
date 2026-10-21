@@ -30,7 +30,8 @@ import { getBuiltinWorkflowCatalogV1 } from '@happier-dev/protocol/workflows/bui
 import type { ArtifactCallerAccessV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { projectNativeJsonValueForTransport, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows';
-import { isWorkflowProjectTarget } from '@/sync/domains/workflows/workflowProjectTarget';
+import { WorkflowDefinitionV1Schema } from '@happier-dev/protocol/workflows/workflowV1';
+import { isWorkflowProjectTarget, type WorkflowAuthoringTarget } from '@/sync/domains/workflows/workflowProjectTarget';
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
 import type { WorkflowArtifactRevisionV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
 
@@ -95,8 +96,9 @@ import { WorkflowTriggerSection } from '../triggers/WorkflowTriggerSection';
 import { useWorkflowTriggerEditing } from '../triggers/useWorkflowTriggerEditing';
 import { editWorkflowTriggerDraft, EMPTY_WORKFLOW_TRIGGER_DRAFT, WorkflowTriggerSnapshotRestoreError, type WorkflowTriggerSnapshot } from '../triggers/workflowTriggerDraft';
 import { useWorkflowEditorHistory, workflowEditorSnapshotsEqual } from '../editor/useWorkflowEditorHistory';
-import { formatWorkflowWhereSummary, WorkflowProjectTargetControl } from '../editor/WorkflowProjectTargetControl';
+import { formatWorkflowWhereSummary } from '../editor/WorkflowProjectTargetControl';
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
+import { createWorkflowStartWhereChip } from '../run/workflowStartWhereChip';
 import { useActionFieldOptionsForMachine } from '@/components/sessions/actions/useSessionActionFieldOptions';
 import { resolveEffectiveActionInputFields } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
 import { findWorkflowActionSpec } from '@/components/workflows/presentation/workflowActionCatalog';
@@ -258,7 +260,9 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const accountScopeKey = activeAccountScope === null
         ? null
         : serverAccountScopeKeySuffix(activeAccountScope);
-    const runNow = useWorkflowRunNowController(accountLifetime);
+    const runNow = useWorkflowRunNowController(accountLifetime,
+        props.source.kind === 'saved' || destinationInstanceKey !== null
+            ? `editor:${destinationInstanceKey ?? ''}:${workflowEditorSourceKey(props.source)}` : undefined);
     const agentSeedId = props.source.kind === 'saved' ? props.source.agentRevisionSeedId ?? null : null;
     const [agentSeedState, setAgentSeedState] = React.useState(() => ({
         id: agentSeedId, seed: agentSeedId === null ? null : readWorkflowAgentRevision(agentSeedId),
@@ -536,9 +540,10 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         reviewedRunSeed?.executionTarget.kind ?? 'session',
     );
 
-    // One Run UUID per explicit admission attempt. A response-loss retry reuses
-    // it; a deliberate "Run again" allocates a new one at its own call site.
+    // Explicit Plan identities and an unsaved draft's first-save promotion keep
+    // their existing handle; route-stable pending custody stays in runNow.
     const pendingRunIdRef = React.useRef<string | null>(null);
+    const pendingRunId = runNow.pendingRunId ?? pendingRunIdRef.current;
     /** The draft exactly as loaded at `saved.revision`, for edited-since-save detection. */
     const savedDraftRef = React.useRef<WorkflowEditorDraft | null>(null);
     /** Whether this source already consumed its one-shot "open in import" request. */
@@ -792,21 +797,34 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         roleOverrides?: WorkflowRunComposerModalProps['roleOverrides'],
         visibleTeamId?: string,
     ): Promise<void> => {
-        if (planPendingRef.current || draft === null || projectTarget === null || projectTarget.directory.trim().length === 0) return;
+        if (planPendingRef.current || draft === null) return;
+        const retained = runNow.retainedRequest;
+        if (retained === null && (projectTarget === null || projectTarget.directory.trim().length === 0)) return;
         const validation = validateWorkflowEditorDraft(testSource === null ? draft : buildWorkflowEditorDraftFromDefinition({
             draftId: draft.draftId, name: testSource.metadata.title, definition: testSource.definition,
         }));
-        const normalizedDefinition = validation.normalizedDefinition;
-        if (!validation.valid || normalizedDefinition === undefined) return;
+        // Authoring edits and runtime availability describe the next start. Recovery
+        // belongs to the controller's already-reviewed snapshot, including Plan comparison.
+        const normalizedDefinition = retained?.input.source.kind === 'inline'
+            ? WorkflowDefinitionV1Schema.parse(retained.input.source.definition) : validation.normalizedDefinition;
+        if (retained === null && (!validation.valid || normalizedDefinition === undefined)) return;
         // An unavailable runtime is refused rather than downgraded: quietly
         // running effectful work under different execution semantics is exactly
         // what the page-level choice exists to prevent.
-        const admittedTarget = resolveAdmittedWorkflowExecutionTarget({
+        const admittedTarget = retained !== null ? retained.input.executionTarget ?? { kind: 'session' as const } : resolveAdmittedWorkflowExecutionTarget({
             selected: executionTarget,
             targets: runAsTargets,
         });
         if (admittedTarget === null) return;
-        const runId = pendingRunIdRef.current ?? (testSource === null && planReview && reviewedRunSeed
+        const source = retained?.input.source ?? (normalizedDefinition === undefined ? null : testSource === null ? {
+            kind: 'inline' as const,
+            ...(saved?.definitionId ? { sourceArtifactId: saved.definitionId } : {}),
+            ...(visibleTeamId === undefined ? {} : { visibleTeamId }),
+            definition: { ...normalizedDefinition, inputs: [...normalizedDefinition.inputs], blocks: [...normalizedDefinition.blocks] },
+        } : { kind: 'saved' as const, definitionId: testSource.definitionId, revision: testSource.revision,
+            ...(visibleTeamId === undefined ? {} : { visibleTeamId }) });
+        if (source === null) return;
+        const runId = pendingRunId ?? (testSource === null && planReview && reviewedRunSeed
             ? planReview.runId ?? deriveWorkflowPlanRunId(reviewedRunSeed.sourceRunId, planReview.invocationId) : randomUUID());
         pendingRunIdRef.current = runId;
         const sourceGenerationIsCurrent = captureSourceGeneration();
@@ -819,35 +837,29 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         const title = (testSource?.metadata.title ?? draft.name).trim();
         const start = () => runNow.runNow({
             runId,
-            ...(title.length === 0 ? {} : { metadata: { title } }),
-            executionTarget: admittedTarget,
-            source: testSource === null ? {
-                kind: 'inline',
-                // Grant lineage does not substitute saved contents for this reviewed draft.
-                ...(saved?.definitionId ? { sourceArtifactId: saved.definitionId } : {}),
-                ...(visibleTeamId === undefined ? {} : { visibleTeamId }),
-                // The canonical definition is deeply readonly; the ingress request
-                // type is mutable, so hand it a shallow mutable copy instead of
-                // casting the contract away. The Action re-parses it regardless.
-                definition: {
-                    ...normalizedDefinition,
-                    inputs: [...normalizedDefinition.inputs],
-                    blocks: [...normalizedDefinition.blocks],
-                },
-            } : { kind: 'saved', definitionId: testSource.definitionId, revision: testSource.revision,
-                ...(visibleTeamId === undefined ? {} : { visibleTeamId }) },
-            ...(inputs === undefined ? {} : { inputs }),
-            ...(roleOverrides === undefined ? {} : { roleOverrides: [...roleOverrides] }),
-            project: projectTarget,
+            ...(retained !== null ? {
+                ...retained.input,
+                ...(retained.project === undefined ? {} : { project: retained.project }),
+            } : {
+                ...(title.length === 0 ? {} : { metadata: { title } }),
+                executionTarget: admittedTarget,
+                source,
+                ...(inputs === undefined ? {} : { inputs }),
+                ...(roleOverrides === undefined ? {} : { roleOverrides: [...roleOverrides] }),
+                ...(projectTarget === null ? {} : { project: projectTarget }),
+                ...(ownedPlanOriginId && reportBack ? { onComplete: { kind: 'originating_session' as const } } : {}),
+                // A saved revision is sent by reference; its reviewed contents stay with this admission so a
+                // later review shows that revision, never one saved since.
+                ...(testSource === null ? {} : { reviewedDefinition: testSource.definition }),
+            }),
+            ...(ownedPlanOriginId ? { originSessionId: ownedPlanOriginId } : {}),
             isInvocationCurrent: sourceIsCurrent,
             // The composer stays open with the refusal's reason (04 §4.8).
             refusal: 'inline',
-            ...(ownedPlanOriginId ? { originSessionId: ownedPlanOriginId } : {}),
-            ...(ownedPlanOriginId && reportBack ? { onComplete: { kind: 'originating_session' as const } } : {}),
         });
         let admitted: Awaited<ReturnType<typeof runNow.runNow>>;
         try {
-            if (testSource === null && planReview && reviewedRunSeed) {
+            if (testSource === null && planReview && reviewedRunSeed && normalizedDefinition !== undefined) {
                 planPendingRef.current = true;
                 setPlanPending(true);
                 // The draft may stay open after Cancel. Re-read the canonical live
@@ -901,22 +913,33 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         if (!sourceIsCurrent()) return;
         pendingRunIdRef.current = null;
         setInputSheetOpen(false);
-        if (testSource !== null) {
-            setTestRun({ runId: admitted.run.id, definition: testSource.definition });
+        const testedDefinition = retained !== null
+            ? retained.input.source.kind === 'saved' ? retained.reviewedDefinition : undefined
+            : testSource?.definition;
+        if (testedDefinition !== undefined) {
+            setTestRun({ runId: admitted.run.id, definition: testedDefinition });
             return;
         }
         router.pushRetainingCurrent(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
-    }, [accountLifetime, captureSourceGeneration, draft, executionTarget, projectTarget, router, runAsTargets, runNow, planReview, reviewedRunSeed, ownedPlanOriginId, reportBack, saved?.definitionId, testSource]);
+    }, [accountLifetime, captureSourceGeneration, draft, executionTarget, pendingRunId, projectTarget, router, runAsTargets, runNow, planReview, reviewedRunSeed, ownedPlanOriginId, reportBack, saved?.definitionId, testSource]);
 
     const handleRunNow = React.useCallback(() => {
-        if (draft === null || testSourcePending || runNow.isPending(pendingRunIdRef.current ?? '')) return;
+        if (draft === null || testSourcePending || runNow.isPending(pendingRunId ?? '')) return;
+        if (runNow.hasUnsettledAdmission(pendingRunId ?? '')) {
+            setInputSheetOpen(true);
+            return;
+        }
         // Every Run is reviewed in the composer, including a no-input recipe.
         setTestSource(null);
         setInputSheetOpen(true);
-    }, [draft, runNow, testSourcePending]);
+    }, [draft, pendingRunId, runNow, testSourcePending]);
 
     const handleTestRun = React.useCallback(() => {
-        if (saved === null || testSourcePending || runNow.isPending(pendingRunIdRef.current ?? '')) return;
+        if (saved === null || testSourcePending || runNow.isPending(pendingRunId ?? '')) return;
+        if (runNow.hasUnsettledAdmission(pendingRunId ?? '')) {
+            setInputSheetOpen(true);
+            return;
+        }
         const lifetime = accountLifetime;
         if (lifetime === null) return;
         const sourceIsCurrent = captureSourceGeneration();
@@ -932,9 +955,24 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         }).finally(() => {
             if (lifetime.isCurrent() && sourceIsCurrent()) setTestSourcePending(false);
         });
-    }, [accountLifetime, captureSourceGeneration, runNow, saved, testSourcePending]);
+    }, [accountLifetime, captureSourceGeneration, pendingRunId, runNow, saved, testSourcePending]);
 
     const { clearRefusal } = runNow;
+    // While a start is unsettled, the review is the request it already sent: Start re-sends that
+    // request (its graph, inputs and Where), never the draft as it is now.
+    const runRetained = runNow.retainedRequest;
+    const retainedDefinition = React.useMemo(() => {
+        const source = runRetained?.input.source;
+        if (source?.kind === 'saved') return runRetained?.reviewedDefinition ?? null;
+        if (source?.kind !== 'inline') return null;
+        const parsed = WorkflowDefinitionV1Schema.safeParse(source.definition);
+        return parsed.success ? parsed.data : null;
+    }, [runRetained]);
+    const retainedMachine = runRetained?.project ? machines.find((candidate) => candidate.id === runRetained.project?.machineId) : undefined;
+    const whereMachineName = runRetained?.project ? retainedMachine ? getMachineDisplayName(retainedMachine) : runRetained.project.machineId : machineName;
+    const whereHomeDir = runRetained?.project ? retainedMachine?.metadata?.homeDir ?? null : machineHomeDir;
+    const retainedTest = runRetained?.input.source.kind === 'saved';
+    const reportShown = runRetained !== null ? runRetained.input.onComplete?.kind === 'originating_session' : reportBack;
     const dismissInputSheet = React.useCallback(() => {
         if (planPendingRef.current) return;
         clearRefusal();
@@ -950,50 +988,58 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const projectTargetDirty = saved !== null && !pluginJsonValuesEqual(projectTarget, savedProjectTargetRef.current);
 
     const inputModalProps = React.useMemo<WorkflowRunComposerModalProps | null>(() => draft === null ? null : ({
-        definition: testSource?.definition ?? validateWorkflowEditorDraft(draft).normalizedDefinition,
+        definition: retainedDefinition ?? testSource?.definition ?? validateWorkflowEditorDraft(draft).normalizedDefinition,
         sourceArtifactId: saved?.definitionId ?? null,
         ...(saved?.definitionId ? { optionsConsumer: { kind: 'workflow' as const, workflow: saved.definitionId } } : {}),
-        inputs: testSource?.definition.inputs ?? draft.inputs,
+        inputs: retainedDefinition?.inputs ?? testSource?.definition.inputs ?? draft.inputs,
+        retainedRequest: runRetained,
         values: inputValues,
         onChangeValues: setInputValues,
         rawTextValues: inputRawTextValues,
         onChangeRawTextValues: setInputRawTextValues,
-        workflowName: testSource?.metadata.title ?? draft.name,
-        preview: (testSource?.metadata.description ?? (testSource === null ? description : '')) || (testSource?.definition.blocks ?? draft.blocks).map((block) => workflowBlockReferenceLabel(block)).join('\n'),
+        workflowName: runRetained?.input.metadata?.title ?? testSource?.metadata.title ?? draft.name,
+        preview: (runRetained !== null ? '' : testSource?.metadata.description ?? (testSource === null ? description : '')) || (retainedDefinition?.blocks ?? testSource?.definition.blocks ?? draft.blocks).map((block) => workflowBlockReferenceLabel(block)).join('\n'),
         ...(planReview ? { preview: readWorkflowPlanResult(planReview.value)?.document, notice: t('workflows.review.planRunNotice') } : {}),
-        ...(testSource === null ? {} : { notice: t('workflows.testRun.savedNotice') }),
-        includesUnsavedEdits: testSource === null && (definitionDraftDirty || descriptionDraftDirty),
-        machineId: projectTarget?.machineId ?? null,
-        directory: projectTarget?.directory ?? null,
+        ...(testSource === null && !retainedTest ? {} : { notice: t('workflows.testRun.savedNotice') }),
+        // A retained request is described by what it sent, not by how the draft compares now.
+        includesUnsavedEdits: runRetained === null && testSource === null && (definitionDraftDirty || descriptionDraftDirty),
+        machineId: (runRetained?.project ?? projectTarget)?.machineId ?? null,
+        directory: (runRetained?.project ?? projectTarget)?.directory ?? null,
         serverId: activeAccountScope?.serverId ?? null,
         ...(ownedPlanOriginId && activeAccountScope ? { originSession: {
             serverId: activeAccountScope.serverId, sessionId: ownedPlanOriginId,
         } } : {}),
-        extraActionChips: [{
-            ...createExecutionRunStartContentChip({
-                key: 'workflow-start-where', icon: 'folder', title: t('workflows.page.where.label'),
-                label: formatWorkflowWhereSummary({ target: projectTarget, machineName, machineHomeDir }) ?? t('workflows.page.where.choose'),
-                testID: 'workflow-start-where-chip',
-                renderContent: <WorkflowProjectTargetControl purpose="workflow" target={projectTarget} machineName={machineName} accountLifetime={props.accountLifetime}
-                    machines={machines} onChange={(target) => { if (isWorkflowProjectTarget(target)) setProjectTarget(target); }}
-                    testIDPrefix="workflow-start-where" />,
-            }), controlId: 'machine',
-        }, ...(ownedPlanOriginId ? [{ ...createExecutionRunStartContentChip({ key: 'workflow-plan-report', icon: 'arrow-elbow-down-right',
+        extraActionChips: [createWorkflowStartWhereChip({
+            target: runRetained?.project ?? projectTarget, machineName: whereMachineName, machineHomeDir: whereHomeDir,
+            machines, accountLifetime: props.accountLifetime,
+            // The sent Where is shown without a setter; only a new start chooses again.
+            ...(runRetained?.project ? {} : { onChange: (target: WorkflowAuthoringTarget) => { if (isWorkflowProjectTarget(target)) setProjectTarget(target); } }),
+            testID: 'workflow-start-where-chip', testIDPrefix: 'workflow-start-where',
+        }), ...(runRetained === null ? [] : [{ ...createExecutionRunStartContentChip({
+            // The page's Run as belongs to the next start; the review names what this request runs in.
+            key: 'workflow-start-run-as', icon: 'stack', title: t('workflows.start.targetsTitle'),
+            label: runRetained.input.executionTarget?.kind === 'detached_run' ? t('workflows.start.targetsBackground') : t('workflows.start.targetsSessions'),
+            testID: 'workflow-start-run-as-chip', revision: runRetained.input.executionTarget?.kind ?? 'session',
+            renderContent: <Item title={t('workflows.start.targetsTitle')} showChevron={false}
+                subtitle={runRetained.input.executionTarget?.kind === 'detached_run' ? t('workflows.page.sections.aBackgroundRun') : t('workflows.page.sections.aSession')} />,
+        }), controlId: 'workflowTargets' as const }]), ...(ownedPlanOriginId ? [{ ...createExecutionRunStartContentChip({ key: 'workflow-plan-report', icon: 'arrow-elbow-down-right',
             label: t('workflows.review.reportBackTitle', { session: planOriginName }), title: t('workflows.review.reportBackTitle', { session: planOriginName }),
-            testID: 'workflow-plan-report-chip', revision: String(reportBack), renderContent: <Item
+            testID: 'workflow-plan-report-chip', revision: String([reportShown, runRetained !== null]), renderContent: <Item
                 title={t('workflows.review.reportBackTitle', { session: planOriginName })} subtitle={t('workflows.review.reportBackBody', { session: planOriginName })}
                 showChevron={false} rightElementOutsidePressable
-                rightElement={<Switch value={reportBack} onValueChange={setReportBack} disabled={planPending} />} /> }),
+                // A sent request's completion choice is fixed; the switch shows it and only a new start changes it.
+                rightElement={<Switch testID="workflow-plan-report-switch" value={reportShown} onValueChange={setReportBack}
+                    disabled={planPending || runRetained !== null} />} /> }),
             controlId: 'delivery' as const }] : [])],
         onRun: (inputs, roleOverrides, visibleTeamId) => { void startRun(inputs, roleOverrides, visibleTeamId); },
         onCancel: dismissInputSheet,
-        pending: planPending || runNow.isPending(pendingRunIdRef.current ?? ''),
-        reconciling: runNow.stateFor(pendingRunIdRef.current ?? '') === 'reconciling',
+        pending: planPending || runNow.isPending(pendingRunId ?? ''),
+        reconciling: runNow.stateFor(pendingRunId ?? '') === 'reconciling',
         startProblem: runNow.refusal?.message ?? null,
-    }), [activeAccountScope?.serverId, definitionDraftDirty, descriptionDraftDirty, description, dismissInputSheet, draft, inputRawTextValues, inputValues, machineName, machines, projectTarget, runNow, saved?.definitionId, startRun, planReview, ownedPlanOriginId, planOriginName, reportBack, planPending, testSource]);
+    }), [activeAccountScope?.serverId, definitionDraftDirty, descriptionDraftDirty, description, dismissInputSheet, draft, inputRawTextValues, inputValues, machineName, machines, pendingRunId, projectTarget, retainedDefinition, whereHomeDir, whereMachineName, runNow, runRetained, saved?.definitionId, startRun, planReview, ownedPlanOriginId, planOriginName, reportShown, planPending, retainedTest, testSource]);
 
     const runComposer = useWorkflowRunComposerModal({ open: inputSheetOpen, props: inputModalProps,
-        anchorRef: testSource === null ? runNowAnchorRef : testRunAnchorRef });
+        anchorRef: testSource === null && !retainedTest ? runNowAnchorRef : testRunAnchorRef });
     const testRunPresentation = useWorkflowTestRunPresentation({ runId: testRun?.runId ?? null, definition: testRun?.definition ?? null, editable: canEditDefinition });
 
     const handleSave = React.useCallback(async (caller?: WorkflowActionCallerContext, asCopy = false): Promise<WorkflowDraftMutationResultV1> => {
@@ -1837,7 +1883,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 {...(saved === null ? {} : { onTestRun: handleTestRun, testRunPending: testSourcePending })}
                 runNowAnchorRef={runNowAnchorRef}
                 testRunAnchorRef={testRunAnchorRef}
-                runPending={testSourcePending || runNow.isPending(pendingRunIdRef.current ?? '')}
+                runPending={testSourcePending || runNow.isPending(pendingRunId ?? '')}
                 {...(canManagePersonalTriggers ? { onSave: saveFromUi, triggersSummary: triggers.summary,
                 triggersSection: (
                     <WorkflowTriggerSection

@@ -8,7 +8,6 @@ import { NavigationBackChromeProvider, useNavigationBackControl } from '@/compon
 import { Stack } from '@/components/appShell/workspace/destinationRoute';
 import { DefaultBackButton } from '@/components/navigation/Header';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
-import { randomUUID } from 'expo-crypto';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type {
@@ -18,7 +17,9 @@ import type {
     WorkflowInvocationRecoveryAvailabilityV1,
     WorkflowRunSummaryV1,
     WorkflowReplayAgentOverrideV1,
+    WorkflowDefinitionV1,
 } from '@happier-dev/protocol';
+import type { WorkflowRunAcceptedContextV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { ArtifactAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -30,7 +31,7 @@ import { canStartWorkflowAnotherRound } from '@/components/workflows/presentatio
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
-import { WorkflowProjectTargetControl, formatWorkflowWhereSummary } from '../editor/WorkflowProjectTargetControl';
+import { createWorkflowStartWhereChip } from '../run/workflowStartWhereChip';
 import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
 import { t } from '@/text';
 import { projectWorkflowFlow } from '../flow/workflowFlowProjection';
@@ -234,6 +235,17 @@ type WorkflowRunPagingFailure = Readonly<{
     window: 'history' | 'attention';
 }>;
 
+/** Names the step a sent Agent swap applies to, from the same frozen graph the request was built from. */
+function describeReplayOverrideStep(
+    definition: WorkflowDefinitionV1 | null,
+    acceptedContext: WorkflowRunAcceptedContextV1 | null,
+    override: Pick<WorkflowReplayAgentOverrideV1, 'sourceKey' | 'blockId'>,
+): string {
+    const owner = override.sourceKey === '$root' ? definition : acceptedContext?.frozenChildren[override.sourceKey] ?? null;
+    const block = owner ? walkWorkflowBlocks(owner.blocks).find((candidate) => candidate.id === override.blockId) : undefined;
+    return block ? workflowBlockReferenceLabel(block) : override.blockId;
+}
+
 function firstParam(value: string | string[] | undefined): string | undefined {
     return Array.isArray(value) ? value[0] : value;
 }
@@ -354,7 +366,10 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
     const { binding } = useServerCredentialAccountScopeBinding(exactServerId ?? null);
     const accountLifetime = exactServerId ? binding : activeLifetime;
     const workflowRunDetailActions = React.useMemo(() => createWorkflowRunDetailActions({ accountLifetime }), [accountLifetime]);
-    const runNow = useWorkflowRunNowController(accountLifetime);
+    // Run again (reviewed, possibly with another Agent) and Another round are different requests,
+    // so each keeps its own pending identity: pressing one never re-sends the other.
+    const runNow = useWorkflowRunNowController(accountLifetime, `replay:${runId ?? ''}`);
+    const anotherRoundStart = useWorkflowRunNowController(accountLifetime, `another-round:${runId ?? ''}`);
     const activeAccountScope = accountLifetime?.scope ?? null;
     const accountScopeKey = activeAccountScope === null
         ? null
@@ -483,7 +498,6 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         recordId: string;
         contentRevision: string;
     }> | null>(null);
-    const pendingRunAgainIdRef = React.useRef<string | null>(null);
     /**
      * What the last completed load observed, so a background invalidation knows
      * whether it still has to open the Run's private half at all.
@@ -542,7 +556,6 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         setSelectedInvocationId(requestedInvocationId);
         setView('flow');
         setLoadState('loading');
-        pendingRunAgainIdRef.current = null;
         previousLifecyclesRef.current = new Map();
         loadedDetailRef.current = null;
         setAnnouncementsEnabled(false);
@@ -1595,16 +1608,13 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
         if (visibleDefinition === null || visibleAcceptedContext === null || summary === null) return;
         if (intent === undefined && runAgainAgentOverride !== null && runAgainAgentOverride.engine === undefined) return;
         const requestIdentity = contentIdentity;
-        const nextRunId = pendingRunAgainIdRef.current ?? randomUUID();
-        pendingRunAgainIdRef.current = nextRunId;
         const prepared = prepareWorkflowRunStartV1({ definition: visibleDefinition,
             acceptedContext: visibleAcceptedContext, ...(inputs === undefined ? {} : { inputs }),
             replay: { runId: summary.id, ...(intent !== undefined ? { intent } : runAgainAgentOverride?.engine ? { agentOverride: {
                 sourceKey: runAgainAgentOverride.sourceKey, blockId: runAgainAgentOverride.blockId,
                 engine: runAgainAgentOverride.engine,
             } } : {}) } });
-        const admitted = await runNow.runNow({
-            runId: nextRunId,
+        const admitted = await (intent === 'another_round' ? anotherRoundStart : runNow).runNow({
             refusal: 'inline',
             isInvocationCurrent: () => isContentIdentityCurrent(requestIdentity),
             ...prepared,
@@ -1614,19 +1624,17 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             ...(prepared.project ? { project: projectAcceptedWorkflowRunTarget(prepared.project) } : {}),
         });
         if (admitted === null || !isContentIdentityCurrent(requestIdentity)) return;
-        pendingRunAgainIdRef.current = null;
         setRunAgainInputOpen(false);
         router.push(createWorkflowRunRoute(admitted.run.id, activeAccountScope?.serverId) as never);
-    }, [activeAccountScope, contentIdentity, isContentIdentityCurrent, router, runNow, runAgainAgentOverride, summary, visibleAcceptedContext, visibleDefinition]);
+    }, [activeAccountScope, anotherRoundStart, contentIdentity, isContentIdentityCurrent, router, runNow, runAgainAgentOverride, summary, visibleAcceptedContext, visibleDefinition]);
 
     const requestRunAgain = React.useCallback(async () => {
         if (visibleDefinition === null || visibleAcceptedContext === null) return;
-        if (runNow.isPending(pendingRunAgainIdRef.current ?? '')) {
+        if (runNow.hasUnsettledAdmission(runNow.pendingRunId ?? '')) {
             setRunAgainInputOpen(true);
             return;
         }
         runNow.clearRefusal();
-        pendingRunAgainIdRef.current = null;
         setRunAgainValues(prepareWorkflowRunStartV1({ definition: visibleDefinition,
             acceptedContext: visibleAcceptedContext }).inputs ?? {});
         setRunAgainRawTextValues({});
@@ -1636,16 +1644,14 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
 
     const requestAnotherRound = React.useCallback(() => {
         // A pending start (including a lost reply) rejoins its own Run id rather than minting another.
-        if (!runNow.isPending(pendingRunAgainIdRef.current ?? '')) {
-            runNow.clearRefusal();
-            pendingRunAgainIdRef.current = null;
+        if (!anotherRoundStart.hasUnsettledAdmission(anotherRoundStart.pendingRunId ?? '')) {
+            anotherRoundStart.clearRefusal();
         }
-        setRunAgainAgentOverride(null);
         void admitRunAgain(undefined, 'another_round');
-    }, [admitRunAgain, runNow]);
+    }, [admitRunAgain, anotherRoundStart]);
 
     const requestRunWithAnotherAgent = React.useCallback(() => {
-        if (runNow.isPending(pendingRunAgainIdRef.current ?? '')) {
+        if (runNow.hasUnsettledAdmission(runNow.pendingRunId ?? '')) {
             setRunAgainInputOpen(true);
             return;
         }
@@ -1812,17 +1818,33 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
 
     // The controller's methods are stable; the memoized composer must consume its observed state,
     // not the method object's identity. No second admission state or pending guard lives here.
-    const runAgainState = runNow.stateFor(pendingRunAgainIdRef.current ?? '');
+    const runAgainState = runNow.stateFor(runNow.pendingRunId ?? '');
     const runAgainPending = runAgainState === 'submitting' || runAgainState === 'reconciling';
-    const runAgainRefusal = pendingRunAgainIdRef.current === null ? null : runNow.refusal;
-    const runAgainStatus = runAgainInputOpen ? null : runAgainPending
+    const runAgainRefusal = runNow.refusal;
+    const anotherRoundState = anotherRoundStart.stateFor(anotherRoundStart.pendingRunId ?? '');
+    const anotherRoundPending = anotherRoundState === 'submitting' || anotherRoundState === 'reconciling';
+    // Another round has no review of its own, so its progress and refusal speak on the page; Run again's
+    // speak in its open composer and on the page once that closes.
+    const pageStart = anotherRoundPending || anotherRoundStart.refusal !== null
+        ? { state: anotherRoundState, pending: anotherRoundPending, refusal: anotherRoundStart.refusal }
+        : runAgainInputOpen ? null : { state: runAgainState, pending: runAgainPending, refusal: runAgainRefusal };
+    const runAgainStatus = pageStart === null ? null : pageStart.pending
         ? <SurfaceStateCard testID="workflow-run-again-pending" size="line" kind="loading"
-            title={t(runAgainState === 'reconciling' ? 'workflows.start.stillStarting' : 'workflows.start.starting')}
+            title={t(pageStart.state === 'reconciling' ? 'workflows.start.stillStarting' : 'workflows.start.starting')}
             accessibilitySemantics="status" />
-        : runAgainRefusal ? <SurfaceStateCard testID="workflow-run-again-refused" size="line"
-            kind={runAgainRefusal.accessibilitySemantics === 'status' ? 'unavailable' : 'error'}
-            title={runAgainRefusal.title} reason={runAgainRefusal.message}
-            accessibilitySemantics={runAgainRefusal.accessibilitySemantics} /> : null;
+        : pageStart.refusal ? <SurfaceStateCard testID="workflow-run-again-refused" size="line"
+            kind={pageStart.refusal.accessibilitySemantics === 'status' ? 'unavailable' : 'error'}
+            title={pageStart.refusal.title} reason={pageStart.refusal.message}
+            accessibilitySemantics={pageStart.refusal.accessibilitySemantics} /> : null;
+    // While Run again is unsettled its review is the request it re-sends, including any Agent swap.
+    const runAgainRetained = runNow.retainedRequest;
+    const retainedReplay = runAgainRetained?.input.source.kind === 'inline' ? runAgainRetained.input.source.replay : undefined;
+    const runAgainOverrideShown = runAgainRetained === null ? runAgainAgentOverride
+        : retainedReplay?.agentOverride === undefined ? null : {
+            ...retainedReplay.agentOverride,
+            step: describeReplayOverrideStep(visibleDefinition, visibleAcceptedContext, retainedReplay.agentOverride),
+        };
+    const runAgainTarget = runAgainRetained?.project ?? visibleAcceptedContext?.workspaceTarget.project ?? null;
     const runAgainModalProps = React.useMemo<WorkflowRunComposerModalProps | null>(
         () => visibleDefinition === null ? null : ({
             definition: visibleDefinition,
@@ -1836,30 +1858,26 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             onChangeRawTextValues: setRunAgainRawTextValues,
             workflowName: visibleAcceptedContext?.metadata?.title,
             notice: t('workflows.recovery.repeatedEffectWarning'),
-            startDisabled: runAgainAgentOverride !== null && runAgainAgentOverride.engine === undefined,
+            startDisabled: runAgainOverrideShown !== null && runAgainOverrideShown.engine === undefined,
+            retainedRequest: runAgainRetained,
             preview: visibleAcceptedContext?.metadata?.description || visibleDefinition.blocks.map((block) => workflowBlockReferenceLabel(block)).join('\n'),
             machineId: visibleAcceptedContext?.machineId ?? null,
-            ...(visibleAcceptedContext === null ? {} : { extraActionChips: [{
-                ...createExecutionRunStartContentChip({
-                    key: 'workflow-start-where', icon: 'folder', title: t('workflows.page.where.label'),
-                    label: formatWorkflowWhereSummary({ target: visibleAcceptedContext.workspaceTarget.project,
-                        machineName: getMachineDisplayName(runMachine), machineHomeDir: runMachine?.metadata?.homeDir }) ?? visibleAcceptedContext.machineId,
-                    testID: 'workflow-start-where-chip',
-                    // No setter: this is the accepted target, not another authored choice.
-                    renderContent: <WorkflowProjectTargetControl purpose="workflow" target={visibleAcceptedContext.workspaceTarget.project}
-                        machineName={getMachineDisplayName(runMachine)} machineHomeDir={runMachine?.metadata?.homeDir}
-                        testIDPrefix="workflow-repeat-where" />,
-                }), controlId: 'machine' as const,
-            }, ...(runAgainAgentOverride === null ? [] : [{ ...createExecutionRunStartContentChip({
-                key: 'workflow-run-another-agent', icon: 'users', title: t('workflows.start.agentForStep', { step: runAgainAgentOverride.step }),
-                label: t('workflows.start.agentForStep', { step: runAgainAgentOverride.step }),
+            ...(visibleAcceptedContext === null ? {} : { extraActionChips: [
+                // No setter: this is the accepted (or already sent) target, not another authored choice.
+                createWorkflowStartWhereChip({ target: runAgainTarget, machineName: getMachineDisplayName(runMachine),
+                    machineHomeDir: runAgainTarget?.machineId === runMachine?.id ? runMachine?.metadata?.homeDir ?? null : null,
+                    fallbackLabel: visibleAcceptedContext.machineId,
+                    testID: 'workflow-start-where-chip', testIDPrefix: 'workflow-repeat-where' }),
+                ...(runAgainOverrideShown === null ? [] : [{ ...createExecutionRunStartContentChip({
+                key: 'workflow-run-another-agent', icon: 'users', title: t('workflows.start.agentForStep', { step: runAgainOverrideShown.step }),
+                label: t('workflows.start.agentForStep', { step: runAgainOverrideShown.step }),
                 testID: 'workflow-run-another-agent-chip',
-                revision: JSON.stringify(runAgainAgentOverride.engine),
-                disabled: runAgainPending,
-                renderContent: <WorkflowRunAgentOverrideField step={runAgainAgentOverride.step} value={runAgainAgentOverride.engine}
+                revision: JSON.stringify([runAgainOverrideShown.engine, runAgainRetained !== null]),
+                disabled: runAgainPending || runAgainRetained !== null,
+                renderContent: <WorkflowRunAgentOverrideField step={runAgainOverrideShown.step} value={runAgainOverrideShown.engine}
                     serverId={activeAccountScope?.serverId} machineId={visibleAcceptedContext?.machineId ?? null}
                     directory={visibleAcceptedContext?.workspaceTarget.project.directory ?? null}
-                    disabled={runAgainPending}
+                    disabled={runAgainPending || runAgainRetained !== null}
                     onChange={(engine) => setRunAgainAgentOverride((current) => current === null ? null : { ...current, engine })} />,
             }), controlId: 'engine' as const }])] }),
             onRun: (inputs) => { void admitRunAgain(inputs); },
@@ -1868,7 +1886,7 @@ function WorkflowRunBody(props: Readonly<{ onCloseInvocation: () => void; embedd
             reconciling: runAgainState === 'reconciling',
             startProblem: runAgainRefusal?.message,
         }),
-        [activeAccountScope?.serverId, admitRunAgain, runAgainAgentOverride, runAgainPending, runAgainRawTextValues, runAgainRefusal, runAgainState, runAgainValues, runMachine, sourceRef, visibleAcceptedContext, visibleDefinition],
+        [activeAccountScope?.serverId, admitRunAgain, runAgainOverrideShown, runAgainPending, runAgainRawTextValues, runAgainRefusal, runAgainRetained, runAgainState, runAgainTarget, runAgainValues, runMachine, sourceRef, visibleAcceptedContext, visibleDefinition],
     );
 
     // One host, one presentation for one composer: Run again anchors to its button on wide layouts and

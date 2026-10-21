@@ -8,6 +8,11 @@ import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionP
 
 const haptics = vi.hoisted(() => ({ light: vi.fn(async () => {}) }));
 
+// Completion's device feedback goes through the real platform/preference adapter.
+vi.mock('react-native', async () => {
+    const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeNativeMock({ platformOS: 'ios' });
+});
 vi.mock('expo-haptics', async (importOriginal) => ({
     ...await importOriginal<typeof import('expo-haptics')>(),
     impactAsync: haptics.light,

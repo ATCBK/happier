@@ -3034,6 +3034,7 @@ const filesPaneTranslations = { fr: {
             showingFirst: ({ slice, size }) => "Premiers " + slice + " sur " + size,
             showingLast: ({ slice, size }) => "Derniers " + slice + " sur " + size,
             partialFact: ({ slice, size }) => slice + " sur " + size,
+            plainText: "Texte brut",
             fromMachine: ({ machine }) => "depuis " + machine,
         },
         intelligence: {

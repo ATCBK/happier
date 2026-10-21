@@ -22,7 +22,6 @@ import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernance
 
 installDisconnectedServerSocketBoundary();
 const { ModalProvider, useModal } = await import('@/modal/ModalProvider');
-const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
 const { useWorkflowInlineRunControls } = await import('./useWorkflowInlineRunControls');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
@@ -54,7 +53,7 @@ afterEach(async () => {
     vi.unstubAllGlobals();
 });
 
-async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMissingRead = false, anotherRound = false, inlineRound = false) {
+async function harness(outcome: 'admitted' | 'not-sent' | 'unknown' | 'delayed', holdFirstMissingRead = false, anotherRound = false, inlineRound = false) {
     vi.stubGlobal('React', React);
     installShippedNativeFrameScheduler();
     await loadSyncSingletonForTests();
@@ -62,7 +61,10 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
     let admissions = 0;
     let reads = 0;
     let dispatches = 0;
+    let currentOutcome = outcome;
     const firstMissingRead = createDeferred<void>();
+    const releaseOriginal = createDeferred<void>();
+    let original: Promise<unknown> | undefined;
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
     const storageBoundary = async (operation: Readonly<Record<string, unknown>>) => {
         const id = String(operation.runId);
@@ -160,8 +162,15 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
         const actual = WorkflowRunStartRequestV1Schema.parse(request);
         dispatchedInput = actual;
         if (inlineRound) admittedRunId = actual.runId;
-        if (outcome === 'not-sent') return { ok: false, errorCode: 'target_unavailable', error: 'offline before dispatch' };
-        if (outcome === 'admitted') {
+        if (currentOutcome === 'not-sent') return { ok: false, errorCode: 'target_unavailable', error: 'offline before dispatch' };
+        if (currentOutcome === 'delayed') {
+            if (dispatches === 1) {
+                original = releaseOriginal.promise.then(() => owner.execute({ actionId: 'workflow.run.start', input: actual, context }));
+                throw new Error('Start response lost before delayed delivery');
+            }
+            return owner.execute({ actionId: 'workflow.run.start', input: actual, context });
+        }
+        if (currentOutcome === 'admitted') {
             await expect(owner.execute({ actionId: 'workflow.run.start', input: actual, context })).resolves.toMatchObject({ admission: 'created', run: { id: admittedRunId } });
         }
         throw new Error('Start response lost after dispatch');
@@ -178,19 +187,25 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
         const inline = useWorkflowInlineRunControls({ run: priorDetail?.run ?? createWorkflowRunSummaryFixture({ id: runId }),
             definition: null, acceptedContext: null, supportsAnotherRound: inlineRound, accountLifetime: lifetime, canEdit: true,
             onStarted: result => { opened(result); } });
-        state = inlineRound ? inline.start.stateFor(inline.start.pendingRunId ?? admittedRunId) : controller.stateFor(runId);
+        const start = inlineRound ? inline.start : controller;
+        state = start.stateFor(start.pendingRunId ?? admittedRunId);
         return <WorkflowRunComposer inputs={[]} definition={definition} values={{}} onChangeValues={() => {}} onCancel={() => {}}
             pending={state === 'submitting' || state === 'reconciling'}
             reconciling={state === 'reconciling'}
-            startProblem={controller.refusal?.message ?? null}
+            startProblem={start.refusal?.message ?? null}
             onRun={() => { pending = inlineRound ? inline.anotherRound?.()
                 : controller.runNow({ ...input, project: context.externalActionTarget.project, refusal: 'inline' }).then(result => { if (result) opened(result); }); }} />;
     };
-    const screen = await renderScreen(<ModalProvider><Host /></ModalProvider>);
+    let mount = 0;
+    const renderHost = () => <ModalProvider><Host key={mount} /></ModalProvider>;
+    const screen = await renderScreen(renderHost());
     disposals.push(screen.unmount);
     return { screen, opened, owner, input, context, account, readState: () => state, readModals: () => modals,
         counts: () => ({ admissions, reads, dispatches }), pending: () => pending, admittedRunId: () => admittedRunId,
         dispatchedInput: () => dispatchedInput,
+        remount: async () => { mount++; await screen.update(renderHost()); },
+        recoverTransport: () => { currentOutcome = 'admitted'; },
+        finishOriginal: async () => { releaseOriginal.resolve(); return original; },
         releaseFirstMissingRead: () => firstMissingRead.resolve() };
 }
 
@@ -248,8 +263,8 @@ describe('Run start response-loss through the real composer, authenticated HTTP 
         expect(h.screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false);
         expect(h.counts()).toEqual({ admissions: 0, reads: 0, dispatches: 1 });
     });
-    it('keeps an absent outcome pending and resolves on the Account feed without polling or resending', async () => {
-        const h = await harness('unknown', true);
+    it('rejoins an absent Start and a delayed original consumes the same canonical admission', async () => {
+        const h = await harness('delayed', true);
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
         await vi.waitFor(() => expect(h.readState()).toBe('reconciling'));
         await vi.waitFor(() => expect(h.counts().reads).toBe(1));
@@ -258,10 +273,38 @@ describe('Run start response-loss through the real composer, authenticated HTTP 
         expect(h.opened).not.toHaveBeenCalled();
         expect(h.screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(true);
         expect(h.screen.findHostByTestId('workflow-run-inputs-reconciling')).not.toBeNull();
-        await act(async () => { await h.owner.execute({ actionId: 'workflow.run.start', input: h.input, context: h.context });
-            publishHomeAccountChange(h.account.home.id, [`workflow-run:${runId}`]);
-            h.releaseFirstMissingRead(); });
+        await act(async () => { h.releaseFirstMissingRead(); await h.pending(); });
         await vi.waitFor(() => expect(h.opened).toHaveBeenCalled());
-        expect(h.counts()).toEqual({ admissions: 1, reads: 2, dispatches: 1 });
+        await expect(h.finishOriginal()).resolves.toMatchObject({ admission: 'existing', run: { id: runId } });
+        expect(h.counts()).toEqual({ admissions: 1, reads: 1, dispatches: 2 });
+    });
+    it('returns an unknown outcome to the composer with recovery enabled when the rejoin is also lost', async () => {
+        const h = await harness('unknown');
+        await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await act(async () => { await h.pending(); });
+        expect(h.readState()).toBe('idle');
+        expect(h.opened).not.toHaveBeenCalled();
+        expect(h.screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false);
+        expect(h.screen.findByTestId('workflow-run-inputs-reason-text')?.props.children).toBe('workflows.problem.unresolvedOutcome');
+        expect(h.counts()).toEqual({ admissions: 0, reads: 1, dispatches: 2 });
+    });
+    it('reopens inline Another round with the same reviewed request after unmount and lost rejoin', async () => {
+        const h = await harness('unknown', false, true, true);
+        await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await act(async () => { await h.pending(); });
+        const original = h.dispatchedInput();
+        if (original === null) throw new Error('Expected the reviewed Another round request');
+        expect(h.counts()).toMatchObject({ admissions: 0, dispatches: 2 });
+        await h.remount();
+        expect(h.screen.findByTestId('workflow-run-inputs-reason-text')?.props.children).toBe('workflows.problem.unresolvedOutcome');
+        h.recoverTransport();
+        await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await act(async () => { await h.pending(); });
+        expect(h.dispatchedInput()).toEqual(original);
+        expect(h.counts()).toMatchObject({ admissions: 1, dispatches: 3 });
+        expect(h.opened).toHaveBeenCalledWith(expect.objectContaining({ admission: 'existing', run: expect.objectContaining({ id: original.runId }) }));
+        const opened = await h.owner.execute({ actionId: 'workflow.run.get', input: { runId: original.runId }, context: h.context });
+        expect(opened).toMatchObject({ acceptedContext: { inputs: { participants: ['retained-participant'],
+            previousRoundContext: { runId: '33333333-3333-4333-8333-333333333333', state: 'succeeded', outcomes: [] } } } });
     });
 });

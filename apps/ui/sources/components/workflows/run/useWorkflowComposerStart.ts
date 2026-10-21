@@ -140,6 +140,10 @@ export function useWorkflowComposerStart(params: Readonly<{
     const changeRawTextValues = React.useCallback((rawTextValues: PendingStart['rawTextValues']) => {
         setPending((current) => current ? { ...current, rawTextValues } : current);
     }, []);
+    // The review of an unknown outcome is the request this selection already sent. A new selection
+    // resets the id, so it never shows another selection's request; Try again keeps this one.
+    const retainedRequest = runNow.retainedRequest?.unresolved === true && runNow.retainedRequest.input.runId === pendingRunIdRef.current
+        ? runNow.retainedRequest : null;
     const modalProps = React.useMemo<WorkflowRunComposerModalProps | null>(() => pending === null ? null : {
         // The composer asks only for person inputs; host-bound ones keep their defaults in the submission.
         inputs: pending.entry.definition.inputs,
@@ -158,10 +162,11 @@ export function useWorkflowComposerStart(params: Readonly<{
             sessionId: pending.originSession.sessionId } : undefined,
         onRun: (inputs, roleOverrides) => { void admit(pending, inputs, roleOverrides); },
         onCancel: cancel,
+        retainedRequest,
         pending: runNow.isPending(pendingRunIdRef.current ?? ''),
         reconciling: runNow.stateFor(pendingRunIdRef.current ?? '') === 'reconciling',
         startProblem: runNow.refusal?.message ?? null,
-    }, [admit, cancel, changeRawTextValues, changeValues, pending, runNow]);
+    }, [admit, cancel, changeRawTextValues, changeValues, pending, retainedRequest, runNow]);
     React.useEffect(() => pending?.lifetime.onRetire(cancel).dispose, [cancel, pending?.lifetime]);
     useWorkflowRunComposerModal({ open: pending !== null, props: modalProps, accountLifetime: pending?.lifetime });
 

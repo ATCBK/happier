@@ -3029,6 +3029,7 @@ const filesPaneTranslations = { 'zh-Hans': {
             showingFirst: ({ slice, size }) => size + " 中的前 " + slice,
             showingLast: ({ slice, size }) => size + " 中的最后 " + slice,
             partialFact: ({ slice, size }) => slice + " / " + size,
+            plainText: "纯文本",
             fromMachine: ({ machine }) => "来自 " + machine,
         },
         intelligence: {

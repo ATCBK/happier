@@ -3047,6 +3047,7 @@ const filesPaneTranslations = { pl: {
             showingFirst: ({ slice, size }) => "Pierwsze " + slice + " z " + size,
             showingLast: ({ slice, size }) => "Ostatnie " + slice + " z " + size,
             partialFact: ({ slice, size }) => slice + " z " + size,
+            plainText: "Zwykły tekst",
             fromMachine: ({ machine }) => "z " + machine,
         },
         intelligence: {

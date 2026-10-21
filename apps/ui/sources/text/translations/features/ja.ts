@@ -3034,6 +3034,7 @@ const filesPaneTranslations = { ja: {
             showingFirst: ({ slice, size }) => size + " のうち最初の " + slice,
             showingLast: ({ slice, size }) => size + " のうち最後の " + slice,
             partialFact: ({ slice, size }) => slice + " / " + size,
+            plainText: "プレーンテキスト",
             fromMachine: ({ machine }) => machine + " から",
         },
         intelligence: {

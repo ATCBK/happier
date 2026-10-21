@@ -1401,17 +1401,19 @@ describe('WorkflowStartPicker plugin workflows', () => {
     const screen = await renderScreen(
       <SessionAgentsLaunchMenu launcher={launcher} />,
     );
+    // Sync may finish its header-only census after fixture setup. The closed
+    // launcher must not demand Workflow bodies, summaries or daemon catalogs.
+    const workflowReads = () => home.requests.filter((request) =>
+      (request.path === '/v1/artifacts' && request.url.searchParams.get('includeBody') === 'true') ||
+      request.path === '/v3/automations/runs/workflow-storage');
     expect(
-      home.requests.filter(
-        (request) =>
-          request.path === '/v1/artifacts' ||
-          request.path === '/v3/automations/runs/workflow-storage',
-      ),
+      workflowReads(),
     ).toEqual([]);
     expect(machineRpc).not.toHaveBeenCalled();
     await act(async () => {
       screen.findByType(DropdownMenu).props.onOpenChange(true);
     });
+    await vi.waitFor(() => expect(workflowReads()).not.toHaveLength(0));
     await act(async () => {
       await Promise.resolve();
     });
