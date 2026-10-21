@@ -231,9 +231,13 @@ advancing Follow progress, so a later invalidation or reconnect can observe the
 same retained original again.
 
 In development source, configured Execution Run and Workflow Run follows read
-the Run's own terminal original through the Follow occurrence-route owner.
+the Run's own original through the Follow occurrence-route owner.
 Execution Runs retain their terminal occurrence id, including recovered host
-loss; Workflow Runs retain their revision and typed state. Source notifications
+loss; Workflow Runs retain their revision and typed state. A live Execution Run
+permission request uses its sorted exact request-id/creation-time pairs as a `needs_you` approval
+original for Session receivers. Clearing or replacing that request withdraws
+unstarted delivery through the same source reader and Pending owner; it never
+advances or fabricates a terminal cursor. Source notifications
 and receiver reconnect both use that read. Session receivers then use the shared
 policy and Pending admission. They do not substitute a parent Session's transcript frontier for a
 Run result. Repeated observations reuse the original's destination-scoped input
@@ -245,7 +249,10 @@ inherited source root. Without a person input, the exact Run occurrence's
 deterministic destination input is the root. Actual native starts count through
 the existing Pending/check-in owner; quiet delivery and personal Inbox
 acceptance are not starts.
-For Account receivers, the captured authorized Account daemon uses the same
+Account Execution Run receivers remain terminal-only: their existing personal
+progress field cannot represent permission originals. They refuse that unsupported
+attention path rather than acknowledge a delivery they cannot retain.
+For supported Account occurrences, the captured authorized Account daemon uses the same
 dispatcher and the existing private Inbox
 notice and personal Follow progress. Only acceptance of that notice advances
 the Run cursor and admits one outward channel attempt; channel success is not
@@ -918,6 +925,15 @@ delivered frontier; its shared receiver, delivery mute and check-in decisions
 remain authoritative. New Discussion participation defaults to Quiet through the
 canonical Follow creation preferences. Explicitly addressed messages still wake
 through C3 addressing; there is no separate configurable delivery engine.
+
+In 0.3 development, Discussion Follow intake renders the addressed question
+through `sessionInputPromptContextV1.ts`. Its input-context block identifies the
+sender kind and available Account, Team, Session and display-name facts. These
+labels describe the request; they grant no authority. Background items, including
+compact Doc cards, use that same owner's `<happier_discussion_context>` block:
+each item carries its author and escaped content marked as data, not instructions.
+Workflow inputs and digests must consume this shared renderer when their
+Discussion context is wired; this intake change does not certify those consumers.
 
 A human Discussion writer does not need control of an already-invited participant's Session
 to address it. Invitation control and receiver disclosure remain separately enforced. Intake
