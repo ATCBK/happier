@@ -465,8 +465,10 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
       const rows = all ? await automationRows(deps.automations, {}) : (await scopedRows(deps.automations, null, 'workflow' in input
         ? { workflowDefinitionId: input.workflow } : { scope: 'account_inline' })).filter((row) => 'workflow' in input
         ? row.workflowDefinitionId === input.workflow : row.workflowDefinitionId == null);
-      const sets: WorkflowTriggerSetV1[] = [];
-      for (const item of rows) {
+      // Pages can overlap while the Account changes. Hydrate each Automation once,
+      // preserving census order and preventing duplicate legacy conversion writes.
+      const uniqueRows = [...new Map(rows.map((row) => [row.id, row])).values()];
+      const projected = await Promise.allSettled(uniqueRows.map(async (item) => {
         if (all && item.scopeSessionId) await assertSessionAdmission(item.scopeSessionId, caller);
         let row = await read(item.id, all ? item.scopeSessionId ?? null : null);
         if (row.templateCiphertext !== undefined) {
@@ -493,12 +495,20 @@ export function createWorkflowTriggerActions(deps: WorkflowTriggerActionsDepende
         }
         if ('scope' in input && row.executionRecipe?.v === 2) {
           // Invalid inline context remains visible as unavailable, rather than disappearing from the Triggers section.
-          sets.push(await projection(row));
+          return await projection(row);
         } else if ('workflow' in input || row.templateCiphertext !== undefined) {
-          sets.push(await projection(row));
+          return await projection(row);
         }
-      }
-      for (const set of sets) if (set.scopeSessionId) await assertSessionAdmission(set.scopeSessionId, caller);
+        return null;
+      }));
+      // Settle all admitted work, including legacy writes, before reporting failure.
+      const sets = projected.flatMap((result) => {
+        if (result.status === 'rejected') throw result.reason;
+        return result.value ? [result.value] : [];
+      });
+      await Promise.all(sets.map(async (set) => {
+        if (set.scopeSessionId) await assertSessionAdmission(set.scopeSessionId, caller);
+      }));
       return { sets };
     },
     add: async (raw: WorkflowTriggerAddRequestV1, caller?: Caller, scope?: Readonly<{ sessionId: string; onComplete?: WorkflowTriggerContextV1['onComplete'] }>) => {

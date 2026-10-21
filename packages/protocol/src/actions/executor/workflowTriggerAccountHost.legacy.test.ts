@@ -57,6 +57,18 @@ function fixture(templateCiphertext: string, encryption = plain, targetType: Aut
   return { params, row: () => row, writes: () => writes, written: () => written };
 }
 
+it('withdraws a census if Account encryption changes before final private disclosure', async () => {
+  const f = fixture(AUTOMATION_TEMPLATE_V02_PLAIN);
+  let reads = 0;
+  const host = createAccountWorkflowTriggerActions({ ...f.params,
+    resolveEncryption: async () => ++reads === 1 ? plain : encrypted,
+  });
+  await expect(host.list({ scope: 'account_all' })).rejects.toMatchObject({ code: 'content_unavailable' });
+  expect(reads).toBe(2);
+  // A later authority change does not deny the already committed legacy conversion.
+  expect(f.writes()).toBe(1);
+});
+
 async function conversionApprovalFixture(surface: 'agent' | 'mcp' | 'cli' = 'mcp') {
   const f = fixture(AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED, plain, 'existingSession');
   f.row().enabled = false;

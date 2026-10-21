@@ -36,6 +36,7 @@ import {
   createWorkflowTriggerActions,
   type WorkflowTriggerActionsDependencies,
   type WorkflowTriggerAutomationOperations,
+  type WorkflowTriggerActions,
 } from './workflowTriggerActions.js';
 
 function unavailable(code = 'content_unavailable', details?: unknown): never {
@@ -58,7 +59,7 @@ export type WorkflowTriggerAccountHostParams = Readonly<{
  * this adapter: Automation recipe/context and private trigger envelopes are opened and sealed with
  * the caller Account's current material. Hosts supply only transport, crypto material and ids.
  */
-export function createAccountWorkflowTriggerActions(params: WorkflowTriggerAccountHostParams) {
+function createAccountWorkflowTriggerActionOwner(params: WorkflowTriggerAccountHostParams) {
   const readStoredLegacy = async (row: AutomationDefinitionDetail) => {
     if (row.templateCiphertext === undefined
       || (row.targetType !== 'newSession' && row.targetType !== 'existingSession')) unavailable('source_unavailable');
@@ -258,4 +259,30 @@ export function createAccountWorkflowTriggerActions(params: WorkflowTriggerAccou
       return legacyContext(converted.definition, converted.project);
     },
   });
+}
+
+export function createAccountWorkflowTriggerActions(params: WorkflowTriggerAccountHostParams): WorkflowTriggerActions {
+  const actions = createAccountWorkflowTriggerActionOwner(params);
+  return {
+    ...actions,
+    list: async (raw, caller) => {
+      // The whole census opens under one fresh Account witness, not one HTTP
+      // currentness round trip per context/trigger. Nothing survives this call.
+      let encryption: Promise<AvailableAutomationAccountEncryptionV1> | undefined;
+      const census = createAccountWorkflowTriggerActionOwner({ ...params,
+        resolveEncryption: () => (encryption ??= params.resolveEncryption()),
+      });
+      const result = await census.list(raw, caller);
+      if (encryption) {
+        const opened = await encryption;
+        const current = await params.resolveEncryption();
+        // Private disclosure still has a fresh final authority check. The
+        // Account-wide sequence may advance during legacy writes; only mode
+        // and content-key identity determine whether these bytes can be opened.
+        if (current.witness.mode !== opened.witness.mode
+          || current.witness.contentKeyFingerprint !== opened.witness.contentKeyFingerprint) unavailable();
+      }
+      return result;
+    },
+  };
 }
