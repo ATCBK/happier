@@ -1,13 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from '@happier-dev/protocol';
-import { createSocketIoManagerBoundaryStub } from '@/dev/testkit/mocks/socketIo';
+import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import { createOwnedHomeCarrierRelease } from '@/sync/runtime/homeCarrierPolicy';
 import type { ScopedSocketClient } from './serverScopedRpcTypes';
 import { createServerScopedRpcSocketPool } from './serverScopedRpcSocketPool';
-
-type Listener = (...args: any[]) => void;
 
 /**
  * A semantic Home carrier is only ever identified here; the pool never moves bytes
@@ -28,70 +26,27 @@ function createFakeSocket(options: Readonly<{
     disconnectEventDelayMs?: number;
     connectionId?: string;
     connectError?: Error;
-}> = {}): Readonly<{
-    socket: any;
-    connectSpy: ReturnType<typeof vi.fn>;
-    disconnectSpy: ReturnType<typeof vi.fn>;
-}> {
-    const listeners = new Map<string, Set<Listener>>();
-
-    const on = (event: string, cb: Listener) => {
-        const set = listeners.get(event) ?? new Set<Listener>();
-        set.add(cb);
-        listeners.set(event, set);
-    };
-
-    const off = (event: string, cb: Listener) => {
-        const set = listeners.get(event);
-        set?.delete(cb);
-    };
-
-    const emit = (event: string, ...args: any[]) => {
-        const set = listeners.get(event);
-        if (!set) return;
-        for (const cb of Array.from(set)) {
-            cb(...args);
-        }
-    };
-
-    const connectSpy = vi.fn(() => {
-        if (options.connectError) {
-            emit('connect_error', options.connectError);
-            return;
-        }
-        socket.connected = true;
-        // socket.io-client assigns `id` once the handshake completes.
-        if (typeof options.connectionId === 'string') {
-            socket.id = options.connectionId;
-        }
-        emit('connect');
-    });
-
-    const disconnectSpy = vi.fn(() => {
-        socket.connected = false;
-        if (typeof options.disconnectEventDelayMs === 'number') {
-            setTimeout(() => emit('disconnect', 'io client disconnect'), Math.max(0, options.disconnectEventDelayMs));
-            return;
-        }
-        emit('disconnect', 'io client disconnect');
-    });
-
-    const socket: any = {
-        io: createSocketIoManagerBoundaryStub(),
-        connected: false,
-        on,
-        off,
-        connect: connectSpy,
-        disconnect: disconnectSpy,
-        timeout: (_ms: number) => ({
-            emitWithAck: async () => ({ ok: true }),
-        }),
-        emit: vi.fn((event: string, ...args: any[]) => {
-            emit(event, ...args);
-        }),
-    };
-
-    return { socket, connectSpy, disconnectSpy };
+}> = {}) {
+    const { socket, trigger } = createSocketIoBoundaryStub();
+    socket.id = options.connectionId ?? '';
+    if (options.connectError) {
+        socket.connect.mockImplementation(() => {
+            socket.active = true;
+            trigger('connect_error', options.connectError);
+        });
+    }
+    if (typeof options.disconnectEventDelayMs === 'number') {
+        // Some platform bridges deliver disconnect asynchronously; keep the
+        // canonical stub's inactive/disconnected behavior beneath that delay.
+        const delayMs = Math.max(0, options.disconnectEventDelayMs);
+        socket.disconnect.mockImplementation(() => {
+            const wasConnected = socket.connected;
+            socket.active = false;
+            socket.connected = false;
+            if (wasConnected) setTimeout(() => trigger('disconnect', 'io client disconnect'), delayMs);
+        });
+    }
+    return { socket, trigger, connectSpy: socket.connect, disconnectSpy: socket.disconnect };
 }
 
 describe('serverScopedRpcSocketPool', () => {
@@ -361,7 +316,7 @@ describe('serverScopedRpcSocketPool', () => {
         c2.disconnect();
 
         vi.advanceTimersByTime(5_000);
-        expect(disconnectSpy).toHaveBeenCalledTimes(1);
+        expect(socket.connected).toBe(false);
 
         await pool.stopAll();
         pool.resetForTests();
@@ -401,7 +356,7 @@ describe('serverScopedRpcSocketPool', () => {
 	        const listenerFn: (allowed: boolean) => void = capturedListener as unknown as (allowed: boolean) => void;
 	        listenerFn(false);
 	        await vi.waitFor(() => {
-	            expect(disconnectSpy).toHaveBeenCalledTimes(1);
+	            expect(socket.connected).toBe(false);
 	        });
 
 	        await pool.stopAll();
@@ -437,7 +392,7 @@ describe('serverScopedRpcSocketPool', () => {
     });
 
     it('exposes raw socket event subscription on acquired scoped clients', async () => {
-        const { socket } = createFakeSocket();
+        const { socket, trigger } = createFakeSocket();
         const pool = createServerScopedRpcSocketPool({
             createSocket: () => socket,
             reachability: {
@@ -457,11 +412,11 @@ describe('serverScopedRpcSocketPool', () => {
         const listener = vi.fn();
 
         client.on('custom-event', listener);
-        socket.emit('custom-event', { ok: true });
+        trigger('custom-event', { ok: true });
         expect(listener).toHaveBeenCalledWith({ ok: true });
 
         client.off('custom-event', listener);
-        socket.emit('custom-event', { ok: false });
+        trigger('custom-event', { ok: false });
         expect(listener).toHaveBeenCalledTimes(1);
 
         client.disconnect();
@@ -632,7 +587,10 @@ describe('serverScopedRpcSocketPool', () => {
         const { socket, disconnectSpy } = createFakeSocket();
         const createSocketSpy = vi.fn(() => socket);
         const homeCarrier = createFakeHomeCarrier('endpoint-shared');
-        const releaseCarrier = vi.fn(async () => {});
+        const releaseCarrier = vi.fn(async () => {
+            expect(socket.connected).toBe(false);
+            expect(socket.active).toBe(false);
+        });
 
         const pool = createServerScopedRpcSocketPool({
             createSocket: () => createSocketSpy(),
@@ -669,7 +627,7 @@ describe('serverScopedRpcSocketPool', () => {
         await vi.waitFor(() => {
             expect(releaseCarrier).toHaveBeenCalledTimes(1);
         });
-        expect(disconnectSpy).toHaveBeenCalledTimes(1);
+        expect(disconnectSpy).toHaveBeenCalled();
         expect(releaseCarrier.mock.invocationCallOrder[0]).toBeGreaterThan(
             disconnectSpy.mock.invocationCallOrder[0] as number,
         );
@@ -902,7 +860,7 @@ describe('serverScopedRpcSocketPool', () => {
 
         second.disconnect();
         await vi.waitFor(() => {
-            expect(disconnectSpy).toHaveBeenCalledTimes(1);
+            expect(socket.connected).toBe(false);
             expect(releaseRetained).toHaveBeenCalledTimes(1);
         });
 

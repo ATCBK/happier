@@ -1,4 +1,4 @@
-import { createHappierSocket } from '@happier-dev/sync-client';
+import { createHappierSocket, createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { createRpcCallError, MACHINE_RPC_TIMEOUT_ERROR_CODE, readRpcErrorCode, type ScopedRpcSocketConnectionPhase } from '@happier-dev/protocol/rpcErrors';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
@@ -81,6 +81,7 @@ type PoolEntry = {
     carrier: 'https' | 'iroh';
     homeCarrier: HomeCarrier | null;
     socket: SocketLike;
+    transport: ReturnType<typeof createSocketTransportAdapter>;
     inUseCount: number;
     connectInFlight: { result: Promise<void>; controller: AbortController; waiters: number; progress: { phase: ScopedRpcSocketConnectionPhase } } | null;
     intentionalDisconnect: boolean;
@@ -112,50 +113,19 @@ function readScopedRpcSocketIdleDisconnectMsFromEnv(): number {
     return parsed;
 }
 
-async function connectSocket(socket: SocketLike, signal: AbortSignal): Promise<void> {
+async function connectSocket(transport: ReturnType<typeof createSocketTransportAdapter>, signal: AbortSignal): Promise<void> {
     if (signal.aborted) throw signal.reason;
-    if (socket.connected) return;
-    await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const onAbort = () => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            reject(signal.reason);
-        };
-
-        const cleanup = () => {
-            signal.removeEventListener('abort', onAbort);
-            socket.off('connect', onConnect);
-            socket.off('connect_error', onConnectError);
-        };
-
-        const onConnect = () => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            resolve();
-        };
-
-        const onConnectError = (error: unknown) => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            reject(readRpcErrorCode(error) || isTerminalAuthError(error) ? error : Object.assign(createRpcCallError({
-                error: error instanceof Error ? error.message : 'Scoped RPC socket connection failed',
-                errorCode: 'MACHINE_RPC_UNREACHABLE',
-            }), { cause: error }));
-        };
-
-        socket.on('connect', onConnect);
-        socket.on('connect_error', onConnectError);
-        signal.addEventListener('abort', onAbort, { once: true });
-        try {
-            socket.connect();
-        } catch (error) {
-            onConnectError(error);
-        }
-    });
+    try {
+        // The shared adapter settles both connect_error and an engine close
+        // before namespace admission. The pool owns cancellation and deadlines.
+        await transport.connect();
+    } catch (error) {
+        if (signal.aborted) throw signal.reason;
+        throw readRpcErrorCode(error) || isTerminalAuthError(error) ? error : Object.assign(createRpcCallError({
+            error: error instanceof Error ? error.message : 'Scoped RPC socket connection failed',
+            errorCode: 'MACHINE_RPC_UNREACHABLE',
+        }), { cause: error });
+    }
 }
 
 export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Readonly<{
@@ -163,20 +133,24 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
     stopAll: () => Promise<void>;
     resetForTests: () => void;
 }> {
-    const deps: Deps = {
-        createSocket: overrides?.createSocket ?? ((params) => {
-            return createHappierSocket({
-                endpoint: params.serverUrl,
-                token: params.token,
-                clientType: 'user-scoped',
-                clientPurpose: 'scoped-rpc',
-                authExtras: buildAccountStoredContentCompatibilitySocketAuthV1(
-                    CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
-                ),
-                transports: resolveSocketIoTransportsForCarrier(params.carrier),
-                ...(params.homeCarrier ? { websocketFactory: params.homeCarrier.createWebSocket } : {}),
-            }).socket;
-        }),
+    const createSocket = (params: Parameters<Deps['createSocket']>[0]) => {
+        if (overrides?.createSocket) {
+            const socket = overrides.createSocket(params);
+            return { socket, transport: createSocketTransportAdapter(socket) };
+        }
+        return createHappierSocket({
+            endpoint: params.serverUrl,
+            token: params.token,
+            clientType: 'user-scoped',
+            clientPurpose: 'scoped-rpc',
+            authExtras: buildAccountStoredContentCompatibilitySocketAuthV1(
+                CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
+            ),
+            transports: resolveSocketIoTransportsForCarrier(params.carrier),
+            ...(params.homeCarrier ? { websocketFactory: params.homeCarrier.createWebSocket } : {}),
+        });
+    };
+    const deps: Omit<Deps, 'createSocket'> = {
         reachability: overrides?.reachability ?? {
             acquireReachability: async (params) => await acquireServerReachabilitySupervisor({
                 serverUrl: params.serverUrl,
@@ -230,10 +204,10 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         homeCarrier: HomeCarrier | null,
     ) => `${buildKey(reachabilityServerUrl, token)}::${homeIdentityId ?? ''}::${serverUrl}::${carrier}::${homeCarrier?.endpointId ?? ''}`;
 
-    const disconnectEntrySocket = (entry: PoolEntry): void => {
+    const disconnectEntrySocket = async (entry: PoolEntry): Promise<void> => {
         entry.intentionalDisconnect = true;
         try {
-            entry.socket.disconnect();
+            await entry.transport.disconnect({ intentional: true });
         } catch {
             // Teardown still owns releasing reachability and carrier custody.
         }
@@ -256,7 +230,8 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 error: 'Scoped RPC socket stopped before connecting',
                 errorCode: 'MACHINE_RPC_UNREACHABLE',
             }));
-            disconnectEntrySocket(entry);
+            await disconnectEntrySocket(entry);
+            if (entry.teardownRequested) await entry.transport.destroy();
             const releaseReachability = entry.reachabilityRelease;
             if (releaseReachability) {
                 await releaseReachability();
@@ -315,7 +290,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         carrierRelease: (() => Promise<void>) | null,
     ): PoolEntry => {
         const key = buildEntryKey(serverUrl, reachabilityServerUrl, homeIdentityId, token, carrier, homeCarrier);
-        const socket = deps.createSocket({ serverUrl, token, carrier, homeCarrier });
+        const { socket, transport } = createSocket({ serverUrl, token, carrier, homeCarrier });
         const entry: PoolEntry = {
             key,
             serverUrl,
@@ -325,6 +300,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
             carrier,
             homeCarrier,
             socket,
+            transport,
             inUseCount: 0,
             connectInFlight: null,
             intentionalDisconnect: false,
@@ -386,7 +362,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                     homeCarrier: entry.homeCarrier,
                 });
                 progress.phase = 'socket-connect';
-                await connectSocket(entry.socket, controller.signal);
+                await connectSocket(entry.transport, controller.signal);
             })();
             const result = run.finally(() => {
                 if (entry.connectInFlight !== flight) return;
@@ -427,7 +403,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 // keep the carrier and logical holders for the next acquisition.
                 entry.connectInFlight = null;
                 connection.controller.abort(new ScopedRpcSocketConnectionTimeoutError(connection.progress.phase));
-                disconnectEntrySocket(entry);
+                await disconnectEntrySocket(entry);
             }
         }
     };

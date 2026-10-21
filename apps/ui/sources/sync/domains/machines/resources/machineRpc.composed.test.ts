@@ -4,7 +4,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createDeferred, renderScreen } from '@/dev/testkit';
-import { socketRpcCodec } from '@happier-dev/sync-client';
+import { readRpcRequestDisposition, socketRpcCodec } from '@happier-dev/sync-client';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MachineVitalsGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -47,7 +47,7 @@ type MachineCall = Readonly<{ method: string; requestId: string; params: unknown
 
 // This is the existing family harness: physical Home readiness, real Socket.IO, codec and Action wiring.
 async function withMachineHome(run: (home: Readonly<{
-    serverId: string; calls: MachineCall[]; cancellations: string[];
+    serverId: string; serverUrl: string; socketServer: Server; calls: MachineCall[]; cancellations: string[];
     setAnswer(answer: (call: MachineCall) => Promise<void>): void;
 }>) => Promise<void>) {
     await loadSyncSingletonForTests();
@@ -92,7 +92,7 @@ async function withMachineHome(run: (home: Readonly<{
             await answer(call);
         });
     });
-    try { await run({ serverId, calls, cancellations, setAnswer: next => { answer = next; } }); }
+    try { await run({ serverId, serverUrl, socketServer: server, calls, cancellations, setAnswer: next => { answer = next; } }); }
     finally { await serverScopedRpcSocketPool.stopAll(); await new Promise<void>(resolve => server.close(() => resolve())); }
 }
 
@@ -103,6 +103,48 @@ function vitals(sampledAt = Date.now()) {
         disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 12, txBps: 3 },
     }, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } });
 }
+
+it('retires an engine-closed namespace dial and dispatches Vitals through the same scoped pool after network recovery', async () => {
+    await withMachineHome(async home => {
+        let snapshot = vitals();
+        home.setAnswer(async call => { await call.reply(snapshot); });
+        const request = { serverId: home.serverId, accountId: 'owner', machineId: 'shared-machine',
+            method: RPC_METHODS.MACHINES_VITALS_GET, payload: { machineId: 'shared-machine', view: 'overview' },
+            preferScoped: true, timeoutMs: 4_000 } as const;
+        expect(MachineVitalsSnapshotV1Schema.parse(await machineRpcWithServerScope(request))).toEqual(snapshot);
+        const token = homes.findByServerUrl(home.serverUrl)?.token;
+        if (!token) throw new Error('Missing synthetic Home credential');
+        const retained = await serverScopedRpcSocketPool.acquire({ serverUrl: home.serverUrl, token, timeoutMs: 4_000 });
+        try {
+            const disconnected = createDeferred<void>();
+            const onDisconnect = () => { retained.off('disconnect', onDisconnect); disconnected.resolve(); };
+            retained.on('disconnect', onDisconnect);
+            for (const socket of home.socketServer.sockets.sockets.values()) socket.conn.close();
+            await disconnected.promise;
+            const interrupted = createDeferred<void>();
+            let interrupt = true;
+            home.socketServer.use((socket, next) => {
+                if (!interrupt) { next(); return; }
+                interrupt = false;
+                // Engine.IO has opened, but the namespace has not connected yet.
+                socket.conn.close();
+                interrupted.resolve();
+            });
+            const failed = machineRpcWithServerScope({ ...request, timeoutMs: 1_000 }).catch((error: unknown) => error);
+            await interrupted.promise;
+            const error = await failed;
+            expect(error).toMatchObject({ rpcErrorCode: 'MACHINE_RPC_UNREACHABLE' });
+            expect(readRpcRequestDisposition(error)).toBe('notSent');
+            expect(home.calls).toHaveLength(1);
+
+            snapshot = vitals(snapshot.sample!.sampledAt + 2_000);
+            expect(await fetchMachineVitalsViaMachineRpc({ serverId: home.serverId, expectedAccountId: 'owner',
+                machineId: 'shared-machine', view: 'overview' })).toEqual({ ok: true, value: snapshot });
+            expect(retained.connected).toBe(true);
+            expect(home.calls).toHaveLength(2);
+        } finally { retained.disconnect(); }
+    });
+});
 
 function ResourceProbe({ serverId, overview, expectedAccountId }: { serverId: string; overview: boolean; expectedAccountId?: string }) {
     const key = { serverId, machineId: 'shared-machine', expectedAccountId };
