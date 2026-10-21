@@ -2973,6 +2973,7 @@ const filesPaneTranslations = { ja: {
             showBlame: "行の作成者を表示",
             hideBlame: "行の作成者を非表示",
             copyPath: "パスをコピー",
+            copyAbsolutePath: "絶対パスをコピー",
             copyHappierLink: "Happierリンクをコピー",
             attachToMessage: "メッセージに添付",
             saveAsArtifact: "Artifactとして保存…",

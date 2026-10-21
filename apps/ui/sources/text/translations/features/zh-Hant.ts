@@ -2968,6 +2968,7 @@ const filesPaneTranslations = { 'zh-Hant': {
             showBlame: "顯示行作者",
             hideBlame: "隱藏行作者",
             copyPath: "複製路徑",
+            copyAbsolutePath: "複製絕對路徑",
             copyHappierLink: "複製 Happier 連結",
             attachToMessage: "附加至訊息",
             saveAsArtifact: "另存為 Artifact…",

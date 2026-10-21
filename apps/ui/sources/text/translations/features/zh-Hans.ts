@@ -2968,6 +2968,7 @@ const filesPaneTranslations = { 'zh-Hans': {
             showBlame: "显示行作者",
             hideBlame: "隐藏行作者",
             copyPath: "复制路径",
+            copyAbsolutePath: "复制绝对路径",
             copyHappierLink: "复制 Happier 链接",
             attachToMessage: "附加到消息",
             saveAsArtifact: "另存为 Artifact…",

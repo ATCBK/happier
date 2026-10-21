@@ -2973,6 +2973,7 @@ const filesPaneTranslations = { fr: {
             showBlame: "Afficher les auteurs",
             hideBlame: "Masquer les auteurs",
             copyPath: "Copier le chemin",
+            copyAbsolutePath: "Copier le chemin absolu",
             copyHappierLink: "Copier le lien Happier",
             attachToMessage: "Joindre au message",
             saveAsArtifact: "Enregistrer comme Artifact…",

@@ -2995,6 +2995,7 @@ const filesPaneTranslations = { ru: {
             showBlame: "Показать авторов строк",
             hideBlame: "Скрыть авторов строк",
             copyPath: "Копировать путь",
+            copyAbsolutePath: "Копировать абсолютный путь",
             copyHappierLink: "Копировать ссылку Happier",
             attachToMessage: "Прикрепить к сообщению",
             saveAsArtifact: "Сохранить как Artifact…",

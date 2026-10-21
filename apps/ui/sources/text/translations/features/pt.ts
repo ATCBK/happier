@@ -2975,6 +2975,7 @@ const filesPaneTranslations = { pt: {
             showBlame: "Mostrar autoria",
             hideBlame: "Ocultar autoria",
             copyPath: "Copiar caminho",
+            copyAbsolutePath: "Copiar caminho absoluto",
             copyHappierLink: "Copiar link do Happier",
             attachToMessage: "Anexar à mensagem",
             saveAsArtifact: "Salvar como Artifact…",

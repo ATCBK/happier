@@ -2,7 +2,8 @@ import type { TranslationKeyNoParams } from '@/text';
 
 export type FileMenuSurface = 'page' | 'phone' | 'treeRow';
 export type FileMenuAvailability = 'hidden' | 'enabled' | Readonly<{ disabledReason: string }>;
-type FileMenuRun = () => void | Promise<void>;
+export type FileMenuIntent = Readonly<{ altKey?: boolean }>;
+type FileMenuRun = (intent?: FileMenuIntent) => void | Promise<void>;
 
 /** Behaviour is supplied by its owner; the File page owns this one shared item inventory. */
 export type FileMenuContext = Readonly<{
@@ -31,6 +32,7 @@ export type FileMenuContext = Readonly<{
     commands?: Partial<Readonly<Record<'code.goToDefinition' | 'code.showInfo' | 'code.showProblems' | 'code.restart', FileMenuRun>>>;
     changes?: Readonly<{ discardAll?: FileMenuRun; restoreBeforeTurn?: FileMenuRun; restoreBeforeTurnTitle?: string }>;
     copyPath?: FileMenuRun;
+    copyAbsolutePath?: FileMenuRun;
     copyLink?: FileMenuRun;
     attachToMessage?: FileMenuRun;
     saveAsArtifact?: FileMenuRun;
@@ -48,7 +50,7 @@ export type FileMenuItem = Readonly<{
     destructive?: boolean;
     surfaces: readonly FileMenuSurface[];
     state(context: FileMenuContext): FileMenuAvailability;
-    run(context: FileMenuContext): void | Promise<void>;
+    run(context: FileMenuContext, intent?: FileMenuIntent): void | Promise<void>;
 }>;
 
 const everySurface: readonly FileMenuSurface[] = ['page', 'phone', 'treeRow'];
@@ -77,9 +79,9 @@ function item(input: Readonly<{
         id: input.id, group: input.group, titleKey: input.titleKey, destructive: input.destructive,
         surfaces: input.surfaces ?? everySurface,
         state: availability,
-        run: context => {
+        run: (context, intent) => {
             // The same admission is enforced for keyboard/menu consumers as for the rendered row.
-            if (availability(context) === 'enabled') return input.callback(context)?.();
+            if (availability(context) === 'enabled') return input.callback(context)?.(intent);
         },
     };
 }
@@ -108,6 +110,7 @@ export const FILE_MENU_ITEMS: readonly FileMenuItem[] = [
         callback: c => c.commands?.[id], surfaces: pageSurfaces, requiresMachine: true,
     })),
     item({ id: 'copyPath', group: 'share', titleKey: 'files.pane.menu.copyPath', callback: c => c.copyPath }),
+    item({ id: 'copyAbsolutePath', group: 'share', titleKey: 'files.pane.menu.copyAbsolutePath', callback: c => c.copyAbsolutePath, surfaces: ['phone'] }),
     item({ id: 'copyLink', group: 'share', titleKey: 'files.pane.menu.copyHappierLink', callback: c => c.copyLink }),
     item({ id: 'attachToMessage', group: 'share', titleKey: 'files.pane.menu.attachToMessage', callback: c => c.attachToMessage, requiresContent: true }),
     item({ id: 'saveAsArtifact', group: 'share', titleKey: 'files.pane.menu.saveAsArtifact', callback: c => c.saveAsArtifact, requiresMachine: true }),
@@ -127,7 +130,7 @@ export function resolveFileMenuItems(context: FileMenuContext, surface: FileMenu
         return state === 'hidden' ? [] : [{ ...item,
             titleKey: item.id === 'blame' && context.blame ? 'files.pane.menu.hideBlame' as const : item.titleKey,
             ...(item.id === 'restoreBeforeTurn' && context.changes?.restoreBeforeTurnTitle ? { title: context.changes.restoreBeforeTurnTitle } : {}),
-            state, run: () => item.run(context) }];
+            state, run: (intent?: FileMenuIntent) => item.run(context, intent) }];
     });
 }
 

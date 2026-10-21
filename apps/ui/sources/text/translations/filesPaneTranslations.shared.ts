@@ -12,6 +12,7 @@ export type FilesPaneTranslations = Readonly<{
         showBlame: string;
         hideBlame: string;
         copyPath: string;
+        copyAbsolutePath: string;
         copyHappierLink: string;
         attachToMessage: string;
         saveAsArtifact: string;
@@ -134,6 +135,7 @@ export const filesPaneTranslationsEnglish = { en: {
             showBlame: "Show blame",
             hideBlame: "Hide blame",
             copyPath: "Copy path",
+            copyAbsolutePath: "Copy absolute path",
             copyHappierLink: "Copy Happier link",
             attachToMessage: "Attach to message",
             saveAsArtifact: "Save as Artifact…",

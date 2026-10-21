@@ -6,6 +6,19 @@ const base: FileMenuContext = {
 };
 
 describe('one file menu inventory across page, phone and tree', () => {
+    it('preserves desktop Alt path intent and offers an explicit absolute path on phones', async () => {
+        const copyPath = vi.fn();
+        const copyAbsolutePath = vi.fn();
+        const context = { ...base, copyPath, copyAbsolutePath };
+        await resolveFileMenuItems(context, 'page').find(item => item.id === 'copyPath')?.run({ altKey: true });
+        expect(copyPath).toHaveBeenCalledWith({ altKey: true });
+        const phone = resolveFileMenuItems(context, 'phone');
+        expect(phone.map(item => item.id)).toEqual(['copyPath', 'copyAbsolutePath']);
+        await phone.find(item => item.id === 'copyAbsolutePath')?.run();
+        expect(copyAbsolutePath).toHaveBeenCalledOnce();
+        expect(resolveFileMenuItems(context, 'page').some(item => item.id === 'copyAbsolutePath')).toBe(false);
+    });
+
     it('hides missing provider behaviours and exposes one comparison discard across surfaces', async () => {
         expect(resolveFileMenuItems(base, 'page')).toEqual([]);
         const discard = vi.fn();
