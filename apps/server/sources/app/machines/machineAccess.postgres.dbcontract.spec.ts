@@ -11,6 +11,8 @@ import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { registerMachineAccessRoutes } from '@/app/api/routes/machines/machineAccessRoutes';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { readMachineRecipientCensusInTx, resolveMachineAdmissionInTx, resolveMachineAdmissionsInTx } from './machineAccess';
+import { readArtifactRecipientCensusInTx, commitArtifactRecipientKeyEnvelopesInTx, readArtifactHeaderForCallerInTx } from '@/app/artifacts/artifactAccessService';
+import { removeTeamMemberForActorInTx } from '@/app/teams/memberships/memberAdministration';
 
 async function fixture() {
     const owner = await db.account.create({ data: { encryptionMode: 'plain' } });
@@ -28,7 +30,7 @@ async function fixture() {
 }
 
 /** Interleave only at the Prisma transport; all access decisions and SQL remain real. */
-function beforePublicationFence(interleave: () => Promise<void>) {
+function beforeAdmissionFence(interleave: () => Promise<void>) {
     const original = db.$transaction;
     let advanced = false;
     db.$transaction = new Proxy(original, {
@@ -40,7 +42,9 @@ function beforePublicationFence(interleave: () => Promise<void>) {
                     if (property !== '$queryRawUnsafe') return typeof value === 'function' ? value.bind(transaction) : value;
                     return async (...queryArgs: unknown[]) => {
                         const sql = typeof queryArgs[0] === 'string' ? queryArgs[0] : '';
-                        if (!advanced && sql.includes('Account') && sql.includes('FOR NO KEY UPDATE')) {
+                        // Entry admission precedes resource/recipient decisions; NO KEY UPDATE
+                        // now belongs to terminal cursor publication, after those decisions.
+                        if (!advanced && sql.includes('Account') && sql.includes('FOR KEY SHARE')) {
                             advanced = true;
                             await interleave();
                         }
@@ -50,7 +54,10 @@ function beforePublicationFence(interleave: () => Promise<void>) {
             })), options]);
         },
     });
-    return () => { db.$transaction = original; };
+    return () => {
+        db.$transaction = original;
+        expect(advanced, 'the interleave must reach the real Account admission boundary').toBe(true);
+    };
 }
 
 describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('Machine access publication (PostgreSQL)', () => {
@@ -63,6 +70,40 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('M
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it('skips a Resource recipient whose Team removal committed between census and PATCH', async () => {
+        const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding() } });
+        const recipient = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding() } });
+        const team = await db.team.create({ data: { name: 'Resource recipient removal' } });
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: 'owner' } });
+        const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: recipient.id, role: 'member' } });
+        const key = tweetnacl.randomBytes(32);
+        const wrap = (publicKey: Uint8Array) => sealEncryptedDataKeyEnvelopeV1({
+            dataKey: key, recipientPublicKey: publicKey, randomBytes: tweetnacl.randomBytes,
+        });
+        const artifact = await db.artifact.create({ data: { id: randomUUID(), accountId: owner.id,
+            header: new TextEncoder().encode('opaque header'), body: new TextEncoder().encode('opaque body'),
+            dataEncryptionKey: new Uint8Array(wrap(owner.contentPublicKey!)) } });
+        await db.artifactTeamGrant.create({ data: { artifactId: artifact.id, teamId: team.id,
+            accessLevel: 'view', createdByAccountId: owner.id } });
+        const actor = { actorAccountId: owner.id, artifactId: artifact.id };
+        const census = await inTx(tx => readArtifactRecipientCensusInTx(tx, actor));
+        if (!census.ok) throw new Error(census.error);
+        const prepared = census.value.recipients.find(row => row.recipientAccountId === recipient.id);
+        expect(prepared?.contentPublicKeyFingerprint).toBe(computeContentPublicKeyFingerprint(recipient.contentPublicKey!));
+        expect(await inTx(tx => removeTeamMemberForActorInTx(tx, { teamId: team.id,
+            actorAccountId: owner.id, membershipId: membership.id }))).toMatchObject({ ok: true });
+        const committed = await inTx(tx => commitArtifactRecipientKeyEnvelopesInTx(tx, { ...actor,
+            expectedDataEncryptionKey: encodeBase64(artifact.dataEncryptionKey), recipientKeyEnvelopes: [{
+                recipientAccountId: recipient.id, encryptedDataKey: encodeBase64(wrap(recipient.contentPublicKey!)),
+                recipientContentPublicKeyFingerprint: prepared!.contentPublicKeyFingerprint!,
+            }],
+        }));
+        expect(committed).toEqual({ ok: true, value: { appliedRecipientAccountIds: [], skippedRecipientAccountIds: [recipient.id] } });
+        expect(await db.artifactKeyEnvelope.count({ where: { artifactId: artifact.id, recipientAccountId: recipient.id } })).toBe(0);
+        expect(await inTx(tx => readArtifactHeaderForCallerInTx(tx, { ...actor, actorAccountId: recipient.id })))
+            .toEqual({ ok: false, error: 'artifact_not_found' });
+    });
 
     it('admits owned Machines without waiting for the unrelated foreign-grant graph', async () => {
         const f = await fixture();
@@ -152,10 +193,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('M
         }
     });
 
-    it.each(['authority', 'currentness', 'audience'] as const)('revalidates %s after the publication fence', async change => {
+    it.each(['authority', 'currentness', 'audience'] as const)('revalidates %s after the Account admission fence', async change => {
         const f = await fixture();
         const manager = await db.account.create({ data: { id: `a-${randomUUID()}`, encryptionMode: 'plain' } });
-        const restore = beforePublicationFence(async () => {
+        const restore = beforeAdmissionFence(async () => {
             if (change === 'authority') await db.account.update({ where: { id: f.owner.id }, data: { status: 'suspended' } });
             else if (change === 'currentness') await db.machine.update({ where: { id: f.machine.id }, data: { revokedAt: new Date() } });
             else await db.machineAccountGrant.create({ data: { machineId: f.machine.id, accountId: manager.id,
@@ -186,7 +227,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('M
         const team = await db.team.create({ data: { name: 'Prospective audience' } });
         const group = await db.teamGroup.create({ data: { teamId: team.id, name: 'Prospective group', nameKey: randomUUID() } });
         vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', retries);
-        const restore = beforePublicationFence(async () => {
+        const restore = beforeAdmissionFence(async () => {
             const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: member.id, role: 'member' } });
             if (kind === 'group') await db.teamGroupMembership.create({ data: { teamId: team.id,
                 teamGroupId: group.id, teamMembershipId: membership.id, nativeContribution: true } });
@@ -227,7 +268,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('M
         const census = await inTx(tx => readMachineRecipientCensusInTx(tx, { machineId: machine.id, actorAccountId: owner.id }));
         if ('kind' in census) throw new Error(census.code);
         expect(census.recipients.map(row => row.recipientAccountId)).toEqual([earlier.id, recipient.id].sort());
-        const restore = beforePublicationFence(async () => {
+        const restore = beforeAdmissionFence(async () => {
             if (change === 'content') await db.machine.update({ where: { id: machine.id }, data: { metadataVersion: { increment: 1 } } });
             else if (change === 'recipient') await db.account.update({ where: { id: recipient.id }, data: createSignedAccountContentBinding() });
             else await db.machineAccountGrant.delete({ where: { machineId_accountId: { machineId: machine.id, accountId: recipient.id } } });

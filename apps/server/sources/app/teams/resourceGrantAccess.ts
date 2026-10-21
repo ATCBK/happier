@@ -233,6 +233,7 @@ export async function applyResourceRecipientKeyEnvelopesInTx<Envelope extends Re
     const accounts = recipientIds.length === 0 ? [] : await tx.account.findMany({
         where: { id: { in: recipientIds } }, select: RECIPIENT_READINESS_SELECT,
     });
+    // Decisions share one in-transaction fact snapshot; subsequent grant removal is enforced by live resource reads.
     const facts = recipientIds.length === 0 ? null : await adapter.readAccessFactsInTx(tx, input.resourceId);
     const accountsById = new Map(accounts.map(account => [account.id, account]));
     for (const envelope of input.recipientKeyEnvelopes) {

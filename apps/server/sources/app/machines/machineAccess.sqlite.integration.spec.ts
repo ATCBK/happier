@@ -262,7 +262,7 @@ describe('Machine current access (real SQLite)', () => {
 
     it('set-acquires recipient material while preserving exception paging and all-before-write refusal', async () => {
         const f = await fixture('e2ee');
-        const recipients = (await Promise.all(Array.from({ length: 5 }, () => account('e2ee')))).sort((a, b) => a.id.localeCompare(b.id));
+        const recipients = (await Promise.all(Array.from({ length: 13 }, () => account('e2ee')))).sort((a, b) => a.id.localeCompare(b.id));
         await db.machineAccountGrant.createMany({ data: recipients.map(recipient => ({ machineId: f.machine.id,
             accountId: recipient.id, accessLevel: 'view', createdByAccountId: f.owner.id })) });
         const actor = { actorAccountId: f.owner.id, machineId: f.machine.id };
@@ -270,15 +270,16 @@ describe('Machine current access (real SQLite)', () => {
             const observed = observePrismaReads(tx, ['account', 'machineKeyEnvelope']);
             const value = await access.readMachineRecipientCensusInTx(observed.tx, { ...actor, query: { limit: 2, state, ...(cursor ? { cursor } : {}) } });
             if ('kind' in value) throw new Error(value.code);
-            return { value, reads: observed.reads };
+            return { value, reads: observed.reads, rows: observed.rows };
         });
         const first = await read();
         expect(first.value.recipients.map(row => row.recipientAccountId)).toEqual(recipients.slice(0, 2).map(row => row.id));
-        const second = await read(first.value.nextCursor!);
-        const third = await read(second.value.nextCursor!);
-        expect([...first.value.recipients, ...second.value.recipients, ...third.value.recipients].map(row => row.recipientAccountId))
+        const pages = [first];
+        while (pages[pages.length - 1].value.nextCursor) pages.push(await read(pages[pages.length - 1].value.nextCursor!));
+        expect(pages.flatMap(page => page.value.recipients).map(row => row.recipientAccountId))
             .toEqual(recipients.map(row => row.id));
-        expect(third.value.nextCursor).toBeNull();
+        const accountIds = (page: typeof first) => page.rows.filter(row => row.model === 'account').flatMap(row => row.ids);
+        const envelopeIds = (page: typeof first) => page.rows.filter(row => row.model === 'machineKeyEnvelope').flatMap(row => row.ids);
         const entries = recipients.map(recipient => ({ recipientAccountId: recipient.id,
             encryptedDataKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: f.key,
                 recipientPublicKey: recipient.keys.publicKey, randomBytes: tweetnacl.randomBytes })),
@@ -296,6 +297,19 @@ describe('Machine current access (real SQLite)', () => {
         expect(healthy.value).toMatchObject({ recipients: [], nextCursor: null });
         const all = await read(undefined, 'all');
         expect(all.value.recipients.map(row => row.encryptedDataKey)).toEqual(entries.slice(0, 2).map(row => row.encryptedDataKey));
+        const sparse = [3, 7, 8, 11].map(index => recipients[index].id);
+        await db.machineKeyEnvelope.deleteMany({ where: { machineId: f.machine.id, recipientAccountId: { in: sparse } } });
+        const sparseFirst = await read();
+        const sparseLast = await read(sparseFirst.value.nextCursor!);
+        expect([...sparseFirst.value.recipients, ...sparseLast.value.recipients].map(row => row.recipientAccountId)).toEqual(sparse);
+        expect(sparseLast.value.nextCursor).toBeNull();
+        await inTx(tx => access.commitMachineRecipientKeyEnvelopesInTx(tx, input));
+        const healthyTailExceptions = [0, 1, 11, 12].map(index => recipients[index].id);
+        await db.machineKeyEnvelope.deleteMany({ where: { machineId: f.machine.id, recipientAccountId: { in: healthyTailExceptions } } });
+        const healthyTail = await read();
+        const healthyTailLast = await read(healthyTail.value.nextCursor!);
+        expect([...healthyTail.value.recipients, ...healthyTailLast.value.recipients].map(row => row.recipientAccountId)).toEqual(healthyTailExceptions);
+        expect(healthyTailLast.value.nextCursor).toBeNull();
         // A later stale binding must prevent even earlier valid entries from being written.
         await db.machineKeyEnvelope.deleteMany({ where: { machineId: f.machine.id } });
         await db.account.update({ where: { id: recipients[4].id }, data: createSignedAccountContentBinding() });
@@ -306,10 +320,17 @@ describe('Machine current access (real SQLite)', () => {
         expect(await inTx(tx => access.commitMachineRecipientKeyEnvelopesInTx(tx, input)))
             .toEqual({ kind: 'refused', code: 'access_denied' });
         expect(await db.machineKeyEnvelope.count({ where: { machineId: f.machine.id } })).toBe(0);
-        expect({ first: first.reads, healthy: healthy.reads, commit: committed.reads }).toEqual({
-            first: ['account.findMany', 'machineKeyEnvelope.findMany'],
-            healthy: ['account.findMany', 'machineKeyEnvelope.findMany'], commit: ['account.findMany'],
-        });
+        expect(pages.map(accountIds)).toEqual(Array.from({ length: 7 }, (_, page) => recipients.slice(page * 2, page * 2 + 3).map(row => row.id)));
+        expect(accountIds(healthy)).toEqual(recipients.map(row => row.id));
+        expect(envelopeIds(healthy)).toEqual(recipients.map(row => row.id));
+        expect(accountIds(all)).toEqual(recipients.slice(0, 3).map(row => row.id));
+        expect(envelopeIds(all)).toEqual(accountIds(all));
+        expect(accountIds(sparseFirst)).toEqual(recipients.slice(0, 9).map(row => row.id));
+        expect(accountIds(sparseLast)).toEqual(recipients.slice(8).map(row => row.id));
+        expect(accountIds(healthyTail)).toEqual(recipients.slice(0, 12).map(row => row.id));
+        expect(healthyTail.reads).toHaveLength(8);
+        expect({ first: first.reads.length, healthy: healthy.reads.length, commit: committed.reads.length })
+            .toEqual({ first: 2, healthy: 10, commit: 1 });
     });
 
     it('preserves mixed Team member compatibility and key recoverability while allowing grant level edits', async () => {

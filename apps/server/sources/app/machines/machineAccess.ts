@@ -484,27 +484,32 @@ export async function readMachineRecipientCensusInTx(tx: Tx, input: MachineActor
     if (encryptionMode === 'e2ee') {
         const ids = (await resolveCurrentMachineRecipientAccountIdsInTx(tx, row.id))
             .filter(accountId => accountId !== row.accountId && (after === null || accountId > after));
-        const accounts = ids.length === 0 ? [] : await tx.account.findMany({
-            where: { id: { in: ids } }, select: RECIPIENT_READINESS_SELECT,
-        });
-        const envelopes = ids.length === 0 ? [] : await tx.machineKeyEnvelope.findMany({
-            where: { machineId: row.id, recipientAccountId: { in: ids } },
-        });
-        const accountsById = new Map(accounts.map(account => [account.id, account]));
-        const envelopesByAccountId = new Map(envelopes.map(envelope => [envelope.recipientAccountId, envelope]));
-        for (const accountId of ids) {
-            const account = accountsById.get(accountId);
-            if (!account) continue;
-            const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
-            const envelope = envelopesByAccountId.get(accountId);
-            const publicFingerprint = readiness.status === 'available' ? readiness.binding.contentPublicKeyFingerprint : null;
-            const current = readiness.status === 'available' && envelope?.machineOwnerEnvelopeFingerprint === fingerprint
-                && envelope.recipientContentPublicKeyFingerprint === publicFingerprint && parseEncryptedDataKeyEnvelopeV1(envelope.encryptedDataKey) !== null;
-            if (query.state === 'action_required' && current) continue;
-            if (recipients.length === query.limit) { nextCursor = encodeSessionDataKeyEnvelopeCursorV1(recipients[recipients.length - 1].recipientAccountId); break; }
-            recipients.push({ recipientAccountId: accountId, contentKey: projectRecipientContentKey(account, readiness),
-                contentPublicKeyFingerprint: publicFingerprint, encryptedDataKey: current ? encodeBase64(new Uint8Array(envelope.encryptedDataKey)) : null,
-                recipientContentPublicKeyFingerprint: current ? envelope.recipientContentPublicKeyFingerprint : null });
+        for (let offset = 0; offset < ids.length && nextCursor === null;) {
+            // The response page owns the scan batch; one further qualifying row proves continuation.
+            const batchIds = ids.slice(offset, offset + query.limit + 1);
+            offset += batchIds.length;
+            const accounts = await tx.account.findMany({
+                where: { id: { in: batchIds } }, select: RECIPIENT_READINESS_SELECT,
+            });
+            const envelopes = await tx.machineKeyEnvelope.findMany({
+                where: { machineId: row.id, recipientAccountId: { in: batchIds } },
+            });
+            const accountsById = new Map(accounts.map(account => [account.id, account]));
+            const envelopesByAccountId = new Map(envelopes.map(envelope => [envelope.recipientAccountId, envelope]));
+            for (const accountId of batchIds) {
+                const account = accountsById.get(accountId);
+                if (!account) continue;
+                const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
+                const envelope = envelopesByAccountId.get(accountId);
+                const publicFingerprint = readiness.status === 'available' ? readiness.binding.contentPublicKeyFingerprint : null;
+                const current = readiness.status === 'available' && envelope?.machineOwnerEnvelopeFingerprint === fingerprint
+                    && envelope.recipientContentPublicKeyFingerprint === publicFingerprint && parseEncryptedDataKeyEnvelopeV1(envelope.encryptedDataKey) !== null;
+                if (query.state === 'action_required' && current) continue;
+                if (recipients.length === query.limit) { nextCursor = encodeSessionDataKeyEnvelopeCursorV1(recipients[recipients.length - 1].recipientAccountId); break; }
+                recipients.push({ recipientAccountId: accountId, contentKey: projectRecipientContentKey(account, readiness),
+                    contentPublicKeyFingerprint: publicFingerprint, encryptedDataKey: current ? encodeBase64(new Uint8Array(envelope.encryptedDataKey)) : null,
+                    recipientContentPublicKeyFingerprint: current ? envelope.recipientContentPublicKeyFingerprint : null });
+            }
         }
     }
     return { machineId: row.id, custodianAccountId: row.accountId, encryptionMode, machineOwnerEnvelopeFingerprint: fingerprint,
