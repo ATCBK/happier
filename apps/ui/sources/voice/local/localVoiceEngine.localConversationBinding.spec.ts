@@ -6,7 +6,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
-import { createSessionFixture } from '@/dev/testkit';
+import { createMachineFixture, createSessionFixture } from '@/dev/testkit';
 import type { PartialOptions as ElevenLabsStartOptions } from '@elevenlabs/client';
 import {
     getStorage, loadLocalVoiceEngineWithCompatState, registerLocalVoiceEngineHarnessHooks,
@@ -88,8 +88,18 @@ describe('local voice engine local conversation binding', () => {
         localVoiceEngine = await loadLocalVoiceEngineWithCompatState();
     }, 180_000);
 
-    it('resolves agent-mode local conversation toggles through the hidden global control session', async () => {
+    it('resolves agent-mode device speech through the hidden global control session despite an offline speech Machine', async () => {
         await configureAgentMode();
+        const storage = await getStorage();
+        const voice = storage.getState().settings.voice;
+        const config = readLocalConversationVoiceSettings(voice);
+        storage.__setState({ settings: { ...storage.getState().settings, voice: { ...voice,
+            executionMachine: { mode: 'fixed', machineId: 'speech-offline' },
+            providers: { ...voice.providers, local_conversation: { schemaVersion: 1, config: { ...config,
+                stt: { ...config.stt, provider: 'device' },
+                tts: { ...config.tts, provider: 'device' },
+            } } },
+        } } });
 
         await localVoiceEngine.toggleLocalVoiceTurn('session-1');
 
@@ -102,6 +112,42 @@ describe('local voice engine local conversation binding', () => {
                 targetSessionAddress: { serverId: localVoiceHomeId, sessionId: 'session-1' },
             });
         });
+    }, 60_000);
+
+    it.each(['stt', 'tts'] as const)('refuses an offline daemon %s Machine before preparing a carrier on the online root Machine', async (surface) => {
+        await configureAgentMode();
+        const storage = await getStorage();
+        const voice = storage.getState().settings.voice;
+        const config = readLocalConversationVoiceSettings(voice);
+        storage.__setState({
+            machines: { ...storage.getState().machines,
+                'speech-offline': createMachineFixture({ id: 'speech-offline', active: false, activeAt: 1 }),
+            },
+            settings: { ...storage.getState().settings, voice: { ...voice,
+                executionMachine: { mode: 'fixed', machineId: 'speech-offline' },
+                providers: { ...voice.providers, local_conversation: { schemaVersion: 1, config: { ...config,
+                    stt: { ...config.stt, provider: surface === 'stt' ? 'local_neural' : 'device', localNeural: {
+                        ...config.stt.localNeural, execution: 'daemon',
+                    } },
+                    tts: { ...config.tts, provider: surface === 'tts' ? 'local_neural' : 'device',
+                        autoSpeakReplies: true, localNeural: { ...config.tts.localNeural, execution: 'daemon' } },
+                } } },
+            } },
+        });
+        const { resolveVoiceExecutionMachineSelectionFromState } = await import('@/voice/settings/executionMachine');
+        expect(resolveVoiceExecutionMachineSelectionFromState(storage.getState())).toEqual({
+            kind: 'selected_unreachable', machineId: 'speech-offline',
+        });
+        let failure: unknown;
+        try { await localVoiceEngine.toggleLocalVoiceTurn('session-1'); } catch (error) { failure = error; }
+
+        expect(await getLocalConversationSnapshot()).toMatchObject({
+            status: 'error', canStop: false,
+            errorCode: 'execution_machine_unavailable', errorRecoveryAction: 'select_execution_machine',
+        });
+        expect(failure).toMatchObject({ code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE' });
+        expect(machineRpcWithServerScope.mock.calls.filter(([request]) => request.method === RPC_METHODS.SESSION_SPAWN_NEW)).toEqual([]);
+        expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
     }, 60_000);
 
     it('publishes connecting for a targetless lifecycle start and admits its host-owned Voice Home creation', async () => {

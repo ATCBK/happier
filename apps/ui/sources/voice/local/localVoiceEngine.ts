@@ -50,6 +50,7 @@ import {
 } from '@/voice/runtime/input/VoiceCaptureAdmissionController';
 import { resolveVoiceSttCapturePlan } from '@/voice/runtime/input/resolveVoiceSttCapturePlan';
 import { resolveVoiceExecutionMachineIdFromState } from '@/voice/settings/executionMachine';
+import { resolveLocalNeuralExecutionPolicy } from '@/voice/runtime/daemonInference/daemonVoiceInferencePolicy';
 import type { TurnEndpointSignal } from '@/voice/runtime/input/TurnEndpointController';
 import { createExpoAudioRecordingMicSession } from '@/voice/runtime/mic/NativeMicSession';
 import { isMicrophoneUnavailableError } from '@/utils/platform/microphonePermissions';
@@ -533,6 +534,18 @@ async function ensureLocalConversationBindingForSession(
   localVoicePreparationAbortController = preparationController;
   voiceConversationRuntimeMachine.transitionToConnecting({ controlSessionId });
   try {
+    // A Session-root carrier can run on a different Machine from speech.
+    // Refuse unavailable daemon speech before preparing that carrier.
+    const capturePlan = resolveVoiceSttCapturePlan(settings);
+    const tts = parseLocalVoiceTtsSettings(config?.tts);
+    const needsDaemonSpeech = capturePlan.localNeuralExecution === 'daemon'
+      || (tts.autoSpeakReplies && tts.provider === 'local_neural'
+        && resolveLocalNeuralExecutionPolicy({ requestedExecution: tts.localNeural.execution }).preferredExecution === 'daemon');
+    if (needsDaemonSpeech && !resolveVoiceExecutionMachineIdFromState(storage.getState())) {
+      throw Object.assign(new Error('voice_execution_machine_unavailable'), {
+        code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE',
+      });
+    }
     await voiceSessionBindingManager.ensureBound({
       adapterId: 'local_conversation',
       controlSessionId,
