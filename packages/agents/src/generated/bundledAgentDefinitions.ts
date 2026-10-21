@@ -252,8 +252,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
+      "materialization": "copy",
       "nativeDisable": "unsupported",
       "nativeRoots": {
         "project": [
@@ -468,17 +469,6 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "liveReload": "supported",
       "nativeDisable": "supported",
       "nativeRoots": {
-        "plugin": [
-          [
-            ".claude",
-            "plugins",
-            "cache",
-            "*",
-            "{plugin}",
-            "*",
-            "skills"
-          ]
-        ],
         "project": [
           [
             ".claude",
@@ -1168,7 +1158,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
       "nativeDisable": "unsupported",
       "nativeRoots": {
@@ -1721,7 +1711,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
       "nativeDisable": "unsupported",
       "nativeRoots": {
@@ -1884,7 +1874,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
       "nativeDisable": "unsupported",
       "nativeRoots": {
@@ -2089,13 +2079,17 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
       "nativeDisable": "unsupported",
       "nativeRoots": {
         "project": [
           [
             ".devin",
+            "skills"
+          ],
+          [
+            ".cognition",
             "skills"
           ],
           [
@@ -2111,6 +2105,11 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
           [
             ".config",
             "devin",
+            "skills"
+          ],
+          [
+            ".config",
+            "cognition",
             "skills"
           ],
           [
@@ -2567,9 +2566,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
-      "nativeDisable": "unsupported",
+      "nativeDisable": "supported",
       "nativeRoots": {
         "project": [
           [
@@ -2774,7 +2773,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
       "nativeDisable": "unsupported",
       "nativeRoots": {
@@ -3865,9 +3864,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
       "persisted": true
     },
     "skills": {
-      "delivery": "none",
+      "delivery": "session_dir",
       "liveReload": "unsupported",
-      "nativeDisable": "unsupported",
+      "nativeDisable": "supported",
       "nativeRoots": {
         "project": [
           [
