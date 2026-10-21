@@ -147,7 +147,8 @@ import type { SessionFollowActionInputV1, SessionFollowActionOutputV1 } from '@h
 import { machineContributionRegistryProjectionDescribe, machinePluginUiTargetedContributionsRead } from '@/sync/ops/machineContributionRegistryProjection';
 import { machineWorkspaceFileSearch } from '@/sync/ops/machineWorkspaceFileSearch';
 import { machineLanguageIntelligenceQuery, machineLanguageIntelligenceRestart } from '@/sync/ops/machineLanguageIntelligence';
-import { machineWorkspaceFileReplacePreview } from '@/sync/ops/machineWorkspaceFileReplace';
+import { DaemonWorkspaceFileReplacePreviewResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { classifyWorkspaceFileRpcError } from '@/sync/ops/machineWorkspaceFileRpcError';
 import { randomUUID } from '@/platform/randomUUID';
 import { executeCurrentUiContextAction, executeCurrentUiContextContributedAction } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 import { createUiAccountAction, resolveUiAccountActionFallbackMachineId } from './accountActionDeps';
@@ -231,6 +232,7 @@ import { cancelMachineAgentInstallJob, startAgentInstallJob } from '@/agents/mac
 import { executeExternalSessionBrowseAction } from './externalSessionBrowseAction';
 import { createUiConnectedServiceAction } from './connectedServiceActionDeps';
 import { createUiUsageActionPorts } from './usageActionDeps';
+import { createUiPublicProfileActionPorts } from './publicProfileActionDeps';
 import { createUiUsageSourceActionPort } from './usageSourceActionDeps';
 import { createUiScmAction } from './scmActionDeps';
 import { createUiFilesystemAction, resolveUiFilesystemTransferCustodyFailure } from './filesystemActionDeps';
@@ -648,6 +650,8 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
 }
 
   function buildDefaultActionExecutor(opts?: Readonly<{
+  /** Captured profile candidate; Settings admission remains in the shared executor. */
+  publicProfileAtmosphereDraft?: import('@/components/settings/catalog/settingDeclarations').SettingsMutationServices['publicProfileAtmosphereDraft'];
   /** Fresh invocation's exact Session admission objects; never serialized or shared by cached executors. */
   archiveInvocation?: SessionArchiveInvocation;
   /** Private presentation leaf for this invocation; never enters Action custody. */
@@ -963,7 +967,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     try {
       const written = await writeApprovalRequestArtifact({
         artifactId, request,
-        read: async id => await (artifactAccount ? artifactAccount.fetchArtifact(id) : sync.fetchArtifactWithBody(id)),
+        read: async id => await (artifactAccount ? artifactAccount.fetchArtifact(id, { fresh: true }) : sync.fetchArtifactWithBody(id, { fresh: true })),
         write: async (basis, header, body) => {
           if (artifactAccount) {
             await artifactAccount.updateArtifact(artifactId, header, body, basis);
@@ -973,7 +977,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           storage.getState().updateArtifact(basis);
           try { await sync.updateArtifactWithHeader(artifactId, header, body); }
           catch (error) {
-            const latest = await sync.fetchArtifactWithBody(artifactId);
+            const latest = await sync.fetchArtifactWithBody(artifactId, { fresh: true });
             if (latest) storage.getState().updateArtifact(latest);
             throw error;
           }
@@ -987,6 +991,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       return written;
     } finally { settlement?.dispose(); }
   };
+  const usageActions = accountContext ? createUiUsageActionPorts(accountContext, opts?.usageRecapRender) : undefined;
+  const scmActionExecute = opts?.scmActionExecute ?? createUiScmAction(accountContext, { onDispatched: opts?.onScmDispatched });
+  const publicProfileHome = opts?.homeDomainAction ?? capturedFamilyPorts?.homeDomainAction;
   let deps: ActionExecutorDeps = {
     buildApprovalPreview: async ({ actionId, input, context, defaultPreview }) => {
       if (actionId !== 'session.spawn_new' || !accountContext || !machineAccessAction) return defaultPreview;
@@ -1200,9 +1207,12 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       });
     },
     connectedServiceAction,
-    usageActions: accountContext ? createUiUsageActionPorts(accountContext, opts?.usageRecapRender) : undefined,
+    usageActions,
+    publicProfileActions: accountContext && publicProfileHome && usageActions
+      ? createUiPublicProfileActionPorts(accountContext, publicProfileHome, usageActions,
+        (actionId, input, context) => executor.execute(actionId, input, context)) : undefined,
     usageSourceAction: accountContext ? createUiUsageSourceActionPort(accountContext, opts?.usageSourceDismiss) : undefined,
-    scmActionExecute: opts?.scmActionExecute ?? createUiScmAction(accountContext, { onDispatched: opts?.onScmDispatched }),
+    scmActionExecute,
     appShellAction: createAppShellAction(accountContext),
     notificationConfigurationAction: createNotificationConfigurationAction(accountContext ?? null),
     bugReportSubmit: createBugReportSubmitAction(accountContext ?? null),
@@ -1237,6 +1247,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       },
       mutationServices: { readAgentCatalog: createVoiceAgentSettingsCatalogReader(accountContext ?? null),
         ...(accountContext ? createAtmosphereSettingServices(accountContext) : {}),
+        ...(accountContext && opts?.publicProfileAtmosphereDraft ? { publicProfileAtmosphereDraft: opts.publicProfileAtmosphereDraft } : {}),
         ...(accountContext ? { readConnectedAccountPurposes: async (signal?: AbortSignal) => {
           const { readAdmittedConnectedAccountCatalogInContext } = await import('@/sync/api/account/apiConnectedAccountCatalog');
           const snapshot = await readAdmittedConnectedAccountCatalogInContext(accountContext, 'purposes', signal);
@@ -1469,12 +1480,12 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         const assertCurrent = () => { signal?.throwIfAborted(); accountContext.assertCurrent(); };
         assertCurrent();
         const { encryption } = await accountContext.resolveAccountEncryption();
-        const account = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request });
+        const account = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request, usage: 'identity' });
         assertCurrent();
         const rules = await readSessionFollowRuleCensus({ mode: account.mode,
           material: account.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(accountContext.credentials),
           request: accountContext.request, assertCurrent, signal });
-        const current = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request });
+        const current = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request, usage: 'fresh-authority' });
         assertCurrent();
         return current.mode === account.mode ? { kind: 'complete', rules } : { kind: 'unavailable' };
       } catch {
@@ -3007,8 +3018,17 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         acpCatalogSnapshot: catalog, backendEnabledByTargetKey: preferences.backendEnabledByTargetKey ?? null });
     },
     workspaceFilesReplacePreview: async ({ machineId, ...request }, context) => {
-      const result = await machineWorkspaceFileReplacePreview(machineId, request, { serverId: context.serverId, accountId: accountContext?.accountId, signal: context.signal });
-      return !result.ok && 'errorCode' in result ? { ok: false, errorCode: result.errorCode === 'method_unavailable' ? 'update_required' : 'workspace_file_replace_unavailable', error: result.errorCode } : result;
+      try {
+        const response = await actionMachineRpc({ machineId, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW,
+          payload: request, serverId: context.serverId, accountId: accountContext?.accountId,
+          operationTimeoutMs: null, ...(context.signal ? { signal: context.signal } : {}) });
+        const parsed = DaemonWorkspaceFileReplacePreviewResponseSchema.safeParse(response);
+        return parsed.success ? parsed.data : { ok: false, errorCode: 'workspace_file_replace_unavailable', error: 'invalid_response' };
+      } catch (error) {
+        if (context.signal?.aborted) throw error;
+        const code = classifyWorkspaceFileRpcError(error);
+        return { ok: false, errorCode: code === 'method_unavailable' ? 'update_required' : 'workspace_file_replace_unavailable', error: code };
+      }
     },
     workspaceFilesReplace: createUiWorkspaceFileReplaceAction(accountContext),
     languageIntelligenceQuery: ({ machineId, request }, context) => machineLanguageIntelligenceQuery(machineId, request, {
@@ -3215,8 +3235,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           sessions: { [sessionId]: session }, sessionListRowsByServerId: {} }, { ...account.accountLifetime.scope, sessionId });
         if (!target) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
         if (requiresReplyCustody) {
-          const machines = await fetchMachineRows({ credentials: account.credentials,
-            request: (path, init) => account.request(path, { ...init, ...(signal ? { signal } : {}) }) });
+          const machines = await withActionAccountRequestSignal(account, signal, ownedSignal => fetchMachineRows({ credentials: account.credentials,
+            readTransport: account.readTransport, signal: ownedSignal,
+            request: (path, init) => account.request(path, { ...init, signal: ownedSignal }) }));
           account.assertCurrent();
           signal?.throwIfAborted();
           const machine = machines.find(row => row.id === target.machineId && row.revokedAt === null && row.replacedByMachineId === null);
