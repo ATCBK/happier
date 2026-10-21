@@ -129,6 +129,7 @@ describe('terminateProcessTree', () => {
       scopedLogger.flushSync();
       const diagnostic = existsSync(logPath) ? readFileSync(logPath, 'utf8') : '';
       expect(diagnostic).toContain('plugin_exec_termination_incomplete');
+      expect(diagnostic).toMatch(/"reasons":\s*\[\s*"census_unavailable"\s*\]/);
       expect(diagnostic).not.toContain('private-native-value');
     } finally {
       if (previousPath === undefined) delete process.env.PATH;

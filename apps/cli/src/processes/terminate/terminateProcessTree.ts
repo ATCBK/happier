@@ -127,8 +127,12 @@ export async function terminateProcessTree(proc: ProcessTreeRoot | ProcessTreeTe
     await owner.terminateProcessTree(proc, opts);
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'plugin_exec_termination_incomplete') {
+      // The CJS owner attaches its structured result; project categories without native identities.
+      const result = 'result' in error ? error.result as Partial<ProcessTreeTerminationResult> : undefined;
       logger.infoFile('[process-tree] Owned process cleanup could not be verified', {
         code: 'plugin_exec_termination_incomplete',
+        outcomes: [...new Set(result?.outcomes?.map(row => row.outcome) ?? [])],
+        reasons: [...new Set(result?.outcomes?.flatMap(row => row.reason ? [row.reason] : []) ?? [])],
       });
     }
     throw error;
