@@ -3033,12 +3033,16 @@ Account mode; neither infers it from keys. A verified API-token root can admit
 finite Session effects with its own captured grant without creating Account
 credential custody; see [the canonical Action admission owner](actions.md#canonical-owners).
 
-Finite worker and reviewed Service Move Sync preparation reuse that same box with a closed
+Finite worker, reviewed Service Start and Service Move Sync preparation reuse that same box with a closed
 `workspace_sync_prepare` purpose. It binds the exact controller installation and
 source/target ref request while preserving the original Action root.
+The shared Project preparation classification includes Script, Compute, Service
+Start and Move; approval replay retains the original signed input for each.
 Only the verified installed sender reseals its admitted requester custody to the
 Home-proved controller. The receiving private owner requires the verified SOURCE
 request to remain current; it cannot fall back to the controller's credentials.
+Service Start also checks the source declaration and selected destination against
+the original input before copying; native review still rejects changed effects.
 Plain Accounts stay keyless, and protected original inputs are opened with the
 requester's existing Account material. These are unreleased 0.3 contracts.
 
