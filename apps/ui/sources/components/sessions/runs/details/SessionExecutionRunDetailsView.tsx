@@ -218,7 +218,10 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // screen is a background refresh: it must not replace the loaded surface
     // (and the mounted composer with its text and selection) with a spinner.
     // Only an address that is not loaded yet, or an error, enters `loading`.
-    const runAddressKey = JSON.stringify([explicitServerId, pendingOutboxScope?.accountId, props.sessionId,
+    // Only a workspace-owned Run reads through the Account-scoped Action executor; a Session Run's
+    // address does not change when that Account scope finishes resolving.
+    const workspaceRunExecuteAction = props.sessionId === null ? executeAction : null;
+    const runAddressKey = JSON.stringify([explicitServerId, props.sessionId === null ? pendingOutboxScope?.accountId : null, props.sessionId,
         props.workspace?.machineId, props.workspace?.cwd, props.runId]);
     const loadedRunAddressRef = React.useRef<string | null>(null);
     // Request currentness: concurrent loads (route effect, bus notification,
@@ -250,7 +253,8 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         const getRun = async (request: Readonly<{ runId: string; includeStructured: true; waitForInputId?: string }>) => {
             if (props.sessionId !== null) return sessionExecutionRunGet(props.sessionId, request, rpcOptions);
             try {
-                const result = await executeAction('execution.run.get', { sessionId: null, ...request }, { ...runOperation, signal: controller.signal });
+                if (!workspaceRunExecuteAction) throw new Error(t('runs.runDetails.failedToLoad'));
+                const result = await workspaceRunExecuteAction('execution.run.get', { sessionId: null, ...request }, { ...runOperation, signal: controller.signal });
                 if (!result.ok) return result;
                 const parsed = ExecutionRunGetResponseSchema.safeParse(result.result);
                 return parsed.success ? { ok: true as const, ...parsed.data }
@@ -367,7 +371,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         if (daemonFallback?.daemonProcessLine) {
             setDaemonProcessLine(daemonFallback.daemonProcessLine);
         }
-    }, [executeAction, runOperation, explicitServerId, hasQualifiedSession, props.runId, props.sessionId, props.workspace?.machineId, props.workspace?.cwd, runAddressKey, session?.active, sessionMessagesLoaded, source, transcriptFallback]);
+    }, [workspaceRunExecuteAction, runOperation, explicitServerId, hasQualifiedSession, props.runId, props.sessionId, props.workspace?.machineId, props.workspace?.cwd, runAddressKey, session?.active, sessionMessagesLoaded, source, transcriptFallback]);
 
     React.useEffect(() => {
         void load();
