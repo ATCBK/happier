@@ -164,7 +164,7 @@ describe('Plugin Account Availability reader', () => {
         expect(reader.readAccountUiProjection()).toBeNull();
         expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'unavailable' });
     });
-    it('admits bundled Account Action bytes and declared Account KV without a Machine claim', () => {
+    it('retains bundled Account custody across admission reads while observing current disablement and Account retirement', () => {
         const graph = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: 'portable', tier: 'reactNative',
             entry: 'react-native/portable/entry.cjs.bundle', digest: artifactDigest,
             files: [{ relativePath: 'react-native/portable/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
@@ -175,12 +175,14 @@ describe('Plugin Account Availability reader', () => {
             contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui', 'cli'], placementBindings: [],
                 dangerLevel: 'safe', hostAccess: ['account-storage'], execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } } }] },
         });
-        const reader = createPluginAccountAvailabilityReader({ scope,
-            snapshot: snapshot({ intentReads: [], materializations: [], snapshots: [] }),
+        const store = createPluginAccountAvailabilityReaderStore({
             hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
                 packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, artifactGraphs: [graph],
                 entriesById: projectPluginPortableUiDeclarationsV1(manifest, [graph]) }],
         });
+        const initial = snapshot({ intentReads: [], materializations: [], snapshots: [] });
+        store.replace({ scope, snapshot: initial });
+        const reader = store.bind(scope);
         expect(reader.readCurrentAccountExecutionDeclarations()).toMatchObject([{ kind: 'available', manifest,
             sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle' } } }]);
         expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
@@ -188,6 +190,27 @@ describe('Plugin Account Availability reader', () => {
         expect(reader.readCurrentAccountKvCapability({ pluginId: manifest.id })).toMatchObject({ kind: 'available' });
         expect(reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`]?.authorization?.serviceAvailability)
             .toEqual([{ id: 'account-storage', required: true, status: 'available' }]);
+        const admitted = reader.readCurrentAccountExecution(manifest.id);
+        const repeated = store.bind(scope).readCurrentAccountExecution(manifest.id);
+        expect(admitted.kind).toBe('available');
+        expect(repeated.kind).toBe('available');
+        if (admitted.kind !== 'available' || repeated.kind !== 'available') throw new Error('Expected bundled custody');
+        expect(repeated.sourceCustody).toBe(admitted.sourceCustody);
+        const disabled = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...intentRead(),
+            intent: { ...intentRead().intent!, pluginId: manifest.id, desiredVersion: null, enabled: false },
+            release: null, uiArtifacts: [],
+        });
+        store.replace({ scope, snapshot: { ...initial,
+            intentReads: [{ pluginId: manifest.id, response: disabled }] } });
+        expect(reader.readCurrentAccountExecution(manifest.id)).toEqual({ kind: 'unavailable', code: 'plugin_disabled' });
+        expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
+            .toMatchObject({ kind: 'unavailable' });
+        store.replace({ scope: { ...scope, accountId: 'account-b' }, snapshot: initial });
+        expect(reader.readCurrentAccountExecution(manifest.id))
+            .toEqual({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });
+        store.clear();
+        expect(reader.readCurrentAccountExecution(manifest.id))
+            .toEqual({ kind: 'unavailable', code: 'account_availability_not_loaded' });
     });
     it('admits a current daemon-selected source only after Account hydration and without portable intent', () => {
         const store = createPluginAccountAvailabilityReaderStore();

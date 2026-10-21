@@ -1248,6 +1248,34 @@ function readCurrentHostBundle(
     return bundles.length === 1 ? bundles[0]! : null;
 }
 
+type BundledAccountExecution = NonNullable<Parameters<typeof resolvePluginAccountExecutionSelectionV1>[0]['bundled']>;
+
+// App-package declarations are immutable. Artifact currentness checks may run
+// once per file, so retain their parsed declaration and content custody rather
+// than hashing the complete manifest on every check. Account intent is still
+// read and admitted below on every access; it is never cached here.
+const bundledAccountExecutions = new WeakMap<PluginHostBundledUiDeclaration, BundledAccountExecution | null>();
+
+function readBundledAccountExecution(bundle: PluginHostBundledUiDeclaration): BundledAccountExecution | null {
+    const cached = bundledAccountExecutions.get(bundle);
+    if (cached !== undefined) return cached;
+    const manifest = PluginPortableReleaseManifestV1Schema.safeParse(bundle.normalizedManifest);
+    if (!manifest.success || manifest.data.id !== bundle.pluginId || manifest.data.version !== bundle.pluginVersion) {
+        bundledAccountExecutions.set(bundle, null);
+        return null;
+    }
+    const bundleId = computePluginAccountBundledCustodyIdV1({
+        packageName: bundle.packageName, manifest: manifest.data, artifacts: bundle.artifactGraphs ?? [],
+    });
+    const bundled: BundledAccountExecution = Object.freeze({
+        manifest: manifest.data, custodyId: bundleId,
+        sourceCustody: Object.freeze({ kind: 'bundled_first_party',
+            packagedRuntime: Object.freeze({ kind: 'app_bundle', bundleId }) }),
+    });
+    bundledAccountExecutions.set(bundle, bundled);
+    return bundled;
+}
+
 function readAccountExecutionSelection(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
@@ -1262,16 +1290,9 @@ function readAccountExecutionSelection(
     if (reads.length > 1) return Object.freeze({ kind: 'unavailable', code: 'plugin_release_unavailable' });
     const bundles = hostBundledUi.filter(row => row.pluginId === pluginId);
     const bundle = bundles.length === 1 ? bundles[0] : undefined;
-    const manifest = PluginPortableReleaseManifestV1Schema.safeParse(bundle?.normalizedManifest);
-    const bundleId = bundle && manifest.success ? computePluginAccountBundledCustodyIdV1({
-        packageName: bundle.packageName, manifest: manifest.data,
-        artifacts: bundle.artifactGraphs ?? [],
-    }) : null;
+    const bundled = bundle ? readBundledAccountExecution(bundle) : null;
     return resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: reads[0]?.response ?? null,
-        ...(bundle && manifest.success && manifest.data.id === pluginId && manifest.data.version === bundle.pluginVersion && bundleId ? {
-            bundled: { manifest: manifest.data, custodyId: bundleId,
-                sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle', bundleId } } },
-        } : {}),
+        ...(bundled ? { bundled } : {}),
     });
 }
 
