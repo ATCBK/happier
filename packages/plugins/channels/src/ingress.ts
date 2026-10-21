@@ -8234,6 +8234,9 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
     return failure;
   }
 
+  if (input.revalidateOccurrenceConflict !== undefined) await revalidateCheckpointedPollConflicts({
+    context, connection: current, observations: result.kind === 'batch' ? result.observations : [],
+  });
   const source: Extract<IngressExecutionSource, Readonly<{ kind: 'checkpointedPoll' }>> = {
     kind: 'checkpointedPoll',
     executionOrigin: getPluginMachineExecutionRouting(execution.executionOrigin),
