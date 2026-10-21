@@ -152,7 +152,8 @@ export async function executeTranscriptRollbackAction(params: Readonly<{
                 scope,
                 sessionId: params.sessionId,
                 patch: { text: restoredDraftText,
-                    mentions: restored?.mentions.map(mention => StrictJsonValueSchema.parse(mention)) ?? [] },
+                    mentions: restored?.mentions.map(mention => StrictJsonValueSchema.parse(mention)) ?? [],
+                    attachments: restored?.attachments ?? [] },
                 materializationIntent: 'seeded',
             });
         }

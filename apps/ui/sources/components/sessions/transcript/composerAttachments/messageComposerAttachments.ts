@@ -2,6 +2,7 @@ import * as React from 'react';
 
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/sessions/userMessageRpc';
 import type { ComposerAttachmentInputV1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
+import type { MessageStructuredReferences } from '../references/messageStructuredReferences';
 
 export type TranscriptComposerAttachment = Readonly<{
     instanceId: string;
@@ -32,13 +33,15 @@ function projectTranscriptComposerAttachment(
     });
 }
 
-export function resolveMessageComposerAttachments(meta: unknown): readonly TranscriptComposerAttachment[] {
+export function resolveMessageComposerAttachments(meta: unknown, inline?: MessageStructuredReferences['inline']): readonly TranscriptComposerAttachment[] {
+    const placed = new Set(Array.from(inline?.values() ?? []).flatMap(reference => reference.attachmentId ? [reference.attachmentId] : []));
     const attachments = readHappierStructuredInputV1FromMeta(meta)?.composerAttachments ?? [];
-    return attachments.length === 0
+    const unplaced = attachments.filter(attachment => !placed.has(attachment.instanceId));
+    return unplaced.length === 0
         ? NO_COMPOSER_ATTACHMENTS
-        : Object.freeze(attachments.map(projectTranscriptComposerAttachment));
+        : Object.freeze(unplaced.map(projectTranscriptComposerAttachment));
 }
 
-export function useMessageComposerAttachments(meta: unknown): readonly TranscriptComposerAttachment[] {
-    return React.useMemo(() => resolveMessageComposerAttachments(meta), [meta]);
+export function useMessageComposerAttachments(meta: unknown, inline?: MessageStructuredReferences['inline']): readonly TranscriptComposerAttachment[] {
+    return React.useMemo(() => resolveMessageComposerAttachments(meta, inline), [meta, inline]);
 }

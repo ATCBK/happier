@@ -110,11 +110,11 @@ export function hydratePendingMessageComposerAttachmentDrafts(
 
     const attachments: readonly ComposerAttachmentDraftV1[] = envelope.data.composerAttachments ?? [];
     const mentions = envelope.data.mentions ?? [];
-    if (mentions.length > 0) {
+    if (mentions.length > 0 || (attachments.length > 0 && typeof text === 'string')) {
         if (typeof text !== 'string') return { status: 'unavailable' };
         const admittedMentions = admitMentionRefsV1ForText(text, mentions);
         if (admittedMentions.length !== mentions.length) return { status: 'unavailable' };
-        const hydrated = hydrateComposerDraftReferencesFromMessage({ text, references: admittedMentions });
+        const hydrated = hydrateComposerDraftReferencesFromMessage({ text, references: admittedMentions, attachments });
         return {
             status: 'ready',
             attachments,

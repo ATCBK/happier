@@ -7,6 +7,10 @@ import {
 } from '@/dev/testkit/sessionTranscriptSource';
 import type { MessageStructuredReferences } from './messageStructuredReferences';
 import { useMessageInlineReferences } from './useMessageInlineReferences';
+import { resolveMessageStructuredReferences } from './messageStructuredReferences';
+import { readableMessageText } from '../messageDisplayText';
+import { projectSessionInputReferencesV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
+import { sanitizeEnrichedMarkdownWithInlineReferences } from '@/components/markdown/enriched/enrichedMarkdownLinkHandling';
 
 const sessionRef = 'session:relay-retry';
 const imageRef = 'attachment:draft-b';
@@ -67,6 +71,21 @@ async function renderInlineReferences() {
 }
 
 describe('useMessageInlineReferences', () => {
+  it('keeps a different-label literal of a selected identity inert in Markdown, copy and Agent input', async () => {
+    const token = '[Old title](happier-ref:session:session-1)';
+    const literal = '[New title](happier-ref:session:session-1)';
+    const text = `${token} / ${literal}`;
+    const mention = { kind: 'happier.session', ref: 'session:session-1', token, label: 'Old title' };
+    const meta = { happierStructuredInputV1: { v: 1, mentions: [mention] } };
+    const hook = await renderHookWithSessionTranscriptSource(() => useMessageInlineReferences({
+      projection: resolveMessageStructuredReferences({ text, meta }), pictures: [], openPath: () => false,
+    }), { source: createTestSessionTranscriptSource() });
+    const rendered = sanitizeEnrichedMarkdownWithInlineReferences(text, hook.getCurrent().inlineReferences);
+    expect(rendered.markdown).toBe(`${token} / New title`);
+    const agent = projectSessionInputReferencesV1({ text, references: { mentions: [mention] } }).text;
+    expect(readableMessageText(text, meta)).toBe('@Session "Old title" / New title');
+    expect(readableMessageText(text, meta)).toBe(agent);
+  });
   it('resolves a bound token to the shared chip in the bubble ink and leaves unbound refs as text', async () => {
     const { hook } = await renderInlineReferences();
     const references = hook.getCurrent().inlineReferences!;

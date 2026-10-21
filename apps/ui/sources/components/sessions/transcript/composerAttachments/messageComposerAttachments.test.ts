@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { resolveMessageComposerAttachments } from './messageComposerAttachments';
+import { resolveMessageStructuredReferences } from '../references/messageStructuredReferences';
 
 function persistedAttachment(overrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
     return {
@@ -15,6 +16,21 @@ function persistedAttachment(overrides: Readonly<Record<string, unknown>> = {}):
 }
 
 describe('message composer attachment transcript projection', () => {
+    it('keeps only unplaced or legacy fallbacks when the canonical projection draws an attachment inline', () => {
+        const meta = { happierStructuredInputV1: { v: 1, composerAttachments: [
+            persistedAttachment(), persistedAttachment({ instanceId: 'unplaced' }),
+        ] } };
+        const projection = resolveMessageStructuredReferences({ text: '[Review #42](happier-ref:attachment:instance-1)', meta });
+        expect(resolveMessageComposerAttachments(meta, projection.inline).map(item => item.instanceId)).toEqual(['unplaced']);
+        expect(resolveMessageComposerAttachments(meta).map(item => item.instanceId)).toEqual(['instance-1', 'unplaced']);
+        const mediaMeta = { happierStructuredInputV1: { v: 1, composerAttachments: [
+            persistedAttachment({ content: { kind: 'sessionMedia', mediaId: 'media-1' } }),
+        ] } };
+        const mediaProjection = resolveMessageStructuredReferences({ text: '[Review #42](happier-ref:attachment:instance-1)', meta: mediaMeta });
+        expect(resolveMessageComposerAttachments(mediaMeta, mediaProjection.inline)).toEqual([]);
+        const code = resolveMessageStructuredReferences({ text: '`[Review #42](happier-ref:attachment:instance-1)`', meta });
+        expect(resolveMessageComposerAttachments(meta, code.inline).map(item => item.instanceId)).toEqual(['instance-1', 'unplaced']);
+    });
     it('renders only the flat persisted presentation the author supplied at admission', () => {
         // The transcript is read long after the authoring plugin may have been
         // uninstalled, so the row it shows must be reconstructable from the

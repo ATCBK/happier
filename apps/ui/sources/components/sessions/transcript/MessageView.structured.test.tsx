@@ -438,6 +438,16 @@ describe('MessageView (structured meta)', { timeout: 60_000 }, () => {
         expect(screen.getTextContent()).toContain('Issue #42');
         expect(screen.getTextContent()).toContain('Production error');
         expect(screen.getTextContent()).toContain('Deploy #7');
+
+        // The same admitted attachment becomes a chip when placed in the text;
+        // the unplaced attachment still needs its legacy/fallback presentation.
+        const inlineScreen = await renderScreen(<MessageView message={{ ...message,
+            text: '[Issue #42](happier-ref:attachment:issue-42)',
+        }} metadata={null} sessionId="s1" />);
+        const markdown = inlineScreen.findAllByType('MarkdownView')[0]!;
+        expect(markdown.props.inlineReferences.resolve('attachment:issue-42')).toMatchObject({ label: 'Issue #42' });
+        expect(inlineScreen.findByTestId('transcript-composer-attachment:composer-attachments:issue-42')).toBeNull();
+        expect(inlineScreen.findByTestId('transcript-composer-attachment:composer-attachments:run-7')).not.toBeNull();
     });
 
     it('renders durable plugin provenance in ordinary and structured user messages, but fails closed otherwise', async () => {

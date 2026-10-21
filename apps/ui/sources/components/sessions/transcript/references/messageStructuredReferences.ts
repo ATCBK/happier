@@ -34,6 +34,8 @@ export type InlineMessageReference = Readonly<{
     kind: string;
     label: string;
     marker: string;
+    /** Mention bindings require this exact authored token; attachment labels remain advisory. */
+    token?: string;
     glyph: NonNullable<MarkdownInlineReference['glyph']>;
     path?: string;
     sessionId?: string;
@@ -52,10 +54,19 @@ export type MessageStructuredReferences = Readonly<{
 const NO_REFERENCES: readonly TranscriptStructuredReference[] = Object.freeze([]);
 const NO_PROJECTION: MessageStructuredReferences = Object.freeze({ inline: new Map(), row: NO_REFERENCES, imageNumbers: new Map() });
 
+/** Eligibility stays with the typed projection even when multiple tokens share one destination. */
+export function resolveInlineMessageReference(
+    inline: MessageStructuredReferences['inline'], ref: string, sourceToken?: string,
+): InlineMessageReference | null {
+    const reference = inline.get(ref);
+    return reference && (sourceToken === undefined || reference.token === undefined || reference.token === sourceToken)
+        ? reference : null;
+}
+
 function projectMention(mention: MentionRefV1, tokenLabel: string): InlineMessageReference | null {
     const ref = parseMentionRefV1(mention.ref);
     if (!ref) return null;
-    const base = { ref: mention.ref, kind: mention.kind, label: mention.label ?? tokenLabel,
+    const base = { ref: mention.ref, kind: mention.kind, token: mention.token, label: mention.label ?? tokenLabel,
         marker: formatSessionInputMentionMarkerV1({ ...mention, label: mention.label ?? tokenLabel }) };
     switch (mention.kind) {
         case MENTION_KIND_V1.file: {

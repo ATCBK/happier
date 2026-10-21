@@ -3,6 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createReducer } from '@happier-dev/session-core/reducer';
+import { MessageMetaSchema, type UserTextMessage } from '@happier-dev/session-core/messages';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import {
     getTranscriptModalMockRef,
@@ -236,6 +238,20 @@ describe('TranscriptRollbackActionButton', () => {
 
     it('prefills the session draft after rollback-to-point succeeds', async () => {
         executeSpy.mockResolvedValueOnce({ ok: true, result: { ok: true } });
+        const token = '[Auth fix](happier-ref:session:auth)';
+        const attachmentToken = '[Issue #42](happier-ref:attachment:issue-42)';
+        const attachment = { v: 1, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
+            key: '42', value: { issueId: 42 }, presentation: { label: 'Issue #42', typeLabel: 'Issue' } };
+        const message: UserTextMessage = { kind: 'user-text', id: 'source', localId: null, createdAt: 1, seq: 7,
+            text: `${token} / ${token} / ${attachmentToken} / [Literal](happier-ref:session:auth)`,
+            meta: MessageMetaSchema.parse({ happierStructuredInputV1: { v: 1, mentions: [
+                { kind: 'happier.session', ref: 'session:auth', token, label: 'Auth fix' },
+            ], composerAttachments: [attachment] } }) };
+        const { storage } = await import('@/sync/domains/state/storage');
+        const messagesById = { source: message };
+        storage.setState({ sessionMessages: { 'session-1': { messagesById, messagesMap: messagesById,
+            messageIdsOldestFirst: ['source'], messagesVersion: 1, reducerState: createReducer(),
+            latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null, isLoaded: true } } });
 
         const { TranscriptRollbackActionButton } = await import('./TranscriptRollbackActionButton');
         const screen = await renderScreen(
@@ -243,7 +259,7 @@ describe('TranscriptRollbackActionButton', () => {
                 sessionId="session-1"
                 testID="rollback-action"
                 target={{ type: 'before_user_message', userMessageSeq: 7 }}
-                restoredDraftText="edit this prompt"
+                restoredDraftText={message.text}
             />,
         );
         expect(screen.findByTestId('rollback-action')?.props.accessibilityLabel).toBe('session.rollback.beforeUserMessageA11y');
@@ -262,7 +278,12 @@ describe('TranscriptRollbackActionButton', () => {
         );
         expect(writeExistingSessionDraftSpy).toHaveBeenCalledWith(expect.objectContaining({
             sessionId: 'session-1',
-            patch: { text: 'edit this prompt', mentions: [] },
+            patch: { text: message.text, attachments: [attachment], mentions: [
+                expect.objectContaining({ ref: 'session:auth', start: 0, end: token.length }),
+                expect.objectContaining({ ref: 'session:auth', start: token.length + 3, end: token.length * 2 + 3 }),
+                expect.objectContaining({ ref: 'attachment:issue-42', start: token.length * 2 + 6,
+                    end: token.length * 2 + 6 + attachmentToken.length }),
+            ] },
         }));
         await screen.unmount();
     });

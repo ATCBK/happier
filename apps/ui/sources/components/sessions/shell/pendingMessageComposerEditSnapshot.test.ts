@@ -47,6 +47,34 @@ function createSnapshotWithValue(fieldId: string): PendingMessageComposerSemanti
 }
 
 describe('pending message composer semantic draft snapshot', () => {
+    it('restores every exact mention and contentless attachment occurrence while keeping a lookalike literal unbound', () => {
+        const token = '[Auth fix](happier-ref:session:auth)';
+        const attachmentToken = '[Issue #42](happier-ref:attachment:issue-42)';
+        const literal = '[Other title](happier-ref:session:auth)';
+        const text = `${token} / ${token} / ${attachmentToken} / ${literal}`;
+        const attachment = { v: 1, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
+            key: '42', value: { issueId: 42 }, presentation: { label: 'Issue #42', typeLabel: 'Issue' } };
+        const hydrated = hydratePendingMessageComposerAttachmentDrafts({ happierStructuredInputV1: {
+            v: 1, mentions: [{ kind: 'happier.session', ref: 'session:auth', token, label: 'Auth fix' }],
+            composerAttachments: [attachment],
+        } }, text);
+        expect(hydrated.status).toBe('ready');
+        if (hydrated.status !== 'ready') throw new Error('expected editable Pending message');
+        expect(hydrated.attachments).toEqual([attachment]);
+        expect(hydrated.mentions?.map(({ ref, start, end }) => ({ ref, start, end }))).toEqual([
+            { ref: 'session:auth', start: 0, end: token.length },
+            { ref: 'session:auth', start: token.length + 3, end: token.length * 2 + 3 },
+            { ref: 'attachment:issue-42', start: token.length * 2 + 6, end: token.length * 2 + 6 + attachmentToken.length },
+        ]);
+    });
+    it('restores attachment chips even when no envelope mentions were sent', () => {
+        const token = '[Issue #42](happier-ref:attachment:issue-42)';
+        const hydrated = hydratePendingMessageComposerAttachmentDrafts({ happierStructuredInputV1: {
+            v: 1, composerAttachments: [{ v: 1, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
+                key: '42', value: { issueId: 42 }, presentation: { label: 'Issue #42', typeLabel: 'Issue' } }],
+        } }, token);
+        expect(hydrated).toMatchObject({ status: 'ready', mentions: [{ ref: 'attachment:issue-42', token, start: 0, end: token.length }] });
+    });
     it('normalizes legacy queued references together with their exact editable text', () => {
         const token = '[Auth fix](happier-ref:session:auth)';
         expect(hydratePendingMessageComposerAttachmentDrafts({ happierStructuredInputV1: {

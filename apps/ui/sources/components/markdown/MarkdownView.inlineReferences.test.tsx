@@ -48,7 +48,7 @@ describe('MarkdownView inline references', () => {
         );
         expect(result.markdown).toBe('See [Current title](happier-ref:session:s1) and unbound.');
         expect(result.references.get('happier-ref:session:s1')).toEqual(reference);
-        expect(resolve).toHaveBeenCalledWith('s1');
+        expect(resolve).toHaveBeenCalledWith('s1', '[old](happier-ref:session:s1)');
         expect(sanitizeEnrichedMarkdownWithInlineReferences('[lookalike](happier-ref:file:src/@a.ts)').markdown).toBe('lookalike');
     });
 

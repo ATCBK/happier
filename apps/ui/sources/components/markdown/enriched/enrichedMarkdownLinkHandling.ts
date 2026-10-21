@@ -135,6 +135,7 @@ function extractMarkdownLinkDestination(raw: string): Readonly<{
 /** `[text](scheme:target)` cited by an author, resolved by the owner of that scheme. */
 function resolveInlineReferenceLink(
     destination: string,
+    sourceToken: string,
     references: MarkdownInlineReferences | undefined,
     resolved: Map<string, MarkdownInlineReference>,
 ): string | null {
@@ -144,7 +145,7 @@ function resolveInlineReferenceLink(
     if (!prefixed && (!references.scheme || !destination.startsWith(`${references.scheme}:`))) return null;
     if (references.scheme && !ref.startsWith(`${references.scheme}:`)) return null;
     const target = references.scheme ? ref.slice(references.scheme.length + 1) : ref;
-    const reference = target ? references.resolve(target) : null;
+    const reference = target ? references.resolve(target, sourceToken) : null;
     if (!reference) return null;
     const href = `${INLINE_REFERENCE_HREF_PREFIX_V1}${ref}`;
     resolved.set(href, reference);
@@ -200,7 +201,7 @@ function normalizeExplicitMarkdownLinks(
             index = destinationEnd;
             continue;
         }
-        const reference = resolveInlineReferenceLink(extracted.destination, references, resolved);
+        const reference = resolveInlineReferenceLink(extracted.destination, markdown.slice(index, destinationEnd + 1), references, resolved);
         if (reference) {
             out += reference;
             index = destinationEnd;

@@ -5,7 +5,7 @@ import type { MarkdownInlineReferences } from '@/components/markdown/markdownInl
 import { referenceChipFill } from '@/components/ui/referenceChip/referenceChipFill';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { useSessionTranscriptSource } from '../source/SessionTranscriptSourceContext';
-import type { MessageStructuredReferences } from './messageStructuredReferences';
+import { resolveInlineMessageReference, type MessageStructuredReferences } from './messageStructuredReferences';
 
 /** How long a picture keeps the ring its "Image #N" chip put on it. */
 const IMAGE_RING_MS = 1600;
@@ -77,8 +77,8 @@ export function useMessageInlineReferences(
     if (inline.size === 0) return undefined;
     const background = referenceChipFill(ink);
     return {
-      resolve: (ref) => {
-        const reference = inline.get(ref);
+      resolve: (ref, sourceToken) => {
+        const reference = resolveInlineMessageReference(inline, ref, sourceToken);
         if (!reference) return null;
         const picturePath =
           reference.imageNumber !== undefined

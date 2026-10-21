@@ -768,7 +768,7 @@ function UserTextBlock(props: {
     text: renderedMarkdownText,
   });
   const structuredReferences = structuredReferenceProjection.row;
-  const composerAttachments = useMessageComposerAttachments(props.message.meta);
+  const composerAttachments = useMessageComposerAttachments(props.message.meta, isStructuredOnly ? undefined : structuredReferenceProjection.inline);
   // D5: a message composed with inline references shows its pictures numbered above the text and
   // its chips in place; a legacy (0.2) message keeps today's composition.
   const inlineComposition = structuredReferenceProjection.inline.size > 0

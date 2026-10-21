@@ -19,7 +19,8 @@ export type MarkdownInlineReference = Readonly<{
 export type MarkdownInlineReferences = Readonly<{
   /** Optional authored shorthand, such as finding:. Prefixed links resolve their full ref. */
   scheme?: string;
-  resolve: (target: string) => MarkdownInlineReference | null;
+  /** The authored source token lets typed-message owners check exact binding eligibility. */
+  resolve: (target: string, sourceToken?: string) => MarkdownInlineReference | null;
   onPress?: (target: string) => void;
 }>;
 

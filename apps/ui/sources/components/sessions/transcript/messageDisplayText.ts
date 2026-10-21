@@ -12,7 +12,7 @@ export { readTranscriptAttachmentsMeta } from './structured/happierMetaEnvelope'
 import { resolveUnsupportedContentLabel } from '@/sync/domains/messages/resolveUnsupportedContentLabel';
 import { scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { projectInlineReferenceLabelsV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
-import { resolveMessageStructuredReferences } from './references/messageStructuredReferences';
+import { resolveInlineMessageReference, resolveMessageStructuredReferences } from './references/messageStructuredReferences';
 
 export type TranscriptMessageDisplayOptions = Readonly<{
     debugInformationEnabled?: boolean;
@@ -77,7 +77,8 @@ export function readableMessageText(text: string, meta?: unknown): string {
     const chunks: string[] = [];
     let cursor = 0;
     for (const token of tokens) {
-        chunks.push(text.slice(cursor, token.start), inline.get(token.ref)?.marker ?? token.label);
+        const reference = resolveInlineMessageReference(inline, token.ref, text.slice(token.start, token.end));
+        chunks.push(text.slice(cursor, token.start), reference?.marker ?? token.label);
         cursor = token.end;
     }
     chunks.push(text.slice(cursor));
