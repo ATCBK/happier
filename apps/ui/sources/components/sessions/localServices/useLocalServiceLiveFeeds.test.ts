@@ -14,6 +14,7 @@ import { publishLocalServiceLauncherSnapshot, resetLocalServiceLauncherStoreForT
 import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
 import { useLocalServiceLiveFeeds } from './useLocalServiceLiveFeeds';
 import { buildLocalServiceRows } from '@/sync/domains/local/services/serviceRow';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 const remote = vi.hoisted(() => vi.fn());
 const alert = vi.hoisted(() => vi.fn());
@@ -28,7 +29,7 @@ afterEach(async () => { await home?.dispose(); home = undefined; resetLocalServi
   storage.getState().clearProjectAccountRowsScope(); remote.mockReset(); alert.mockReset(); });
 
 describe('Project Services source feed plus actual native binding', () => {
-  it('updates a mounted stopped declaration after an external Start advances the daemon watch', async () => {
+  it.each(['watch', 'home-reconnect', 'home-reconnect-invalid'] as const)('updates a mounted stopped declaration after an external Start (%s)', async recovery => {
     home = await createPlainArtifactHomeFixture('https://project-services-external-start.test', { handleRequest: async path =>
       path === '/v1/machines?includeRevoked=true' ? new Response(JSON.stringify([
         { id: 'source', revokedAt: null, replacedByMachineId: null },
@@ -51,7 +52,8 @@ describe('Project Services source feed plus actual native binding', () => {
     remote.mockImplementation(async ({ method, machineId, payload }: {
       method: string; machineId: string; payload: { projection?: 'managed_bindings' };
     }) => {
-      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise(resolve => watches.push(resolve));
+      if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise((resolve, reject) =>
+        watches.push(value => value instanceof Error ? reject(value) : resolve(value)));
       if (method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT) return { protocolVersion: 1,
         snapshot: { v: 1, machineId, updatedAt: running ? 2 : 1, targets: payload.projection ? running ? [actual] : [] : [declaration] } };
       return { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } };
@@ -64,8 +66,22 @@ describe('Project Services source feed plus actual native binding', () => {
     try {
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ status: 'stopped', primaryAction: { kind: 'start' } }));
       await vi.waitFor(() => expect(watches).toHaveLength(1));
+      if (recovery !== 'watch') {
+        // Non-timeout transport failure or invalid reply, without navigating the Services page.
+        await act(async () => { watches[0]!(recovery === 'home-reconnect'
+          ? new RpcError('Transport unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) : { invalid: true }); });
+        await flushHookEffects();
+        expect.soft(hook.getCurrent().inventoryState.refreshState).toBe('error');
+        expect.soft(readRows()[0]).toMatchObject({ id: declaration.id, status: 'unavailable', primaryAction: null });
+        expect(watches).toHaveLength(1);
+        await act(async () => { publishHomeAccountChange('another-home', undefined, { source: 'connected' }); });
+        await flushHookEffects();
+        expect(watches).toHaveLength(1);
+        await act(async () => { publishHomeAccountChange(serverId, undefined, { source: 'connected' }); });
+        await vi.waitFor(() => expect(watches).toHaveLength(2));
+      }
       running = true;
-      await act(async () => { watches[0]!({ protocolVersion: 1, changed: true,
+      await act(async () => { watches.at(-1)!({ protocolVersion: 1, changed: true,
         snapshot: { v: 1, machineId: source.machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] } }); });
       await vi.waitFor(() => expect(readRows()[0]).toMatchObject({ id: declaration.id, status: 'running', target: actual }));
     } finally { await hook.unmount(); }
@@ -176,6 +192,9 @@ describe('Project Services source feed plus actual native binding', () => {
     } finally { await hook.unmount(); }
   });
   it.each(['absent', 'failed', 'retired'] as const)('settles the first fresh binding without another Machine census or inventory watch (%s)', async outcome => {
+    remote.mockImplementation(async ({ method, machineId }: { method: string; machineId: string }) =>
+      method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH ? new Promise(() => {})
+        : { protocolVersion: 1, snapshot: { v: 1, machineId, generatedAt: 1, refreshState: 'idle', entries: [], diagnostics: [] } });
     let censusReads = 0;
     home = await createPlainArtifactHomeFixture('https://project-services-first-binding.test', { handleRequest: async path => {
       if (path !== '/v1/machines?includeRevoked=true') return null;

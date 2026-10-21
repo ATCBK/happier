@@ -18,6 +18,8 @@ import {
     subscribeLocalServiceLauncherStore,
 } from './sharedStore';
 import { selectLocalServiceLaunchTargets } from './store';
+import { buildLocalServiceRows } from '../serviceRow';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { resetLocalServiceInventoryStoreForTests } from '../inventory/sharedStore';
 import { createLocalServicesRuntimeActionExecutor } from '../actions/runtimeActionExecutor';
 import { LocalServiceActionRequestV1Schema, LocalServiceActionResultV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
@@ -52,13 +54,42 @@ describe('shared local-service launcher store', () => {
                 return { protocolVersion: 1, snapshot: { v: 1, machineId: 'machine-a', generatedAt: 1_000,
                     refreshState: 'idle', entries: [], diagnostics: [] } };
             }
-            if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return { ok: false };
+            if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise(() => {});
             return rpc.launcher(request);
         });
     });
     afterEach(() => {
         resetLocalServiceLauncherStoreForTests();
         resetLocalServiceInventoryStoreForTests();
+    });
+
+    it('keeps last-known rows stale after watch retirement and recovers even at the same inventory generation', async () => {
+        const watches: Array<(value: unknown) => void> = [];
+        let available = true;
+        rpc.machine.mockImplementation(async (request: { method: string }) => {
+            if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) return new Promise(resolve => watches.push(resolve));
+            if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH) return { protocolVersion: 1,
+                snapshot: { v: 1, machineId: 'machine-a', generatedAt: 1_000, refreshState: 'idle', entries: [], diagnostics: [] } };
+            return { protocolVersion: 1, snapshot: LocalServiceLauncherSnapshotV1Schema.parse({ ...snapshot,
+                targets: snapshot.targets.map(target => ({ ...target, state: available ? 'available' : 'unavailable',
+                    ...(available ? {} : { unavailableReason: 'launch_unavailable' }), actions: available ? ['start'] : [] })) }) };
+        });
+        const key = { machineId: 'machine-a', serverId: 'server-a' };
+        const release = subscribeLocalServiceLauncherStore(key, () => {});
+        const rows = () => buildLocalServiceRows({ inventoryRows: [], launchTargets: selectLocalServiceLaunchTargets(getLocalServiceLauncherState(key)),
+            sessionId: 'session-a', scope: 'machine' });
+        try {
+            await vi.waitFor(() => expect(rows()[0]?.status).toBe('running'));
+            await vi.waitFor(() => expect(watches).toHaveLength(1));
+            watches[0]!({ invalid: true });
+            await flushMicrotasks();
+            expect.soft(rows()[0]).toMatchObject({ id: snapshot.targets[0]!.id, status: 'stale', primaryAction: null });
+            expect.soft(getLocalServiceLauncherState(key).updatedAt).toBe(snapshot.updatedAt);
+            available = false;
+            publishHomeAccountChange(key.serverId, undefined, { source: 'connected' });
+            await vi.waitFor(() => expect(watches).toHaveLength(2));
+            await vi.waitFor(() => expect(rows()[0]?.status).toBe('unavailable'));
+        } finally { release(); }
     });
 
     it('refreshes all launcher projections after external runtime changes without a mounted surface refresh', async () => {

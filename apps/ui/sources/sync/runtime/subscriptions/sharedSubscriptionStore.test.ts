@@ -15,6 +15,43 @@ type TestState = Readonly<{
 type TestSnapshot = Readonly<{ value: number }>;
 
 describe('createSharedSubscriptionStore', () => {
+    it('recovers retired observation only on a demanded recovery event and releases its listener', async () => {
+        let recover: (() => void) | undefined;
+        const detach = vi.fn();
+        const replies: Array<(value: SharedSubscriptionWatchOutcome<number>) => void> = [];
+        let reads = 0;
+        const store = createSharedSubscriptionStore({
+            emptyState: 0, createState: () => 0, normalizeInput: (key: string) => key, storeKey: (key: string) => key,
+            defaultSnapshotClient: async () => ++reads, defaultWatchClient: {}, watchAfterRefresh: true, retainState: true,
+            refresh: ({ snapshotClient }) => snapshotClient(), applySnapshot: (_state: number, snapshot: number) => snapshot,
+            subscribeRecovery: (_input: string, listener: () => void) => { recover = listener; return detach; },
+            watch: () => new Promise<SharedSubscriptionWatchOutcome<number>>(resolve => replies.push(resolve)),
+        });
+        const release = store.subscribe('machine', () => {});
+        const releaseSibling = store.subscribe('machine', () => {});
+        await vi.waitFor(() => expect(replies).toHaveLength(1));
+        store.publish('machine', 9);
+        expect(detach).not.toHaveBeenCalled();
+        recover?.();
+        expect(reads).toBe(1);
+        replies[0]!({ status: 'idle' });
+        await vi.waitFor(() => expect(replies).toHaveLength(2));
+        replies[1]!({ status: 'unavailable' });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(replies).toHaveLength(2);
+        recover?.();
+        await vi.waitFor(() => expect(replies).toHaveLength(3));
+        expect(store.getState('machine')).toBe(2);
+        release();
+        expect(detach).not.toHaveBeenCalled();
+        releaseSibling();
+        expect(detach).toHaveBeenCalledOnce();
+        recover?.();
+        expect(reads).toBe(2);
+        store.reset();
+    });
+
     it('rearms a retired watch when a retained entry gains demand again', async () => {
         let reads = 0;
         const watches: Array<AbortSignal | undefined> = [];

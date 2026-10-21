@@ -53,7 +53,7 @@ describe('shared local-service inventory store', () => {
         rpc.snapshot.mockReset();
         rpc.machine.mockReset().mockImplementation(async (request: { method: string }) => {
             if (request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH) {
-                return { ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+                return new Promise(() => {});
             }
             expect([RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_SNAPSHOT,
                 RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_REFRESH]).toContain(request.method);

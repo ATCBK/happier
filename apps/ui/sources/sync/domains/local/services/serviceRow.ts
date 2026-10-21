@@ -74,12 +74,13 @@ const SOURCE_LABEL_KEYS: Readonly<Record<LocalServiceLaunchTarget['source'], Tra
 function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
     if (target.unavailableReason === 'project_service_binding_pending') return 'loading';
     if (target.unavailableReason === 'project_service_binding_unavailable') return 'unavailable';
+    if (target.state === 'stale') return 'stale';
     // Available means the script can be launched, never that a listener is running. Older
     // launcher snapshots may omit sourceClass; source already establishes this distinction.
     if (target.source === 'package_script') return 'stopped';
     // Launcher availability does not revive a settled managed lifetime. Keep
     // stale/offline presentation, but consume the supervisor's actual outcome.
-    if (target.source === 'managed_service' && target.state !== 'stale') {
+    if (target.source === 'managed_service') {
         if (hasUncertainLocalServiceNativeCustodyV1(target)) return 'unavailable';
         if (target.serviceState === 'stopped') return 'stopped';
         if (target.serviceState === 'failed') return 'failed';
@@ -93,8 +94,6 @@ function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
             return 'running';
         case 'starting':
             return 'starting';
-        case 'stale':
-            return 'stale';
         case 'unavailable':
             // A managed_* stopped reason reads as stopped; everything else as unavailable.
             return target.unavailableReason?.includes('stopped') ? 'stopped' : 'unavailable';
@@ -102,6 +101,7 @@ function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
 }
 
 function resolvePrimaryAction(target: LocalServiceLaunchTarget): ServiceRow['primaryAction'] {
+    if (target.state === 'stale') return null;
     if (target.unavailableReason === 'project_service_binding_pending') return null;
     if (target.unavailableReason === 'project_service_binding_unavailable') return null;
     if (hasUncertainLocalServiceNativeCustodyV1(target)) return null;
@@ -448,7 +448,7 @@ export function resolveServiceRowSection(row: ServiceRow): ServiceRowSection | n
     // Happier's own listeners are one quiet group, closed by default, and never "running here".
     if (row.internal) return 'happier';
     // A package script is a launcher suggestion: its `available` state means "can start", not "running".
-    if (row.scope === 'suggestion') return row.primaryAction?.kind === 'start' ? 'ready' : null;
+    if (row.scope === 'suggestion') return row.primaryAction?.kind === 'start' || row.target.declaration ? 'ready' : null;
     if (row.status === 'running' || row.status === 'starting' || row.status === 'stopping' || row.status === 'stale') {
         return row.scope === 'machine' ? 'elsewhere' : 'running';
     }

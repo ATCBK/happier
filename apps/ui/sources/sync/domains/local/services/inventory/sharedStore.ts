@@ -1,5 +1,9 @@
 import { createSharedSubscriptionStore } from '@/sync/runtime/subscriptions/sharedSubscriptionStore';
 import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@happier-dev/protocol/rpcErrors';
+import { apiSocket } from '@/sync/api/session/apiSocket';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import {
     type LocalServiceInventorySnapshotClientInput,
     type LocalServiceInventorySnapshotClientResult,
@@ -92,6 +96,25 @@ const store = createSharedSubscriptionStore<
     failRefresh: (state, input) => (
         applyLocalServiceInventoryRefreshFailed(state, input.machineId)
     ),
+    failWatch: (state, input) => applyLocalServiceInventoryRefreshFailed(state, input.machineId),
+    subscribeRecovery: (input, recover) => {
+        const matchesHome = (serverId: string) => areServerProfileIdentifiersEquivalent(
+            input.serverId ?? getActiveServerSnapshot().serverId, serverId,
+        );
+        const detachFocused = apiSocket.onStatusChange(status => {
+            if (status !== 'connected') return;
+            // The connection owner clears failed Machine reachability after publishing status.
+            // Let that same connection commit finish before admitting the recovered read.
+            void Promise.resolve().then(() => {
+                const scope = apiSocket.getMachineRequestScope();
+                if (scope && matchesHome(scope.serverId)) recover();
+            });
+        });
+        const detachConcurrent = subscribeHomeAccountChange(event => {
+            if (event.source === 'connected' && matchesHome(event.serverId)) recover();
+        });
+        return () => { detachFocused(); detachConcurrent(); };
+    },
     applySnapshot: applyLocalServiceInventorySnapshot,
     defaultWatchClient,
     watchAfterRefresh: true,

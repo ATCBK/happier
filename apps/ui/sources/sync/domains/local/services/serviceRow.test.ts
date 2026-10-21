@@ -96,6 +96,15 @@ describe('buildLocalServiceRows', () => {
         expect(selectLocalServiceRunningCount(rows)).toBe(0);
     });
 
+    it.each(['managed_service', 'package_script'] as const)('retains a stale %s declaration without presenting a fresh Start', source => {
+        const target = LocalServiceLaunchTargetV1Schema.parse(packageTarget({ source, state: 'stale', actions: [],
+            workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'checkout', rootPath: '/repo' },
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'web' } } }));
+        const [row] = buildLocalServiceRows({ inventoryRows: [], launchTargets: [target], sessionId: null, scope: 'workspace' });
+        expect(row).toMatchObject({ id: target.id, status: 'stale', primaryAction: null });
+        expect(groupLocalServiceRowsBySection([row!])).toHaveLength(1);
+    });
+
     it('keeps a pending binding distinct from an unavailable declaration and offers no Start', () => {
         const target = LocalServiceLaunchTargetV1Schema.parse(packageTarget({ source: 'managed_service',
             workspace: { serverId: 'home', machineId: 'machine-a', workspaceId: 'checkout', rootPath: '/repo' },

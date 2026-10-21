@@ -19,7 +19,7 @@ export type SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient> = R
  * nothing to report. `retry` means the transport exhausted that watch's deadline without an
  * answer. Both re-arm with the same cursor; the daemon window or transport deadline owns the
  * cadence, without a client timer. `unavailable` retires the watch until a user refresh, fresh
- * publication or foreground invalidation restarts it.
+ * publication, foreground invalidation or a subscribed transport recovery restarts it.
  */
 export type SharedSubscriptionWatchOutcome<TSnapshot> =
     | Readonly<{ status: 'changed'; snapshot: TSnapshot }>
@@ -65,6 +65,10 @@ export type SharedSubscriptionStoreConfig<
     beginRefresh?: (state: TState, input: TInput, nowMs: () => number) => TState;
     refresh: (params: SharedSubscriptionRefreshParams<TInput, TState, TSnapshotClient>) => Promise<TState>;
     failRefresh?: (state: TState, input: TInput, nowMs: () => number, error: unknown) => TState;
+    /** Retain useful content while exposing the loss of live observation. */
+    failWatch?: (state: TState, input: TInput) => TState;
+    /** Existing transport recovery signal; bound once while this entry has live demand. */
+    subscribeRecovery?: (input: TInput, recover: () => void) => () => void;
     applySnapshot: (state: TState, snapshot: TSnapshot) => TState;
     /** Publish derived/sibling state only after the next watch has dispatched. */
     onWatchSnapshot?: (input: TInput, snapshot: TSnapshot, previous: TState) => void;
@@ -128,6 +132,7 @@ type SharedSubscriptionStoreEntry<TInput, TState, TSnapshotClient, TWatchClient>
     watching: boolean;
     watchRetired: boolean;
     watchRecoveryRequested: boolean;
+    unsubscribeRecovery: (() => void) | null;
     nowMs: () => number;
 };
 
@@ -184,6 +189,7 @@ export function createSharedSubscriptionStore<
                 watching: false,
                 watchRetired: false,
                 watchRecoveryRequested: false,
+                unsubscribeRecovery: null,
                 nowMs: options?.nowMs ?? Date.now,
             };
             entries.set(key, entry);
@@ -245,8 +251,11 @@ export function createSharedSubscriptionStore<
 
     // The push half. Exactly one watch is outstanding per entry with subscribers; every answer
     // re-arms the next one, so the cadence is the daemon's park window and there is no timer here.
-    // An unavailable watch retires until invalidation or snapshot publication restores it.
-    // Both user Refresh and the foreground trigger reuse these owners.
+    // An unavailable watch retires until invalidation, publication or transport recovery.
+    const retireWatch = (entry: Entry): void => {
+        entry.watchRetired = !entry.watchRecoveryRequested;
+        if (entry.watchRetired && config.failWatch) setState(entry, config.failWatch(entry.state, entry.input));
+    };
     const runWatchLoop = (entry: Entry): Promise<void> => {
         const watch = config.watch;
         if (!watch || entry.watching || entry.watchRetired || entry.refCount <= 0 || config.shouldWatch?.(entry.state) === false) {
@@ -273,7 +282,7 @@ export function createSharedSubscriptionStore<
                     return;
                 }
                 if (outcome.status === 'unavailable') {
-                    entry.watchRetired = !entry.watchRecoveryRequested;
+                    retireWatch(entry);
                 }
                 if (outcome.status === 'changed') {
                     const previous = entry.state;
@@ -282,7 +291,7 @@ export function createSharedSubscriptionStore<
                     publication = { snapshot: outcome.snapshot, previous, changed: previous !== next };
                 }
             } catch {
-                if (!abortController?.signal.aborted) entry.watchRetired = !entry.watchRecoveryRequested;
+                if (!abortController?.signal.aborted) retireWatch(entry);
             } finally {
                 if (entry.watchAbortController === abortController) {
                     entry.watching = false;
@@ -336,6 +345,19 @@ export function createSharedSubscriptionStore<
             entry.listeners.add(listener);
             entry.refCount += 1;
             if (entry.refCount === 1) {
+                entry.unsubscribeRecovery = config.subscribeRecovery?.(entry.input, () => {
+                    if (entry.refCount <= 0) return;
+                    // Recovery may precede the old transport's final failed reply. Allow that
+                    // reply to re-arm once without replacing a healthy outstanding watch.
+                    if (entry.watching) {
+                        entry.watchRecoveryRequested = true;
+                    } else if (entry.watchRetired) {
+                        entry.watchRetired = false;
+                        const refresh = runRefresh(entry);
+                        if (config.watchAfterRefresh) void refresh.then(() => runWatchLoop(entry));
+                        else runWatchLoop(entry);
+                    }
+                }) ?? null;
                 // New demand refreshes the snapshot and renews a previously retired watch.
                 entry.watchRetired = false;
                 const previousWasAborted = entry.abortController?.signal.aborted;
@@ -357,6 +379,8 @@ export function createSharedSubscriptionStore<
                 entry.listeners.delete(listener);
                 entry.refCount -= 1;
                 if (entry.refCount <= 0) {
+                    entry.unsubscribeRecovery?.();
+                    entry.unsubscribeRecovery = null;
                     entry.abortController?.abort();
                     stopWatch(entry);
                     if (!config.retainState) entries.delete(key);
@@ -405,6 +429,8 @@ export function createSharedSubscriptionStore<
         },
         reset() {
             for (const entry of entries.values()) {
+                entry.unsubscribeRecovery?.();
+                entry.unsubscribeRecovery = null;
                 entry.abortController?.abort();
                 stopWatch(entry);
             }

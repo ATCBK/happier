@@ -115,6 +115,12 @@ const store = createSharedSubscriptionStore<
     },
     refresh: async ({ input, state, snapshotClient, signal }) => {
         const normalized = normalizeInput(input);
+        if (getLocalServiceInventoryState(input).refreshState === 'error') {
+            // A retired inventory watch cannot prove that an old absence or lifetime is
+            // current. Keep the same rows and daemon timestamp, with existing stale UI.
+            return failRefresh({ ...state, targetsById: new Map([...state.targetsById].map(([id, target]) =>
+                [id, { ...target, state: 'stale' as const, actions: [] }])) }, normalized, 'request_failed');
+        }
         const result = await snapshotClient({
             machineId: normalized.machineId,
             serverId: normalized.serverId,
@@ -165,13 +171,17 @@ export function subscribeLocalServiceLauncherStore(
     if (!subscription) {
         const inventoryKey = { machineId: input.machineId, serverId: input.serverId };
         let generation = getLocalServiceInventoryState(inventoryKey).generatedAt;
+        let unavailable = getLocalServiceInventoryState(inventoryKey).refreshState === 'error';
         const dispose = subscribeLocalServiceInventoryStore(inventoryKey, () => {
-            const next = getLocalServiceInventoryState(inventoryKey).generatedAt;
-            if (next === generation) return;
-            generation = next;
+            const next = getLocalServiceInventoryState(inventoryKey);
+            const availabilityChanged = (next.refreshState === 'error' && !unavailable)
+                || (next.refreshState === 'idle' && unavailable);
+            if (next.refreshState !== 'refreshing') unavailable = next.refreshState === 'error';
+            const generationChanged = next.generatedAt !== generation;
+            generation = next.generatedAt;
             // Even the initial scan can finish after a cached launcher response. Keep
             // declaration hydration independent of that scan, then reconcile its result.
-            if (next !== null) store.invalidate(input);
+            if (availabilityChanged || (generationChanged && next.generatedAt !== null)) store.invalidate(input);
         }, options?.inventorySnapshotClient ? { snapshotClient: options.inventorySnapshotClient } : undefined);
         subscription = { input, count: 0, dispose };
         inventorySubscriptions.set(key, subscription);
