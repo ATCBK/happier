@@ -16,6 +16,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { decideApprovalAsInbox, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 
 const transport = vi.hoisted(() => ({ download: vi.fn() }));
 // Machine byte transfer is the boundary; the Action executor, source admission and Artifact writer remain real.
@@ -137,6 +138,55 @@ describe('Artifact surface pending approvals', () => {
         expect(artifacts.readPlainBody(created!)).toBe('Copied bytes');
         expect(decodePlainArtifactStoredContent(artifacts.read(created!)!.header)).toMatchObject({ title: 'Notes for review' });
         expect(artifacts.list()).toHaveLength(1);
+        await hook.unmount();
+    });
+
+    it.each(['session', 'project', 'unassociated'] as const)('binds the %s file audience to its source instead of another Account Team', async (sourceKind) => {
+        const { serverId } = await serveArtifactAccount(`https://file-copy-source-team-${sourceKind}.test`);
+        const { applyTeamProjection } = await import('@/sync/store/teams/teamsSnapshots');
+        const session = createSessionFixture({ id: 'source-team-session', serverId });
+        session.access = { ...session.access!, primaryTeamId: 'source-team' };
+        storage.getState().applySessions([session]);
+        const scope = { serverId, accountId: 'owner-1' };
+        const team = teamSummaryFixture({ id: 'source-team', name: 'Source Team' });
+        applyTeamProjection({ scope, address: { serverId, teamId: team.id }, team, observedAt: Date.now() });
+        applyTeamProjection({ scope, address: { serverId, teamId: 'unrelated-team' },
+            team: teamSummaryFixture({ id: 'unrelated-team', name: 'Another Team' }), observedAt: Date.now() });
+        let sourceReads = 0;
+        machineRoute = async request => {
+            if (request.path !== '/v1/projects/sources/source-project') return undefined;
+            sourceReads += 1;
+            const { ProjectSourcesReadOutputV1Schema } = await import('@happier-dev/protocol/projects/sources/projectSourceV1');
+            return Response.json(ProjectSourcesReadOutputV1Schema.parse({ ok: true, canManage: true, source: {
+                id: 'source-project', revision: 1, name: 'Project Source', createdByAccountId: 'owner-1',
+                audience: [{ principal: { kind: 'team', teamId: 'source-team' }, level: 'view' }],
+                repository: { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com' },
+                    repository: { nameWithOwner: 'acme/repo' }, protocol: 'https' },
+            } }));
+        };
+        const hook = await renderHook(() => useSaveWorkspaceFileAsArtifact({ scope,
+            sourceSessionId: sourceKind === 'session' ? session.id : null, filePath: 'docs/note.txt',
+            sourceProject: sourceKind === 'project' ? { id: 'workspace-project', serverId, machineId: 'source-machine', rootPath: '/repo',
+                label: null, createdAtMs: 1, lastOpenedAtMs: null, source: { sourceId: 'source-project', revision: 1 } } : null }));
+        expect(sourceReads).toBe(0);
+        await act(async () => { hook.getCurrent().open(); });
+        if (sourceKind === 'unassociated') {
+            expect(hook.getCurrent().team).toBeNull();
+            await act(async () => hook.getCurrent().setVisibility('team'));
+            expect(hook.getCurrent().visibility).toBe('private');
+            await hook.unmount();
+            return;
+        }
+        await vi.waitFor(() => expect(hook.getCurrent().team).toEqual({ teamId: 'source-team', name: 'Source Team' }));
+        expect(sourceReads).toBe(sourceKind === 'project' ? 1 : 0);
+        await act(async () => hook.getCurrent().setVisibility('team'));
+        expect(hook.getCurrent().visibility).toBe('team');
+        if (sourceKind === 'session') {
+            await act(async () => { storage.getState().applySessions([{ ...session,
+                access: { ...session.access!, primaryTeamId: 'unrelated-team' } }]); });
+            await vi.waitFor(() => expect(hook.getCurrent().team?.teamId).toBe('unrelated-team'));
+            expect(hook.getCurrent().visibility).toBe('private');
+        }
         await hook.unmount();
     });
 
