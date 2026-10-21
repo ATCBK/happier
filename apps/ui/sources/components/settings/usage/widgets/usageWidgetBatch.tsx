@@ -1,6 +1,7 @@
 import * as React from 'react';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { UsageBuiltinWidgetIdV1 } from '@happier-dev/protocol/widgets';
+import { readBuiltinWidgetDescriptorV1, proposeWidgetInputDefaultBindingsV1 } from '@happier-dev/protocol/widgets';
 import {
   getUsageQueryKey,
   normalizeUsageQuery,
@@ -191,6 +192,15 @@ function resolveQuery(
   widgetId: UsageQueryWidgetId,
 ): Registration | null {
   try {
+    const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: widgetId })!;
+    const defaults = proposeWidgetInputDefaultBindingsV1(descriptor);
+    // The platform has already bound scope. Only own presentation defaults belong here;
+    // never let a descriptor's empty scope defaults replace a page or group pin.
+    const ownDefaults = Object.fromEntries(descriptor.inputs!.fields.flatMap(field => {
+      const binding = field.contextMode === 'own' ? defaults[field.path] : undefined;
+      return binding?.kind === 'value' ? [[field.path, binding.value]] : [];
+    }));
+    const { style: _style, colourBy: _colourBy, day: _day, ...queryInput } = { ...ownDefaults, ...input };
     // This widget bundle consumes both the calendar and weekday/hour facts, irrespective of partial route read clauses.
     // Direct usage.query callers retain their explicit includeActivity/activityResolution semantics.
     const singleSession = typeof input.session === 'string' && input.session.length > 0
@@ -198,9 +208,14 @@ function resolveQuery(
     // The Work autopsy renders only for one selected Session. The aggregate
     // Session-value plot/rows consume allocation facts, not private transcripts.
     const autopsy = widgetId === 'usage_session_value' && singleSession;
-    const query = normalizeUsageQuery({ ...clauses, ...input, includeActivity: true, activityResolution: 'both', includeAccounting: true,
+    const rhythmMetric = queryInput.metric;
+    const query = normalizeUsageQuery({ ...clauses, ...queryInput, includeActivity: true, activityResolution: 'both', includeAccounting: true,
       includeTranscriptEvidence: false,
       ...USAGE_WIDGET_DEMAND[widgetId],
+      ...(widgetId === 'usage_rhythm' ? {
+        includeSessionEvidence: rhythmMetric !== 'tokens' && rhythmMetric !== 'cost',
+        includeTranscriptEvidence: rhythmMetric === 'steering',
+      } : {}),
       ...(autopsy ? { includeSessionEvidence: true, includeTranscriptEvidence: true } : {}),
     });
     return { query, key: getUsageQueryKey(query) };

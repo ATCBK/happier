@@ -88,6 +88,30 @@ function Body(
 }
 
 describe('Usage page batch', () => {
+  it('strips chart own inputs from queries and selects only the metric evidence it needs', async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-chart-inputs.test', accountId: 'account-a' }],
+      route: request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    let query: ReturnType<typeof useUsageWidgetModel>['query'] = null;
+    function Probe(props: { metric: 'tokens' | 'busy' }) {
+      query = useUsageWidgetModel({ ...scope, metric: props.metric, style: 'sky', colourBy: 'intensity', day: '2026-10-21' }, 'usage_rhythm').query;
+      return null;
+    }
+    const view = (metric: 'tokens' | 'busy') => <InjectedAuthProvider credentials={credentials}><UsageWidgetBatchProvider clauses={clauses}>
+      <Probe metric={metric} /></UsageWidgetBatchProvider></InjectedAuthProvider>;
+    const screen = await renderScreen(view('tokens'));
+    try {
+      await expect.poll(() => query?.metric).toBe('tokens');
+      expect(query).toMatchObject({ includeSessionEvidence: false, includeTranscriptEvidence: false });
+      for (const key of ['style', 'colourBy', 'day']) expect(query).not.toHaveProperty(key);
+      await screen.update(view('busy'));
+      await expect.poll(() => query?.metric).toBe('busy');
+      expect(query).toMatchObject({ includeSessionEvidence: true, includeTranscriptEvidence: false });
+    } finally { await screen.unmount(); }
+  });
   it('keeps a Project setup preview out of the mounted Account page batch', async () => {
     home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-preview-isolation.test', accountId: 'account-a' }],
       route: request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined });

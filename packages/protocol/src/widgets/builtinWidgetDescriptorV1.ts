@@ -35,6 +35,39 @@ export type BuiltinWidgetIdV1 = SessionBuiltinWidgetIdV1 | ProjectBuiltinWidgetI
 export const BuiltinWidgetIdV1Schema = z.enum([...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...PROJECT_BUILTIN_WIDGET_IDS_V1,
     ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1]);
 
+/** Copied public presentation declarations, not a second catalog or disclosure-policy owner. */
+function usagePublicPresentation(id: UsageBuiltinWidgetIdV1) {
+    const empty = z.strictObject({});
+    switch (id) {
+        case 'usage_rhythm': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id), inputs: z.strictObject({
+            style: z._default(z.enum(['heatmap', 'weekdayHour', 'sky', 'weekTide', 'daylight']), 'sky'),
+            colourBy: z.optional(z.literal('intensity')),
+        }) });
+        case 'usage_parallel': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.literal('peak') }) });
+        case 'usage_constellation': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.literal('agentMix') }) });
+        case 'usage_flow': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.literal('agentRiver') }) });
+        case 'usage_breakdowns': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.optional(z.enum(['breakdowns', 'crew'])) }) });
+        case 'usage_outcomes': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.optional(z.enum(['outcomes', 'shipped'])) }) });
+        case 'usage_recap': return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id),
+            inputs: z.strictObject({ style: z.optional(z.enum(['recap', 'personalRecords'])) }) });
+        case 'usage_daily': case 'usage_period_summary': case 'usage_footprint': case 'usage_source_coverage':
+        case 'usage_orbit': case 'usage_planet': case 'usage_run_length':
+            return z.strictObject({ kind: z.literal('usage'), widgetId: z.literal(id), inputs: empty });
+        default: return null;
+    }
+}
+/** PP2 embeds this closed arm in its copied layout; no private pins, metrics, Resources or Actions. */
+export const BuiltinUsagePublicPresentationV1Schema = lazyDefinition(() => z.union(USAGE_BUILTIN_WIDGET_IDS_V1.flatMap(id => {
+    const declaration = usagePublicPresentation(id);
+    return declaration ? [declaration] : [];
+})));
+export type BuiltinUsagePublicPresentationV1 = z.infer<typeof BuiltinUsagePublicPresentationV1Schema>;
+
 /**
  * Missing default Overview only: render without writing, then retain the whole layout on its first edit.
  * The preset makes no frame choice, so each widget follows its area's default until the person picks one.
@@ -100,6 +133,15 @@ const nativeMetadata = {
     machine_cleanup_suggestion: { title: 'Suggestion', titleKey: 'machines.widgets.machine_cleanup_suggestion', descriptionKey: 'machines.widgets.body.purpose.machine_cleanup_suggestion', icon: 'sparkle' },
     your_home: { title: 'Your Home', titleKey: 'homeWidgets.yourHomeTitle', descriptionKey: 'homeWidgets.yourHomeDescription', icon: 'house' },
 } as const;
+
+/** Gallery/default block titles and input schemas use the same declaration that admits the copy. */
+export function readBuiltinUsagePublicPresentationDescriptorV1(widgetId: string) {
+    const id = USAGE_BUILTIN_WIDGET_IDS_V1.find(id => id === widgetId);
+    const declaration = id ? usagePublicPresentation(id) : null;
+    return id && declaration ? { ...nativeMetadata[id], widgetId: id,
+        inputSchema: PluginJsonSchemaV2Schema.parse(zodSchemaToJsonSchemaObject(declaration.shape.inputs, { target: 'draft-7' })),
+    } : null;
+}
 
 const inputs: InputHints = { fields: [{ path: 'session', title: 'Session', prompt: 'Which session?', description: 'The session it shows; it reads that session where it runs.', widget: 'select', inputType: { hostType: 'session' }, required: true, optionsSourceId: 'sessions' }] };
 const sessionInputs: WidgetInputDescriptorV1 = {

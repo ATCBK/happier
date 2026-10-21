@@ -12,6 +12,9 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { captureUiUsageQueryAccountContext, decodeUsageQueryResource, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
+import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { createHomeDomainActionExecutorForScope } from '@/sync/api/home/homeDomainActions';
+import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 const clipboard = vi.hoisted(() => ({ image: vi.fn(async (_base64: string) => {}) }));
 // The operating-system clipboard is the boundary; captured Account, Action admission,
@@ -37,6 +40,86 @@ async function context(denied = false, route?: Parameters<typeof serveAccountHom
 const input = { query: normalizeUsageQuery({ period: { startMs: 100, endMs: 900 } }), style: 'holo', format: 'square', selectedFields: ['tokens', 'modelMix'] };
 
 describe('recap export through the real captured UI Account Action', () => {
+  it.each(['updated', 'outcome_unknown', 'unavailable'] as const)('separates public views before, during and after an issued %s publication mutation', async outcome => {
+    const heldReads = createDeferred<void>();
+    const heldWrite = createDeferred<void>();
+    const writeIssued = createDeferred<void>();
+    const caller = await context(false, async request => {
+      if (request.path === '/v1/account/public-profile/view') {
+        await heldReads.promise;
+        return Response.json({ kind: 'unavailable' });
+      }
+      if (request.method !== 'GET' && request.path.startsWith('/v1/account/public-profile')) {
+        writeIssued.resolve();
+        await heldWrite.promise;
+        if (outcome === 'outcome_unknown') throw new TypeError('Response lost after mutation dispatch');
+        return Response.json(outcome === 'updated' ? { kind: 'updated', record: null }
+          : { kind: 'unavailable', reason: 'feature_disabled' });
+      }
+      return undefined;
+    });
+    const executor = createDefaultActionExecutor();
+    const recap = () => executor.execute('usage.recap.compose', { source: { kind: 'public_profile' } }, caller);
+    const reads = () => home!.requests.filter(request => request.path === '/v1/account/public-profile/view');
+    let publicationWakes = 0;
+    const unsubscribe = subscribeHomeAccountChange(event => { if (event.serverId === caller.serverId) publicationWakes++; });
+    const before = recap();
+    const pending: Promise<unknown>[] = [before];
+    try {
+      await vi.waitFor(() => expect(reads()).toHaveLength(1));
+      // This is the real Home family mutation transport, below independent Action admission.
+      const mutation = createHomeDomainActionExecutorForScope({ serverId: caller.serverId, accountId: 'account-a' })({
+        actionId: 'account.public_profile.unpublish', input: {},
+      });
+      pending.push(mutation);
+      await writeIssued.promise;
+      expect(publicationWakes).toBe(0);
+      const during = recap();
+      pending.push(during);
+      await vi.waitFor(() => expect(reads()).toHaveLength(2));
+      heldWrite.resolve();
+      expect(await mutation).toMatchObject(outcome === 'updated' ? { kind: 'updated', record: null }
+        : outcome === 'unavailable' ? { kind: 'unavailable', reason: 'feature_disabled' }
+          : { ok: false, errorCode: 'outcome_unknown' });
+      expect(publicationWakes).toBe(outcome === 'updated' ? 1 : 0);
+      const after = recap();
+      pending.push(after);
+      await vi.waitFor(() => expect(reads()).toHaveLength(3));
+      heldReads.resolve();
+      for (const result of await Promise.all([before, during, after])) {
+        expect(result).toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'public_profile_unavailable' } });
+      }
+    } finally { unsubscribe(); heldReads.resolve(); heldWrite.resolve(); await Promise.allSettled(pending); }
+  });
+
+  it('shares public-view acquisition after independent recap admission while cancellation stays private', async () => {
+    const held = createDeferred<void>();
+    const caller = await context(false, async request => {
+      if (request.path !== '/v1/account/public-profile/view') return undefined;
+      await held.promise;
+      return Response.json({ kind: 'unavailable' });
+    });
+    const executor = createDefaultActionExecutor();
+    const input = { source: { kind: 'public_profile' } };
+    const abort = new AbortController();
+    const departed = executor.execute('usage.recap.compose', input, { ...caller, signal: abort.signal });
+    void departed.catch(() => {});
+    const live = executor.execute('usage.recap.compose', input, caller);
+    const reads = () => home!.requests.filter(request => request.path === '/v1/account/public-profile/view');
+    try {
+      await vi.waitFor(() => expect(reads().length).toBeGreaterThan(0));
+      await flushHookEffects({ cycles: 20 });
+      expect(reads()).toHaveLength(1);
+      abort.abort();
+      held.resolve();
+      await expect(departed).rejects.toMatchObject({ name: 'AbortError' });
+      expect(await live).toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'public_profile_unavailable' } });
+      expect(home!.requests.some(request => request.path === '/v2/usage/query')).toBe(false);
+      await executor.execute('usage.recap.compose', input, caller);
+      expect(reads()).toHaveLength(2);
+    } finally { held.resolve(); await Promise.allSettled([departed, live]); }
+  });
+
   it('reads only the current captured public view and refuses its response after Account retirement', async () => {
     let retireOnRead = false;
     const caller = await context(false, request => {

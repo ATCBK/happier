@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readBuiltinWidgetDescriptorV1, SESSION_COMPANION_BUILTIN_ITEM_IDS } from './builtinWidgetDescriptorV1.js';
+import { readBuiltinWidgetDescriptorV1, SESSION_COMPANION_BUILTIN_ITEM_IDS, BuiltinUsagePublicPresentationV1Schema } from './builtinWidgetDescriptorV1.js';
 import { isWidgetTargetHostableV1, readWidgetInputTargetV1, resolveConfiguredWidgetInputs, resolveConfiguredWidgetTargetInputV1, validateWidgetWorkspaceInputV1, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import { composeWidgetGroupContextV1 } from './widgetActionInputResolverV1.js';
 import { normalizeUsageQuery } from '../inputs/usageQuery.js';
@@ -9,6 +9,22 @@ import { createUsageWidgetPresets } from './usageWidgetPresetsV1.js';
 import { resolveEffectiveInputFields } from '../inputs/inputFieldRuntime.js';
 
 describe('native widget target contracts', () => {
+    it('declares copied public Usage identities and closed own inputs without private query authority', () => {
+        for (const widgetId of ['usage_daily', 'usage_period_summary', 'usage_breakdowns', 'usage_outcomes', 'usage_recap',
+            'usage_footprint', 'usage_source_coverage', 'usage_orbit', 'usage_planet', 'usage_run_length']) {
+            expect(BuiltinUsagePublicPresentationV1Schema.safeParse({ kind: 'usage', widgetId, inputs: {} }).success).toBe(true);
+        }
+        expect(BuiltinUsagePublicPresentationV1Schema.safeParse({ kind: 'usage', widgetId: 'usage_rhythm', inputs: { style: 'sky', colourBy: 'intensity' } }).success).toBe(true);
+        expect(BuiltinUsagePublicPresentationV1Schema.safeParse({ kind: 'usage', widgetId: 'usage_parallel', inputs: { style: 'peak' } }).success).toBe(true);
+        expect(BuiltinUsagePublicPresentationV1Schema.safeParse({ kind: 'usage', widgetId: 'usage_constellation', inputs: { style: 'agentMix' } }).success).toBe(true);
+        for (const value of [
+            { widgetId: 'usage_score', inputs: {} }, { widgetId: 'usage_human_loop', inputs: {} },
+            { widgetId: 'usage_parallel', inputs: { style: 'lanes' } },
+            { widgetId: 'usage_rhythm', inputs: { style: 'sky', colourBy: 'leadingAgent' } },
+            ...['metric', 'period', 'agents', 'machines', 'projects', 'sources', 'session', 'costBasis', 'day', 'resource', 'action'].map(key =>
+                ({ widgetId: 'usage_rhythm', inputs: { [key]: key === 'metric' ? 'cost' : 'private' } })),
+        ]) expect(BuiltinUsagePublicPresentationV1Schema.safeParse({ kind: 'usage', ...value }).success).toBe(false);
+    });
     it('keeps evidence metrics out of retained accounting-only bodies, including direct binder reads', () => {
         const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_period_summary' })!;
         const instance: WidgetInstanceV1 = { v: 1, id: 'summary', definition: { kind: 'builtin', id: 'usage_period_summary' },
