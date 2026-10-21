@@ -62,6 +62,9 @@ const RUNTIME_ACTION_APPROVAL_POLICIES: NonNullable<RuntimeActionSpecFamily['app
 const RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS: NonNullable<RuntimeActionSpecFamily['approvalTechnicalInputPaths']> = Object.freeze(
   Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalTechnicalInputPaths ?? {})),
 );
+const RUNTIME_ACTION_APPROVAL_SUMMARIES: NonNullable<RuntimeActionSpecFamily['approvalSummaries']> = Object.freeze(
+  Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalSummaries ?? {})),
+);
 
 /**
  * The sole aggregate runtime-schema owner. Family maps retain literal schema
@@ -166,8 +169,9 @@ function createRuntimeActionSpecFor<
       operation: { version: 1 as const, visibility: 'activity' as const, progress: 'reported' as const,
         presentation: { onStart: 'current' as const } },
     } : {}),
-    ...(RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] ? { approvalPresentation: {
-      summary: () => null, technicalInputPaths: RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] } } : {}),
+    ...(RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] || RUNTIME_ACTION_APPROVAL_SUMMARIES[actionId] ? { approvalPresentation: {
+      summary: RUNTIME_ACTION_APPROVAL_SUMMARIES[actionId] ?? (() => null),
+      ...(RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] ? { technicalInputPaths: RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] } : {}) } } : {}),
     ...(actionId === 'computer.target.select' ? { approvalNarrowing: computerTargetSelectionNarrowing } : {}),
     ...(serviceCli ? { cli: serviceCli } : {}),
     ...(domainRpc ? { executionPlacement: 'machine' as const, bindings: { rpcMethod: domainRpc.rpcMethod,

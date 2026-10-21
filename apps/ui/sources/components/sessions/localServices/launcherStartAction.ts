@@ -158,7 +158,7 @@ export function useLocalServiceLauncherStartAction(
                 || (target.source === 'package_script' && !(target.workspace && target.declaration))) {
                 return undefined;
             }
-            const selected = resolveDestination?.(target, context.signal);
+            const selected = choice === undefined ? resolveDestination?.(target, context.signal) : undefined;
             if (selected) {
                 const resolved = await selected;
                 if (!resolved || !isLocalServiceActionAdmissionCurrent(context)) return undefined;

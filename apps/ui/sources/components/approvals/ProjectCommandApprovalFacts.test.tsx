@@ -16,6 +16,7 @@ installSessionSubagentCommonModuleMocks({
 });
 const {
   ProjectCommandApprovalFacts,
+  describeProjectCommandApprovalDecisions,
   describeProjectCommandApprovalTitle,
   readProjectCommandApproval,
   readProjectServiceEffectApproval,
@@ -49,6 +50,10 @@ describe('Project command approval facts', () => {
       preview: { serviceStartReview: review } });
     expect(presentation).toMatchObject({ kind: 'service', destination: { kind: 'machine', machineId: 'worker' }, workspace: target });
     if (!presentation) throw new Error('Missing qualified Service review');
+    // A requested Start reads as starting that Service where it runs, and decides as the Services page does.
+    expect(presentation).toMatchObject({ name: 'web' });
+    expect(describeProjectCommandApprovalTitle(presentation, 'devbox', 'worker box')).toBe('Start web on worker box?');
+    expect(describeProjectCommandApprovalDecisions(presentation)).toEqual({ approve: 'Start', reject: 'Not now' });
     const screen = await renderScreen(<ProjectCommandApprovalFacts presentation={presentation} testID="facts" />);
     expect(screen.getTextContent()).toContain('serve web');
     expect(screen.getTextContent()).toContain('install dependencies');

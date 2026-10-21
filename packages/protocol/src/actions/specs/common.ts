@@ -12,6 +12,8 @@ export type RuntimeActionSpecFamily = Readonly<{
   approvalPolicies?: Readonly<Partial<Record<RuntimeActionIdV1, PreNormalizedActionSpec['approvalPolicy']>>>;
   /** Input paths the approval page reads under Technical details (see ActionSpec `approvalPresentation`). */
   approvalTechnicalInputPaths?: Readonly<Partial<Record<RuntimeActionIdV1, readonly string[]>>>;
+  /** Domain-written request summaries, for Actions whose spec description is agent-facing (see ActionSpec `approvalPresentation`). */
+  approvalSummaries?: Readonly<Partial<Record<RuntimeActionIdV1, (input: unknown) => string | null>>>;
   titles: RuntimeActionSpecTextMap;
   descriptions?: RuntimeActionSpecTextMap;
   /** Canonical per-id schema rows for public/runtime projections. */

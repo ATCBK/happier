@@ -315,7 +315,7 @@ export const zhHant = {
     localServices_inventory_list: "列出本機服務",
     localServices_inventory_refresh: "重新整理本機服務",
     localServices_launcher_snapshot: "取得本機服務啟動器快照",
-    localServices_launcher_start: "啟動本機服務啟動器目標",
+    localServices_launcher_start: "啟動本機服務",
     localServices_launcher_openPreview: "開啟本機服務啟動器預覽",
     localServices_launcher_registerPreview: "註冊本機服務啟動器預覽",
     localServices_launcher_history_clear: "清除本機服務啟動器記錄",

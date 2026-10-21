@@ -315,7 +315,7 @@ export const it = {
     localServices_inventory_list: "Elenca i servizi locali",
     localServices_inventory_refresh: "Aggiorna i servizi locali",
     localServices_launcher_snapshot: "Acquisisci un'istantanea dell'avvio dei servizi locali",
-    localServices_launcher_start: "Avvia la destinazione del lanciatore di servizi locali",
+    localServices_launcher_start: "Avvia un servizio locale",
     localServices_launcher_openPreview: "Apri l'anteprima del lanciatore di servizi locali",
     localServices_launcher_registerPreview: "Registra l'anteprima del lanciatore di servizi locali",
     localServices_launcher_history_clear: "Cancella la cronologia del lanciatore di servizi locali",

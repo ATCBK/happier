@@ -58,6 +58,8 @@ export type ProjectCommandApprovalPresentation =
       kind: 'service';
       serverId: string;
       sourceMachineId: string;
+      /** The declared Service's name; the question and the decisions are about it. */
+      name: string | null;
       command: string | null;
       destination: Destination;
       workspace?: WorkspaceAddressV1;
@@ -81,8 +83,10 @@ export function readProjectCommandApproval(
     if (!review.success || !sameStrictJsonValue(review.data.request, approval.actionArgs)) return null;
     const source = review.data.request.workspace!;
     const target = review.data.target;
+    const selection = review.data.request.declaration!.selection;
     return { ...readProjectServiceEffectApproval({ serverId: review.data.target.serverId,
-      sourceMachineId: source.machineId, reviewedEffect: review.data.reviewedEffect }),
+      sourceMachineId: source.machineId, reviewedEffect: review.data.reviewedEffect,
+      name: selection.kind === 'manifest' ? selection.name : selection.source.target }),
       kind: 'service', serverId: target.serverId, sourceMachineId: source.machineId,
       workspace: target, destination: sameStrictJsonValue(source, target) ? { kind: 'primary' }
         : { kind: 'machine', machineId: target.machineId },
@@ -150,6 +154,7 @@ export function readProjectServiceEffectApproval(input: Readonly<{
   serverId: string;
   sourceMachineId: string;
   reviewedEffect: unknown;
+  name?: string;
 }>): Extract<ProjectCommandApprovalPresentation, { kind: 'service' }> {
   const effect = isRecord(input.reviewedEffect) ? input.reviewedEffect : {};
   const serviceEffect = isRecord(effect.serviceEffect) ? effect.serviceEffect : null;
@@ -160,6 +165,7 @@ export function readProjectServiceEffectApproval(input: Readonly<{
     kind: 'service',
     serverId: input.serverId,
     sourceMachineId: input.sourceMachineId,
+    name: input.name ?? null,
     command,
     destination: target && target !== input.sourceMachineId
       ? { kind: 'machine', machineId: target }
@@ -178,34 +184,49 @@ function readDestination(choice: ProjectExecutionChoiceV1 | undefined): Destinat
     : { kind: 'pool', poolId: choice.destination.poolId };
 }
 
-/** The card's question: one-off commands and named Scripts ask differently; a worker is named as such. */
+/**
+ * The card's question: one-off commands, named Scripts and declared Services ask differently; a worker
+ * is named as such. A Service starts where it will run, so its question names that machine.
+ */
 export function describeProjectCommandApprovalTitle(
   presentation: ProjectCommandApprovalPresentation,
   sourceMachineName: string,
+  runsOnMachineName: string = sourceMachineName,
 ): string {
   if (presentation.kind === 'setup')
     return t('projects.authoring.sessionAsk', { machine: sourceMachineName });
   if (presentation.kind === 'script')
     return t('projects.scripts.adhocRunScriptTitle', { name: presentation.name });
+  if (presentation.kind === 'service' && presentation.name)
+    return presentation.destination.kind === 'pool'
+      ? t('localServices.effectReview.startTitle', { service: presentation.name })
+      : t('localServices.effectReview.startTitleOn', { service: presentation.name, machine: runsOnMachineName });
   return presentation.destination.kind === 'primary'
     ? t('projects.scripts.adhocTitle')
     : t('projects.scripts.adhocTitleWorker');
 }
 
 /** The question and the decision labels of a Project approval, named by the machine, never its id. */
+export function useProjectCommandApprovalTitle(presentation: ProjectCommandApprovalPresentation): string;
+export function useProjectCommandApprovalTitle(presentation: ProjectCommandApprovalPresentation | null): string | null;
 export function useProjectCommandApprovalTitle(
   presentation: ProjectCommandApprovalPresentation | null,
 ): string | null {
   const source = useServerScopedMachine(presentation?.serverId ?? null, presentation?.sourceMachineId ?? '');
-  return presentation
-    ? describeProjectCommandApprovalTitle(presentation, source ? getMachineSentenceName(source) : presentation.sourceMachineId)
-    : null;
+  const runsOnId = presentation?.destination.kind === 'machine' ? presentation.destination.machineId : '';
+  const runsOn = useServerScopedMachine(presentation?.serverId ?? null, runsOnId);
+  if (!presentation) return null;
+  const sourceName = source ? getMachineSentenceName(source) : presentation.sourceMachineId;
+  return describeProjectCommandApprovalTitle(presentation, sourceName,
+    runsOnId ? (runsOn ? getMachineSentenceName(runsOn) : runsOnId) : sourceName);
 }
 
-/** The two decisions a Project approval asks, in the words of the Scripts page (setup) or the command card. */
+/** The two decisions a Project approval asks, in the words of the Scripts page (setup), the Services page (Start) or the command card. */
 export function describeProjectCommandApprovalDecisions(
   presentation: ProjectCommandApprovalPresentation,
 ): Readonly<{ approve: string; reject: string }> {
+  if (presentation.kind === 'service')
+    return { approve: t('localServices.effectReview.start'), reject: t('localServices.effectReview.notNow') };
   return presentation.kind === 'setup'
     ? { approve: t('projects.scripts.setup.run'), reject: t('projects.scripts.setup.notNow') }
     : { approve: t('projects.scripts.adhocRunOnce'), reject: t('projects.scripts.adhocDeny') };

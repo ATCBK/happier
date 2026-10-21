@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorkspaceExecutionSettingsV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
+import type { ProjectExecutionChoiceV1, WorkspaceExecutionSettingsV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import { buildLocalServiceRows } from '@/sync/domains/local/services/serviceRow';
 
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
@@ -330,14 +330,14 @@ async function setup(options: Readonly<{
     return <>{row ? <ServiceRowView row={row} testID="service-row" presentation="detail" placement={placement}
       onStartLauncherTarget={async () => start!()} machineName="Source workstation" /> : null}</>;
   }
-  let start: (() => Promise<unknown>) | undefined;
+  let start: ((choice?: ProjectExecutionChoiceV1) => Promise<unknown>) | undefined;
   function StartProbe() {
     const launch = useLocalServiceLauncherStartAction({ runtimeActionExecute: options.serviceRuntime, serverId });
     const launchTarget: LocalServiceLaunchTarget = { id: 'declared-server', machineId: source.machineId,
       source: 'managed_service', title: 'server', actions: ['start'], state: 'available', confidence: 'high',
       workspace: { serverId, workspaceId: source.id, machineId: source.machineId, rootPath: source.rootPath },
       declaration: { workspaceRefId: source.id, selection: { kind: 'manifest', name: 'server' } } };
-    start = async () => launch?.(launchTarget);
+    start = async choice => launch?.(launchTarget, choice);
     return null;
   }
   function Host() {
@@ -415,7 +415,7 @@ async function setup(options: Readonly<{
     setRunning: (value: boolean) => { running = value; refreshRow?.(); },
     setRowMachine: (machineId: string) => { rowMachineId = machineId; refreshRow?.(); },
     setActualFails: (failed: boolean) => { actualFails = failed; },
-    start: () => start!(),
+    start: (choice?: ProjectExecutionChoiceV1) => start!(choice),
     setDeclarationBasis: (basis: string) => setDeclarationBasis!(basis), setControlVisible: (visible: boolean) => setControlVisible!(visible),
     failPlacementReads: () => { placementReadsFail = true; },
     setLifecycle: (key: string) => setLifecycle(key), setDetail: (open: boolean) => setDetail!(open),
@@ -424,6 +424,37 @@ async function setup(options: Readonly<{
 }
 
 describe('Service Runs on through the placement and relocation Actions', () => {
+  it.each(['worker', 'pool', 'primary', 'override', 'unavailable'] as const)('addresses normal Start from current saved placement (%s)', async destination => {
+    const starts: Readonly<{ machineId: string; params: unknown }>[] = [];
+    const { createDefaultRuntimeActionExecutor } = await import('@/sync/ops/actions/defaultRuntimeActionExecutor');
+    const execute = createFrontDoorRuntimeActionExecutor(createActionExecutor(createActionExecutorBoundaryFixture({
+      isActionApprovalRequired: () => false,
+      runtimeActionExecute: createDefaultRuntimeActionExecutor(),
+    })));
+    const choice = destination === 'primary' ? { kind: 'primary' as const }
+      : destination === 'pool' ? { kind: 'workers' as const, destination: { kind: 'pool' as const,
+        poolId: '00000000-0000-4000-8000-000000000032', selection: 'automatic' as const } }
+      : { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: 'hz-build-1' } };
+    const { screen, start, failPlacementReads, writes } = await setup({ running: false,
+      sharedObservation: true, serviceRuntime: execute, saved: { runsOn: choice, unavailable: 'fail' },
+      onStart: request => starts.push(request) });
+    if (destination === 'unavailable') failPlacementReads();
+    await act(async () => {
+      if (destination === 'unavailable') await expect(start()).rejects.toThrow();
+      else await start(destination === 'override' ? { kind: 'primary' } : undefined);
+    });
+    if (destination === 'unavailable') expect(starts).toEqual([]);
+    else expect(starts).toEqual([expect.objectContaining({
+      machineId: destination === 'primary' || destination === 'override' ? 'devbox'
+        : destination === 'pool' ? 'pool-worker' : 'hz-build-1',
+      params: expect.objectContaining({ choice: destination === 'pool'
+        ? { kind: 'workers', destination: { kind: 'machine', machineId: 'pool-worker' } }
+        : destination === 'override' ? { kind: 'primary' } : choice,
+        workspace: expect.objectContaining({ machineId: 'devbox', workspaceId: 'checkout' }) }),
+    })]);
+    expect(writes).toEqual([]);
+    await screen.unmount();
+  });
   it.each(['outbound', 'return'] as const)('settles a collapsed %s Move row from native facts and stays stopped after Stop', async direction => {
     const h = await setup({ running: true, sharedObservation: true, withRow: true, collapsedRow: true, waitEnabled: false });
     const machineId = direction === 'outbound' ? 'hz-build-1' : 'devbox';

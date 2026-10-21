@@ -315,7 +315,7 @@ export const ja = {
     localServices_inventory_list: "ローカルサービスの一覧を表示",
     localServices_inventory_refresh: "ローカルサービスを再読み込み",
     localServices_launcher_snapshot: "ローカルサービスランチャーのスナップショットを取得",
-    localServices_launcher_start: "ローカルサービスランチャーの対象を起動",
+    localServices_launcher_start: "ローカルサービスを起動",
     localServices_launcher_openPreview: "ローカルサービスランチャーのプレビューを開く",
     localServices_launcher_registerPreview: "ローカルサービスランチャーのプレビューを登録",
     localServices_launcher_history_clear: "ローカルサービスランチャーの履歴を消去",

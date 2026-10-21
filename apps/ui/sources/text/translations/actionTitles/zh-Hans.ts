@@ -315,7 +315,7 @@ export const zhHans = {
     localServices_inventory_list: "列出本地服务",
     localServices_inventory_refresh: "刷新本地服务",
     localServices_launcher_snapshot: "获取本地服务启动器快照",
-    localServices_launcher_start: "启动本地服务启动器目标",
+    localServices_launcher_start: "启动本地服务",
     localServices_launcher_openPreview: "打开本地服务启动器预览",
     localServices_launcher_registerPreview: "注册本地服务启动器预览",
     localServices_launcher_history_clear: "清除本地服务启动器历史记录",

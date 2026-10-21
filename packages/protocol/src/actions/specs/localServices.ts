@@ -204,7 +204,7 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<Runti
   'localServices.inventory.list': 'List local services',
   'localServices.inventory.refresh': 'Refresh local services',
   'localServices.launcher.snapshot': 'Get local service launcher snapshot',
-  'localServices.launcher.start': 'Start local service launcher target',
+  'localServices.launcher.start': 'Start a local service',
   'localServices.launcher.openPreview': 'Open local service launcher preview',
   'localServices.launcher.registerPreview': 'Register local service launcher preview',
   'localServices.launcher.history.clear': 'Clear local service launcher history',
@@ -218,8 +218,8 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_TITLES: Readonly<Partial<Record<Runti
   'localServices.actions.copyUrl': 'Copy local service URL',
   'localServices.actions.openPreview': 'Open local service preview',
   'localServices.actions.forget': 'Forget local service',
-  'localServices.actions.stopManaged': 'Stop managed local service',
-  'localServices.actions.restartManaged': 'Restart managed local service',
+  'localServices.actions.stopManaged': 'Stop a local service',
+  'localServices.actions.restartManaged': 'Restart a local service',
   'localServices.actions.terminateDetected': 'Terminate detected local service',
 });
 
@@ -301,8 +301,25 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'localServices.actions.terminateDetected': LocalServiceActionResultV1Schema,
 } as const satisfies Readonly<Record<LocalServicesRuntimeActionId, z.ZodMiniType>>);
 
+/**
+ * The Start request in the words of the Services page: which Service, from which project. The spec
+ * description stays agent-facing; a declared Start without a declaration keeps it.
+ */
+export function describeLocalServiceStartApprovalSummary(input: unknown): string | null {
+  const request = DaemonLocalServiceLauncherStartRequestV1Schema.safeParse(input);
+  const selection = request.success ? request.data.declaration?.selection : undefined;
+  if (!request.success || !selection) return null;
+  const service = selection.kind === 'manifest' ? selection.name : selection.source.target;
+  const project = request.data.workspace?.rootPath.split(/[\\/]+/).filter(Boolean).pop();
+  return project ? `Start ${service} from ${project}.` : `Start ${service}.`;
+}
+
 export const LOCAL_SERVICES_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
+  approvalSummaries: { 'localServices.launcher.start': describeLocalServiceStartApprovalSummary },
   approvalPolicies: {
+    // A person's own Start is reversible and the Services page owns its designed setup/copy review;
+    // Agent, CLI and automation requests keep the approval floor.
+    'localServices.launcher.start': { uiConfirmation: 'direct' },
     'localServices.publicPreview.status': { agentDefault: 'egress' },
     'localServices.publicPreview.copyUrl': { agentDefault: 'egress' },
   },

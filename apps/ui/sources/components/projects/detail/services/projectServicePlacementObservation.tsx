@@ -19,6 +19,9 @@ import type { ActionApprovalRegistration } from '@/components/approvals/actionAp
 import type { ServiceRelocationOutcome } from './serviceRelocationAction';
 import { publishActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationRuntime';
 import { invalidateLocalServiceLauncherStores } from '@/sync/domains/local/services/launch/sharedStore';
+import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
+import { resolveMachinePool } from '@/sync/ops/machinePools';
+import { randomUUID } from '@/platform/randomUUID';
 
 export type ProjectServicePlacementOperationAttachment = Readonly<{
   operationId: string;
@@ -191,9 +194,34 @@ function ScopedObservationProvider(props: Readonly<{
       || !areServerProfileIdentifiersEquivalent(target.workspace.serverId, props.source.serverId)) return undefined;
     const name = declaration.selection.name;
     const selected = selectedRef.current.get(name);
-    return selected ? selected.purpose === 'start' ? managedRef.current.get(name)?.acquire(signal) ?? Promise.resolve(null)
-      : Promise.resolve(null) : undefined;
-  }, [props.source.machineId, props.source.refId, props.source.serverId]);
+    if (selected) return selected.purpose === 'start' ? managedRef.current.get(name)?.acquire(signal) ?? Promise.resolve(null)
+      : Promise.resolve(null);
+    // The declaration belongs to SOURCE; its saved next-start placement owns the
+    // receiving address. Resolve it before constructing the native Start request.
+    return (async () => {
+      const binding = props.binding;
+      const assertCurrent = () => {
+        if (signal?.aborted || !binding?.isCurrent()) throw new Error('project_service_placement_unavailable');
+      };
+      assertCurrent();
+      const workspace = { serverId: props.source.serverId, refId: props.source.refId };
+      const placement = await executeProjectWorkerActionV1('projects.service.placement.get', { workspace, serviceName: name },
+        { expectedAccountId: binding!.accountId, signal });
+      assertCurrent();
+      if (placement.status !== 'ready') throw new Error('project_service_placement_unavailable');
+      const choice = placement.placement.runsOn;
+      if (choice.kind !== 'workers' || choice.destination.kind !== 'pool') return choice;
+      if (choice.destination.selection === 'ask') throw new Error('choice_required');
+      const resolved = await resolveMachinePool(props.source.serverId, { poolId: choice.destination.poolId,
+        purpose: 'service-start', workspace, requestKey: randomUUID() }, { expectedAccountId: binding!.accountId });
+      assertCurrent();
+      if (resolved.kind !== 'resolved') {
+        if (placement.placement.unavailable === 'primary') return { kind: 'primary' as const };
+        throw new Error(resolved.reason);
+      }
+      return { kind: 'workers' as const, destination: { kind: 'machine' as const, machineId: resolved.machineId } };
+    })();
+  }, [props.binding, props.source.machineId, props.source.refId, props.source.serverId]);
   React.useEffect(() => {
     const retirement = props.binding?.onRetire(() => setEntries(new Map()));
     return () => retirement?.dispose();

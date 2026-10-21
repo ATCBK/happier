@@ -399,6 +399,8 @@ describe('isApprovalRequiredByActionsSettings', () => {
     'home.identity.connections.test.consume',
     'home.mailDelivery.test',
     'home.search.rebuild',
+    // A person's own Service Start: reversible, and the Services page owns the designed setup/copy review.
+    'localServices.launcher.start',
     'identity.providers.create',
     'identity.providers.update',
     'identity.providers.validate',

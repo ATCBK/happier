@@ -3,6 +3,7 @@ import * as React from 'react';
 import {
   ProjectCommandApprovalFacts,
   readProjectServiceEffectApproval,
+  useProjectCommandApprovalTitle,
 } from '@/components/approvals/ProjectCommandApprovalFacts';
 import { ApprovalDecisionFooter } from '@/components/tools/shell/approvals/ApprovalDecisionFooter';
 import { ApprovalPromptChrome } from '@/components/tools/shell/approvals/ApprovalPromptChrome';
@@ -35,21 +36,25 @@ export const LocalServiceEffectReviewCard = React.memo(
           serverId: props.serverId,
           sourceMachineId: review.target.machineId ?? props.machineId ?? '',
           reviewedEffect: review.reviewedEffect,
+          name: service,
         }),
       [
         props.machineId,
         props.serverId,
         review.reviewedEffect,
         review.target.machineId,
+        service,
       ],
     );
+    // The same question the Inbox asks of a requested Start: which Service, and where it will run.
+    const startTitle = useProjectCommandApprovalTitle(presentation);
     return (
       <ApprovalPromptChrome
         testID={props.testID}
         title={
           restart
             ? t('localServices.effectReview.restartTitle', { service })
-            : t('localServices.effectReview.startTitle', { service })
+            : startTitle
         }
         subtitle={t('localServices.effectReview.subtitle')}
         footer={

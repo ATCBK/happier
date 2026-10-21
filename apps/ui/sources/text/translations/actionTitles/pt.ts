@@ -315,7 +315,7 @@ export const pt = {
     localServices_inventory_list: "Listar serviços locais",
     localServices_inventory_refresh: "Atualizar serviços locais",
     localServices_launcher_snapshot: "Obter captura do inicializador de serviços locais",
-    localServices_launcher_start: "Iniciar destino do inicializador de serviços locais",
+    localServices_launcher_start: "Iniciar um serviço local",
     localServices_launcher_openPreview: "Abrir prévia do inicializador de serviços locais",
     localServices_launcher_registerPreview: "Registrar prévia do inicializador de serviços locais",
     localServices_launcher_history_clear: "Limpar histórico do inicializador de serviços locais",

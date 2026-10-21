@@ -315,7 +315,7 @@ export const ru = {
     localServices_inventory_list: "Показать локальные сервисы",
     localServices_inventory_refresh: "Обновить локальные сервисы",
     localServices_launcher_snapshot: "Получить снимок средства запуска локальных сервисов",
-    localServices_launcher_start: "Запустить выбранный локальный сервис",
+    localServices_launcher_start: "Запустить локальный сервис",
     localServices_launcher_openPreview: "Открыть предпросмотр запуска локального сервиса",
     localServices_launcher_registerPreview: "Зарегистрировать предпросмотр запуска локального сервиса",
     localServices_launcher_history_clear: "Очистить историю запуска локальных сервисов",

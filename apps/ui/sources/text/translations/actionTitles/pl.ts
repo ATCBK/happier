@@ -315,7 +315,7 @@ export const pl = {
     localServices_inventory_list: "Wyświetl usługi lokalne",
     localServices_inventory_refresh: "Odśwież usługi lokalne",
     localServices_launcher_snapshot: "Pobierz migawkę uruchamiania usług lokalnych",
-    localServices_launcher_start: "Uruchom wybrany cel usługi lokalnej",
+    localServices_launcher_start: "Uruchom usługę lokalną",
     localServices_launcher_openPreview: "Otwórz podgląd uruchamiania usługi lokalnej",
     localServices_launcher_registerPreview: "Zarejestruj podgląd uruchamiania usługi lokalnej",
     localServices_launcher_history_clear: "Wyczyść historię uruchamiania usług lokalnych",

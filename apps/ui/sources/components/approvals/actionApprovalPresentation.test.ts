@@ -12,6 +12,15 @@ import { readActionApprovalReview } from './actionApprovalReview';
 afterEach(() => setPreferredLanguageFromSettings('en'));
 
 describe('the shared Action approval presentation owner', () => {
+    it('summarizes a declared Service Start by its Service and project, never by the agent-facing Action description', () => {
+        const actionArgs = getActionSpec('localServices.launcher.start').inputSchema.parse({
+            machineId: 'worker', targetId: 'project-service:a',
+            workspace: { serverId: 'home', machineId: 'devbox', workspaceId: 'checkout', rootPath: '/home/dev/qaS-studio' },
+            declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'httpPort' } },
+        });
+        const summary = presentActionApproval({ actionId: 'localServices.launcher.start', actionArgs }).summary;
+        expect(summary).toBe('Start httpPort from qaS-studio.');
+    });
     it('exposes literal reviewed file operands separately from their formatted approval description', () => {
         const actionArgs = { rootPath: '/repo', path: '/repo/ leading file ', content: 'aGVsbG8=' };
         const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,

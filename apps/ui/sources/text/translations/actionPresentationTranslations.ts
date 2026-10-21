@@ -323,7 +323,7 @@ const en = {
         localServices_inventory_list: "List local services",
         localServices_inventory_refresh: "Refresh local services",
         localServices_launcher_snapshot: "Get local service launcher snapshot",
-        localServices_launcher_start: "Start local service launcher target",
+        localServices_launcher_start: "Start a local service",
         localServices_launcher_openPreview: "Open local service launcher preview",
         localServices_launcher_registerPreview: "Register local service launcher preview",
         localServices_launcher_history_clear: "Clear local service launcher history",

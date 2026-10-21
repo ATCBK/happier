@@ -315,7 +315,7 @@ export const de = {
     localServices_inventory_list: "Lokale Dienste auflisten",
     localServices_inventory_refresh: "Lokale Dienste aktualisieren",
     localServices_launcher_snapshot: "Momentaufnahme des lokalen Dienststarters abrufen",
-    localServices_launcher_start: "Ziel des lokalen Dienststarters starten",
+    localServices_launcher_start: "Lokalen Dienst starten",
     localServices_launcher_openPreview: "Vorschau des lokalen Dienststarters öffnen",
     localServices_launcher_registerPreview: "Vorschau des lokalen Dienststarters registrieren",
     localServices_launcher_history_clear: "Verlauf des lokalen Dienststarters leeren",

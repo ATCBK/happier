@@ -315,7 +315,7 @@ export const ca = {
     localServices_inventory_list: "Llista els serveis locals",
     localServices_inventory_refresh: "Actualitza els serveis locals",
     localServices_launcher_snapshot: "Consulta l'estat del llançador de serveis locals",
-    localServices_launcher_start: "Inicia la destinació del llançador de serveis locals",
+    localServices_launcher_start: "Inicia un servei local",
     localServices_launcher_openPreview: "Obre la previsualització del llançador de serveis locals",
     localServices_launcher_registerPreview: "Registra una previsualització al llançador de serveis locals",
     localServices_launcher_history_clear: "Esborra l'historial del llançador de serveis locals",
