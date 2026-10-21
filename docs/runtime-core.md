@@ -2234,8 +2234,13 @@ stream receives its native committed fact, the writer finalizes that channel's e
 row under its generated localId, including an already durable checkpoint, with the
 authoritative text and `happierStreamSegmentV1.sourceMessageId`. Assistant and reasoning
 segments remain independent; later outputs in the turn start new segments. Cancellation
-retains the interrupted checkpoint. Named deltas retain their native localId path, and
-Session-scoped output does not acquire this foreground handoff.
+retains the interrupted checkpoint. Named streams use the same finalizer under their
+native localId, including Session-scoped and sidechain output. A final snapshot replaces
+the text even when empty, publishes terminal segment metadata, drains live publication
+before durable admission, and retains unresolved custody for retry. Durable admission
+preserves the caller's cancellation and deadline. A matching named writer takes precedence over the unnamed foreground
+handoff; Session-scoped output does not acquire that unnamed handoff. Loaded native retry
+recovery still requires a fresh runner after the CLI host reload.
 The host's metadata reader recognizes the recorded source identity for both follow/replay
 and cold reconciliation. Follow opens metadata through the existing Session-mode decoder
 and retains both row and source identities in its paged baseline; plugins receive the

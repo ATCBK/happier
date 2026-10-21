@@ -640,10 +640,11 @@ transport failure does not replay inference or substitute another source.
 The native Agent can independently retry a broken response stream within its
 existing turn. Codex reports that decision with `willRetry: true`; its codec
 supersedes unfinished assistant text without resubmitting the host input or
-removing earlier completed messages. Transcript retirement must reconcile both
-the durable checkpoint and the live stream under the original item identity.
-Development outage QA still exposes a retained partial alongside the retried
-answer; physical Gateway restart alone does not verify transcript recovery.
+removing earlier completed messages. In 0.3 development source, the host's
+stream finalizer reconciles both the durable checkpoint and terminal live
+snapshot under the original item identity, including an empty correction.
+Loaded outage replay after a CLI host reload remains required; physical
+Gateway restart alone does not verify transcript recovery.
 An access refusal withdraws that consumer projection while the Session retains
 its Provider invocation; later access must freshly authorize before rejoining.
 An unavailable exact executable source remains unavailable: retained declaration
