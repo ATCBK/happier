@@ -648,6 +648,8 @@ export function useFileBlameRegion(
       onRequestClose={close}
       placement="bottom"
       phonePresentation="sheet"
+      // The card leads with its own title; the sheet keeps only its grabber (lab bl-Bp).
+      sheetHeader="none"
       accessibilityLabel={open.label}
       portal={{
         web: true,
