@@ -28,9 +28,9 @@ import {
 import { loadDaemonMergedProjectionCacheEntry, readDaemonMergedProjectionRetryDelayMs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import {
     useEndpointStatus,
-    useMachineCliDetectionTarget,
     useSetting,
 } from '@/sync/domains/state/storage';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import {
     captureActiveServerAccountScopeLifetime,
     getActiveServerAccountScope,
@@ -236,7 +236,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
         targetKey && machineId ? { machineId, serverId } : null
     ), [machineId, serverId, targetKey]);
     const endpointStatus = useEndpointStatus();
-    const machineCliDetectionTarget = useMachineCliDetectionTarget(machineId, serverId);
+    const machinePresence = useMachinePresenceSummary(serverId, machineId?.trim() ?? null);
     const appliedServerId = React.useSyncExternalStore(
         subscribeAppliedActiveServer,
         getAppliedActiveServerId,
@@ -253,7 +253,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
     const online = Boolean(
         targetKey
         && (!usesFocusedEndpoint || endpointStatus === 'online')
-        && machineCliDetectionTarget.isOnline,
+        && machinePresence.reachability === 'reachable',
     );
     const subscribeProjectionInvalidation = React.useCallback((listener: () => void) => (
         target && accountLifetimeCurrent

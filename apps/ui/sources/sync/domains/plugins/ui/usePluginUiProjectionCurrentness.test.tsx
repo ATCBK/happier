@@ -759,32 +759,55 @@ describe('usePluginUiProjectionCurrentness', () => {
     });
 
     it('keeps the live catalog current with forty mounted offline readers without republishing unchanged currentness', async () => {
+        let renders = 0;
+        let publications = 0;
+        setMachine({ active: true, daemonStateVersion: 1, daemonState: {
+            status: 'running', pid: 17, runtimeId: 'runtime-currentness', contributionRegistryProjectionRevision: 0,
+        } });
         const offlineMachines = Array.from({ length: 40 }, (_, index) => createMachineFixture({
             id: `offline-${index}`, active: false, activeAt: 0,
         }));
         storage.getState().applyMachines(offlineMachines, false, { sourceServerId: connection!.home.id });
         projectionRuntime.describe.mockResolvedValue(supportedProjection('Live catalog'));
         const rendered = await renderHook(() => {
+            renders += 1;
             // The reader count is fixed for this mounted test. Each reader
             // runs the real store/currentness owner, as AppShell's children do.
-            const readers = ['machine-1', ...offlineMachines.map(machine => machine.id)].map(machineId => (
+            const readers = [' machine-1 ', ...offlineMachines.map(machine => machine.id)].map(machineId => (
                 usePluginUiProjectionCurrentness({ machineId, serverId: serverIdentityId })
             ));
+            React.useEffect(() => { publications += 1; }, readers);
             return { readers, union: unionPluginUiProjections(readers.map(reader => ({
                 ...reader, machineId: reader.machineId!,
                 projection: reader.pluginUiProjection,
             }))) };
         });
         await waitForHomeGovernance(() => expect(rendered.getCurrent().readers[0]?.phase).toBe('current'));
+        expect(rendered.getCurrent().readers[0]?.machineId).toBe(' machine-1 ');
         expect(rendered.getCurrent().readers.slice(1).every(reader => reader.phase === 'unavailable')).toBe(true);
         expect(rendered.getCurrent().union).toMatchObject({ phase: 'current', interactionEnabled: true });
         expect(projectionRuntime.describe.mock.calls.map(([machineId]) => machineId)).toEqual(['machine-1']);
         const settledReaders = rendered.getCurrent().readers;
+        const settledPublications = publications;
         await act(async () => {
             setMachine({ active: true, daemonStateVersion: 1 });
         });
         await flushHookEffects();
         expect(rendered.getCurrent().readers.every((reader, index) => reader === settledReaders[index])).toBe(true);
+        expect(publications).toBe(settledPublications);
+        const rendersBeforeTelemetry = renders;
+        for (let index = 0; index < 10; index += 1) {
+            await act(async () => {
+                setMachine({ active: true, daemonStateVersion: index + 2, daemonState: {
+                    status: 'running', pid: 17, runtimeId: 'runtime-currentness', contributionRegistryProjectionRevision: 0,
+                    resources: { cpu: { usage: index / 10 } },
+                } });
+            });
+            await flushHookEffects();
+        }
+        expect(projectionRuntime.describe).toHaveBeenCalledTimes(1);
+        expect(rendered.getCurrent().readers.every((reader, index) => reader === settledReaders[index])).toBe(true);
+        expect({ renders: renders - rendersBeforeTelemetry, publications: publications - settledPublications }).toEqual({ renders: 0, publications: 0 });
         await rendered.unmount();
     });
 
