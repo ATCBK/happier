@@ -574,7 +574,10 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
         "recoveryCredits": {
           "supported": true
         },
-        "title": "ChatGPT"
+        "title": "ChatGPT",
+        "usageIdentity": {
+          "providerId": "openai-codex"
+        }
       }
     ],
     "daemonDatabases": [],
@@ -1061,10 +1064,10 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
         "locator": {
           "export": "createCodexAgentRuntime",
           "externalSessionsExport": "codexExternalSessionsContribution",
-          "module": "./agent/runtime/engine",
+          "module": "./agent/runtime/factory",
           "runtimeApiVersion": 1
         },
-        "normalizedModulePath": ".happier-plugin/agent/runtime/engine.js"
+        "normalizedModulePath": ".happier-plugin/agent/runtime/factory.js"
       }
     ],
     "apiVersion": 1
