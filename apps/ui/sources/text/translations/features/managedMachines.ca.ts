@@ -195,7 +195,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         options: {
             empty: ({ provider }: { provider: string }) => `No hi ha opcions disponibles per a ${provider} aquí.`,
             loading: ({ provider }: { provider: string }) => `Comprovant les opcions de ${provider}…`,
-            error: "No s’han pogut comprovar les opcions. Les teves opcions estan desades.",
+            error: "No s’han pogut comprovar les opcions.",
             unavailable: "Aquesta opció ja no està disponible.",
         },
         controller: {

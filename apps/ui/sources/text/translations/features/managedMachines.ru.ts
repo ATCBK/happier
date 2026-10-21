@@ -195,7 +195,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         options: {
             empty: ({ provider }: { provider: string }) => `Для ${provider} здесь нет доступных вариантов.`,
             loading: ({ provider }: { provider: string }) => `Проверка вариантов для ${provider}…`,
-            error: "Не удалось проверить варианты. Ваш выбор сохранён.",
+            error: "Не удалось проверить варианты.",
             unavailable: "Этот вариант больше недоступен.",
         },
         controller: {

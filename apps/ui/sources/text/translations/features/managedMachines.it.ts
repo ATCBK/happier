@@ -195,7 +195,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         options: {
             empty: ({ provider }: { provider: string }) => `Nessuna opzione disponibile per ${provider} qui.`,
             loading: ({ provider }: { provider: string }) => `Verifica delle opzioni per ${provider}…`,
-            error: "Non è stato possibile verificare le opzioni. Le tue scelte sono salvate.",
+            error: "Non è stato possibile verificare le opzioni.",
             unavailable: "Questa opzione non è più disponibile.",
         },
         controller: {

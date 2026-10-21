@@ -235,6 +235,59 @@ describe('mounted managed configurator', () => {
         expect(screen.findByTestId('managed-config.error-action')).not.toBeNull();
         await screen.unmount();
     });
+    it('puts a failed read where the choices would be instead of a column of empty fields', async () => {
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://failed-read-blank-fields.example',
+            serverIdentityId: 'srv_failed_read_blank_fields', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        const action = PluginProjectedActionV2Schema.parse({ id: 'options', pluginId: provisioner.contribution.pluginId, occurrenceId: 'options-occurrence',
+            title: 'Native options', scopes: ['machine'], surfaces: ['cli', 'plugin'], execution: { target: 'daemon' }, available: true, dangerLevel: 'safe',
+            inputHints: { fields: [{ path: 'instance', title: 'Instance name', widget: 'text', required: true }] } });
+        const projection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: {
+            ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, agentsById: {}, diagnostics: [],
+            installedPackagesById: { [action.pluginId]: { ...PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE.installedPackagesById['acme.review'], id: action.pluginId } },
+            actionsById: { [buildQualifiedPluginContributionKey({ pluginId: action.pluginId, localId: action.id })]: action },
+        } });
+        nativeBoundary.rpc.mockImplementation(async (request: { method: string }) => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+            ? projection : request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ
+                ? { ok: true, inputSchema: { type: 'object', properties: { instance: { type: 'string' } }, additionalProperties: false } } : { ok: false, code: 'unsupported' });
+        harness.answer(serverId, '/v1/actions/machines.provisioners.list', { select: value => {
+            const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+            return { body: { v: 1, actionId: 'machines.provisioners.list', requestId: request.requestId,
+                execution: { ok: true, result: { controller: defaultController, provisioners: [provisioner] } } } };
+        } });
+        harness.answer(serverId, '/v1/actions/machines.provisioners.check', { status: 500, body: { code: 'unavailable' } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.error')).not.toBeNull());
+        // The required field has nothing in it and the read that would fill its choices failed: no empty box to fill.
+        expect(screen.findByTestId('managed-config.field:instance')).toBeNull();
+        expect(screen.findByTestId('managed-config.error-action')).not.toBeNull();
+        await screen.unmount();
+    });
+    it('leaves the phone summary without a dash while no price is known', async () => {
+        const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 390, height: 844, scale: 1, fontScale: 1 });
+        restoreViewport = () => viewport.mockRestore();
+        const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://unpriced-summary.example',
+            serverIdentityId: 'srv_unpriced_summary', accountId: 'owner', currentAccount: true });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'host', installationId: 'installation' })] } });
+        for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [provisioner] }],
+            ['machines.provisioners.check', { available: true }], ['machines.provisioners.options', { choices: [] }]] as const)
+            harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(value);
+                return { body: { v: 1, actionId, requestId: request.requestId, execution: { ok: true, result } } };
+            } });
+        const { ManagedMachineConfigurationView } = await import('./ManagedMachineConfigurationView');
+        const screen = await renderScreen(<ManagedMachineConfigurationView serverId={serverId}
+            provisioner={buildQualifiedPluginContributionKey(provisioner.contribution)} initialController={defaultController} />);
+        await waitForHomeGovernance(() => expect(screen.findByTestId('managed-config.summary')).not.toBeNull());
+        const summary = screen.findByTestId('managed-config.summary')?.props.accessibilityLabel;
+        expect(summary).toContain('Virtual machine');
+        expect(summary).not.toContain('\u2014');
+        await screen.unmount();
+    });
     it('offers retained wake for a resume-only provisioner and preserves the choice in composer intent', async () => {
         const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1280, height: 844, scale: 1, fontScale: 1 });
         restoreViewport = () => viewport.mockRestore();

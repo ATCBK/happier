@@ -123,21 +123,32 @@ function SummaryBar(
         <HappierPressable
           testID={props.testID}
           accessibilityRole="button"
-          accessibilityLabel={`${props.summary.value} ${props.summary.unit}, ${props.summary.spec}`}
+          accessibilityLabel={[`${props.summary.value} ${props.summary.unit}`.trim(), props.summary.spec].filter(Boolean).join(', ')}
           accessibilityHint={t('managedMachines.receipt.openSummary')}
           hasPopup="dialog"
           onPress={props.onOpen}
           style={styles.barSummary}
         >
+          {/* Until a price is known the choices lead, with the caret that says the bar opens the receipt. */}
           <View style={styles.barValueRow}>
-            <Text style={styles.barValue}>{props.summary.value}</Text>
-            <Text style={styles.barUnit}>{props.summary.unit}</Text>
+            {props.summary.value ? (
+              <>
+                <Text style={styles.barValue}>{props.summary.value}</Text>
+                <Text style={styles.barUnit}>{props.summary.unit}</Text>
+              </>
+            ) : (
+              <Text style={styles.barSpecLead} numberOfLines={2}>
+                {props.summary.spec}
+              </Text>
+            )}
             <Icon name="caret-up" size={12} color={theme.colors.text.secondary} />
           </View>
           {/* Size, place and Keep it all stay readable beside Create: two lines before it ellipsizes. */}
-          <Text style={styles.barSpec} numberOfLines={2}>
-            {props.summary.spec}
-          </Text>
+          {props.summary.value ? (
+            <Text style={styles.barSpec} numberOfLines={2}>
+              {props.summary.spec}
+            </Text>
+          ) : null}
         </HappierPressable>
         {props.primary ? (
           <RoundButton
@@ -222,6 +233,12 @@ const styles = StyleSheet.create((theme) => ({
     ...Typography.default(),
     ...happierPageTextMetrics('meta'),
     color: theme.colors.text.secondary,
+  },
+  barSpecLead: {
+    ...Typography.default('semiBold'),
+    ...happierPageTextMetrics('meta'),
+    color: theme.colors.text.primary,
+    flexShrink: 1,
   },
   barSpec: {
     ...Typography.default(),

@@ -195,7 +195,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         options: {
             empty: ({ provider }: { provider: string }) => `這裡沒有可用的 ${provider} 選項。`,
             loading: ({ provider }: { provider: string }) => `正在檢查 ${provider} 的選項…`,
-            error: "無法檢查選項。你的選擇已儲存。",
+            error: "無法檢查選項。",
             unavailable: "此選項已不再提供。",
         },
         controller: {

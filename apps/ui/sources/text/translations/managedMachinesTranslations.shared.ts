@@ -201,7 +201,7 @@ export const managedMachinesEn = {
         options: {
             empty: ({ provider }: { provider: string }) => `No choices are available for ${provider} here.`,
             loading: ({ provider }: { provider: string }) => `Checking choices for ${provider}…`,
-            error: "Choices couldn’t be checked. Your choices are saved.",
+            error: "Choices couldn’t be checked.",
             unavailable: "This choice is no longer available.",
         },
         controller: {

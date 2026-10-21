@@ -570,6 +570,9 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
     const repairs = draft?.check?.prerequisites?.filter(prerequisite => prerequisite.status !== 'available' && prerequisite.repairAction) ?? [];
     // Nothing to choose from yet is not "no choices" while the recipe still waits on a required field: the field says what it needs.
     const awaitsRequiredInput = recipeFields.some(field => field.required && isBlankInput(readInputPath(fieldInput, field.path)));
+    // A failed read leaves nothing to fill a blank required field from: the failure takes the fields' place, not a column of empty boxes.
+    const readFailed = !!error && error !== 'conflict';
+    const showRecipeFields = recipeFields.length > 0 && !(readFailed && awaitsRequiredInput);
     // A failed check is the cause: its own words say why and what to do ("Not installed · get it from …"), ahead of the option
     // reads that fail because of it. The generic line only fills the gap when the check named nothing.
     const choiceState = !draft ? null
@@ -581,8 +584,8 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         : null;
     const kindTitle = presentation.kindTitle;
     const pageTitle = props.presetOnly || !kindTitle ? title : t('managedMachines.config.newKind', { provider: title, kind: kindTitle });
-    // Unpriced, the bar's value stays short; the sentence belongs to the receipt.
-    const summaryValue = summaryPrice ? formatProviderAmount(summaryPrice) : receiptFacts?.billing.location === 'local' ? t('managedMachines.price.noBill') : '—';
+    // Unpriced, the bar's value stays short; the sentence belongs to the receipt. No price yet is no value, not a placeholder.
+    const summaryValue = summaryPrice ? formatProviderAmount(summaryPrice) : receiptFacts?.billing.location === 'local' ? t('managedMachines.price.noBill') : '';
     return <ManagedMachineConfigurator title={pageTitle} description={props.presetOnly ? t('machinePresets.futureOnly') : compact ? undefined : t('managedMachines.config.description')} mark={mark}
         actions={scope.chip}
         compact={compact} testID="managed-config" receipt={receipt} summary={{ value: summaryValue,
@@ -613,7 +616,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
         </ItemGroup> : null}
         {draft && !credentialsReady ? <SurfaceStateCard kind="warning" size="line" title={t('managedMachines.credential.required')}
             testID="managed-config.credential-required" /> : null}
-        {draft && recipeFields.length ? <ItemGroup title={t('managedMachines.detail.recipeTitle')}>
+        {draft && showRecipeFields ? <ItemGroup title={t('managedMachines.detail.recipeTitle')}>
             <ActionInputFields fields={recipeFields} input={fieldInput} editable={!!catalogProvisioner && !!catalogController && !busy && (!preset || props.presetOnly === true)}
                 busy={busy} resolveFieldOptions={fieldOptions.resolveOptions} resolveFieldTestID={field => `managed-config.field:${field.path}`}
                 onPatch={patch => setDraft(current => current ? setManagedConfiguratorOptionsSelectors(current, { ...fieldInput, ...patch }) : current)} />
@@ -654,8 +657,11 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
             <ManagedFieldRow testID="managed-config.limit" row={managedPresetLimitRow({ limit, disabled: busy,
                 onChange: next => { if (activeBinding?.isCurrent()) setLimit(next); } })} />
         </ItemGroup> : null}
-        {error ? <SurfaceStateCard kind="error" title={error === 'conflict' ? t('machinePresets.conflict') : t('managedMachines.options.error')}
-            testID="managed-config.error" action={{ label: t(error === 'conflict' ? 'managedMachines.actions.review' : 'managedMachines.actions.tryAgain'), onPress: retry }} /> : null}
+        {error ? <ItemGroup surface="none">
+            <SurfaceStateCard kind="error" size="line" title={error === 'conflict' ? t('machinePresets.conflict') : t('managedMachines.options.error')}
+                diagnosticCode={error === 'conflict' ? undefined : error} testID="managed-config.error"
+                action={{ label: t(error === 'conflict' ? 'managedMachines.actions.review' : 'managedMachines.actions.tryAgain'), onPress: retry }} />
+        </ItemGroup> : null}
         {saved && !props.presetOnly ? <SurfaceStateCard testID="managed-config.saved" kind="success" size="line" title={t('machinePresets.saved', { name: saved.name })}
             action={{ label: t('machinePresets.openPreset'), onPress: () => router.push(`/settings/machines/presets/${encodeURIComponent(saved.id)}?serverId=${encodeURIComponent(saved.serverId)}` as never) }} /> : null}
     </ManagedMachineConfigurator>;
