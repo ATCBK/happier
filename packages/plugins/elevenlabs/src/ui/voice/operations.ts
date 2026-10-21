@@ -28,6 +28,7 @@ function providerError(
   code:
     | 'invalid_parameters'
     | 'credential_unavailable'
+    | 'rate_limited'
     | 'provider_response_invalid'
     | 'voice_account_operation_cancelled'
     | 'voice_not_found',

@@ -4,7 +4,7 @@ const MAX_PROVIDER_SDP_RESPONSE_BYTES = 64 * 1024;
 export const OPENAI_CLIENT_AUTH_EXPIRY_SAFETY_WINDOW_MS = 1_000;
 
 function providerError(
-  code: 'credential_unavailable' | 'provider_response_invalid' = 'provider_response_invalid',
+  code: 'credential_unavailable' | 'rate_limited' | 'provider_response_invalid' = 'provider_response_invalid',
 ): Error {
   return Object.assign(new Error(code), { code });
 }

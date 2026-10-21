@@ -151,7 +151,7 @@ export type {
 } from '@happier-dev/protocol/voice/modelPacks/contributionV1';
 export const classifyVoiceProviderHttpFailure: (
     status: number,
-) => 'credential_unavailable' | 'provider_response_invalid' | null = canonicalClassifyVoiceProviderHttpFailure;
+) => 'credential_unavailable' | 'rate_limited' | 'provider_response_invalid' | null = canonicalClassifyVoiceProviderHttpFailure;
 export const VOICE_SPEECH_OUTPUT_MAX_BYTES: number = canonicalVoiceSpeechOutputMaxBytes;
 export const VoiceCredentialSlotIdSchema: VoiceSchema<VoiceCredentialSlotId> = canonicalVoiceCredentialSlotIdSchema;
 export const VoiceProviderContributionSchema: VoiceSchema<VoiceProviderContribution> = canonicalVoiceProviderContributionSchema;

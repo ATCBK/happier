@@ -24,8 +24,9 @@ export type VoiceProviderCredentialRemediationCode = z.infer<
 
 export function classifyVoiceProviderHttpFailure(
   status: number,
-): 'credential_unavailable' | 'provider_response_invalid' | null {
+): 'credential_unavailable' | 'rate_limited' | 'provider_response_invalid' | null {
   if (Number.isInteger(status) && status >= 200 && status < 300) return null;
+  if (status === 429) return 'rate_limited';
   return status === 401 || status === 403
     ? 'credential_unavailable'
     : 'provider_response_invalid';

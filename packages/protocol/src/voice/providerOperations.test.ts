@@ -20,6 +20,10 @@ describe('Voice provider operation failure classification', () => {
     expect(classifyVoiceProviderHttpFailure(Number.NaN)).toBe('provider_response_invalid');
   });
 
+  it('classifies a provider throttle as rate limited', () => {
+    expect(classifyVoiceProviderHttpFailure(429)).toBe('rate_limited');
+  });
+
   it('admits only canonical credential/access remediation codes from unknown failures', () => {
     expect(VoiceProviderCredentialRemediationCodeSchema.parse(
       'credential_access_review_required',

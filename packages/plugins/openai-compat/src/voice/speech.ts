@@ -26,6 +26,7 @@ const MAX_TRANSCRIPT_CHARACTERS = 1_000_000;
 type ProviderErrorCode =
   | 'invalid_parameters'
   | 'credential_unavailable'
+  | 'rate_limited'
   | 'provider_unavailable'
   | 'provider_response_invalid';
 

@@ -6,7 +6,7 @@ describe('OpenAI WebRTC signaling leaf', () => {
   it.each([
     [401, 'credential_unavailable'],
     [403, 'credential_unavailable'],
-    [429, 'provider_response_invalid'],
+    [429, 'rate_limited'],
   ])('classifies SDP HTTP %s without exposing the response body', async (status, code) => {
     const signaling = createOpenAiWebRtcSignaling({
       ephemeralToken: 'ek_short',

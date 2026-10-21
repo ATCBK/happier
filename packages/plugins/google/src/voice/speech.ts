@@ -47,7 +47,7 @@ const GEMINI_AUDIO_INPUT_MODEL_IDS = new Set([
 ]);
 
 function providerError(
-  code: 'invalid_parameters' | 'credential_unavailable' | 'provider_response_invalid',
+  code: 'invalid_parameters' | 'credential_unavailable' | 'rate_limited' | 'provider_response_invalid',
 ): Error {
   return Object.assign(new Error(code), { code });
 }

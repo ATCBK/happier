@@ -154,11 +154,15 @@ describe('Google daemon voice providers', () => {
       expect(input.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
       expect(input.headers?.['x-goog-api-key']).toBe('gemini-secret');
       expect(new TextDecoder().decode(input.body)).not.toContain('gemini-secret');
+      expect(JSON.parse(new TextDecoder().decode(input.body))).toMatchObject({
+        contents: [{ parts: [expect.anything(), { inline_data: { mime_type: 'audio/m4a' } }] }],
+        generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+      });
       return jsonHttpResponse({ candidates: [{ content: { parts: [{ text: 'hello world' }] } }] });
     });
     const runtime = createGoogleGeminiSttRuntime();
     await expect(runtime.transcribe!(
-      transcribeRequest,
+      { ...transcribeRequest, mimeType: 'audio/mp4' },
       credentialContext(
         'gemini-secret',
         (request) => requestedOrigins.push(request.origin ?? ''),
@@ -167,6 +171,33 @@ describe('Google daemon voice providers', () => {
       ),
     )).resolves.toEqual({ requestId: 'r1', text: 'hello world' });
     expect(requestedOrigins).toEqual(['https://generativelanguage.googleapis.com']);
+  });
+
+  it.each([
+    [400, { error: { details: [{ reason: 'API_KEY_INVALID' }] } }, 'credential_unavailable'],
+    [429, { error: { status: 'RESOURCE_EXHAUSTED' } }, 'rate_limited'],
+  ])('preserves the typed Gemini HTTP %s failure', async (status, body, code) => {
+    const request = vi.fn(async () => jsonHttpResponse(body, status));
+    await expect(createGoogleGeminiSttRuntime().transcribe!(
+      transcribeRequest,
+      credentialContext('invalid-secret', undefined, undefined, request),
+    )).rejects.toMatchObject({ code, message: code });
+  });
+
+  it.each([
+    ['models/gemini-2.5-flash-lite-preview-06-17', true],
+    ['gemini-2.5-pro', false],
+    ['gemini-2.5-flash-image', false],
+  ])('configures transcription thinking only for supported Flash model %s', async (model, disableThinking) => {
+    const request = vi.fn(async (input: Parameters<VoiceSpeechOperationContext['http']['request']>[0]) => {
+      const body = JSON.parse(new TextDecoder().decode(input.body));
+      expect(body.generationConfig).toEqual(disableThinking ? { thinkingConfig: { thinkingBudget: 0 } } : undefined);
+      return jsonHttpResponse({ candidates: [{ content: { parts: [{ text: 'hello world' }] } }] });
+    });
+    await createGoogleGeminiSttRuntime().transcribe!(
+      { ...transcribeRequest, model },
+      credentialContext('gemini-secret', undefined, undefined, request),
+    );
   });
 
   it('keeps Gemini inline audio within its declared request envelope', async () => {

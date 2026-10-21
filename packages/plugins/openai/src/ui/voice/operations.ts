@@ -30,7 +30,7 @@ const AudienceSchema = z.strictObject({
 });
 
 function providerError(
-  code: 'invalid_parameters' | 'credential_unavailable' | 'provider_response_invalid',
+  code: 'invalid_parameters' | 'credential_unavailable' | 'rate_limited' | 'provider_response_invalid',
 ): Error {
   return Object.assign(new Error(code), { code });
 }
