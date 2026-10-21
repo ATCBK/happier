@@ -9,6 +9,8 @@ type SessionRouteHrefQueryValue = string | readonly string[] | number | boolean 
 type BuildScopedSessionRouteHrefParams = Readonly<{
     sessionId: string;
     serverId?: string | null;
+    /** Exact committed server message; the message-detail route owns its resolution. */
+    messageId?: string;
     suffix?: string;
     query?: Readonly<Record<string, SessionRouteHrefQueryValue>>;
 }>;
@@ -57,7 +59,9 @@ export function mergeSessionRouteServerScopeParams<T extends Record<string, unkn
 
 export function buildScopedSessionRouteHref(params: BuildScopedSessionRouteHrefParams): `/session/${string}` {
     const normalizedSessionId = String(params.sessionId ?? '').trim();
-    const normalizedSuffix = typeof params.suffix === 'string' ? params.suffix : '';
+    const normalizedSuffix = params.messageId
+        ? `/message/${encodeURIComponent(`server:${params.messageId}`)}`
+        : typeof params.suffix === 'string' ? params.suffix : '';
     const pathname: `/session/${string}` = `/session/${encodeURIComponent(normalizedSessionId)}${normalizedSuffix}`;
     const searchParams = new URLSearchParams();
     const normalizedServerId = normalizeRouteParam(params.serverId);

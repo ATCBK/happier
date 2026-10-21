@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { buildScopedSessionRouteHref, createSessionRouteServerScope } from './sessionRouteServerScope';
 
 describe('buildScopedSessionRouteHref', () => {
+    it('opens an exact committed message without losing its Home or double interpreting its id', () => {
+        expect(buildScopedSessionRouteHref({ sessionId: 'same/session', serverId: 'home-b',
+            messageId: 'committed/answer?1' })).toBe('/session/same%2Fsession/message/server%3Acommitted%2Fanswer%3F1?serverId=home-b');
+    });
     it('preserves the scoped serverId when query also contains serverId', () => {
         expect(buildScopedSessionRouteHref({
             sessionId: 'session-1',

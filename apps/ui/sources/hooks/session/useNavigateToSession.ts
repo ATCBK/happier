@@ -58,7 +58,7 @@ export async function navigateToSession(sessionId: string, opts: NavigateToSessi
     owner.router.navigate(buildScopedSessionRouteHref({
         sessionId: normalizedSessionId,
         serverId: targetServerId || null,
-        ...(opts?.messageId ? { suffix: `/message/${encodeURIComponent(`server:${opts.messageId}`)}` } : {}),
+        ...(opts?.messageId ? { messageId: opts.messageId } : {}),
         ...(opts?.query ? { query: opts.query } : {}),
     }), {
         dangerouslySingular(name, params) {
