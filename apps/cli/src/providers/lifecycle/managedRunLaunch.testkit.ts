@@ -26,6 +26,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   readUpstreamAnswer?: boolean;
   experimental?: boolean;
   runtimeCredentialHeader?: Readonly<{ name: string; format: 'raw' | 'bearer' }>;
+  acceptedCredentialFormats?: readonly ('raw' | 'bearer')[];
   connectedAccounts?: readonly ConnectedAccountPurposeDeclarationV1[];
   resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-managed-run-'));
@@ -76,7 +77,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
           executionRunContext: { versions: [1] } } },
         providerRequirements: { acceptsProtocols: ['openai-responses'], required: { streaming: true },
           credentialSupport: { supportsNoAuth: true, apiKeyTransports: [{ protocol: 'openai-responses',
-            destination: { kind: 'httpHeader', names: 'anyValidated', formats: [input.runtimeCredentialHeader?.format ?? 'bearer'] } }] },
+            destination: { kind: 'httpHeader', names: 'anyValidated', formats: input.acceptedCredentialFormats ?? [input.runtimeCredentialHeader?.format ?? 'bearer'] } }] },
           authIsolation: { suppressConnectedServiceIds: [], ownedEnvKeys: ['RUN_PROVIDER_TOKEN'] },
           materialization: 'spawnEnv', applyPolicy: 'restart_session', supportsFreeformModelIds: false } }],
       ...(gateway ? {} : { providers: [{ v: 1, id: 'gateway', name: 'Gateway', kind: 'aggregator',

@@ -85,7 +85,9 @@ function createTransport(manager: RpcHandlerManager, replies: unknown[] = []) {
 
 describe('server-origin Machine reads across the E2EE RPC seam', () => {
     const verifyWorkerOnlySource = async (scenario: 'connected_source' | 'saved_provider') => {
-        const worker = await createManagedRunLaunchFixture();
+        // The source uses upstream bearer auth; the brokered worker authenticates
+        // to the local carrier with its raw capability header.
+        const worker = await createManagedRunLaunchFixture({ acceptedCredentialFormats: ['bearer', 'raw'] });
         const home = await mkdtemp(join(tmpdir(), 'worker-only-source-catalog-'));
         try {
             const captured = readLeasedAgentProviderBindingAdapter({ lease: worker.lease, agentId: worker.agentId });
