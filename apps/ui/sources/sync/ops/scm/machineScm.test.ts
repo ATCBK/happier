@@ -103,7 +103,8 @@ describe('machineScm', () => {
             runGit(root, ['config', 'user.name', 'Revision Preview']);
             runGit(root, ['config', 'user.email', 'revision-preview@example.test']);
             await writeFile(join(root, 'committed.png'), bytes);
-            runGit(root, ['add', '--', 'committed.png']);
+            await writeFile(join(root, 'archive.zip'), bytes);
+            runGit(root, ['add', '--', 'committed.png', 'archive.zip']);
             runGit(root, ['commit', '-m', 'preview']);
             const blobId = runGit(root, ['rev-parse', 'HEAD:committed.png']);
             await writeFile(join(root, 'committed.png'), Buffer.from([1, 2, 3]));
@@ -130,6 +131,12 @@ describe('machineScm', () => {
                 await vi.waitFor(async () => {
                     await flushHookEffects();
                     expect(hook.getCurrent()).toMatchObject({ status: 'error', uri: null, errorCode: 'not_found' });
+                });
+                // A successful revision read must not erase the materializer's unsupported verdict.
+                await hook.rerender({ ...input, path: 'archive.zip', mimeType: 'application/zip' });
+                await vi.waitFor(async () => {
+                    await flushHookEffects();
+                    expect(hook.getCurrent()).toMatchObject({ status: 'error', uri: null, errorCode: 'unsupported' });
                 });
             } finally {
                 await hook.unmount();
