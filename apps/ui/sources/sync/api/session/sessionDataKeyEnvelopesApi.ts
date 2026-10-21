@@ -8,15 +8,15 @@ import {
     type CurrentSessionPreparationOutcome,
     type CurrentSessionPreparationProgress,
 } from '@/sync/encryption/prepareCurrentSessionDataKeyEnvelopes';
-import { readTransferableSessionDataKey } from '@/sync/encryption/readTransferableSessionDataKey';
 import { captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryption';
 import {
     runWithServerRequestAuthorityForServerAccountScope,
 } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import {
-    readSessionSnapshotForAuthority,
     SessionSnapshotReadError,
 } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
+import { createOperationAccountCurrentnessSource, fetchSessionByIdWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/fetchSessionByIdWithServerScope';
+import { isTerminalAuthError } from '@/sync/runtime/connectivity/authErrors';
 import {
     runWithServerAccountScopeRequestGuard,
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
@@ -144,7 +144,7 @@ export async function readSessionDataKeyEnvelopeCollectionPage(
 /**
  * One preparation pass for the current Session, under one captured authority.
  *
- * The Session snapshot supplies both facts this client cannot infer: the storage
+ * The admitted Session context supplies both facts this client cannot infer: the storage
  * mode, and the caller's own envelope. Neither is derived from the other — an
  * E2EE Session whose envelope this device cannot open must stay distinguishable
  * from a plain Session that never had one.
@@ -157,19 +157,27 @@ export async function prepareSessionDataKeyEnvelopesForScope(
 ): Promise<CurrentSessionPreparationOutcome> {
     return await runWithEnvelopeCollectionAuthority(options, async bound => {
         const encryption = bound.authority.context.encryption;
-        // The snapshot carries the envelope bytes, so bind the Account-encryption generation
+        // The context carries the envelope bytes, so bind the Account-encryption generation
         // before asking for it. Capturing after this await could bless a retired envelope under a
         // newer generation of the same Account owner.
         const encryptionCurrentness = captureEncryptionGenerationCurrentness(encryption, {
             serverId: bound.authority.scope.serverId,
         });
         const isCurrent = () => bound.guard.isCurrent() && encryptionCurrentness.isCurrent();
-        let snapshot: Awaited<ReturnType<typeof readSessionSnapshotForAuthority>>;
+        const sessionDataKeys = new Map<string, Uint8Array>();
+        const credentials = bound.authority.context.credentials;
+        if (!credentials) throw new Error('Session request requires credentials');
+        const currentness = createOperationAccountCurrentnessSource({ credentials,
+            request: bound.authority.request, serverId: bound.authority.scope.serverId });
+        let context: Awaited<ReturnType<typeof fetchSessionByIdWithServerScope>>;
         try {
-            snapshot = await readSessionSnapshotForAuthority({
-                authority: bound.authority,
-                sessionId: bound.sessionId,
-                isCurrent,
+            context = await fetchSessionByIdWithServerScope({
+                authority: bound.authority, serverId: bound.authority.scope.serverId, sessionId: bound.sessionId,
+                contentDemand: 'encryption-context', activeCredentials: credentials,
+                activeEncryption: encryption, activeRequest: bound.authority.request,
+                sessionDataKeys, sessionDataKeyEnvelopes: new Map(),
+                accountCurrentnessSource: currentness, isCurrent, signal: bound.guard.signal,
+                applySessions: () => {}, log: { log() {} },
             });
         } catch (error) {
             if (error instanceof SessionSnapshotReadError && error.errorCode === 'stale_response') {
@@ -182,9 +190,12 @@ export async function prepareSessionDataKeyEnvelopesForScope(
                     invalidBindingRecipients: [],
                 };
             }
+            if (isTerminalAuthError(error)) throw new SessionSnapshotReadError('unauthorized');
             throw error;
+        } finally {
+            currentness.dispose();
         }
-        if (!isCurrent()) {
+        if (!isCurrent() || context.errorCode === 'stale_response') {
             return {
                 status: 'scope_changed',
                 preparedCount: 0,
@@ -194,7 +205,12 @@ export async function prepareSessionDataKeyEnvelopesForScope(
                 invalidBindingRecipients: [],
             };
         }
-        const sessionEncryptionMode = snapshot.session.encryptionMode ?? 'e2ee';
+        const keyUnavailable = context.errorCode === 'session_key_unavailable' || context.errorCode === 'session_key_invalid';
+        if (!context.ok && !keyUnavailable) throw new SessionSnapshotReadError(context.errorCode ?? 'unavailable', context.httpStatus);
+        // These two admitted context outcomes identify E2EE material that cannot
+        // be transferred; a legacy Account reader likewise contributes no standalone key.
+        const sessionEncryptionMode = keyUnavailable ? 'e2ee' : context.encryptionMode;
+        if (sessionEncryptionMode !== 'plain' && sessionEncryptionMode !== 'e2ee') throw new SessionSnapshotReadError('invalid_response');
         const capturedEncryptionScope = sessionEncryptionMode === 'e2ee'
             ? encryptionCurrentness.capturedScope
             : null;
@@ -203,10 +219,7 @@ export async function prepareSessionDataKeyEnvelopesForScope(
         // the mode rather than from whether some bytes happen to be present.
         const sessionDataKey = sessionEncryptionMode === 'plain'
             ? null
-            : await readTransferableSessionDataKey({
-                callerDataKeyEnvelope: snapshot.callerDataKeyEnvelope,
-                encryption,
-            });
+            : sessionDataKeys.get(bound.sessionId) ?? null;
         if (!isCurrent()) {
             return {
                 status: 'scope_changed',

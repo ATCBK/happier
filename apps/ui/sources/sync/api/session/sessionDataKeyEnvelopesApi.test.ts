@@ -156,6 +156,22 @@ describe('Session envelope exact Account transport', () => {
         expect(env.request.mock.calls).toHaveLength(1);
     });
 
+    it('preserves a missing Session refusal without discovering recipient identities', async () => {
+        const env = await setup();
+        const { prepareSessionDataKeyEnvelopesForScope } = await import('./sessionDataKeyEnvelopesApi');
+        env.request.mockImplementation(async url => {
+            const path = new URL(url).pathname;
+            if (path.includes('/account/encryption')) return Response.json({ mode: 'plain', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+            if (path === '/v2/sessions/same') return Response.json({ error: 'Session not found' }, { status: 404 });
+            throw new Error(`Unexpected request ${path}`);
+        });
+        await expect(prepareSessionDataKeyEnvelopesForScope({ scope: { serverId: env.target.id, accountId: 'target-account' },
+            sessionId: 'same', availability: 'available', isCurrent: () => true }))
+            .rejects.toMatchObject({ errorCode: 'not_found', httpStatus: 404 });
+        expect(env.request.mock.calls.some(([url]) => url.endsWith('/turns') || url.includes('/data-key/envelopes'))).toBe(false);
+    });
+
     it('prepares a plain Session without opening keys or discovering recipient identities', async () => {
         const env = await setup();
         const { prepareSessionDataKeyEnvelopesForScope } = await import('./sessionDataKeyEnvelopesApi');
@@ -167,7 +183,7 @@ describe('Session envelope exact Account transport', () => {
                 encryptionMode: 'plain', dataEncryptionKey: null, metadataVersion: 1, metadata: '{}',
                 agentStateVersion: 1, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             throw new Error(`Unexpected request ${path}`);
         });
         await expect(prepareSessionDataKeyEnvelopesForScope({
@@ -175,6 +191,7 @@ describe('Session envelope exact Account transport', () => {
             sessionId: 'same', availability: 'available', isCurrent: () => true,
         })).resolves.toMatchObject({ status: 'not_required', preparedCount: 0 });
         expect(env.request.mock.calls.every(([url]) => !url.includes('/data-key/envelopes'))).toBe(true);
+        expect(env.request.mock.calls.some(([url]) => url.endsWith('/turns'))).toBe(false);
     });
 
     it.each([
@@ -245,7 +262,7 @@ describe('Session envelope exact Account transport', () => {
                     agentStateVersion: 5, agentState: null, share: null,
                 } }));
             }
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path.endsWith('/data-key/envelopes') && init?.method === 'PATCH') {
                 events.push('patch');
                 const body = JSON.parse(String(init.body)) as { entries: typeof uploaded[] };
@@ -274,6 +291,7 @@ describe('Session envelope exact Account transport', () => {
 
         expect(outcome.status).toBe('complete');
         expect(outcome.preparedCount).toBe(1);
+        expect(env.request.mock.calls.some(([url]) => url.endsWith('/turns'))).toBe(false);
         // The recipient recovers the exact 32 bytes the manager opened from its own envelope —
         // not a re-keyed value, and not the manager's Account material.
         const opened = openEncryptedDataKeyEnvelopeV1({
@@ -296,6 +314,33 @@ describe('Session envelope exact Account transport', () => {
         });
         // The rendered aggregate is the server's own, refreshed by the final recheck page.
         expect(outcome.summary).toEqual({ prepared: envelopeState === 'prepared' ? 2 : 1, pending: 0, invalid: 0, recipientKeyUnavailable: 0 });
+    });
+
+    it.each(['missing', 'legacy'] as const)('keeps %s standalone-key custody unavailable without turns or recipient discovery', async custody => {
+        const env = await setup({ accountEncryption: 'e2ee' });
+        if (custody === 'legacy') {
+            vi.mocked(env.TokenStorage.getCredentialsForServerUrl).mockImplementation(async url => ({
+                token: env.token(url === 'https://target.example' ? 'target-account' : 'active-account'),
+                secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64url'),
+            }));
+        }
+        env.request.mockImplementation(async url => {
+            const path = new URL(url).pathname;
+            if (path.includes('/account/encryption')) return Response.json({ mode: 'e2ee', version: 1,
+                signingKeyFingerprint: 'signing-current', contentKeyFingerprint: 'content-current', updatedAt: 1,
+                recipientEnvelopeReadiness: { status: 'available' } });
+            if (path === '/v2/sessions/same') return Response.json({ session: {
+                id: 'same', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
+                encryptionMode: 'e2ee', dataEncryptionKey: null, metadataLayoutVersion: 0,
+                metadataVersion: 4, metadata: 'not-demanded', agentStateVersion: 5, agentState: null, share: null,
+            } });
+            throw new Error(`Unexpected request ${path}`);
+        });
+        const { prepareSessionDataKeyEnvelopesForScope } = await import('./sessionDataKeyEnvelopesApi');
+        await expect(prepareSessionDataKeyEnvelopesForScope({ scope: { serverId: env.target.id, accountId: 'target-account' },
+            sessionId: 'same', availability: 'available', isCurrent: () => true }))
+            .resolves.toMatchObject({ status: 'session_data_key_unavailable', preparedCount: 0, summary: null });
+        expect(env.request.mock.calls.some(([url]) => url.endsWith('/turns') || url.includes('/data-key/envelopes'))).toBe(false);
     });
 
     it('does not carry a Session DEK across an Account-encryption generation change while opening it', async () => {
@@ -340,7 +385,7 @@ describe('Session envelope exact Account transport', () => {
                 metadataLayoutVersion: 0, metadataVersion: 4, metadata: 'sealed-metadata',
                 agentStateVersion: 5, agentState: null, share: null,
             } }));
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             if (path.endsWith('/data-key/envelopes')) {
                 throw new Error('stale key material must not reach recipient discovery');
             }
@@ -387,7 +432,7 @@ describe('Session envelope exact Account transport', () => {
                     agentStateVersion: 5, agentState: null, share: null,
                 } }));
             }
-            if (path.endsWith('/turns')) return new Response('{}', { status: 404 });
+            if (path.endsWith('/turns')) return Response.json({ error: 'not_found' }, { status: 404 });
             throw new Error(`Unexpected request ${path}`);
         });
         await expect(prepareSessionDataKeyEnvelopesForScope({
