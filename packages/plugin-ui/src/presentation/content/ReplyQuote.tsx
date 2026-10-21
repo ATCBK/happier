@@ -1,5 +1,7 @@
 import type { ComponentType, ReactElement, ReactNode } from 'react';
-import { View, type TextStyle } from 'react-native';
+import { View } from 'react-native';
+
+import type { HappierPortableStyle } from '../portableTypes.js';
 
 import { HAPPIER_SPACE_STEPS } from '../../environment/spacing.js';
 import { HappierPressable } from '../interaction/Pressable.js';
@@ -25,7 +27,7 @@ export type HappierReplyQuoteTextProps = Readonly<{
   testID?: string;
   /** The quote is one line: a reminder of what is answered, not a second copy of it. */
   numberOfLines?: number;
-  style?: TextStyle;
+  style?: HappierPortableStyle;
   children: ReactNode;
 }>;
 
