@@ -740,7 +740,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         () => buildFileLineSelectionFingerprint(fileEntry),
         [fileEntry]
     );
-    const { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, staleSince, lastOwnWriteHash, tooLarge, refreshAll, publishSavedFile } = useWorkspaceFileDetailsLoading({
+    const { fileContent, diffContent, setDiffContent, isLoading, isDiffLoading, error, fileWriteSupported, setFileWriteSupported, staleSince, lastOwnWriteHash, tooLarge, refreshAll, readFileForSave, publishSavedFile } = useWorkspaceFileDetailsLoading({
         scope, filePath, diffMode,
         accountId: editorAccountScope?.accountId ?? null,
         fileEntryKind: fileEntry?.kind ?? null,
@@ -942,7 +942,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         filesEditorNativeCodeMirrorEnabled: filesEditorNativeCodeMirrorEnabled === true,
         filesEditorAutoSave: filesEditorAutoSave === true,
         filesEditorChangeDebounceMs: typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : 0,
-        mountedRef, refreshAll, publishSavedFile, persistedDraft: persistedDraft ?? null, persistDraft,
+        mountedRef, refreshAll, readFileForSave, publishSavedFile, persistedDraft: persistedDraft ?? null, persistDraft,
         panePersistenceFailed: pane.persistenceFailed, agentName: editorAttribution.agentName,
         requestApproval: approval.requestApproval,
     });
