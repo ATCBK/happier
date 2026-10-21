@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reloadConfiguration } from '@/configuration';
-import { listExecutionRunMarkers } from '@/daemon/executionRunRegistry';
+import { listExecutionRunMarkers, readRetainedExecutionRunRecord } from '@/daemon/executionRunRegistry';
+import { ExecutionRunFollowFrontierResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { deriveSessionFollowOriginalOccurrenceKeyV1, resolveExecutionRunFollowOccurrenceV1, SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 import type { AgentMessage } from '@/agent/core/AgentMessage';
 import type {
@@ -72,10 +74,12 @@ describe('ExecutionRunHostBridge detached task scope', () => {
       return createTestExecutionRunHostRuntime({ onSendPrompt: async () => {},
         onWaitForTurnCompletion: async () => await new Promise<void>((resolve) => { finishTurn = resolve; }) });
     });
-    const manager = new ExecutionRunHostBridge({ parentProvider: TEST_BACKEND_ID, cwd: process.cwd(), sendAcp: async () => {} });
+    const manager = new ExecutionRunHostBridge({ parentProvider: TEST_BACKEND_ID, cwd: process.cwd(), sendAcp: async () => {},
+      resolveRunReportPolicy: async () => ({ preset: 'important' }) });
     const abort = new AbortController();
     try {
-      const started = await manager.start({ sessionId: null, intent: 'agent',
+      const started = await manager.start({ sessionId: 'follow-source', intent: 'agent',
+        modelSelection: null,
         backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID }, permissionMode: 'default',
         instructions: 'Await permission in this exact input', localInputId: 'permission-input',
         retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response', getPermissionRequestStore: () => store });
@@ -89,7 +93,7 @@ describe('ExecutionRunHostBridge detached task scope', () => {
       let terminalSettled = false;
       const terminal = manager.waitForTerminal(started.runId).then(() => { terminalSettled = true; });
       expect(occurrence).toBeTruthy();
-      const responseTarget = buildExecutionRunPermissionRequestEnvelope({ sessionId: null, runId: started.runId,
+      const responseTarget = buildExecutionRunPermissionRequestEnvelope({ sessionId: 'follow-source', runId: started.runId,
         callId: started.callId, sidechainId: started.sidechainId, backendId: TEST_BACKEND_ID, runtimeKind: 'native_agent_session',
         controllerOccurrenceId: occurrence, providerRequestId: 'permission-native', permissionMode: 'default',
         providerPayload: {}, toolName: 'bash', reason: 'bash' }).responseTarget;
@@ -99,11 +103,31 @@ describe('ExecutionRunHostBridge detached task scope', () => {
       await expect(observer).resolves.toMatchObject({ disposition: 'needs_attention', result: { run: {
         attention: { kind: 'permission_required', requestIds: [requestId] },
       } } });
+      await vi.waitFor(async () => expect((await readRetainedExecutionRunRecord(started.runId))?.state)
+        .toMatchObject({ attention: { kind: 'permission_required', requestIds: [requestId] } }));
+      const retained = (await readRetainedExecutionRunRecord(started.runId))!;
+      const frontier = ExecutionRunFollowFrontierResponseSchema.parse({ sessionId: 'follow-source', runId: started.runId,
+        status: retained.state.status, terminalEventId: null, attention: retained.state.attention });
+      const followOccurrence = resolveExecutionRunFollowOccurrenceV1(frontier);
+      expect(SessionFollowInputV1Schema.parse({ v: 1, ...followOccurrence, delivery: 'wake' })).toMatchObject({
+        original: { source: { kind: 'execution_run', sessionId: 'follow-source', runId: started.runId }, permissionRequests: [{ requestId, createdAt: 1 }] },
+        event: { kind: 'needs_you', type: 'approval' },
+      });
       expect(terminalSettled).toBe(false);
       const change = manager.waitForRunStateChange(started.runId);
       await getStore?.()?.completeRequest?.({ requestId, status: 'denied' });
       await change;
       expect(manager.getPublic(started.runId)?.attention).toBeUndefined();
+      await vi.waitFor(async () => expect((await readRetainedExecutionRunRecord(started.runId))?.state.attention).toBeUndefined());
+      expect(resolveExecutionRunFollowOccurrenceV1({ ...frontier, attention: undefined })).toBeNull();
+      await getStore?.()?.publishRequestAndWait?.({ requestId, toolName: 'bash', toolInput: {}, createdAt: 2, responseTarget });
+      await vi.waitFor(async () => expect((await readRetainedExecutionRunRecord(started.runId))?.state.attention?.requests)
+        .toEqual([{ requestId, createdAt: 2 }]));
+      const reopened = (await readRetainedExecutionRunRecord(started.runId))!;
+      const reopenedOccurrence = resolveExecutionRunFollowOccurrenceV1({ ...frontier, attention: reopened.state.attention })!;
+      expect(deriveSessionFollowOriginalOccurrenceKeyV1(reopenedOccurrence.original))
+        .not.toBe(deriveSessionFollowOriginalOccurrenceKeyV1(followOccurrence!.original));
+      await getStore?.()?.completeRequest?.({ requestId, status: 'denied' });
       await manager.stop(started.runId);
       await terminal;
     } finally { abort.abort(); finishTurn?.(); await manager.dispose(); }
@@ -649,6 +673,7 @@ describe('ExecutionRunHostBridge detached task scope', () => {
         sessionId: 'happier_parent_session_1',
         enqueueRegisteredSessionStateFieldMutation: vi.fn(async () => {}),
       },
+      resolveRunReportPolicy: async () => ({ preset: 'important' }),
       getNowMs: () => 1_700_000_000_000,
     });
 
