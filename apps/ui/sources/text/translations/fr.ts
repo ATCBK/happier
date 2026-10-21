@@ -5620,7 +5620,7 @@ export const fr: TranslationStructure = {
             discarded: {
                 title: 'Messages abandonnés',
                 subtitle:
-                    'Ces messages n’ont pas été envoyés à l’agent (par exemple lors du passage de distant à local).',
+                    'Ces messages ne sont plus en attente. Leur livraison peut être incertaine ; vérifiez la transcription avant de les renvoyer.',
                 label: 'Abandonné',
                 removeConfirm: {
                     title: 'Retirer le message abandonné ?',

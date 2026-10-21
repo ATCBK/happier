@@ -1618,6 +1618,15 @@ In current development source, reconnect readiness uses a fresh authenticated
 feature observation and inherits that request owner's attempt deadline. A separate
 health endpoint is not an admission prerequisite. Authentication rejection fails
 closed; server failures remain retryable under the existing connection supervisor.
+The deadline covers response-body consumption as well as HTTP headers, so a partial
+feature response cannot park reconnect probing indefinitely.
+Diagnostic artifact collection likewise retains its existing request deadline until
+the server response body has been consumed.
+
+The Claude session-hook forwarder reports failed HTTP delivery, transport error codes,
+and unreadable secret-file error codes on stderr. It keeps secrets, paths, hook
+payloads, and server response bodies out of those diagnostics. A listening hook port
+alone does not prove that a hook was authenticated or processed successfully.
 
 ### Control server (local IPC)
 

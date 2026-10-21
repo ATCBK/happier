@@ -5203,7 +5203,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 },
                 discarded: {
                     title: '已丟棄訊息',
-                    subtitle: '這些訊息未送到代理（例如，從遠端切換到本機時）。',
+                    subtitle: '這些訊息已不在佇列中。傳送結果可能不確定；重新傳送前請檢查對話記錄。',
                     label: '已丟棄',
                     removeConfirm: {
                         title: '移除已丟棄訊息？',

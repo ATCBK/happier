@@ -5993,7 +5993,7 @@ export const pl: TranslationStructure = {
         discarded: {
           title: "Odrzucone wiadomości",
           subtitle:
-            "Te wiadomości nie zostały wysłane do agenta (np. przy przełączaniu z zdalnego na lokalny).",
+            "Te wiadomości nie są już w kolejce. Ich dostarczenie może być niepewne; sprawdź historię rozmowy przed ponownym wysłaniem.",
           label: "Odrzucone",
           removeConfirm: {
             title: "Usunąć odrzuconą wiadomość?",

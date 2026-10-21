@@ -6316,7 +6316,7 @@ export const it: TranslationStructure = {
         discarded: {
           title: "Messaggi scartati",
           subtitle:
-            "Questi messaggi non sono stati inviati all’agente (ad esempio passando da remoto a locale).",
+            "Questi messaggi non sono più in coda. La consegna potrebbe essere incerta; controlla la trascrizione prima di inviarli di nuovo.",
           label: "Scartato",
           removeConfirm: {
             title: "Rimuovere il messaggio scartato?",

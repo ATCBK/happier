@@ -5632,7 +5632,7 @@ deps: {
               },
               discarded: {
                   title: 'Missatges descartats',
-                  subtitle: 'Aquests missatges no s’han enviat a l’agent (per exemple, en canviar de remot a local).',
+                  subtitle: 'Aquests missatges ja no són a la cua. El lliurament pot ser incert; comprova la transcripció abans de tornar-los a enviar.',
                   label: 'Descartat',
                   removeConfirm: {
                       title: 'Vols eliminar el missatge descartat?',
