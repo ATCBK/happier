@@ -10,6 +10,7 @@ import { ApiMachineClient } from '@/api/apiMachine';
 import { createDaemonPluginTransferRpcResolver } from '@/plugins/daemon/runtimeOwner';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { createDirectTransferServerLifecycle } from '@/machines/transfer/directTransferServerLifecycle';
 
 describe('plugin Session attachment materialization', () => {
   it('uses the daemon host carrier without a peer grant and preserves the hosted Session destination', async () => {
@@ -22,16 +23,29 @@ describe('plugin Session attachment materialization', () => {
     }, undefined, { resolveHostedSessionWorkingDirectory: async id => id === 'session-1' ? directory : null });
     let activeMachine: ApiMachineClient | null = null;
     const resolveRpc = createDaemonPluginTransferRpcResolver(() => activeMachine);
+    const preparedTransfers = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
     try {
+      // Real daemon startup attaches the prepared data-plane after construction.
+      // It shares method ids with the host-local attachment upload lifecycle.
+      machine.setRPCHandlers({
+        spawnSession: async () => ({ type: 'error', errorMessage: 'No fixture Session launch' }),
+        stopSession: async () => true,
+        requestShutdown() {},
+        preparedMachineTransfer: { request: preparedTransfers.requestPreparedTransfer },
+      });
       await writeFile(sourcePath, bytes);
       expect(resolveRpc()).toBeNull();
       activeMachine = machine;
       const rpc = resolveRpc();
       if (!rpc) throw new Error('Expected daemon transfer carrier');
-      const request = { sourcePath, name: 'lead.pdf', messageLocalId: 'input-1' };
+      const request = { sourcePath, name: 'lead.pdf', messageLocalId: 'plugin-input-v1:4m9MAtqecOTML90GoD1ICHEtIyV4-1uX2iCCcOTGufM' };
       const result = await materializePluginSessionAttachment({ rpc, sessionId: 'session-1', request, signal: new AbortController().signal });
       expect(await readFile(join(directory, result.path))).toEqual(bytes);
       expect(result.bytes).toEqual(bytes);
+      // Public prepared RPC keeps its strict envelope even while local uploads work.
+      await expect(machine.invokeLocalMachineAction(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK, {
+        uploadId: 'not-a-prepared-transfer', index: 0, contentBase64: bytes.toString('base64'),
+      })).resolves.toMatchObject({ errorCode: 'invalid_request' });
       await expect(materializePluginSessionAttachment({ rpc, sessionId: 'foreign-session', request, signal: new AbortController().signal }))
         .rejects.toMatchObject({ code: 'plugin_session_attachment_unavailable' });
       await expect(machine.getPeerMediationMachineRpcHandlerManager().invokeLocal(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, {
@@ -39,6 +53,7 @@ describe('plugin Session attachment materialization', () => {
       })).resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     } finally {
       await machine.shutdown();
+      await preparedTransfers.stop();
       await rm(directory, { recursive: true, force: true });
     }
   });
