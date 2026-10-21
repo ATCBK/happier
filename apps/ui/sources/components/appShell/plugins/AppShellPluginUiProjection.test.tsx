@@ -31,6 +31,8 @@ import {
     settleAppShellPluginRuntimeUpdate,
     resolveAppShellPluginProjectionTargets,
     useAppShellPluginUiProjection,
+    useAppShellPluginUiDeclarationProjection,
+    useProjectedPluginLocalizedTextResolver,
     AppShellPluginUiProjectionValueProvider,
     type AppShellPluginUiProjectionValue,
 } from './AppShellPluginUiProjection';
@@ -104,6 +106,7 @@ import type { PluginAppPage } from './pluginAppPages';
 import { publishMachineContributionRegistryProjectionReconnect } from '@/sync/ops/machineContributionRegistryProjectionRevision';
 import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
+import { commitPreferredLanguage, getPreferredLanguage } from '@/text/preferredLanguage';
 
 describe('app-shell projection bootstrap targets', () => {
     it('restores retained presentation targets before live machine inventory arrives', () => {
@@ -119,14 +122,51 @@ describe('app-shell projection bootstrap targets', () => {
 });
 
 describe('AppShell declaration subscriptions', () => {
+    it('updates declared plugin text when the ready locale changes without a new projection', async () => {
+        const previousLanguage = getPreferredLanguage();
+        onTestFinished(() => commitPreferredLanguage(previousLanguage));
+        commitPreferredLanguage('en');
+        const projection = {
+            ...EMPTY_PLUGIN_UI_PROJECTION,
+            translationsByPluginId: {
+                'acme.review': {
+                    id: 'translations:acme.review', pluginId: 'acme.review', contributionKind: 'translations' as const,
+                    locales: ['en', 'fr'], bundles: { en: { title: 'Review' }, fr: { title: 'Revue' } },
+                },
+            },
+        };
+        let title = '';
+        function Probe() {
+            title = useProjectedPluginLocalizedTextResolver()('acme.review', { key: 'title', fallback: 'Fallback' });
+            return null;
+        }
+        const value: AppShellPluginUiProjectionValue = {
+            pluginUiProjection: projection, pluginBrowserProjection: null,
+            phase: 'current', interactionEnabled: true, machineId: null, serverId: null,
+            platform: 'web', accountLifetime: null, connectedAccountProjectionRevision: 1,
+            reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' },
+            reloadClientExecutables: () => {},
+        };
+        const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={value}><Probe /></AppShellPluginUiProjectionValueProvider>);
+        onTestFinished(() => screen.unmount());
+        expect(title).toBe('Review');
+        await act(async () => commitPreferredLanguage('fr'));
+        expect(title).toBe('Revue');
+    });
+
     it('keeps declaration-only consumers renderless across executable diagnostics and publishes changed declarations', async () => {
         let renders = 0;
+        let executableRevision: AppShellPluginUiProjectionValue['connectedAccountProjectionRevision'] = 0;
         let seen: AppShellPluginUiProjectionValue['pluginUiProjection'] = null;
         const Probe = React.memo(function DeclarationProbe() {
             renders += 1;
-            seen = useAppShellPluginUiProjection().pluginUiProjection;
+            seen = useAppShellPluginUiDeclarationProjection();
             return null;
         });
+        function ExecutableProbe() {
+            executableRevision = useAppShellPluginUiProjection().connectedAccountProjectionRevision;
+            return null;
+        }
         const value: AppShellPluginUiProjectionValue = {
             pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null,
             phase: 'current', interactionEnabled: true, machineId: null, serverId: null,
@@ -135,7 +175,7 @@ describe('AppShell declaration subscriptions', () => {
             reloadClientExecutables: () => {},
         };
         const render = (next: AppShellPluginUiProjectionValue) => (
-            <AppShellPluginUiProjectionValueProvider value={next}><Probe /></AppShellPluginUiProjectionValueProvider>
+            <AppShellPluginUiProjectionValueProvider value={next}><Probe /><ExecutableProbe /></AppShellPluginUiProjectionValueProvider>
         );
         const screen = await renderScreen(render(value));
         onTestFinished(() => screen.unmount());
@@ -143,6 +183,7 @@ describe('AppShell declaration subscriptions', () => {
         const settledRenders = renders;
         await screen.update(render({ ...value, connectedAccountProjectionRevision: 2,
             clientExecutableActivation: { status: 'establishing' } }));
+        expect(executableRevision).toBe(2);
         expect(renders).toBe(settledRenders);
         const nextProjection = { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 2 };
         await screen.update(render({ ...value, pluginUiProjection: nextProjection }));
@@ -2027,9 +2068,12 @@ describe('AppShellPluginUiProjectionProvider', () => {
         expect(getVoiceAdapterRegistry().get(providerId)).toBeNull();
 
         reconnectDescription = createDeferred();
-        await act(async () => persistentStorage.setState({ endpointStatus: 'online' }));
-        // A socket reconnect advances the machine's projection revision.
-        await act(async () => projectionRefreshState.publish());
+        // apiSocket's onConnected callback publishes status and reconnect
+        // invalidation synchronously, before yielding to a render.
+        await act(async () => {
+            persistentStorage.setState({ endpointStatus: 'online' });
+            projectionRefreshState.publish();
+        });
         await screen.update(renderApp());
         await flushHookEffects({ cycles: 3 });
         expect(registration()).toBeNull();
@@ -2137,9 +2181,11 @@ describe('AppShellPluginUiProjectionProvider', () => {
             pluginBrowserProjection: null,
         }));
 
-        await act(async () => persistentStorage.setState({ endpointStatus: 'online' }));
-        // A socket reconnect advances the machine's projection revision.
-        await act(async () => projectionRefreshState.publish());
+        // Match apiSocket's synchronous status/reconnect notification batch.
+        await act(async () => {
+            persistentStorage.setState({ endpointStatus: 'online' });
+            projectionRefreshState.publish();
+        });
         await screen.update(renderApp());
         await flushHookEffects({ cycles: 2 });
         expect(currentnessRequestCount).toBe(2);

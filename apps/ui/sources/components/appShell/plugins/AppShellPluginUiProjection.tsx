@@ -101,7 +101,7 @@ import {
     createPluginLocalizedTextResolver,
     type PluginLocalizedTextResolver,
 } from '@/sync/domains/plugins/ui/i18n';
-import { getPreferredLanguage } from '@/text/i18n';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
 export type AppShellPluginUiProjectionValue = Readonly<{
     pluginUiProjection: PluginUiProjectionModel | null;
@@ -1149,7 +1149,7 @@ export function useProjectedConnectedServicesRegistry(): ConnectedServiceRegistr
 /** Binds plugin-authored text to the exact current app-scope projection and locale. */
 export function useProjectedPluginLocalizedTextResolver(): PluginLocalizedTextResolver {
     const projection = useAppShellPluginUiDeclarationProjection();
-    const locale = getPreferredLanguage();
+    const locale = usePreferredLanguage();
     return React.useMemo(
         () => createPluginLocalizedTextResolver({ projection, locale }),
         [locale, projection],
