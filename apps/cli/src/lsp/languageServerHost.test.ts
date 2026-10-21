@@ -81,6 +81,13 @@ describe('language intelligence composed host', () => {
                 const f = await fixture(rootPath, 1, { nativeTypeScript: true });
                 try {
                     const target = { machineId: 'machine', rootPath, path: scenario === 'fix' ? 'fix.ts' : 'a.ts' };
+                    if (scenario === 'fix') {
+                        await f.open('fix.ts', broken, 7, true);
+                        expect(await f.call(RPC_METHODS.DAEMON_LSP_SYNC, { rootPath, op: { op: 'snapshot', path: 'fix.ts', languageId: 'typescript', version: 8, text: broken, unsaved: false } }))
+                            .toMatchObject({ status: 'ok' });
+                        expect(await f.query('diagnostics', 'fix.ts', { text: 'disk' }))
+                            .toMatchObject({ status: 'ok', diagnostics: [{ code: 2304 }] });
+                    }
                     const previewResult = await f.executor.execute(scenario === 'symbol' ? 'code.rename.preview' : scenario === 'file' ? 'code.file.rename.preview' : 'code.codeActions.list',
                         scenario === 'symbol' ? { ...target, line: 1, symbol: 'greet', newName: 'salute' }
                             : scenario === 'file' ? { ...target, newPath: 'moved.ts' } : { ...target, line: 1, symbol: 'greet' }, { surface: 'agent' });
