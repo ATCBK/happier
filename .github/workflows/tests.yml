@@ -406,6 +406,18 @@ jobs:
       - uses: ./.github/actions/install-yarn-dependencies
         with:
           prepared-artifact: gate-prepared-workspace
+      - name: Add swap headroom for the native compiler peak
+        # Mitigation: UI core peaks near 14.5 GB RSS on this 15 GiB runner and the
+        # host job was shut down mid-compile (run 39526709939). Swap keeps the
+        # runner alive at the peak; the fix is smaller UI compiler partitions.
+        run: |
+          swapfile=/mnt/gate-compiler.swap
+          [ -w /mnt ] || sudo test -d /mnt || swapfile=/gate-compiler.swap
+          sudo fallocate -l 10G "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile" >/dev/null
+          sudo swapon "$swapfile"
+          free -h
       - name: Check compiler diagnostics without governance or test phases
         id: gate-compiler
         env:
@@ -592,6 +604,18 @@ jobs:
         with:
           toolchain: 1.94.1
           targets: wasm32-unknown-unknown
+      - name: Add swap headroom for the native compiler peak
+        # Mitigation: UI core peaks near 14.5 GB RSS on this 15 GiB runner and the
+        # host job was shut down mid-compile (run 39526709939). Swap keeps the
+        # runner alive at the peak; the fix is smaller UI compiler partitions.
+        run: |
+          swapfile=/mnt/gate-compiler.swap
+          [ -w /mnt ] || sudo test -d /mnt || swapfile=/gate-compiler.swap
+          sudo fallocate -l 10G "$swapfile"
+          sudo chmod 600 "$swapfile"
+          sudo mkswap "$swapfile" >/dev/null
+          sudo swapon "$swapfile"
+          free -h
       - name: Check non-UI compiler projects from the shared preparation
         env:
           HAPPIER_TYPESCRIPT_CLI_MEASURE_RSS: "1"
