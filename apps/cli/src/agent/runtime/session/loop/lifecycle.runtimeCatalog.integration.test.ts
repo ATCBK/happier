@@ -2276,8 +2276,19 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
     info.mockRestore();
   });
 
-  it('lets canonical runtime cancellation own the durable transcript marker without an abort-side duplicate', async () => {
+  it.each(['no-partial', 'committed-partial'] as const)('lets canonical runtime cancellation retain exact reply custody without an abort-side duplicate (%s)', async partial => {
     const baseParams = createLifecycleParams({ policyAgentId: 'codex' });
+    // The provider and acknowledged transcript transport are the boundaries;
+    // Stop, ordered transcript projection and terminal mutation stay real.
+    const partialSeq = 42;
+    Object.assign(baseParams.session, {
+      getLastObservedMessageSeq: () => partial === 'committed-partial' ? partialSeq : 40,
+      getCommittedUserMessageSeq: (localId: string) => localId === 'original-addressed-question' ? 40 : null,
+      enqueueAgentMessageCommitted: vi.fn<NonNullable<SessionLoopLifecycleParams['session']['enqueueAgentMessageCommitted']>>(async (_provider, body) => ({
+        persisted: true as const, delivered: true as const,
+        committedSequence: body.type === 'message' ? partialSeq : partialSeq + 1,
+      })),
+    });
     let abortRequested: (() => void | Promise<void>) | null = null;
     let runtimeEventHandler: RuntimeTurnMessageHandler | null = null;
     const runtime = baseParams.runtime as unknown as {
@@ -2313,6 +2324,15 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
             turnId: 'turn-1',
             startedBy: 'host',
           }));
+          runtimeEventHandler?.(canonicalRuntimeEvent({
+            kind: 'input-accepted', sessionId: 'session-1', emittedAtMs: 1,
+            inputIds: ['original-addressed-question'], delivery: { kind: 'newTurn', turnId: 'turn-1' },
+          }));
+          if (partial === 'committed-partial') runtimeEventHandler?.(canonicalRuntimeEvent({
+            kind: 'transcript-message-committed', sessionId: 'session-1', emittedAtMs: 1,
+            turnId: 'turn-1', messageId: 'exact-stopped-partial', role: 'assistant',
+            text: 'The stopped turn retained this partial answer',
+          }));
           await abortRequested?.();
         }),
       },
@@ -2320,7 +2340,8 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
 
     await runSessionLoopLifecycle(params);
 
-    expect(baseParams.session.enqueueAgentMessageCommitted).toHaveBeenCalledOnce();
+    const commits = vi.mocked(baseParams.session.enqueueAgentMessageCommitted!).mock.calls;
+    expect(commits.filter(([, body]) => body.type === 'turn_cancelled')).toHaveLength(1);
     expect(baseParams.session.enqueueAgentMessageCommitted).toHaveBeenCalledWith(
       'codex',
       { type: 'turn_cancelled', id: 'agent-turn-1' },
@@ -2329,9 +2350,22 @@ describe('runSessionLoopLifecycle runtime transcript projection', () => {
         provenance: { kind: 'non_dependent', source: 'external' },
       }),
     );
-    expect(baseParams.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'cancel', turnId: 'turn-1' }),
-    );
+    const mutations = vi.mocked(baseParams.session.enqueueSessionTurnMutation!).mock.calls.map(([mutation]) => mutation);
+    const cancel = mutations.find(mutation => mutation.action === 'cancel');
+    expect(cancel).toMatchObject({ action: 'cancel', turnId: 'turn-1' });
+    // Earlier append_transcript_anchors is equally valid custody. Inspect the
+    // complete emitted turn history, not one incidental terminal packet shape.
+    const retainedResultSeqs = mutations.flatMap(mutation =>
+      'turnId' in mutation && mutation.turnId === 'turn-1'
+        && 'transcriptAnchors' in mutation && typeof mutation.transcriptAnchors?.finalAssistantMessageSeq === 'number'
+        ? [mutation.transcriptAnchors.finalAssistantMessageSeq] : []);
+    if (partial === 'committed-partial') {
+      expect(commits.some(([, body, options]) => body.type === 'message'
+        && options.localId === 'exact-stopped-partial')).toBe(true);
+      expect(retainedResultSeqs).toContain(partialSeq);
+    } else {
+      expect(retainedResultSeqs).toEqual([]);
+    }
   });
 
   it('classifies a hostile remote handoff rejection without logging or synchronizing it', async () => {

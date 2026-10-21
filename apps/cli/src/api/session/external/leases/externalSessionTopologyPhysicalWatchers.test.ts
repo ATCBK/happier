@@ -57,23 +57,25 @@ function createFakeWatchBoundary(): PhysicalRegistration[] {
     watchBoundary.watch.mockImplementation((
         path: string,
         options: WatchOptions,
-        listener: WatchListener<string>,
+        listener?: WatchListener<string>,
     ): FSWatcher => {
         const errorListeners: Array<(error: Error) => void> = [];
+        const changeListeners: WatchListener<string>[] = listener ? [listener] : [];
         const close = vi.fn();
         const watcher = {
             close,
-            on: vi.fn((event: string, callback: (error: Error) => void) => {
+            on: vi.fn((event: string, callback: (...args: unknown[]) => void) => {
                 if (event === 'error') {
-                    errorListeners.push(callback);
+                    errorListeners.push(error => callback(error));
                 }
+                if (event === 'change') changeListeners.push((kind, name) => callback(kind, name));
                 return watcher;
             }),
         } as unknown as FSWatcher;
         registrations.push({
             path,
             options,
-            listener,
+            listener: (kind, name) => { for (const notify of changeListeners) notify(kind, name); },
             close,
             errorListeners,
         });
@@ -164,6 +166,37 @@ afterEach(async () => {
 });
 
 describe('External Sessions topology physical watcher pooling', () => {
+    it('keeps accounting delivery live when an admitted directory attachment fails', async () => {
+        const registrations = createFakeWatchBoundary();
+        const home = await createHome('accounting-directory-failure');
+        const file = join(home.sessions, 'accounting.jsonl');
+        const changes: string[] = [];
+        const reconciler = createExternalSessionObservationReconciler({
+            acquireObserver: async () => ({ dispose() {} }),
+        });
+        const subscription = await reconciler.registerAccountingSource({
+            resource: resource('accounting-directory-failure'),
+            source: { kind: 'codexHome', home: 'user', homePath: home.home },
+            changeObservation: 'watch_file_changes',
+            watchFileChanges: { files: [file], topologyDirectories: [home.sessions] },
+            onChange: change => { if (change.changedFile) changes.push(change.changedFile); },
+        });
+        try {
+            const directory = registrations.find(item => item.path === home.sessions && item.options.recursive !== undefined);
+            expect(directory).toBeDefined();
+            for (const onError of directory!.errorListeners) onError(Object.assign(new Error('watch unavailable'), { code: 'EMFILE' }));
+            await vi.waitFor(() => {
+                const fallback = registrations.find(item => item.path === home.sessions && item.options.recursive === undefined);
+                fallback?.listener('change', 'accounting.jsonl');
+                expect(changes).toContain(file);
+            });
+            await subscription.dispose();
+            const delivered = changes.length;
+            for (const item of registrations) item.listener('change', 'accounting.jsonl');
+            expect(changes).toHaveLength(delivered);
+        } finally { await subscription.dispose(); await reconciler.dispose(); }
+    });
+
     it('keeps concurrent accounting demand and independent disposal through yielding admission', async () => {
         const home = await createHome('concurrent-admission');
         const watched = new Set<string>();
