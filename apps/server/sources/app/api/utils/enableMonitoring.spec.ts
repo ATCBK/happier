@@ -62,7 +62,7 @@ describe("enableMonitoring", () => {
                 expect(samples.some((sample) => sample.labels.route === "/known/:id")).toBe(true);
 
                 const recorded = await register.getSingleMetric(metric)!.get();
-                const counts = recorded.values.filter((sample) => sample.metricName === undefined
+                const counts = recorded.values.filter((sample) => !('metricName' in sample)
                     || sample.metricName === `${metric}_count`);
                 expect(counts).toEqual(expect.arrayContaining([
                     expect.objectContaining({ labels: { method: "GET", route: [...unmatchedRoutes][0], status: "404" }, value: 1000 }),
