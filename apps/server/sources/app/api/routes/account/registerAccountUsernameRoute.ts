@@ -3,6 +3,7 @@ import { db } from "@/storage/db";
 import { Context } from "@/context";
 import { InvalidUsernameError, UsernameTakenError, usernameCheck, usernameRelease, usernameUpdate } from "@/app/social/usernameUpdate";
 import { resolveFriendsPolicyFromServerFeatures } from "@/app/social/resolveFriendsPolicyFromServerFeatures";
+import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { type Fastify } from "../../types";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 import {
@@ -11,8 +12,9 @@ import {
     AccountUsernameReleaseRequestV1Schema, AccountUsernameReleaseResponseV1Schema,
 } from "@happier-dev/protocol/account/profile";
 
-/** PP-1 retains existing Friends eligibility; profile capability admission is PP-2. */
+/** One Account handle serves profiles and Friends; Friends identity policy remains independent. */
 async function readUsernameEligibilityError(accountId: string, env: NodeJS.ProcessEnv) {
+    if (isServerFeatureEnabledForRequest("account.publicProfiles", env)) return null;
     const policy = resolveFriendsPolicyFromServerFeatures(env);
     if (!policy.enabled) return "friends-disabled" as const;
     if (policy.allowUsername) return null;

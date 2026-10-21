@@ -11,6 +11,7 @@ function applyAccountUsernameFriendsEnv(
     overrides: Record<string, string | undefined> = {},
 ): void {
     harness.resetEnv({
+        HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED: "0",
         HAPPIER_FEATURE_SOCIAL_FRIENDS__ENABLED: "1",
         HAPPIER_FEATURE_SOCIAL_FRIENDS__ALLOW_USERNAME: "1",
         ...overrides,
@@ -38,6 +39,62 @@ describe("Account username update (integration)", () => {
             () => db.accountIdentity.deleteMany(),
             () => db.account.deleteMany(),
         ]);
+    });
+
+    it.each([
+        { profiles: undefined, friends: "0" },
+        { profiles: "1", friends: "1" },
+    ])("checks, claims, changes and releases a profile username without Friends identity eligibility ($profiles/$friends)", async ({ profiles, friends }) => {
+        applyAccountUsernameFriendsEnv(harness, {
+            HAPPIER_FEATURE_ACCOUNT_PUBLIC_PROFILES__ENABLED: profiles,
+            HAPPIER_FEATURE_SOCIAL_FRIENDS__ENABLED: friends,
+            HAPPIER_FEATURE_SOCIAL_FRIENDS__ALLOW_USERNAME: "0",
+            GITHUB_CLIENT_ID: friends === "1" ? "test_client_id" : undefined,
+            GITHUB_CLIENT_SECRET: friends === "1" ? "test_client_secret" : undefined,
+            GITHUB_REDIRECT_URL: friends === "1" ? "https://api.example.test/v1/oauth/github/callback" : undefined,
+            GITHUB_REDIRECT_URI: undefined,
+        });
+        await withAuthenticatedTestApp(accountRoutes, async app => {
+            const owner = await db.account.create({ data: { publicKey: `pk-profile-username-${friends}` } });
+            const headers = { "x-test-user-id": owner.id };
+            const check = (username: string) => app.inject({ method: "POST", url: "/v1/account/username/check", headers, payload: { username } });
+            const claim = (username: string) => app.inject({ method: "POST", url: "/v1/account/username", headers, payload: { username } });
+            expect((await check(" Profile_Name ")).json()).toEqual({ username: "profile_name", availability: "available", suggestions: [] });
+            const claimed = await claim(" Profile_Name ");
+            expect(claimed.statusCode).toBe(200);
+            expect(claimed.json()).toEqual({ username: "profile_name" });
+            const changed = await claim("profile-changed");
+            expect(changed.statusCode).toBe(200);
+            expect(changed.json()).toEqual({ username: "profile-changed" });
+            expect((await check("support")).json()).toEqual({ username: "support", availability: "reserved", suggestions: [] });
+            expect((await claim("support")).json()).toEqual({ error: "invalid-username" });
+            const released = await app.inject({ method: "POST", url: "/v1/account/username/release", headers, payload: {} });
+            expect(released.statusCode).toBe(200);
+            expect(released.json()).toMatchObject({ username: null, released: true });
+            expect((await claim("profile-changed")).statusCode).toBe(409);
+            expect(await db.account.findUniqueOrThrow({ where: { id: owner.id } })).toMatchObject({ username: null, usernameAutoFillEnabled: false });
+            expect(await db.accountIdentity.count({ where: { accountId: owner.id } })).toBe(0);
+            expect(await db.releasedUsername.findUnique({ where: { username: "profile-changed" } })).not.toBeNull();
+        });
+    });
+
+    it("refuses check and release along with claim when both profile and Friends admission are off", async () => {
+        applyAccountUsernameFriendsEnv(harness, { HAPPIER_FEATURE_SOCIAL_FRIENDS__ENABLED: "0" });
+        await withAuthenticatedTestApp(accountRoutes, async app => {
+            const owner = await db.account.create({ data: { publicKey: "pk-all-username-admission-off", username: "retained_name" } });
+            const headers = { "x-test-user-id": owner.id };
+            for (const [url, payload] of [
+                ["/v1/account/username", { username: "new_name" }],
+                ["/v1/account/username/check", { username: "new_name" }],
+                ["/v1/account/username/release", {}],
+            ] as const) {
+                const response = await app.inject({ method: "POST", url, headers, payload });
+                expect(response.statusCode).toBe(400);
+                expect(response.json()).toEqual({ error: "friends-disabled" });
+            }
+            expect((await db.account.findUniqueOrThrow({ where: { id: owner.id } })).username).toBe("retained_name");
+            expect(await db.releasedUsername.count()).toBe(0);
+        });
     });
 
     it("checks normalized availability and only suggests policy-valid free names", async () => {
