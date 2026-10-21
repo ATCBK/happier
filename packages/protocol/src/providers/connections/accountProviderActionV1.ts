@@ -18,7 +18,7 @@ import { ProviderConnectionV1Schema, type ProviderConnectionV1 } from './v1.js';
 import { prepareProviderConnectionCreationV1 } from './creationV1.js';
 import { composeProviderSettingsV1, splitProviderSettingsV1, type ProviderConnectionsCatalogV1,
   type ProviderConnectionsCatalogSnapshotV1 } from './connectionRowsV1.js';
-import { DaemonProviderConnectionViewV1Schema, type DaemonProviderConnectionViewV1 } from '../../rpc/providers.js';
+import { DaemonProviderConnectionViewV1Schema, type DaemonProviderConnectionViewV1, type DaemonProviderConnectionsDescribeResponseV1 } from '../../rpc/providers.js';
 import { readProviderConnectionSourceFactsV1, projectAvailableProviderContributionsV1 } from './sourceFactsV1.js';
 import { normalizeProviderEndpointUrlSyntax } from '../safety/url.js';
 import { createProviderCustomCopyTemplateV1 } from './customCopyV1.js';
@@ -119,6 +119,16 @@ export function describeAccountProviderConnectionV1(settings: ProviderSettingsV1
   });
 }
 
+/** Display projection of an admitted Account catalog; it grants no Machine authority. */
+export function describeAccountProviderConnectionsV1(catalog: ProviderConnectionsCatalogV1,
+  definitions: readonly AccountProviderDeclarationV1[], connectionId?: string): Extract<DaemonProviderConnectionsDescribeResponseV1, { status: 'success' }> {
+  const settings = composeProviderSettingsV1(catalog, {});
+  return { status: 'success', connections: settings.connections.filter(connection => !connectionId || connection.id === connectionId)
+    .map(connection => describeAccountProviderConnectionV1(settings, connection, definitions)),
+    available: projectAvailableProviderContributionsV1({ connections: settings.connections, definitions }),
+    discoveryCandidates: [], localInstallations: [], diagnosticsTruncated: false, diagnostics: [], availableTruncated: false };
+}
+
 /** Account semantics, shared by UI, CLI and daemon compatibility dispatch. Transport owns CAS, mode admission and SavedSecret atomics. */
 export function createAccountProviderActionExecuteV1(host: Readonly<{
   assertCurrent(): void;
@@ -207,10 +217,7 @@ export function createAccountProviderActionExecuteV1(host: Readonly<{
         case 'providers.connections.describe': {
           mutation = false;
           const input = request.input;
-          output = { status: 'success', connections: settings.connections.filter(connection => !input.connectionId || connection.id === input.connectionId)
-            .map(connection => describeAccountProviderConnectionV1(settings, connection, definitions)),
-            available: projectAvailableProviderContributionsV1({ connections: settings.connections, definitions }),
-            discoveryCandidates: [], localInstallations: [], diagnosticsTruncated: false, diagnostics: [], availableTruncated: false };
+          output = describeAccountProviderConnectionsV1(captured.catalog, definitions, input.connectionId);
           if (input.authoringPreview) {
             const preview = input.authoringPreview;
             const source = definitions.find(row => areProviderContributionKeysEqualV1(row.contributionKey, preview.contributionKey)) ?? refuse('provider_contribution_unavailable');

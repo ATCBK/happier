@@ -1,9 +1,11 @@
 import * as React from 'react';
 import type { DaemonProviderConnectionsDescribeResponseV1 } from '@happier-dev/protocol/rpc';
+import { describeAccountProviderConnectionsV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
 
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
-import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
+import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
+import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 import {
     captureActiveServerAccountScopeLifetime,
     type ActiveServerAccountScopeLifetime,
@@ -74,11 +76,24 @@ export function useProviderConnections(input: Readonly<{
         && state.accountLifetime === accountLifetime;
     const scopeEnabled = input.enabled;
     const accountMatchesScope = state.accountScopeKey === accountScopeKey && state.accountLifetime === accountLifetime;
-    const catalog = accountMatchesScope && catalogAdmission?.data
+    const answeredCatalog = accountMatchesScope && catalogAdmission?.data
         && state.catalog?.cryptoAdmission?.contentPublicKeyFingerprint === catalogAdmission.cryptoAdmission?.contentPublicKeyFingerprint
         ? state.catalog?.data ?? null : null;
-    const data = state.catalog?.data && catalog === null ? null
+    // A phone's list/detail transition may mount a new reader while the Home is
+    // slow. Reuse the catalog owner's admitted display data until this reader
+    // answers; a later catalog revision must not overwrite an editor's answer.
+    const retained = React.useMemo(() => {
+        if (!input.enabled || !binding?.isCurrent() || !accountLifetime?.isCurrent()
+            || !areServerAccountScopesEqual(binding.scope, accountLifetime.scope)
+            || !catalogAdmission?.data || accountMatchesScope && state.accountData) return null;
+        return { catalog: catalogAdmission.data, data: describeAccountProviderConnectionsV1(
+            catalogAdmission.data, readAccountProviderDeclarations(), input.connectionId,
+        ) };
+    }, [accountLifetime, accountMatchesScope, binding, catalogAdmission, input.connectionId, input.enabled, state.accountData]);
+    const catalog = answeredCatalog ?? retained?.catalog ?? null;
+    const answeredData = state.catalog?.data && answeredCatalog === null ? null
         : stateMatchesScope ? state.data : accountMatchesScope ? state.accountData ?? null : null;
+    const data = answeredData ?? retained?.data ?? null;
     const error = stateMatchesScope ? state.error : null;
     const machineError = stateMatchesScope ? state.machineError ?? null : null;
     // Account rows are already usable while optional Machine facts refresh.
