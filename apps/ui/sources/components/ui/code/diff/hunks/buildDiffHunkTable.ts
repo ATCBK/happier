@@ -4,10 +4,13 @@ import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrence
 import { formatHunk } from '@happier-dev/protocol/diff/hunks';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { buildCodeLinesFromTextDiff } from '@/components/ui/code/model/buildCodeLinesFromTextDiff';
+import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
 
 export type DiffHunkTable = Readonly<{
     hunks: readonly DiffHunkInfo[];
     hunksByAfterLineId: ReadonlyMap<string, readonly DiffHunkInfo[]>;
+    /** Each unit's first changed line, where a comment on the change lands. */
+    firstChangeLineByKey: ReadonlyMap<string, CodeLine>;
 }>;
 
 export function buildDiffHunkTable(props: DiffViewerProps): DiffHunkTable {
@@ -33,6 +36,7 @@ export function buildDiffHunkTable(props: DiffViewerProps): DiffHunkTable {
     }
     const hunks: DiffHunkInfo[] = [];
     const hunksByAfterLineId = new Map<string, DiffHunkInfo[]>();
+    const firstChangeLineByKey = new Map<string, CodeLine>();
     for (const unit of units) {
         const hunk = unit.hunk;
         if (hunk.firstChange < 0) continue;
@@ -83,9 +87,10 @@ export function buildDiffHunkTable(props: DiffViewerProps): DiffHunkTable {
             changeLineIds,
         };
         hunks.push(info);
+        firstChangeLineByKey.set(info.key, firstLine);
         const anchored = hunksByAfterLineId.get(anchor.id);
         if (anchored) anchored.push(info);
         else hunksByAfterLineId.set(anchor.id, [info]);
     }
-    return { hunks, hunksByAfterLineId };
+    return { hunks, hunksByAfterLineId, firstChangeLineByKey };
 }

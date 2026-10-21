@@ -22,6 +22,36 @@ afterEach(() => { standardCleanup(); storage.setState({ settings: initialSetting
 const patch = '@@ -1,3 +1,3 @@\n-old\n+new\n middle\n-before\n+after\n';
 
 describe('hunk review through the shared keyboard and Account port', () => {
+    it('retains unchanged file units while neighboring diffs load and the reading file changes', async () => {
+        const generated = '@@ -0,0 +1,11035 @@\n' + Array.from({ length: 11035 }, (_, index) => `+export const value${index} = ${index};\n`).join('');
+        const marks = { record: null, unavailableReason: null, setReviewed: () => {}, clear: () => {}, setReviewedKeys: () => {} };
+        let files = [{ path: 'generated.ts', unifiedDiff: generated }, { path: 'other.ts', unifiedDiff: '' }];
+        let path = 'generated.ts';
+        let controller!: ReturnType<typeof useHunkReviewController>;
+        function Review() {
+            controller = useHunkReviewController({ source: { kind: 'live', root: '/repo' }, path,
+                unifiedDiff: files.find(file => file.path === path)!.unifiedDiff, liveFiles: files, host: null, serverId: null, marks });
+            return null;
+        }
+        const screen = await renderScreen(<Review />);
+        const generatedUnits = controller.reviewUnitsForPath('generated.ts');
+        expect(generatedUnits).toHaveLength(1);
+        expect(generatedUnits[0]!.hunk.newLines).toBe(11035);
+        files = [files[0]!, { path: 'other.ts', unifiedDiff: patch }];
+        const updateStarted = performance.now();
+        await screen.update(<Review />);
+        console.info('review-controller-neighbor-load', JSON.stringify({ lines: 11035, milliseconds: performance.now() - updateStarted }));
+        expect(controller.reviewUnitsForPath('generated.ts')).toBe(generatedUnits);
+        path = 'other.ts';
+        await screen.update(<Review />);
+        expect(controller.reviewUnitsForPath('generated.ts')).toBe(generatedUnits);
+        const otherUnits = controller.reviewUnitsForPath('other.ts');
+        files = [files[0]!, { path: 'other.ts', unifiedDiff: patch.replace('+new', '+updated') }];
+        await screen.update(<Review />);
+        expect(controller.reviewUnitsForPath('generated.ts')).toBe(generatedUnits);
+        expect(controller.reviewUnitsForPath('other.ts')).not.toBe(otherUnits);
+        expect(controller.reviewUnitsForPath('other.ts')[0]!.key).not.toBe(otherUnits[0]!.key);
+    });
     it('binds a tracked gutter change to review actions and reverts dirty text as one undoable edit', async () => {
         const marker = buildEditorChangeMarkers('a.ts', null, patch)[0]!;
         let text = 'inserted\nnew\nmiddle\nafter\n';
@@ -119,6 +149,47 @@ describe('hunk review through the shared keyboard and Account port', () => {
         expect(keep).toHaveBeenCalledWith([key], true);
         expect(discard).toHaveBeenCalledWith(expect.objectContaining({ path: 'b.ts', changeKey: key }));
         expect(ask).toHaveBeenCalledWith(expect.objectContaining({ path: 'b.ts', changeKey: key }));
+    });
+    it('phone review follows the reading line without moving the page, and Keep advances to the next open change', async () => {
+        const three = '@@ -1,5 +1,5 @@\n-one\n+ONE\n a\n-two\n+TWO\n b\n-three\n+THREE\n';
+        const keys = buildReviewUnits('a.ts', undefined, three).map(unit => unit.key);
+        let kept: readonly string[] = [keys[1]!];
+        let controller!: ReturnType<typeof useHunkReviewController>;
+        const navigated = vi.fn();
+        function Review() {
+            const [record, setRecord] = React.useState<readonly string[]>(kept);
+            controller = useHunkReviewController({ source: { kind: 'live', root: '/repo' }, path: 'a.ts', unifiedDiff: three,
+                host: null, serverId: null, onNavigate: navigated,
+                marks: { record: { reviewedChangeKeys: record } as unknown as ScmReviewedMarksRecord, unavailableReason: null,
+                    setReviewed: () => {}, clear: () => {},
+                    setReviewedKeys: (next, on) => { kept = on ? [...record, ...next] : record.filter(key => !next.includes(key)); setRecord(kept); } } });
+            return null;
+        }
+        await renderScreen(<Review />);
+        await act(async () => { controller.hunks.onHunks?.(buildReviewUnits('a.ts', undefined, three).map((unit, index) => ({
+            index, hunkIndex: unit.hunkIndex, key: unit.key, oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, sectionHeading: '',
+            rangeStart: index + 1, rangeEnd: index + 1, rangeSide: 'new' as const, firstChangeLineId: `line-${index}`, changeLineIds: [] }))); });
+        const firstReveal = controller.revealHunk?.key;
+        expect(firstReveal).toBe(keys[0]);
+        // Scrolling to change 3 makes it the bar's target, without asking the page to scroll to it.
+        await act(async () => { controller.followReadingLine(keys[2]!); });
+        expect(controller.strip.currentOrdinal).toBe(3);
+        expect(controller.currentHunk?.key).toBe(keys[2]);
+        expect(controller.revealHunk).toBeNull();
+        expect(navigated).not.toHaveBeenCalled();
+        // Keep on the bar marks the change it targets, then glides to the next open change (2 is kept, so 1).
+        await act(async () => { controller.keepCurrentAndAdvance(); });
+        expect(kept).toEqual([keys[1], keys[2]]);
+        expect(controller.currentHunk?.key).toBe(keys[0]);
+        expect(controller.revealHunk?.key).toBe(keys[0]);
+        expect(navigated).toHaveBeenLastCalledWith({ path: 'a.ts', key: keys[0] });
+        // The last open change completes the file and the cursor stays.
+        await act(async () => { controller.keepCurrentAndAdvance(); });
+        expect(controller.strip.fileComplete).toBe(true);
+        expect(controller.currentHunk?.key).toBe(keys[0]);
+        // An unknown reading-line key is ignored.
+        await act(async () => { controller.followReadingLine('gone'); });
+        expect(controller.currentHunk?.key).toBe(keys[0]);
     });
     it('R keeps the current change offline, advances the comparison counter and rejects a stale row', async () => {
         storage.setState({ settings: { ...initialSettings, keyboardShortcutsV2Enabled: true,

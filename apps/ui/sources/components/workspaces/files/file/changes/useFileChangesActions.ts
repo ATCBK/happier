@@ -32,6 +32,8 @@ export function useFileChangesActions(input: Omit<DiscardChangeParams, 'entry'> 
     filePath: string;
     selector: SessionScmReviewComparison;
     comparison: ScmComparison | null;
+    /** Whether the shown scope has changes for this file; an unchanged file offers no restore. */
+    changed: boolean;
     expectedHash?: string | null;
     /** Selected deletion; the canonical mutation result determines whether Undo exists. */
     deleted?: boolean;
@@ -44,7 +46,7 @@ export function useFileChangesActions(input: Omit<DiscardChangeParams, 'entry'> 
 }>) {
     const [result, setResult] = React.useState<DiscardChangeResult | null>(null);
     const intent = resolveFileChangesRestoreIntent({ path: input.filePath, selector: input.selector,
-        comparison: input.comparison, sessionId: input.sessionTarget?.sessionId, expectedHash: input.expectedHash });
+        comparison: input.comparison, sessionId: input.sessionTarget?.sessionId, expectedHash: input.expectedHash, changed: input.changed });
     const restore = async () => {
         const selected = input;
         const entry = intent.entry;

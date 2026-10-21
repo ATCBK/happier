@@ -8,7 +8,17 @@ export type DiffHunkRowRenderer = (hunk: DiffHunkInfo, review: DiffViewerHunks) 
 
 export function useDiffHunkSlots(props: DiffViewerProps, renderRow?: DiffHunkRowRenderer) {
     const table = useDiffHunkTable(props, props.hunks !== undefined);
-    const review = props.hunks;
+    const hosted = props.hunks;
+    const onPressAddComment = props.onPressAddComment;
+    // Comment on a change is the surface's own line comment at the change's first line (the phone menu's Comment).
+    const review = React.useMemo(() => {
+        if (!hosted || !onPressAddComment || hosted.actions?.comment) return hosted;
+        const comment = (hunk: DiffHunkInfo) => {
+            const line = table.firstChangeLineByKey.get(hunk.key);
+            if (line) onPressAddComment(line);
+        };
+        return { ...hosted, actions: { ...hosted.actions, comment } };
+    }, [hosted, onPressAddComment, table]);
     const renderAfterLine = React.useMemo(() => {
         if (!review) return props.renderAfterLine;
         return composeDiffLineSlots(props.renderAfterLine, (line) => {

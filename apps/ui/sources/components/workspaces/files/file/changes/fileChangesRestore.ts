@@ -24,8 +24,11 @@ export function buildFileChangesRestoreEntry(input: Readonly<{
     return parsed.success && parsed.data.kind === 'comparison' ? parsed.data : null;
 }
 
-/** The rendered request is also the menu's authority; a later tab selection cannot retarget it. */
-export function resolveFileChangesRestoreIntent(input: Parameters<typeof buildFileChangesRestoreEntry>[0]) {
-    const entry = buildFileChangesRestoreEntry(input);
+/**
+ * The rendered request is also the menu's authority; a later tab selection cannot retarget it.
+ * `changed` is whether the shown scope has changes for this file: an unchanged file offers no restore.
+ */
+export function resolveFileChangesRestoreIntent(input: Parameters<typeof buildFileChangesRestoreEntry>[0] & Readonly<{ changed: boolean }>) {
+    const entry = input.changed ? buildFileChangesRestoreEntry(input) : null;
     return { entry, restoreBeforeTurn: entry !== null && input.selector.kind === 'turnCheckpoint' };
 }

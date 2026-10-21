@@ -105,7 +105,7 @@ describe('file editor entry and persisted restoration', () => {
             });
             const actions = useFileChangesActions({
                 target: { serverId, machineId: 'm1', rootPath: '/repo' }, filePath: 'src/a.ts',
-                selector: { kind: 'workingTree' }, comparison: null, expectedHash: 'a'.repeat(64),
+                selector: { kind: 'workingTree' }, comparison: null, changed: true, expectedHash: 'a'.repeat(64),
                 messages: { moved_on: '', update_required: '', unsupported: '', unavailable: '', unknown: '', discarded: '',
                     restored: '', kept_edited: '', undone: '', undo_conflict: '', undo: '', note_failed: '', undo_unavailable: '' },
                 readCurrentText: async () => 'saved edit', refresh: async () => {},

@@ -84,6 +84,9 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
         : { repositoryRootPath: params.source.root, source: { kind: 'workingTree' } });
     const marked = React.useMemo(() => new Set(marks.record?.reviewedChangeKeys ?? []), [marks.record]);
     const [selection, setSelection] = React.useState<HunkReviewCursor | null>(null);
+    // The change the page last moved to (navigation, Keep advance); `reading` once the reader's own scroll
+    // chose the current change, so the page never jumps under the reader and the next move always lands.
+    const [revealed, setRevealed] = React.useState<HunkReviewCursor | 'reading' | null>(null);
     const [table, setTable] = React.useState<readonly DiffHunkInfo[]>([]);
     const [discardingKey, setDiscardingKey] = React.useState<string | null>(null);
     const currentKey = selection?.path === params.path && units.some(unit => unit.key === selection.key)
@@ -95,11 +98,14 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
         setTable(previous => previous.length === next.length && previous.every((hunk, index) =>
             hunk.key === next[index]?.key && hunk.firstChangeLineId === next[index]?.firstChangeLineId) ? previous : next);
     }, []);
+    const moveTo = (next: HunkReviewCursor) => {
+        setSelection(next);
+        setRevealed(next);
+        params.onNavigate?.(next);
+    };
     const navigate = (direction: 1 | -1, fileOnly = false) => {
         const next = moveHunkReviewCursor(files, cursor, direction, marked, fileOnly);
-        if (!next) return;
-        setSelection(next);
-        params.onNavigate?.(next);
+        if (next) moveTo(next);
     };
     const findUnit = (key: string, path = params.path) => resolveHunkReviewUnit({ key, renderedScopeId: scopeId,
             currentScopeId: latest.current.scopeId, units: latest.current.unitsByPath.get(path) ?? [] });
@@ -143,6 +149,8 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
     const fileIndex = ordered.findIndex(file => file.path === params.path);
     const numberOffset = ordered.slice(0, Math.max(0, fileIndex)).reduce((sum, file) => sum + file.keys.length, 0);
     const currentIndex = currentKey ? units.findIndex(unit => unit.key === currentKey) : -1;
+    const revealKey = revealed === 'reading' ? null
+        : revealed?.path === params.path && units.some(unit => unit.key === revealed.key) ? revealed.key : units[0]?.key ?? null;
     const nextFile = moveHunkReviewCursor(files, cursor, 1, marked, true);
     const stateOfKey = (key: string): DiffHunkReviewState => discardingKey === key ? 'discarding' : marked.has(key) ? 'kept' : 'open';
     const disabledReason = (action: DiffHunkAction) => action === 'keep' ? marks.unavailableReason
@@ -184,12 +192,30 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
     return {
         hunks, hunksForPath, changeActionsForKey, reviewUnitsForPath: (path: string) => unitsByPath.get(path) ?? [],
         reviewUnits: units, cursor, currentIndex, currentHunk: table.find(hunk => hunk.key === currentKey) ?? null,
+        /** Where the page should be scrolled: the change last moved to, never one the reader scrolled onto. */
+        revealHunk: table.find(hunk => hunk.key === revealKey) ?? null,
+        /** Phone: the change crossing the reading line becomes current (P5 §3.11) without scrolling the page. */
+        followReadingLine: (key: string) => {
+            if (key === currentKey || !units.some(unit => unit.key === key)) return;
+            setSelection({ path: params.path, key });
+            setRevealed('reading');
+        },
         strip: { ...summary, currentOrdinal: currentIndex < 0 ? 0 : numberOffset + currentIndex + 1,
             canKeepAll: !marks.unavailableReason && units.some(unit => !marked.has(unit.key)),
             nextFile: nextFile?.path !== params.path ? nextFile?.path ?? null : null,
             fileComplete: units.length > 0 && units.every(unit => marked.has(unit.key)) },
         next: () => navigate(1), previous: () => navigate(-1), nextFile: () => navigate(1, true), previousFile: () => navigate(-1, true),
         keepCurrent: () => { if (currentKey) keep(currentKey); },
+        /** The phone bar's Keep: mark the current change, then glide to the next open change in this file. */
+        keepCurrentAndAdvance: () => {
+            if (!currentKey || latest.current.marks.unavailableReason) return;
+            const keeping = !marked.has(currentKey);
+            keep(currentKey);
+            if (!keeping) return;
+            const at = units.findIndex(unit => unit.key === currentKey);
+            const open = [...units.slice(at + 1), ...units.slice(0, Math.max(0, at))].find(unit => !marked.has(unit.key));
+            if (open) moveTo({ path: params.path, key: open.key });
+        },
         discardCurrent: params.onDiscard ? () => { if (currentKey) void discard(currentKey); } : undefined,
         askCurrent: params.onAsk ? () => { if (currentKey) ask(currentKey); } : undefined,
         keepAll: () => { if (!marks.unavailableReason && units.length > 0) {

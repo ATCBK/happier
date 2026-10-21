@@ -151,7 +151,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
                 source: selector.kind === 'session' ? { kind: 'session', sessionId: 'session-a' } : selector,
                 repository: { rootPath: '/repo/exact' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } }),
             messages, readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => false,
-            onReplacedUnsavedEdits: () => {}, confirmUnsaved: { title: 'Replace draft' },
+            onReplacedUnsavedEdits: () => {}, changed: true, confirmUnsaved: { title: 'Replace draft' },
         }), { initialProps: { kind: 'session' } });
         expect(hook.getCurrent().changes.discardAll).toBeTypeOf('function');
         expect(hook.getCurrent().changes.restoreBeforeTurn).toBeUndefined();
@@ -173,7 +173,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
             comparison: ScmComparisonSchema.parse({ id: selected.comparisonId, source: { kind: 'turnCheckpoint', turnId: selected.turnId },
                 repository: { rootPath: '/repo/exact' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } }),
             messages, readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => false,
-            onReplacedUnsavedEdits: () => {}, confirmUnsaved: { title: 'Replace draft' },
+            onReplacedUnsavedEdits: () => {}, changed: true, confirmUnsaved: { title: 'Replace draft' },
         }), { initialProps: first });
         const renderedRestore = hook.getCurrent().changes.restoreBeforeTurn!;
         await hook.rerender(second);
@@ -198,7 +198,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
             target: { serverId, machineId: 'machine:capture-session', rootPath: '/repo/exact' },
             filePath: 'src/a.ts', selector: { kind: 'workingTree' }, comparison: null, messages,
             readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => dirty,
-            onReplacedUnsavedEdits, confirmUnsaved: { title: 'Replace draft' },
+            onReplacedUnsavedEdits, changed: true, confirmUnsaved: { title: 'Replace draft' },
         }), { initialProps: false });
         await act(async () => hook.getCurrent().changes.discardAll!());
         expect(boundary.calls.filter(call => call.method === RPC_METHODS.SCM_CHANGE_DISCARD)).toHaveLength(1);
@@ -225,7 +225,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
             target: { serverId, machineId: 'machine:capture-session', rootPath: '/repo/exact' },
             filePath: 'src/a.ts', selector: { kind: 'turnCheckpoint', turnId: 'turn-4' }, comparison, messages,
             readCurrentText: async () => '', refresh: async () => {}, hasUnsavedEdits: () => false,
-            onReplacedUnsavedEdits: () => {}, confirmUnsaved: { title: 'Replace draft' }, offerWholeTurnRollback,
+            onReplacedUnsavedEdits: () => {}, changed: true, confirmUnsaved: { title: 'Replace draft' }, offerWholeTurnRollback,
         }));
         for (const errorCode of ['DISCARD_UNSUPPORTED', 'CHANGE_MOVED_ON']) {
             boundary.response = { success: false, errorCode, error: errorCode };

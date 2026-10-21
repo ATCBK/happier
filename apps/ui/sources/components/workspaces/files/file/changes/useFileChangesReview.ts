@@ -13,6 +13,7 @@ import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScop
 import { useSessionSelector } from '@/sync/store/hooks';
 import { t } from '@/text';
 import { useFileChangesActions } from './useFileChangesActions';
+import { buildFileChangesLiveFiles } from './fileChangesNavigation';
 import { rangeOfReviewUnit, useHunkDiscard } from '@/components/workspaces/scm/review/hunkReview/useHunkDiscard';
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
 import { askAboutRanges } from '@/components/ui/code/selection/askAboutRanges';
@@ -42,6 +43,10 @@ export type FileChangesReviewParams = Readonly<{
   /** The Session's Agent display name, for copy that names it. */
   agentName?: string | null;
   onOpenFile?: (path: string) => void;
+  /** The project the page belongs to; without a Session, other files open in it. */
+  workspaceRefId?: string | null;
+  /** Uncommitted: the checkout's changed files in review order, so a reviewed file can lead to the next. */
+  changedPaths?: readonly string[];
   hasUnsavedEdits?: () => boolean;
   onReplacedUnsavedEdits?: () => void;
   offerWholeTurnRollback?: (turnId: string) => void;
@@ -144,7 +149,13 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     });
   }, [sessionId, unifiedDiff, scope, mainColumn]);
 
+  const liveFiles = React.useMemo(
+    () => live && params.changedPaths ? buildFileChangesLiveFiles(params.changedPaths, filePath, unifiedDiff ?? '') : undefined,
+    [live, params.changedPaths, filePath, unifiedDiff],
+  );
+  const workspaceRefId = params.workspaceRefId?.trim() || null;
   const controller = useHunkReviewController({
+    liveFiles,
     source:
       live || !captured
         ? { kind: 'live', root: scope.rootPath }
@@ -165,6 +176,9 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
       if (params.onOpenFile) { params.onOpenFile(cursor.path); return; }
       if (sessionId) void opener.open({ kind: 'session', sessionId, serverId: scope.serverId, path: cursor.path },
         { view: 'changes', changesScope: current, intent: 'preview' });
+      else if (workspaceRefId) void opener.open({ kind: 'project', workspaceRefId, serverId: scope.serverId,
+        machineId: scope.machineId, rootPath: scope.rootPath, path: cursor.path },
+        { view: 'changes', changesScope: current, intent: 'preview' });
     },
   });
   const hunks = React.useMemo(
@@ -172,6 +186,8 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     [controller.hunks, controller.strip.total],
   );
 
+  // Whether the shown scope has changes for this file; Discard and Open Changes both read it.
+  const changed = live ? Boolean(params.liveDiff) : capturedFile !== null;
   const restore = useFileChangesActions({
     target,
     messages,
@@ -181,6 +197,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     filePath,
     selector: changes.selector,
     comparison: captured,
+    changed,
     expectedHash: params.contentHash ?? null,
     deleted: capturedFile?.changeKind === 'deleted',
     hasUnsavedEdits: params.hasUnsavedEdits ?? (() => false),
@@ -253,12 +270,13 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     controller,
     hunks,
     reviewUnits: controller.reviewUnits,
-    scrollToLineId: controller.currentHunk?.firstChangeLineId,
+    scrollToLineId: controller.revealHunk?.firstChangeLineId,
     keyboard,
     discardDisabledReason,
     machineName,
     reachability,
     menuChanges: restore.changes,
+    changed,
     refresh: changes.refresh,
     undoAvailable,
     undo,

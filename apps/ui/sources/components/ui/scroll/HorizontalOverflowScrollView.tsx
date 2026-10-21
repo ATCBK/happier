@@ -11,6 +11,7 @@ type HorizontalOverflowScrollViewProps = Readonly<{
     showsHorizontalScrollIndicator?: boolean;
     /** Preserve selection when the content has no replacement copy control. */
     keepNativeTextSelection?: boolean;
+    onScroll?: ScrollViewProps['onScroll'];
 }>;
 
 export const HorizontalOverflowScrollView = React.memo<HorizontalOverflowScrollViewProps>((props) => {
@@ -21,6 +22,7 @@ export const HorizontalOverflowScrollView = React.memo<HorizontalOverflowScrollV
         showsHorizontalScrollIndicator: props.showsHorizontalScrollIndicator,
         style: props.style,
         contentContainerStyle: props.contentContainerStyle,
+        ...(props.onScroll ? { onScroll: props.onScroll, scrollEventThrottle: 16 } : {}),
         // Android selection competes with hesitant horizontal drags and opens the native magnifier.
         children: <HappierTextSelectabilityScope suppressSelection={Platform.OS === 'android' && props.keepNativeTextSelection !== true}>
             {props.children}

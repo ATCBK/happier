@@ -30,7 +30,11 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
     if (props.mode === 'text' && props.face === 'prose') return <ProseDiffViewer {...props} />;
 
     const wantsPierre = rendererMode === 'pierre';
+    // A leading lane (the File page's blame column) is a per-line cell of the canonical line renderer.
+    // Pierre has no per-line gutter slot (only hover utilities and after-line annotations), so a caller
+    // that asks for one is served by the renderer that draws it: the same column View shows.
     const pierreAllowed = wantsPierre
+        && !props.renderLeadingLane
         && isPierreDiffKillSwitchEnabled()
         && supportsPierreRuntime();
 

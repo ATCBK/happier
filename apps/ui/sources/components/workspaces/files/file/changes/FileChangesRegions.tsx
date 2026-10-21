@@ -3,6 +3,7 @@ import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
+import { DiffHunkRowRegistryContext, useDiffHunkReadingLine } from '@/components/ui/code/diff/hunks/diffHunkReadingLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { ReviewBar } from '@/components/workspaces/scm/review/hunkReview/ReviewBar';
 import { ReviewStrip } from '@/components/workspaces/scm/review/hunkReview/ReviewStrip';
@@ -70,6 +71,8 @@ export type FileChangesDiffSurface = Readonly<{
   hunks: DiffViewerHunks;
   reviewUnits: readonly ReviewUnit[];
   scrollToLineId?: string;
+  /** Native phones: the page's diff scroll events, so the bar follows the reading line. */
+  onScroll?: () => void;
 }>;
 
 /**
@@ -98,6 +101,14 @@ export function FileChangesBody(
     containsFocus: props.containsFocus,
   });
   const strip = review.controller.strip;
+  // Phones: the bar acts on the change crossing the reading line (P5 §3.11), through the one review cursor.
+  const readingLine = useDiffHunkReadingLine({
+    enabled: phone && review.status === 'ready' && strip.total > 0,
+    rootRef: diffRootRef,
+    revealKey: review.controller.revealHunk?.key ?? null,
+    keys: review.reviewUnits.map((unit) => unit.key),
+    onRead: review.controller.followReadingLine,
+  });
   const viewer = props.image ? resolveFileViewerKind({ path: props.image.filePath }) : null;
   if (props.image && viewer && (viewer.kind === 'image' || viewer.kind === 'svg') && review.status !== 'loading') {
     return (
@@ -156,13 +167,17 @@ export function FileChangesBody(
     );
   }
   return (
-    <View ref={diffRootRef} collapsable={false} style={styles.body}>
-      {props.children({
-        unifiedDiff: review.unifiedDiff,
-        hunks: review.hunks,
-        reviewUnits: review.reviewUnits,
-        scrollToLineId: review.scrollToLineId,
-      })}
+    <View ref={diffRootRef} collapsable={false} style={styles.body}
+      onTouchStart={phone && Platform.OS !== 'web' ? readingLine.onTouchStart : undefined}>
+      <DiffHunkRowRegistryContext.Provider value={phone ? readingLine.registry : null}>
+        {props.children({
+          unifiedDiff: review.unifiedDiff,
+          hunks: review.hunks,
+          reviewUnits: review.reviewUnits,
+          scrollToLineId: review.scrollToLineId,
+          ...(phone && Platform.OS !== 'web' ? { onScroll: readingLine.onScroll } : {}),
+        })}
+      </DiffHunkRowRegistryContext.Provider>
       {Platform.OS === 'web' && props.ask ? (
         <FileReadAskControls rootRef={diffRootRef} mode="diff" scopeId={props.ask.scopeId} scope={props.ask.scope}
           filePath={props.ask.filePath} text={review.unifiedDiff} sessionId={props.ask.sessionId} active={props.ask.active} />
@@ -174,7 +189,10 @@ export function FileChangesBody(
           total={strip.total}
           onPrevious={review.controller.previous}
           onNext={review.controller.next}
-          onKeep={review.controller.keepCurrent}
+          onKeep={review.controller.keepCurrentAndAdvance}
+          // A kept current change reads "Kept" (pressing it lets go, as on the row).
+          keepLabel={review.controller.currentHunk && review.hunks.stateOf?.(review.controller.currentHunk) === 'kept'
+            ? t('hunkReview.kept') : undefined}
           onDiscard={review.controller.discardCurrent}
           discardDisabledReason={review.discardDisabledReason}
           complete={

@@ -6,18 +6,18 @@ describe('File Changes whole-file restore', () => {
     it('offers the before-turn menu only for a turn and retains each rendered request', () => {
         const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source: { kind: 'session', sessionId: 'session-a' },
             repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
-        const session = resolveFileChangesRestoreIntent({ path: 'src/a.ts', selector: { kind: 'session' }, comparison });
+        const session = resolveFileChangesRestoreIntent({ path: 'src/a.ts', selector: { kind: 'session' }, comparison, changed: true });
         expect(session.entry).not.toBeNull();
         expect(session.restoreBeforeTurn).toBe(false);
         for (const selector of [{ kind: 'branch', head: 'HEAD', base: 'main' }, { kind: 'commit', commit: 'HEAD' }] as const) {
             const other = resolveFileChangesRestoreIntent({ path: 'src/a.ts', selector,
-                comparison: ScmComparisonSchema.parse({ ...comparison, source: selector }) });
+                comparison: ScmComparisonSchema.parse({ ...comparison, source: selector }), changed: true });
             expect(other.entry).not.toBeNull();
             expect(other.restoreBeforeTurn).toBe(false);
         }
         const turnComparison = ScmComparisonSchema.parse({ ...comparison, source: { kind: 'turnCheckpoint', turnId: 'turn-4' } });
         const turn = resolveFileChangesRestoreIntent({ path: 'src/b.ts', selector: { kind: 'turnCheckpoint', turnId: 'turn-4' },
-            comparison: turnComparison, expectedHash: 'b'.repeat(64) });
+            comparison: turnComparison, expectedHash: 'b'.repeat(64), changed: true });
         expect(turn.restoreBeforeTurn).toBe(true);
         expect(turn.entry).toMatchObject({ path: 'src/b.ts', expectedHash: 'b'.repeat(64) });
         expect(session.entry?.path).toBe('src/a.ts');
@@ -37,5 +37,14 @@ describe('File Changes whole-file restore', () => {
         expect(entry).not.toHaveProperty('changeKeys');
         expect(buildFileChangesRestoreEntry({ path: 'src/a.ts', selector: { kind: 'turnCheckpoint', turnId: 'turn-8' }, comparison })).toBeNull();
         expect(buildFileChangesRestoreEntry({ path: 'src/a.ts', selector: { kind: 'session' }, comparison: null })).toBeNull();
+    });
+    it('offers no restore for a file that has no changes in the shown scope', () => {
+        const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source: { kind: 'session', sessionId: 'session-a' },
+            repository: { rootPath: '/repo' }, endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
+        expect(resolveFileChangesRestoreIntent({ path: 'README.md', selector: { kind: 'workingTree' }, comparison: null, changed: false }))
+            .toEqual({ entry: null, restoreBeforeTurn: false });
+        expect(resolveFileChangesRestoreIntent({ path: 'README.md', selector: { kind: 'session' }, comparison, changed: false }).entry).toBeNull();
+        expect(resolveFileChangesRestoreIntent({ path: 'README.md', selector: { kind: 'workingTree' }, comparison: null, changed: true }).entry)
+            .toEqual({ kind: 'comparison', path: 'README.md', against: { source: { kind: 'workingTree' } } });
     });
 });

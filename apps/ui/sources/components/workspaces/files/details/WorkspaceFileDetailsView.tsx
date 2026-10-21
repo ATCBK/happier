@@ -100,7 +100,7 @@ import {
     useWorkspaceScmSnapshot,
 } from '@/sync/domains/state/storage';
 import { useWorkspaceReviewCommentDraftHandlers } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceReviewCommentDraftHandlers';
-import type { ScmFileStatus } from '@/scm/scmStatusFiles';
+import { selectScmChangedFiles, type ScmFileStatus } from '@/scm/scmStatusFiles';
 import { useFileScmStageActions } from '@/hooks/session/files/useFileScmStageActions';
 import { useWorkspaceFileScmStageActions } from '@/hooks/workspaces/scm/useWorkspaceFileScmStageActions';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
@@ -677,6 +677,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         [filePath, scmSnapshot]
     );
     const hasConflicts = scmSnapshot?.hasConflicts === true;
+    // The Review list's order, so a reviewed file's Next file is the one the list shows after it.
+    const changedPaths = React.useMemo(() => scmSnapshot ? selectScmChangedFiles(scmSnapshot).map(file => file.fullPath) : undefined, [scmSnapshot]);
     const snapshotSignature = React.useMemo(() => scmSnapshot ? buildScmDiffSnapshotSignature(scmSnapshot) : null, [scmSnapshot]);
 
     const [displayMode, setDisplayMode] = React.useState<FileDisplayMode>(() => (
@@ -1231,6 +1233,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         hasUnsavedEdits: () => editorDirty,
         onReplacedUnsavedEdits: cancelEditingFile,
         offerWholeTurnRollback,
+        workspaceRefId: props.workspaceRefId,
+        changedPaths,
     });
     // The peek names who made the change: the agent, and its turn when the marks come from one turn (ED3 "Claude, turn 3").
     const peekTurnNumber = changesReview.scopeKind === 'turn' ? changesReview.turnNumber : null;
@@ -1287,7 +1291,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         selectLines: scmWriteEnabled && (includeExcludeEnabled || virtualSelectionEnabled) && (lineSelectionCanStart || lineSelectionEnabled) && !commitSelectionModeActive
             ? () => onStartLineSelection() : undefined,
         revealInFiles: props.onRevealInFilesTree ? () => props.onRevealInFilesTree?.(filePath) : undefined,
-        openChanges: props.onOpenChanges,
+        // Only a file the shown scope changed has Changes to open (the same predicate as Discard all changes).
+        openChanges: changesReview.changed ? props.onOpenChanges : undefined,
         discardEdits: isEditingFile && editorDirty ? cancelEditingFile : undefined,
         toggleBlame: scmSnapshot?.capabilities?.readBlame === true ? () => patchFileView({ blame: !(fileView.blame === true) }) : undefined,
         changes: fileEntry?.kind === 'deleted' ? undefined : changesReview.menuChanges,
@@ -1477,7 +1482,10 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         scrollTestID="file-details-scroll"
                         onLayout={scrollFades.onViewportLayout}
                         onContentSizeChange={scrollFades.onContentSizeChange}
-                        onScroll={scrollFades.onScroll}
+                        onScroll={surface?.onScroll ? (event: Parameters<typeof scrollFades.onScroll>[0]) => {
+                            scrollFades.onScroll(event);
+                            surface.onScroll?.();
+                        } : scrollFades.onScroll}
                         renderLeadingLane={blameRegion.renderLeadingLane}
                         emphasizedLines={blameRegion.emphasizedLines}
                     />

@@ -66,6 +66,17 @@ describe('DiffViewer (web renderer selection)', () => {
         expect(screen.findAllByType(LazyMountOnScreen)[0] ?? null).toBeNull();
     });
 
+    it('serves a leading lane (File page blame) through the canonical line renderer while Pierre is selected', async () => {
+        const { DiffViewer } = await import('./DiffViewer.web');
+        const unifiedDiff = ['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -1,1 +1,2 @@', ' const a = 1;', '+const b = 2;'].join('\n');
+
+        const screen = await renderScreen(<DiffViewer mode="unified" unifiedDiff={unifiedDiff} filePath="a.ts"
+            renderLeadingLane={(line) => <span data-testid={`lane-${line.newLine ?? 'removed'}`} />} />);
+
+        expect(screen.findAllByType(pierreViewerType)[0] ?? null).toBeNull();
+        expect(screen.findAllByType(unifiedViewerType)[0] ?? null).toBeTruthy();
+    });
+
     it('wraps virtualized Pierre diffs in LazyMountOnScreen for lazy mounting', async () => {
         const { DiffViewer } = await import('./DiffViewer.web');
 

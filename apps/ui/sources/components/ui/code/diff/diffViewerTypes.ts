@@ -25,7 +25,8 @@ export type DiffHunkInfo = Readonly<{
 }>;
 
 export type DiffHunkReviewState = 'open' | 'kept' | 'discarding';
-export type DiffHunkAction = 'keep' | 'discard' | 'ask' | 'copy';
+/** `comment` opens the surface's review comment at the change (composed by the viewer from `onPressAddComment`). */
+export type DiffHunkAction = 'keep' | 'discard' | 'ask' | 'copy' | 'comment';
 
 export type DiffViewerHunks = Readonly<{
     onHunks?: (hunks: readonly DiffHunkInfo[]) => void;

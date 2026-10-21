@@ -1134,6 +1134,9 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         ? ({
             ...typographyStyle,
             ...selectionStyle,
+            // A flex column, so the Virtualizer's `flex: 1` takes the wrapper's height and scrolls inside it.
+            display: 'flex',
+            flexDirection: 'column',
             flex: 1,
             minHeight: 0,
             maxHeight: 'inherit',

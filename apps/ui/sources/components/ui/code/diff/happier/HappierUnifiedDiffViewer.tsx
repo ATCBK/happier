@@ -5,7 +5,7 @@ import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildC
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
-import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
+import { DiffHorizontalScroll } from './DiffHorizontalScroll';
 import { useSetting } from '@/sync/store/settingsReadHooks';
 
 import type { UnifiedDiffViewerProps } from '../diffViewerTypes';
@@ -202,12 +202,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
     if (wrapLines) return view;
 
     return (
-        <HorizontalOverflowScrollView
-            showsHorizontalScrollIndicator={true}
-            contentContainerStyle={{ flexGrow: 1 }}
-        >
-            {view}
-        </HorizontalOverflowScrollView>
+        <DiffHorizontalScroll>{view}</DiffHorizontalScroll>
     );
 });
 

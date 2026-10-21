@@ -2,7 +2,7 @@ import * as React from 'react';
 import type { DiffViewerProps } from '../diffViewerTypes';
 import { buildDiffHunkTable, type DiffHunkTable } from './buildDiffHunkTable';
 
-const EMPTY_TABLE: DiffHunkTable = { hunks: [], hunksByAfterLineId: new Map() };
+const EMPTY_TABLE: DiffHunkTable = { hunks: [], hunksByAfterLineId: new Map(), firstChangeLineByKey: new Map() };
 
 export function useDiffHunkTable(props: DiffViewerProps, enabled = true): DiffHunkTable {
     const unifiedDiff = props.mode === 'unified' ? props.unifiedDiff : undefined;

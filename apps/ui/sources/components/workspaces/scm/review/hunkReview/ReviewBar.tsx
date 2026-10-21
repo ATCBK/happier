@@ -47,22 +47,36 @@ export function ReviewBar(props: ReviewBarProps) {
     completeRef.current = complete;
   }, [props.complete]);
 
+  const nextFileName = props.complete?.onNextFile ? props.complete.nextFileName ?? null : null;
   const body = props.complete ? (
     <View style={styles.row}>
-      <Text
-        variant="body"
-        emphasis="semiBold"
-        numberOfLines={2}
-        style={[styles.message, { color: theme.colors.text.primary }]}
-      >
-        {t('hunkReview.fileReviewed')}
-      </Text>
-      {props.complete.nextFileName && props.complete.onNextFile ? (
+      {nextFileName ? (
+        // Lab rvp P2: the completion says it once, quietly, and names where Next file leads.
+        <View style={styles.message}>
+          <Text variant="label" numberOfLines={1} style={{ color: theme.colors.text.secondary }}>
+            {t('hunkReview.fileReviewed')}
+          </Text>
+          <Text testID="review-bar-next-file-name" variant="body" emphasis="semiBold" numberOfLines={1}
+            ellipsizeMode="middle" style={{ color: theme.colors.text.primary }}>
+            {nextFileName}
+          </Text>
+        </View>
+      ) : (
+        <Text
+          variant="body"
+          emphasis="semiBold"
+          numberOfLines={2}
+          style={[styles.message, { color: theme.colors.text.primary }]}
+        >
+          {t('hunkReview.fileReviewed')}
+        </Text>
+      )}
+      {nextFileName && props.complete.onNextFile ? (
         <RoundButton
           testID="review-bar-next-file"
           size="normal"
           title={t('hunkReview.nextFile')}
-          accessibilityHint={props.complete.nextFileName}
+          accessibilityHint={nextFileName}
           onPress={props.complete.onNextFile}
         />
       ) : null}
@@ -137,7 +151,8 @@ export function ReviewBar(props: ReviewBarProps) {
 
   return (
     <View testID={props.testID} pointerEvents="box-none" style={styles.anchor}>
-      <FloatingTabBarSurface bottomInset={insets.bottom}>
+      {/* Controls at both ends (‹ 2 of 7 › … Discard · Keep): the capsule spans the gutters, like the File page bar. */}
+      <FloatingTabBarSurface bottomInset={insets.bottom} stretch>
         {body}
       </FloatingTabBarSurface>
     </View>
@@ -164,6 +179,7 @@ const styles = StyleSheet.create((theme) => ({
   },
   message: {
     flex: 1,
+    minWidth: 0,
     paddingLeft: theme.space.s8,
   },
   grow: {

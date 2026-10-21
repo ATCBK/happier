@@ -3,6 +3,8 @@ import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { TactilePressable } from '@/components/ui/interactions/TactilePressable';
+import { hapticsLight } from '@/components/ui/theme/haptics';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { resolveCodeMonoFontFamily } from '@/components/ui/code/codeTypography';
@@ -16,6 +18,8 @@ import type {
   DiffHunkInfo,
   DiffViewerHunks,
 } from '../diffViewerTypes';
+import { DiffHunkRowRegistryContext } from './diffHunkReadingLine';
+import { HunkContextMenu } from './HunkContextMenu';
 
 /** The row label begins where the code text begins: past the two number columns of a diff gutter. */
 const ROW_TEXT_INSET = resolveCodeEditorGutterMetrics({
@@ -30,6 +34,10 @@ const ROW_TEXT_INSET = resolveCodeEditorGutterMetrics({
  */
 /** Below this the row drops its range and key hints so the change name and both buttons fit. */
 const NARROW_ROW_WIDTH = 320;
+
+/** The visible width of an unwrapped code column that scrolls sideways (Happier renderer); null when it wraps. */
+export type DiffHunkRowViewport = Readonly<{ width: number; offsetX: number }>;
+export const DiffHunkRowViewportContext = React.createContext<DiffHunkRowViewport | null>(null);
 
 /** A px inset, or a CSS length on web (Pierre's code column measures its text inset in `ch`). */
 export const DiffHunkRowTextInsetContext = React.createContext<number | `${number}ch`>(ROW_TEXT_INSET);
@@ -101,6 +109,20 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
   const keepReason = keep ? reason('keep') : null;
   const shownReason = current ? (discardReason ?? keepReason) : null;
   const textInset = React.useContext(DiffHunkRowTextInsetContext);
+  // In a sideways-scrolling column the row spans the visible width and stays pinned to its left edge,
+  // so its actions sit at the pane edge, not past the longest line.
+  const viewport = React.useContext(DiffHunkRowViewportContext);
+  // The surface follows which change crosses its reading line from the mounted rows (phone review).
+  const registry = React.useContext(DiffHunkRowRegistryContext);
+  const rowRef = React.useRef<View | null>(null);
+  React.useEffect(() => (registry && rowRef.current ? registry.register(hunk, rowRef.current) : undefined), [registry, hunk]);
+  // Phones: the row is a quiet label; a long press opens the change's menu (lab ade-shell RV3 P3).
+  const [menuOpen, setMenuOpen] = React.useState(false);
+  const hasMenu = phone && Boolean(keep || discard || review.actions?.ask || review.actions?.copy || review.actions?.comment);
+  const openMenu = React.useCallback(() => {
+    void hapticsLight();
+    setMenuOpen(true);
+  }, []);
   const reveal = React.useCallback(() => setRevealed(true), []);
   const conceal = React.useCallback(() => setRevealed(false), []);
   const hoverHandlers =
@@ -113,8 +135,9 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
         }
       : null;
 
-  return (
+  const row = (
     <HoverView
+      ref={rowRef}
       testID={`diff-hunk-row-${hunk.index}`}
       onLayout={onRowLayout}
       accessibilityState={{ busy }}
@@ -123,6 +146,9 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
         styles.row,
         // RN's DimensionValue has no `ch`; only the web Pierre adapter supplies one, and RNW passes CSS lengths through.
         { paddingLeft: textInset as number },
+        viewport
+          ? { width: viewport.width, transform: [{ translateX: viewport.offsetX }] }
+          : null,
         current
           ? [
               styles.rowCurrent,
@@ -241,6 +267,21 @@ export const DiffHunkRow = React.memo(function DiffHunkRow(
       ) : null}
     </HoverView>
   );
+  if (!hasMenu) return row;
+  return (
+    <>
+      <TactilePressable
+        testID={`diff-hunk-row-press-${hunk.index}`}
+        accessibilityLabel={t('hunkReview.change', { n }) + ' · ' + range}
+        onLongPress={openMenu}
+        static
+        containerStyle={styles.pressFill}
+      >
+        {row}
+      </TactilePressable>
+      <HunkContextMenu hunk={hunk} review={review} anchorRef={rowRef} open={menuOpen} onOpenChange={setMenuOpen} />
+    </>
+  );
 });
 
 /** Module-scope renderer handed to `useDiffHunkSlots`, so the slot identity stays stable. */
@@ -268,6 +309,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   rowCurrent: {
     backgroundColor: theme.colors.surface.selected,
+  },
+  // A web <button> shrinks to its content inside Pierre's block slot; the row spans its column.
+  pressFill: {
+    alignSelf: 'stretch',
+    width: '100%',
   },
   rowBusy: {
     opacity: 0.6,
