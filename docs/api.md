@@ -210,6 +210,12 @@ retries the mutation. Credential replacement or target replacement still takes
 the stale-response path. Session-viewer socket reconnects retain their Session
 role and do not register Account presence or Machine RPC handlers.
 
+In 0.3 development, ApiSocket disconnects the focused socket while the canonical
+Home supervisor is not online and reconnects it on a fresh online observation.
+A refused recovery dial re-enters the existing Home revalidation path, so a
+reachable Home does not leave that socket stranded. Retired configuration or
+transport callbacks cannot revalidate a replacement connection.
+
 ### Home authentication entry (0.3 development source)
 
 `POST /v1/auth/entry` is the public, stateless discovery endpoint for the
