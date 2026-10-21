@@ -114,6 +114,7 @@ export type WorkflowEventCatalogActionResultById = {
                         listSeparator?: 'comma' | 'newline' | undefined;
                         maxSelections?: number | undefined;
                         defaultValue?: JsonValue | undefined;
+                        unit?: 'bytes' | undefined;
                         visibleWhen?: InputPredicate | undefined;
                         visibleWhenContextSlot?: string | undefined;
                         requiredWhen?: InputPredicate | undefined;
@@ -167,6 +168,7 @@ export type WorkflowEventCatalogActionResultById = {
                         listSeparator?: 'comma' | 'newline' | undefined;
                         maxSelections?: number | undefined;
                         defaultValue?: JsonValue | undefined;
+                        unit?: 'bytes' | undefined;
                         visibleWhen?: InputPredicate | undefined;
                         visibleWhenContextSlot?: string | undefined;
                         requiredWhen?: InputPredicate | undefined;

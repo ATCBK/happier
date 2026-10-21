@@ -5293,6 +5293,7 @@ export type ActionInputFieldHint = {
     listSeparator?: 'comma' | 'newline' | undefined;
     maxSelections?: number | undefined;
     defaultValue?: JsonValue | undefined;
+    unit?: 'bytes' | undefined;
     visibleWhen?: InputPredicate | undefined;
     visibleWhenContextSlot?: string | undefined;
     requiredWhen?: InputPredicate | undefined;
@@ -5352,6 +5353,7 @@ export type ActionInputHints = {
         listSeparator?: 'comma' | 'newline' | undefined;
         maxSelections?: number | undefined;
         defaultValue?: JsonValue | undefined;
+        unit?: 'bytes' | undefined;
         visibleWhen?: InputPredicate | undefined;
         visibleWhenContextSlot?: string | undefined;
         requiredWhen?: InputPredicate | undefined;
@@ -5424,6 +5426,7 @@ export type EffectiveActionInputField = {
     listSeparator?: 'comma' | 'newline' | undefined;
     maxSelections?: number | undefined;
     defaultValue?: JsonValue | undefined;
+    unit?: 'bytes' | undefined;
     visibleWhen?: InputPredicate | undefined;
     visibleWhenContextSlot?: string | undefined;
     requiredWhen?: InputPredicate | undefined;
@@ -5660,6 +5663,7 @@ export type PluginActionContributionV2 = {
             listSeparator?: 'comma' | 'newline' | undefined;
             maxSelections?: number | undefined;
             defaultValue?: JsonValue | undefined;
+            unit?: 'bytes' | undefined;
             visibleWhen?: InputPredicate | undefined;
             visibleWhenContextSlot?: string | undefined;
             requiredWhen?: InputPredicate | undefined;
@@ -5785,6 +5789,7 @@ export type PluginToolContributionV2 = {
             listSeparator?: 'comma' | 'newline' | undefined;
             maxSelections?: number | undefined;
             defaultValue?: JsonValue | undefined;
+            unit?: 'bytes' | undefined;
             visibleWhen?: InputPredicate | undefined;
             visibleWhenContextSlot?: string | undefined;
             requiredWhen?: InputPredicate | undefined;
@@ -8058,6 +8063,7 @@ export type ActionSpec = {
             listSeparator?: 'comma' | 'newline' | undefined;
             maxSelections?: number | undefined;
             defaultValue?: JsonValue | undefined;
+            unit?: 'bytes' | undefined;
             visibleWhen?: InputPredicate | undefined;
             visibleWhenContextSlot?: string | undefined;
             requiredWhen?: InputPredicate | undefined;

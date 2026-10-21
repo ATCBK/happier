@@ -106,6 +106,7 @@ export type HomeHubLayoutActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 defaultValue?: unknown;
+                                unit?: 'bytes' | undefined;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -235,6 +236,7 @@ export type HomeHubLayoutActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 defaultValue?: unknown;
+                                unit?: 'bytes' | undefined;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -408,6 +410,7 @@ export type HomeHubLayoutActionInputById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         defaultValue?: unknown;
+                                        unit?: 'bytes' | undefined;
                                         visibleWhen?: unknown;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: unknown;
@@ -570,6 +573,7 @@ export type HomeHubLayoutActionInputById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 defaultValue?: unknown;
+                                unit?: 'bytes' | undefined;
                                 visibleWhen?: unknown;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: unknown;
@@ -754,6 +758,7 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     defaultValue?: JsonValue | undefined;
+                                    unit?: 'bytes' | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -879,6 +884,7 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         defaultValue?: JsonValue | undefined;
+                                        unit?: 'bytes' | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -1032,6 +1038,7 @@ export type HomeHubLayoutActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 defaultValue?: JsonValue | undefined;
+                                unit?: 'bytes' | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -1162,6 +1169,7 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         defaultValue?: JsonValue | undefined;
+                                        unit?: 'bytes' | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -1305,6 +1313,7 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     defaultValue?: JsonValue | undefined;
+                                    unit?: 'bytes' | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -1436,6 +1445,7 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     defaultValue?: JsonValue | undefined;
+                                    unit?: 'bytes' | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
@@ -1561,6 +1571,7 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         defaultValue?: JsonValue | undefined;
+                                        unit?: 'bytes' | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -1714,6 +1725,7 @@ export type HomeHubLayoutActionResultById = {
                                 listSeparator?: 'comma' | 'newline' | undefined;
                                 maxSelections?: number | undefined;
                                 defaultValue?: JsonValue | undefined;
+                                unit?: 'bytes' | undefined;
                                 visibleWhen?: InputPredicate | undefined;
                                 visibleWhenContextSlot?: string | undefined;
                                 requiredWhen?: InputPredicate | undefined;
@@ -1844,6 +1856,7 @@ export type HomeHubLayoutActionResultById = {
                                         listSeparator?: 'comma' | 'newline' | undefined;
                                         maxSelections?: number | undefined;
                                         defaultValue?: JsonValue | undefined;
+                                        unit?: 'bytes' | undefined;
                                         visibleWhen?: InputPredicate | undefined;
                                         visibleWhenContextSlot?: string | undefined;
                                         requiredWhen?: InputPredicate | undefined;
@@ -1987,6 +2000,7 @@ export type HomeHubLayoutActionResultById = {
                                     listSeparator?: 'comma' | 'newline' | undefined;
                                     maxSelections?: number | undefined;
                                     defaultValue?: JsonValue | undefined;
+                                    unit?: 'bytes' | undefined;
                                     visibleWhen?: InputPredicate | undefined;
                                     visibleWhenContextSlot?: string | undefined;
                                     requiredWhen?: InputPredicate | undefined;
