@@ -19,7 +19,6 @@ import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorS
 import { resolveServerScopedMachineInventoryKeys } from '@/sync/domains/machines/resolveServerScopedMachines';
 
 import { resolveHomeConnectionSummary } from './resolveHomeConnectionSummary';
-import { useActiveHomeConnectionHealth } from './useConnectionHealth';
 import { resolveConnectionHealth } from './resolveConnectionHealth';
 
 function subscribeApplied(listener: () => void): () => void {
@@ -35,8 +34,12 @@ function useReportedHomeServerId(): string | null {
 
 /** Whether the Home this device uses is unreachable: the canonical connection summary the footer shows. */
 export function useActiveHomeUnavailable(): boolean {
-    const health = useActiveHomeConnectionHealth();
-    return resolveHomeConnectionSummary({ healthKind: health.kind }).kind === 'unavailable';
+    return React.useSyncExternalStore(subscribeAppliedHomeSummary,
+        readAppliedHomeUnavailable, readAppliedHomeUnavailable);
+}
+
+function readAppliedHomeUnavailable(): boolean {
+    return readAppliedHomeSummaryKind() === 'unavailable';
 }
 
 /** The canonical connection summary of the applied Home, read without subscribing to its machines. */

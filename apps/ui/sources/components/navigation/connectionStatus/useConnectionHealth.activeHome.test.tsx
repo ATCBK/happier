@@ -18,6 +18,7 @@ const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();
 const { useActiveHomeConnectionHealth } = await import('./useConnectionHealth');
+const { useActiveHomeUnavailable } = await import('./HomeReachabilityGate');
 const initialStorageState = storage.getState();
 let appliedHomeId = '';
 let stagedHomeId = '';
@@ -45,6 +46,25 @@ function applyMachine(serverId: string, id: string, host: string) {
 }
 
 describe('useActiveHomeConnectionHealth', () => {
+    it('keeps unavailable-only readers quiet across Machine metadata publications while observing real Home failures', async () => {
+        applyMachine(appliedHomeId, 'machine-a', 'applied-a');
+        let renders = 0;
+        const hook = await renderHook(() => { renders++; return useActiveHomeUnavailable(); });
+        expect(hook.getCurrent()).toBe(false);
+        const settledRenders = renders;
+        await act(async () => { applyMachine(appliedHomeId, 'machine-a', 'renamed-a'); });
+        expect(hook.getCurrent()).toBe(false);
+        expect(renders).toBe(settledRenders);
+        await act(async () => { storage.setState({ endpointStatus: 'offline', socketStatus: 'disconnected' }); });
+        expect(hook.getCurrent()).toBe(true);
+        await act(async () => { publishAppliedActiveServerRuntimeAvailability(false); });
+        expect(hook.getCurrent()).toBe(false);
+        await act(async () => { publishAppliedActiveServerRuntimeAvailability(true); });
+        expect(hook.getCurrent()).toBe(true);
+        await act(async () => { storage.setState({ endpointStatus: 'online', socketStatus: 'connected' }); });
+        expect(hook.getCurrent()).toBe(false);
+    });
+
     it('keeps an empty active Home machine list unknown while it is loading', async () => {
         const hook = await renderHook(useActiveHomeConnectionHealth);
         expect(hook.getCurrent()).toMatchObject({ kind: 'connecting', machineCount: 0, onlineCount: 0,
