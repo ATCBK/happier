@@ -96,6 +96,7 @@ export type AccountProfileActionInputById = {
                     kind: 'declarative';
                     document: unknown;
                 };
+                title?: string | undefined;
             } | {
                 kind: 'group';
                 id: string;
@@ -111,6 +112,7 @@ export type AccountProfileActionInputById = {
                         kind: 'declarative';
                         document: unknown;
                     };
+                    title?: string | undefined;
                 }[];
                 title?: string | undefined;
             })[];
@@ -264,6 +266,7 @@ export type AccountProfileActionInputById = {
                     kind: 'declarative';
                     document: unknown;
                 };
+                title?: string | undefined;
             } | {
                 kind: 'group';
                 id: string;
@@ -279,6 +282,7 @@ export type AccountProfileActionInputById = {
                         kind: 'declarative';
                         document: unknown;
                     };
+                    title?: string | undefined;
                 }[];
                 title?: string | undefined;
             })[];
@@ -432,6 +436,7 @@ export type AccountProfileActionInputById = {
                     kind: 'declarative';
                     document: unknown;
                 };
+                title?: string | undefined;
             } | {
                 kind: 'group';
                 id: string;
@@ -447,6 +452,7 @@ export type AccountProfileActionInputById = {
                         kind: 'declarative';
                         document: unknown;
                     };
+                    title?: string | undefined;
                 }[];
                 title?: string | undefined;
             })[];
@@ -895,6 +901,7 @@ export type AccountProfileActionResultById = {
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
@@ -913,6 +920,7 @@ export type AccountProfileActionResultById = {
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
@@ -1663,6 +1671,7 @@ export type AccountProfileActionResultById = {
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
@@ -1681,6 +1690,7 @@ export type AccountProfileActionResultById = {
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
@@ -2061,6 +2071,7 @@ export type AccountProfileActionResultById = {
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
@@ -2079,6 +2090,7 @@ export type AccountProfileActionResultById = {
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
@@ -2459,6 +2471,7 @@ export type AccountProfileActionResultById = {
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
@@ -2477,6 +2490,7 @@ export type AccountProfileActionResultById = {
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
@@ -2859,6 +2873,7 @@ export type AccountProfileActionResultById = {
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
@@ -2877,6 +2892,7 @@ export type AccountProfileActionResultById = {
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
@@ -3257,6 +3273,7 @@ export type AccountProfileActionResultById = {
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
@@ -3275,6 +3292,7 @@ export type AccountProfileActionResultById = {
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
@@ -3655,6 +3673,7 @@ export type AccountProfileActionResultById = {
                             root: PluginDeclarativeNodeV2;
                         }>;
                     };
+                    title?: string | undefined;
                 } | {
                     kind: 'group';
                     id: string;
@@ -3673,6 +3692,7 @@ export type AccountProfileActionResultById = {
                                 root: PluginDeclarativeNodeV2;
                             }>;
                         };
+                        title?: string | undefined;
                     }[];
                     title?: string | undefined;
                 })[];
