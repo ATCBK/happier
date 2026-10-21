@@ -6,16 +6,48 @@ type SpeechLine =
   | Readonly<{ kind: 'marker'; indent: number; marker: '`' | '~'; length: number }>
   | Readonly<{ kind: 'prose' | 'code' | 'closing' }>;
 
-/** Parser context only: no accumulated assistant text or code is retained. */
+/** Parser context plus only an undecidable inline-link candidate; never the full reply or fenced code.
+ * The output ingestor admits each event against its turn payload budget before extending this state.
+ */
 export type VoiceSpeechTextState = Readonly<{
   fence: SpeechFence | null;
   line: SpeechLine;
   emphasis: readonly string[];
   previousCharacter: string;
   inlineCodeDelimiter: number;
+  pendingLink: string;
 }>;
 
-type SpeechEmphasisContext = { emphasis: string[]; previousCharacter: string; inlineCodeDelimiter: number };
+type SpeechEmphasisContext = { emphasis: string[]; previousCharacter: string; inlineCodeDelimiter: number; pendingLink: string };
+
+type SpeechMarkupToken = Readonly<{ start: number; end: number }> & (
+  | Readonly<{ kind: 'code'; delimiterAfter: number }>
+  | Readonly<{ kind: 'link'; label: string }>
+  | Readonly<{ kind: 'pending_link' }>
+);
+
+/** Speech recognizes simple inline links/images and opaque inline code, not full Markdown. */
+function nextSpeechMarkupToken(text: string, cursor: number, inlineCodeDelimiter: number): SpeechMarkupToken | null {
+  const markers = inlineCodeDelimiter ? /`+/gu : /`+|!?\[/gu;
+  markers.lastIndex = cursor;
+  for (let match = markers.exec(text); match; match = markers.exec(text)) {
+    const start = match.index;
+    if (match[0][0] === '`') {
+      const length = match[0].length;
+      return { kind: 'code', start, end: start + length, delimiterAfter: inlineCodeDelimiter === length ? 0 : inlineCodeDelimiter || length };
+    }
+    const labelStart = start + match[0].length;
+    const labelEnd = text.indexOf(']', labelStart);
+    if (labelEnd === -1) return { kind: 'pending_link', start, end: labelStart };
+    if (labelEnd === labelStart && match[0] !== '![') continue;
+    if (labelEnd + 1 === text.length) return { kind: 'pending_link', start, end: labelStart };
+    if (text[labelEnd + 1] !== '(') continue;
+    const end = text.indexOf(')', labelEnd + 2);
+    if (end === -1) return { kind: 'pending_link', start, end: labelStart };
+    return { kind: 'link', start, end: end + 1, label: text.slice(labelStart, labelEnd) };
+  }
+  return null;
+}
 
 function removeSpeechEmphasis(text: string, context: SpeechEmphasisContext, followingCharacter: string): string {
   const normalized = text.replace(/\*{1,2}|_{1,2}|~~/g, (marker: string, offset: number) => {
@@ -58,39 +90,46 @@ function normalizeSpeechProse(prose: string, context: SpeechEmphasisContext, atL
 function normalizeSpeechMarkup(
   prose: string,
   context: SpeechEmphasisContext,
+  final: boolean,
   atLineStart = !context.previousCharacter || context.previousCharacter === '\n',
 ): string {
+  const text = context.pendingLink + prose;
+  context.pendingLink = '';
   let spoken = '';
   let cursor = 0;
   const append = (end: number) => {
-    const part = prose.slice(cursor, end);
+    const part = text.slice(cursor, end);
     if (context.inlineCodeDelimiter) {
       spoken += part;
       context.previousCharacter = part.at(-1) ?? context.previousCharacter;
     } else {
-      spoken += normalizeSpeechProse(part, context, cursor === 0 ? atLineStart : prose[cursor - 1] === '\n', prose[end] ?? '');
+      spoken += normalizeSpeechProse(part, context, cursor === 0 ? atLineStart : text[cursor - 1] === '\n', text[end] ?? '');
     }
   };
-  const backticks = /`+/gu;
-  const tokens = /`+|!\[([^\]]*)\]\([^)]*\)|\[([^\]]+)\]\([^)]*\)/gu;
-  while (cursor < prose.length) {
+  while (cursor < text.length) {
     // Active code owns delimiter detection; link-looking content remains literal.
-    const pattern = context.inlineCodeDelimiter ? backticks : tokens;
-    pattern.lastIndex = cursor;
-    const match = pattern.exec(prose);
-    if (!match) break;
-    append(match.index);
-    const label = match[1] ?? match[2];
-    if (label !== undefined) spoken += normalizeSpeechMarkup(label, context, false);
-    else {
-      const length = match[0].length;
-      if (!context.inlineCodeDelimiter) context.inlineCodeDelimiter = length;
-      else if (context.inlineCodeDelimiter === length) context.inlineCodeDelimiter = 0;
-      else spoken += match[0];
+    const token = nextSpeechMarkupToken(text, cursor, context.inlineCodeDelimiter);
+    if (!token) break;
+    if (token.kind === 'pending_link') {
+      if (!final) {
+        append(token.start);
+        context.pendingLink = text.slice(token.start);
+        cursor = text.length;
+        break;
+      }
+      append(token.end);
+      cursor = token.end;
+      continue;
     }
-    cursor = match.index + match[0].length;
+    append(token.start);
+    if (token.kind === 'link') spoken += normalizeSpeechMarkup(token.label, context, true, false);
+    else {
+      if (context.inlineCodeDelimiter === token.delimiterAfter) spoken += text.slice(token.start, token.end);
+      context.inlineCodeDelimiter = token.delimiterAfter;
+    }
+    cursor = token.end;
   }
-  append(prose.length);
+  append(text.length);
   return spoken;
 }
 
@@ -109,6 +148,7 @@ export function normalizeVoiceSpeechTextChunk(
     emphasis: [...state?.emphasis ?? []],
     previousCharacter: state?.previousCharacter ?? '',
     inlineCodeDelimiter: state?.inlineCodeDelimiter ?? 0,
+    pendingLink: state?.pendingLink ?? '',
   };
   let prose = '';
   const input = markdown.replace(/\r\n?/g, '\n') + (final ? '\n' : '');
@@ -156,7 +196,7 @@ export function normalizeVoiceSpeechTextChunk(
       if (char.trim()) line = { kind: 'code' };
     } else if (line.kind === 'prose') prose += char;
   }
-  const text = normalizeSpeechMarkup(prose, context);
+  const text = normalizeSpeechMarkup(prose, context, final);
   return { text, state: { fence, line, ...context } };
 }
 

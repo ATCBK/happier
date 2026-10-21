@@ -108,6 +108,84 @@ describe('VoiceAgentOutputEventV1', () => {
     expect(/^word /u.test(text.slice(length))).toBe(true);
   });
 
+  it.each([
+    ['](https://example.test/docs). Then continue.', 'Ready first. See the parser documentation. Then continue.'],
+    ['', 'Ready first. See [the parser documentation'],
+    ['] remains literal.', 'Ready first. See [the parser documentation] remains literal.'],
+  ])('retains only an undecidable link candidate across events and flushes literal text: %s', (tail, expected) => {
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    let spoken = '';
+    for (const text of ['Ready first. See [the parser documentation', tail].filter(Boolean)) {
+      const result = ingestVoiceAgentOutputEventV1(state, {
+        v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text,
+      });
+      state = result.state;
+      spoken += result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text).join('');
+      if (state.nextSeq === 1) expect(spoken).toBe('Ready first. See ');
+    }
+    const text = `Ready first. See [the parser documentation${tail}`;
+    const result = ingestVoiceAgentOutputEventV1(state, {
+      v: 1, kind: 'turn_final', turnId: 'turn-1', seq: state.nextSeq, text,
+    });
+    spoken += result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text).join('');
+    expect(spoken.trim()).toBe(expected);
+    expect(result.effects.at(-1)).toEqual({ kind: 'persist_final', text });
+    expect(result.state.speechTextState).toBeNull();
+  });
+
+  it('normalizes a link label crossing the actual wire envelope without leaking its destination', () => {
+    const label = 'a'.repeat(17_000);
+    const text = `Ready first. See [${label}](https://example.test/docs). Then continue.`;
+    let remaining = text;
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    let spoken = '';
+    while (remaining) {
+      const length = resolveVoiceAgentOutputSpeechSegmentLength(remaining, { force: true, firstSegment: state.nextSeq === 0 });
+      const event = { v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text: remaining.slice(0, length) } as const;
+      expect(VoiceAgentOutputEventV1Schema.safeParse(event).success).toBe(true);
+      const result = ingestVoiceAgentOutputEventV1(state, event);
+      state = result.state;
+      spoken += result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text).join('');
+      remaining = remaining.slice(length);
+    }
+    expect(state.nextSeq).toBeGreaterThan(1);
+    expect(spoken).toBe(`Ready first. See ${label}. Then continue.`);
+  });
+
+  it('discards an undecidable link on cancellation and preserves the admitted turn budget', () => {
+    let result = ingestVoiceAgentOutputEventV1(createVoiceAgentOutputTurnV1('turn-1'), {
+      v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: 0, segmentId: 'first', text: 'Ready. [unfinished',
+    });
+    const pending = result.state;
+    result = ingestVoiceAgentOutputEventV1(pending, { v: 1, kind: 'turn_cancelled', turnId: 'turn-1', seq: 1 });
+    expect(result.effects).toEqual([{ kind: 'cancel_turn' }]);
+    expect(result.state.speechTextState).toBeNull();
+    expect(ingestVoiceAgentOutputEventV1(result.state, {
+      v: 1, kind: 'turn_final', turnId: 'turn-1', seq: 2, text: 'Ready. [unfinished](url)',
+    }).effects).toEqual([]);
+
+    let state = pending;
+    let rejected = false;
+    for (let index = 0; index < 20; index += 1) {
+      const previousSpeechState = state.speechTextState;
+      try {
+        state = ingestVoiceAgentOutputEventV1(state, {
+          v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+          segmentId: `large-${index}`, text: 'x'.repeat(16_384),
+        }).state;
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        expect(error.message).toBe('voice_output_budget_exceeded');
+        expect(state.speechTextState).toBe(previousSpeechState);
+        rejected = true;
+        break;
+      }
+    }
+    expect(rejected).toBe(true);
+  });
+
   it('packs a large semantic segment into accepted wire events without dropping text or splitting Unicode', () => {
     const text = `${'x'.repeat(16_383)}😀${'y'.repeat(5_000)}`;
     let remaining = text;

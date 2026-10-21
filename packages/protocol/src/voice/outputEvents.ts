@@ -219,9 +219,11 @@ export function ingestVoiceAgentOutputEventV1(
       speechTextState = tail.state;
       if (tail.text.trim()) effects.push({ kind: 'speak', segmentId: `${state.turnId}:final`, text: tail.text });
     }
+    speechTextState = null;
     effects.push({ kind: 'persist_final', text: event.text });
   } else {
     terminal = 'cancelled';
+    speechTextState = null;
     effects.push({ kind: 'cancel_turn' });
   }
 
