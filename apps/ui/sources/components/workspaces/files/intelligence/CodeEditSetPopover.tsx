@@ -190,6 +190,8 @@ function useEditSetCommit(params: Readonly<{
     const current = latest.current;
     const target = { machineId: current.scope.machineId, rootPath: current.scope.rootPath, scopeKey,
       options: { serverId: options.serverId ?? current.scope.serverId, accountId: options.accountId ?? author.binding?.scope.accountId } };
+    const path = current.filePath;
+    const languageId = current.languageId;
     const continuationSignal = author.getSignal();
     const operation =
       stage.action && stage.fileHash
@@ -204,12 +206,13 @@ function useEditSetCommit(params: Readonly<{
     >;
     try {
       await current.syncDocument?.().catch(() => null);
+      if (!alive.current || continuationSignal.aborted || !author.isCurrent() || currentScopeKey.current !== scopeKey) return;
       response = await machineLanguageIntelligenceApplyAction(
-        current.scope.machineId,
+        target.machineId,
         {
-          rootPath: current.scope.rootPath,
-          path: current.filePath,
-          ...(current.languageId ? { languageId: current.languageId } : {}),
+          rootPath: target.rootPath,
+          path,
+          ...(languageId ? { languageId } : {}),
           operation,
         },
         { ...target.options, continuationSignal, onApprovalPending: author.approval.requestApproval },
