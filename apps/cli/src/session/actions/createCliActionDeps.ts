@@ -8106,6 +8106,13 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
       return await requestSessionStop({ credentials: params.credentials, idOrPrefix: sessionId,
+        invokeMachineRpc: request => callMachineAction({ machineId: request.machineId, method: request.method,
+          request: request.request, requestId: request.requestId, timeoutMs: request.timeoutMs,
+          ...(request.authorization ? { authorization: request.authorization } : {}),
+          ...(request.signal ? { signal: request.signal } : {}),
+          ...(context ? { context, authority: context.authority, serverId: context.serverId } : {}),
+          effectActionId: 'session.stop',
+        }),
         ...(signal ? { signal } : {}),
         ...(context ? { actionContext: context } : {}),
         resolveAuthorizationHeaders: request => resolveServerRequestHeaders(context, 'session.stop', request),

@@ -256,6 +256,12 @@ Metadata PATCH transport uses that mutation's caller lifetime and cancellation,
 including explicit Stop intent and terminal-control retirement. The generic
 Session HTTP read timeout does not shorten a metadata mutation. CLI and UI Stop
 both reach the owning daemon's physical Stop owner. In development source, their
+Action adapter uses the incumbent exact-Machine dispatcher, preserving admitted
+requester custody for local execution and authenticated RPC for other targets.
+The Stop service reads either the physical daemon receipt or a requester
+executor's canonical public Stop result for that exact Session; a confirmed
+public receipt is not reparsed as an unavailable daemon, and an unconfirmed
+receipt remains unconfirmed. Their
 Account front doors must persist the same explicit Stop hold before issuing the
 physical operation. UI uses the scoped Sync metadata tuple writer and preserves
 the admitted Action context; automation cannot acquire a person's hold. Failed

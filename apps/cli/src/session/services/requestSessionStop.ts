@@ -3,7 +3,7 @@ import { configuration } from '@/configuration';
 import { stopDaemonSession } from '@/daemon/controlClient';
 import { listSessionMarkers, removeSessionMarkerIfOwned } from '@/daemon/sessionRegistry';
 import { createStopSession } from '@/daemon/sessions/stopSession';
-import { SessionStopCleanupIncompleteReasonSchema, SessionStopOutcomeSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { SessionStopCleanupIncompleteReasonSchema, SessionStopOutcomeSchema, SessionStopResultSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
 import type { SessionStopOutcome, SessionStopResult as SessionStopCommandResult } from '@happier-dev/protocol';
 import type {
@@ -124,9 +124,10 @@ async function stopSessionOnOwningMachine(params: Readonly<{
   requestId: string;
   signal?: AbortSignal;
   externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
-}>): Promise<StopSessionAttemptResult | ActionExecuteFailure> {
+  invokeMachineRpc?: typeof callMachineRpc;
+}>): Promise<StopSessionAttemptResult | Readonly<{ status: 'command_result'; result: SessionStopCommandResult }> | ActionExecuteFailure> {
   try {
-    const response = await callMachineRpc({
+    const response = await (params.invokeMachineRpc ?? callMachineRpc)({
       credentials: params.credentials,
       machineId: params.machineId,
       requestId: params.requestId,
@@ -156,6 +157,15 @@ async function stopSessionOnOwningMachine(params: Readonly<{
         return { status: 'incomplete', reason: 'transport_ambiguous' };
       }
       return refusal.data;
+    }
+    // A requester-account receiver executes the public Action with its own
+    // custody. Its result already includes physical/projection confirmation;
+    // it is not the raw daemon Stop result returned by a custodian receiver.
+    const command = SessionStopResultSchema.safeParse(response);
+    if (command.success) {
+      return command.data.sessionId === params.sessionId
+        ? { status: 'command_result', result: command.data }
+        : { status: 'incomplete', reason: 'target_daemon_unavailable' };
     }
     const result = StopSessionResultSchema.safeParse(response);
     return result.success
@@ -329,6 +339,8 @@ export async function requestSessionStop(params: Readonly<{
   idOrPrefix: string;
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
   externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
+  /** The Action host supplies its existing exact-Machine dispatch owner. */
+  invokeMachineRpc?: typeof callMachineRpc;
   resolveAuthorizationHeaders?: Parameters<typeof recordSessionExplicitStopIntent>[0]['resolveAuthorizationHeaders'];
 }>): Promise<
   | (Readonly<{ ok: true }> & SessionStopCommandResult)
@@ -435,10 +447,18 @@ export async function requestSessionStop(params: Readonly<{
         sessionId: resolved.sessionId,
         machineId,
         requestId: stopRequestId,
+        ...(params.invokeMachineRpc ? { invokeMachineRpc: params.invokeMachineRpc } : {}),
         ...(signal ? { signal } : {}),
         ...(params.externalAction ? { externalAction: params.externalAction } : {}),
       }));
       if ('ok' in physicalStopResult) return { ...physicalStopResult, code: physicalStopResult.errorCode };
+      if (physicalStopResult.status === 'command_result') {
+        const result = physicalStopResult.result;
+        return result.stopped
+          ? { ok: true, sessionId: result.sessionId, stopped: true }
+          : { ok: true, sessionId: result.sessionId, stopped: false,
+              ...(result.stopOutcome ? { stopOutcome: result.stopOutcome } : {}) };
+      }
       if (physicalStopResult.status !== 'stopped') {
         return {
           ok: true,

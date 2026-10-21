@@ -849,10 +849,18 @@ it('stops a led child through the real requester RPC receiver and preserves rece
             getAccountSettings: () => admitted.accountSettingsContext.settings },
           externalActionMachineRequestPrivateKey: installation.secretKey,
           externalActionMachineInstallationId: storage.state.installationId,
-          // Native process delivery is the boundary; the real requester executor
-          // must reach this dependency only after policy and fresh subtree admission.
-          sessionStop: async ({ sessionId: target }) => {
-            effects.push(target); f.markInactive(); return { status: 'stopped' };
+          // Use the installed Machine transport, rather than replacing the
+          // Session Stop service. Only physical process delivery is substituted.
+          machineActionDirectTargetTransport: { machineId: storage.state.machineId,
+            invoke: async (method, request) => {
+              expect(method).toBe(RPC_METHODS.STOP_SESSION);
+              const receiver = createMachineSessionStopLifecycleActionExecutor({ stopSession: async target => {
+                effects.push(target); f.markInactive(); return { status: 'stopped' };
+              } });
+              const result = await receiver.execute('session.stop', request);
+              if (!result.ok) throw new Error(result.errorCode);
+              return result.result;
+            },
           },
         });
         return { execute: async (id, input, context) => {
@@ -908,7 +916,7 @@ it('stops a led child through the real requester RPC receiver and preserves rece
     enable();
     expect(await run(), JSON.stringify({ receiverResults, requesterResults })).toMatchObject({ ok: true, result: { stopped: true } });
     expect(effects).toEqual([childId]);
-    expect(requesterResults).toContainEqual({ ok: true, result: { status: 'stopped' } });
+    expect(requesterResults).toContainEqual({ ok: true, result: { ok: true, sessionId: childId, stopped: true } });
     receiverDisabled = true;
     transport.mockClear();
     expect(await run()).toMatchObject({ ok: false, errorCode: 'action_disabled' });

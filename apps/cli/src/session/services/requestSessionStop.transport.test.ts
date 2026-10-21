@@ -25,6 +25,8 @@ import { markSessionListQueryResultV1 } from '@happier-dev/protocol/sessions/awa
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { resolveSessionResumeControlIntent } from './sessionExplicitStopIntent';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { SessionStopResultSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 const boundary = vi.hoisted(() => ({ socket: null as unknown, mode: 'timeout', connections: 0 }));
 vi.mock('socket.io-client', () => ({ io: () => { boundary.connections++; return boundary.socket; } }));
@@ -152,6 +154,12 @@ describe('requestSessionStop machine transport', () => {
           details: { cause: 'target_outside_led_subtree' } }, decoded.callId) });
       if (boundary.mode === 'action_unknown') callback?.({ ok: true, result: await socketRpcCodec.encodeResponse(content,
         { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { kind: 'outcomeUnknown' } }, decoded.callId) });
+      if (boundary.mode === 'requester_foreign' || boundary.mode === 'requester_unconfirmed') {
+        const result = SessionStopResultSchema.parse(boundary.mode === 'requester_foreign'
+          ? { sessionId: 'another-session', stopped: true }
+          : { sessionId, stopped: false, stopOutcome: { status: 'physical_stop_unconfirmed', reason: 'transport_ambiguous' } });
+        callback?.({ ok: true, result: await socketRpcCodec.encodeResponse(content, result, decoded.callId) });
+      }
       if (boundary.mode === 'disconnect') events.emit('disconnect', 'transport close');
       if (boundary.mode === 'forbidden') callback?.({ ok: false, error: 'Forbidden', errorCode: 'RPC_FORBIDDEN' });
       if (boundary.mode === 'unavailable') callback?.({ ok: false, error: 'RPC method not available', errorCode: 'RPC_METHOD_NOT_AVAILABLE' });
@@ -175,6 +183,32 @@ describe('requestSessionStop machine transport', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it.each(['owning-machine', 'another-machine'])('uses only the installed exact-Machine Stop receiver (%s)', async installedMachineId => {
+    active = true;
+    boundary.mode = 'unavailable';
+    const stoppedSessions: string[] = [];
+    const receiver = createMachineSessionStopLifecycleActionExecutor({ stopSession: async target => {
+      // Physical process Stop is the OS boundary. Metadata intent, locality,
+      // Action transport selection and the actual lifecycle receiver stay real.
+      expect(readPersistedStop()).toMatchObject({ cause: 'explicit_stop' });
+      stoppedSessions.push(target); active = false; return { status: 'stopped' };
+    } });
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: installedMachineId, invoke: async (method, request) => {
+        expect(method).toBe('stop-session');
+        const result = await receiver.execute('session.stop', request);
+        if (!result.ok) throw new Error(result.errorCode);
+        return result.result;
+      } },
+    });
+    const result = await deps.sessionStop!({ sessionId, context: { surface: 'cli', authority: 'present_user' } });
+    expect(result).toMatchObject(installedMachineId === 'owning-machine'
+      ? { ok: true, sessionId, stopped: true }
+      : { ok: true, sessionId, stopped: false, stopOutcome: { reason: 'target_daemon_unavailable' } });
+    expect(stoppedSessions).toEqual(installedMachineId === 'owning-machine' ? [sessionId] : []);
+    expect(issuedMethods).toEqual(installedMachineId === 'owning-machine' ? [] : ['owning-machine:stop-session']);
   });
 
   it('routes layout-one Stop through the Account-owned locality instead of caller-local control', async () => {
@@ -477,6 +511,15 @@ describe('requestSessionStop machine transport', () => {
       stopped: false,
       stopOutcome: { status: 'physical_stop_unconfirmed', reason: 'target_daemon_unavailable' },
     });
+  });
+
+  it.each(['requester_foreign', 'requester_unconfirmed'])('does not confirm a %s public Stop receipt', async mode => {
+    boundary.mode = mode;
+    await expect(requestSessionStop({ credentials, idOrPrefix: sessionId })).resolves.toEqual({
+      ok: true, sessionId, stopped: false, stopOutcome: { status: 'physical_stop_unconfirmed',
+        reason: mode === 'requester_foreign' ? 'target_daemon_unavailable' : 'transport_ambiguous' },
+    });
+    expect(issuedMethods).toEqual(['owning-machine:stop-session']);
   });
 
   it('keeps a receiver Action outcome-unknown response ambiguous even with an inactive row', async () => {
