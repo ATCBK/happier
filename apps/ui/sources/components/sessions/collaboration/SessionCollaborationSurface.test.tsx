@@ -205,7 +205,7 @@ beforeEach(async () => {
     await loadSyncSingletonForTests();
 });
 
-type CollaborationFeatureId = 'sharing.session' | 'sharing.public' | 'sessions.conversations';
+type CollaborationFeatureId = 'sharing.session' | 'sharing.public' | 'sessions.conversations' | 'sessions.following';
 
 async function publishFeatures(
     serverId: string,
@@ -853,6 +853,48 @@ describe('SessionCollaborationSurface', () => {
         publishSessionCollaborationIntent({ serverId: active.id, sessionId: 'same-id' }, 'access');
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(nativeFocus.setAccessibilityFocus).not.toHaveBeenCalled();
+    });
+
+    it('opens the Following page for "Edit what it follows" and leaves ordinary People navigation closed', async () => {
+        const active = await upsertServerProfile({ name: 'Following focus Home', serverUrl: 'https://collaboration-following-focus.example.test' });
+        credentials.serverId = active.id;
+        await publishFeatures(active.id, ['sharing.session', 'sharing.public', 'sessions.conversations', 'sessions.following']);
+        storage.setState((state) => ({
+            profileScope: { serverId: active.id, accountId: credentials.accountId },
+            sessions: {
+                ...state.sessions,
+                'same-id': {
+                    id: 'same-id', metadata: null, currentStorageState: 'hosted', transcriptShareable: true,
+                    access: { capabilities: { managePublicLink: false } },
+                } as unknown as Session,
+            },
+        }));
+        serveSession(active.id, { managePublicLink: false });
+        const target = { serverId: active.id, sessionId: 'same-id' };
+        const element = () => (
+            <AppPaneProvider>
+                <SessionCollaborationSurface target={target} />
+            </AppPaneProvider>
+        );
+
+        // Ordinary People navigation: the summary row is there and nothing opens.
+        const screen = await renderScreen(element());
+        await vi.waitFor(() => expect(screen.findByTestId('session-people-following-summary')).not.toBeNull());
+        expect(route.push).not.toHaveBeenCalled();
+
+        // The coordinator's "Edit what it follows" lands with the Following focus: this phone pushes its page once.
+        await act(async () => { route.applyParams({ collaborationFocus: 'following' }); });
+        await screen.update(element());
+        await vi.waitFor(() => expect(route.push).toHaveBeenCalledTimes(1));
+        expect(String(route.push.mock.calls[0]?.[0])).toContain('/follow-people');
+        expect(String(route.push.mock.calls[0]?.[0])).toContain('direction=following');
+        await vi.waitFor(() => expect(route.readParams().collaborationFocus).toBeUndefined());
+
+        // A repeated request on the retained surface opens it again.
+        await screen.update(element());
+        await act(async () => { route.applyParams({ collaborationFocus: 'following' }); });
+        await screen.update(element());
+        await vi.waitFor(() => expect(route.push).toHaveBeenCalledTimes(2));
     });
 
     it('consumes the Access focus query once so a later visit does not force Share open again', async () => {

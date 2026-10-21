@@ -161,13 +161,26 @@ export function useSessionPeopleFollow(target: SessionAddress) {
         const editor = projectAccountSessionFollowPolicyEditor(you);
         return editor.following && editor.model ? editor.model.preset as FollowPreset : 'none';
     }, [you]);
-    return { enabled, census, followersLoading: followers.loading, following, youLevel, youLoading: you.loading };
+    return {
+        enabled,
+        census,
+        followersLoading: followers.loading,
+        // A failed reverse read is unknown, never "nobody else": the sheet says so and offers the owner's re-read.
+        followersError: followers.error,
+        refreshFollowers: followers.refresh,
+        following,
+        youLevel,
+        youLoading: you.loading,
+    };
 }
 
 export type SessionPeopleFollow = ReturnType<typeof useSessionPeopleFollow>;
+/** A one-shot request to open People's Follow sheet in one direction; each new object is one request. */
+export type SessionPeopleFollowOpenRequest = Readonly<{ direction: SessionPeopleFollowDirection }>;
 
 /** Followers in one line: your own level, then how many sessions and other people (never who) also follow it. */
 function describeFollowersSummary(people: SessionPeopleFollow): string | null {
+    if (people.followersError !== null && !people.census.sessions) return t('errors.unknownError');
     const you = people.youLevel === null ? null : joinHappierFacts(t('session.collaboration.pane.followersYou'),
         people.youLevel === 'none' ? t('session.follow.level.none') : t(`session.follow.policy.${people.youLevel}`));
     const { sessions, otherPeople } = people.census;
@@ -212,8 +225,13 @@ function countFollowers(people: SessionPeopleFollow): number | null {
 export const SessionPeopleFollowSections = React.memo(function SessionPeopleFollowSections(props: Readonly<{
     target: SessionAddress;
     session: Session | null;
-    /** Attached to the Following row so "Edit what it follows" can bring it into view. */
+    /** Attached to the Following row: the sheet floats from it and focus returns to it. */
     followingAnchorRef?: React.RefObject<View | null>;
+    /**
+     * A one-shot request to open a direction's sheet ("Edit what it follows" opens Following). Each new request object
+     * opens it once; ordinary People navigation passes none and the sheet stays closed.
+     */
+    openRequest?: SessionPeopleFollowOpenRequest | null;
 }>) {
     const people = useSessionPeopleFollow(props.target);
     const { census, following } = people;
@@ -255,14 +273,23 @@ export const SessionPeopleFollowSections = React.memo(function SessionPeopleFoll
     usePaneHeaderSlotContent(React.useMemo(() => ({ line: headerLine }), [headerLine]));
 
     const close = React.useCallback(() => setOpenDirection(null), []);
-    const open = (direction: SessionPeopleFollowDirection) => {
+    const { target } = props;
+    const open = React.useCallback((direction: SessionPeopleFollowDirection) => {
         if (anchored) { setOpenDirection(direction); return; }
         router.push(buildScopedSessionRouteHref({
-            ...props.target,
+            ...target,
             suffix: '/follow-people',
             query: { direction },
         }) as Href);
-    };
+    }, [anchored, router, target]);
+    const handledRequest = React.useRef<SessionPeopleFollowOpenRequest | null>(null);
+    const request = props.openRequest ?? null;
+    React.useEffect(() => {
+        // Applied once Following is known to be offered here, so a request never pushes a page that can't render.
+        if (!request || !people.enabled || handledRequest.current === request) return;
+        handledRequest.current = request;
+        open(request.direction);
+    }, [open, people.enabled, request]);
     if (!people.enabled) return null;
     const followersSummary = describeFollowersSummary(people);
     const followingSummary = describeFollowingSummary(people);
@@ -391,12 +418,18 @@ export function SessionPeopleFollowSheet(props: Readonly<{
                             query: { source: target.sessionId },
                         }) as Href);
                     }} />
-            ) : people.followersLoading ? <Item title={t('common.loading')} loading showChevron={false} mode="info" /> : null}
+            ) : people.followersLoading && people.followersError === null
+                ? <Item title={t('common.loading')} loading showChevron={false} mode="info" /> : null}
             {people.census.otherPeople ? (
                 <Item testID="session-people-followers-people" showChevron={false}
                     icon={<FollowerMark name="users" />}
                     title={t('session.collaboration.pane.followersPeople', { count: people.census.otherPeople })}
                     subtitle={t('session.collaboration.pane.followersPeopleNote')} />
+            ) : null}
+            {/* The Following list's own failed-read row: last-known followers stay, Retry re-reads. */}
+            {people.followersError !== null ? (
+                <Item testID="session-people-followers-error" title={t('errors.unknownError')} detail={t('common.retry')}
+                    accessibilityLiveRegion="polite" onPress={people.refreshFollowers} />
             ) : null}
         </ItemGroup>
     ) : (
@@ -406,7 +439,10 @@ export function SessionPeopleFollowSheet(props: Readonly<{
     );
     return frame({
         title: followers ? t('session.collaboration.pane.followersTitle') : t('session.follow.sources.title'),
-        subtitle: (followers ? describeFollowersSummary(people) : describeFollowingSummary(people)) ?? '',
+        // One message per state: a failed read is said by the list's own Retry row, not again in the header.
+        subtitle: (followers
+            ? (people.followersError !== null && !people.census.sessions ? null : describeFollowersSummary(people))
+            : (people.following.error !== null && !people.following.projection ? null : describeFollowingSummary(people))) ?? '',
         mark: <FollowerMark name={followers ? 'users' : 'bell'} />,
         body,
         footer,

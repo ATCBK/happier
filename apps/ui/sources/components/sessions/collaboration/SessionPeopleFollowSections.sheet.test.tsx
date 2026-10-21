@@ -49,13 +49,19 @@ type Screen = Awaited<ReturnType<typeof renderSettingsView>>;
  * The Followers sheet over a real census projection. The pane's reverse read needs a stored Home credential this
  * harness doesn't provide, so the sheet receives the projection that read would produce.
  */
-function FollowersSheet(props: Readonly<{ sources: readonly FollowSourceRelationV1[] }>) {
+function FollowersSheet(props: Readonly<{
+    sources: readonly FollowSourceRelationV1[] | null;
+    followersError?: string | null;
+    refreshFollowers?: () => void;
+}>) {
     const anchorRef = React.useRef(null);
     const focusReturnRef = React.useRef(null);
     const people = {
         enabled: true,
-        census: projectSessionFollowerCensus({ sources: props.sources, follows: [], peopleCount: 1 }),
+        census: projectSessionFollowerCensus(props.sources ? { sources: props.sources, follows: [], peopleCount: 1 } : null),
         followersLoading: false,
+        followersError: props.followersError ?? null,
+        refreshFollowers: props.refreshFollowers ?? (() => {}),
         following: { projection: null, loading: false, error: null, refresh: async () => {} },
         youLevel: 'quiet' as const,
         youLoading: false,
@@ -144,6 +150,58 @@ describe('People Follow summary rows and their sheet', () => {
         expect(api.list.mock.calls.map(([address]) => address)).not.toContainEqual({ serverId: 'home-a', sessionId: 'lead' });
         expect(router.push).not.toHaveBeenCalled();
         await screen.unmount();
+    });
+
+    it('opens the Following sheet for an "Edit what it follows" request, again when repeated, and never without one', async () => {
+        const request = (direction: 'followers' | 'following') => ({ direction });
+        const screen = await renderSettingsView(<SessionPeopleFollowSections target={target} session={null} openRequest={null} />);
+        await vi.waitFor(() => expect(screen.findByTestId('session-people-following-summary')).not.toBeNull());
+        // Ordinary People navigation stays closed.
+        expect(screen.findByTestId('session-people-follow-sheet')).toBeNull();
+
+        await screen.update(<SessionPeopleFollowSections target={target} session={null} openRequest={request('following')} />);
+        await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-worker')).not.toBeNull());
+        expect(screen.findByTestId('session-people-follow-sheet')).not.toBeNull();
+        await press(screen, 'session-people-follow-sheet-done');
+        expect(screen.findByTestId('session-people-follow-sheet')).toBeNull();
+
+        // The same request issued again (a new one-shot intent) opens it again.
+        await screen.update(<SessionPeopleFollowSections target={target} session={null} openRequest={request('following')} />);
+        await vi.waitFor(() => expect(screen.findByTestId('session-people-follow-sheet')).not.toBeNull());
+        expect(router.push).not.toHaveBeenCalled();
+        await screen.unmount();
+    });
+
+    it('on a phone: an "Edit what it follows" request pushes the Following page', async () => {
+        vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 390, height: 844, scale: 3, fontScale: 1 });
+        const screen = await renderSettingsView(<SessionPeopleFollowSections target={target} session={null} openRequest={{ direction: 'following' }} />);
+        await vi.waitFor(() => expect(router.push).toHaveBeenCalledTimes(1));
+        expect(String(router.push.mock.calls[0]?.[0])).toContain('/follow-people');
+        expect(String(router.push.mock.calls[0]?.[0])).toContain('direction=following');
+        expect(screen.findByTestId('session-people-follow-sheet')).toBeNull();
+        await screen.unmount();
+    });
+
+    it('says a failed Followers read could not be checked, with Retry, instead of showing only you', async () => {
+        // The reverse read cannot bind a Home credential in this harness, so it settles unavailable, as a failed read does.
+        const pane = await renderSettingsView(<SessionPeopleFollowSections target={target} session={null} />);
+        await press(pane, 'session-people-followers-summary');
+        await vi.waitFor(() => expect(pane.findByTestId('session-people-followers-error')).not.toBeNull());
+        expect(pane.findByTestId('session-people-follower-you')).not.toBeNull();
+        await pane.unmount();
+
+        // Retry re-reads through the followers owner; a failed refresh keeps the last-known rows beside it.
+        const refreshFollowers = vi.fn();
+        const sheet = await renderSettingsView(<FollowersSheet sources={null} followersError="unavailable" refreshFollowers={refreshFollowers} />);
+        await press(sheet, 'session-people-followers-error');
+        expect(refreshFollowers).toHaveBeenCalledTimes(1);
+        await sheet.unmount();
+        const retained = await renderSettingsView(<FollowersSheet followersError="unavailable" sources={[
+            { sourceSessionId: 'this', destinationSessionId: 'lead', relation: 'follower', policy: { preset: 'quiet' }, deliveryState: 'eligible', hasPendingUpdates: false },
+        ]} />);
+        await vi.waitFor(() => expect(retained.findByTestId('session-people-follower-session-lead')).not.toBeNull());
+        expect(retained.findByTestId('session-people-followers-error')).not.toBeNull();
+        await retained.unmount();
     });
 
     it('on a phone: a summary pushes the directional page instead of floating a panel', async () => {

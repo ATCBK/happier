@@ -25,7 +25,7 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { useHomeDisplayName } from '@/components/settings/server/homeDisplayName';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
-import { SessionPeopleFollowSections } from './SessionPeopleFollowSections';
+import { SessionPeopleFollowSections, type SessionPeopleFollowOpenRequest } from './SessionPeopleFollowSections';
 import { SessionPresenceSection } from './SessionPresenceSection';
 import { SessionPeopleReadinessSection } from './SessionPeopleReadinessSection';
 import { SessionPublicLinkSection, useSessionCollaborationPublicLink, type SessionCollaborationPublicLink } from './SessionPublicLinkSection';
@@ -136,6 +136,8 @@ function SessionCollaborationAccountContent(props: Readonly<{ scope: ServerAccou
     const [openRowRequest, setOpenRowRequest] = React.useState<Readonly<{ key: string }> | undefined>(
         () => initialFocus === 'publicLink' ? { key: 'public-link' } : undefined,
     );
+    // "Edit what it follows" opens People's Following sheet (its page on a phone), not just its summary row.
+    const [followOpenRequest, setFollowOpenRequest] = React.useState<SessionPeopleFollowOpenRequest | null>(null);
     const publicLinkAnchor = React.useRef<React.ElementRef<typeof View>>(null);
     const appliedIntentId = React.useRef(0);
     const appliedRouteFocus = React.useRef<SessionCollaborationFocusTarget | null>(null);
@@ -194,11 +196,17 @@ function SessionCollaborationAccountContent(props: Readonly<{ scope: ServerAccou
             scheduleFocus(focusTarget === 'publicLink' ? publicLinkAnchor : refs.accessAnchor);
             return;
         }
-        if (focusTarget === 'responsible' || focusTarget === 'following') {
+        if (focusTarget === 'following') {
             setShareOpen(false);
-            scheduleFocus(focusTarget === 'following' ? refs.followingAnchor : refs.responsibleAnchor);
+            // The sheet takes focus and returns it to the Following row when it closes.
+            setFollowOpenRequest({ direction: 'following' });
+            return;
         }
-    }, [openShare, refs.accessAnchor, refs.followingAnchor, refs.responsibleAnchor, scheduleFocus]);
+        if (focusTarget === 'responsible') {
+            setShareOpen(false);
+            scheduleFocus(refs.responsibleAnchor);
+        }
+    }, [openShare, refs.accessAnchor, refs.responsibleAnchor, scheduleFocus]);
 
     React.useEffect(() => () => {
         if (focusHandle.current !== null) clearTimeout(focusHandle.current);
@@ -292,6 +300,7 @@ function SessionCollaborationAccountContent(props: Readonly<{ scope: ServerAccou
         handoff,
         responsibleAccountId: responsibilityController.responsibleAccountId ?? null,
         openRowRequest,
+        followOpenRequest,
     } as const;
     return (
         <View style={styles.surface}>
@@ -333,6 +342,7 @@ type PaneProps = Readonly<{
     /** Tagged on that person's access row in the Share panel. */
     responsibleAccountId: string | null;
     openRowRequest?: Readonly<{ key: string }>;
+    followOpenRequest: SessionPeopleFollowOpenRequest | null;
 }>;
 
 /**
@@ -385,7 +395,8 @@ function SessionCollaborationPane(props: PaneProps & Readonly<{ access: SessionA
         <>
             {/* Configured vs ready (C7): whether asking this session can work now, before who hears about it. */}
             <SessionPeopleReadinessSection scope={props.scope} sessionId={props.sessionId} />
-            <SessionPeopleFollowSections target={props.target} session={props.snapshot.session} followingAnchorRef={refs.followingAnchor} />
+            <SessionPeopleFollowSections target={props.target} session={props.snapshot.session} followingAnchorRef={refs.followingAnchor}
+                openRequest={props.followOpenRequest} />
         </>
     );
     return (
