@@ -17,10 +17,10 @@ export type VoiceSpeechTextState = Readonly<{
 
 type SpeechEmphasisContext = { emphasis: string[]; previousCharacter: string; inlineCodeDelimiter: number };
 
-function removeSpeechEmphasis(text: string, context: SpeechEmphasisContext): string {
+function removeSpeechEmphasis(text: string, context: SpeechEmphasisContext, followingCharacter: string): string {
   const normalized = text.replace(/\*{1,2}|_{1,2}|~~/g, (marker: string, offset: number) => {
     const before = text[offset - 1] ?? context.previousCharacter;
-    const after = text[offset + marker.length] ?? '';
+    const after = text[offset + marker.length] ?? followingCharacter;
     const active = context.emphasis.indexOf(marker);
     if (marker.startsWith('*')
       && /\d[ \t]*$/u.test(`${context.previousCharacter}${text.slice(0, offset)}`)
@@ -44,20 +44,22 @@ function removeSpeechEmphasis(text: string, context: SpeechEmphasisContext): str
   return normalized;
 }
 
-function normalizeSpeechProse(prose: string, context: SpeechEmphasisContext, atLineStart: boolean): string {
+function normalizeSpeechProse(prose: string, context: SpeechEmphasisContext, atLineStart: boolean, followingCharacter: string): string {
   const removeBlockMarker = (marker: string, offset: number) => offset === 0 && !atLineStart ? marker : '';
   const text = prose
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/\bhttps?:\/\/(?:www\.)?([^\s/?#)]+)[^\s)]*/gi, '$1')
     .replace(/^[ \t]*#{1,6}[ \t]+/gm, removeBlockMarker)
     .replace(/^[ \t]*>[ \t]?/gm, removeBlockMarker)
     .replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, removeBlockMarker)
     .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, removeBlockMarker);
-  return removeSpeechEmphasis(text, context);
+  return removeSpeechEmphasis(text, context, followingCharacter);
 }
 
-function normalizeSpeechMarkup(prose: string, context: SpeechEmphasisContext): string {
+function normalizeSpeechMarkup(
+  prose: string,
+  context: SpeechEmphasisContext,
+  atLineStart = !context.previousCharacter || context.previousCharacter === '\n',
+): string {
   let spoken = '';
   let cursor = 0;
   const append = (end: number) => {
@@ -66,19 +68,27 @@ function normalizeSpeechMarkup(prose: string, context: SpeechEmphasisContext): s
       spoken += part;
       context.previousCharacter = part.at(-1) ?? context.previousCharacter;
     } else {
-      const atLineStart = cursor === 0
-        ? !context.previousCharacter || context.previousCharacter === '\n'
-        : prose[cursor - 1] === '\n';
-      spoken += normalizeSpeechProse(part, context, atLineStart);
+      spoken += normalizeSpeechProse(part, context, cursor === 0 ? atLineStart : prose[cursor - 1] === '\n', prose[end] ?? '');
     }
   };
-  for (const match of prose.matchAll(/`+/gu)) {
+  const backticks = /`+/gu;
+  const tokens = /`+|!\[([^\]]*)\]\([^)]*\)|\[([^\]]+)\]\([^)]*\)/gu;
+  while (cursor < prose.length) {
+    // Active code owns delimiter detection; link-looking content remains literal.
+    const pattern = context.inlineCodeDelimiter ? backticks : tokens;
+    pattern.lastIndex = cursor;
+    const match = pattern.exec(prose);
+    if (!match) break;
     append(match.index);
-    const length = match[0].length;
-    if (!context.inlineCodeDelimiter) context.inlineCodeDelimiter = length;
-    else if (context.inlineCodeDelimiter === length) context.inlineCodeDelimiter = 0;
-    else spoken += match[0];
-    cursor = match.index + length;
+    const label = match[1] ?? match[2];
+    if (label !== undefined) spoken += normalizeSpeechMarkup(label, context, false);
+    else {
+      const length = match[0].length;
+      if (!context.inlineCodeDelimiter) context.inlineCodeDelimiter = length;
+      else if (context.inlineCodeDelimiter === length) context.inlineCodeDelimiter = 0;
+      else spoken += match[0];
+    }
+    cursor = match.index + match[0].length;
   }
   append(prose.length);
   return spoken;

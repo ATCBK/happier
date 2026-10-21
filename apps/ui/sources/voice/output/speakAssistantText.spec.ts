@@ -77,6 +77,7 @@ describe('speakAssistantText', () => {
     ['**Done.** See [the PR](https://example.test/pull/1).\n```ts\nconst a = 1;\n```', 'Done. See the PR.'],
     ['```sh\nls -la\n```', ''],
     ['Call `f(*args, **kwargs)`.', 'Call f(*args, **kwargs).'],
+    ['See [`parser`](https://example.test/docs) and literal `[x](url)`.', 'See parser and literal [x](url).'],
   ])('normalizes complete assistant speech before provider dispatch: %s', async (text, spoken) => {
     await speakAssistantText({ text, settings: { voice: { providerId: 'local_direct', providers: {
       local_direct: { schemaVersion: 1, config: { tts: { provider: 'device' } } },

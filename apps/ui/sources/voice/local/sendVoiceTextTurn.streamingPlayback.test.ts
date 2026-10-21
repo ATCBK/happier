@@ -359,9 +359,9 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     expect(spoken.join(' ').replace(/\s+/g, ' ').trim()).toBe('Bundled first. Bundled second.');
   });
 
-  it.each(['device', 'happier.voice.google/google-cloud-tts'])('preserves normalized inline code through %s streamed playback', async provider => {
+  it.each(['device', 'happier.voice.google/google-cloud-tts'])('preserves normalized inline code and link labels through %s streamed playback', async provider => {
     await establishProductionBinding();
-    streamDeltas.current = ['Call `f(*args, ', '**kwargs)` and then **done**.'];
+    streamDeltas.current = ['Call `f(*args, ', '**kwargs)` and see [`parser`](u), literal `[x](url)`, then **done**.'];
 
     await sendVoiceTextTurn({
       sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
@@ -372,7 +372,7 @@ describe('sendVoiceTextTurn streaming playback convergence', () => {
     });
 
     const spoken = provider === 'device' ? readDeviceSpeech() : readBundledSpeech();
-    expect(spoken.join(' ').replace(/\s+/gu, ' ').trim()).toBe('Call f(*args, **kwargs) and then done.');
+    expect(spoken.join(' ').replace(/\s+/gu, ' ').trim()).toBe('Call f(*args, **kwargs) and see parser, literal [x](url), then done.');
   });
 
   it('plays accepted speech from every canonical tool round in order', async () => {
