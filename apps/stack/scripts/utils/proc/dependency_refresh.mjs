@@ -440,9 +440,17 @@ export async function withDependencyRefresh({
     throw new TypeError('withDependencyRefresh requires onDependenciesReady to be a function when provided');
   }
   const shouldRunDependencyReadyAction = onDependenciesReady !== null;
-  const beforeLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });
-  if (!force && !beforeLock.required && !shouldRunDependencyReadyAction
-    && !isDependencyRefreshMutationActive({ installDir, env })) return { refreshed: false, reason: 'up-to-date' };
+  if (!force && !shouldRunDependencyReadyAction) {
+    // Readiness is not mutation: share installed-tree custody with finite
+    // consumers, and wait as a reader when an installer is active. Release
+    // before requesting a real refresh; never upgrade a held reader to writer.
+    const readiness = await withDependencyConsumption({ installDir, env }, () =>
+      inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode }));
+    if (!readiness.required) return { refreshed: false, reason: 'up-to-date' };
+    if (!refreshExisting && readiness.selfReferentialNodeModulesLinkPath === null) {
+      return { refreshed: false, reason: 'refresh-disabled' };
+    }
+  }
 
   return await withDependencyRefreshLock({ installDir, env }, async ({ lockPath, owner }) => {
     const afterDependencyLock = await inspectDependencyRefresh({ installDir, componentDir, runtimeIdentity, installMode });

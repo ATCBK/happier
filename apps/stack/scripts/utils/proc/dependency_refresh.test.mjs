@@ -6,6 +6,76 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { inspectDependencyRefresh, isDependencyRefreshLockActive, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh, withDependencyRefreshLock, resolveDependencyRefreshLockPath } from './dependency_refresh.mjs';
+import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
+import { withWorkspaceBuildResources } from './workspace_build_admission.mjs';
+
+test('readiness without installation shares a long consumer even when source inputs are stale', { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-readonly-dependency-readiness-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await mkdir(fixture.path('node_modules'));
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(fixture.path('yarn.lock'), '# admitted\n');
+  await withDependencyRefresh({ installDir: fixture.root, env }, async () => {});
+  await writeFile(fixture.path('yarn.lock'), '# source advanced, installed tree remains coherent\n');
+  let enter, release, notifyWriter;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const queuedWriter = new Promise(resolve => { notifyWriter = resolve; });
+  t.mock.method(process.stderr, 'write', chunk => {
+    if (String(chunk).includes('dependency refresh lock')) notifyWriter('queued-writer');
+    return true;
+  });
+  const consumer = withWorkspaceBuildResources({ dependencyInstallDir: fixture.root, env }, async () => { enter(); await held; });
+  let readiness;
+  try {
+    await entered;
+    readiness = withDependencyRefresh({ installDir: fixture.root, env, refreshExisting: false },
+      async () => assert.fail('read-only readiness must never install'));
+    assert.equal(await Promise.race([readiness.then(() => 'ready'), queuedWriter]), 'ready',
+      'a no-install check must not become a writer behind a long finite consumer');
+    assert.deepEqual(await readiness, { refreshed: false, reason: 'refresh-disabled' });
+    assert.equal((await inspectDependencyRefresh({ installDir: fixture.root })).required, true,
+      'read-only admission must not certify newer source inputs');
+  } finally { release(); await Promise.allSettled([consumer, readiness].filter(Boolean)); }
+});
+
+test('readiness queued during installation remains a reader and waits for complete installed bytes', { timeout: 10000 }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-dependency-install-readiness-order-' });
+  const env = { ...process.env, HAPPIER_STACK_HOME_DIR: fixture.root, HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' };
+  delete env.HAPPIER_BUILD_DEPENDENCY_CUSTODY;
+  await mkdir(fixture.path('node_modules'));
+  await writeFile(fixture.path('package.json'), '{"private":true}');
+  await writeFile(fixture.path('yarn.lock'), '# fixture\n');
+  let enter, release, notifyWait;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const held = new Promise(resolve => { release = resolve; });
+  const waiting = new Promise(resolve => { notifyWait = resolve; });
+  t.mock.method(process.stderr, 'write', chunk => { if (String(chunk).includes('dependency refresh lock')) notifyWait(); return true; });
+  const install = withDependencyRefresh({ installDir: fixture.root, env }, async () => {
+    await writeFile(fixture.path('node_modules', 'tool'), 'partial'); enter(); await held;
+    await writeFile(fixture.path('node_modules', 'tool'), 'complete');
+  });
+  let check, consumer, checked = false, consumed = false;
+  try {
+    await entered;
+    check = withDependencyRefresh({ installDir: fixture.root, env }, async () => assert.fail('completed install must be reused'))
+      .then(result => { checked = true; return result; });
+    await waiting;
+    const directory = `${resolveDependencyRefreshLockPath(fixture.root, env)}.waiters`;
+    const tickets = await readdir(directory);
+    const roles = await Promise.all(tickets.filter(name => /^\d+\.json$/.test(name))
+      .map(async name => JSON.parse(await readFile(join(directory, name), 'utf8')).priority));
+    assert.deepEqual(roles, ['reader'], 'waiting for readiness must not reserve mutation priority');
+    consumer = withWorkspaceBuildResources({ dependencyInstallDir: fixture.root, env }, async () => {
+      assert.equal(await readFile(fixture.path('node_modules', 'tool'), 'utf8'), 'complete'); consumed = true;
+    });
+    assert.equal(checked, false); assert.equal(consumed, false, 'an active install excludes consumers');
+    release(); await Promise.all([install, check, consumer]);
+    assert.deepEqual(await check, { refreshed: false, reason: 'up-to-date' });
+    assert.equal(consumed, true);
+  } finally { release(); await Promise.allSettled([install, check, consumer].filter(Boolean)); }
+});
 
 test('dependency writers reject live inherited read custody instead of waiting on their containing reader', async t => {
   const root = await mkdtemp(join(tmpdir(), 'happier-dependency-read-upgrade-'));

@@ -6,12 +6,38 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { withWorkspaceBundleLock, WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
-import { runWorkspaceBuildAdmission, withWorkspaceBuildResources } from './workspace_build_admission.mjs';
+import { resolveWorkspaceBuildAdmissionInvocation, runWorkspaceBuildAdmission, withWorkspaceBuildResources } from './workspace_build_admission.mjs';
 import { resolveDependencyRefreshLockPath, withDependencyConsumption, withDependencyRefreshLock } from './dependency_refresh.mjs';
 import { spawnTestProcess } from '../../testkit/core/spawn_test_process.mjs';
 import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { join } from 'node:path';
+
+for (const platform of ['linux', 'win32']) test(`dependency admission selects the canonical reader resource on ${platform}`, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-dependency-admission-platform-' });
+  const env = { ...buildNativeAdmissionFixtureEnv(), HAPPIER_STACK_HOME_DIR: fixture.root };
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  // Platform selection is an OS boundary. The resource/queue implementation
+  // remains real; native Windows filesystem execution is a separate check.
+  Object.defineProperty(process, 'platform', { ...descriptor, value: platform });
+  let invocation;
+  try {
+    invocation = resolveWorkspaceBuildAdmissionInvocation({ command: process.execPath, args: ['-e', ''],
+      dependencyInstallDir: fixture.root, env });
+  } finally { Object.defineProperty(process, 'platform', descriptor); }
+  const rawLocks = platform === 'win32'
+    ? invocation.args[2]
+    : invocation.args.find(value => value.startsWith('--workspace-locks=')).slice('--workspace-locks='.length);
+  assert.deepEqual(JSON.parse(rawLocks), [{ kind: 'dependency', installDir: fixture.root,
+    path: resolveDependencyRefreshLockPath(fixture.root, env) }]);
+  if (platform === 'win32') {
+    assert.equal(invocation.command, process.execPath);
+    assert.equal(invocation.args[1], '--standalone');
+  } else {
+    assert.equal(invocation.command, '/bin/sh');
+    assert.ok(invocation.args.includes('--heavyweight-admission'));
+  }
+});
 
 test('Turbo preserves authenticated build transport context without forwarding unrelated environment', async t => {
   const require = createRequire(import.meta.url);
