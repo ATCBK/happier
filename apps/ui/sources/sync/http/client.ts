@@ -26,7 +26,7 @@ import { resolveActiveServerRuntimeOrigin } from '@/sync/runtime/nativeLoopbackT
 import { getActiveServerHomeCarrier } from '@/sync/domains/server/serverRuntime';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import { normalizeRequestBodyHeaders } from './requestBodyHeaders';
-import { bindAccountEncryptionObservation, matchesAccountEncryptionObservationCredentials, type AccountEncryptionObservationBinding } from './accountEncryptionObservationBinding';
+import { bindAccountEncryptionObservation, captureAccountEncryptionObservationForHome, matchesAccountEncryptionObservationCredentials, type AccountEncryptionObservationBinding } from './accountEncryptionObservationBinding';
 
 export { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
@@ -946,16 +946,40 @@ export function createServerFetchAtEndpoint(
  */
 export function createServerFetchForActiveServer(
     expectedActiveServer?: ExpectedActiveServerFetchBasis,
+    account?: Readonly<{ credentials: AuthCredentials; signal?: AbortSignal; isCurrent?: () => boolean }>,
 ): ServerResponseRequest {
-    const basis = expectedActiveServer ?? getActiveServerSnapshot();
+    const snapshot = getActiveServerSnapshot();
+    const basis = expectedActiveServer ?? snapshot;
     const captured = { serverId: basis.serverId, generation: basis.generation };
+    const isCurrent = () => {
+        const current = getActiveServerSnapshot();
+        return current.serverId === captured.serverId && current.generation === captured.generation
+            && account?.isCurrent?.() !== false;
+    };
     function request(path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
     function request<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
     async function request<T>(path: string, init?: RequestInit, options?: ServerFetchOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
+        throwIfAborted(account?.signal);
+        if (account && !isCurrent()) throw new StaleServerGenerationError();
         const scopedOptions = { ...options, expectedActiveServer: captured };
-        return consumeResponse ? await serverFetch(path, init, scopedOptions, consumeResponse) : await serverFetch(path, init, scopedOptions);
+        const cancellation = account?.signal ? mergeAbortSignals([account.signal, init?.signal ?? undefined]) : undefined;
+        try {
+            const scopedInit = cancellation ? { ...init, signal: cancellation.signal } : init;
+            return consumeResponse ? await serverFetch(path, scopedInit, scopedOptions, consumeResponse) : await serverFetch(path, scopedInit, scopedOptions);
+        } finally { cancellation?.dispose(); }
     }
-    return request;
+    if (!account || !isCurrent()) return request;
+    const runtimeOrigin = resolveActiveServerRuntimeOrigin(snapshot);
+    const homeCarrier = getActiveServerHomeCarrier();
+    const observation = captureAccountEncryptionObservationForHome({
+        serverId: captured.serverId, endpointUrl: snapshot.serverUrl, credentials: account.credentials,
+        isCurrent, signals: [account.signal],
+    });
+    // Lend only the socket admitted on this exact active publication. Keep the
+    // focused request's existing generation/abort owner, not an explicit endpoint path.
+    if (!observation || normalizeEndpointBase(observation.runtimeOrigin) !== normalizeEndpointBase(runtimeOrigin)
+        || observation.homeCarrierEndpointId !== (homeCarrier?.endpointId ?? null)) return request;
+    return bindAccountEncryptionObservation(request, observation);
 }
 
 /** Focused-Home compatibility wrapper. All request policy remains in `requestAtEndpoint`. */

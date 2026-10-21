@@ -53,7 +53,7 @@ import type { Artifact, ArtifactCreateRequest } from '@/sync/domains/artifacts/a
 import { buildWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
 import { buildWorkflowEditorDraftFromDefinition, validateWorkflowEditorDraft } from '@/sync/domains/workflows/workflowAuthoring';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
-import { flushHookEffects, renderHook, renderScreen } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook, renderScreen } from '@/dev/testkit';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { SessionTriggersSection } from '@/components/workflows/triggers/SessionTriggersSection';
 import { ConversationBindingV1Schema, SessionPullRequestBindingInputV1Schema } from '@happier-dev/channels-protocol/v1';
@@ -68,10 +68,11 @@ import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEnc
 import type { AutomationV3RunDetail } from '@happier-dev/protocol/automations/automationApiV3';
 import { WorkflowDefinitionListResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 import { buildKeepGoingTriggerAddRequest } from '@/components/sessions/workState/sessionGoalContinuation';
@@ -304,6 +305,14 @@ async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly
     const operations: Readonly<Record<string, unknown>>[] = [];
     const deletedResources: string[] = [];
     const artifacts = new Map<string, Artifact>();
+    const artifactCensus = (artifact: Artifact) => ArtifactAccessRecipientCensusResponseV1Schema.parse({
+        artifactId: artifact.id, ownerAccountId: accountId, access: 'owner', encryptionMode: mode,
+        dataEncryptionKey: mode === 'plain' ? null : artifact.dataEncryptionKey,
+        callerDataEncryptionKey: mode === 'plain' ? null : artifact.dataEncryptionKey,
+        provenanceDataEncryptionKey: mode === 'plain' ? null : artifact.provenanceDataEncryptionKey,
+        callerProvenanceDataEncryptionKey: mode === 'plain' ? null : artifact.provenanceDataEncryptionKey,
+        recipients: [],
+    });
     const automationRows = new Map<string, AutomationDefinitionDetail>();
     const automationWrites: string[] = [];
     runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
@@ -336,9 +345,16 @@ async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly
             if (init?.method !== 'POST') return json([...artifacts.values()]);
             const input = JSON.parse(String(init.body)) as ArtifactCreateRequest;
             const row: Artifact = { ...input, ownerAccountId: accountId, access: 'owner', encryptionMode: mode,
-                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+                publicAudience: 'none', headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
             artifacts.set(input.id, row);
             return json(row);
+        }
+        if (target.pathname === '/v1/artifacts/read' && init?.method === 'POST') {
+            return createArtifactReadBatchHttpResponse(JSON.parse(String(init.body)), artifactId => {
+                const artifact = artifacts.get(artifactId);
+                return artifact ? { artifactId, ok: true, artifact, recipientCensus: mode === 'plain' ? null : artifactCensus(artifact) }
+                    : { artifactId, ok: false, status: 404, error: 'artifact_not_found', retryable: false };
+            });
         }
         if (target.pathname.startsWith('/v1/artifacts/') && target.pathname.endsWith('/access/grants')) {
             const artifactId = decodeURIComponent(target.pathname.slice('/v1/artifacts/'.length, -'/access/grants'.length));
@@ -350,14 +366,7 @@ async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly
             if (!artifact) return json({ error: 'not-found' }, 404);
             // The real E2EE open prepares the current audience; this transport
             // has no additional recipients, but echoes the exact stored key.
-            return json(ArtifactAccessRecipientCensusResponseV1Schema.parse({
-                artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: mode,
-                dataEncryptionKey: mode === 'plain' ? null : artifact.dataEncryptionKey,
-                callerDataEncryptionKey: mode === 'plain' ? null : artifact.dataEncryptionKey,
-                provenanceDataEncryptionKey: mode === 'plain' ? null : artifact.provenanceDataEncryptionKey,
-                callerProvenanceDataEncryptionKey: mode === 'plain' ? null : artifact.provenanceDataEncryptionKey,
-                recipients: [],
-            }));
+            return json(artifactCensus(artifact));
         }
         if (target.pathname.startsWith('/v1/artifacts/')) {
             const artifactId = target.pathname.slice('/v1/artifacts/'.length);
@@ -923,6 +932,78 @@ describe('UI Workflow Action front door', () => {
             }
         } finally { h.account.dispose(); await connection?.dispose(); storage.setState(previousState); }
     });
+    it.each([false, true])('retires a retained Session read with its Account while preserving a sibling=%s', async (withSibling) => {
+        const previousState = storage.getState();
+        const previousApplied = getAppliedActiveServerSnapshot();
+        const previousAvailability = isAppliedActiveServerRuntimeAvailable();
+        const h = await createHarness('plain', { historicalSecret: new Uint8Array(32).fill(7) });
+        const responseGate = createDeferred<void>();
+        const started = createDeferred<AbortSignal>();
+        let account: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | undefined;
+        let review: ReturnType<typeof h.execute> | undefined;
+        let sibling: Promise<unknown> | undefined;
+        try {
+            h.automationRows.set('automation-retained', {
+                ...triggerSetRow('automation-retained', ''), workflowDefinitionId: null,
+                name: 'Old encrypted trigger', targetType: 'existingSession', existingSessionId: 'session-old',
+                templateCiphertext: AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED,
+                triggers: [storedTrigger('scheduled', scheduleTrigger)],
+            });
+            const encryption = await createEncryptionFromAuthCredentials(h.account.credentials);
+            const encryptedKey = encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(9),
+                recipientPublicKey: encryption.contentDataKey, randomBytes: length => new Uint8Array(length).fill(3) }), 'base64');
+            const request = runtimeFetch.getMockImplementation()!;
+            const sessionBoundary = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/session-old'
+                ? json({ session: { id: 'session-old', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
+                    encryptionMode: 'e2ee', metadata: 'encrypted-metadata', metadataVersion: 1,
+                    agentState: null, agentStateVersion: 1, dataEncryptionKey: encryptedKey, share: null } }) : undefined);
+            let sessionReads = 0;
+            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+                const target = new URL(String(url));
+                if (target.pathname !== '/v2/sessions/read-batch') return request(url, init);
+                sessionReads += 1;
+                if (!init?.signal) throw new Error('Expected the real Session read cancellation signal');
+                started.resolve(init.signal);
+                await responseGate.promise;
+                return await sessionBoundary.handle({ home: h.account.serverId, accountId, url: target,
+                    path: target.pathname, method: init.method ?? 'GET', headers: new Headers(init.headers),
+                    signal: init.signal, body: JSON.parse(String(init.body)) }) ?? request(url, init);
+            });
+            publishAppliedActiveServerSnapshot({ serverId: h.account.serverId, serverUrl: h.home.serverUrl,
+                generation: previousApplied.generation + 1 });
+            storage.setState({ profileScope: { serverId: h.account.serverId, accountId } });
+            account = await captureLazyActionAccountContext(h.account.serverId);
+            expect(account.invocationSignal).toBeUndefined();
+            const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+            const execute = createFrontDoorActionExecute(createDefaultActionExecutor({
+                workflowAction: h.createUiWorkflowAction({ account, transport: h.transport }),
+            }));
+            review = execute('workflow.trigger.list', { review: true, automationId: 'automation-retained' }, h.context);
+            const physicalSignal = await started.promise;
+            const writesBeforeRetirement = [...h.automationWrites];
+            if (withSibling) {
+                const { readSessionByIdHttp } = await import('@/sync/engine/sessions/sessionByIdHttp');
+                sibling = readSessionByIdHttp({ sessionId: 'session-old', token: h.account.credentials.token,
+                    accessProjectionVersion: 1, readTransport: h.account.readTransport,
+                    request: (path, init) => h.account.request(path, init, { includeAuth: false }) });
+            }
+            publishAppliedActiveServerRuntimeAvailability(false);
+            expect(account.accountLifetime.isCurrent()).toBe(false);
+            expect(physicalSignal.aborted).toBe(!withSibling);
+            responseGate.resolve();
+            expect(await review).toMatchObject({ ok: false });
+            if (sibling) expect(await sibling).toMatchObject({ ok: true, status: 200 });
+            expect(sessionReads).toBe(1);
+            expect(h.automationWrites).toEqual(writesBeforeRetirement);
+        } finally {
+            responseGate.resolve();
+            await Promise.allSettled([review, sibling]);
+            account?.dispose();
+            h.account.dispose();
+            publishAppliedActiveServerSnapshot(previousApplied, previousAvailability);
+            storage.setState(previousState);
+        }
+    });
     it('converts predecessor rows on read without asking Channels to change their binding identity', async () => {
         const h = await createHarness();
         try {
@@ -934,6 +1015,80 @@ describe('UI Workflow Action front door', () => {
             expect(result).toMatchObject({ ok: true, result: { sets: [{ automationId: 'automation-old', revision: 2, health: 'available' }] } });
             expect(h.automationRows.get('automation-old')?.executionRecipe).toMatchObject({ v: 2 });
             expect(h.transport).not.toHaveBeenCalled();
+        } finally { h.account.dispose(); }
+    });
+    it.each(['plain', 'e2ee'] as const)('hydrates the %s Account census in one concurrent round with a shared currentness read', async (mode) => {
+        const duplicates: AutomationDefinitionListItem[] = [];
+        const h = await createHarness(mode, { automations: duplicates });
+        try {
+            for (let index = 0; index < 6; index += 1) {
+                expect(await h.execute('workflow.trigger.add', {
+                    target: { kind: 'inline', definition }, project: { machineId: 'machine-a', directory: '/repo' },
+                    trigger: scheduleTrigger,
+                }, h.context)).toMatchObject({ ok: true });
+            }
+            if (mode === 'plain') {
+                const legacy: AutomationDefinitionDetail = { ...triggerSetRow('census-legacy', ''), workflowDefinitionId: null, triggers: [],
+                    targetType: 'newSession' as const, templateCiphertext: AUTOMATION_TEMPLATE_V02_PLAIN };
+                h.automationRows.set(legacy.id, legacy);
+                // A repeated summary (for example across changing pages) must not race the same legacy write.
+                duplicates.push(listedAutomation(legacy));
+                h.automationRows.set('census-review', { ...triggerSetRow('census-review', ''), workflowDefinitionId: null, triggers: [],
+                    targetType: 'existingSession', existingSessionId: 'session-old', templateCiphertext: AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED });
+                h.automationRows.set('census-unavailable', { ...triggerSetRow('census-unavailable', ''), workflowDefinitionId: null, triggers: [],
+                    executionRecipe: { v: 2, templateVersion: 1, triggerEvidence: null,
+                        workflow: { t: 'plain', v: { workspace: { directory: '/repo' }, executionTarget: { kind: 'session' } } } } });
+            }
+            const expectedIds = [...duplicates.map(row => row.id), ...h.automationRows.keys()]
+                .filter((id, index, ids) => ids.indexOf(id) === index);
+            const request = runtimeFetch.getMockImplementation()!;
+            let active = 0;
+            let peak = 0;
+            let currentnessReads = 0;
+            const details: string[] = [];
+            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+                const path = new URL(String(url)).pathname;
+                if (path === '/v1/account/encryption/currentness') {
+                    currentnessReads += 1;
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                const id = path.startsWith('/v3/automations/') ? decodeURIComponent(path.slice('/v3/automations/'.length)) : null;
+                if (!id || init?.method === 'PUT') return request(url, init);
+                details.push(id);
+                active += 1;
+                peak = Math.max(peak, active);
+                try {
+                    await new Promise(resolve => setTimeout(resolve, id === expectedIds[0] ? 40 : 10));
+                    return await request(url, init);
+                } finally { active -= 1; }
+            });
+            const started = performance.now();
+            const result = await h.execute('workflow.trigger.list', { scope: 'account_all' }, h.context);
+            console.info('FIX-CENSUS measurement', { mode, elapsedMs: Math.round(performance.now() - started),
+                rows: expectedIds.length, detailReads: details.length, peak, currentnessReads });
+            expect(result).toMatchObject({ ok: true });
+            if (!result.ok) throw new Error(JSON.stringify(result));
+            const { WorkflowTriggerListResultV1Schema } = await import('@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1');
+            const { sets } = WorkflowTriggerListResultV1Schema.parse(result.result);
+            expect.soft(sets.map(set => set.automationId)).toEqual(expectedIds);
+            expect.soft(details).toHaveLength(expectedIds.length);
+            expect.soft(peak).toBe(expectedIds.length);
+            // One fresh witness shared for opening, plus the fresh final disclosure check.
+            expect.soft(currentnessReads).toBeLessThanOrEqual(2);
+            if (mode === 'plain') {
+                expect(sets.find(set => set.automationId === 'census-legacy')).toMatchObject({ revision: 2, health: 'available' });
+                expect(sets.find(set => set.automationId === 'census-review')).toMatchObject({ enabled: false,
+                    health: 'source_unavailable', legacy: { lockedReason: 'review_required' } });
+                expect(sets.find(set => set.automationId === 'census-unavailable')).toMatchObject({ health: 'source_unavailable' });
+                expect(h.automationWrites.filter(write => write.startsWith('reconcile:'))).toEqual(
+                    expect.arrayContaining(['reconcile:census-legacy', 'reconcile:census-review']));
+                expect(h.automationWrites.filter(write => write === 'reconcile:census-legacy')).toHaveLength(1);
+                expect(h.automationWrites.filter(write => write === 'reconcile:census-review')).toHaveLength(1);
+            }
+            // A later invocation must obtain its own authority rather than retain this census's snapshot.
+            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => new URL(String(url)).pathname === '/v1/account/encryption/currentness'
+                ? json({ error: 'currentness_unavailable' }, 403) : request(url, init));
+            expect(await h.execute('workflow.trigger.list', { scope: 'account_all' }, h.context)).toMatchObject({ ok: false });
         } finally { h.account.dispose(); }
     });
     it('converts an existing-Session predecessor using its current Agent and placement, not stale template defaults', async () => {

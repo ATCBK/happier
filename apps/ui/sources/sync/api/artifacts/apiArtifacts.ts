@@ -21,7 +21,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { createScopedBatchResolutionSingleFlight, createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
-import { readHomeAccountReadRevision } from '@/sync/runtime/orchestration/homeAccountChange';
+import { invalidateHomeAccountReadJoins, readHomeAccountReadRevision } from '@/sync/runtime/orchestration/homeAccountChange';
 /** The /v1/artifacts transport cursor; shared by complete sync and Action paging. */
 export function encodeArtifactListCursor(row: Readonly<{ artifactId: string; updatedAt: number }>): string {
     return encodeBase64(new TextEncoder().encode(JSON.stringify({ updatedAt: row.updatedAt, id: row.artifactId })), 'base64url');
@@ -29,7 +29,7 @@ export function encodeArtifactListCursor(row: Readonly<{ artifactId: string; upd
 
 async function uploadArtifactContent(credentials: AuthCredentials, destination: ArtifactUploadDestinationV1,
     content: ArtifactBlobStoredContentV1, opts: Pick<ArtifactApiOptions, 'request' | 'signal'>): Promise<Response> {
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     const frame = encodeArtifactUploadFrameV1(destination, content);
     return (opts.request ?? serverFetch)(ARTIFACT_UPLOAD_PATH_V1, {
         method: 'POST', body: frame.buffer,
@@ -123,6 +123,22 @@ const artifactDetailReads = createScopedBatchResolutionSingleFlight<ArtifactRead
 const artifactOpaqueReads = createScopedResolutionSingleFlight<Artifact>();
 const artifactInventoryReads = createScopedResolutionSingleFlight<ArtifactListPage>();
 
+/** A write may commit even when its acknowledgement is refused or lost. */
+function artifactMutationAttempt<T>(opts: Pick<ArtifactApiOptions, 'serverId' | 'readTransport'>,
+    operation: () => Promise<T>): Promise<T> {
+    const forget = () => {
+        if (opts.serverId) invalidateHomeAccountReadJoins(opts.serverId);
+        if (opts.readTransport) {
+            const scope = opts.readTransport.scope ?? opts.readTransport.key;
+            artifactDetailReads.invalidate(scope);
+            artifactOpaqueReads.invalidate(scope);
+            artifactInventoryReads.invalidate(scope);
+        }
+    };
+    forget();
+    return operation().finally(forget);
+}
+
 function captureArtifactReadBinding(opts: Pick<ArtifactApiOptions, 'request' | 'readTransport'>) {
     const active = getActiveServerSnapshot();
     const activeRequest = opts.request || opts.readTransport ? undefined : createServerFetchForActiveServer(active);
@@ -211,15 +227,15 @@ export async function fetchArtifactReadBatch(credentials: AuthCredentials, artif
 /** The Home supplies only the isolated shell location, never opened HTML or a public grant. */
 export async function fetchArtifactHtmlPreviewLocation(credentials: AuthCredentials, artifactId: string,
     opts: Pick<ArtifactApiOptions, 'request' | 'signal'> = {}): Promise<string> {
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     const response = await (opts.request ?? serverFetch)(`/v1/artifacts/${encodeURIComponent(artifactId)}/html-preview`, {
         headers: { Authorization: `Bearer ${credentials.token}` }, ...(opts.signal ? { signal: opts.signal } : {}),
     }, { includeAuth: false, retry: 'none' });
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!response.ok) throw new HappyError('HTML preview is unavailable', false,
         { status: response.status, code: 'artifact_html_preview_unavailable' });
     const parsed = ArtifactHtmlPreviewResponseV1Schema.safeParse(await response.json());
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!parsed.success || new URL(parsed.data.url).pathname !== `/a/${encodeURIComponent(artifactId)}`)
         throw new HappyError('HTML preview is unavailable', false, { code: 'artifact_html_preview_unavailable' });
     return parsed.data.url;
@@ -228,15 +244,15 @@ export async function fetchArtifactHtmlPreviewLocation(credentials: AuthCredenti
 /** Authenticated bytes only: verify the requested identity and owner mode before opening. */
 export async function fetchArtifactBlob(credentials: AuthCredentials, artifactId: string, blobId: string,
     ownerMode: 'plain' | 'e2ee', opts: Pick<ArtifactApiOptions, 'request' | 'signal'> = {}) {
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     const response = await (opts.request ?? serverFetch)(`/v1/artifacts/${encodeURIComponent(artifactId)}/blobs/${encodeURIComponent(blobId)}`, {
         headers: { Authorization: `Bearer ${credentials.token}` }, ...(opts.signal ? { signal: opts.signal } : {}),
     }, { includeAuth: false, retry: 'none' });
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!response.ok) throw new HappyError('Artifact file is unavailable', false,
         { status: response.status, code: 'artifact_content_unavailable' });
     const parsed = ArtifactBlobReadResponseV1Schema.safeParse(await response.json());
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!parsed.success || parsed.data.blobId !== blobId) throw new HappyError('Artifact file is unavailable', false,
         { code: 'artifact_content_unavailable' });
     if ((ownerMode === 'plain') !== (parsed.data.content.t === 'plain')) throw new HappyError('Artifact file does not match its owner Account mode', false,
@@ -250,33 +266,33 @@ export async function fetchArtifactRevisions(
     artifactId: string,
     opts: Pick<ArtifactApiOptions, 'request' | 'signal'> = {},
 ) {
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     const response = await (opts.request ?? serverFetch)(`/v1/artifacts/${encodeURIComponent(artifactId)}/revisions`, {
         headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
         ...(opts.signal ? { signal: opts.signal } : {}),
     }, { includeAuth: false, retry: 'none' });
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!response.ok) {
         throw new HappyError('Artifact revisions are unavailable', false, { status: response.status, code: 'artifact_content_unavailable' });
     }
     const parsed = ArtifactRevisionListResponseV1Schema.safeParse(await response.json());
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!parsed.success) throw new HappyError('Artifact revision inventory is incomplete', false, { code: 'artifact_content_unavailable' });
     return parsed.data;
 }
 
 export async function fetchArtifactStorageUsage(credentials: AuthCredentials,
     opts: Pick<ArtifactApiOptions, 'request' | 'signal'> = {}) {
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     const response = await (opts.request ?? serverFetch)('/v1/artifacts/storage/usage', {
         headers: { Authorization: `Bearer ${credentials.token}` },
         ...(opts.signal ? { signal: opts.signal } : {}),
     }, { includeAuth: false, retry: 'none' });
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!response.ok) throw new HappyError('Artifact storage usage is unavailable', false,
         { status: response.status, code: 'content_unavailable' });
     const parsed = ArtifactStorageUsageV1Schema.safeParse(await response.json());
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (!parsed.success) throw new HappyError('Artifact storage usage is unavailable', false, { code: 'content_unavailable' });
     return parsed.data;
 }
@@ -286,53 +302,64 @@ export async function restoreArtifactRevision(credentials: AuthCredentials, inpu
     kind?: ArtifactCoarseKindV1;
     artifactId: string; bodyVersion: number; header: string; body?: string; expectedRevision: ArtifactRevisionV1;
     provenance?: string | null; provenanceDataEncryptionKey?: string | null;
-}>, opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'serverId'> = {}): Promise<ArtifactRevisionV1> {
-    opts.signal?.throwIfAborted();
-    const response = await (opts.request ?? serverFetch)(`/v1/artifacts/${encodeURIComponent(input.artifactId)}/revisions/${input.bodyVersion}/restore`, {
-        method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ header: input.header, ...(input.kind ? { kind: input.kind } : {}), expectedHeaderVersion: input.expectedRevision.headerVersion,
-            expectedBodyVersion: input.expectedRevision.bodyVersion, ...(input.body === undefined ? {} : { body: input.body }),
-            ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
-            ...(input.provenanceDataEncryptionKey === undefined ? {} : { provenanceDataEncryptionKey: input.provenanceDataEncryptionKey }) }),
-        ...(opts.signal ? { signal: opts.signal } : {}),
-    }, { includeAuth: false, retry: 'none' });
-    opts.signal?.throwIfAborted();
-    if (!response.ok) throw await readWriteRefusal(response, 'Artifact restore failed');
-    const value: unknown = await response.json();
-    opts.signal?.throwIfAborted();
-    if (value && typeof value === 'object' && Reflect.get(value, 'success') === false
-        && Reflect.get(value, 'error') === 'version-mismatch') {
-        throw new HappyError('Artifact was modified by another client', false, { code: 'version_mismatch' });
-    }
-    const revision = ArtifactRevisionV1Schema.safeParse(value && typeof value === 'object' ? {
-        headerVersion: Reflect.get(value, 'headerVersion'), bodyVersion: Reflect.get(value, 'bodyVersion'),
-    } : null);
-    if (!value || typeof value !== 'object' || Reflect.get(value, 'success') !== true || !revision.success)
-        throw new HappyError('Artifact restore result is unavailable', false, { code: 'content_unavailable' });
-    return revision.data;
+}>, opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'serverId' | 'readTransport'> = {}): Promise<ArtifactRevisionV1> {
+    throwIfAborted(opts.signal);
+    const active = opts.request ? undefined : getActiveServerSnapshot();
+    const mutationOptions = { ...opts, serverId: opts.serverId ?? active?.serverId };
+    const request = opts.request ?? createServerFetchForActiveServer(active);
+    return artifactMutationAttempt(mutationOptions, async () => {
+        const response = await request(`/v1/artifacts/${encodeURIComponent(input.artifactId)}/revisions/${input.bodyVersion}/restore`, {
+            method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ header: input.header, ...(input.kind ? { kind: input.kind } : {}), expectedHeaderVersion: input.expectedRevision.headerVersion,
+                expectedBodyVersion: input.expectedRevision.bodyVersion, ...(input.body === undefined ? {} : { body: input.body }),
+                ...(input.provenance === undefined ? {} : { provenance: input.provenance }),
+                ...(input.provenanceDataEncryptionKey === undefined ? {} : { provenanceDataEncryptionKey: input.provenanceDataEncryptionKey }) }),
+            ...(opts.signal ? { signal: opts.signal } : {}),
+        }, { includeAuth: false, retry: 'none' });
+        throwIfAborted(opts.signal);
+        if (!response.ok) throw await readWriteRefusal(response, 'Artifact restore failed');
+        const value: unknown = await response.json();
+        throwIfAborted(opts.signal);
+        if (value && typeof value === 'object' && Reflect.get(value, 'success') === false
+            && Reflect.get(value, 'error') === 'version-mismatch') {
+            throw new HappyError('Artifact was modified by another client', false, { code: 'version_mismatch' });
+        }
+        const revision = ArtifactRevisionV1Schema.safeParse(value && typeof value === 'object' ? {
+            headerVersion: Reflect.get(value, 'headerVersion'), bodyVersion: Reflect.get(value, 'bodyVersion'),
+        } : null);
+        if (!value || typeof value !== 'object' || Reflect.get(value, 'success') !== true || !revision.success)
+            throw new HappyError('Artifact restore result is unavailable', false, { code: 'content_unavailable' });
+        return revision.data;
+    });
 }
 
 /** The existing Artifact HTTP owner carries grants and fenced recipient keys. */
-export function createArtifactAccessApi(credentials: AuthCredentials, opts: Pick<ArtifactApiOptions, 'request'> = {}) {
+export function createArtifactAccessApi(credentials: AuthCredentials, opts: Pick<ArtifactApiOptions, 'request' | 'serverId' | 'readTransport'> = {}) {
     const send = async <T>(artifactId: string, leaf: string, schema: { parse: (value: unknown) => T },
         method?: string, input?: unknown, signal?: AbortSignal): Promise<T> => {
-        signal?.throwIfAborted();
-        const response = await (opts.request ?? serverFetch)(`/v1/artifacts/${encodeURIComponent(artifactId)}/access/${leaf}`, {
-            ...(method ? { method } : {}),
-            headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
-            ...(input === undefined ? {} : { body: JSON.stringify(input) }),
-            ...(signal ? { signal } : {}),
-        }, { includeAuth: false, retry: 'none' });
-        signal?.throwIfAborted();
-        const value: unknown = await response.json().catch(() => null);
-        signal?.throwIfAborted();
-        if (!response.ok) {
-            const known = ArtifactAccessErrorCodeV1Schema.safeParse(value && typeof value === 'object' ? Reflect.get(value, 'error') : undefined);
-            const code = known.success ? known.data
-                : response.status === 404 || response.status === 405 ? 'artifact_access_unavailable' : 'artifact_access_failed';
-            throw Object.assign(new Error(code), { code });
-        }
-        return schema.parse(value);
+        throwIfAborted(signal);
+        const active = opts.request ? undefined : getActiveServerSnapshot();
+        const mutationOptions = { ...opts, serverId: opts.serverId ?? active?.serverId };
+        const request = opts.request ?? createServerFetchForActiveServer(active);
+        const run = async () => {
+            const response = await request(`/v1/artifacts/${encodeURIComponent(artifactId)}/access/${leaf}`, {
+                ...(method ? { method } : {}),
+                headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
+                ...(input === undefined ? {} : { body: JSON.stringify(input) }),
+                ...(signal ? { signal } : {}),
+            }, { includeAuth: false, retry: 'none' });
+            throwIfAborted(signal);
+            const value: unknown = await response.json().catch(() => null);
+            throwIfAborted(signal);
+            if (!response.ok) {
+                const known = ArtifactAccessErrorCodeV1Schema.safeParse(value && typeof value === 'object' ? Reflect.get(value, 'error') : undefined);
+                const code = known.success ? known.data
+                    : response.status === 404 || response.status === 405 ? 'artifact_access_unavailable' : 'artifact_access_failed';
+                throw Object.assign(new Error(code), { code });
+            }
+            return schema.parse(value);
+        };
+        return method ? artifactMutationAttempt(mutationOptions, run) : run();
     };
     return {
         list: (input: ArtifactAccessGrantsListInputV1, signal?: AbortSignal) =>
@@ -443,11 +470,13 @@ export async function createArtifact(
     request: ArtifactCreateRequest,
     opts: ArtifactApiOptions = {},
 ): Promise<Artifact> {
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (request.memoryDecisionSource && request.blob)
         throw new HappyError('memory_decision_source_unsupported', false, { code: 'memory_decision_source_unsupported' });
+    const active = opts.request ? undefined : getActiveServerSnapshot();
+    const mutationOptions = { ...opts, serverId: opts.serverId ?? active?.serverId };
     const artifactRequest = opts.request ?? (() => {
-        const focusedRequest = createServerFetchForActiveServer();
+        const focusedRequest = createServerFetchForActiveServer(active);
         return ((path, init, options) => focusedRequest(path, init, { includeAuth: false, ...options })) satisfies ServerFetch;
     })();
     const scopedOptions = { ...opts, request: artifactRequest };
@@ -485,10 +514,10 @@ export async function createArtifact(
     };
 
     if (opts.retry === 'none') {
-        return await run();
+        return await artifactMutationAttempt(mutationOptions, run);
     }
 
-    return await backoff(run);
+    return await backoff(() => artifactMutationAttempt(mutationOptions, run));
 }
 
 /**
@@ -500,11 +529,13 @@ export async function updateArtifact(
     request: ArtifactUpdateRequest,
     opts: ArtifactApiOptions = {},
 ): Promise<ArtifactUpdateResponse> {
-    opts.signal?.throwIfAborted();
+    throwIfAborted(opts.signal);
     if (request.memoryDecisionSource && request.blob)
         throw new HappyError('memory_decision_source_unsupported', false, { code: 'memory_decision_source_unsupported' });
+    const active = opts.request ? undefined : getActiveServerSnapshot();
+    const mutationOptions = { ...opts, serverId: opts.serverId ?? active?.serverId };
     const artifactRequest = opts.request ?? (() => {
-        const focusedRequest = createServerFetchForActiveServer();
+        const focusedRequest = createServerFetchForActiveServer(active);
         return ((path, init, options) => focusedRequest(path, init, { includeAuth: false, ...options })) satisfies ServerFetch;
     })();
     const scopedOptions = { ...opts, request: artifactRequest };
@@ -548,10 +579,10 @@ export async function updateArtifact(
     };
 
     if (opts.retry === 'none') {
-        return await run();
+        return await artifactMutationAttempt(mutationOptions, run);
     }
 
-    return await backoff(run);
+    return await backoff(() => artifactMutationAttempt(mutationOptions, run));
 }
 
 /**
@@ -562,9 +593,11 @@ export async function deleteArtifact(
     artifactId: string,
     opts: ArtifactApiOptions & Readonly<{ expectedRevision?: Readonly<{ headerVersion: number; bodyVersion: number }>; onTransportIssued?: () => void }> = {},
 ): Promise<void> {
-    const request = opts.request ?? createServerFetchForActiveServer();
+    const active = opts.request ? undefined : getActiveServerSnapshot();
+    const mutationOptions = { ...opts, serverId: opts.serverId ?? active?.serverId };
+    const request = opts.request ?? createServerFetchForActiveServer(active);
     const run = async () => {
-        opts.signal?.throwIfAborted();
+        throwIfAborted(opts.signal);
         const revision = opts.expectedRevision;
         const path = `/v1/artifacts/${encodeURIComponent(artifactId)}${revision ? `/revision/${revision.headerVersion}/${revision.bodyVersion}` : ''}`;
         const response = await request(path, {
@@ -600,5 +633,5 @@ export async function deleteArtifact(
 
     // The Home may have committed before its acknowledgement was lost. Replaying
     // DELETE would turn that unknown outcome into a misleading not-found result.
-    await run();
+    await artifactMutationAttempt(mutationOptions, run);
 }

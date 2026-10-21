@@ -3,7 +3,8 @@ import type { InternalTaskActionId, InternalTaskListOutput, InternalTaskMutation
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { createTodoAccountKvTransport } from '@/sync/domains/todos/todoAccountKvTransport';
-import { serverFetch, type ServerFetch } from '@/sync/http/client';
+import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
+import { bindAccountEncryptionObservation, readAccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 import { sync } from '@/sync/sync';
 import { parseToken } from '@/utils/auth/parseToken';
 import { randomUUID } from '@/platform/randomUUID';
@@ -21,12 +22,14 @@ export async function executeInternalTaskHostAction(args: Readonly<{
       throw Object.assign(new Error('task_scope_mismatch'), { code: 'task_scope_mismatch' });
     }
   };
+  const capturedRequest = createServerFetchForActiveServer(snapshot, {
+    credentials, signal: args.signal, isCurrent: () => { try { requireCurrent(); return true; } catch { return false; } },
+  });
   const request: ServerFetch = (path, init, options) => {
     requireCurrent();
-    return serverFetch(path, { ...init, ...(args.signal ? { signal: args.signal } : {}) }, {
-      ...options, expectedActiveServer: { serverId: snapshot.serverId, generation: snapshot.generation },
-    });
+    return capturedRequest(path, init, options);
   };
+  bindAccountEncryptionObservation(request, readAccountEncryptionObservationBinding(capturedRequest, credentials) ?? undefined);
   return executeInternalTaskAction({ ...args, scope: lifetime.scope, requireCurrent, createId: randomUUID,
     port: createTodoAccountKvTransport({ credentials, request, requireCurrent }),
   });

@@ -7,6 +7,9 @@ import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome'
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { ArtifactReadBatchInputV1Schema } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { fetchArtifactReadBatch } from '@/sync/api/artifacts/apiArtifacts';
+import { apiSocket } from '@/sync/api/session/apiSocket';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -18,6 +21,69 @@ await import('@/sync/syncEngine');
 afterEach(() => standardCleanup());
 
 describe('transcript approval hydration', () => {
+    it('separates a prepared peer read from the inventory kind-backfill acknowledgement', async () => {
+        const artifactId = '11111111-1111-4111-8111-111111111114';
+        const held = createDeferred<void>();
+        const release = createDeferred<void>();
+        const backfilled = createDeferred<void>();
+        let changed = false;
+        let kind: 'prompt' | null = null;
+        let reads = 0;
+        const row = () => ({ id: artifactId, kind, ownerAccountId: 'session-account', access: 'owner', encryptionMode: 'plain',
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, publicAudience: 'none',
+            header: encodePlainArtifactStoredContent({ title: 'Prompt', kind: 'prompt_doc.v2' }),
+            body: encodePlainArtifactStoredContent({ body: 'Current' }), headerVersion: 1, bodyVersion: 1,
+            seq: 1, createdAt: 1, updatedAt: 1 });
+        const home = await serveSessionActionHome({ homes: [{ key: 'session', serverUrl: 'https://inventory-backfill-peer.test',
+            accountId: 'session-account', currentAccount: true }], route: async request => {
+            if (request.path === '/v1/artifacts' && request.method === 'GET') return Response.json(changed ? [row()] : []);
+            if (request.path === '/v2/cursor') return Response.json({ cursor: changed ? 1 : 0, changesFloor: 0 });
+            if (request.path === '/v2/changes') return Response.json({ changes: changed
+                ? [{ kind: 'artifact', entityId: artifactId, cursor: 1, changedAt: 1, hint: null }] : [], nextCursor: changed ? 1 : 0 });
+            if (request.path === `/v1/artifacts/${artifactId}` && request.method === 'POST') {
+                expect(request.body).toEqual({ kind: 'prompt', expectedHeaderVersion: 1 });
+                kind = 'prompt';
+                backfilled.resolve();
+                return Response.json({ success: true });
+            }
+            if (request.path !== '/v1/artifacts/read') return undefined;
+            const ids = ArtifactReadBatchInputV1Schema.parse(request.body).artifactIds;
+            const observed = row();
+            reads++;
+            if (reads === 1) { held.resolve(); await release.promise; }
+            return Response.json({ items: ids.map(id => ({ artifactId: id, ok: true, artifact: observed, recipientCensus: null })) });
+        } });
+        const disconnect = await home.restoreActiveConnection();
+        let old: ReturnType<typeof fetchArtifactReadBatch> | undefined;
+        let current: ReturnType<typeof fetchArtifactReadBatch> | undefined;
+        try {
+            const { sync } = await import('@/sync/sync');
+            const { storage } = await import('@/sync/domains/state/storage');
+            await waitForHomeGovernance(() => {
+                expect(storage.getState().isDataReady).toBe(true);
+                expect(storage.getState().artifactsLoaded).toBe(true);
+            });
+            const credentials = sync.getCredentials();
+            if (!credentials) throw new Error('Expected restored Account credentials');
+            const active = getActiveServerSnapshot();
+            const readTransport = apiSocket.createReadTransportForActiveServer({ ...active, endpoint: active.serverUrl });
+            if (!readTransport) throw new Error('Expected actual prepared Account transport');
+            old = fetchArtifactReadBatch(credentials, [artifactId], { readTransport });
+            await held.promise;
+            changed = true;
+            await sync.fetchArtifactsList();
+            await backfilled.promise;
+            const readsBeforeAcknowledgedDemand = reads;
+            current = fetchArtifactReadBatch(credentials, [artifactId], { readTransport });
+            await vi.waitFor(() => expect(reads).toBe(readsBeforeAcknowledgedDemand + 1));
+            await expect(current).resolves.toMatchObject([{ ok: true, artifact: { kind: 'prompt' } }]);
+        } finally {
+            release.resolve();
+            await Promise.allSettled([old, current]);
+            await disconnect(); await home.dispose();
+        }
+    });
+
     it.each(['recover', 'retire', 'isolate'] as const)('owns overlapping demanded receipt retries without another navigation (%s)', async scenario => {
         installDisconnectedServerSocketBoundary();
         const approval = ApprovalRequestV2Schema.parse({ v: 2, status: 'executed', createdAtMs: 1, updatedAtMs: 2,

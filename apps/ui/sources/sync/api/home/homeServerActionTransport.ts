@@ -9,6 +9,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
 import type { ServerFetch } from '@/sync/http/client';
+import { invalidateHomeAccountReadJoins } from '@/sync/runtime/orchestration/homeAccountChange';
 
 /**
  * The Home family's client transport.
@@ -192,7 +193,10 @@ export async function requestHomeDomain<TValue, TCode extends string = HomeDomai
                     body: JSON.stringify(params.input),
                 }),
                 ...(params.signal ? { signal: params.signal } : {}),
-            }, { onIssued: () => { issued = true; } });
+            }, { onIssued: () => {
+                issued = true;
+                if (params.effect === 'write') invalidateHomeAccountReadJoins(params.scope.serverId);
+            } });
             const body = await readJsonBody(response);
             params.requestAuthority?.assertCurrent();
             if (!response.ok) return classifyAnswer<TCode>(response.status, body, params.errorSchema);
@@ -219,5 +223,9 @@ export async function requestHomeDomain<TValue, TCode extends string = HomeDomai
         return params.effect === 'write' && classifyHttpMutationRequestFailure({ error, issued, signal: params.signal }) === 'outcome_unknown'
             ? failure('outcome_unknown', false)
             : failure('unreachable', true);
+    } finally {
+        // A read begun during an issued write cannot serve later demand, even
+        // when its acknowledgement was lost. This asserts no committed event.
+        if (issued && params.effect === 'write') invalidateHomeAccountReadJoins(params.scope.serverId);
     }
 }

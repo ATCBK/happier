@@ -134,7 +134,7 @@ async function readCapturedRemoteHostCatalogProjection(context: RemoteHostAccoun
         context.assertCurrent();
         return { version: baseline.version, raw: baseline.raw ?? {} };
     };
-    const result = await loadRemoteHostCatalogProjectionV1({ mode, material, signal, assertCurrent: context.assertCurrent,
+    return loadRemoteHostCatalogProjectionV1({ mode, material, signal, assertCurrent: context.assertCurrent,
         hasPendingCleanup: publication?.hasPendingCleanup,
         readRow: () => readRemoteHostCatalogRowInContext(context, signal), readSource,
         prepareSource: async (_source, hosts) => {
@@ -218,13 +218,11 @@ async function readCapturedRemoteHostCatalogProjection(context: RemoteHostAccoun
                 return history.status === 'complete';
             } catch { return false; }
         },
-        ...(publication?.onReady ? { onReady: async catalog => {
+        onReady: async catalog => {
             await assertModeCurrent();
-            publication.onReady?.(catalog, context.accountLifetime.isCurrent);
-        } } : {}),
+            publication?.onReady?.(catalog, context.accountLifetime.isCurrent);
+        },
     });
-    await assertModeCurrent();
-    return result;
 }
 
 async function retainedHostMatches(context: RemoteHostAccountContext, material: AccountScopedCryptoMaterial | null,

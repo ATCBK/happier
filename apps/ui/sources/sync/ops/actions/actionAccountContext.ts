@@ -25,11 +25,11 @@ import { readAccountSettingsBaseline } from '@/sync/engine/settings/accountSetti
 import { syncSettings, requireOneShotAccountSettingsMutationApplied, type AccountSettingsMutationCapture } from '@/sync/engine/settings/syncSettings';
 import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { createServerFetchAtEndpoint, type ServerFetch } from '@/sync/http/client';
-import { bindAccountEncryptionObservation, captureAccountEncryptionObservationForHome } from '@/sync/http/accountEncryptionObservationBinding';
+import { bindAccountEncryptionObservation, captureAccountEncryptionObservationForHome, readAccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 import { resolveServerScopedTransport } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedTransport';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/connectionManager';
-import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals';
 import { parseToken } from '@/utils/auth/parseToken';
 import { createArtifactWithHeaderViaApi, decryptArtifactListItems, fetchArtifactWithBodyFromApi, fetchArtifactsWithBodiesFromApi, updateArtifactWithHeaderViaApi,
     fetchArtifactBodyRevisionsFromApi, fetchArtifactBinaryFromApi, restoreArtifactBodyRevisionViaApi, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
@@ -92,7 +92,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             if (!embed.isCurrent()) throw Object.assign(new Error('action_account_scope_changed'), { code: 'action_account_scope_changed' });
         };
         const assertCurrent = () => {
-            signal?.throwIfAborted();
+            throwIfAborted(signal);
             assertAccountCurrent();
         };
         const assertResultCurrent = (effectClass?: ActionEffectClass) => { if (!isEffectResult(effectClass)) assertCurrent(); };
@@ -120,7 +120,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             mutateRawSettings: async (_mutate: (raw: Readonly<Record<string, unknown>>) => Record<string, unknown> | Promise<Record<string, unknown>>,
                 options?: RawSettingsMutationOptions) => {
                     assertCurrent();
-                    options?.signal?.throwIfAborted();
+                    throwIfAborted(options?.signal);
                     return unavailable();
                 }, readLiveSettings: () => null,
             runPrepared: async <T>(run: () => Promise<T>, effectClass?: ActionEffectClass): Promise<T> => {
@@ -189,16 +189,16 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
         }
     };
     const assertCurrent = () => {
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         assertAccountCurrent();
     };
     // Disclose read content only in its current scope; an effect receipt stays true for its invoker.
     const assertResultCurrent = (effectClass?: ActionEffectClass) => { if (!isEffectResult(effectClass)) assertCurrent(); };
     try {
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         const credentials = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId });
         assertCurrent();
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         if (!credentials) {
             const { AccountStorageCurrentnessUnavailableError } = await import('@/sync/encryption/accountStorageContext');
             throw new AccountStorageCurrentnessUnavailableError(undefined, 'unauthorized', 'action_home_signed_out');
@@ -250,12 +250,12 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             const mutation = method !== 'GET' && method !== 'HEAD';
             const cancellation = mergeAbortSignals([controller.signal, signal, init?.signal ?? undefined]);
             try {
-                cancellation.signal.throwIfAborted();
+                throwIfAborted(cancellation.signal);
                 const requestInit = { ...init, signal: cancellation.signal };
                 const transport = await resolveServerScopedTransport({ profile, credentials });
                 try {
                     assertCurrent();
-                    cancellation.signal.throwIfAborted();
+                    throwIfAborted(cancellation.signal);
                     const response = await createServerFetchAtEndpoint({
                         endpointUrl: transport.canonicalServerUrl,
                         runtimeOrigin: transport.runtimeOrigin,
@@ -275,11 +275,36 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 cancellation.dispose();
             }
         };
-        bindAccountEncryptionObservation(request, accountEncryptionObservation);
         const loadAccountMode = async () => {
-            const mode = (await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).mode;
-            assertCurrent();
-            return mode;
+            const transport = await resolveServerScopedTransport({ profile, credentials });
+            const cancellation = mergeAbortSignals([controller.signal, signal]);
+            try {
+                assertCurrent();
+                throwIfAborted(cancellation.signal);
+                const endpointRequest = createServerFetchAtEndpoint({
+                    endpointUrl: transport.canonicalServerUrl,
+                    runtimeOrigin: transport.runtimeOrigin,
+                    serverId,
+                    credentials,
+                    accountEncryptionObservation,
+                    isCurrent: accountLifetime.isCurrent,
+                    ...(transport.homeCarrier ? { homeCarrier: transport.homeCarrier } : {}),
+                });
+                // Only the actual resolved carrier may lend its authenticated
+                // observation to later reads in this captured invocation.
+                const binding = readAccountEncryptionObservationBinding(endpointRequest, credentials) ?? undefined;
+                bindAccountEncryptionObservation(request, binding);
+                const modeRequest: ServerFetch = (path, init, options) => endpointRequest(path,
+                    { ...init, signal: cancellation.signal }, options);
+                bindAccountEncryptionObservation(modeRequest, binding);
+                const mode = (await fetchAccountEncryptionMode(credentials, { request: modeRequest, usage: 'identity' })).mode;
+                assertCurrent();
+                return mode;
+            } finally {
+                try { await transport.release(); }
+                finally { cancellation.dispose(); }
+                assertCurrent();
+            }
         };
         let accountMode: ReturnType<typeof loadAccountMode> | null = null;
         const resolveAccountMode = () => {
@@ -304,12 +329,22 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             assertCurrent();
             return { request, readTransport, serverId, credentials, encryption: (await resolveAccountEncryption()).encryption, artifactDataKeys };
         };
+        const withArtifactReadSignal = async <T>(operationSignal: AbortSignal | undefined,
+            operation: (borrowerSignal: AbortSignal | undefined) => Promise<T>): Promise<T> => {
+            assertCurrent();
+            try {
+                const result = await withActionAccountRequestSignal({ accountLifetime, invocationSignal: signal }, operationSignal, operation);
+                assertCurrent();
+                return result;
+            } catch (error) {
+                assertCurrent();
+                throw error;
+            }
+        };
         const readArtifact = async (artifactId: string, options?: ArtifactReadOptions) => {
-            assertCurrent();
-            const artifact = await fetchArtifactWithBodyFromApi({ ...await artifactParams(), artifactId, signal: options?.signal ?? signal,
-                prepareRecipientKeys: options?.prepareRecipientKeys, fresh: options?.fresh });
-            assertCurrent();
-            return artifact;
+            return withArtifactReadSignal(options?.signal, async borrowerSignal =>
+                fetchArtifactWithBodyFromApi({ ...await artifactParams(), artifactId, signal: borrowerSignal,
+                    prepareRecipientKeys: options?.prepareRecipientKeys, fresh: options?.fresh }));
         };
         const fetchArtifact = async (artifactId: string, options?: ArtifactReadOptions) => {
             const artifact = await readArtifact(artifactId, options);
@@ -320,10 +355,10 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             }
             return artifact;
         };
-        const accessApi = createArtifactAccessApi(credentials, { request });
+        const accessApi = createArtifactAccessApi(credentials, { request, readTransport, serverId });
         const withArtifactPreparation = async <T extends Readonly<{ access: ArtifactCallerAccessV1 | null }>>(artifactId: string, operation: () => Promise<T>, operationSignal?: AbortSignal): Promise<T> => {
             assertCurrent();
-            operationSignal?.throwIfAborted();
+            throwIfAborted(operationSignal);
             const result = await operation();
             assertCurrent();
             // A committed self-revocation has no readable audience for this caller.
@@ -358,7 +393,8 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 assertCurrent();
                 const params = await artifactParams();
                 assertCurrent();
-                const page = await fetchArtifactListPage(credentials, { request, readTransport, ...options, serverId });
+                const page = await withArtifactReadSignal(options.signal, borrowerSignal =>
+                    fetchArtifactListPage(credentials, { request, readTransport, ...options, serverId, signal: borrowerSignal }));
                 const artifacts = page.items;
                 assertCurrent();
                 // Header inventories classify content without consuming private attribution.
@@ -449,10 +485,10 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
         const readArtifactDocument = async (publish: boolean, ...[artifactId, options]: Parameters<WorkflowDefinitionArtifactOperations['read']>) =>
             projectArtifactDocument(await (publish ? fetchArtifact : readArtifact)(artifactId, options), options);
         const readArtifactContents = async (artifactIds: readonly string[], options?: Parameters<WorkflowDefinitionArtifactOperations['read']>[1]) => {
-            assertCurrent(); options?.signal?.throwIfAborted();
-            const results = await fetchArtifactsWithBodiesFromApi({ ...await artifactParams(), artifactIds,
-                signal: options?.signal ?? signal });
-            assertCurrent(); options?.signal?.throwIfAborted();
+            assertCurrent(); throwIfAborted(options?.signal);
+            const results = await withArtifactReadSignal(options?.signal, async borrowerSignal =>
+                fetchArtifactsWithBodiesFromApi({ ...await artifactParams(), artifactIds, signal: borrowerSignal }));
+            assertCurrent(); throwIfAborted(options?.signal);
             return Promise.allSettled(results.map(async result => {
                 if (result.status === 'rejected') throw result.reason;
                 return projectArtifactDocument(result.value, options);
@@ -469,7 +505,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             delete: async (artifactId, options) => {
                 assertCurrent();
                 try {
-                    await deleteArtifactApi(credentials, artifactId, { request, ...options });
+                    await deleteArtifactApi(credentials, artifactId, { request, readTransport, serverId, ...options });
                     assertCurrent();
                     artifactDataKeys.delete(artifactId);
                     if (canPublish()) storage.getState().deleteArtifact(artifactId);
@@ -530,7 +566,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const cancellation = mergeAbortSignals([signal, options?.signal, controller.signal]);
                 const assertMutationCurrent = () => {
                     assertCurrent();
-                    cancellation.signal.throwIfAborted();
+                    throwIfAborted(cancellation.signal);
                 };
                 const mutationRequest: ServerFetch = async (path, init, requestOptions) => {
                     const requestCancellation = mergeAbortSignals([cancellation.signal, init?.signal ?? undefined]);
@@ -589,11 +625,11 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const stopWatching = watch();
                 try {
                     assertCurrent();
-                    signal?.throwIfAborted();
+                    throwIfAborted(signal);
                     const current = await TokenStorage.getCredentialsForServerUrl(profile.serverUrl, { serverId });
                     if (current?.token !== credentials.token) abort();
                     assertCurrent();
-                    signal?.throwIfAborted();
+                    throwIfAborted(signal);
                     const result = await run();
                     assertResultCurrent(effectClass);
                     return result;
@@ -614,7 +650,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 const body = typeof artifact.body === 'string' ? artifact.body
                     : await fetchArtifactBinaryFromApi({ ...await artifactParams(), artifactId, reference: artifact.body, artifact, signal: operationSignal ?? signal });
                 assertCurrent();
-                operationSignal?.throwIfAborted();
+                throwIfAborted(operationSignal);
                 const mime = typeof artifact.body === 'string' ? typeof header.mime === 'string' ? header.mime : undefined : artifact.body.mime;
                 return { bundle: artifactHtmlBundleFromBodyV1(body, mime, 'stored'), revision: { headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
             },

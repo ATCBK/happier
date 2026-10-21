@@ -6,6 +6,7 @@ import { computeAccountEncryptionMigrateKeyFingerprintV1, convertContentPublicKe
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
+import { sealRemoteHostCatalogContentV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { encodeBase64 } from '@/encryption/base64';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
@@ -39,12 +40,17 @@ afterEach(async () => {
     resetRuntimeFetch();
 });
 
-it.each(['cold', 'warm'] as const)('enters the RemoteHost scope admission only once (%s identity)', async warmth => {
-    const accountId = `remote-host-single-admission-${warmth}`;
-    const serverUrl = `https://remote-host-single-admission-${warmth}.test`;
-    const credentials = { token: createAccountTokenForTests(accountId, { currentAccount: true }) };
+it.each((['plain', 'e2ee'] as const).flatMap(mode => (['cold', 'warm'] as const).map(warmth => ({ mode, warmth }))))(
+    'enters the RemoteHost scope admission only once ($warmth identity, $mode)', async ({ warmth, mode }) => {
+    const accountId = `remote-host-single-admission-${warmth}-${mode}`;
+    const serverUrl = `https://remote-host-single-admission-${warmth}-${mode}.test`;
+    const token = createAccountTokenForTests(accountId, { currentAccount: true });
+    const credentials = mode === 'e2ee' ? { token, secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') } : { token };
+    const material = mode === 'e2ee' ? resolveAccountScopedCryptoMaterialFromCredentials(credentials) : null;
+    const fingerprint = material ? convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+        createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material }).contentPublicKeyFingerprint) : null;
     const serverId = await home.addHome({ name: 'One RemoteHost admission', serverUrl, accountId, credentials,
-        accountEncryptionMode: 'plain', currentAccount: true });
+        accountEncryptionMode: mode, currentAccount: true });
     let rowRead = false;
     const initialAuthority: string[] = [];
     const finalAuthority: string[] = [];
@@ -52,12 +58,14 @@ it.each(['cold', 'warm'] as const)('enters the RemoteHost scope admission only o
         const path = new URL(String(rawUrl)).pathname;
         if (path === '/v1/account/encryption' || path === '/v1/account/encryption/currentness') {
             (rowRead ? finalAuthority : initialAuthority).push(path);
-            return Response.json(path.endsWith('/currentness') ? createPlainAccountEncryptionCurrentnessFixture()
-                : { mode: 'plain', updatedAt: 1 });
+            return Response.json(path.endsWith('/currentness') ? mode === 'plain' ? createPlainAccountEncryptionCurrentnessFixture()
+                : { mode, version: 1, signingKeyFingerprint: null, contentKeyFingerprint: fingerprint,
+                    updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } } : { mode, updatedAt: 1 });
         }
         if (path === '/v1/account/entity-rows/remote-hosts') {
             rowRead = true;
-            return Response.json({ status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, hosts: [] } } });
+            return Response.json({ status: 'present', revision: 1,
+                content: sealRemoteHostCatalogContentV1({ mode, material, record: { v: 1, hosts: [] } }) });
         }
         return home.request(rawUrl, init);
     });
@@ -69,7 +77,7 @@ it.each(['cold', 'warm'] as const)('enters the RemoteHost scope admission only o
             request: createServerFetchAtEndpoint({ endpointUrl: serverUrl, serverId, credentials }), isCurrent: () => true }, null);
         await waitForHomeGovernance(() => expect(socket?.connected).toBe(true));
         const warm = await captureLazyActionAccountContext(serverId);
-        try { await expect(warm.resolveAccountMode()).resolves.toBe('plain'); }
+        try { await expect(warm.resolveAccountMode()).resolves.toBe(mode); }
         finally { warm.dispose(); }
         expect(initialAuthority).toEqual(['/v1/account/encryption/currentness']);
         initialAuthority.length = 0;

@@ -556,7 +556,7 @@ describe('mounted Collection contract acquisition through real Home authority', 
             expect(contractReads).toBe(2);
         } finally { release.resolve(); await home.dispose(); }
     });
-    it('shares concurrent relation admission without retaining a settled contract or its access', async () => {
+    it('shares only the pending contract HTTP read across independently bound readers without retaining its access', async () => {
         let allowed = true;
         let gate = createDeferred<void>();
         const entered = createDeferred<void>();
@@ -592,37 +592,43 @@ describe('mounted Collection contract acquisition through real Home authority', 
                 } }],
             } });
             const collection = createPluginUiDataClient({ pluginId, accountLifetime: lifetime, readAvailability }).collection(definition);
+            const otherCollection = createPluginUiDataClient({ pluginId, accountLifetime: lifetime, readAvailability }).collection(definition);
             const signal = new AbortController().signal;
-            const tags = Array.from({ length: 56 }, (_, index) => collection.identityTag({ field: 'id', components: [String(index)] }, { signal }));
+            const otherSignal = new AbortController().signal;
+            const tags = Array.from({ length: 56 }, (_, index) => (index % 2 === 0 ? collection : otherCollection)
+                .identityTag({ field: 'id', components: [String(index)] }, { signal: index % 2 === 0 ? signal : otherSignal }));
             const allTags = Promise.all(tags);
             // The HTTP response gate represents one pending authenticated contract read.
             // Release it after all callers have been admitted, then assert the physical work and results.
             await Promise.race([entered.promise, allTags]);
+            await vi.dynamicImportSettled();
             gate.resolve(); hold = false;
             const values = await allTags;
             expect(new Set(values).size).toBe(56);
             expect(home.requests.filter(request => request.path === '/v1/plugins/data/contract')).toHaveLength(1);
             expect(lifetime.isCurrent()).toBe(true);
 
-            // Two independently cancellable readers must not borrow one another's
-            // physical admission. Cancelling one leaves the other reader usable.
+            // Admission is still per invocation. Only raw acquisition is shared;
+            // cancelling its initiator leaves an independently admitted reader usable.
             hold = true; gate = createDeferred<void>();
             const cancelled = new AbortController();
             const retained = new AbortController();
             const independent = Promise.allSettled([
                 collection.identityTag({ field: 'id', components: ['cancelled'] }, { signal: cancelled.signal }),
-                collection.identityTag({ field: 'id', components: ['retained'] }, { signal: retained.signal }),
+                otherCollection.identityTag({ field: 'id', components: ['retained'] }, { signal: retained.signal }),
             ]);
-            await vi.waitFor(() => expect(home.requests.filter(request => request.path === '/v1/plugins/data/contract')).toHaveLength(3));
+            await vi.waitFor(() => expect(home.requests.filter(request => request.path === '/v1/plugins/data/contract')).toHaveLength(2));
+            await vi.dynamicImportSettled();
             cancelled.abort(); gate.resolve(); hold = false;
             const results = await independent;
             expect(results[0]).toMatchObject({ status: 'rejected', reason: { code: 'plugin_collection_cancelled' } });
             expect(results[1]).toMatchObject({ status: 'fulfilled', value: expect.any(String) });
+            expect(home.requests.filter(request => request.path === '/v1/plugins/data/contract')).toHaveLength(2);
 
             allowed = false;
             await expect(collection.identityTag({ field: 'id', components: ['later'] }, { signal }))
                 .rejects.toMatchObject({ code: 'plugin_collection_undeclared' });
-            expect(home.requests.filter(request => request.path === '/v1/plugins/data/contract')).toHaveLength(4);
+            expect(home.requests.filter(request => request.path === '/v1/plugins/data/contract')).toHaveLength(3);
         } finally { gate.resolve(); await home.dispose(); }
     });
 });

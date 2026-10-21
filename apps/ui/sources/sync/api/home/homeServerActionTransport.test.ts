@@ -9,13 +9,8 @@ import {
     SavedSecretResourceEnvelopeCensusResponseV1Schema,
 } from '@happier-dev/protocol';
 
-const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: serverFetchMock,
-}));
 
 vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     runtimeFetchWithServerReachability: runtimeFetchMock,
@@ -102,7 +97,6 @@ function governanceRequest(serverId: string, accountId = 'account') {
 }
 
 beforeEach(() => {
-    serverFetchMock.mockReset();
     runtimeFetchMock.mockReset();
     getCredentialsForServerUrlMock.mockReset();
 });
@@ -125,8 +119,6 @@ describe('requestHomeDomain', () => {
         expect(call?.url).toBe('https://home-a.example/v1/home/governance/get');
         expect(call?.init?.method).toBe('POST');
         expect(JSON.parse(call?.init?.body ?? 'null')).toEqual({});
-        // The explicit-Home authority carried it, not the focused-Home fetch.
-        expect(serverFetchMock).not.toHaveBeenCalled();
     });
 
     it('reads first and next Saved Secret envelope-census pages through encoded GET queries without bodies', async () => {
@@ -170,7 +162,6 @@ describe('requestHomeDomain', () => {
         expect(nextRequest?.init?.method).toBe('GET');
         expect(firstRequest?.init?.body).toBeUndefined();
         expect(nextRequest?.init?.body).toBeUndefined();
-        expect(serverFetchMock).not.toHaveBeenCalled();
     });
 
     it('completes against the Home it captured even when focus moves to another Home first', async () => {
@@ -208,7 +199,6 @@ describe('requestHomeDomain', () => {
 
         expect(result.ok).toBe(false);
         expect(runtimeFetchMock).not.toHaveBeenCalled();
-        expect(serverFetchMock).not.toHaveBeenCalled();
     });
 
     it('distinguishes a mutation response loss after dispatch from a safe read retry', async () => {

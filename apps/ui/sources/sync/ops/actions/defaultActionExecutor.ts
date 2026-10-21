@@ -1083,9 +1083,9 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           ? readPromptLibraryCatalogProjectionInContext(accountContext, signal)
           : promptLibraryStore.organization!.readCatalog(signal, key),
         listSkills: async (signal?: AbortSignal, skillIds?: readonly string[]) => {
-          accountContext.assertCurrent(); signal?.throwIfAborted();
+          accountContext.assertCurrent(); throwIfAborted(signal);
           const skills = await readUiSkillLibraryCatalogV1(accountContext, signal, skillIds);
-          accountContext.assertCurrent(); signal?.throwIfAborted();
+          accountContext.assertCurrent(); throwIfAborted(signal);
           return skills;
         }, ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }),
       } } : {}),
@@ -1104,11 +1104,11 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         return { grants, publicShares };
       },
       readSession: async (ref, context) => {
-        accountContext.assertCurrent(); context.signal?.throwIfAborted();
+        accountContext.assertCurrent(); throwIfAborted(context.signal);
         const { session } = await runWithServerRequestAuthorityForServerAccountScope({
           scope: accountContext.accountLifetime.scope, activeRequest: accountContext.request,
         }, authority => readSessionSnapshotForAuthority({ authority, sessionId: ref.sessionId, isCurrent: accountContext.accountLifetime.isCurrent }));
-        accountContext.assertCurrent(); context.signal?.throwIfAborted();
+        accountContext.assertCurrent(); throwIfAborted(context.signal);
         const metadata = readSessionOwnerMetadataView(session);
         if (!metadata) throw Object.assign(new Error('session_target_unavailable'), { code: 'session_target_unavailable' });
         return { metadata, revision: session.metadataVersion };
@@ -1141,7 +1141,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         return { ok: false, errorCode: 'session_update_source_mismatch', error: 'session_update_source_mismatch' };
       }
       accountContext.assertCurrent();
-      context.signal?.throwIfAborted();
+      throwIfAborted(context.signal);
       const result = await actionSessionRpc<unknown, typeof input>({
         serverId: accountContext.serverId, sessionId, method: 'session.update.post', payload: input,
         ...(context.signal ? { signal: context.signal } : {}),
@@ -1154,7 +1154,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       const sessionId = context.defaultSessionId?.trim();
       if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
       accountContext.assertCurrent();
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       const mounted = opts?.currentSessionPresentationApply;
       if (mounted && context.surface === 'ui' && context.authority === 'present_user') {
         if (!areServerProfileIdentifiersEquivalent(mounted.serverId, accountContext.serverId)
@@ -1201,7 +1201,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       return result;
     },
     scopeAction: async ({ actionId, input, context }) => {
-      context.signal?.throwIfAborted();
+      throwIfAborted(context.signal);
       accountContext?.assertCurrent();
       return await invokeScopeAction(actionId, input, context);
     },
@@ -1224,10 +1224,10 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     appUpdateAction: executeAppUpdateAction,
     updatesAction: createUpdatesAction(accountContext),
     clipboardWrite: async ({ text, signal }) => {
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       accountContext?.assertCurrent();
       const copied = await setClipboardStringSafe(text);
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       accountContext?.assertCurrent();
       return copied ? { status: 'copied' } : { ok: false, errorCode: 'clipboard_unavailable', error: 'clipboard_unavailable' };
     },
@@ -1264,12 +1264,12 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
             request => executor.execute(request.actionId, request.input, request.context), accountContext,
           ) } : {}),
         ...(accountContext ? { purgeAccountSettingsHistory: async (versions: readonly number[], signal?: AbortSignal) => {
-          signal?.throwIfAborted(); accountContext.assertCurrent();
+          throwIfAborted(signal); accountContext.assertCurrent();
           const { purgeAccountSettingsHistoryVersions } = await import('@/sync/engine/settings/accountSettingsHistoryRestore');
           return accountContext.runPrepared(() => purgeAccountSettingsHistoryVersions({
             credentials: accountContext.credentials, settingsScope: accountContext.accountLifetime.scope, versions, signal,
             requestContext: { request: accountContext.request, isCurrent: () => {
-              try { accountContext.assertCurrent(); signal?.throwIfAborted(); return true; } catch { return false; }
+              try { accountContext.assertCurrent(); throwIfAborted(signal); return true; } catch { return false; }
             } },
           }), 'danger');
         } } : {}),
@@ -1309,7 +1309,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       shouldContinue: accountContext.accountLifetime.isCurrent,
     }) } : {}),
     ...(accountContext ? { launchProfilePublish: async (input, context) => {
-      context?.signal?.throwIfAborted();
+      throwIfAborted(context?.signal);
       let capturedRow: Readonly<{ record: ProfileRecordV1; revision: number }> | null = null;
       return await createLaunchProfilePublisherV1({
         profileStore: {
@@ -1406,15 +1406,15 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           || context.expectedAccountId && context.expectedAccountId !== accountContext.accountId
           || context.runtimeAccountId && context.runtimeAccountId !== accountContext.accountId) return { kind: 'incomplete' };
         try {
-          signal?.throwIfAborted(); accountContext.assertCurrent();
+          throwIfAborted(signal); accountContext.assertCurrent();
           const { session } = await runWithServerRequestAuthorityForServerAccountScope({
             scope: accountContext.accountLifetime.scope, activeRequest: accountContext.request,
           }, authority => readSessionSnapshotForAuthority({ authority, sessionId: exact.sessionId,
             isCurrent: () => !signal?.aborted && accountContext.accountLifetime.isCurrent() }));
-          signal?.throwIfAborted(); accountContext.assertCurrent();
+          throwIfAborted(signal); accountContext.assertCurrent();
           return session.id === exact.sessionId ? { kind: 'unique', address: exact } : { kind: 'incomplete' };
         } catch (error) {
-          signal?.throwIfAborted();
+          throwIfAborted(signal);
           return error instanceof SessionSnapshotReadError && error.httpStatus === 404 ? { kind: 'none' } : { kind: 'incomplete' };
         }
       }
@@ -1482,7 +1482,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         || context.expectedAccountId && context.expectedAccountId !== accountContext.accountId
         || context.runtimeAccountId && context.runtimeAccountId !== accountContext.accountId) return { kind: 'unavailable' };
       try {
-        const assertCurrent = () => { signal?.throwIfAborted(); accountContext.assertCurrent(); };
+        const assertCurrent = () => { throwIfAborted(signal); accountContext.assertCurrent(); };
         assertCurrent();
         const { encryption } = await accountContext.resolveAccountEncryption();
         const account = await resolveAccountStorageContext(accountContext.credentials, { encryption, request: accountContext.request, usage: 'identity' });
@@ -1494,7 +1494,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         assertCurrent();
         return current.mode === account.mode ? { kind: 'complete', rules } : { kind: 'unavailable' };
       } catch {
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         return { kind: 'unavailable' };
       }
     },
@@ -1838,7 +1838,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       if (!serverId || !areServerProfileIdentifiersEquivalent(serverId, accountContext.serverId)) {
         return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       }
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       try {
         return await writeSessionOrganizationPin({
           scope: createSessionOrganizationMutationScopeForAccount(accountContext),
@@ -1867,21 +1867,21 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
               ? { operationTimeoutMs: null } : {}),
           }),
           openOutput: async address => {
-            signal?.throwIfAborted();
+            throwIfAborted(signal);
             accountContext?.assertCurrent();
             if (opts?.actionOperationOpenOutput) {
               await opts.actionOperationOpenOutput(address);
-              signal?.throwIfAborted();
+              throwIfAborted(signal);
               accountContext?.assertCurrent();
               return;
             }
             const { openActionOperationDetail } = await import('@/components/inbox/actionOperations/openActionOperationDetail');
-            signal?.throwIfAborted();
+            throwIfAborted(signal);
             accountContext?.assertCurrent();
             openActionOperationDetail({ serverId: address.serverId, operationId: address.operationId });
           },
           copyOutput: async output => {
-            signal?.throwIfAborted();
+            throwIfAborted(signal);
             accountContext?.assertCurrent();
             const decoder = createTerminalUtf8ProjectionDecoder();
             let text = '';
@@ -2130,10 +2130,10 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
 
     sessionRuntimeRefresh: async ({ sessionId, machineId, serverId, signal }) => withAccountLifetime(signal, async signal => {
       accountContext?.assertCurrent();
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       const runtimeState = await getSessionRunnerRuntimeStatus({ sessionId, machineId, serverId, signal });
       accountContext?.assertCurrent();
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       if (!runtimeState || runtimeState.machineId !== machineId) {
         return { ok: false, status: 'unsupported_daemon', sessionId, reasonCode: 'unsupported_daemon_version' } as const;
       }
@@ -2575,7 +2575,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
 
     presentUserActionConfirmation: accountContext ? async ({ actionId, input, context }) => {
       accountContext.assertCurrent();
-      context.signal?.throwIfAborted();
+      throwIfAborted(context.signal);
       if (opts?.presentUserActionConfirmation) {
         const confirmed = await opts.presentUserActionConfirmation({ actionId, input, context });
         if (context.signal?.aborted) return false;
@@ -2590,7 +2590,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       const roleResult = roleId && accountRoleAction ? await accountRoleAction({ actionId: 'roles.get', input: { roleId }, context }) : null;
       const roleEntry = roleResult ? RoleActionOutputSchemasV1['roles.get'].safeParse(roleResult) : null;
       const role = roleEntry?.success ? buildRoleCatalog({ items: [roleEntry.data], overrides: {} })[0] : null;
-      context.signal?.throwIfAborted();
+      throwIfAborted(context.signal);
       accountContext.assertCurrent();
       // A Machine-targeted Action names its paths the way that Machine's home reads them (`~/work/app`).
       const targetMachineId = input && typeof input === 'object' && typeof (input as { machineId?: unknown }).machineId === 'string'
@@ -3138,7 +3138,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     machineAgentInstallStart: async ({ machineId, signal, ...request }) => {
       if (!accountContext) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       accountContext.assertCurrent();
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       const scope = accountContext.accountLifetime.scope;
       const item = request.intent === 'update' && request.definitionId === undefined
         ? readCurrentMachineUpdateItem(scope, machineId, { kind: 'agent-cli', agentId: request.agentId }) : null;
@@ -3155,7 +3155,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     machineAgentInstallCancel: async ({ machineId, signal, jobId }) => {
       if (!accountContext) throw new Error('not_authenticated');
       accountContext.assertCurrent();
-      signal?.throwIfAborted();
+      throwIfAborted(signal);
       return await cancelMachineAgentInstallJob({ ...accountContext.accountLifetime.scope, machineId }, jobId);
     },
     agentsModelsList: async (args) => {
@@ -3242,7 +3242,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           activeRequest: account.request }, authority => readSessionSnapshotForAuthority({ authority, sessionId,
             isCurrent: account.accountLifetime.isCurrent }));
         account.assertCurrent();
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         const target = resolveMachineControlTargetForSessionFromState({ ...storage.getState(),
           sessions: { [sessionId]: session }, sessionListRowsByServerId: {} }, { ...account.accountLifetime.scope, sessionId });
         if (!target) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
@@ -3251,7 +3251,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
             readTransport: account.readTransport, signal: ownedSignal,
             request: (path, init) => account.request(path, { ...init, signal: ownedSignal }) }));
           account.assertCurrent();
-          signal?.throwIfAborted();
+          throwIfAborted(signal);
           const machine = machines.find(row => row.id === target.machineId && row.revokedAt === null && row.replacedByMachineId === null);
           if (!supportsMachineOperationProtocolCapabilityV1(machine?.operationProtocolCapabilities, 'sessionMessageReply')) {
             return { ok: false, errorCode: 'session_input_target_update_required', error: 'session_input_target_update_required' };
@@ -3269,13 +3269,13 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
             read: async schemaInput => execute({ actionId: 'action.spec.get', input: schemaInput, context,
               ...(signal ? { signal } : {}) }) });
           account.assertCurrent();
-          signal?.throwIfAborted();
+          throwIfAborted(signal);
           advertisedInputSchema = advertised.inputSchema;
           if (!supportsSessionMessageInputJsonSchema(advertised.inputSchema, input)) {
             return { ok: false, errorCode: 'session_input_target_update_required', error: 'session_input_target_update_required' };
           }
         } catch {
-          signal?.throwIfAborted();
+          throwIfAborted(signal);
           account.assertCurrent();
           return { ok: false, errorCode: 'session_input_target_update_required', error: 'session_input_target_update_required' };
         }
@@ -3375,7 +3375,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         return { ok: false, errorCode: 'invalid_parameters', errorMessage: 'invalid_parameters' };
       }
       const updatedAt = Date.now();
-      context.signal?.throwIfAborted();
+      throwIfAborted(context.signal);
       if (fieldId === 'intent.voicePreference' && value !== null) {
         const builtIn = readBuiltInSessionVoiceDeclarationV1(value.providerContributionId);
         const entry = createDefaultVoiceProviderRegistry().get(value.providerContributionId);
@@ -3391,7 +3391,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         await withUiPromptLibraryArtifactReader(reader => admitSessionContextIntentV1(value, reader.readArtifactHeader), {
           serverId, signal: context.signal,
         });
-        context.signal?.throwIfAborted();
+        throwIfAborted(context.signal);
       }
       const result = await writeUiSessionStateField({
         sessionId: sid, fieldId,
@@ -3399,10 +3399,10 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         metadataReason: `ui-${actionId}`,
         ...(opts?.sessionStateMetadataPreprocess ? { metadataPreprocess: opts.sessionStateMetadataPreprocess } : {}),
         updateSessionMetadataWithRetry: async (targetSessionId, updater) => {
-          context.signal?.throwIfAborted();
+          throwIfAborted(context.signal);
           let committedRevision: number | undefined;
           await sync.patchSessionMetadataWithRetry(targetSessionId, (metadata) => {
-            context.signal?.throwIfAborted();
+            throwIfAborted(context.signal);
             return updater(metadata);
           }, { serverId: serverId ?? null,
             ...(accountContext ? { accountLifetime: accountContext.accountLifetime } : {}),
@@ -3882,7 +3882,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
           activeRequest: accountContext.request }, authority => readSessionSnapshotForAuthority({ authority, sessionId: address.sessionId,
             isCurrent: accountContext.accountLifetime.isCurrent }));
         accountContext.assertCurrent();
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         const managerSessionId = readSessionManagerSessionIdV1(session);
         return { kind: 'manager', address: managerSessionId ? { serverId: accountContext.serverId, sessionId: managerSessionId } : null };
       } catch { return { kind: 'unavailable' }; }
@@ -4266,12 +4266,12 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
     const sessionCapabilities = deps.sessionCapabilities;
     deps = { ...deps, skillActionExecute: createUiSkillActionExecuteV1(accountContext, promptLibraryStore, deps.skillRules,
       async (sessionId, skillId, signal) => {
-        accountContext.assertCurrent(); signal?.throwIfAborted();
+        accountContext.assertCurrent(); throwIfAborted(signal);
         const result = await setSessionCapabilityV1({ port: sessionCapabilities, request: { sessionId, kind: 'skill', id: skillId, state: 'on' },
           context: { surface: 'ui', serverId: accountContext.serverId, signal } });
         return { ok: result.ok };
       }, async (machineId, path, signal) => {
-        accountContext.assertCurrent(); signal?.throwIfAborted();
+        accountContext.assertCurrent(); throwIfAborted(signal);
         const source = opts?.foundSkillSource;
         if (source && (source.target.machineId !== machineId || !source.isCurrent())) {
           throw Object.assign(new Error('machine_target_mismatch'), { code: 'machine_target_mismatch' });
@@ -4279,7 +4279,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         const result = await readFoundSkillBundle(machineId, path, {
           serverId: source?.target.serverIdentityId ?? accountContext.serverId, signal,
         });
-        accountContext.assertCurrent(); signal?.throwIfAborted();
+        accountContext.assertCurrent(); throwIfAborted(signal);
         if (source && !source.isCurrent()) throw Object.assign(new Error('machine_target_mismatch'), { code: 'machine_target_mismatch' });
         return result;
       }) };
@@ -4486,7 +4486,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
     signal?: AbortSignal, requestId?: string, operationTimeoutMs?: null,
     payload: unknown = { ...input, serverId: account.serverId }) => {
     account.assertCurrent();
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     if (input.serverId && !areServerProfileIdentifiersEquivalent(input.serverId, account.serverId)) {
       return { ok: false as const, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
     }
@@ -4498,7 +4498,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
       ...(spec.sideEffectClass !== 'read' || operationTimeoutMs === null ? { operationTimeoutMs: null } : {}),
       ...(requestId ? { requestId } : {}), signal: ownedSignal }));
     account.assertResultCurrent(spec.sideEffectClass);
-    if (spec.sideEffectClass === 'read') signal?.throwIfAborted();
+    if (spec.sideEffectClass === 'read') throwIfAborted(signal);
     return result;
   };
   return {
@@ -4510,7 +4510,7 @@ function createCapturedScopeFamilyPorts(account: LazyActionAccountContext): Read
         const found = SkillFoundListResultV1Schema.safeParse(result);
         if (found.success) {
           const { saveFoundWarmCacheEntry } = await import('@/sync/domains/state/warmCachePersistence');
-          account.assertCurrent(); context.signal?.throwIfAborted();
+          account.assertCurrent(); throwIfAborted(context.signal);
           saveFoundWarmCacheEntry(account.serverId, account.accountId, { kind: 'skill', machineId: request.machineId,
             observedAt: found.data.scannedAt, result: found.data });
         }
@@ -4661,7 +4661,7 @@ export async function withDefaultActionExecuteContext<TResult>(
       assertExpectedActionAccount(account, context);
       const settings = await readActionAdmissionSettings(account);
       account.assertCurrent();
-      context.signal?.throwIfAborted();
+      throwIfAborted(context.signal);
       const result = await work(buildDefaultActionExecutor({ ...opts, archiveInvocation, ...(context.openRoute ? { openRoute: context.openRoute } : {}) }, { ...account, settings }), account, settings);
       const effectClass = executedActionId ? getActionSpec(executedActionId).sideEffectClass : undefined;
       // Return an effect's actual disposition to its captured invoker. Retirement
@@ -4696,7 +4696,7 @@ export async function executeDefaultActionInCapturedAccount(
     assertExpectedActionAccount(account, context);
     const settings = await readActionAdmissionSettings(account);
     account.assertCurrent();
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     const { archiveOperation, ...actionContext } = context ?? {};
     const archiveInvocation = createSessionArchiveInvocation(actionId, input, archiveOperation, account.serverId, context?.defaultSessionId);
     const admittedContext = {
@@ -4707,7 +4707,7 @@ export async function executeDefaultActionInCapturedAccount(
       runtimeAccountId: account.accountId,
     };
     account.assertCurrent();
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     try {
       const result = await buildDefaultActionExecutor({ archiveInvocation }, { ...account, settings }).execute(actionId, input, admittedContext);
       account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
@@ -4878,7 +4878,7 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
             runtimeAccountId: account.accountId,
           };
           account.assertCurrent();
-          signal?.throwIfAborted();
+          throwIfAborted(signal);
           return native ? await executor.executeNativeManagedAction(native, input, capturedContext)
             : await executor.execute(actionId, input, capturedContext);
         }, actionId);
@@ -4907,7 +4907,7 @@ export function createDefaultActionExecutor(opts?: DefaultActionExecutorOptions)
         assertExpectedActionAccount(account, context);
         const settings = await readActionAdmissionSettings(account);
         account.assertCurrent();
-        context?.signal?.throwIfAborted();
+        throwIfAborted(context?.signal);
         const executor = buildDefaultActionExecutor({ ...opts, archiveInvocation, ...(openRoute ? { openRoute } : {}) }, { ...account, settings });
         const capturedContext = {
           ...actionContext,

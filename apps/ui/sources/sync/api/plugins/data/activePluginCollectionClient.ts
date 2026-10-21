@@ -718,6 +718,8 @@ export async function createActivePluginCollectionClientForContractRef<
     /** The bound facade's current release admission, rechecked before effects. */
     assertAdmitted?: () => void;
     signal?: AbortSignal;
+    /** Writer admission is fresh by default; read-only callers may share pending raw acquisition. */
+    fresh?: boolean;
 }>): Promise<ActivePluginCollectionClientForContractRefOutcomeV1<TValue>> {
     const request = PluginCollectionContractReadRequestV1Schema.safeParse({ ref: input.ref });
     if (!request.success) return rejected('collection_query_invalid');
@@ -728,6 +730,8 @@ export async function createActivePluginCollectionClientForContractRef<
         const response = await requestCollectionOperation({
             operation: prepared.operation,
             path: PLUGIN_COLLECTION_CONTRACT_HTTP_PATH_V1,
+            kind: 'read',
+            fresh: input.fresh ?? true,
             body: request.data,
             options: input.options,
         });

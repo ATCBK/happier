@@ -1,16 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { HomeGovernanceProjectionV1Schema, NO_HOME_CAPABILITIES_V1 } from '@happier-dev/protocol/home/governance';
+import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 
-const serverFetchMock = vi.hoisted(() => vi.fn());
-const createServerFetchAtEndpointMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const releaseTransport = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveContext = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: serverFetchMock,
-    createServerFetchAtEndpoint: createServerFetchAtEndpointMock,
-}));
 
 vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     runtimeFetchWithServerReachability: runtimeFetchMock,
@@ -74,8 +68,6 @@ function governanceRequest(signal?: AbortSignal) {
 }
 
 beforeEach(() => {
-    serverFetchMock.mockReset();
-    createServerFetchAtEndpointMock.mockReset();
     runtimeFetchMock.mockReset();
     releaseTransport.mockClear();
     resolveContext.mockReset();
@@ -96,27 +88,23 @@ describe('Home family transport composition', () => {
         // origin is the resolved Iroh one.
         expect(call?.serverUrl).toBe('https://server-a.example');
         expect(call?.url).toBe('http://127.0.0.1:49152/v1/home/governance/get');
-        expect(createServerFetchAtEndpointMock).not.toHaveBeenCalled();
-        expect(serverFetchMock).not.toHaveBeenCalled();
     });
 
     it('travels a browser Iroh Home through the canonical HTTP owner carrying its carrier', async () => {
-        const homeCarrier = { kind: 'browser-iroh' } as const;
+        const carrierFetch = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify(projection()), { status: 200 }));
+        const homeCarrier = {
+            endpointId: 'home-endpoint', readObservedPath: () => 'relay',
+            request: carrierFetch, createWebSocket: () => null,
+        } satisfies HomeCarrier;
         resolveContext.mockResolvedValue(scopedContext({ homeCarrier }));
-        const carrierFetch = vi.fn(async (_path: string, _init?: RequestInit) => new Response(JSON.stringify(projection()), { status: 200 }));
-        createServerFetchAtEndpointMock.mockReturnValue(carrierFetch);
 
         await expect(governanceRequest()).resolves.toEqual({ ok: true, value: projection() });
 
         // A Home that owns its bytes has no origin a URL fetch can reach, so the
         // carrier — not the reachability fetch — must carry the request.
-        expect(createServerFetchAtEndpointMock).toHaveBeenCalledWith(expect.objectContaining({
-            endpointUrl: 'https://server-a.example',
-            homeCarrier,
-        }));
-        expect(carrierFetch.mock.calls[0]?.[0]).toBe('/v1/home/governance/get');
+        expect(carrierFetch).toHaveBeenCalledWith('https://server-a.example/v1/home/governance/get',
+            expect.objectContaining({ method: 'POST', body: '{}' }));
         expect(runtimeFetchMock).not.toHaveBeenCalled();
-        expect(serverFetchMock).not.toHaveBeenCalled();
     });
 
     it('releases the scoped lease after the answer is read, on success and on refusal alike', async () => {

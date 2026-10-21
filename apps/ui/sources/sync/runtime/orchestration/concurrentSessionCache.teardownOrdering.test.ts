@@ -8,6 +8,7 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 
 // Native UI and cryptography adapters do not exist in this Node host.
 vi.mock('react-native', async () => {
@@ -70,8 +71,6 @@ describe('concurrent session cache teardown ordering', () => {
             // closed. The real transport/cache must detach its observers.
             boundary.socket.disconnect.mockImplementation(() => boundary.trigger('disconnect', 'transport close'));
         });
-        const observationFactory = vi.spyOn(await import('@happier-dev/sync-client'), 'createAccountEncryptionCurrentnessObservation');
-
         let holdIncomingSecrets = false;
         const heldSecrets: { finish: (() => void) | null } = { finish: null };
         let heldSecretReads: Promise<void> | null = null;
@@ -106,12 +105,18 @@ describe('concurrent session cache teardown ordering', () => {
         const machineRow = createPlainMachineRowFixture({ id: 'machine-b', accountId: homeB.accountId });
         const currentnessReads = new Map<string, number>();
         const modeReads = new Map<string, number>();
+        let secondaryBinding: AccountEncryptionObservationBinding | null = null;
+        let switchingStarted = false;
+        const retiredAtSuccessorReads: boolean[] = [];
         network.setHttpResponder(async (input, init) => {
             const url = new URL(String(input));
             const path = url.pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v1/account/encryption/currentness') {
                 currentnessReads.set(url.origin, (currentnessReads.get(url.origin) ?? 0) + 1);
+                if (switchingStarted && url.origin === homeB.serverUrl) {
+                    retiredAtSuccessorReads.push(secondaryBinding?.isCurrent() === false);
+                }
                 const expectedToken = url.origin === homeA.serverUrl ? homeA.token : homeB.token;
                 if (new Headers(init?.headers).get('authorization') !== `Bearer ${expectedToken}`) {
                     return Response.json({ error: 'forbidden' }, { status: 403 });
@@ -158,7 +163,7 @@ describe('concurrent session cache teardown ordering', () => {
         const secondaryB = sockets.find((socket) => socket.serverUrl === homeB.serverUrl && socket.options.auth?.clientPurpose === 'concurrent-server-cache');
         expect(secondaryB).toBeDefined();
         const credentialB = { token: homeB.token };
-        const secondaryBinding = cache.getConcurrentAccountEncryptionObservationBinding(homeB.id, credentialB);
+        secondaryBinding = cache.getConcurrentAccountEncryptionObservationBinding(homeB.id, credentialB);
         expect(secondaryBinding).not.toBeNull();
         await expect(secondaryBinding!.read()).resolves.toMatchObject({ mode: 'plain' });
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
@@ -191,8 +196,6 @@ describe('concurrent session cache teardown ordering', () => {
         const warmReadCount = currentnessReads.get(homeB.serverUrl);
         await Promise.all(Array.from({ length: 10 }, () => secondaryBinding!.read()));
         expect(currentnessReads.get(homeB.serverUrl)).toBe(warmReadCount);
-        const bObservationCount = () => observationFactory.mock.calls.filter(([options]) => options.accountId === homeB.accountId).length;
-        expect(bObservationCount()).toBe(1);
         observer = await pool.acquireServerReachabilitySupervisor({ serverUrl: homeB.serverUrl, token: homeB.token });
         const row = createSessionListRenderableSessionFixture({ id: 'session-b' });
         storage.getState().applyServerScopedSessionListRows(homeB.id, [row], { source: 'ordinary', mode: 'replace' });
@@ -204,6 +207,7 @@ describe('concurrent session cache teardown ordering', () => {
         await profiles.upsertServerProfile({ serverUrl: homeB.serverUrl, name: 'Renamed B' });
         holdIncomingSecrets = true;
         await profiles.setActiveServerId(homeB.id, { scope: 'device' });
+        switchingStarted = true;
         const switching = connection.switchConnectionToActiveServer();
         await vi.waitFor(() => expect(heldSecrets.finish).toBeTypeOf('function'));
         await vi.advanceTimersByTimeAsync(1);
@@ -218,8 +222,9 @@ describe('concurrent session cache teardown ordering', () => {
         expect(secondaryBinding!.isCurrent()).toBe(false);
         expect(secondaryBinding!.peek()).toBeNull();
         await expect(secondaryBinding!.read()).rejects.toMatchObject({ code: 'account-encryption-currentness-unavailable' });
-        // The successor cannot bootstrap until the former secondary fact has retired.
-        expect(bObservationCount()).toBe(1);
+        // Incoming identity may initialize before device Settings keys finish;
+        // every successor read must follow withdrawal of the former fact.
+        expect(retiredAtSuccessorReads).not.toContain(false);
         // The retained observer keeps reachability online. A teardown callback
         // mistakenly reported as a live failure would move this real pool offline.
         expect(pool.peekServerReachabilityState(homeB.serverUrl, homeB.token)?.phase).toBe('online');
@@ -267,8 +272,10 @@ describe('concurrent session cache teardown ordering', () => {
         const { apiSocket } = await import('@/sync/api/session/apiSocket');
         const focusedBinding = apiSocket.getAccountEncryptionObservationBinding(credentialB);
         expect(focusedBinding).not.toBeNull();
+        expect(focusedBinding).not.toBe(secondaryBinding);
         await expect(focusedBinding!.read()).resolves.toMatchObject({ mode: 'plain' });
-        expect(bObservationCount()).toBe(2);
+        expect(retiredAtSuccessorReads.length).toBeGreaterThan(0);
+        expect(retiredAtSuccessorReads).not.toContain(false);
         expect(secondaryBinding!.isCurrent()).toBe(false);
         const focusedReadCount = currentnessReads.get(homeB.serverUrl);
         await Promise.all(Array.from({ length: 10 }, () => focusedBinding!.read()));

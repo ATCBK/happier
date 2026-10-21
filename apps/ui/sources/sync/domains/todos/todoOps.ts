@@ -6,6 +6,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { kvList } from '@/sync/api/account/apiKv';
 import type { AccountEncryptionReadUsage } from '@/sync/api/account/apiAccountEncryptionMode';
 import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
+import { bindAccountEncryptionObservation, readAccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 import { createAccountKvJsonTransport, openUiAccountKvJsonRow, type AccountKvJsonTransport } from '@/sync/ops/account/accountKvJsonTransport';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
@@ -88,7 +89,7 @@ export async function fetchTodos(
         if (opts.shouldContinue?.() === false) throw new TodoStoredContentUnavailableError(TODO_INDEX_KEY, 'account_currentness_unavailable');
     };
     requireCurrent();
-    const request = opts.request ?? createServerFetchForActiveServer();
+    const request = opts.request ?? createServerFetchForActiveServer(undefined, { credentials, isCurrent: opts.shouldContinue });
     const context = await resolveTodoAccountStorageContext(credentials, { request, usage: 'identity' });
     const state: TodoState = {
         todos: {},
@@ -183,10 +184,9 @@ function withTodoStoredContentFailures(key: string, transport: AccountKvJsonTran
 /** Apply one accepted Session to the current task, never a captured replacement map. */
 export async function applyTodoSessionLinkIntent(credentials: AuthCredentials, intent: TodoSessionLinkIntent,
     options: Readonly<{ signal?: AbortSignal; request?: ServerFetch }> = {}): Promise<void> {
-    const [{ captureActiveServerAccountScopeLifetime }, { getActiveServerSnapshot }, { serverFetch }] = await Promise.all([
+    const [{ captureActiveServerAccountScopeLifetime }, { getActiveServerSnapshot }] = await Promise.all([
         import('@/sync/domains/scope/activeServerAccountScope'),
         import('@/sync/domains/server/serverRuntime'),
-        import('@/sync/http/client'),
     ]);
     const lifetime = captureActiveServerAccountScopeLifetime();
     const snapshot = getActiveServerSnapshot();
@@ -204,10 +204,14 @@ export async function applyTodoSessionLinkIntent(credentials: AuthCredentials, i
         }
     };
     requireCurrent();
+    const capturedRequest = options.request ?? createServerFetchForActiveServer(snapshot, {
+        credentials, signal: options.signal, isCurrent: () => { try { requireCurrent(); return true; } catch { return false; } },
+    });
     const request: ServerFetch = (path, init, requestOptions) => {
         requireCurrent();
-        return (options.request ?? serverFetch)(path, { ...init, ...(options.signal ? { signal: options.signal } : {}) }, { ...requestOptions, expectedActiveServer: { serverId: snapshot.serverId, generation: snapshot.generation } });
+        return capturedRequest(path, { ...init, ...(options.signal ? { signal: options.signal } : {}) }, { ...requestOptions, expectedActiveServer: { serverId: snapshot.serverId, generation: snapshot.generation } });
     };
+    bindAccountEncryptionObservation(request, readAccountEncryptionObservationBinding(capturedRequest, credentials) ?? undefined);
     try {
         await todoLock.inLock(async () => {
             requireCurrent();
@@ -254,12 +258,16 @@ export async function reorderTodos(
     requireCurrent();
     await todoLock.inLock(async () => {
         requireCurrent();
-        const [{ createTodoAccountKvTransport }, { serverFetch }, { getActiveServerSnapshot }] = await Promise.all([
-            import('./todoAccountKvTransport'), import('@/sync/http/client'), import('@/sync/domains/server/serverRuntime'),
+        const [{ createTodoAccountKvTransport }, { getActiveServerSnapshot }] = await Promise.all([
+            import('./todoAccountKvTransport'), import('@/sync/domains/server/serverRuntime'),
         ]);
-        const scope = { serverId: getActiveServerSnapshot().serverId, accountId: parseToken(credentials.token) };
+        const snapshot = getActiveServerSnapshot();
+        const scope = { serverId: snapshot.serverId, accountId: parseToken(credentials.token) };
+        const request = options.request ?? createServerFetchForActiveServer(snapshot, {
+            credentials, signal: options.signal, isCurrent: options.isCurrent,
+        });
         await applyInternalTaskReorder({ input: { scope, sourceId: todoId, position }, scope, requireCurrent,
-            port: createTodoAccountKvTransport({ credentials, request: options.request ?? serverFetch, requireCurrent }),
+            port: createTodoAccountKvTransport({ credentials, request, requireCurrent }),
             onApplied: (_order, version) => {
                 // Acknowledgement survives retirement; only publication is suppressed.
                 if (options.signal?.aborted || options.isCurrent?.() === false) return;

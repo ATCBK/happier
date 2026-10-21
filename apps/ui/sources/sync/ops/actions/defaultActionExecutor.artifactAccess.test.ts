@@ -215,6 +215,9 @@ describe('UI Artifact sharing Action front door', () => {
                 if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
                 if (target.pathname === '/v1/artifacts/authored') return Response.json(row('authored',
                     buildWidgetDefinitionArtifactHeaderV1(definition), JSON.stringify(definition)));
+                if (target.pathname === '/v1/artifacts/authored/access/grants') return Response.json({
+                    artifactId: 'authored', ownerAccountId: 'owner', access: 'owner', grants: [],
+                });
                 if (target.pathname === `/v1/artifacts/${homeId}`) return Response.json(row(homeId,
                     { kind: HOME_HUB_ARTIFACT_KIND_V1, v: 1 }, JSON.stringify(mixedInstalledPlacement ? { ...layout,
                         items: [...layout.items, { kind: 'widget', instance: { v: 1, id: 'installed-copy',
@@ -227,7 +230,7 @@ describe('UI Artifact sharing Action front door', () => {
                 layout, sections: expect.arrayContaining([expect.objectContaining({ id: instance.id, size: 'wide', frameStyle: 'plain' })]),
             } });
             expect(new Set(requests.filter(path => path.startsWith('/v1/artifacts/'))))
-                .toEqual(new Set([`/v1/artifacts/${homeId}`, '/v1/artifacts/authored']));
+                .toEqual(new Set([`/v1/artifacts/${homeId}`, '/v1/artifacts/authored', '/v1/artifacts/authored/access/grants']));
             expect(requests).not.toContain('/v1/artifacts');
             mixedInstalledPlacement = true;
             expect(await f.executor.execute('home.hub.layout.get', {}, f.context))

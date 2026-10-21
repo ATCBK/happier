@@ -13,6 +13,8 @@ import { log } from '@/log';
 import { randomUUID } from '@/platform/randomUUID';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
+import { createServerFetchForActiveServer, type ServerFetch } from '@/sync/http/client';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import {
     type ArtifactApiOptions,
     createArtifact as createArtifactApi,
@@ -55,6 +57,7 @@ import { hashArtifactBinaryContent, openArtifactBinaryContent, sealArtifactBinar
 import { openArtifactPrivateRevisionMetadata, sealArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import type { ArtifactRevisionProvenanceV1 } from '@happier-dev/protocol';
 import type { ArtifactAccessRecipientCensusResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 function prepareArtifactBody(input: ArtifactBodyInput): ArtifactBodyV1 | null {
     if (input !== null && typeof input === 'object' && 'bytes' in input) return ArtifactBlobReferenceV1Schema.parse({
@@ -83,7 +86,7 @@ async function requireArtifactHtmlWriteContent(params: Readonly<{
             artifactHtmlBundleFromBodyV1(await params.readReference(params.body), params.body.mime);
         } else throw new Error('HTML content is unavailable');
     } catch {
-        params.signal?.throwIfAborted();
+        throwIfAborted(params.signal);
         throw new HappyError('HTML Artifact content is invalid', false, { code: 'artifact_html_content_invalid' });
     }
 }
@@ -97,7 +100,7 @@ function artifactAccessProjection(artifact: Artifact) {
 
 async function sharedArtifactWriteContext(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; signal?: AbortSignal;
-    readTransport?: ArtifactApiOptions['readTransport'];
+    serverId?: string; readTransport?: ArtifactApiOptions['readTransport'];
     artifactId: string; current: DecryptedArtifact; header: Readonly<Record<string, unknown>>; candidateBody?: ArtifactBodyV1 | null;
 }>) {
     const currentHeader = params.current.rawHeader;
@@ -113,7 +116,7 @@ async function sharedArtifactWriteContext(params: Readonly<{
         publicAudience: artifact.publicAudience };
     const shared = await readArtifactSharedAudienceV1({ current, signal: params.signal,
         readGrants: () => createArtifactAccessApi(params.credentials, params).list({ artifactId: params.artifactId }, params.signal) });
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     return { current, shared };
 }
 
@@ -319,7 +322,7 @@ async function prepareArtifactProvenanceWrite(params: Readonly<{
     let ownerEnvelope = envelope;
     const grantInitialization = initializeKey && params.existingArtifact !== undefined && params.existingArtifact.access !== 'owner';
     if (grantInitialization) {
-        const census = await createArtifactAccessApi(params.credentials, { request: params.request }).readRecipients(params.artifactId, params.signal);
+        const census = await createArtifactAccessApi(params.credentials, params).readRecipients(params.artifactId, params.signal);
         if (census.artifactId !== params.artifactId || census.callerDataEncryptionKey !== cached.envelope
             || census.provenanceDataEncryptionKey)
             throw Object.assign(new Error('Artifact data key changed'), { code: 'artifact_data_key_changed' });
@@ -338,6 +341,7 @@ async function prepareArtifactProvenanceWrite(params: Readonly<{
 
 async function acknowledgeArtifactProvenanceWrite(params: Readonly<{
     artifactId: string; credentials: AuthCredentials; request?: ArtifactApiOptions['request']; signal?: AbortSignal;
+    serverId?: string; readTransport?: ArtifactApiOptions['readTransport'];
     artifactDataKeys: ArtifactDataKeyCache;
 }>, prepared: Awaited<ReturnType<typeof prepareArtifactProvenanceWrite>>) {
     if (!prepared.candidate) return;
@@ -345,7 +349,7 @@ async function acknowledgeArtifactProvenanceWrite(params: Readonly<{
     if (!cached) throw new Error('Artifact content key is unavailable');
     let envelope = prepared.candidate.provenanceEnvelope;
     if (prepared.initializedOwnerEnvelope) {
-        const api = createArtifactAccessApi(params.credentials, { request: params.request });
+        const api = createArtifactAccessApi(params.credentials, params);
         const census = await api.readRecipients(params.artifactId, params.signal);
         if (census.artifactId !== params.artifactId || census.callerDataEncryptionKey !== cached.envelope
             || census.provenanceDataEncryptionKey !== prepared.initializedOwnerEnvelope || !census.dataEncryptionKey)
@@ -650,7 +654,7 @@ export function awaitPendingArtifactInventory(params: Readonly<{
     credentials: AuthCredentials;
     signal?: AbortSignal;
 }>): Promise<void> | null {
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     const pending = pendingArtifactInventory;
     if (!pending || !areServerAccountScopesEqual(pending.scope, params.scope)
         || !areCredentialsEqual(pending.credentials, params.credentials)) return null;
@@ -667,6 +671,7 @@ export async function fetchAndApplyArtifactsList(params: {
     credentials: AuthCredentials | null | undefined;
     request?: ArtifactApiOptions['request'];
     readTransport?: ArtifactApiOptions['readTransport'];
+    serverId?: string;
     signal?: AbortSignal;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
@@ -810,7 +815,8 @@ export async function fetchAndApplyArtifactsList(params: {
             const kind = deriveArtifactCoarseKindV1(artifact.rawHeader);
             if (artifact.kind === kind) continue;
             void updateArtifactApi(credentials, artifact.id, { kind, expectedHeaderVersion: artifact.headerVersion },
-                { request: params.request, signal: params.signal, retry: 'none' }).catch(error => {
+                { request: params.request, readTransport: params.readTransport, serverId: params.serverId,
+                    signal: params.signal, retry: 'none' }).catch(error => {
                 log.log(`📦 fetchArtifactsList: Kind backfill refused for ${artifact.id}: ${error}`);
             });
         }
@@ -896,7 +902,7 @@ export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
     prepareRecipientKeys?: boolean;
     shouldContinue?: () => boolean;
 }>): Promise<PromiseSettledResult<DecryptedArtifact | null>[]> {
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     const shouldContinue = params.shouldContinue ?? (() => !params.signal?.aborted);
     if (params.artifactIds.length === 0 || !shouldContinue()) return [];
     const { credentials, encryption, artifactDataKeys } = params;
@@ -904,7 +910,7 @@ export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
     if (!shouldContinue()) return [];
     const artifacts = detailReads.flatMap(item => item.ok ? [item.artifact] : []);
     await resolveArtifactDataKeys({ artifacts, encryption, artifactDataKeys });
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     if (!shouldContinue()) return [];
     return Promise.allSettled(detailReads.map(async item => {
         if (!shouldContinue()) return null;
@@ -934,7 +940,7 @@ export async function fetchArtifactWithBodyFromApi(params: {
     // when their unusable envelope cannot form a keyholding census.
     if (!params.encryption || params.prepareRecipientKeys === false) {
         try {
-            params.signal?.throwIfAborted();
+            throwIfAborted(params.signal);
             const artifact = await fetchArtifactApi(params.credentials, params.artifactId, params);
             return await openArtifactWithRecipientKeyPreparation({ ...params, artifact });
         } catch (error) {
@@ -945,7 +951,7 @@ export async function fetchArtifactWithBodyFromApi(params: {
     // The authenticated batch owner returns the exact row and its matching
     // recipient census together, including for a one-row content demand.
     const [result] = await fetchArtifactsWithBodiesFromApi({ ...params, artifactIds: [params.artifactId] });
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     if (!result) return null;
     if (result.status === 'rejected') throw result.reason;
     return result.value;
@@ -954,14 +960,15 @@ export async function fetchArtifactWithBodyFromApi(params: {
 /** Both authenticated read forms open content and prepare keys through the same owner. */
 async function openArtifactWithRecipientKeyPreparation(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; signal?: AbortSignal;
+    serverId?: string; readTransport?: ArtifactApiOptions['readTransport'];
     artifact: Artifact; encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache;
     recipientCensus?: ArtifactAccessRecipientCensusResponseV1 | null;
     prepareRecipientKeys?: boolean;
 }>): Promise<DecryptedArtifact | null> {
     const { artifact, encryption, artifactDataKeys } = params;
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     const opened = await decryptArtifactWithBody({ artifact, encryption, artifactDataKeys });
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     if (opened?.isDecrypted && opened.storageMode === 'e2ee' && params.prepareRecipientKeys !== false) {
         const key = artifactDataKeys.get(artifact.id);
         const census = params.recipientCensus;
@@ -970,7 +977,7 @@ async function openArtifactWithRecipientKeyPreparation(params: Readonly<{
         if (!key || key.envelope !== artifact.dataEncryptionKey || !census) {
             throw Object.assign(new Error('artifact_content_unavailable'), { code: 'artifact_content_unavailable' });
         }
-        const accessApi = createArtifactAccessApi(params.credentials, { request: params.request });
+        const accessApi = createArtifactAccessApi(params.credentials, params);
         await runArtifactRecipientKeyPreparationV1({ artifactId: artifact.id, dataKey: key.dataKey,
             provenanceDataKey: key.provenanceDataKey, openedProvenanceDataEncryptionKey: key.provenanceEnvelope,
             openedDataEncryptionKey: key.envelope, randomBytes: getRandomBytes, signal: params.signal,
@@ -1009,7 +1016,7 @@ async function openFetchedArtifactBinary(params: Readonly<{
     if (mode === 'e2ee' && (!key || !currentKey || currentKey.envelope !== key.envelope || currentKey.dataKey !== key.dataKey)) {
         throw new HappyError('Artifact file changed or is unavailable', false, { code: 'artifact_content_unavailable' });
     }
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     return bytes;
 }
 
@@ -1105,7 +1112,7 @@ async function openRetainedArtifactBodies(params: ArtifactRevisionReadParams, ar
             throw Object.assign(new Error('Artifact revision content is unavailable'), { code: 'content_unavailable' });
         }
     }));
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     return { artifactId: artifact.id, revisions, retentionCount: inventory.retentionCount };
 }
 
@@ -1150,7 +1157,7 @@ export async function restoreArtifactBodyRevisionViaApi(params: ArtifactRevision
         bodyVersion: params.bodyVersion, expectedRevision: params.expectedRevision, header, body, ...privateMetadata.write }, params);
     await acknowledgeArtifactProvenanceWrite(params, privateMetadata);
     const restored = await fetchArtifactWithBodyFromApi({ ...params, fresh: true });
-    params.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     if (!restored?.isDecrypted) throw Object.assign(new Error('Artifact content is unavailable'), { code: 'content_unavailable' });
     params.updateArtifact(restored);
     return { artifactId: artifact.id, revision };
@@ -1159,6 +1166,7 @@ export async function restoreArtifactBodyRevisionViaApi(params: ArtifactRevision
 export async function createArtifactViaApi(params: {
     credentials: AuthCredentials;
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
     serverId?: string;
     title: string | null;
     body: ArtifactBodyInput;
@@ -1173,6 +1181,7 @@ export async function createArtifactViaApi(params: {
     return await createArtifactWithHeaderViaApi({
         credentials,
         request: params.request,
+        readTransport: params.readTransport,
         serverId: params.serverId,
         header: {
             title,
@@ -1190,6 +1199,7 @@ export async function createArtifactWithHeaderViaApi(params: {
     memoryDecisionSource?: CoordinationMessageRefV1;
     credentials: AuthCredentials;
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
     serverId?: string;
     artifactId?: string;
     signal?: AbortSignal;
@@ -1220,7 +1230,12 @@ export async function createArtifactWithHeaderViaApi(params: {
     try {
         // Generate unique artifact ID
         const artifactId = params.artifactId ?? randomUUID();
-        const accountMode = (await fetchAccountEncryptionMode(credentials, { request: params.request, usage: 'fresh-authority' })).mode;
+        const active = params.request ? undefined : getActiveServerSnapshot();
+        const sourceServerId = params.serverId ?? active?.serverId;
+        const capturedTransport = params.request ?? createServerFetchForActiveServer(active);
+        const capturedRequest: ServerFetch = params.request ?? ((path, init, options) =>
+            capturedTransport(path, init, { includeAuth: false, ...options }));
+        const accountMode = (await fetchAccountEncryptionMode(credentials, { request: params.request, usage: 'identity' })).mode;
 
         let storedDataEncryptionKey: string;
         let storedHeader: string;
@@ -1271,8 +1286,23 @@ export async function createArtifactWithHeaderViaApi(params: {
         }
 
         // Send to server
-        params.signal?.throwIfAborted();
-        const artifact = await createArtifactApi(credentials, request, { request: params.request, signal: params.signal, serverId: params.serverId });
+        throwIfAborted(params.signal);
+        // The create API owns retries and binary framing. Admit the prepared
+        // encoding at its physical send port on every attempt, not before crypto.
+        const createRequest: ServerFetch = async (path, init, options) => {
+            const currentMode = (await fetchAccountEncryptionMode(credentials, {
+                request: capturedRequest, usage: 'fresh-authority',
+            })).mode;
+            if (currentMode !== accountMode) {
+                throw new HappyError('Artifact content does not match its Account mode', false, {
+                    code: 'artifact_account_mode_mismatch',
+                });
+            }
+            throwIfAborted(params.signal);
+            return capturedRequest(path, init, options);
+        };
+        const artifact = await createArtifactApi(credentials, request, { request: createRequest, readTransport: params.readTransport,
+            signal: params.signal, serverId: sourceServerId });
         if (artifact.dataEncryptionKey === request.dataEncryptionKey
             && artifact.provenanceDataEncryptionKey === request.provenanceDataEncryptionKey)
             await acknowledgeArtifactProvenanceWrite({ ...params, artifactId }, privateMetadata);
@@ -1467,8 +1497,9 @@ export async function updateArtifactWithHeaderViaApi(params: {
     // Send update to server
     updateRequest.kind = deriveArtifactCoarseKindV1(rawHeader);
     if (params.memoryDecisionSource) updateRequest.memoryDecisionSource = params.memoryDecisionSource;
-    params.signal?.throwIfAborted();
-    const response = await updateArtifactApi(credentials, artifactId, updateRequest, { request: params.request, signal: params.signal, serverId: params.serverId });
+    throwIfAborted(params.signal);
+    const response = await updateArtifactApi(credentials, artifactId, updateRequest, { request: params.request, readTransport: params.readTransport,
+        signal: params.signal, serverId: params.serverId });
 
     if (!response.success) {
         // Handle version mismatch

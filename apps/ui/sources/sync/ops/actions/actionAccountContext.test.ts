@@ -19,6 +19,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { createWidgetDefinitionArtifactPortV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
 import type { WidgetDefinitionV1 } from '@happier-dev/protocol/widgets/widgetDefinitionV1';
 import NativeAbortController from 'abort-controller';
+import { createArtifact as createArtifactApi, fetchArtifact as fetchArtifactApi } from '@/sync/api/artifacts/apiArtifacts';
 
 let homes: Awaited<ReturnType<typeof serveAccountHomes>>;
 let accountMode: 'plain' | 'e2ee';
@@ -85,14 +86,34 @@ describe('captureActionAccountContext encryption authority', () => {
 describe('captureLazyActionAccountContext encryption on demand', () => {
     it('accepts the React Native AbortController signal without throwIfAborted', async () => {
         vi.stubGlobal('AbortController', NativeAbortController);
+        const artifactId = '11111111-1111-4111-8111-111111111111';
+        let stored: unknown;
+        network.mockImplementation(async (url, init) => {
+            if (url.pathname === '/v1/features') return Response.json({ features: {}, capabilities: { accountStoredContentCompatibility: {
+                v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+            } } });
+            if (url.pathname === '/v1/artifacts' && init?.method === 'POST') {
+                const input: unknown = JSON.parse(String(init.body));
+                if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Expected Artifact create object');
+                stored = { ...input, ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+                return Response.json(stored);
+            }
+            if (url.pathname === `/v1/artifacts/${artifactId}` && stored) return Response.json(stored);
+            return homes.fetch(url, init);
+        });
         let context: Awaited<ReturnType<typeof captureLazyActionAccountContext>> | undefined;
         try {
             context = await captureLazyActionAccountContext(homes.homes.b!.id);
             expect('throwIfAborted' in new NativeAbortController().signal).toBe(false);
             await expect(context.resolveAccountMode()).resolves.toBe('plain');
+            await expect(context.createArtifactDocument({ artifactId, header: { title: 'Native' }, body: 'Current',
+                signal: new AbortController().signal })).resolves.toMatchObject({ artifactId });
+            await expect(context.readArtifact(artifactId, { signal: new AbortController().signal })).resolves.toMatchObject({ body: 'Current' });
         } finally { context?.dispose(); vi.unstubAllGlobals(); }
     });
-    it.each(['home', 'widget', 'widget-unknown-commit'] as const)('uses a fresh committed create receipt while a pre-create absence read is held (%s)', async kind => {
+    it.each(['home', 'widget', 'widget-unknown-commit', 'ambient'] as const)('uses a fresh committed create receipt while a pre-create absence read is held (%s)', async kind => {
         const started = createDeferred<void>();
         const committed = createDeferred<void>();
         const release = createDeferred<void>();
@@ -107,7 +128,7 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
                 currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
             } } });
             if (url.pathname === '/v1/artifacts' && init?.method === 'POST') {
-                if (kind !== 'home') {
+                if (kind === 'widget' || kind === 'widget-unknown-commit') {
                     oldRead = reader!.readArtifact(artifactId);
                     await started.promise;
                 }
@@ -119,14 +140,17 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
                 if (kind === 'widget-unknown-commit') return Response.json({ error: 'ack_unavailable' }, { status: 400 });
                 return Response.json(stored);
             }
+            if (url.pathname === `/v1/artifacts/${artifactId}/access/grants`) return Response.json({
+                artifactId, ownerAccountId: 'account-a', access: 'owner', grants: [],
+            });
             if (url.pathname !== `/v1/artifacts/${artifactId}`) return homes.fetch(url, init);
             reads++;
             const observed = stored;
-            if (reads === (kind === 'home' ? 1 : 2)) { started.resolve(); await release.promise; }
+            if (reads === (kind === 'home' || kind === 'ambient' ? 1 : 2)) { started.resolve(); await release.promise; }
             return observed ? Response.json(observed) : Response.json({ error: 'not_found' }, { status: 404 });
         });
-        reader = await captureLazyActionAccountContext(homes.homes.b!.id);
-        const writer = await captureLazyActionAccountContext(homes.homes.b!.id);
+        reader = await captureLazyActionAccountContext(homes.homes[kind === 'ambient' ? 'a' : 'b']!.id);
+        const writer = await captureLazyActionAccountContext(homes.homes[kind === 'ambient' ? 'a' : 'b']!.id);
         let creation: Promise<unknown> | undefined;
         try {
             await Promise.all([reader.resolveAccountMode(), writer.resolveAccountMode()]);
@@ -135,7 +159,13 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
                 inputSchema: { type: 'object', additionalProperties: false },
                 body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Current content' } } },
                 provenance: { source: { kind: 'authored' }, authorAccountId: 'account-a' } };
-            if (kind === 'home') {
+            if (kind === 'ambient') {
+                oldRead = fetchArtifactApi(reader.credentials, artifactId);
+                await started.promise;
+                creation = createArtifactApi(writer.credentials, { id: artifactId, dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+                    header: encodePlainArtifactStoredContent({ title: 'Committed' }), body: encodePlainArtifactStoredContent({ body: 'Current content' }) })
+                    .then(() => fetchArtifactApi(writer.credentials, artifactId));
+            } else if (kind === 'home') {
                 oldRead = reader.readArtifact(artifactId);
                 await started.promise;
                 creation = writer.homeHubArtifactTransport.create({ artifactId, header: { title: 'Committed' }, body: 'Current content' });
@@ -148,9 +178,13 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
                         return { ...page, items: page.items.map(row => ({ ...row, ownerAccountId: row.ownerAccountId ?? '' })) }; },
                 }, { accountId: 'account-a' }).create(definition);
             }
+            // Assert this original promise below even if it rejects before the held-read count settles.
+            void creation.catch(() => {});
             await committed.promise;
-            await vi.waitFor(() => expect(reads).toBe(kind === 'home' ? 2 : 3));
-            await expect(creation).resolves.toMatchObject(kind === 'home' ? { artifactId, body: 'Current content' } : definition);
+            await vi.waitFor(() => expect(reads).toBe(kind === 'home' || kind === 'ambient' ? 2 : 3));
+            if (kind === 'ambient') {
+                await expect(creation).resolves.toMatchObject({ id: artifactId });
+            } else await expect(creation).resolves.toMatchObject(kind === 'home' ? { artifactId, body: 'Current content' } : definition);
         } finally {
             release.resolve();
             await Promise.allSettled([oldRead, creation]);

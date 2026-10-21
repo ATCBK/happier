@@ -59,20 +59,25 @@ describe('Artifact read acquisition', () => {
             if (!observed) { oldStarted.resolve(); await releaseReads.promise; }
             return observed ? Response.json({ items: [{ artifactId, ok: true, artifact: stored, recipientCensus: null }] }) : missing([artifactId]);
         };
-        const readTransport = capturedRead(request);
         const credentials = { token: 'same-authority' };
-        const old = fetchArtifactReadBatch(credentials, [artifactId], { readTransport });
+        // A distinct captured authority on the same Home has its own pending
+        // partition. Mutation invalidation must not depend on descriptor identity.
+        const readCredentials = { ...credentials, secret: 'other-captured-material' };
+        const readTransport = capturedRead(request, readCredentials);
+        const writeTransport = createCapturedServerReadTransport({ serverId: 'artifact-read-test',
+            profile: { serverUrl: 'https://artifact-read.test' }, credentials });
+        const old = fetchArtifactReadBatch(readCredentials, [artifactId], { readTransport });
         let during: ReturnType<typeof fetchArtifactReadBatch> | undefined;
         let write: Promise<unknown> | undefined;
         try {
             await oldStarted.promise;
-            write = createArtifact(credentials, input, { request, readTransport }).catch(error => error);
+            write = createArtifact(credentials, input, { request, readTransport: writeTransport, serverId: 'artifact-read-test' }).catch(error => error);
             await writeStarted.promise;
-            during = fetchArtifactReadBatch(credentials, [artifactId], { readTransport });
+            during = fetchArtifactReadBatch(readCredentials, [artifactId], { readTransport });
             await vi.waitFor(() => expect(reads).toBe(2));
             allowCommit.resolve();
             await write;
-            await expect(fetchArtifactReadBatch(credentials, [artifactId], { readTransport })).resolves.toMatchObject([{ ok: true, artifact: stored }]);
+            await expect(fetchArtifactReadBatch(readCredentials, [artifactId], { readTransport })).resolves.toMatchObject([{ ok: true, artifact: stored }]);
             expect(reads).toBe(3);
         } finally {
             allowCommit.resolve(); releaseReads.resolve();

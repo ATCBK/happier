@@ -246,30 +246,21 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
     const resolve = async <TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(
         requested: PluginCollectionContractRefV1,
         signal?: AbortSignal,
-        pending?: Map<AbortSignal | undefined, Promise<ResolvedCollection<TValue>>>,
+        fresh = true,
     ): Promise<ResolvedCollection<TValue>> => {
         assertBindingCurrent(signal);
-        const incumbent = pending?.get(signal);
-        if (incumbent) return await incumbent;
-        const result = (async () => {
-            await ensureCollectionAdmitted({ ref: requested }, signal);
-            const admission = admit(requested, signal);
-            const outcome = await createActivePluginCollectionClientForContractRef<TValue>({
-                ref: admission.ref,
-                ...(signal ? { options: { signal } } : {}),
-                accountLifetime: input.accountLifetime,
-                assertAdmitted: () => { admit(requested, signal); },
-                signal: input.signal,
-            });
-            admit(requested, signal);
-            return resolvedClient(outcome);
-        })();
-        pending?.set(signal, result);
-        try {
-            return await result;
-        } finally {
-            if (pending?.get(signal) === result) pending.delete(signal);
-        }
+        await ensureCollectionAdmitted({ ref: requested }, signal);
+        const admission = admit(requested, signal);
+        const outcome = await createActivePluginCollectionClientForContractRef<TValue>({
+            ref: admission.ref,
+            ...(signal ? { options: { signal } } : {}),
+            accountLifetime: input.accountLifetime,
+            assertAdmitted: () => { admit(requested, signal); },
+            signal: input.signal,
+            fresh,
+        });
+        admit(requested, signal);
+        return resolvedClient(outcome);
     };
 
     const collection = <TDefinition extends PluginAccountCollectionDefinition>(
@@ -279,10 +270,6 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
         if (!requested) {
             throw dataError(COLLECTION_UNDECLARED_CODE, 'The requested Account Collection is not declared');
         }
-        // Read-only facade operations share overlapping contract acquisition for
-        // this exact facade and cancellation lifetime. Mutations resolve their
-        // own writer admission; every direct operation still admits currentness.
-        const pending = new Map<AbortSignal | undefined, Promise<ResolvedCollection<PluginAccountCollectionValue<TDefinition>>>>();
         return Object.freeze<PluginAccountCollectionForDefinition<TDefinition>>({
             watch(request, listener) {
                 admit(requested);
@@ -348,7 +335,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 return Object.freeze({ dispose });
             },
             async identityTag(request, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, false);
                 const outcome = await active.client.identityTag(request, options);
                 admit(requested, options?.signal);
                 if (outcome.status === 'ready') return outcome.tag;
@@ -356,7 +343,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 throw unavailableError(outcome.reason);
             },
             async get(rowId, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, false);
                 const outcome = await active.client.get(rowId, options);
                 admit(requested, options?.signal);
                 if (outcome.status === 'ready') {
@@ -433,7 +420,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 throw unavailableError(outcome.reason);
             },
             async query(request, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, false);
                 const outcome = await active.client.query({
                     indexId: request.index,
                     ...(request.prefix ? { prefix: request.prefix } : {}),
@@ -469,14 +456,14 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 throw unavailableError(outcome.reason);
             },
             async limits(options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, false);
                 const outcome = await active.client.limits(options);
                 admit(requested, options?.signal);
                 if (outcome.status === 'ready') return outcome.limits;
                 throw unavailableError(outcome.reason);
             },
             async measureBatch(operations, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, false);
                 const outcome = await active.client.measureBatch(operations, options);
                 admit(requested, options?.signal);
                 if (outcome.status === 'ready') return outcome.measurement;
@@ -499,7 +486,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
         if (admission.kind !== 'available') {
             throw dataError(COLLECTION_UNDECLARED_CODE, 'The requested Account Collection is not admitted by the current release');
         }
-        const active = await resolve<PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(admission.ref, query.signal);
+        const active = await resolve<PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(admission.ref, query.signal, false);
         const descriptors = active.contract.uiQueries.filter((candidate) => candidate.id === query.uiQueryId);
         if (descriptors.length !== 1) {
             throw dataError(

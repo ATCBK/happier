@@ -19,9 +19,13 @@ import type { ConnectedServiceConfigurationCatalogHostV1 } from '@happier-dev/pr
 import { randomUUID } from '@/platform/randomUUID';
 import { applyAcknowledgedConnectedAccountCatalog } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { withActionAccountRequestSignal } from '@/sync/ops/actions/actionAccountContext';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 export type ConnectedAccountCatalogAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 export type ConnectedAccountCatalogMutationResponseV1 = ReturnType<typeof ConnectedAccountCatalogRowMutationResponseV1Schema.parse>;
+const rowReads = createScopedResolutionSingleFlight<ReturnType<typeof ConnectedAccountCatalogRowReadResponseV1Schema.parse>>();
 import { ConnectedAccountCatalogOperationError } from './connectedAccountCatalogOperationError';
 export { ConnectedAccountCatalogOperationError };
 export function requireUpdatedConnectedAccountCatalogMutation(result: ConnectedAccountCatalogMutationResponseV1): asserts result is Extract<ConnectedAccountCatalogMutationResponseV1, { status: 'updated' }> {
@@ -48,14 +52,31 @@ function failure(error: unknown, signal?: AbortSignal): ConnectedAccountCatalogS
     return { status: 'unavailable', reason: classifyAccountStorageReadFailure(error, signal) };
 }
 export async function readConnectedAccountCatalogRowInContext(context: ConnectedAccountCatalogAccountContext,
-    key: ConnectedAccountCatalogKeyV1, signal?: AbortSignal) {
-    const response = await context.request(`${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/${key}`, { method: 'GET', signal }, { retry: 'none' });
-    context.assertCurrent();
-    if (!response.ok) throw new ConnectedAccountCatalogOperationError(response.status === 401 ? 'unauthorized'
-        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
-    const parsed = ConnectedAccountCatalogRowReadResponseV1Schema.parse(await response.json());
-    context.assertCurrent();
-    return parsed;
+    key: ConnectedAccountCatalogKeyV1, signal?: AbortSignal, options?: Readonly<{ fresh?: boolean }>) {
+    return withActionAccountRequestSignal(context, signal, async signal => {
+        context.assertCurrent();
+        throwIfAborted(signal);
+        const path = `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/${key}`;
+        const consume = async (response: Response) => {
+            if (!response.ok) throw new ConnectedAccountCatalogOperationError(response.status === 401 ? 'unauthorized'
+                : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable');
+            return ConnectedAccountCatalogRowReadResponseV1Schema.parse(await response.json());
+        };
+        const transport = context.readTransport;
+        let parsed: ReturnType<typeof ConnectedAccountCatalogRowReadResponseV1Schema.parse>;
+        if (transport) {
+            const snapshotKey = transport.key;
+            parsed = await rowReads.run(JSON.stringify([snapshotKey, key]), sharedSignal => transport.read(path,
+                { method: 'GET', signal: sharedSignal }, { retry: 'none' }, consume), {
+                scope: transport.scope ?? snapshotKey, signal, fresh: options?.fresh ?? true,
+            });
+        } else {
+            parsed = await consume(await context.request(path, { method: 'GET', signal }, { retry: 'none' }));
+        }
+        throwIfAborted(signal);
+        context.assertCurrent();
+        return parsed;
+    });
 }
 type ConnectedAccountCatalogReadPublication = Readonly<{
     onReady?: (catalog: ConnectedAccountCatalogSnapshotV1, isAccountCurrent: () => boolean) => void;
@@ -65,7 +86,7 @@ export type ConnectedAccountCatalogSourceAdmission = Readonly<{ sourceMachineId?
 async function readConnectedAccountCatalogWithAdmissionInContext(context: ConnectedAccountCatalogAccountContext,
     key: ConnectedAccountCatalogKeyV1, signal: AbortSignal | undefined,
     publication: ConnectedAccountCatalogReadPublication | null,
-    sourceAdmission?: ConnectedAccountCatalogSourceAdmission): Promise<ConnectedAccountCatalogSnapshotV1> {
+    sourceAdmission?: ConnectedAccountCatalogSourceAdmission, fresh = false): Promise<ConnectedAccountCatalogSnapshotV1> {
     try {
         return await admit(context, 'identity', async (mode, material) => {
             const project = async (catalog: ConnectedAccountCatalogSnapshotV1): Promise<ConnectedAccountCatalogSnapshotV1> => {
@@ -75,7 +96,7 @@ async function readConnectedAccountCatalogWithAdmissionInContext(context: Connec
                 return current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
             };
             const catalog = await loadConnectedAccountCatalogV1({ key, mode, material, signal,
-                readRow: () => readConnectedAccountCatalogRowInContext(context, key, signal),
+                readRow: () => readConnectedAccountCatalogRowInContext(context, key, signal, { fresh: fresh || publication !== null }),
                 ...(publication?.onReady ? { onReadyBeforeCleanup: async catalog => {
                     publication.onReady!(await project(catalog), context.accountLifetime.isCurrent);
                 } } : {}),
@@ -153,7 +174,7 @@ export function readConnectedAccountCatalogInContext(context: ConnectedAccountCa
 /** Active-row edits await current authority, not retained-source/history maintenance. */
 export async function readConnectedAccountCatalogForMutationInContext(context: ConnectedAccountCatalogAccountContext,
     key: ConnectedAccountCatalogKeyV1, signal?: AbortSignal): Promise<ConnectedAccountCatalogSnapshotV1> {
-    const admitted = await readAdmittedConnectedAccountCatalogInContext(context, key, signal);
+    const admitted = await readConnectedAccountCatalogWithAdmissionInContext(context, key, signal, null, undefined, true);
     return admitted.status === 'unavailable' && admitted.reason === 'authority-not-confirmed'
         ? readConnectedAccountCatalogInContext(context, key, signal) : admitted;
 }
@@ -215,7 +236,8 @@ export function prepareConnectedAccountCatalogMutationInContext(context: Connect
 }
 export async function writeConnectedAccountCatalogRecordInContext(context: ConnectedAccountCatalogAccountContext,
     input: ConnectedAccountCatalogRecordWriteInput, signal?: AbortSignal): Promise<ConnectedAccountCatalogMutationResponseV1> {
-        const mutation = await prepareConnectedAccountCatalogMutationInContext(context, input, signal);
+    const mutation = await prepareConnectedAccountCatalogMutationInContext(context, input, signal);
+    try {
         let response: Response;
         try {
             response = await context.request(`${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/${input.record.key}`, {
@@ -232,6 +254,11 @@ export async function writeConnectedAccountCatalogRecordInContext(context: Conne
             catch { /* Display publication cannot retract the durable row receipt. */ }
         }
         return parsed.data;
+    } finally {
+        // Unknown write outcomes can have committed. Do not let later reads
+        // borrow a pre-write row before the captured Home receives its wake.
+        if (context.readTransport) rowReads.invalidate(context.readTransport.scope ?? context.readTransport.key);
+    }
 }
 export async function writeConnectedAccountCatalogRecordAndPublishInContext(context: ConnectedAccountCatalogAccountContext,
     input: ConnectedAccountCatalogRecordWriteInput, signal?: AbortSignal): Promise<ConnectedAccountCatalogMutationResponseV1> {

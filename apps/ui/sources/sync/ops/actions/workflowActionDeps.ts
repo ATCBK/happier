@@ -75,6 +75,7 @@ import { listSessionsForVoiceTool } from '@/voice/tools/actionImpl/sessionList';
 import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { createUiAccountAction, resolveUiAccountActionFallbackMachineId } from './accountActionDeps';
 import type { WorkflowActionTransport } from './workflowActionTransport';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 function targetUnavailable(): never {
     throw Object.assign(new Error('target_unavailable'), { code: 'target_unavailable' });
@@ -102,7 +103,7 @@ function createUiTriggerSessionResolver(account: LazyActionAccountContext): NonN
                 sessionId, isCurrent: account.accountLifetime.isCurrent,
             })).session);
         account.assertCurrent();
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         const ownerMetadata = session ? readSessionOwnerMetadataView(session) : null;
         const machineId = ownerMetadata?.machineId?.trim();
         const directory = ownerMetadata?.path?.trim();
@@ -260,10 +261,10 @@ export function createUiWorkflowAction(params: Readonly<{
         resolveEncryption: () => resolveEncryption(),
         resolveRetainedSession: async (sessionId): Promise<AutomationTemplateRetainedSessionV1 | null> => {
             account.assertCurrent();
-            const response = await readSessionByIdHttp({ sessionId, serverId: account.serverId,
+            const response = await withActionAccountRequestSignal(account, account.invocationSignal, signal => readSessionByIdHttp({ sessionId, serverId: account.serverId,
                 token: account.credentials.token, accessProjectionVersion: 1, readTransport: account.readTransport,
                 request: (path, init) => account.request(path, init, { includeAuth: false }),
-                signal: account.invocationSignal });
+                signal }));
             account.assertCurrent();
             if (!response.ok) return null;
             const session = parseCompatSessionByIdResponse(response.body)?.session;

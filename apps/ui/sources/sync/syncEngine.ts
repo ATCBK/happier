@@ -27,7 +27,7 @@ import {
     apiSocket,
 } from '@/sync/api/session/apiSocket';
 import type { AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
-import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { getConcurrentAccountEncryptionObservationBinding } from '@/sync/runtime/orchestration/concurrentSessionCache';
 import { emitSessionReadCursorUpdateWithServerScope } from '@/sync/api/session/emitSessionReadCursorUpdateWithServerScope';
 import { isDemoModeActive } from '@/demoMode/runtime/enterExitDemoMode';
 import { ensureSessionRuntimeForPendingInput } from '@/sync/ops';
@@ -2189,6 +2189,16 @@ class Sync {
         });
     }
 
+    private createAppliedReadTransport(target: SyncServerTarget | null = this.getAppliedTransportTarget()) {
+        if (this.embedSessionScope || !target) return undefined;
+        return apiSocket.createReadTransportForPreparedTarget({
+            endpoint: target.serverUrl, serverId: target.serverId, generation: target.generation,
+            ...(target.runtimeOrigin ? { runtimeOrigin: target.runtimeOrigin } : {}),
+            ...(target.carrier ? { carrier: target.carrier } : {}),
+            ...(target.homeCarrier !== undefined ? { homeCarrier: target.homeCarrier } : {}),
+        });
+    }
+
     private createAppliedSettingsRequestContext(
         settingsScope: AccountSettingsScope | null | undefined,
     ): SyncSettingsParams['requestContext'] {
@@ -3142,6 +3152,7 @@ class Sync {
                             sessionDataKeys: this.sessionDataKeys,
                             sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
                             activeRequest: this.requestViaConfiguredSocket,
+                            activeReadTransport: this.createAppliedReadTransport(appliedTarget),
                             applySessions: sessions => this.applySessions(sessions),
                             log,
                             isCurrent: isDraftScopeCurrent,
@@ -3957,7 +3968,8 @@ class Sync {
                         }
                     })()
                 );
-            const activeServerId = String(this.getAppliedTransportTarget()?.serverId ?? '').trim();
+            const appliedTransportTarget = this.getAppliedTransportTarget();
+            const activeServerId = String(appliedTransportTarget?.serverId ?? '').trim();
             const preferredServerId = embedScope ? embedScope.endpointUrl : resolveMessageRouteHydrationServerId(
                 normalized,
                 options?.serverId,
@@ -4080,6 +4092,7 @@ class Sync {
                         sessionDataKeys: this.sessionDataKeys,
                         sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
                         activeRequest: this.requestViaConfiguredSocket,
+                        activeReadTransport: this.createAppliedReadTransport(appliedTransportTarget),
                         getExistingSession: readHydrationSession,
                         applySessions: (sessions) => this.applySessions(sessions),
                         log,
@@ -4217,6 +4230,7 @@ class Sync {
             sessionDataKeys: this.sessionDataKeys,
             sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
             activeRequest: this.createAppliedTransportRequest(target),
+            activeReadTransport: this.createAppliedReadTransport(target),
             applySessions: (sessions) => { if (isCurrent()) this.applySessions(sessions); },
             getExistingSession: readExistingSession,
             getCurrentSessionListRenderable: (id) => readSessionListRowForServerId(storage.getState().sessionListRowsByServerId, serverId, id),
@@ -5456,6 +5470,7 @@ class Sync {
                 sessionDataKeys: this.sessionDataKeys,
                 sessionDataKeyEnvelopes: this.sessionDataKeyEnvelopes,
                 activeRequest: this.requestViaConfiguredSocket,
+                activeReadTransport: this.createAppliedReadTransport(),
                 applySessions: (sessions) => {
                     assertCurrent();
                     const session = sessions.find((candidate) => candidate.id === sessionId);
@@ -7131,6 +7146,7 @@ class Sync {
                 sessionDataKeys: stagedSessionDataKeys,
                 sessionDataKeyEnvelopes: stagedSessionDataKeyEnvelopes,
                 activeRequest: sessionRequest,
+                activeReadTransport: this.createAppliedReadTransport(appliedTransportTarget),
                 accountCurrentness,
                 getExistingSession: (targetSessionId) => storage.getState().sessions[targetSessionId] ?? null,
                 applySessions: (sessions) => {
@@ -8635,8 +8651,10 @@ class Sync {
         return this.credentials?.token ? this.credentials : null;
     }
 
-    public getAccountEncryptionObservationBinding(credentials: AuthCredentials): AccountEncryptionObservationBinding | null {
-        return apiSocket.getAccountEncryptionObservationBinding(credentials);
+    public getAccountEncryptionObservationBinding(credentials: AuthCredentials, serverId?: string): AccountEncryptionObservationBinding | null {
+        const active = apiSocket.getAccountEncryptionObservationBinding(credentials);
+        if (!serverId || active && areServerProfileIdentifiersEquivalent(active.serverId, serverId)) return active;
+        return getConcurrentAccountEncryptionObservationBinding(serverId, credentials);
     }
 
     // Artifact methods
@@ -8713,7 +8731,7 @@ class Sync {
     }
 
     private async withArtifactReadAuthority<TResult>(signal: AbortSignal | undefined,
-        operation: (params: Omit<Parameters<typeof fetchArtifactForViewFromApi>[0], 'artifactId'>) => Promise<TResult>,
+        operation: (params: Omit<Parameters<typeof fetchArtifactForViewFromApi>[0], 'artifactId'> & Readonly<{ serverId: string }>) => Promise<TResult>,
     ): Promise<TResult> {
         if (!this.credentials) throw new Error('Not authenticated');
         const scope = getActiveServerAccountScope();
@@ -8735,6 +8753,7 @@ class Sync {
                 guard.check();
                 if (authority.context.token !== credentials.token) throw staleError();
                 result = await operation({ credentials, encryption, artifactDataKeys: this.artifactDataKeys,
+                    serverId: scope.serverId,
                     readTransport: authority.readTransport,
                     signal: guard.signal,
                     forbiddenOrigins: [authority.context.targetServerUrl,
@@ -8842,15 +8861,13 @@ class Sync {
         const sourceServerId = appliedTransportTarget.serverId;
         const cachedMachineDisplayEntries = buildMachineDisplayCacheEntriesFromRenderables(storage.getState().machineDisplayById);
         const recipientEncryptionLifetime = captureEncryptionGenerationCurrentness(this.encryption);
-        const readTransport = this.embedSessionScope ? undefined : createCapturedServerReadTransport({
-            serverId: sourceServerId, credentials,
-            prepared: { ...appliedTransportTarget, endpointUrl: appliedTransportTarget.serverUrl,
-                request: apiSocket.createRequestForPreparedTarget({ ...appliedTransportTarget, endpoint: appliedTransportTarget.serverUrl }) },
+        const readTransport = this.embedSessionScope ? undefined : apiSocket.createReadTransportForPreparedTarget({
+            ...appliedTransportTarget, endpoint: appliedTransportTarget.serverUrl,
         });
 
         await fetchAndApplyMachines({
             credentials,
-            readAccountMode: async () => (await fetchAccountEncryptionMode(credentials, { request: this.createAppliedTransportRequest(appliedTransportTarget) })).mode,
+            readAccountMode: async () => (await fetchAccountEncryptionMode(credentials, { request: this.createAppliedTransportRequest(appliedTransportTarget), usage: 'identity' })).mode,
             request: this.createAppliedTransportRequest(appliedTransportTarget),
             readTransport,
             encryption: this.encryption,
@@ -12523,7 +12540,7 @@ class Sync {
               readAccountMode: async () => {
                   const credentials = this.credentials;
                   if (!credentials || !shouldContinue()) throw new Error('machine_target_changed');
-                  const result = await fetchAccountEncryptionMode(credentials, { request: this.createAppliedTransportRequest(appliedTransportTarget) });
+                  const result = await fetchAccountEncryptionMode(credentials, { request: this.createAppliedTransportRequest(appliedTransportTarget), usage: 'identity' });
                   if (!shouldContinue() || this.credentials !== credentials) throw new Error('machine_target_changed');
                   return result.mode;
               },
@@ -12708,6 +12725,7 @@ class Sync {
                     try {
                         mode = (await fetchAccountEncryptionMode(actionOperationCredentials, {
                             request: this.createAppliedTransportRequest(actionOperationTransportTarget),
+                            usage: 'identity',
                         })).mode;
                     } catch {
                         // Unavailable Account mode never admits content by key presence.
