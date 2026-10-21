@@ -206,6 +206,8 @@ test('source edits refresh the inventory module consumed by a running Metro', as
   });
   const repoRoot = fixture.path('repo');
   await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoRoot });
+  await import('../../../../packages/cli-common/registerSourceRuntime.mjs');
+  const { CHANNEL_STATE_COLLECTION } = await import(pathToFileURL(join(repoRoot, 'packages/plugins/channels/src/collections.ts')));
   await cp(join(sourceRepo, 'apps/ui/tools'), join(repoRoot, 'apps/ui/tools'), { recursive: true });
   await cp(join(sourceRepo, 'apps/stack/bin'), join(repoRoot, 'apps/stack/bin'), { recursive: true });
   const cliManifestPath = join(repoRoot, 'apps/cli/package.json');
@@ -327,7 +329,8 @@ test('source edits refresh the inventory module consumed by a running Metro', as
       { module: channelsModule, exports: channelsModule.exports, require, TextEncoder, TextDecoder });
     const contract = channelsModule.exports.renderSurface();
     assert.equal(contract.id, 'channel-state');
-    assert.equal(contract.schemaVersion, 9, 'the refreshed Channels consumer must carry the current writer contract');
+    assert.equal(contract.schemaVersion, CHANNEL_STATE_COLLECTION.schemaVersion,
+      'the refreshed Channels consumer must carry the captured writer contract');
   }, { timeout: 120_000, interval: 100 });
   await t.test('published inventory is immediately resolvable by Metro', () => {
     assert.equal(sawCandidate, true, 'the real watcher must observe the replacement candidate');
@@ -997,6 +1000,14 @@ async function linkCanonicalServerWorkspace(repoDir) {
     await symlink(join(canonicalRepo, directory), join(repoDir, directory),
       process.platform === 'win32' ? 'junction' : 'dir');
   }
+  // Capture follows declared workspace dependencies. These fixtures re-export
+  // the real migration owner, so they must declare its real runtime closure.
+  const { name, type, dependencies } = JSON.parse(await readFile(join(canonicalRepo, 'apps/server/package.json'), 'utf8'));
+  await mkdir(join(repoDir, 'apps/server'), { recursive: true });
+  await writeFile(join(repoDir, 'apps/server/package.json'), JSON.stringify({ name, type, dependencies }));
+  const installedDependencies = join(canonicalRepo, 'apps/server/node_modules');
+  if (existsSync(installedDependencies)) await symlink(installedDependencies, join(repoDir, 'apps/server/node_modules'),
+    process.platform === 'win32' ? 'junction' : 'dir');
 }
 
 test('cold source CLI loader retains the production stack-debug graph without CLI testkit inputs', async t => {
@@ -2633,8 +2644,6 @@ test('one-shot source builds retire their real preparation process after success
   await linkCanonicalServerWorkspace(repoDir);
   const serverDir = join(repoDir, 'apps/server');
   await mkdir(join(serverDir, 'sources'), { recursive: true });
-  await mkdir(join(serverDir, 'node_modules'), { recursive: true });
-  await writeFile(join(serverDir, 'package.json'), JSON.stringify({ name: '@happier-dev/server', type: 'module' }));
   await writeFile(join(serverDir, 'tsconfig.json'), JSON.stringify({
     extends:fileURLToPath(new URL('../../../server/tsconfig.json', import.meta.url)),
   }));
@@ -2642,7 +2651,6 @@ test('one-shot source builds retire their real preparation process after success
   await mkdir(join(serverDir, 'scripts'));
   await writeFile(join(serverDir, 'scripts/migrate.sqlite.deploy.ts'),
     `export {runSqliteMigrationDeploy} from ${JSON.stringify(fileURLToPath(new URL('../../../server/scripts/migrate.sqlite.deploy.ts', import.meta.url)))};`);
-  await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')), join(serverDir, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
   // Preparation runs beneath foreground custody. Observe the real spawn
   // boundary in every descendant, not only the long-lived caller.
   const observedProcessesPath = join(repoDir, 'observed-processes.jsonl');
@@ -2666,7 +2674,6 @@ test('one-shot source builds retire their real preparation process after success
     import {createRequire} from 'node:module';
     import {readFile,writeFile} from 'node:fs/promises';
     import {join} from 'node:path';
-    const require=createRequire(import.meta.url);
     const {buildSourceRuntimeBundle}=await import(${JSON.stringify(new URL('./build_source_runtime.mjs', import.meta.url).href)});
     const {observeProcessLivenessSync}=await import(${JSON.stringify(new URL('../../../../packages/cli-common/processInstance.mjs', import.meta.url).href)});
     const repoDir=process.argv[1], results=[];
@@ -2688,7 +2695,7 @@ test('one-shot source builds retire their real preparation process after success
         results.push({failure,rejected,retired});
       }
       console.log(JSON.stringify(results));
-    } finally {require(join(repoDir,'apps/server/node_modules/esbuild')).stop();}
+    } finally {createRequire(join(repoDir,'apps/server/package.json'))('esbuild').stop();}
   `;
   const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '--eval', script, repoDir], {
     env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --require ${JSON.stringify(observerPath)}` },
@@ -2912,9 +2919,8 @@ test('Node source-light runs the canonical SQLite migration before startup witho
   const migrationName = '20260927010000_add_home_settings_and_administration_events';
   const canonicalDeploy = fileURLToPath(new URL('../../../server/scripts/migrate.sqlite.deploy.ts', import.meta.url));
   const canonicalMigrations = fileURLToPath(new URL('../../../server/prisma/sqlite/migrations', import.meta.url));
-  await Promise.all(['sources', 'scripts', `prisma/sqlite/migrations/${migrationName}`, 'node_modules']
+  await Promise.all(['sources', 'scripts', `prisma/sqlite/migrations/${migrationName}`]
     .map(name => mkdir(join(serverDir, name), {recursive:true})));
-  await writeFile(join(serverDir, 'package.json'), JSON.stringify({name:'@happier-dev/server', type:'module'}));
   await writeFile(join(serverDir, 'tsconfig.json'), JSON.stringify({
     extends:fileURLToPath(new URL('../../../server/tsconfig.json', import.meta.url)),
   }));
@@ -2923,8 +2929,6 @@ test('Node source-light runs the canonical SQLite migration before startup witho
   await writeFile(join(serverDir, 'scripts/migrate.sqlite.deploy.ts'),
     `export {runSqliteMigrationDeploy} from ${JSON.stringify(canonicalDeploy)};`);
   await cp(canonicalMigrations, join(serverDir, 'prisma/sqlite/migrations'), {recursive:true});
-  await symlink(dirname(createRequire(import.meta.url).resolve('esbuild/package.json')),
-    join(serverDir, 'node_modules/esbuild'), process.platform === 'win32' ? 'junction' : 'dir');
   await installSourcePreparationInputs(fixture.path('repo'), 'server');
   const runtime = await buildSourceRuntimeBundle({repoDir:fixture.path('repo'), stackBaseDir:fixture.path('stacks/consumer'),
     component:'server', serverComponent:'happier-server-light', dbProvider:'sqlite'});
