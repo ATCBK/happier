@@ -318,8 +318,10 @@ failure envelope carries these details through Agent and MCP tools.
 
 Discovery uses the same content-free issue envelope for an unknown Action id
 (`unknown_action` at `id` or `actionId`) and an unknown input hint
-(`unknown_field` at `fieldPath`). Identifiers are located by path rather than
-echoed. Native callers can repair the named operand without receiving rejected
+(`unknown_field` at `fieldPath`). An invalid schema-section pointer identifies
+`schemaPath` with `invalid_schema_path`, independently of Action lookup.
+Identifiers are located by path rather than echoed. Native callers can repair
+the named operand without receiving rejected
 values or private input content. Missing or contradictory inventory selections
 use `invalid_selection` at the relevant `draftInput` field. The shared selection
 owner preserves that refusal through both option resolution and direct reads.

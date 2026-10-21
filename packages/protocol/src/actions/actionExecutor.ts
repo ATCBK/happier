@@ -7364,36 +7364,41 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const includeOutputSchema = schemaPath?.startsWith('/outputSchema') === true || (typeof data.includeOutputSchema === 'boolean'
             ? data.includeOutputSchema
             : ctx.surface !== 'agent' && ctx.surface !== 'mcp' && ctx.surface !== 'cli');
-          const projectDiscovery = (definition: Parameters<typeof projectActionSpecSchemaSections>[0]) => {
+          const projectDiscovery = (definition: Parameters<typeof projectActionSpecSchemaSections>[0]): ActionExecuteResult => {
             const scope = deps.widgetAccountScope?.();
             const sessionId = ctx.defaultSessionId;
             const invocationContext = sessionId ? { sessionId,
               ...(scope ? { widgetSurface: { serverId: scope.serverId, accountId: scope.accountId,
                 owner: { kind: 'sessionBoard' as const, sessionId } } } : {}) } : undefined;
-            return {
-              ...(schemaPath !== undefined || ctx.surface === 'agent' || ctx.surface === 'mcp' || ctx.surface === 'cli'
-                ? projectActionSpecSchemaSections(definition, schemaPath) : { actionSpec: definition }),
-              ...(invocationContext ? { invocationContext } : {}),
-            };
+            try {
+              return { ok: true, result: {
+                ...(schemaPath !== undefined || ctx.surface === 'agent' || ctx.surface === 'mcp' || ctx.surface === 'cli'
+                  ? projectActionSpecSchemaSections(definition, schemaPath) : { actionSpec: definition }),
+                ...(invocationContext ? { invocationContext } : {}),
+              } };
+            } catch (error) {
+              if (error instanceof Error && error.message === 'invalid_schema_path') {
+                return actionInputIssueFailure({ code: 'invalid_schema_path', path: ['schemaPath'] });
+              }
+              throw error;
+            }
           };
-          try {
-            const requestedSpec = getActionSpec(requestedId as ActionId);
+          let requestedSpec: ActionSpec | null = null;
+          try { requestedSpec = getActionSpec(requestedId as ActionId); } catch { /* May be contributed. */ }
+          if (requestedSpec) {
             const credentialFailure = credentialScopeFailure(requestedId, ctx, undefined, true);
             if (credentialFailure) return credentialFailure;
             const requestedAvailability = resolveAvailabilityForContext(requestedSpec, ctx);
             if (requestedAvailability ? !requestedAvailability.available : !isActionEnabled(requestedSpec, ctx)) {
               return actionDisabled(requestedAvailability);
             }
-            return {
-              ok: true,
-              result: projectDiscovery(projectActionDefinitionForExternalDiscovery(
-                actionSpecToActionDefinitionV1(requestedSpec, {
-                  surface: ctx.surface ?? null,
-                  includeOutputSchema,
-                }),
-              )),
-            };
-          } catch {
+            return projectDiscovery(projectActionDefinitionForExternalDiscovery(
+              actionSpecToActionDefinitionV1(requestedSpec, {
+                surface: ctx.surface ?? null,
+                includeOutputSchema,
+              }),
+            ));
+          } else {
             const contributedDefinition = getContributedActionDefinition(requestedId, ctx);
             if (!contributedDefinition) {
               return actionInputIssueFailure({ code: 'unknown_action', path: ['id'] });
@@ -7409,15 +7414,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               return { ok: false, errorCode: 'unavailable', error: 'unavailable' };
             }
             const { outputSchema: _summaryOutputSchema, ...contributedMetadata } = contributedDefinition;
-            return {
-              ok: true,
-              result: projectDiscovery(projectActionDefinitionForExternalDiscovery({
-                ...contributedMetadata,
-                kindVersion: 1,
-                inputSchema: { ...schemas.inputSchema },
-                ...(includeOutputSchema && schemas.outputSchema !== undefined ? { outputSchema: { ...schemas.outputSchema } } : {}),
-              })),
-            };
+            return projectDiscovery(projectActionDefinitionForExternalDiscovery({
+              ...contributedMetadata,
+              kindVersion: 1,
+              inputSchema: { ...schemas.inputSchema },
+              ...(includeOutputSchema && schemas.outputSchema !== undefined ? { outputSchema: { ...schemas.outputSchema } } : {}),
+            }));
           }
         }
 
