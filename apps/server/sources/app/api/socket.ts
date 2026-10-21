@@ -152,13 +152,15 @@ export function resolveSocketPlannedRestartRetryAfterMsFromEnv(env: Record<strin
 }
 
 export function emitSocketPlannedRestart(
-    io: Readonly<{ emit: (event: string, payload: { retryAfterMs: number }) => unknown }>,
+    io: Pick<Server, 'local'>,
     retryAfterMs: number,
 ): void {
     const normalizedRetryAfterMs = Number.isFinite(retryAfterMs) && retryAfterMs >= 0
         ? Math.trunc(retryAfterMs)
         : DEFAULT_SOCKET_PLANNED_RESTART_RETRY_AFTER_MS;
-    io.emit('server:restarting', { retryAfterMs: normalizedRetryAfterMs });
+    // Only this process is shutting down. A cluster broadcast would make
+    // healthy peers' clients declare their Home unavailable and disconnect.
+    io.local.emit('server:restarting', { retryAfterMs: normalizedRetryAfterMs });
 }
 
 export function normalizeSocketHandshakeClientType(clientType: unknown): SocketClientType {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
     EXTERNAL_ACTION_RELAY_REQUEST_SOCKET_MIN_BUFFER_BYTES_V2,
@@ -10,7 +10,6 @@ import {
     resolveExternalSessionOperationSocketBatchLimitsForMaxHttpBufferSize,
     resolveSocketMaxHttpBufferSizeFromEnv,
     resolveSocketPlannedRestartRetryAfterMsFromEnv,
-    emitSocketPlannedRestart,
     DEFAULT_SOCKET_PLANNED_RESTART_RETRY_AFTER_MS,
     DEFAULT_SOCKET_FAST_DISCONNECT_LOG_THRESHOLD_MS,
     DEFAULT_SOCKET_MAX_HTTP_BUFFER_SIZE,
@@ -109,15 +108,5 @@ describe('resolveSocketPlannedRestartRetryAfterMsFromEnv', () => {
             .toBe(DEFAULT_SOCKET_PLANNED_RESTART_RETRY_AFTER_MS);
         expect(resolveSocketPlannedRestartRetryAfterMsFromEnv({ HAPPIER_SOCKET_PLANNED_RESTART_RETRY_AFTER_MS: '-1' }))
             .toBe(DEFAULT_SOCKET_PLANNED_RESTART_RETRY_AFTER_MS);
-    });
-});
-
-describe('emitSocketPlannedRestart', () => {
-    it('broadcasts the planned restart event with a retry hint', () => {
-        const io = { emit: vi.fn() };
-
-        emitSocketPlannedRestart(io, 7_000);
-
-        expect(io.emit).toHaveBeenCalledWith('server:restarting', { retryAfterMs: 7_000 });
     });
 });

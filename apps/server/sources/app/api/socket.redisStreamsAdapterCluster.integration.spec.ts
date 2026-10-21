@@ -10,6 +10,7 @@ import { startSilentPartitionProxy } from "@/testkit/redisSilentPartitionProxy";
 import { startRedisAdapterRecoveryCluster } from "@/testkit/redisAdapterRecoveryCluster";
 
 import { RedisStreamsRoomEmitter } from "@/app/events/createRedisStreamsRoomEmitter";
+import { emitSocketPlannedRestart } from "./socket";
 import {
     REDIS_STREAMS_ADAPTER_CHANNEL_PREFIX,
     REDIS_STREAMS_ADAPTER_STREAM_NAME,
@@ -152,6 +153,27 @@ describe("socket.io redis streams adapter cluster integration", () => {
         openClients.push(socket);
         return socket;
     }
+
+    it("announces a node shutdown only to that node's sockets, preserving healthy peer connections", async () => {
+        const cluster = await startCluster();
+        const [retiring, healthy] = cluster.nodes;
+        const local = await connect(retiring.port);
+        const remote = await connect(healthy.port);
+        const remoteRestarts: unknown[] = [];
+        remote.on("server:restarting", payload => remoteRestarts.push(payload));
+        const localRestart = new Promise<unknown>(resolve => local.once("server:restarting", resolve));
+        const delivered = new Promise<void>(resolve => remote.once("shutdown-test-barrier", resolve));
+
+        emitSocketPlannedRestart(retiring.io, 7_000);
+        // The same publisher/stream orders this marker after any cluster-wide
+        // restart broadcast. Its delivery makes the negative assertion decisive.
+        retiring.io.emit("shutdown-test-barrier");
+        await delivered;
+
+        expect(await localRestart).toEqual({ retryAfterMs: 7_000 });
+        expect(remoteRestarts).toEqual([]);
+        expect(remote.connected).toBe(true);
+    });
 
     it("opens one root, one blocking stream reader, and one Pub/Sub subscriber per API node", async () => {
         await startCluster();

@@ -243,6 +243,11 @@ Socket.IO connections are tagged by scope:
 - `session-scoped`: receive updates only for one session.
 - `machine-scoped`: daemon connections for machine state.
 
+In 0.3 development, `emitSocketPlannedRestart` sends `server:restarting` only
+to sockets attached to the retiring API process. A healthy Redis peer keeps
+its connections; one node's shutdown is not a cluster-wide Home outage.
+The event name and retry hint are unchanged for clients on the retiring node.
+
 ### Event router
 `EventRouter` (`sources/app/events/eventRouter.ts`) maintains per-user connection sets and routes:
 - **Persistent `update` events**: database-backed changes with a user-level monotonic `seq`.
