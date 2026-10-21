@@ -13,6 +13,7 @@ import { failureSignal } from '@/agent/executionRuns/controllers/failureSignal';
 import { createExecutionRunCodedError } from '@/agent/runtime/bridges/executionRun/errors';
 import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
 import { createRuntimeTurnFailureAlreadySurfacedError } from '@/agent/runtime/turns/runtimeTurnOperations';
+import { settleExecutionRunController } from '../settleExecutionRunController';
 
 function createResumableBackendHarness(): Readonly<{
   runtime: ExecutionRunHostRuntime;
@@ -65,6 +66,59 @@ function createLongLivedResumableRun(overrides?: Partial<ExecutionRunState>): Ex
 }
 
 describe('sendBackendLongLivedRun (resume)', () => {
+  it('resumes a terminal Run through a new occurrence while the previous controller is settling', async () => {
+    let releaseMarker!: () => void;
+    const terminalMarker = new Promise<void>((resolve) => { releaseMarker = resolve; });
+    const oldInputs: string[] = [];
+    const { runtime: oldRuntime } = createTestExecutionRunHostRuntime({
+      sendPrompt: (_id, prompt) => { oldInputs.push(prompt); },
+    });
+    let resolveTerminal!: () => void;
+    const terminalPromise = new Promise<void>((resolve) => { resolveTerminal = resolve; });
+    const run = createLongLivedResumableRun({ status: 'succeeded' });
+    const oldController: ExecutionRunBackendController = {
+      kind: 'backend', controllerOccurrenceId: 'terminal-occurrence', backend: oldRuntime,
+      backendSupportsResume: true, runtimeId: 'old-runtime', buffer: '', sidechainStreamBuffer: '',
+      sidechainStreamKey: '', streamWriter: null, cancelled: false, turnCount: 1, turnEpoch: 1,
+      turnInFlight: false, turnCancelReason: null, turnCancelEpoch: null,
+      admittedLiveInterventions: [], admittedLiveInterventionsSignal: null, lastMarkerWriteAtMs: 0,
+      failureSignal: failureSignal(), pendingHostBarrier: Promise.resolve(),
+      terminalMarkerWritePromise: terminalMarker, terminalPromise, resolveTerminal,
+    };
+    const controllers = new Map([[run.runId, oldController]]);
+    const settling = settleExecutionRunController({ runId: run.runId, controller: oldController, controllers });
+    const newInputs: string[] = [];
+    const { runtime } = createTestExecutionRunHostRuntime({
+      runtimeId: 'resumed-runtime', sendPrompt: (_id, prompt) => { newInputs.push(prompt); },
+    });
+    const runs = new Map([[run.runId, run]]);
+    try {
+      const sending = sendBackendLongLivedRun({
+        runId: run.runId, params: { message: 'Continue', resume: true }, runs, controllers,
+        budgetRegistry: null, createRuntime: () => runtime, maxTurns: null, getNowMs: () => 123,
+        finishRun: async () => {}, sendAcp: async () => {}, parentProvider: 'codex',
+        streamedTranscriptSession: null, writeActivityMarker: async () => {},
+      });
+      // The native occurrence cannot be replaced before its terminal marker settles.
+      await Promise.resolve();
+      expect(oldInputs).toEqual([]);
+      expect(newInputs).toEqual([]);
+      releaseMarker();
+      await expect(sending).resolves.toEqual({ ok: true });
+      expect(newInputs).toEqual(['Continue']);
+      expect(oldInputs).toEqual([]);
+      expect(runs.get(run.runId)?.status).toBe('running');
+      const resumedController = controllers.get(run.runId);
+      expect(resumedController).not.toBe(oldController);
+      await settling;
+      expect(controllers.get(run.runId)).toBe(resumedController);
+    } finally {
+      releaseMarker();
+      await settling;
+      await runtime.dispose();
+    }
+  });
+
   it('admits a new public retained input with its own Run ceiling instead of reusing an opener authority', async () => {
     const deliverInput = vi.fn<ExecutionRunHostRuntime['deliverInput']>(async () => ({ status: 'admitted' as const }));
     const { runtime } = createTestExecutionRunHostRuntime({ deliverInput });

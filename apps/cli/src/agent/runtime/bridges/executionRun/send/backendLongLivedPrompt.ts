@@ -132,7 +132,9 @@ export async function sendBackendLongLivedRun(args: Readonly<{
 
   const backendCtrl = ctrl && ctrl.kind === 'backend' ? ctrl : null;
 
-  if (!backendCtrl || !backendCtrl.runtimeId) {
+  // Terminal publication precedes controller settlement; only a running occurrence
+  // can be reused. Recovery must load the retained native identity into a new one.
+  if (run.status !== 'running' || !backendCtrl || !backendCtrl.runtimeId) {
     if (wantsResume && run.retentionPolicy === 'resumable') {
       const resumed = await resumeBackendControllerForResumableRun({
         runId: args.runId,

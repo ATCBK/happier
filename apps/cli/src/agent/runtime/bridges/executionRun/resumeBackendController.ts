@@ -129,6 +129,12 @@ export async function resumeBackendControllerForResumableRun(args: Readonly<{
     return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Not resumable', resumeFailureKind: 'permanent' };
   }
 
+  const retiringController = args.controllers.get(args.runId);
+  if (retiringController && args.runs.get(args.runId)?.status !== 'running') {
+    // Terminal publication can precede transcript/marker custody. Join that exact
+    // occurrence's settlement before admitting a replacement, without reopening it.
+    await retiringController.terminalPromise;
+  }
   if (args.controllers.has(args.runId)) {
     return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Resume already in progress', resumeFailureKind: 'indeterminate' };
   }
