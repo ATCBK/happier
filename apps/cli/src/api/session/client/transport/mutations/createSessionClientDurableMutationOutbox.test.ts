@@ -219,6 +219,50 @@ function createStorageExhaustedError(): NodeJS.ErrnoException {
 }
 
 describe('createRuntimeSessionClientDurableMutationOutbox', () => {
+    it('returns each acknowledged transcript without waiting for later publications in the shared flush', async () => {
+        const firstStarted = createDeferred();
+        const releaseFirst = createDeferred();
+        const laterStarted = createDeferred();
+        const releaseLater = createDeferred();
+        const ordinarySocket = createConnectedSocket();
+        const socket = { ...ordinarySocket, emitWithAck: async (event: string, payload: unknown) => {
+            if (event === SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1 && payload && typeof payload === 'object' && 'localId' in payload) {
+                if (payload.localId === 'report-1') {
+                    firstStarted.resolve();
+                    await releaseFirst.promise;
+                }
+                if (payload.localId === 'report-3') {
+                    laterStarted.resolve();
+                    await releaseLater.promise;
+                }
+            }
+            return ordinarySocket.emitWithAck(event, payload);
+        } };
+        const outbox = createRuntimeSessionClientDurableMutationOutbox({
+            token: 'token', sessionId: 'session-1', flushOnReady: false,
+            getSocket: () => socket, requestReconnect: () => undefined,
+        });
+        await outbox.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+        const publish = (index: number) => outbox.enqueueTranscriptMessage(createTranscriptMutation({
+            localId: `report-${index}`, sidechainId: null, text: `Report ${index}`,
+        }));
+        const first = publish(1);
+        await firstStarted.promise;
+        let secondAcknowledged = false;
+        const second = publish(2).then(result => { secondAcknowledged = result.delivered; return result; });
+        const later = [publish(3), publish(4), publish(5)];
+        await drainAsyncWork();
+        releaseFirst.resolve();
+        try {
+            await laterStarted.promise;
+            await drainAsyncWork();
+            expect(secondAcknowledged).toBe(true);
+        } finally {
+            releaseLater.resolve();
+            await Promise.all([first, second, ...later]);
+            await outbox.close();
+        }
+    });
     it.each(['Keep acknowledged Notes', ''])('retains acknowledged Notes %j beside a later Role override through deferred delivery and journal reopen', async notes => {
         const sessionId = 'role-notes-neighbors';
         let metadata = writeSessionRoleConfigurationV1ToMetadata(createTestMetadata(), { overrides: {}, sessionRoles: {}, notes: 'Original Notes' });

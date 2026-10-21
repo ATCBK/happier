@@ -2689,6 +2689,14 @@ function createGenericSessionClientDurableMutationOutboxInstance(
         const requiredDelivery = opts.admission?.requireDelivery === true
             ? waitForAcknowledgedDelivery(deliveryMutationId, opts.admission)
             : null;
+        // A publication owns its exact ACK, not the tail of a shared flush that
+        // may still be delivering unrelated later mutations. The flush remains
+        // the fallback when this attempt cannot confirm delivery.
+        const flushObservation = opts.awaitFlush === true && !requiredDelivery && isTranscriptDeliveryMutation(admittedMutation)
+            ? new AbortController() : null;
+        const acknowledgedDelivery = flushObservation
+            ? waitForAcknowledgedDelivery(deliveryMutationId, { signal: flushObservation.signal })
+            : null;
         const flushPromise = flush(reusedDurableCustody ? 'flush' : 'enqueue').catch((error) => {
             logger.debug('[API] Durable session mutation enqueue flush failed', {
                 sessionId: params.sessionId,
@@ -2703,7 +2711,9 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                 // for its ACK while its own lifecycle can still cancel a blocked transport.
                 await requiredDelivery;
             } else if (opts.awaitFlush === true) {
-                await flushPromise;
+                await (acknowledgedDelivery
+                    ? Promise.race([flushPromise, acknowledgedDelivery.catch(() => flushPromise)])
+                    : flushPromise);
             }
             const delivered = acknowledgedAwaitedDeliveryMutations.has(deliveryMutationId);
             const committedSequence = acknowledgedAwaitedDeliveryMutations.get(deliveryMutationId);
@@ -2714,6 +2724,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                 ...(whenCommitted ? { whenCommitted } : {}),
             };
         } finally {
+            flushObservation?.abort();
             if (opts.awaitFlush === true) {
                 releaseAwaitedDelivery(deliveryMutationId);
             }
