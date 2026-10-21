@@ -243,7 +243,7 @@ describe('machine contribution registry projection ops', () => {
         await expect(machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a' }))
             // No operation deadline was armed, so this unsolicited peer error
             // is not the shared owner's connection/setup timeout fact.
-            .resolves.toEqual({ supported: false, reason: 'error' });
+            .resolves.toEqual({ supported: false, reason: 'transport-error' });
 
         machineRpcWithServerScopeMock.mockRejectedValueOnce(Object.assign(new Error('RPC connection setup timed out'), { code: 'MACHINE_RPC_TIMEOUT' }));
         await expect(machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a' }))
@@ -255,7 +255,32 @@ describe('machine contribution registry projection ops', () => {
 
         machineRpcWithServerScopeMock.mockRejectedValueOnce(new Error('socket closed'));
         await expect(machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a' }))
-            .resolves.toEqual({ supported: false, reason: 'error' });
+            .resolves.toEqual({ supported: false, reason: 'transport-error' });
+    });
+
+    it('distinguishes a failed request preparation from an unreadable daemon response', async () => {
+        const { machineContributionRegistryProjectionDescribe } = await import('./machineContributionRegistryProjection');
+
+        await expect(machineContributionRegistryProjectionDescribe('', { serverId: serverAId, selection: 'agents' }))
+            .resolves.toEqual({ supported: false, reason: 'request-failed' });
+        expect(network.requests).toHaveLength(0);
+    });
+
+    it.each([
+        [RPC_ERROR_CODES.TRANSPORT_UNAVAILABLE, 'transport-unavailable'],
+        [RPC_ERROR_CODES.OUTCOME_UNKNOWN, 'transport-unavailable'],
+        [RPC_ERROR_CODES.FORBIDDEN, 'access-denied'],
+        [RPC_ERROR_CODES.TEAM_AUTHENTICATION_REQUIRED, 'authentication-required'],
+        [RPC_ERROR_CODES.TEAM_AUTHENTICATION_UNAVAILABLE, 'authentication-unavailable'],
+        [RPC_ERROR_CODES.UPDATE_REQUIRED, 'update-required'],
+        ['MACHINE_ENCRYPTION_UNAVAILABLE', 'encryption-unavailable'],
+        ['private source /secret/transcript text', 'transport-error'],
+    ])('keeps a safe projection failure reason for %s', async (code, reason) => {
+        const { machineContributionRegistryProjectionDescribe } = await import('./machineContributionRegistryProjection');
+        machineRpcWithServerScopeMock.mockRejectedValueOnce(new RpcError('Private daemon failure details', code));
+
+        await expect(machineContributionRegistryProjectionDescribe('machine-1', { serverId: serverAId }))
+            .resolves.toEqual({ supported: false, reason });
     });
 
     it.each(['machine-row', 'features', 'socket', 'reachability'] as const)('releases shared targeted reads when %s setup never settles, even after abort', async (phase) => {
@@ -704,7 +729,7 @@ describe('machine contribution registry projection ops', () => {
         const { machineContributionRegistryProjectionDescribe } = await import('./machineContributionRegistryProjection');
 
         await expect(machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a' }))
-            .resolves.toEqual({ supported: false, reason: 'error' });
+            .resolves.toEqual({ supported: false, reason: 'transport-error' });
         await expect(Promise.all([
             machineContributionRegistryProjectionDescribe('machine-1', { serverId: 'server-a' }),
             machineContributionRegistryProjectionDescribe('machine-2', { serverId: 'server-a' }),

@@ -13,8 +13,7 @@ import {
     normalizePluginReleaseFactsV1,
     PluginPortableReleaseManifestV1Schema,
     resolvePluginAccountExecutionSelectionV1,
-    computePluginAccountBundledDeclarationDigestV1,
-    computePluginAccountBundledCustodyIdV1,
+    computePluginAccountBundledCustodyV1,
     type PluginAccountExecutionSelectionV1,
 } from '@happier-dev/protocol/plugins/availability';
 import { PluginUiArtifactsManifestEntryV2Schema, isPluginUiHostApiVersionCompatibleWithVersionV1, PLUGIN_UI_HOST_API_VERSION_V1,
@@ -27,6 +26,7 @@ import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machi
 import { PluginDeclaredUiEntriesV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { normalizePluginInstalledUiDeclarations, type PluginUiActionProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { preparePluginUiProjectionOrigins } from '@/sync/domains/plugins/ui/projectionOrigins';
 import { projectPluginRegistrySourceDeclarationV1 } from '@happier-dev/protocol/registries';
 import { projectPluginSkillDeclarationV1 } from '@happier-dev/protocol/plugins/contributions/skills';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -433,6 +433,10 @@ export type PluginAccountAvailabilityHostedArtifactAdministrationAdmission =
     }>;
 
 export type PluginAccountAvailabilityReader = Readonly<{
+    /** Opaque current publication identity, scoped to this reader's Account. */
+    getObservationSnapshot: (pluginId?: string) => object | null;
+    /** Immutable bundled declaration correspondence; never execution admission. */
+    readBundledAccountDeclarationDigest: (pluginId: string) => `sha256:${string}` | null;
     /** Account custody projects into the existing executable registration owner. */
     readAccountUiProjection: () => PluginUiProjectionModel | null;
     readCurrentAccountExecution: (pluginId: string) => PluginAccountExecutionAdmission;
@@ -549,6 +553,8 @@ export type PluginAccountAvailabilityReaderStore = Readonly<{
     retire: (pluginIds: readonly string[]) => void;
     /** Stable immutable snapshot for the projection owner's React subscription. */
     getSnapshot: () => PluginAccountAvailabilityStoredProjection | null;
+    /** Stable opaque observation slices, prepared before publication notification. */
+    getObservationSnapshot: (pluginId?: string) => object | null;
     subscribe: (listener: () => void) => () => void;
     /**
      * Binds a caller to one Account/realm without disclosing that scope to a
@@ -573,52 +579,30 @@ export type PluginAccountAvailabilityStoredProjection = Readonly<{
     retiredPluginIds?: readonly string[];
 }>;
 
-type AvailabilityProjectionState = PluginAccountAvailabilityStoredProjection;
-
-/** React observation only; bound reader methods always inspect the current owner state. */
-export function arePluginAvailabilityObservationsEqual(
-    previous: PluginAccountAvailabilityStoredProjection | null,
-    next: PluginAccountAvailabilityStoredProjection | null,
-    pluginId: string,
-): boolean {
-    if (previous === next) return true;
-    if (!previous || !next || !areServerAccountScopesEqual(previous.scope, next.scope)) return false;
-    return previous.snapshot.inventoryComplete === next.snapshot.inventoryComplete
-        && previous.stalePluginIds.includes(pluginId) === next.stalePluginIds.includes(pluginId)
-        && (previous.retiredPluginIds?.includes(pluginId) ?? false) === (next.retiredPluginIds?.includes(pluginId) ?? false)
-        && sameStrictJsonValue(previous.snapshot.intentReads.filter(row => row.pluginId === pluginId),
-            next.snapshot.intentReads.filter(row => row.pluginId === pluginId))
-        && sameStrictJsonValue(previous.snapshot.materializations.filter(row => row.pluginId === pluginId),
-            next.snapshot.materializations.filter(row => row.pluginId === pluginId))
-        && sameStrictJsonValue(previous.snapshot.releases?.filter(row => row.ref.pluginId === pluginId) ?? [],
-            next.snapshot.releases?.filter(row => row.ref.pluginId === pluginId) ?? [])
-        // Empty/replaced Machine reports still affect discovery and admission.
-        && sameStrictJsonValue(previous.snapshot.snapshots, next.snapshot.snapshots);
-}
-
-// The owner snapshots these rows immutably. Index their exact identities once
-// per snapshot: origin selection classifies every installation and must not
-// rescan the complete fleet for each one. Keep duplicate rows so ambiguity
-// still refuses admission; replacement/retirement owns a different snapshot.
-const materializationsBySnapshot = new WeakMap<PluginAccountAvailabilitySnapshot,
-    ReadonlyMap<string, readonly PluginMachineMaterializationV1[]>>();
+type AvailabilityProjectionState = PluginAccountAvailabilityStoredProjection & Readonly<{
+    materializationsByIdentity: ReadonlyMap<string, readonly PluginMachineMaterializationV1[]>;
+    intentReadsByPluginId: ReadonlyMap<string, readonly PluginAccountAvailabilityIntentReadProjection[]>;
+    bundledUiByPluginId: ReadonlyMap<string, readonly PreparedBundledUiDeclaration[]>;
+}>;
 
 function materializationLookupKey(input: Pick<PluginMachineMaterializationV1,
     'pluginId' | 'serverIdentityId' | 'machineId' | 'materializationId'>): string {
     return JSON.stringify([input.pluginId, input.serverIdentityId, input.machineId, input.materializationId]);
 }
 
-function readMaterializationsByIdentity(snapshot: PluginAccountAvailabilitySnapshot) {
-    const existing = materializationsBySnapshot.get(snapshot);
-    if (existing) return existing;
-    const indexed = new Map<string, PluginMachineMaterializationV1[]>();
-    for (const row of snapshot.materializations) {
-        const key = materializationLookupKey(row);
-        const rows = indexed.get(key);
-        if (rows) rows.push(row);
+function indexMaterializations(snapshot: PluginAccountAvailabilitySnapshot): AvailabilityProjectionState['materializationsByIdentity'] {
+    return indexAvailabilityRows(snapshot.materializations, materializationLookupKey);
+}
+
+function indexAvailabilityRows<T>(rows: readonly T[], keyOf: (row: T) => string): ReadonlyMap<string, readonly T[]> {
+    const indexed = new Map<string, T[]>();
+    for (const row of rows) {
+        const key = keyOf(row);
+        const values = indexed.get(key);
+        if (values) values.push(row);
         else indexed.set(key, [row]);
     }
-    materializationsBySnapshot.set(snapshot, indexed);
+    for (const values of indexed.values()) Object.freeze(values);
     return indexed;
 }
 
@@ -730,7 +714,7 @@ function snapshotPluginAccountAvailabilitySnapshot(
 
 /** These owned Protocol facts are JSON values; equality retains data, never current admission. */
 function retainUnchangedAvailabilityValue<T>(previous: T | undefined, next: T): T {
-    return previous !== undefined && JSON.stringify(previous) === JSON.stringify(next) ? previous : next;
+    return previous !== undefined && sameStrictJsonValue(previous, next) ? previous : next;
 }
 
 /** Local edits to the ordered snapshot retain the unchanged rows beside them. */
@@ -825,6 +809,7 @@ function readInstalledPluginsAdmission(
     const snapshot = readProjectionForScope(state, scope)!;
     const previousInstallations = new Map(previous?.kind === 'available' ? previous.plugins.flatMap(plugin =>
         plugin.installations.map(installation => [materializationLookupKey(installation.materialization), installation] as const)) : []);
+    const previousPlugins = new Map(previous?.kind === 'available' ? previous.plugins.map(plugin => [plugin.pluginId, plugin] as const) : []);
     const byPluginId = new Map<string, PluginAccountInstalledPluginInstallation[]>();
     for (const materialization of admitted.materializations) {
         const releases = [...(snapshot.releases ?? []), ...snapshot.intentReads.flatMap((entry) => {
@@ -834,18 +819,20 @@ function readInstalledPluginsAdmission(
         const uniqueReleases = new Map(releases.map(release => [release.archiveDigestSha256, release]));
         const release = uniqueReleases.size === 1 ? [...uniqueReleases.values()][0]! : null;
         const declaration = release?.normalizedManifest ?? materialization.declaredManifest ?? null;
-        const declaredUiEntries = materialization.declaredUiEntries
-            ?? (release ? projectPluginPortableUiDeclarationsV1(release.normalizedManifest) : undefined);
-        const registrySources = declaration ? (declaration.contributes?.registrySources ?? []).map(definition =>
-            projectPluginRegistrySourceDeclarationV1({ pluginId: materialization.pluginId,
-                pluginVersion: declaration.version, definition })) : [];
-        const skills = declaration ? (declaration.contributes?.skills ?? []).map(definition =>
-            projectPluginSkillDeclarationV1({ pluginId: materialization.pluginId,
-                pluginVersion: declaration.version, definition })) : [];
         const installations = byPluginId.get(materialization.pluginId) ?? [];
         const incumbent = previousInstallations.get(materializationLookupKey(materialization));
-        const uiModel = incumbent?.materialization === materialization && incumbent.declaration === declaration
-            && incumbent.release === release ? incumbent.uiModel : normalizePluginInstalledUiDeclarations(declaredUiEntries ?? {}, undefined, {
+        let uiModel = incumbent?.materialization === materialization && incumbent.declaration === declaration
+            && incumbent.release === release ? incumbent.uiModel : undefined;
+        if (!uiModel) {
+            const declaredUiEntries = materialization.declaredUiEntries
+                ?? (release ? projectPluginPortableUiDeclarationsV1(release.normalizedManifest) : undefined);
+            const registrySources = declaration ? (declaration.contributes?.registrySources ?? []).map(definition =>
+                projectPluginRegistrySourceDeclarationV1({ pluginId: materialization.pluginId,
+                    pluginVersion: declaration.version, definition })) : [];
+            const skills = declaration ? (declaration.contributes?.skills ?? []).map(definition =>
+                projectPluginSkillDeclarationV1({ pluginId: materialization.pluginId,
+                    pluginVersion: declaration.version, definition })) : [];
+            uiModel = normalizePluginInstalledUiDeclarations(declaredUiEntries ?? {}, undefined, {
                 id: materialization.pluginId,
                 displayName: typeof declaration?.displayName === 'string'
                     ? declaration.displayName : declaration?.displayName.fallback ?? materialization.pluginId,
@@ -858,26 +845,28 @@ function readInstalledPluginsAdmission(
                     contributionPoints: (declaration.contributes.pluginContributionPoints?.length ?? 0) > 0,
                 } } : {}),
             }, registrySources, skills);
-        installations.push(Object.freeze({
+        }
+        uiModel = preparePluginUiProjectionOrigins(uiModel);
+        installations.push(retainUnchangedAvailabilityValue(incumbent, Object.freeze({
             materialization,
             declaration,
             declarationState: declaration ? 'known' : 'preparing',
-            uiDeclarationState: declaredUiEntries !== undefined ? 'known' : 'preparing',
+            uiDeclarationState: materialization.declaredUiEntries !== undefined || release ? 'known' : 'preparing',
             release,
             execution: classifyMaterializationRelease(state, scope, materialization),
             uiModel,
-        }));
+        })));
         byPluginId.set(materialization.pluginId, installations);
     }
-    return Object.freeze({
+    return retainUnchangedAvailabilityValue(previous, Object.freeze({
         kind: 'available',
         availabilityCursor: snapshot.availabilityCursor,
         completeness: snapshot.inventoryComplete === false ? 'incomplete' : 'complete',
-        plugins: Object.freeze([...byPluginId].sort(([a], [b]) => a.localeCompare(b)).map(([pluginId, installations]) => Object.freeze({
+        plugins: Object.freeze([...byPluginId].sort(([a], [b]) => a.localeCompare(b)).map(([pluginId, installations]) => retainUnchangedAvailabilityValue(previousPlugins.get(pluginId), Object.freeze({
             pluginId,
             installations: Object.freeze(installations),
-        }))),
-    });
+        })))),
+    }));
 }
 
 type CurrentReleaseAdmission =
@@ -907,7 +896,7 @@ function readCurrentReleaseAdmission(
     if (!snapshot) {
         return Object.freeze({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });
     }
-    const projections = snapshot.intentReads.filter((projection) => projection.pluginId === pluginId);
+    const projections = state.intentReadsByPluginId.get(pluginId) ?? [];
     if (projections.length === 0) {
         return Object.freeze({ kind: 'unavailable', code: 'artifact_not_current' });
     }
@@ -993,10 +982,10 @@ function readInstalledReleaseAdmission(
     const snapshot = readProjectionForScope(state, scope);
     if (!snapshot || !origin || !('materializationRef' in origin)
         || origin.materializationRef.pluginId !== pluginId || state?.retiredPluginIds?.includes(pluginId)) return null;
-    const intents = snapshot.intentReads.filter(entry => entry.pluginId === pluginId);
+    const intents = state!.intentReadsByPluginId.get(pluginId) ?? [];
     // An explicit null read proves absence; missing or competing reads do not.
     if (intents.length !== 1 || intents[0]!.response.intent !== null) return null;
-    const rows = readMaterializationsByIdentity(snapshot).get(materializationLookupKey({
+    const rows = state!.materializationsByIdentity.get(materializationLookupKey({
         ...origin.materializationRef, serverIdentityId: origin.serverIdentityId,
     })) ?? [];
     if (rows.length !== 1) return null;
@@ -1132,7 +1121,7 @@ function readCurrentArtifactAdmission(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
     slot: PluginAccountAvailabilityArtifactSlot,
-    hostBundledUi: readonly PluginHostBundledUiDeclaration[] = [],
+    hostBundledUi: readonly PreparedBundledUiDeclaration[] = [],
     executionOrigin?: PluginMachineExecutionOriginV1 | null,
     daemonProjectionSelection?: PluginDaemonProjectionArtifactSelection,
 ): PluginAccountAvailabilityArtifactAdmission {
@@ -1168,12 +1157,9 @@ function readCurrentArtifactAdmission(
         }
         const bundled = readCurrentHostBundle(state, scope, hostBundledUi, slot.pluginId);
         if (bundled) {
-            const artifacts = Object.values(bundled.entriesById).flatMap(entry => {
-                const graph = PluginUiArtifactsManifestEntryV2Schema.safeParse(entry.artifactGraph);
-                return entry.contributionId === slot.contributionId && graph.success && graph.data.tier === slot.tier
-                    ? [graph.data] : [];
-            });
-            const execution = readAccountExecutionSelection(state, scope, hostBundledUi, slot.pluginId);
+            const artifacts = (bundled.artifactGraphsByContributionId.get(slot.contributionId) ?? [])
+                .filter(graph => graph.tier === slot.tier);
+            const execution = readAccountExecutionSelection(state, scope, slot.pluginId);
             const accountAction = execution.kind === 'available' ? execution.manifest.contributes.actions?.find(action =>
                 action.id === slot.contributionId && action.execution.target === 'account') : undefined;
             if (execution.kind === 'available' && accountAction?.execution.target === 'account') {
@@ -1231,7 +1217,7 @@ function readCurrentNonPortableUiSnapshot(
 ): PluginAccountAvailabilitySnapshot | null {
     const snapshot = readProjectionForScope(state, scope);
     if (!snapshot || state?.retiredPluginIds?.includes(pluginId)) return null;
-    const intents = snapshot.intentReads.filter(entry => entry.pluginId === pluginId);
+    const intents = state!.intentReadsByPluginId.get(pluginId) ?? [];
     if (intents.length > 1 || intents.some(entry => entry.response.intent
         && (entry.response.intent.pluginId !== pluginId
             || !entry.response.intent.enabled || entry.response.intent.desiredVersion !== null))) return null;
@@ -1241,57 +1227,73 @@ function readCurrentNonPortableUiSnapshot(
 function readCurrentHostBundle(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
-    hostBundledUi: readonly PluginHostBundledUiDeclaration[],
+    hostBundledUi: readonly PreparedBundledUiDeclaration[],
     pluginId: string,
-): PluginHostBundledUiDeclaration | null {
+): PreparedBundledUiDeclaration | null {
     if (!readCurrentNonPortableUiSnapshot(state, scope, pluginId)) return null;
     const bundles = hostBundledUi.filter(candidate => candidate.pluginId === pluginId);
     return bundles.length === 1 ? bundles[0]! : null;
 }
 
-type BundledAccountExecution = NonNullable<Parameters<typeof resolvePluginAccountExecutionSelectionV1>[0]['bundled']>;
+type BundledAccountExecution = NonNullable<Parameters<typeof resolvePluginAccountExecutionSelectionV1>[0]['bundled']>
+    & Readonly<{ declarationDigest: `sha256:${string}` }>;
 
-// App-package declarations are immutable. Artifact currentness checks may run
-// once per file, so retain their parsed declaration and content custody rather
-// than hashing the complete manifest on every check. Account intent is still
-// read and admitted below on every access; it is never cached here.
-const bundledAccountExecutions = new WeakMap<PluginHostBundledUiDeclaration, BundledAccountExecution | null>();
+type PreparedBundledUiDeclaration = PluginHostBundledUiDeclaration & Readonly<{
+    accountExecution: BundledAccountExecution | null;
+    artifactGraphsByContributionId: ReadonlyMap<string, readonly PluginUiArtifactsManifestEntryV2[]>;
+}>;
 
-function readBundledAccountExecution(bundle: PluginHostBundledUiDeclaration): BundledAccountExecution | null {
-    const cached = bundledAccountExecutions.get(bundle);
-    if (cached !== undefined) return cached;
-    const manifest = PluginPortableReleaseManifestV1Schema.safeParse(bundle.normalizedManifest);
-    if (!manifest.success || manifest.data.id !== bundle.pluginId || manifest.data.version !== bundle.pluginVersion) {
-        bundledAccountExecutions.set(bundle, null);
-        return null;
-    }
-    const bundleId = computePluginAccountBundledCustodyIdV1({
-        packageName: bundle.packageName, manifest: manifest.data, artifacts: bundle.artifactGraphs ?? [],
-    });
-    const bundled: BundledAccountExecution = Object.freeze({
-        manifest: manifest.data, custodyId: bundleId,
-        sourceCustody: Object.freeze({ kind: 'bundled_first_party',
-            packagedRuntime: Object.freeze({ kind: 'app_bundle', bundleId }) }),
-    });
-    bundledAccountExecutions.set(bundle, bundled);
-    return bundled;
+/** Acquisition owns immutable content; selection still reads current Account policy. */
+function prepareBundledUiDeclarations(bundles: readonly PluginHostBundledUiDeclaration[]): readonly PreparedBundledUiDeclaration[] {
+    return Object.freeze(bundles.map(bundle => {
+        const { normalizedManifest: _manifest, entriesById: _entries, artifactGraphs: _graphs, ...declaration } = bundle;
+        const parsed = PluginPortableReleaseManifestV1Schema.safeParse(bundle.normalizedManifest);
+        const manifest = parsed.success && parsed.data.id === bundle.pluginId && parsed.data.version === bundle.pluginVersion
+            ? freezeDeepDeclaration(parsed.data) : null;
+        const artifactGraphs = Object.freeze((bundle.artifactGraphs ?? []).map(graph =>
+            freezeDeepDeclaration(PluginUiArtifactsManifestEntryV2Schema.parse(graph))));
+        const entriesById = freezeDeepDeclaration(PluginDeclaredUiEntriesV1Schema.parse(bundle.entriesById));
+        const declaredArtifactGraphs = Object.values(entriesById).flatMap(entry => {
+            const graph = PluginUiArtifactsManifestEntryV2Schema.safeParse(entry.artifactGraph);
+            return entry.contributionId && graph.success
+                ? [Object.freeze({ contributionId: entry.contributionId, graph: freezeDeepDeclaration(graph.data) })] : [];
+        });
+        const artifactGraphsByContributionId = new Map([...indexAvailabilityRows(declaredArtifactGraphs, entry => entry.contributionId)]
+            .map(([id, entries]) => [id, Object.freeze(entries.map(entry => entry.graph))]));
+        const custody = manifest ? computePluginAccountBundledCustodyV1({
+            packageName: bundle.packageName, manifest, artifacts: artifactGraphs,
+        }) : null;
+        return Object.freeze({
+            ...declaration,
+            entriesById,
+            artifactGraphs,
+            artifactGraphsByContributionId,
+            ...(manifest ? { normalizedManifest: manifest } : {}),
+            ...(bundle.declaredExecution ? { declaredExecution: Object.freeze({ ...bundle.declaredExecution }) } : {}),
+            ...(bundle.collectionContracts ? { collectionContracts: Object.freeze(bundle.collectionContracts.map(ref => Object.freeze({ ...ref }))) } : {}),
+            accountExecution: manifest && custody ? Object.freeze({
+                manifest, custodyId: custody.custodyId, declarationDigest: custody.declarationDigest,
+                sourceCustody: Object.freeze({ kind: 'bundled_first_party' as const,
+                    packagedRuntime: Object.freeze({ kind: 'app_bundle' as const, bundleId: custody.custodyId }) }),
+            }) : null,
+        });
+    }));
 }
 
 function readAccountExecutionSelection(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
-    hostBundledUi: readonly PluginHostBundledUiDeclaration[],
     pluginId: string,
 ): PluginAccountExecutionAdmission {
     const snapshot = readProjectionForScope(state, scope);
     if (!snapshot) return Object.freeze({ kind: 'unavailable', code: state
         ? 'account_availability_scope_mismatch' : 'account_availability_not_loaded' });
     if (state?.retiredPluginIds?.includes(pluginId)) return Object.freeze({ kind: 'unavailable', code: 'plugin_account_execution_unavailable' });
-    const reads = snapshot.intentReads.filter(row => row.pluginId === pluginId);
+    const reads = state!.intentReadsByPluginId.get(pluginId) ?? [];
     if (reads.length > 1) return Object.freeze({ kind: 'unavailable', code: 'plugin_release_unavailable' });
-    const bundles = hostBundledUi.filter(row => row.pluginId === pluginId);
+    const bundles = state!.bundledUiByPluginId.get(pluginId) ?? [];
     const bundle = bundles.length === 1 ? bundles[0] : undefined;
-    const bundled = bundle ? readBundledAccountExecution(bundle) : null;
+    const bundled = bundle?.accountExecution;
     return resolvePluginAccountExecutionSelectionV1({ pluginId, intentRead: reads[0]?.response ?? null,
         ...(bundled ? { bundled } : {}),
     });
@@ -1300,20 +1302,20 @@ function readAccountExecutionSelection(
 function readAccountExecutionSelections(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
-    hostBundledUi: readonly PluginHostBundledUiDeclaration[],
+    hostBundledUi: readonly PreparedBundledUiDeclaration[],
 ): readonly Extract<PluginAccountExecutionSelectionV1, { kind: 'available' }>[] {
     const snapshot = readProjectionForScope(state, scope);
     if (!snapshot) return Object.freeze([]);
     const pluginIds = new Set([...snapshot.intentReads.map(row => row.pluginId), ...hostBundledUi.map(row => row.pluginId)]);
     return Object.freeze([...pluginIds].sort().flatMap(pluginId => {
-        const selected = readAccountExecutionSelection(state, scope, hostBundledUi, pluginId);
+        const selected = readAccountExecutionSelection(state, scope, pluginId);
         return selected.kind === 'available' ? [selected] : [];
     }));
 }
 
 function accountActionArtifactGraphs(
     selection: Extract<PluginAccountExecutionSelectionV1, { kind: 'available' }>,
-    hostBundledUi: readonly PluginHostBundledUiDeclaration[],
+    hostBundledUi: readonly PreparedBundledUiDeclaration[],
 ): readonly PluginUiArtifactsManifestEntryV2[] {
     const graphs = selection.release ? selection.release.uiSlots.flatMap(slot => slot.artifactGraph ? [slot.artifactGraph] : [])
         : hostBundledUi.find(bundle => bundle.pluginId === selection.manifest.id)?.artifactGraphs ?? [];
@@ -1444,7 +1446,7 @@ function readCurrentReleaseLessIntent(
     intent: NonNullable<PluginAccountAvailabilityIntentReadProjection['response']['intent']>;
 }> | null {
     const snapshot = state ? readProjectionForScope(state, scope) : null;
-    const projections = snapshot?.intentReads.filter((projection) => projection.pluginId === pluginId) ?? [];
+    const projections = snapshot ? state!.intentReadsByPluginId.get(pluginId) ?? [] : [];
     if (projections.length !== 1) return null;
     const { response } = projections[0]!;
     return response.intent?.pluginId === pluginId && response.intent.desiredVersion === null
@@ -1456,7 +1458,7 @@ function readCurrentCollectionContractAdmission(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
     input: Readonly<{ pluginId: string; collectionId: string; ref?: PluginCollectionContractRefV1 }>,
-    hostBundledUi: readonly PluginHostBundledUiDeclaration[],
+    hostBundledUi: readonly PreparedBundledUiDeclaration[],
 ): PluginAccountAvailabilityCollectionContractAdmission {
     // A claim admits its current writer refs; a release admits its declared
     // refs (older retained reader refs stay with the server's resolver).
@@ -1554,7 +1556,7 @@ function readCurrentAccountKvCapabilityAdmission(
     state: AvailabilityProjectionState | null,
     scope: ServerAccountScope,
     input: Readonly<{ pluginId: string }>,
-    hostBundledUi: readonly PluginHostBundledUiDeclaration[] = [],
+    hostBundledUi: readonly PreparedBundledUiDeclaration[] = [],
 ): PluginAccountAvailabilityAccountKvAdmission {
     // A daemon claim comes from the plugin's own admitted manifest, so it
     // admits that plugin's Account KV exactly as it admits its Collections.
@@ -1566,7 +1568,7 @@ function readCurrentAccountKvCapabilityAdmission(
     }
     const current = readCurrentReleaseAdmission(state, scope, input.pluginId);
     if (current.kind !== 'available') {
-        const selected = readAccountExecutionSelection(state, scope, hostBundledUi, input.pluginId);
+        const selected = readAccountExecutionSelection(state, scope, input.pluginId);
         if (selected.kind === 'available' && releaseRequiresAccountKv(selected.manifest)) {
             return Object.freeze({ kind: 'available', availabilityCursor: state!.snapshot.availabilityCursor });
         }
@@ -1598,156 +1600,214 @@ function readCurrentSettingsDeclarationAdmission(
     });
 }
 
-type AvailabilityReaderProjectionCache = {
-    state?: AvailabilityProjectionState | null;
-    materializations?: PluginMachineMaterializationAdmission;
-    installed?: PluginAccountInstalledPluginsAdmission;
-    lastInstalled?: PluginAccountInstalledPluginsAdmission;
-    accountUi?: PluginUiProjectionModel | null;
-    lastAccountUi?: PluginUiProjectionModel | null;
-    accountUiBundles?: readonly PluginHostBundledUiDeclaration[];
-    accountExecutionSelections?: readonly Extract<PluginAccountExecutionSelectionV1, { kind: 'available' }>[];
-};
+type AvailabilityAccountUiProjection = Readonly<{
+    bundles: readonly PreparedBundledUiDeclaration[];
+    selections: ReturnType<typeof readAccountExecutionSelections>;
+    model: PluginUiProjectionModel | null;
+}>;
+
+type AvailabilityDerivedProjection = Readonly<{
+    materializations: PluginMachineMaterializationAdmission;
+    installed: PluginAccountInstalledPluginsAdmission;
+    accountUi: AvailabilityAccountUiProjection;
+}>;
+
+/** Share unchanged family rows once, when this descriptive model is published. */
+function retainAccountUiProjectionRows(previous: PluginUiProjectionModel | null | undefined, next: PluginUiProjectionModel | null): PluginUiProjectionModel | null {
+    if (!previous || !next) return next;
+    const families = Object.fromEntries(Object.entries(next).map(([key, value]) => {
+        const before: unknown = previous[key as keyof PluginUiProjectionModel];
+        if (!value || typeof value !== 'object' || Array.isArray(value)
+            || !before || typeof before !== 'object' || Array.isArray(before)) {
+            return [key, retainUnchangedAvailabilityValue(before, value)];
+        }
+        const previousRows = before as Readonly<Record<string, unknown>>;
+        const rows = Object.freeze(Object.fromEntries(Object.entries(value).map(([id, row]) =>
+            [id, retainUnchangedAvailabilityValue(previousRows[id], row)])));
+        return [key, retainUnchangedAvailabilityValue(before, rows)];
+    }));
+    return retainUnchangedAvailabilityValue(previous, Object.freeze({ ...next, ...families }));
+}
+
+type AvailabilityObservation = Readonly<{
+    value: Readonly<{
+        scope: ServerAccountScope;
+        inventoryComplete: boolean;
+        stale: boolean;
+        retired: boolean;
+        intentReads: readonly PluginAccountAvailabilityIntentReadProjection[];
+        materializations: readonly PluginMachineMaterializationV1[];
+        releases: readonly PluginReleaseFactsV1[];
+        snapshots: readonly PluginMachineMaterializationSnapshotV1[];
+    }>;
+    token: object;
+}>;
+
+type AvailabilityObservations = Readonly<{
+    all: object;
+    empty: AvailabilityObservation;
+    byPluginId: ReadonlyMap<string, AvailabilityObservation>;
+}>;
+
+function deriveAvailabilityObservations(state: AvailabilityProjectionState, previous?: AvailabilityObservations): AvailabilityObservations {
+    const { snapshot } = state;
+    const intents = state.intentReadsByPluginId;
+    const materializations = indexAvailabilityRows(snapshot.materializations, row => row.pluginId);
+    const releases = indexAvailabilityRows(snapshot.releases ?? [], row => row.ref.pluginId);
+    const stale = new Set(state.stalePluginIds);
+    const retired = new Set(state.retiredPluginIds);
+    const observe = (value: AvailabilityObservation['value'], prior?: AvailabilityObservation): AvailabilityObservation =>
+        prior && sameStrictJsonValue(prior.value, value) ? prior : Object.freeze({ value, token: Object.freeze({}) });
+    const empty = observe(Object.freeze({ scope: state.scope, inventoryComplete: snapshot.inventoryComplete !== false,
+        stale: false, retired: false, intentReads: Object.freeze([]), materializations: Object.freeze([]),
+        releases: Object.freeze([]), snapshots: snapshot.snapshots }), previous?.empty);
+    const byPluginId = new Map<string, AvailabilityObservation>();
+    for (const pluginId of new Set([...intents.keys(), ...materializations.keys(), ...releases.keys(), ...stale, ...retired])) {
+        byPluginId.set(pluginId, observe(Object.freeze({ ...empty.value,
+            stale: stale.has(pluginId), retired: retired.has(pluginId),
+            intentReads: Object.freeze(intents.get(pluginId) ?? []),
+            materializations: Object.freeze(materializations.get(pluginId) ?? []),
+            releases: Object.freeze(releases.get(pluginId) ?? []),
+        }), previous?.byPluginId.get(pluginId) ?? previous?.empty));
+    }
+    return Object.freeze({ all: Object.freeze({}), empty, byPluginId });
+}
+
+function deriveAccountUiProjection(input: Readonly<{
+    scope: ServerAccountScope;
+    hostBundledUi: readonly PreparedBundledUiDeclaration[];
+}>, state: AvailabilityProjectionState, previous?: AvailabilityAccountUiProjection): AvailabilityAccountUiProjection {
+    const bundles = (input.hostBundledUi ?? []).filter(bundle =>
+        readCurrentHostBundle(state, input.scope, input.hostBundledUi ?? [], bundle.pluginId));
+    const selections = readAccountExecutionSelections(state, input.scope, input.hostBundledUi ?? []);
+    if (previous?.bundles?.length === bundles.length
+        && bundles.every((bundle, index) => bundle === previous?.bundles![index])
+        && sameStrictJsonValue(previous?.selections, selections)) {
+        return { bundles, selections, model: previous?.model ?? null };
+    }
+    const entries = Object.assign({}, ...bundles.map(bundle => bundle.entriesById),
+        ...selections.map(selected => {
+            const declarations = projectPluginPortableUiDeclarationsV1(
+                selected.manifest, accountActionArtifactGraphs(selected, input.hostBundledUi ?? []),
+            );
+            return selected.release && selected.manifest.contributes.actions?.some(action => action.execution.target === 'account')
+                ? declarations
+                : Object.fromEntries(Object.entries(declarations).filter(([, entry]) => entry.contributionKind === 'uiRenderer'));
+        }));
+    const accountUiOrigins = new Map(selections.map(({ manifest, custodyId, sourceCustody }) => [manifest.id,
+        Object.freeze({ ...input.scope, custodyId, sourceCustody,
+            ...(sourceCustody.kind === 'bundled_first_party'
+                ? { declarationDigest: input.hostBundledUi.find(bundle => bundle.pluginId === manifest.id)!.accountExecution!.declarationDigest } : {}) }),
+    ] as const));
+    const actions: Record<string, PluginUiActionProjection> = {};
+    for (const selected of selections) {
+        const { manifest, custodyId } = selected;
+        const hostAccountOrigin = accountUiOrigins.get(manifest.id)!;
+        const graphs = accountActionArtifactGraphs(selected, input.hostBundledUi ?? []);
+        for (const action of manifest.contributes.actions ?? []) {
+            if (action.execution.target !== 'account') continue;
+            const execution = action.execution;
+            const matchingGraphs = graphs.filter(graph => graph.tier === 'reactNative'
+                && graph.artifactId === execution.account.artifactId
+                && graph.executable.exports.includes(execution.account.exportName));
+            const graph = matchingGraphs.length === 1 ? matchingGraphs[0] : undefined;
+            const compatible = graph !== undefined && isPluginUiHostApiVersionCompatibleWithVersionV1(PLUGIN_UI_HOST_API_VERSION_V1, graph.hostUiApiRange);
+            const requestedAccess = action.hostAccess ?? [];
+            const optionalAccess = manifest.hostAccess.optional.filter(request => requestedAccess.includes(request.id));
+            const requiredAccess = manifest.hostAccess.required.filter(request => requestedAccess.includes(request.id));
+            const accountKvAdmission = readCurrentAccountKvCapabilityAdmission(state, input.scope, { pluginId: manifest.id }, input.hostBundledUi);
+            const key = buildQualifiedPluginContributionKey({ pluginId: manifest.id, localId: action.id });
+            actions[key] = Object.freeze({ id: action.id, pluginId: manifest.id,
+                pluginVersion: manifest.version, occurrenceId: custodyId, title: action.title,
+                ...(action.description ? { description: action.description } : {}),
+                ...(action.icon ? { icon: action.icon } : {}),
+                scopes: action.scopes, surfaces: action.surfaces, execution,
+                placementBindings: action.placementBindings, dangerLevel: action.dangerLevel,
+                ...(action.confirmation ? { confirmation: action.confirmation } : {}),
+                ...(action.confirmationWhen ? { confirmationWhen: action.confirmationWhen } : {}),
+                available: compatible, hostAccountOrigin, hostAccountDeclaration: manifest,
+                authorization: { generation: { targetGeneration: custodyId, desiredGeneration: custodyId, appliedGeneration: null },
+                    resourceSelections: optionalAccess.map(request => ({ id: request.id, required: true })), scopedGrants: [],
+                    serviceAvailability: [...requiredAccess, ...optionalAccess].map(request => ({ id: request.id, required: true,
+                        status: requiredAccess.includes(request) && request.capability === 'storage.account'
+                            && accountKvAdmission.kind === 'available' ? 'available' as const : 'unavailable' as const })),
+                    operatingSystemAuthorization: [] },
+            });
+            if (graph) {
+                const entry = projectPluginReactNativeArtifactEntryV1({ pluginId: manifest.id, pluginVersion: manifest.version,
+                    contributionId: action.id, artifactId: graph.artifactId, artifact: graph, generatedOwnerKind: 'clientContribution',
+                    artifactSelectionOwner: 'accountRelease', requiredHostMethods: [], exportName: execution.account.exportName,
+                    runtime: Object.freeze({ decision: { state: compatible ? 'load' : 'blocked',
+                        reason: compatible ? 'compatible' : 'generated_ui_host_api_mismatch',
+                        diagnostics: compatible ? [] : ['generated_ui_host_api_mismatch'] },
+                        ...(compatible ? { cacheKey: derivePluginReactNativeBundleCacheKey({ artifactDigest: graph.digest }),
+                            cacheIdentity: { artifactDigest: graph.digest }, loadPolicy: { source: 'installedArtifact' } } : {}) }),
+                });
+                entries[entry.id] = Object.freeze({ ...entry, occurrenceId: custodyId, hostAccountOrigin, hostAccountDeclaration: manifest });
+            }
+        }
+    }
+    const projection = normalizePluginInstalledUiDeclarations(entries);
+    const withAccountOccurrence = <T extends Readonly<{ pluginId: string }>>(entry: T): T => {
+        const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
+        return hostAccountOrigin ? Object.freeze({ ...entry, occurrenceId: hostAccountOrigin.custodyId }) : entry;
+    };
+    const model = Object.keys(entries).length > 0 || Object.keys(actions).length > 0 ? Object.freeze({ ...projection,
+        actionsById: Object.freeze(actions),
+        reactNativeBundlesById: Object.freeze(Object.fromEntries(Object.entries(projection.reactNativeBundlesById)
+            .map(([key, entry]) => [key, withAccountOccurrence(entry)]))),
+        hostedWebById: Object.freeze(Object.fromEntries(Object.entries(projection.hostedWebById)
+            .map(([key, entry]) => [key, withAccountOccurrence(entry)]))),
+        surfacePlacementsById: Object.freeze(Object.fromEntries(Object.entries(projection.surfacePlacementsById)
+            .map(([key, entry]) => {
+                const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
+                return [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]),
+                    ...(hostAccountOrigin ? { occurrenceId: hostAccountOrigin.custodyId, hostAccountOrigin } : {}) })];
+            }))),
+        settingsPagesById: Object.freeze(Object.fromEntries(Object.entries(projection.settingsPagesById)
+            .map(([key, entry]) => {
+                const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
+                return [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]),
+                    ...(hostAccountOrigin ? { occurrenceId: hostAccountOrigin.custodyId, hostAccountOrigin } : {}) })];
+            }))),
+        installedPackagesById: Object.freeze({ ...Object.fromEntries(bundles.map(bundle => [bundle.pluginId, {
+            id: bundle.pluginId, displayName: bundle.displayName,
+            version: bundle.pluginVersion, enabled: true, source: { kind: 'bundled' as const, locator: bundle.packageName },
+            ...(bundle.declaredExecution ? { declaredExecution: bundle.declaredExecution } : {}),
+        }])), ...Object.fromEntries(selections.filter(selected => selected.manifest.contributes.actions?.some(action => action.execution.target === 'account'))
+            .map(selected => {
+                const bundle = bundles.find(candidate => candidate.pluginId === selected.manifest.id);
+                return [selected.manifest.id, { id: selected.manifest.id,
+                displayName: typeof selected.manifest.displayName === 'string' ? selected.manifest.displayName : selected.manifest.displayName.fallback,
+                version: selected.manifest.version, enabled: true,
+                source: selected.release ? { kind: 'archive', locator: selected.release.archiveDigestSha256 }
+                    : { kind: 'bundled', locator: bundle!.packageName },
+                ...(bundle?.declaredExecution ? { declaredExecution: bundle.declaredExecution } : {}),
+            }]; })) }),
+    }) : null;
+    const retained = retainAccountUiProjectionRows(previous?.model, model);
+    return { bundles, selections, model: retained ? preparePluginUiProjectionOrigins(retained) : null };
+}
 
 function createBoundReader(input: Readonly<{
     scope: ServerAccountScope;
     readState: () => AvailabilityProjectionState | null;
     subscribe: (listener: () => void) => () => void;
-    hostBundledUi?: readonly PluginHostBundledUiDeclaration[];
-    projectionCache?: AvailabilityReaderProjectionCache;
+    hostBundledUi?: readonly PreparedBundledUiDeclaration[];
+    readDerivedProjection: () => AvailabilityDerivedProjection | null;
+    readObservationSnapshot: (pluginId?: string) => object | null;
 }>): PluginAccountAvailabilityReader {
-    // Both projections are derived from the owner-snapshotted immutable state.
-    // Fresh imperative admission still reads that state on every access; only
-    // unchanged-state derivation is retained. Clear, retirement, partial refresh
-    // and Account replacement all replace the state identity below.
-    const cache: AvailabilityReaderProjectionCache = input.projectionCache ?? {};
-    const readDerivedState = () => {
-        const state = input.readState();
-        if (state !== cache.state) {
-            cache.state = state;
-            cache.materializations = undefined;
-            cache.installed = undefined;
-            cache.accountUi = undefined;
-        }
-        return state;
-    };
     return Object.freeze({
-        readCurrentAccountExecution: (pluginId: string) => readAccountExecutionSelection(input.readState(), input.scope, input.hostBundledUi ?? [], pluginId),
-        readCurrentAccountExecutionDeclarations: () => readAccountExecutionSelections(input.readState(), input.scope, input.hostBundledUi ?? []),
-        readAccountUiProjection: () => {
-            const state = readDerivedState();
-            if (cache.accountUi !== undefined) return cache.accountUi;
-            const bundles = (input.hostBundledUi ?? []).filter(bundle =>
-                readCurrentHostBundle(state, input.scope, input.hostBundledUi ?? [], bundle.pluginId));
-            const selections = readAccountExecutionSelections(state, input.scope, input.hostBundledUi ?? []);
-            if (cache.accountUiBundles?.length === bundles.length
-                && bundles.every((bundle, index) => bundle === cache.accountUiBundles![index])
-                && sameStrictJsonValue(cache.accountExecutionSelections, selections)) {
-                return cache.accountUi = cache.lastAccountUi ?? null;
-            }
-            const entries = Object.assign({}, ...bundles.map(bundle => bundle.entriesById),
-                ...selections.map(selected => {
-                    const declarations = projectPluginPortableUiDeclarationsV1(
-                        selected.manifest, accountActionArtifactGraphs(selected, input.hostBundledUi ?? []),
-                    );
-                    return selected.release && selected.manifest.contributes.actions?.some(action => action.execution.target === 'account')
-                        ? declarations
-                        : Object.fromEntries(Object.entries(declarations).filter(([, entry]) => entry.contributionKind === 'uiRenderer'));
-                }));
-            const accountUiOrigins = new Map(selections.map(({ manifest, custodyId, sourceCustody }) => [manifest.id,
-                Object.freeze({ ...input.scope, custodyId, sourceCustody,
-                    ...(sourceCustody.kind === 'bundled_first_party'
-                        ? { declarationDigest: computePluginAccountBundledDeclarationDigestV1(manifest) } : {}) }),
-            ] as const));
-            const actions: Record<string, PluginUiActionProjection> = {};
-            for (const selected of selections) {
-                const { manifest, custodyId } = selected;
-                const hostAccountOrigin = accountUiOrigins.get(manifest.id)!;
-                const graphs = accountActionArtifactGraphs(selected, input.hostBundledUi ?? []);
-                for (const action of manifest.contributes.actions ?? []) {
-                    if (action.execution.target !== 'account') continue;
-                    const execution = action.execution;
-                    const matchingGraphs = graphs.filter(graph => graph.tier === 'reactNative'
-                        && graph.artifactId === execution.account.artifactId
-                        && graph.executable.exports.includes(execution.account.exportName));
-                    const graph = matchingGraphs.length === 1 ? matchingGraphs[0] : undefined;
-                    const compatible = graph !== undefined && isPluginUiHostApiVersionCompatibleWithVersionV1(PLUGIN_UI_HOST_API_VERSION_V1, graph.hostUiApiRange);
-                    const requestedAccess = action.hostAccess ?? [];
-                    const optionalAccess = manifest.hostAccess.optional.filter(request => requestedAccess.includes(request.id));
-                    const requiredAccess = manifest.hostAccess.required.filter(request => requestedAccess.includes(request.id));
-                    const accountKvAdmission = readCurrentAccountKvCapabilityAdmission(state, input.scope, { pluginId: manifest.id }, input.hostBundledUi);
-                    const key = buildQualifiedPluginContributionKey({ pluginId: manifest.id, localId: action.id });
-                    actions[key] = Object.freeze({ id: action.id, pluginId: manifest.id,
-                        pluginVersion: manifest.version, occurrenceId: custodyId, title: action.title,
-                        ...(action.description ? { description: action.description } : {}),
-                        ...(action.icon ? { icon: action.icon } : {}),
-                        scopes: action.scopes, surfaces: action.surfaces, execution,
-                        placementBindings: action.placementBindings, dangerLevel: action.dangerLevel,
-                        ...(action.confirmation ? { confirmation: action.confirmation } : {}),
-                        ...(action.confirmationWhen ? { confirmationWhen: action.confirmationWhen } : {}),
-                        available: compatible, hostAccountOrigin, hostAccountDeclaration: manifest,
-                        authorization: { generation: { targetGeneration: custodyId, desiredGeneration: custodyId, appliedGeneration: null },
-                            resourceSelections: optionalAccess.map(request => ({ id: request.id, required: true })), scopedGrants: [],
-                            serviceAvailability: [...requiredAccess, ...optionalAccess].map(request => ({ id: request.id, required: true,
-                                status: requiredAccess.includes(request) && request.capability === 'storage.account'
-                                    && accountKvAdmission.kind === 'available' ? 'available' as const : 'unavailable' as const })),
-                            operatingSystemAuthorization: [] },
-                    });
-                    if (graph) {
-                        const entry = projectPluginReactNativeArtifactEntryV1({ pluginId: manifest.id, pluginVersion: manifest.version,
-                            contributionId: action.id, artifactId: graph.artifactId, artifact: graph, generatedOwnerKind: 'clientContribution',
-                            artifactSelectionOwner: 'accountRelease', requiredHostMethods: [], exportName: execution.account.exportName,
-                            runtime: Object.freeze({ decision: { state: compatible ? 'load' : 'blocked',
-                                reason: compatible ? 'compatible' : 'generated_ui_host_api_mismatch',
-                                diagnostics: compatible ? [] : ['generated_ui_host_api_mismatch'] },
-                                ...(compatible ? { cacheKey: derivePluginReactNativeBundleCacheKey({ artifactDigest: graph.digest }),
-                                    cacheIdentity: { artifactDigest: graph.digest }, loadPolicy: { source: 'installedArtifact' } } : {}) }),
-                        });
-                        entries[entry.id] = Object.freeze({ ...entry, occurrenceId: custodyId, hostAccountOrigin, hostAccountDeclaration: manifest });
-                    }
-                }
-            }
-            const projection = normalizePluginInstalledUiDeclarations(entries);
-            const withAccountOccurrence = <T extends Readonly<{ pluginId: string }>>(entry: T): T => {
-                const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
-                return hostAccountOrigin ? Object.freeze({ ...entry, occurrenceId: hostAccountOrigin.custodyId }) : entry;
-            };
-            cache.accountUiBundles = bundles;
-            cache.accountExecutionSelections = selections;
-            return cache.accountUi = cache.lastAccountUi = Object.keys(entries).length > 0 || Object.keys(actions).length > 0 ? Object.freeze({ ...projection,
-                actionsById: Object.freeze(actions),
-                reactNativeBundlesById: Object.freeze(Object.fromEntries(Object.entries(projection.reactNativeBundlesById)
-                    .map(([key, entry]) => [key, withAccountOccurrence(entry)]))),
-                hostedWebById: Object.freeze(Object.fromEntries(Object.entries(projection.hostedWebById)
-                    .map(([key, entry]) => [key, withAccountOccurrence(entry)]))),
-                surfacePlacementsById: Object.freeze(Object.fromEntries(Object.entries(projection.surfacePlacementsById)
-                    .map(([key, entry]) => {
-                        const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
-                        return [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]),
-                            ...(hostAccountOrigin ? { occurrenceId: hostAccountOrigin.custodyId, hostAccountOrigin } : {}) })];
-                    }))),
-                settingsPagesById: Object.freeze(Object.fromEntries(Object.entries(projection.settingsPagesById)
-                    .map(([key, entry]) => {
-                        const hostAccountOrigin = accountUiOrigins.get(entry.pluginId);
-                        return [key, Object.freeze({ ...entry, hostSupplies: Object.freeze([]),
-                            ...(hostAccountOrigin ? { occurrenceId: hostAccountOrigin.custodyId, hostAccountOrigin } : {}) })];
-                    }))),
-                installedPackagesById: Object.freeze({ ...Object.fromEntries(bundles.map(bundle => [bundle.pluginId, {
-                    id: bundle.pluginId, displayName: bundle.displayName,
-                    version: bundle.pluginVersion, enabled: true, source: { kind: 'bundled' as const, locator: bundle.packageName },
-                    ...(bundle.declaredExecution ? { declaredExecution: bundle.declaredExecution } : {}),
-                }])), ...Object.fromEntries(selections.filter(selected => selected.manifest.contributes.actions?.some(action => action.execution.target === 'account'))
-                    .map(selected => {
-                        const bundle = bundles.find(candidate => candidate.pluginId === selected.manifest.id);
-                        return [selected.manifest.id, { id: selected.manifest.id,
-                        displayName: typeof selected.manifest.displayName === 'string' ? selected.manifest.displayName : selected.manifest.displayName.fallback,
-                        version: selected.manifest.version, enabled: true,
-                        source: selected.release ? { kind: 'archive', locator: selected.release.archiveDigestSha256 }
-                            : { kind: 'bundled', locator: bundle!.packageName },
-                        ...(bundle?.declaredExecution ? { declaredExecution: bundle.declaredExecution } : {}),
-                    }]; })) }),
-            }) : null;
+        getObservationSnapshot: input.readObservationSnapshot,
+        readBundledAccountDeclarationDigest: (pluginId: string) => {
+            const state = input.readState();
+            if (!readProjectionForScope(state, input.scope)) return null;
+            const bundles = state!.bundledUiByPluginId.get(pluginId) ?? [];
+            return bundles.length === 1 ? bundles[0]!.accountExecution?.declarationDigest ?? null : null;
         },
+        readCurrentAccountExecution: (pluginId: string) => readAccountExecutionSelection(input.readState(), input.scope, pluginId),
+        readCurrentAccountExecutionDeclarations: () => readAccountExecutionSelections(input.readState(), input.scope, input.hostBundledUi ?? []),
+        readAccountUiProjection: () => input.readDerivedProjection()?.accountUi.model ?? null,
         readCurrentArtifact: (slot, executionOrigin, daemonProjectionSelection) => readCurrentArtifactAdmission(
             input.readState(),
             input.scope,
@@ -1808,14 +1868,10 @@ function createBoundReader(input: Readonly<{
             input.scope,
             materialization,
         ),
-        readMaterializations: () => {
-            const state = readDerivedState();
-            return cache.materializations ??= readMaterializationAdmission(state, input.scope);
-        },
-        readInstalledPlugins: () => {
-            const state = readDerivedState();
-            return cache.installed ??= cache.lastInstalled = readInstalledPluginsAdmission(state, input.scope, cache.lastInstalled);
-        },
+        readMaterializations: () => input.readDerivedProjection()?.materializations
+            ?? readMaterializationAdmission(input.readState(), input.scope),
+        readInstalledPlugins: () => input.readDerivedProjection()?.installed
+            ?? readInstalledPluginsAdmission(input.readState(), input.scope),
         subscribe: input.subscribe,
     });
 }
@@ -1830,30 +1886,51 @@ export function createPluginAccountAvailabilityReader(input: Readonly<{
     snapshot: PluginAccountAvailabilitySnapshot;
     hostBundledUi?: readonly PluginHostBundledUiDeclaration[];
 }>): PluginAccountAvailabilityReader {
-    const state: AvailabilityProjectionState = Object.freeze({
-        scope: Object.freeze({ ...input.scope }),
-        snapshot: snapshotPluginAccountAvailabilitySnapshot(input.snapshot),
-        stalePluginIds: Object.freeze([]),
-    });
-    return createBoundReader({
-        scope: state.scope,
-        readState: () => state,
-        subscribe: () => () => {},
-        hostBundledUi: input.hostBundledUi,
-    });
+    const store = createPluginAccountAvailabilityReaderStore({ hostBundledUi: input.hostBundledUi });
+    store.replace(input);
+    return store.bind(input.scope);
 }
 
 /**
  * The live Account projection owner. Account-change consumers replace one
- * complete materialization snapshot; no renderer-specific selector is kept.
+ * complete materialization snapshot and publishes its descriptive slices before
+ * notifying readers. Operation policy remains a live read of this owner.
  */
 export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
     hostBundledUi?: readonly PluginHostBundledUiDeclaration[];
 }> = {}): PluginAccountAvailabilityReaderStore {
+    const hostBundledUi = prepareBundledUiDeclarations(input.hostBundledUi ?? []);
+    const bundledUiByPluginId = indexAvailabilityRows(hostBundledUi, bundle => bundle.pluginId);
     let state: AvailabilityProjectionState | null = null;
-    // Readers retain their own scope and fresh methods, while unchanged descriptive
-    // models are shared at this producer across mounted and imperative readers.
-    let projectionCache: Readonly<{ scope: ServerAccountScope; cache: AvailabilityReaderProjectionCache }> | undefined;
+    let derived: AvailabilityDerivedProjection | null = null;
+    let observations: AvailabilityObservations | undefined;
+    let boundReader: Readonly<{ scope: ServerAccountScope; reader: PluginAccountAvailabilityReader }> | undefined;
+    const getObservationSnapshot = (pluginId?: string): object | null => {
+        if (!state || !observations) return null;
+        return pluginId === undefined ? observations.all
+            : (observations.byPluginId.get(pluginId) ?? observations.empty).token;
+    };
+    const publish = (next: PluginAccountAvailabilityStoredProjection) => {
+        const sameScope = state !== null && areServerAccountScopesEqual(state.scope, next.scope);
+        const nextState = Object.freeze({ ...next,
+            bundledUiByPluginId,
+            intentReadsByPluginId: sameScope && state!.snapshot.intentReads === next.snapshot.intentReads
+                ? state!.intentReadsByPluginId : indexAvailabilityRows(next.snapshot.intentReads, row => row.pluginId),
+            materializationsByIdentity: sameScope && state!.snapshot.materializations === next.snapshot.materializations
+                ? state!.materializationsByIdentity : indexMaterializations(next.snapshot),
+        });
+        const nextDerived = Object.freeze({
+            materializations: retainUnchangedAvailabilityValue(sameScope ? derived?.materializations : undefined,
+                readMaterializationAdmission(nextState, nextState.scope)),
+            installed: readInstalledPluginsAdmission(nextState, nextState.scope, sameScope ? derived?.installed : undefined),
+            accountUi: deriveAccountUiProjection({ scope: nextState.scope, hostBundledUi }, nextState,
+                sameScope ? derived?.accountUi : undefined),
+        });
+        const nextObservations = deriveAvailabilityObservations(nextState, sameScope ? observations : undefined);
+        state = nextState;
+        derived = nextDerived;
+        observations = nextObservations;
+    };
     const listeners = new Set<() => void>();
     const notify = () => {
         for (const listener of listeners) listener();
@@ -1883,11 +1960,12 @@ export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
                 ? previous.snapshot.intentReads.filter((entry) => !replacedPluginIds.has(entry.pluginId))
                 : [];
             const previousIntentReads = new Map(canMerge ? previous.snapshot.intentReads.map(entry => [entry.pluginId, entry]) : []);
-            const intentReads = Object.freeze([...retainedIntentReads, ...incoming.intentReads]
+            const intentReads = retainUnchangedAvailabilityRows(canMerge ? previous.snapshot.intentReads : undefined,
+                Object.freeze([...retainedIntentReads, ...incoming.intentReads]
                 .map(entry => Object.freeze({ ...entry, response: Object.freeze({ ...entry.response,
                     release: retainUnchangedAvailabilityValue(previousIntentReads.get(entry.pluginId)?.response.release, entry.response.release),
                 }) }))
-                .sort((left, right) => left.pluginId.localeCompare(right.pluginId)));
+                .sort((left, right) => left.pluginId.localeCompare(right.pluginId))));
             const retainedPluginIds = new Set(intentReads.map((entry) => entry.pluginId));
             const stalePluginIds = new Set(canMerge ? previous.stalePluginIds : []);
             for (const pluginId of replacedPluginIds) stalePluginIds.delete(pluginId);
@@ -1897,7 +1975,7 @@ export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
             for (const pluginId of input.failedPluginIds ?? []) {
                 if (retainedPluginIds.has(pluginId)) stalePluginIds.add(pluginId);
             }
-            state = Object.freeze({
+            publish(Object.freeze({
                 scope: Object.freeze({ ...input.scope }),
                 retiredPluginIds: canMerge ? previous.retiredPluginIds?.filter(pluginId => !replacedPluginIds.has(pluginId)) : [],
                 stalePluginIds: Object.freeze([...stalePluginIds].sort((left, right) => left.localeCompare(right))),
@@ -1916,14 +1994,15 @@ export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
                     releases: retainUnchangedAvailabilityRows(canMerge ? previous.snapshot.releases : undefined,
                         Object.freeze([...retainedReleases, ...(incoming.releases ?? [])])),
                 }),
-            });
+            }));
             notify();
             return previous;
         },
         clear: () => {
             const previous = state;
             state = null;
-            projectionCache = undefined;
+            derived = null;
+            observations = undefined;
             notify();
             return previous;
         },
@@ -1931,27 +2010,31 @@ export function createPluginAccountAvailabilityReaderStore(input: Readonly<{
             if (!state || pluginIds.length === 0) return;
             const retired = new Set(pluginIds);
             const intentReads = state.snapshot.intentReads.filter((entry) => !retired.has(entry.pluginId));
-            state = Object.freeze({
+            publish(Object.freeze({
                 scope: state.scope,
                 snapshot: Object.freeze({ ...state.snapshot, intentReads: Object.freeze(intentReads) }),
                 stalePluginIds: Object.freeze(state.stalePluginIds.filter((pluginId) => !retired.has(pluginId))),
                 retiredPluginIds: Object.freeze([...new Set([...(state.retiredPluginIds ?? []), ...pluginIds])]),
-            });
+            }));
             notify();
         },
         getSnapshot: () => state,
+        getObservationSnapshot,
         subscribe,
         bind: (scope) => {
-            const scoped = projectionCache && areServerAccountScopesEqual(projectionCache.scope, scope)
-                ? projectionCache : { scope: Object.freeze({ ...scope }), cache: {} };
-            if (!state || areServerAccountScopesEqual(state.scope, scope)) projectionCache = scoped;
-            return createBoundReader({
-                scope: scoped.scope,
+            if (boundReader && areServerAccountScopesEqual(boundReader.scope, scope)) return boundReader.reader;
+            const scoped = Object.freeze({ ...scope });
+            const reader = createBoundReader({
+                scope: scoped,
                 readState: () => state,
                 subscribe,
-                hostBundledUi: input.hostBundledUi,
-                projectionCache: scoped.cache,
+                hostBundledUi,
+                readDerivedProjection: () => state && areServerAccountScopesEqual(state.scope, scoped) ? derived : null,
+                readObservationSnapshot: (pluginId) => state && areServerAccountScopesEqual(state.scope, scoped)
+                    ? getObservationSnapshot(pluginId) : null,
             });
+            if (!state || areServerAccountScopesEqual(state.scope, scoped)) boundReader = { scope: scoped, reader };
+            return reader;
         },
     });
 }

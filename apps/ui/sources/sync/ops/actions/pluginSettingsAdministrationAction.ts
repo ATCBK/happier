@@ -230,15 +230,14 @@ export function createUiPluginSettingsAdministrationAction(
             if (!active?.isCurrent() || !areServerAccountScopesEqual(active.scope, account.accountLifetime.scope)) return null;
             const { readPluginAccountAvailability } = await import('@/sync/domains/plugins/availability/projection');
             const reader = readPluginAccountAvailability({ serverId: account.serverId, accountId: account.accountId });
-            const { readCurrentAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
-            const { readPluginUiExecutionOriginCandidates } = await import('@/sync/domains/plugins/ui/projectionUnion');
+            const { readCurrentAppShellPluginUiExecutionOriginCandidates } = await import('@/components/appShell/plugins/committedPluginUiProjection');
             const { resolveFreshPluginMachineExecutionOrigin } = await import('@/sync/domains/machines/administration/usePluginExecutionOriginSelection');
             const { readCurrentPluginMachineExecutionTargetPreference } = await import('@/sync/domains/machines/administration/selectionPreferences');
             const { arePluginMachineExecutionOriginsEqual } = await import('@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1');
             const readSelected = () => resolveFreshPluginMachineExecutionOrigin({ pluginId: input.pluginId,
                 origin: null, storedTarget: readCurrentPluginMachineExecutionTargetPreference(input.pluginId),
                 reader, classifyRelease: reader.classifyRelease,
-                ...readPluginUiExecutionOriginCandidates({ pluginId: input.pluginId, projection: readCurrentAppShellPluginUiProjection() }) });
+                ...readCurrentAppShellPluginUiExecutionOriginCandidates(input.pluginId, { scope: active.scope, declarationsOnly: true }) });
             const selectedSource = readSelected();
             if (selectedSource?.source) {
                 // A live source declaration stays with its current daemon. It

@@ -524,22 +524,27 @@ describe('execution-origin plugin identity with real Account and machine owners'
         const source = { origin, version: '0.0.0', occurrenceId: 'source-occurrence', generation: 1, serverId: home.id };
         const sources = [{ source, releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } }];
         const classified: string[] = [];
-        const candidateProjections = new Set<readonly unknown[]>();
+        const classifiedDuringRender: boolean[] = [];
+        let rendering = false;
         const hook = await renderHook(() => {
-            const classify = useActivePluginAccountAvailabilityReleaseClassifier();
-            const classifyRelease = React.useMemo(() => (materialization: PluginMachineMaterializationV1) => {
-                classified.push(materialization.materializationId);
-                return classify(materialization);
-            }, [classify]);
-            const selection = usePluginMachineExecutionOriginSelection({ pluginId, classifyRelease, sourceCandidates: sources });
-            candidateProjections.add(selection.candidates);
-            return selection;
+            rendering = true;
+            try {
+                const classify = useActivePluginAccountAvailabilityReleaseClassifier();
+                const classifyRelease = React.useMemo(() => (materialization: PluginMachineMaterializationV1) => {
+                    classified.push(materialization.materializationId);
+                    classifiedDuringRender.push(rendering);
+                    return classify(materialization);
+                }, [classify]);
+                return usePluginMachineExecutionOriginSelection({ pluginId, classifyRelease, sourceCandidates: sources });
+            } finally { rendering = false; }
         });
-        // Undemanded rendering classifies only the emitted candidate projection.
+        // The source publication classifies each emitted row once. Initial
+        // pending presentation does not build a second candidate projection.
         // Availability reads retain their memo; explicit invocation stays fresh.
         for (const materialization of [report, portable]) {
-            expect(classified.filter(id => id === materialization.materializationId)).toHaveLength(candidateProjections.size);
+            expect(classified.filter(id => id === materialization.materializationId)).toHaveLength(1);
         }
+        expect(classifiedDuringRender).not.toContain(true);
         expect(hook.getCurrent().candidates.map(getPluginExecutionOriginCandidateOrigin)).toEqual([
             { serverIdentityId, materializationRef: { machineId: machine.id, materializationId: portable.materializationId, pluginId } },
             origin,
@@ -555,6 +560,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
     });
 
     it('resolves a sole source afresh and withdraws execution on source retirement or Account change', async () => {
+        const reactErrors = vi.spyOn(console, 'error');
         const serverIdentityId = 'srv_source_execution';
         const url = 'https://source-execution.example.test';
         await network.addHome(url, FIXTURE_ACCOUNT_ID);
@@ -636,6 +642,17 @@ describe('execution-origin plugin identity with real Account and machine owners'
         await act(async () => { storage.setState({ settingsScope: { ...scope, accountId: 'account-switched' } }); });
         expect(incumbentResolve()).toBeNull();
         expect(hook.getCurrent().resolveExecutionOrigin()).toBeNull();
+        currentSources = candidates;
+        await act(async () => { storage.setState({ profileScope: { ...scope, accountId: 'account-switched' } }); });
+        await act(async () => {
+            storage.setState({ profileScope: scope, settingsScope: scope });
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                availabilityCursor: 2, intentReads: [], materializations: [], snapshots: [],
+            } });
+        });
+        expect(hook.getCurrent().resolveExecutionOrigin()?.source).toEqual(source);
+        expect(incumbentResolve()).toBeNull();
+        expect(reactErrors.mock.calls.filter(([message]) => String(message).includes('Cannot update a component'))).toEqual([]);
         await hook.unmount();
     });
 
@@ -686,6 +703,7 @@ describe('execution-origin plugin identity with real Account and machine owners'
             classifyRelease: useActivePluginAccountAvailabilityReleaseClassifier(), sourceCandidates: detailedCandidates,
             declaredDefaultOrigins: defaults }));
         expect(detailedHook.getCurrent().canExecute).toBe(true);
+        expect(detailedHook.getCurrent().candidates).toBe(hook.getCurrent().candidates);
         await hook.rerender();
         const settledSerializations = machineFactsSerializations();
         const settledFactCalls = serializeFacts.mock.calls.length;

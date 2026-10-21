@@ -23,7 +23,6 @@ import {
     createPluginAccountAvailabilityReaderStore,
     readHostBundledPluginUiDeclarations,
     projectPluginAccountAvailabilityMaterializationIdentity,
-    arePluginAvailabilityObservationsEqual,
     type PluginAccountAvailabilityReader,
     type PluginAccountAvailabilityReleaseClassificationV1,
     type PluginAccountAvailabilitySnapshot,
@@ -138,14 +137,7 @@ export function retirePluginAccountAvailabilityProjection(pluginIds: readonly st
  */
 export function useActivePluginAccountAvailabilityReader(pluginId?: string): PluginAccountAvailabilityReader | null {
     const scope = useActiveServerAccountScope();
-    const readSnapshot = React.useMemo(() => {
-        let selected = readerStore.getSnapshot();
-        return () => {
-            const current = readerStore.getSnapshot();
-            if (!pluginId || !arePluginAvailabilityObservationsEqual(selected, current, pluginId)) selected = current;
-            return selected;
-        };
-    }, [pluginId]);
+    const readSnapshot = React.useCallback(() => readerStore.getObservationSnapshot(pluginId), [pluginId]);
     const snapshot = React.useSyncExternalStore(subscribeToReactProjection, readSnapshot, readSnapshot);
     const serverId = scope?.serverId ?? null;
     const accountId = scope?.accountId ?? null;
@@ -159,7 +151,9 @@ export function useActivePluginAccountAvailabilityReader(pluginId?: string): Plu
 
     return React.useMemo(() => {
         if (!scope) return null;
-        return readPluginAccountAvailability(scope);
+        // Preserve this hook's publication revision for existing memoized
+        // consumers; its methods remain the canonical scope-bound live readers.
+        return Object.freeze({ ...readPluginAccountAvailability(scope) });
     }, [accountId, snapshot, scope, serverId]);
 }
 
@@ -172,12 +166,13 @@ export function useActivePluginAccountAvailabilityReleaseClassifier(pluginId?: s
     materialization: PluginMachineMaterializationV1,
 ) => PluginAccountAvailabilityReleaseClassificationV1 {
     const reader = useActivePluginAccountAvailabilityReader(pluginId);
-    return React.useMemo(() => {
-        if (reader) return reader.classifyRelease;
-        return (materialization): PluginAccountAvailabilityReleaseClassificationV1 => Object.freeze({
-            ...projectPluginAccountAvailabilityMaterializationIdentity(materialization),
-            releaseContent: 'unknown',
-            validation: Object.freeze({ kind: 'rejected', reason: materialization.portableRelease ? 'release_unavailable' : 'non_portable' }),
-        });
-    }, [reader]);
+    return reader?.classifyRelease ?? classifyUnavailableRelease;
+}
+
+function classifyUnavailableRelease(materialization: PluginMachineMaterializationV1): PluginAccountAvailabilityReleaseClassificationV1 {
+    return Object.freeze({
+        ...projectPluginAccountAvailabilityMaterializationIdentity(materialization),
+        releaseContent: 'unknown',
+        validation: Object.freeze({ kind: 'rejected', reason: materialization.portableRelease ? 'release_unavailable' : 'non_portable' }),
+    });
 }

@@ -14,14 +14,12 @@ import {
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
     resolvePluginUiProjectionPlatform,
-    resolvePluginUiProjectionState,
     type PluginUiProjectionModel,
 } from '@/sync/domains/plugins/ui/projection';
 import {
     forgetPluginUiProjectionAdmissionSnapshot,
     pluginUiProjectionAdmissionTargetKey,
     readPluginUiProjectionAdmissionSnapshot,
-    savePluginUiProjectionAdmissionSnapshot,
 } from '@/sync/domains/plugins/ui/projectionWarmCache';
 import {
     getMachineContributionRegistryProjectionRevision,
@@ -47,7 +45,6 @@ import {
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import {
-    readConnectedAccountDescriptorProjection,
     type ConnectedAccountDescriptorMachineProjection,
 } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 
@@ -452,16 +449,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                     scheduleRetry();
                     return;
                 }
-                // This is the one moment admission currentness is confirmed,
-                // so it is the only moment the Account-qualified snapshot is
-                // recorded for the next fresh process.
-                savePluginUiProjectionAdmissionSnapshot({
-                    scope: accountLifetime?.scope ?? null,
-                    targetKey,
-                    machineId: target.machineId,
-                    projection,
-                });
-                const connectedAccountProjection = readConnectedAccountDescriptorProjection(projection);
+                const connectedAccountProjection = entry.inputs.connectedAccountProjection;
                 setLoadedProjection((previous) => {
                     if (
                         previous.targetKey !== targetKey
@@ -476,14 +464,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                         authorityKey,
                         phase: 'current',
                         connectedAccountProjection,
-                        pluginUiProjection: resolvePluginUiProjectionState(
-                            previous.pluginUiProjection,
-                            projection,
-                            {
-                                reuseSameGeneration: previous.authorityKey === authorityKey,
-                                platform,
-                            },
-                        ),
+                        pluginUiProjection: entry.inputs.pluginUiProjection,
                         pluginBrowserProjection: resolvePluginBrowserProjectionState(
                             previous.pluginBrowserProjection,
                             projection,

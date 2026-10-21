@@ -18,8 +18,6 @@ import {
     EMPTY_PLUGIN_UI_PROJECTION,
     createPluginUiProjectedActionResolver,
     normalizePluginUiProjection,
-    readPluginUiProjectionSnapshot,
-    resolvePluginUiProjectionState,
 } from './projection';
 
 const PREVIEW_OCCURRENCE_ID = 'preview-runtime-occurrence-a';
@@ -662,11 +660,11 @@ describe('plugin UI projection normalization', () => {
             platforms: ['web'],
         });
 
-        const web = readPluginUiProjectionSnapshot(projection, 'web');
-        const ios = readPluginUiProjectionSnapshot(projection, 'ios');
-        const android = readPluginUiProjectionSnapshot(projection, 'android');
-        expect(readPluginUiProjectionSnapshot(projection, 'web')).toBe(web);
-        expect(readPluginUiProjectionSnapshot(projection, 'ios')).toBe(ios);
+        const web = normalizePluginUiProjection(projection, 'web');
+        const ios = normalizePluginUiProjection(projection, 'ios');
+        const android = normalizePluginUiProjection(projection, 'android');
+        expect(normalizePluginUiProjection(projection, 'web', web)).toBe(web);
+        expect(normalizePluginUiProjection(projection, 'ios', ios)).toBe(ios);
 
         // Web admits both web-capable rows and rejects the native-only one; a
         // publish-everything normalizer would keep all three on every platform.
@@ -768,16 +766,8 @@ describe('plugin UI projection normalization', () => {
             platforms: ['ios'],
         });
 
-        expect(Object.keys(resolvePluginUiProjectionState(
-            EMPTY_PLUGIN_UI_PROJECTION,
-            projection,
-            { platform: 'web' },
-        ).surfacePlacementsById)).not.toContain('surfacePlacement:acme.preview:native-only');
-        expect(Object.keys(resolvePluginUiProjectionState(
-            EMPTY_PLUGIN_UI_PROJECTION,
-            projection,
-            { platform: 'ios' },
-        ).surfacePlacementsById)).toContain('surfacePlacement:acme.preview:native-only');
+        expect(Object.keys(normalizePluginUiProjection(projection, 'web').surfacePlacementsById)).not.toContain('surfacePlacement:acme.preview:native-only');
+        expect(Object.keys(normalizePluginUiProjection(projection, 'ios').surfacePlacementsById)).toContain('surfacePlacement:acme.preview:native-only');
     });
 
     it('admits a daemon-projected openable-content viewer without reconstructing its declaration', () => {
@@ -1248,23 +1238,4 @@ describe('plugin UI projection normalization', () => {
             .toBeUndefined();
     });
 
-    it('keeps the previous model while a projection refresh is unresolved', () => {
-        const previous = normalizePluginUiProjection(createProjection());
-
-        expect(resolvePluginUiProjectionState(previous, null)).toBe(previous);
-    });
-
-    it('keeps the current model when the same authoritative generation is republished', () => {
-        const previous = normalizePluginUiProjection(createProjection());
-
-        expect(resolvePluginUiProjectionState(previous, createProjection(), {
-            reuseSameGeneration: true,
-        })).toBe(previous);
-    });
-
-    it('does not reuse an equal generation without current authority proof', () => {
-        const previous = normalizePluginUiProjection(createProjection());
-
-        expect(resolvePluginUiProjectionState(previous, createProjection())).not.toBe(previous);
-    });
 });

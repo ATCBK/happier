@@ -16,7 +16,6 @@ import {
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import {
     resolveAccountStoredContentCompatibilityHeaders,
-    withAccountStoredContentCompatibilityRequestDeclaration,
     type AccountStoredContentCompatibilityUnavailableReason,
 } from '@/sync/http/accountStoredContentCompatibility';
 import { captureServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
@@ -24,6 +23,7 @@ import {
     mergeLogicalRow,
     prepareCollectionOperation,
     requestCollectionOperation,
+    readPluginCollectionHttpResponse,
     type ActivePluginCollectionUnavailableReasonV1,
 } from './activePluginCollectionClient';
 import {
@@ -217,6 +217,7 @@ async function executePrivatePluginCollectionUiQuery(
         const response = await requestCollectionOperation({
             operation: prepared.operation,
             path: PLUGIN_COLLECTION_UI_QUERY_PATH_V1,
+            kind: 'read',
             body: request,
             options: { signal: cancellation.signal },
         });
@@ -326,24 +327,25 @@ async function executeCapturedActivePluginCollectionUiQuery(
         assertLifetimeCurrent(captured.lifetime);
         assertServerGenerationCurrent(captured.serverSnapshot);
 
-        const response = await authority.request(
-            PLUGIN_COLLECTION_UI_QUERY_PATH_V1,
-            withAccountStoredContentCompatibilityRequestDeclaration({
+        const response = await readPluginCollectionHttpResponse({
+            authority,
+            path: PLUGIN_COLLECTION_UI_QUERY_PATH_V1,
+            init: {
                 method: 'POST',
                 headers: compatibility.headers,
                 body: JSON.stringify(request),
                 signal: controller.signal,
-            }, PLUGIN_DATA_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION),
-        );
+            },
+        });
         assertLifetimeCurrent(captured.lifetime);
         assertServerGenerationCurrent(captured.serverSnapshot);
-        const body = await response.json();
+        const body = response.body;
         assertLifetimeCurrent(captured.lifetime);
         assertServerGenerationCurrent(captured.serverSnapshot);
         if (!response.ok) {
             const error = PluginCollectionUiQueryErrorV1Schema.safeParse(body);
             if (error.success) return error.data;
-            throw new Error(`Plugin collection UI query request failed with status ${response.status}.`);
+            throw new Error(`Plugin collection UI query request failed with status ${response.httpStatus}.`);
         }
 
         const result = PluginCollectionUiQueryResultV1Schema.parse(body);

@@ -52,6 +52,40 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine inventory lifecycle boundary', () => {
+    it('uses acquired Connected Account descriptors without reparsing the raw machine family', async () => {
+        const { publishDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
+        const { useMachineAgentAuthentication } = await import('./useMachineAgentAuthentication');
+        const server = await network.addHome('https://descriptor-proof.example.test', 'descriptor-proof');
+        const scope = { serverId: server.id, accountId: 'descriptor-proof' };
+        const service = { pluginId: 'happier.agent.codex', localId: 'account' };
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection,
+            familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: { 'happier.agent.codex/account': {
+                id: 'account', serviceId: 'account', pluginId: service.pluginId, title: 'Acquired account', provenance: 'external', sourceKind: 'installed',
+                authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'providerCheck' }] },
+                capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+            } } } },
+            agentsById: { codex: { id: 'codex', title: 'Codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+                connectedAccounts: [{ purpose: 'primary', service, credentialKinds: ['oauth'] }],
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } } },
+        });
+        const acquired = publishDaemonMergedProjectionInputs({ projection });
+        let reads = 0;
+        const inputs = { ...acquired, pluginProjectionV2: new Proxy(projection, { get(target, key, receiver) {
+            if (key === 'familiesById') reads++;
+            return Reflect.get(target, key, receiver);
+        } }) };
+        storage.setState({ profileScope: scope });
+        const lifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const hook = await renderHook(() => useMachineAgentAuthentication({ lifetime, serverId: server.id, enabled: false }));
+        const read = () => hook.getCurrent()({ phase: 'ready', inputs });
+        expect(read().connectedServicesByAgentId?.codex?.[0]?.title).toBe('Acquired account');
+        expect(reads).toBe(0);
+        expect(read().connectedServicesByAgentId?.codex?.[0]?.title).toBe('Acquired account');
+        expect(reads).toBe(0);
+        const withdrawn = publishDaemonMergedProjectionInputs({ projection: { ...projection, familiesById: {} } });
+        expect(hook.getCurrent()({ phase: 'ready', inputs: withdrawn }).connectedServicesByAgentId?.codex?.[0]?.title)
+            .toBe('happier.agent.codex/account');
+    });
     it('moves a fresh composer default to the Agent authenticated by its exact Account purpose, preserving a subsequent picker choice', async () => {
         const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
         await loadSyncSingletonForTests();

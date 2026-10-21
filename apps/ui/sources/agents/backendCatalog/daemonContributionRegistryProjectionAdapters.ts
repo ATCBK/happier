@@ -10,8 +10,15 @@ import type {
     PluginProjectionInstalledPackageV2,
     PluginContributionIdentityV1,
     PluginDiagnosticDataV1,
+    DaemonContributionRegistryProjectionAutomationEligibleEventsV1,
+    DaemonPluginUiComposerSurfaceCatalogEntryV1,
 } from '@happier-dev/protocol';
 import { AGENT_IDS, type AgentId } from '@happier-dev/agents';
+import { normalizePluginUiProjection, resolvePluginUiProjectionPlatform, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import { preparePluginUiProjectionOrigins } from '@/sync/domains/plugins/ui/projectionOrigins';
+import { readConnectedAccountDescriptorProjection, type ConnectedAccountDescriptorMachineProjection } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
+import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { PluginUiPlatformV1 } from '@happier-dev/protocol/plugins/ui';
 
 import { resolveAgentMarkAgentId } from './resolveAgentMarkAgentId';
 
@@ -33,6 +40,99 @@ export type PluginProjectionDiagnostic = Readonly<{
     details?: PluginDiagnosticDataV1['details'];
     contribution?: PluginContributionIdentityV1;
 }>;
+
+export type DaemonMergedProjectionInputs = Readonly<{
+    mergedProviderProjectionById: Readonly<Record<string, MergedProviderProjectionEntry>>;
+    mergedBackendProjectionById: Readonly<Record<string, MergedBackendProjectionEntry>>;
+    discoveredBackendIds: readonly string[];
+    pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
+    pluginProjectionV2: PluginProjectionV2 | null;
+    /** Prepared by acquisition; rendering and sibling readers never normalize raw V2. */
+    pluginUiProjection: PluginUiProjectionModel;
+    pluginUiProjectionPlatform: PluginUiPlatformV1;
+    connectedAccountProjection: ConnectedAccountDescriptorMachineProjection | null;
+    composerSurfaceCatalog?: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
+    automationEligibleEvents?: DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
+    registryDiagnostics: readonly PluginProjectionDiagnostic[];
+}>;
+
+const ownedProjectionInput = Symbol('daemonMergedProjectionInput');
+type OwnedProjectionInput = Readonly<{
+    owner: DaemonMergedProjectionInputs;
+    projection: PluginProjectionV2;
+    composerSurfaceCatalog: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[] | undefined;
+    automationEligibleEvents: DaemonContributionRegistryProjectionAutomationEligibleEventsV1 | undefined;
+}>;
+
+function publishPluginProjectionEntries(
+    entries: Readonly<Record<string, PluginProjectionEntry>>,
+    previous?: Readonly<Record<string, PluginProjectionEntry>>,
+): Readonly<Record<string, PluginProjectionEntry>> {
+    const published: Readonly<Record<string, PluginProjectionEntry>> = Object.fromEntries(Object.entries(entries).map(([id, row]) => {
+        const prior = previous?.[id];
+        if (prior && sameStrictJsonValue(prior, row)) return [id, prior];
+        const shared = prior ? {
+            ...row,
+            installedPackage: sameStrictJsonValue(prior.installedPackage, row.installedPackage) ? prior.installedPackage : row.installedPackage,
+            provenance: sameStrictJsonValue(prior.provenance, row.provenance) ? prior.provenance : row.provenance,
+            diagnostics: sameStrictJsonValue(prior.diagnostics, row.diagnostics) ? prior.diagnostics : row.diagnostics,
+            actions: sameStrictJsonValue(prior.actions, row.actions) ? prior.actions : row.actions,
+            resources: sameStrictJsonValue(prior.resources, row.resources) ? prior.resources : row.resources,
+            editableSettingsGroups: sameStrictJsonValue(prior.editableSettingsGroups, row.editableSettingsGroups) ? prior.editableSettingsGroups : row.editableSettingsGroups,
+            contributionKinds: sameStrictJsonValue(prior.contributionKinds, row.contributionKinds) ? prior.contributionKinds : row.contributionKinds,
+        } : row;
+        // The typed adapter owns this native JSON shape. Its optional members
+        // use the canonical transport omission rule; every nested value is copied
+        // and frozen by Protocol, never by shallow caller-freeze inference.
+        return [id, projectNativeJsonValueForTransport(shared) as PluginProjectionEntry];
+    }));
+    if (previous && Object.keys(previous).length === Object.keys(published).length
+        && Object.entries(published).every(([id, row]) => previous[id] === row)) return previous;
+    return projectNativeJsonValueForTransport(published) as Readonly<Record<string, PluginProjectionEntry>>;
+}
+
+/** One response-local adapter, shared by full publication and explicitly fresh Action reads.
+ * It never writes the full Machine cache, so a selected reply cannot replace a full snapshot. */
+export function publishDaemonMergedProjectionInputs(params: Readonly<{
+    projection: PluginProjectionV2;
+    composerSurfaceCatalog?: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
+    automationEligibleEvents?: DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
+}>, previous?: DaemonMergedProjectionInputs): DaemonMergedProjectionInputs {
+    const platform = resolvePluginUiProjectionPlatform();
+    const candidate = previous ? Object.getOwnPropertyDescriptor(previous, ownedProjectionInput)?.value as OwnedProjectionInput | undefined : undefined;
+    const prior = candidate?.owner === previous ? candidate : undefined;
+    const ownedPrevious = prior ? previous : undefined;
+    if (ownedPrevious?.pluginUiProjectionPlatform === platform
+        && sameStrictJsonValue(prior?.projection, params.projection)
+        && sameStrictJsonValue(prior?.composerSurfaceCatalog, params.composerSurfaceCatalog)
+        && sameStrictJsonValue(prior?.automationEligibleEvents, params.automationEligibleEvents)) return ownedPrevious;
+    // The describe/selected-read transport already used the strict V2 schema.
+    // Keep its public raw identity, but never use its mutable graph as our prior
+    // comparison authority or lend its aliases to ready descriptive slices.
+    const projection = projectNativeJsonValueForTransport(params.projection) as PluginProjectionV2;
+    const composerSurfaceCatalog = params.composerSurfaceCatalog === undefined ? undefined
+        : projectNativeJsonValueForTransport(params.composerSurfaceCatalog) as readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
+    const automationEligibleEvents = params.automationEligibleEvents === undefined ? undefined
+        : projectNativeJsonValueForTransport(params.automationEligibleEvents) as DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
+    const rawAdapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
+    const adapted = projectNativeJsonValueForTransport({
+        ...rawAdapted,
+        pluginProjectionById: publishPluginProjectionEntries(rawAdapted.pluginProjectionById, ownedPrevious?.pluginProjectionById),
+    }) as ReturnType<typeof adaptDaemonContributionRegistryProjectionToMergedProjectionInputs>;
+    const published: DaemonMergedProjectionInputs = {
+        ...adapted,
+        discoveredBackendIds: Object.freeze(Object.keys(adapted.mergedBackendProjectionById)),
+        pluginProjectionV2: params.projection,
+        pluginUiProjectionPlatform: platform,
+        pluginUiProjection: preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform,
+            ownedPrevious?.pluginUiProjectionPlatform === platform ? ownedPrevious.pluginUiProjection : undefined)),
+        connectedAccountProjection: readConnectedAccountDescriptorProjection(projection),
+        ...(composerSurfaceCatalog === undefined ? {} : { composerSurfaceCatalog }),
+        ...(automationEligibleEvents === undefined ? {} : { automationEligibleEvents }),
+    };
+    Object.defineProperty(published, ownedProjectionInput, { value: Object.freeze({ owner: published, projection, composerSurfaceCatalog, automationEligibleEvents }) });
+    return Object.freeze(published);
+}
 
 export type PluginProjectionEditableSettingControl =
     | 'auto'

@@ -279,9 +279,9 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
         if (!requested) {
             throw dataError(COLLECTION_UNDECLARED_CODE, 'The requested Account Collection is not declared');
         }
-        // Bulk relation reads share only overlapping acquisition for this exact
-        // facade and cancellation lifetime. Later operations re-read the server;
-        // the direct client still admits Account currentness for each operation.
+        // Read-only facade operations share overlapping contract acquisition for
+        // this exact facade and cancellation lifetime. Mutations resolve their
+        // own writer admission; every direct operation still admits currentness.
         const pending = new Map<AbortSignal | undefined, Promise<ResolvedCollection<PluginAccountCollectionValue<TDefinition>>>>();
         return Object.freeze<PluginAccountCollectionForDefinition<TDefinition>>({
             watch(request, listener) {
@@ -368,7 +368,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 throw unavailableError(outcome.reason);
             },
             async put(value, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal);
                 const outcome = await active.client.mutate([{
                     kind: 'put',
                     value,
@@ -396,7 +396,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 });
             },
             async delete(rowId, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal);
                 const outcome = await active.client.mutate([{
                     kind: 'delete',
                     rowId,
@@ -423,7 +423,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 });
             },
             async forget(rowId, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options.signal);
                 const outcome = await active.client.forget(rowId, options.expectedRevision, options);
                 if (outcome.status === 'forgotten') return Object.freeze({ rowId, forgotten: true as const });
                 if (outcome.status === 'conflict') {
@@ -460,7 +460,7 @@ function createPluginUiDataBindings(input: PluginUiDataBindingInput) {
                 throw unavailableError(outcome.reason);
             },
             async batch(operations, options) {
-                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal, pending);
+                const active = await resolve<PluginAccountCollectionValue<TDefinition>>(requested, options?.signal);
                 const outcome = await active.client.mutate(operations, options);
                 if (outcome.status === 'updated' || outcome.status === 'conflict') return outcome;
                 if (outcome.status === 'rejected') {

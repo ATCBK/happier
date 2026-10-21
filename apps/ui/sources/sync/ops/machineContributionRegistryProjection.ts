@@ -14,6 +14,7 @@ import {
 } from '@happier-dev/protocol/rpc';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
 import {
     isRpcMethodNotAvailableError,
     isRpcMethodNotFoundError,
@@ -259,21 +260,8 @@ function pluginRpcOperationOptions(opts: Readonly<{ timeoutMs?: number | null; s
  * a timeout, a caller epoch — enters it, so every reader of the same question
  * shares one request.
  */
-type SharedProjectionRead<T> = {
-    request: Promise<T>;
-    controller: AbortController;
-    readers: number;
-    pending: boolean;
-    abandon(): void;
-};
-const projectionReadInflightByKey = new Map<string, SharedProjectionRead<unknown>>();
-
-function createSharedProjectionRead<T>(read: (signal: AbortSignal) => Promise<T>, abandon: () => void): SharedProjectionRead<T> {
-    const controller = new AbortController();
-    const entry = { request: read(controller.signal), controller, readers: 0, pending: true, abandon };
-    void entry.request.then(() => { entry.pending = false; }, () => { entry.pending = false; });
-    return entry;
-}
+type SharedProjectionRead<T> = Readonly<{ wait(signal?: AbortSignal): Promise<T> }>;
+const projectionReads = createScopedResolutionSingleFlight<unknown>();
 
 /**
  * The Account a read is for. Every handle of one Account shares its reads; a
@@ -294,15 +282,7 @@ function shareProjectionRead<T>(
         account ? serverAccountScopeKeySuffix(account.scope) : null,
         payload,
     ]);
-    const incumbent = projectionReadInflightByKey.get(key) as SharedProjectionRead<T> | undefined;
-    if (incumbent) return incumbent;
-    const forget = () => {
-        if (projectionReadInflightByKey.get(key) === request) projectionReadInflightByKey.delete(key);
-    };
-    const request = createSharedProjectionRead(read, forget);
-    projectionReadInflightByKey.set(key, request);
-    void request.request.then(forget, forget);
-    return request;
+    return { wait: async signal => await projectionReads.run(key, read, { signal }) as T };
 }
 
 /** The last departing reader retires the shared transport and allows a fresh attempt. */
@@ -311,28 +291,11 @@ async function waitForSharedRead<T>(
     signal: AbortSignal | undefined,
     aborted: () => T,
 ): Promise<T> {
-    entry.readers++;
-    let onAbort: (() => void) | undefined;
-    let released = false;
-    const release = () => {
-        if (released) return;
-        released = true;
-        if (--entry.readers === 0 && entry.pending) {
-            entry.abandon();
-            entry.controller.abort();
-        }
-    };
     try {
-        if (!signal) return await entry.request;
-        if (signal.aborted) return aborted();
-        return await new Promise<T>((resolve, reject) => {
-            onAbort = () => { release(); resolve(aborted()); };
-            signal.addEventListener('abort', onAbort, { once: true });
-            void entry.request.then(resolve, reject);
-        });
-    } finally {
-        if (onAbort) signal?.removeEventListener('abort', onAbort);
-        release();
+        return await entry.wait(signal);
+    } catch (error) {
+        if (signal?.aborted) return aborted();
+        throw error;
     }
 }
 
@@ -942,14 +905,16 @@ export async function machinePluginActionFormConnectedAccountOptionsResolve(
  * and concurrent readers share one request. A reloaded plugin has a new
  * occurrence id, which replaces the entry and re-reads. Failures are not kept.
  */
-const actionSchemaReadsByKey = new Map<string, Readonly<{
+type ActionSchemaRead = {
     occurrenceId: string;
     request: SharedProjectionRead<MachinePluginActionSchemasReadResult>;
-}>>();
+    result?: MachinePluginActionSchemasReadResult;
+};
+const actionSchemaReadsByKey = new Map<string, ActionSchemaRead>();
 
 /** Forgets every shared in-flight projection read and memoised Action schema. */
 export function resetMachineProjectionReadsForTests(): void {
-    projectionReadInflightByKey.clear();
+    projectionReads.reset();
     actionSchemaReadsByKey.clear();
 }
 
@@ -978,7 +943,7 @@ export async function machinePluginActionSchemasRead(
     const incumbent = actionSchemaReadsByKey.get(key);
     let request = incumbent?.occurrenceId === payload.expectedOccurrenceId ? incumbent.request : null;
     if (!request) {
-        const issued = createSharedProjectionRead(async (signal): Promise<MachinePluginActionSchemasReadResult> => {
+        const read = async (signal: AbortSignal): Promise<MachinePluginActionSchemasReadResult> => {
             try {
                 const response = await machineRpcWithServerScope<unknown, typeof payload>({
                     machineId,
@@ -996,17 +961,32 @@ export async function machinePluginActionSchemasRead(
             } catch (error) {
                 return { supported: false, reason: classifyMachinePluginTransportError(error) };
             }
-        }, () => {
+        };
+        const forget = () => {
             if (actionSchemaReadsByKey.get(key) === entry) actionSchemaReadsByKey.delete(key);
-        });
-        const entry = Object.freeze({ occurrenceId: payload.expectedOccurrenceId, request: issued });
+        };
+        const issued: SharedProjectionRead<MachinePluginActionSchemasReadResult> = {
+            async wait(signal) {
+                if (entry.result) return entry.result;
+                return await projectionReads.run(key, async sharedSignal => {
+                    // The pending owner aborts only after the final borrower leaves.
+                    // Retire this occurrence's abandoned entry synchronously so a new
+                    // reader cannot inherit an abandoned physical continuation.
+                    sharedSignal.addEventListener('abort', forget, { once: true });
+                    try {
+                        const result = await read(sharedSignal);
+                        if (sharedSignal.aborted || !result.supported || !result.result.ok) forget();
+                        else if (actionSchemaReadsByKey.get(key) === entry) entry.result = result;
+                        return result;
+                    } finally {
+                        sharedSignal.removeEventListener('abort', forget);
+                    }
+                }, { signal, scope: entry }) as MachinePluginActionSchemasReadResult;
+            },
+        };
+        const entry: ActionSchemaRead = { occurrenceId: payload.expectedOccurrenceId, request: issued };
         actionSchemaReadsByKey.set(key, entry);
-        void issued.request.then((result) => {
-            if ((!result.supported || !result.result.ok) && actionSchemaReadsByKey.get(key) === entry) {
-                actionSchemaReadsByKey.delete(key);
-            }
-        });
-        request = issued;
+        request = entry.request;
     }
     return await waitForSharedRead(request, opts.signal, () => ({ supported: false, reason: 'aborted' }));
 }

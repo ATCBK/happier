@@ -53,12 +53,11 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     await mutateConnectedAccountPurposeDefaultsInContext(account, mutate, signal);
                 },
                 admitPurposeTarget: async input => {
-                    const [{ loadDaemonMergedProjectionCacheEntry }, { normalizePluginUiProjection, resolvePluginUiProjectionPlatform },
-                        { readConnectedAccountDescriptorProjection }, { getMachineContributionRegistryProjectionRevision },
+                    const [{ loadDaemonMergedProjectionCacheEntry }, { resolvePluginUiProjectionPlatform },
+                        { getMachineContributionRegistryProjectionRevision },
                         { isConnectedAccountPurposeSetupTargetCurrent }, { getActiveServerAccountScope }, { storage }] = await Promise.all([
                         import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs'),
                         import('@/sync/domains/plugins/ui/projection'),
-                        import('@/sync/domains/connectedServices/connectedAccountDescriptorProjection'),
                         import('@/sync/ops/machineContributionRegistryProjectionRevision'),
                         import('@/sync/domains/connectedServices/connectedAccountPurposeSetup'),
                         import('@/sync/domains/scope/activeServerAccountScope'),
@@ -71,11 +70,10 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                         accountLifetime: account.accountLifetime, reuseFreshReady: false, signal });
                     assertCurrent();
                     if (entry?.kind !== 'ready' || !entry.inputs.pluginProjectionV2) return null;
-                    const projection = entry.inputs.pluginProjectionV2;
                     const request = { scope: account.accountLifetime.scope, machineId: input.machineId, purpose: input.purpose };
-                    const runtime = { ...target, pluginUiProjection: normalizePluginUiProjection(projection), pluginBrowserProjection: null,
+                    const runtime = { ...target, pluginUiProjection: entry.inputs.pluginUiProjection, pluginBrowserProjection: null,
                         phase: 'current' as const, interactionEnabled: true, platform: resolvePluginUiProjectionPlatform(),
-                        accountLifetime: account.accountLifetime, connectedAccountProjection: readConnectedAccountDescriptorProjection(projection) };
+                        accountLifetime: account.accountLifetime, connectedAccountProjection: entry.inputs.connectedAccountProjection };
                     const isCurrent = () => getMachineContributionRegistryProjectionRevision(target) === revision
                         && isConnectedAccountPurposeSetupTargetCurrent({ request, viewer: getActiveServerAccountScope(), runtime,
                             profile: storage.getState().profile, target: input.target });
@@ -131,7 +129,7 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     assertCurrent();
                     return await getProviderAccountUsageQuota(account.credentials, input, {
                         ...quotaReadOptions,
-                        accountMode: account.resolveAccountMode(), request: account.request, assertCurrent,
+                        accountMode: account.resolveAccountMode(), request: account.request, readTransport: account.readTransport, assertCurrent,
                         readPacingTargets: async () => {
                             const settings = await account.readSettings();
                             assertCurrent();

@@ -1,111 +1,141 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { storage } from '@/sync/domains/state/storageStore';
+import { subscribeRegisteredStorageMachineUpdates } from '@/sync/domains/state/storageStateReaderBridge';
+import { createSessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 import { readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
 import * as inventory from '@/sync/domains/machines/machineInventorySnapshots';
 import * as origins from './pluginExecutionOrigin';
-import { readExecutionOriginMachineSnapshots } from './pluginExecutionOriginMachineSnapshots';
+import { createExecutionOriginMachineSnapshotPublication, type ExecutionOriginMachineSnapshotInputs } from './pluginExecutionOriginMachineSnapshots';
 
-afterEach(() => vi.restoreAllMocks());
+const originalState = storage.getState();
+const connections: Array<{ dispose(): void }> = [];
+afterEach(() => {
+    for (const connection of connections.splice(0)) connection.dispose();
+    storage.setState(originalState, true);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+});
 
-describe('execution-origin Machine snapshot producer', () => {
-    it('shares unchanged Machine facts across independent consumers, publications and declaration refreshes', () => {
-        const now = Date.now();
-        vi.spyOn(Date, 'now').mockReturnValue(now);
-        // Spies forward the real inventory/Fleet/serialization path, never mock it.
-        const serialize = vi.spyOn(origins, 'serializePluginMachineExecutionOriginMachineFacts');
-        const project = vi.spyOn(inventory, 'resolveAllProfileMachineInventorySnapshots');
-        const stringify = vi.spyOn(JSON, 'stringify');
-        const machine = createMachineFixture({ id: 'origin-count-machine', activeAt: now });
-        const home = { id: 'origin-count-home', serverIdentityId: 'srv_origin_count', name: 'Home',
-            serverUrl: 'https://origin-count.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 };
-        const source = { source: { origin: { serverIdentityId: home.serverIdentityId,
-            sourceRef: { machineId: machine.id, pluginId: 'acme.count',
-                sourceCustody: { kind: 'development' as const, registeredRootId: 'root' } } },
-            version: '1.0.0', occurrenceId: 'occurrence', serverId: home.id, generation: 1 },
-            releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } };
-        const base = { pluginId: 'acme.count', profiles: [home], activeServerId: home.id,
-            reachabilityRevision: 0, readinessServerIdentityId: home.serverIdentityId,
-            accountScopesByServerId: new Map([[home.serverIdentityId, { serverId: home.serverIdentityId, accountId: 'account-count' }]]),
-            materializations: [], sources: [source],
-            state: { machines: {}, machineListByServerId: { [home.id]: [machine] },
-                machineListStatusByServerId: { [home.id]: 'idle' as const }, settings: { machineAdministrationTargetsLocalV1: {} } } };
-        // Pass only the inventory fields the production reader consumes.
-        const read = (input: typeof base) => readExecutionOriginMachineSnapshots(input);
-        const first = read(base);
-        expect(first.readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }))
-            .toMatchObject({ rejection: null, eligible: true });
-        const independent = { ...base, sources: [{ ...source, source: { ...source.source } }] };
-        const before = serialize.mock.calls.length;
-        const beforeJson = stringify.mock.calls.length;
-        const beforeSnapshots = project.mock.calls.length;
+function fixture() {
+    const now = Date.now();
+    const machine = createMachineFixture({ id: 'origin-count-machine', activeAt: now });
+    const home = { id: 'origin-count-home', serverIdentityId: 'srv_origin_count', name: 'Home',
+        serverUrl: 'https://origin-count.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 };
+    const source = { source: { origin: { serverIdentityId: home.serverIdentityId,
+        sourceRef: { machineId: machine.id, pluginId: 'acme.count',
+            sourceCustody: { kind: 'development' as const, registeredRootId: 'root' } } },
+        version: '1.0.0', occurrenceId: 'occurrence', serverId: home.id, generation: 1 },
+        releaseContent: 'matched' as const, validation: { kind: 'admitted' as const } };
+    storage.setState({ machines: {}, machineListByServerId: { [home.id]: [machine] },
+        machineListStatusByServerId: { [home.id]: 'idle' } });
+    const inputs: ExecutionOriginMachineSnapshotInputs = { pluginId: 'acme.count', profiles: [home], activeServerId: home.id,
+        readinessServerIdentityId: home.serverIdentityId,
+        accountScopesByServerId: new Map([[home.serverIdentityId, { serverId: home.serverIdentityId, accountId: 'account-count' }]]),
+        materializations: [], sources: [source] };
+    const publication = createExecutionOriginMachineSnapshotPublication({ readState: storage.getState,
+        subscribeState: listener => storage.subscribe(listener), subscribeMachineUpdates: subscribeRegisteredStorageMachineUpdates,
+        clock: createSessionListRuntimeClock() });
+    const connect = (next = inputs) => {
+        const connection = publication.connect(next, () => {});
+        connections.push(connection);
+        return connection;
+    };
+    return { now, machine, home, source, inputs, connect };
+}
+
+describe('execution-origin Machine publication', () => {
+    it('publishes shared descriptive candidates and election once, outside snapshot reads', () => {
+        const { inputs, connect, source, home, machine } = fixture();
+        const build = vi.spyOn(origins, 'buildPluginMachineExecutionOriginCandidates');
+        const elect = vi.spyOn(origins, 'resolvePluginMachineExecutionOriginState');
+        const selection = { availabilityRevision: {}, classifyRelease: () => ({ releaseContent: 'matched' as const,
+            validation: { kind: 'admitted' as const } }), homeServerIdentityId: source.source.origin.serverIdentityId,
+            storedOrigin: null, contextualTarget: undefined };
+        const first = connect({ ...inputs, selection });
+        const second = connect({ ...inputs, selection });
+        expect(first.getSnapshot()).toMatchObject({ selection: { state: { kind: 'selected', origin: source.source.origin } } });
+        expect(second.getSnapshot()).toBe(first.getSnapshot());
+        expect(build).toHaveBeenCalledTimes(1);
+        expect(elect).toHaveBeenCalledTimes(1);
+        const before = [build.mock.calls.length, elect.mock.calls.length];
         for (let index = 0; index < 100; index += 1) {
-            expect(read({ ...base, state: { ...base.state } })).toBe(first);
-            expect(read(independent)).toBe(first);
+            first.getSnapshot(); second.getSnapshot();
+            storage.setState({ settingsVersion: index });
         }
-        console.info('R-C equal-input producer counts', { publications: 100, consumers: 2,
-            factCalls: serialize.mock.calls.length - before, jsonCalls: stringify.mock.calls.length - beforeJson });
-        expect(serialize.mock.calls.length - before).toBe(0);
-        expect(project.mock.calls.length - beforeSnapshots).toBe(0);
+        expect([build.mock.calls.length, elect.mock.calls.length]).toEqual(before);
+        storage.setState({ machineListByServerId: { [home.id]: [{ ...machine, revokedAt: Date.now() }] } });
+        expect(first.getSnapshot()).toMatchObject({ selection: { state: { kind: 'unavailable', reasons: ['revoked'] } } });
+        expect(second.getSnapshot()).toBe(first.getSnapshot());
+        expect([build.mock.calls.length, elect.mock.calls.length]).toEqual(before.map(count => count + 1));
+    });
 
-        // Release/custody changes are still handled by candidate admission; they
-        // do not change which Home/Machine inventory facts these readers need.
-        const refreshedDeclaration = { ...base, sources: [{ ...source, source: { ...source.source, generation: 2 } }] };
-        expect(read(refreshedDeclaration)).toBe(first);
-        expect(serialize.mock.calls.length - before).toBe(0);
-
-        const otherTarget = { ...base, sources: [{ ...source, source: { ...source.source,
+    it('does no derivation on unchanged reads or unrelated publications across independent consumers', () => {
+        const serialize = vi.spyOn(origins, 'serializePluginMachineExecutionOriginMachineFacts');
+        const targets = vi.spyOn(origins, 'readPluginExecutionOriginMachineTargets');
+        const project = vi.spyOn(inventory, 'resolveAllProfileMachineInventorySnapshots');
+        const { inputs, source, home, machine, connect } = fixture();
+        const shell = connect();
+        const page = connect({ ...inputs, sources: [{ ...source, source: { ...source.source } }] });
+        const first = shell.getSnapshot();
+        const before = [serialize.mock.calls.length, targets.mock.calls.length, project.mock.calls.length];
+        for (let index = 0; index < 100; index += 1) {
+            expect(shell.getSnapshot()).toBe(first);
+            expect(page.getSnapshot()).toBe(first);
+            expect(shell.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }))
+                .toMatchObject({ rejection: null, eligible: true });
+            storage.setState({ settingsVersion: index });
+        }
+        expect([serialize.mock.calls.length, targets.mock.calls.length, project.mock.calls.length]).toEqual(before);
+        shell.updateInputs({ ...inputs, sources: [{ ...source, source: { ...source.source, generation: 2 } }] });
+        expect(shell.getSnapshot()).toBe(first);
+        expect(serialize.mock.calls.length).toBe(before[0]);
+        const changed = { ...inputs, sources: [{ ...source, source: { ...source.source,
             origin: { ...source.source.origin, sourceRef: { ...source.source.origin.sourceRef, machineId: 'missing-machine' } } } }] };
-        const changedTarget = read(otherTarget);
-        expect(changedTarget.key).not.toBe(first.key);
-        expect(serialize.mock.calls.length - before).toBe(1);
-        expect(changedTarget.readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: 'missing-machine' }).rejection).not.toBeNull();
-        read(base);
-        const beforeFactsChanged = serialize.mock.calls.length;
+        shell.updateInputs(changed);
+        expect(shell.getSnapshot().key).not.toBe(first.key);
+        expect(shell.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: 'missing-machine' }).rejection).toBe('missing');
+    });
 
-        // New raw presentation rows must be read, but same eligibility/order
-        // does not require another plugin fact serialization.
-        const heartbeat = read({ ...base, state: { ...base.state,
-            machineListByServerId: { [home.id]: [{ ...machine, activeAt: now + 100 }] } } });
-        expect(heartbeat.key).toBe(first.key);
-        expect(heartbeat.readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).activeAt).toBe(now + 100);
-        expect(project.mock.calls.length - beforeSnapshots).toBe(1);
-        expect(serialize.mock.calls.length).toBe(beforeFactsChanged);
+    it('keeps alternating Home-scope publications alive without evicting or rebuilding one another', () => {
+        const { inputs, connect } = fixture();
+        const project = vi.spyOn(inventory, 'resolveAllProfileMachineInventorySnapshots');
+        const targets = vi.spyOn(origins, 'readPluginExecutionOriginMachineTargets');
+        const a = connect();
+        const b = connect({ ...inputs, accountScopesByServerId: new Map(), pluginId: 'other.plugin' });
+        const aSnapshot = a.getSnapshot();
+        const bSnapshot = b.getSnapshot();
+        expect(aSnapshot.key).not.toBe(bSnapshot.key);
+        const before = [project.mock.calls.length, targets.mock.calls.length];
+        for (let index = 0; index < 100; index += 1) {
+            storage.setState({ settingsVersion: index });
+            expect(a.getSnapshot()).toBe(aSnapshot);
+            expect(b.getSnapshot()).toBe(bSnapshot);
+        }
+        expect([project.mock.calls.length, targets.mock.calls.length]).toEqual(before);
+    });
 
-        const revoked = read({ ...base, state: { ...base.state,
-            machineListByServerId: { [home.id]: [{ ...machine, revokedAt: now }] } } });
-        expect(revoked).not.toBe(first);
-        expect(revoked.readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).rejection).toBe('revoked');
-        expect(serialize.mock.calls.length - beforeFactsChanged).toBe(1);
-
+    it('publishes suppressed heartbeat ordering, expiry and refusal while retaining unchanged eligibility', () => {
+        vi.useFakeTimers();
+        const { now, machine, home, source, inputs, connect } = fixture();
         const second = createMachineFixture({ id: 'second-origin-machine', activeAt: now + 1 });
-        const pair = { ...base, sources: [source, { ...source, source: { ...source.source,
+        storage.setState({ machineListByServerId: { [home.id]: [machine, second] } });
+        storage.getState().applyMachines([machine, second], false, { sourceServerId: home.id });
+        const pair = { ...inputs, sources: [source, { ...source, source: { ...source.source,
             origin: { ...source.source.origin, sourceRef: { ...source.source.origin.sourceRef, machineId: second.id } } } }] };
-        const refusedPair = { ...pair, state: { ...base.state, machineListByServerId: { [home.id]: [
-            { ...machine, revokedAt: now }, { ...second, revokedAt: now },
-        ] } } };
-        const refused = read(refusedPair);
-        const refusedCalls = serialize.mock.calls.length;
-        const refusedHeartbeat = read({ ...refusedPair, state: { ...refusedPair.state, machineListByServerId: { [home.id]: [
-            { ...machine, revokedAt: now, activeAt: now + 2 }, { ...second, revokedAt: now },
-        ] } } });
-        expect(refusedHeartbeat.key).toBe(refused.key);
-        expect(serialize.mock.calls.length - refusedCalls).toBe(0);
-        // Activity ordering among executable targets is a real selection input.
-        const admittedPair = { ...pair, state: { ...base.state, machineListByServerId: { [home.id]: [machine, second] } } };
-        const admitted = read(admittedPair);
-        const ordered = read({ ...admittedPair, state: { ...admittedPair.state, machineListByServerId: { [home.id]: [
-            { ...machine, activeAt: now + 2 }, second,
-        ] } } });
-        expect(ordered.key).not.toBe(admitted.key);
-        expect(ordered.eligibilityKey).toBe(admitted.eligibilityKey);
-
-        // The existing presence deadline is authoritative, even with the same raw rows.
-        read(base);
-        const expires = readMachineStatusNextRefreshAtMs(machine, now)!;
-        expect(expires).not.toBeNull();
-        vi.mocked(Date.now).mockReturnValue(expires);
-        const expired = read(base);
-        expect(expired.readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).rejection).toBe('offline');
+        const connection = connect(pair);
+        const first = connection.getSnapshot();
+        const state = storage.getState();
+        storage.getState().applyMachines([{ ...machine, activeAt: now + 2 }], false, { sourceServerId: home.id });
+        expect(storage.getState()).toBe(state);
+        expect(connection.getSnapshot().key).not.toBe(first.key);
+        expect(connection.getSnapshot().eligibilityKey).toBe(first.eligibilityKey);
+        expect(connection.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).activeAt).toBe(now + 2);
+        const deadline = readMachineStatusNextRefreshAtMs({ ...machine, activeAt: now + 2 }, now)!;
+        vi.advanceTimersByTime(deadline - Date.now());
+        expect(connection.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).rejection).toBe('offline');
+        storage.setState({ machineListByServerId: { [home.id]: [{ ...machine, activeAt: Date.now(), revokedAt: Date.now() }] } });
+        expect(connection.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).rejection).toBe('revoked');
     });
 });

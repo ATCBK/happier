@@ -17,6 +17,7 @@ import { VoiceProviderContributionSchema, type VoiceProviderContribution } from 
 import { PluginProjectedDragSourceEntryV1Schema, PluginProjectedDropTargetEntryV1Schema, type PluginProjectedDragSourceEntryV1, type PluginProjectedDropTargetEntryV1, type PluginProjectionInstalledPackageV2, type PluginProjectedActionV2, type PluginProjectedResourceV2, type PluginProjectedComposerAttachmentEntryV1, type PluginProjectedComposerControlEntryV1, type PluginProjectedComposerRegionEntryV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { compilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import type { PluginJsonSchemaValidator } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
     createPluginSessionInfoSectionRendererIdV1,
     isPluginUiSurfaceBindingPotentiallySupportedOnPlatformV1,
@@ -811,9 +812,18 @@ function isSessionInfoSection(entry: UnknownRecord): entry is PluginUiSessionInf
 
 function normalizeComposerAttachmentEntriesById(
     entriesById: Readonly<Record<string, PluginProjectedComposerAttachmentEntryV1>> | undefined,
+    previous?: PluginUiProjectionModel['composerAttachmentsById'],
 ): Readonly<Record<string, PluginUiComposerAttachmentProjection>> {
     const normalized: Record<string, PluginUiComposerAttachmentProjection> = {};
     for (const [entryId, entry] of Object.entries(entriesById ?? {})) {
+        const previousEntry = previous?.[entryId];
+        if (previousEntry) {
+            const { valueValidator: _validator, ...declaration } = previousEntry;
+            if (sameStrictJsonValue(declaration, entry)) {
+                normalized[entryId] = previousEntry;
+                continue;
+            }
+        }
         let valueValidator: PluginJsonSchemaValidator | null = null;
         try {
             valueValidator = compilePluginJsonSchema(entry.definition.valueSchema);
@@ -862,35 +872,29 @@ export function normalizePluginInstalledUiDeclarations(
     }, platform);
 }
 
-const snapshotModels = new WeakMap<PluginUiProjectionNormalizationInput, Map<PluginUiPlatformV1, PluginUiProjectionModel>>();
-
-/**
- * Mounted consumers share the daemon owner's immutable projection snapshot.
- * Normalize its presentation once per client platform, rather than parsing and
- * compiling the same declarations in every Composer. Currentness remains with
- * the caller: this does not select an Account, Machine, generation or lifetime.
- * Stored/mutable input readers continue through normalizePluginUiProjection.
- */
-export function readPluginUiProjectionSnapshot(
-    projection: PluginUiProjectionNormalizationInput | null,
-    platform: PluginUiPlatformV1 = resolvePluginUiProjectionPlatform(),
-): PluginUiProjectionModel {
-    if (projection === null) return EMPTY_PLUGIN_UI_PROJECTION;
-    let platforms = snapshotModels.get(projection);
-    const existing = platforms?.get(platform);
-    if (existing) return existing;
-    const model = normalizePluginUiProjection(projection, platform);
-    if (!platforms) {
-        platforms = new Map();
-        snapshotModels.set(projection, platforms);
+/** Share unchanged presentation rows at publication, before any consumer reads them. */
+function reconcileProjectionValue<T>(previous: T | undefined, next: T): T {
+    if (previous === next) return next;
+    if (!previous || !next || typeof previous !== 'object' || typeof next !== 'object'
+        || Array.isArray(previous) !== Array.isArray(next)) return next;
+    const previousRecord = previous as Readonly<Record<string, unknown>>;
+    const nextRecord = next as Readonly<Record<string, unknown>>;
+    const keys = Object.keys(nextRecord);
+    let unchanged = keys.length === Object.keys(previousRecord).length;
+    const values: Record<string, unknown> = {};
+    for (const key of keys) {
+        const value = reconcileProjectionValue(previousRecord[key], nextRecord[key]);
+        values[key] = value;
+        if (!Object.prototype.hasOwnProperty.call(previousRecord, key) || value !== previousRecord[key]) unchanged = false;
     }
-    platforms.set(platform, model);
-    return model;
+    if (unchanged) return previous;
+    return Object.freeze(Array.isArray(next) ? keys.map(key => values[key]) : values) as T;
 }
 
 export function normalizePluginUiProjection(
     projection: PluginUiProjectionNormalizationInput | null,
     platform: PluginUiPlatformV1 = resolvePluginUiProjectionPlatform(),
+    previous?: PluginUiProjectionModel,
 ): PluginUiProjectionModel {
     if (!projection) {
         return EMPTY_PLUGIN_UI_PROJECTION;
@@ -904,6 +908,7 @@ export function normalizePluginUiProjection(
     // a Composer-local catalog.
     const composerAttachmentsById = normalizeComposerAttachmentEntriesById(
         projection.familiesById.composerAttachments?.entriesById,
+        previous?.composerAttachmentsById,
     );
     const composerControlsById = Object.freeze({
         ...(projection.familiesById.composerControls?.entriesById ?? {}),
@@ -1139,7 +1144,7 @@ export function normalizePluginUiProjection(
         }
     }
 
-    return Object.freeze({
+    return reconcileProjectionValue(previous, Object.freeze({
         generation: projection.generation,
         diagnostics,
         installedPackagesById,
@@ -1169,27 +1174,6 @@ export function normalizePluginUiProjection(
         workItemsById: Object.freeze(workItemsById),
         dropTargetsById: Object.freeze(dropTargetsById),
         unknownEntriesById: Object.freeze(unknownEntriesById),
-    });
+    }));
 }
 
-export function resolvePluginUiProjectionState(
-    previous: PluginUiProjectionModel,
-    projection: DaemonContributionRegistryProjection | null,
-    options?: Readonly<{
-        reuseSameGeneration?: boolean;
-        /** The currentness owner's already-resolved client platform. */
-        platform?: PluginUiPlatformV1;
-    }>,
-): PluginUiProjectionModel {
-    if (projection === null) {
-        return previous;
-    }
-    if (
-        options?.reuseSameGeneration === true
-        && previous.generation !== null
-        && projection.generation === previous.generation
-    ) {
-        return previous;
-    }
-    return normalizePluginUiProjection(projection, options?.platform);
-}

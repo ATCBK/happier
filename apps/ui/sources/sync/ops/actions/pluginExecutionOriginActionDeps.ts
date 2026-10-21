@@ -1,7 +1,6 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { PluginExecutionOriginActionInputSchemas as inputs } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
-import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
-import { readPluginUiExecutionOriginCandidates } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readCurrentAppShellPluginUiExecutionOriginCandidates } from '@/components/appShell/plugins/committedPluginUiProjection';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
@@ -56,7 +55,7 @@ export function createPluginExecutionOriginActionDeps(account: Pick<LazyActionAc
         const readFacts = () => {
             const reader = readPluginAccountAvailability(scope);
             return { pluginId: parsed.pluginId, origin: null, reader, classifyRelease: reader.classifyRelease,
-                ...readPluginUiExecutionOriginCandidates({ projection: readCurrentAppShellPluginUiProjection(), pluginId: parsed.pluginId }) };
+                ...readCurrentAppShellPluginUiExecutionOriginCandidates(parsed.pluginId, { scope, declarationsOnly: true }) };
         };
         if (actionId === 'plugins.execution_origin.list') {
             const facts = readFacts();

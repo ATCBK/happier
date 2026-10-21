@@ -14,43 +14,22 @@ import { machineContributionRegistryProjectionScopeKey } from '@/sync/ops/machin
 import {
     forgetPluginUiProjectionAdmissionSnapshot,
     pluginUiProjectionAdmissionTargetKey,
+    savePluginUiProjectionAdmissionSnapshot,
 } from '@/sync/domains/plugins/ui/projectionWarmCache';
 
 import {
-    adaptDaemonContributionRegistryProjectionToMergedProjectionInputs,
+    publishDaemonMergedProjectionInputs,
     readProjectedAgentUiBehaviorDescriptors,
-    type PluginProjectionDiagnostic,
-    type PluginProjectionEntry,
+    type DaemonMergedProjectionInputs,
 } from './daemonContributionRegistryProjectionAdapters';
 import {
     clearProjectedAgentUiBehaviorDescriptors,
     publishProjectedAgentUiBehaviorDescriptors,
 } from '@/agents/registry/agentUiBehaviorProjection';
-import type {
-    MergedBackendProjectionEntry,
-    MergedProviderProjectionEntry,
-} from './mergedProjectionTypes';
-import type {
-    DaemonContributionRegistryProjectionAutomationEligibleEventsV1,
-    DaemonPluginUiComposerSurfaceCatalogEntryV1,
-    PluginProjectionV2,
-} from '@happier-dev/protocol';
+import type { PluginProjectionV2 } from '@happier-dev/protocol';
 
 import { getPreferredLanguage } from '@/text';
-import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
-
-export type DaemonMergedProjectionInputs = Readonly<{
-    mergedProviderProjectionById: Readonly<Record<string, MergedProviderProjectionEntry>>;
-    mergedBackendProjectionById: Readonly<Record<string, MergedBackendProjectionEntry>>;
-    discoveredBackendIds: readonly string[];
-    pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
-    pluginProjectionV2: PluginProjectionV2 | null;
-    /** One daemon-selected Composer renderer catalog carried by this projection snapshot. */
-    composerSurfaceCatalog?: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
-    /** Current cold Event-automation composer facts carried by the same daemon projection. */
-    automationEligibleEvents?: DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
-    registryDiagnostics: readonly PluginProjectionDiagnostic[];
-}>;
+export type { DaemonMergedProjectionInputs } from './daemonContributionRegistryProjectionAdapters';
 
 type ProjectionCacheResult = (
     | Readonly<{ kind: 'ready'; fetchedAtMs: number; inputs: DaemonMergedProjectionInputs }>
@@ -70,6 +49,7 @@ type ProjectionCacheEntry = Readonly<{
     accountScope?: ServerAccountScope | null;
     /** The locale whose narrowed translation bundles this answer carries. */
     locale: string;
+    summaries: ProjectionSummaries;
     /** The exact routed Home credential that authorized this projection. */
     accountCurrentness?: Pick<ActiveServerAccountScopeLifetime, 'isCurrent' | 'onRetire'> & Readonly<{
         retainReader(reader: ActiveServerAccountScopeLifetime): void;
@@ -98,10 +78,24 @@ export type DaemonMergedProjectionSummary = Readonly<{
     current: boolean;
 }>;
 const EMPTY_PROJECTION_SUMMARY: DaemonMergedProjectionSummary = Object.freeze({ inputs: null, current: false });
-const PROJECTION_SUMMARIES = new WeakMap<ProjectionCacheEntry, Readonly<{
+type ProjectionSummaries = Readonly<{
     current: DaemonMergedProjectionSummary;
     stale: DaemonMergedProjectionSummary;
-}>>();
+}>;
+const EMPTY_PROJECTION_SUMMARIES: ProjectionSummaries = Object.freeze({ current: EMPTY_PROJECTION_SUMMARY, stale: EMPTY_PROJECTION_SUMMARY });
+
+function publishProjectionSummaries(inputs: DaemonMergedProjectionInputs | undefined): ProjectionSummaries {
+    if (!inputs) return EMPTY_PROJECTION_SUMMARIES;
+    const summaryInputs = Object.freeze({
+        mergedBackendProjectionById: inputs.mergedBackendProjectionById,
+        mergedProviderProjectionById: inputs.mergedProviderProjectionById,
+        agentDeclarationsById: inputs.pluginProjectionV2?.agentsById ?? null,
+    });
+    return Object.freeze({
+        current: Object.freeze({ inputs: summaryInputs, current: true }),
+        stale: Object.freeze({ inputs: summaryInputs, current: false }),
+    });
+}
 
 /** Chrome observes this owner's published summary; it never resolves credentials or describes a daemon. */
 export function readDaemonMergedProjectionSummary(params: Readonly<{
@@ -112,22 +106,12 @@ export function readDaemonMergedProjectionSummary(params: Readonly<{
     if (!entry || !entry.accountCurrentness || (entry.kind !== 'ready' && entry.kind !== 'error') || !entry.inputs) {
         return EMPTY_PROJECTION_SUMMARY;
     }
-    let summaries = PROJECTION_SUMMARIES.get(entry);
-    if (!summaries) {
-        const inputs = Object.freeze({
-            mergedBackendProjectionById: entry.inputs.mergedBackendProjectionById,
-            mergedProviderProjectionById: entry.inputs.mergedProviderProjectionById,
-            agentDeclarationsById: entry.inputs.pluginProjectionV2?.agentsById ?? null,
-        });
-        summaries = Object.freeze({ current: Object.freeze({ inputs, current: true }), stale: Object.freeze({ inputs, current: false }) });
-        PROJECTION_SUMMARIES.set(entry, summaries);
-    }
     return entry.kind === 'ready'
         && entry.projectionRevision === getMachineContributionRegistryProjectionRevision({
             machineId: normalizeKeyPart(params.machineId), serverId: normalizeKeyPart(params.serverId) || null,
         })
         && entry.locale === getPreferredLanguage()
-        ? summaries.current : summaries.stale;
+        ? entry.summaries.current : entry.summaries.stale;
 }
 
 /** One upstream subscription and lifetime observer per cache scope, shared by every row. */
@@ -267,31 +251,6 @@ export function readReusableDaemonMergedProjectionCacheEntry(params: Readonly<{
     return cached;
 }
 
-function toInputs(params: Readonly<{
-    mergedProviderProjectionById: Readonly<Record<string, MergedProviderProjectionEntry>>;
-    mergedBackendProjectionById: Readonly<Record<string, MergedBackendProjectionEntry>>;
-    pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
-    pluginProjectionV2: PluginProjectionV2 | null;
-    composerSurfaceCatalog?: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
-    automationEligibleEvents?: DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
-    registryDiagnostics: readonly PluginProjectionDiagnostic[];
-}>): DaemonMergedProjectionInputs {
-    return {
-        mergedProviderProjectionById: params.mergedProviderProjectionById,
-        mergedBackendProjectionById: params.mergedBackendProjectionById,
-        discoveredBackendIds: Object.keys(params.mergedBackendProjectionById ?? {}),
-        pluginProjectionById: params.pluginProjectionById,
-        pluginProjectionV2: params.pluginProjectionV2,
-        ...(params.composerSurfaceCatalog === undefined
-            ? {}
-            : { composerSurfaceCatalog: params.composerSurfaceCatalog }),
-        ...(params.automationEligibleEvents === undefined
-            ? {}
-            : { automationEligibleEvents: params.automationEligibleEvents }),
-        registryDiagnostics: params.registryDiagnostics,
-    };
-}
-
 export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
     machineId: string;
     serverId?: string | null;
@@ -396,10 +355,15 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
     const publish = (entry: ProjectionCacheResult & Readonly<{ projectionRevision: number }>): ProjectionCacheEntry => {
         const current = currentProjectionCacheEntry(cacheKey);
         if (current !== null && current.projectionRevision > entry.projectionRevision) return current;
+        const inputs = entry.kind === 'ready' || entry.kind === 'error' ? entry.inputs : undefined;
+        const previousInputs = current?.kind === 'ready' || current?.kind === 'error' ? current.inputs : undefined;
         const published = Object.freeze({
             ...entry,
             accountScope,
             locale,
+            summaries: routedAccount
+                ? current && inputs === previousInputs ? current.summaries : publishProjectionSummaries(inputs)
+                : EMPTY_PROJECTION_SUMMARIES,
             ...(routedAccount ? { accountCurrentness: routedAccount.currentness } : {}),
         });
         // A former locale may settle after the current one. It still answers
@@ -453,18 +417,35 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
                 : publishFailure(res.reason, fetchedAtMs);
         }
 
-        const adapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(res.projection);
         // The machine-wide read sees every installed Agent, so it owns this
         // machine's descriptor set — unless a newer answer already replaced it.
         const newerPublished = currentProjectionCacheEntry(cacheKey);
         if (newerPublished !== null && newerPublished.projectionRevision > requestRevision) return newerPublished;
+        const previousInputs = newerPublished && newerPublished.locale === locale
+            && areServerAccountScopesEqual(newerPublished.accountScope ?? null, accountScope)
+            && (newerPublished.kind === 'ready' || newerPublished.kind === 'error')
+            ? newerPublished.inputs : undefined;
+        const inputs = publishDaemonMergedProjectionInputs({
+            projection: res.projection,
+            ...(res.composerSurfaceCatalog === undefined ? {} : { composerSurfaceCatalog: res.composerSurfaceCatalog }),
+            ...(res.automationEligibleEvents === undefined ? {} : { automationEligibleEvents: res.automationEligibleEvents }),
+        }, previousInputs);
+        if (routedAccount && locale === getPreferredLanguage()
+            && getMachineContributionRegistryProjectionRevision(projectionScope) === requestRevision) {
+            savePluginUiProjectionAdmissionSnapshot({
+                scope: routedAccount.scope,
+                targetKey: pluginUiProjectionAdmissionTargetKey(projectionScope),
+                machineId: projectionScope.machineId,
+                projection: res.projection,
+            });
+        }
         if (routedAccount && locale === getPreferredLanguage()) {
             publishProjectedAgentUiBehaviorDescriptors({
                 machineId: projectionScope.machineId,
                 accountScope: routedAccount.scope,
                 accountLifetime: routedAccount.currentness,
-                descriptorsByAgentId: readProjectedAgentUiBehaviorDescriptors(adapted.mergedProviderProjectionById),
-                pluginUiProjection: normalizePluginUiProjection(res.projection),
+                descriptorsByAgentId: readProjectedAgentUiBehaviorDescriptors(inputs.mergedProviderProjectionById),
+                pluginUiProjection: inputs.pluginUiProjection,
                 locale,
             });
         }
@@ -472,16 +453,7 @@ export async function loadDaemonMergedProjectionCacheEntry(params: Readonly<{
             kind: 'ready',
             fetchedAtMs,
             projectionRevision: requestRevision,
-            inputs: toInputs({
-                ...adapted,
-                pluginProjectionV2: res.projection,
-                ...(res.composerSurfaceCatalog === undefined
-                    ? {}
-                    : { composerSurfaceCatalog: res.composerSurfaceCatalog }),
-                ...(res.automationEligibleEvents === undefined
-                    ? {}
-                    : { automationEligibleEvents: res.automationEligibleEvents }),
-            }),
+            inputs,
         });
     })().catch((error: unknown) => {
         // Automatic recovery owns failures after transport normalization too.

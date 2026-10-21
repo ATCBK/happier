@@ -25,6 +25,7 @@ import { resolvePluginMachineExecutionOriginState } from '@/sync/domains/machine
 import { resolvePluginSurfaceDestinationOpen } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 
 import { normalizePluginUiProjection, EMPTY_PLUGIN_UI_PROJECTION } from './projection';
+import * as projectionUnion from './projectionUnion';
 import { selectPluginSurfacePlacementsForBinding } from './surfacePlacementSelectors';
 import { readPluginUiDaemonProjectionSelection } from './artifactAdoption';
 import { resolveAdmittedPluginSettingsPage } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
@@ -210,6 +211,7 @@ it('retains an external archive renderer only from its exact reported installati
 });
 
 it('uses a development override only for the explicitly selected source and otherwise retains the host bundle', () => {
+    const mergeInstalledPluginUiProjections = projectionUnion.createInstalledPluginUiProjectionPublication().publish;
     const pluginId = 'happier.fixture';
     const entry = placementEntry({ pluginId, localId: 'page', container: 'appPage' });
     const origin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
@@ -370,6 +372,7 @@ it('retains runtime client callback graphs beside host-owned renderer bytes with
 });
 
 it('indexes declaration families once per projection when comparing a wide fleet catalog', () => {
+    const unionPluginUiProjections = projectionUnion.createPluginUiProjectionUnionPublication().publish;
     const entries = Array.from({ length: 24 }, (_, index) => placementEntry({
         pluginId: `acme.wide-${index}`, localId: 'panel', container: 'appPage',
     }));
@@ -390,6 +393,26 @@ it('indexes declaration families once per projection when comparing a wide fleet
         expect(readPluginUiContributionOrigin(second.pluginUiProjection!.surfacePlacementsById[entries[0]!.id]))
             .toMatchObject({ machineId: 'machine-b' });
     } finally { enumeration.mockRestore(); }
+});
+
+it('publishes each admitted supply without searching the fleet for its own member', () => {
+    const entry = placementEntry({ pluginId: 'acme.supply', localId: 'panel', container: 'appPage' });
+    const members = Array.from({ length: 16 }, (_, index) => member({
+        machineId: `machine-${String(index).padStart(2, '0')}`, generation: 1, entriesById: { [entry.id]: entry },
+    }));
+    // Observe real fleet searches; the union, admission and projection codecs still run.
+    const search = vi.spyOn(Array.prototype, 'find');
+    let scans: number;
+    let projection: ReturnType<typeof unionPluginUiProjections>;
+    try {
+        projection = unionPluginUiProjections(members);
+        scans = search.mock.contexts.filter(context => Array.isArray(context)
+            && context.length === members.length && context[0] === members[0]
+            && context.at(-1) === members.at(-1)).length;
+    } finally { search.mockRestore(); }
+    const supplies = readPluginUiContributionSupplies(projection.pluginUiProjection!.surfacePlacementsById[entry.id]);
+    expect(supplies.map(supply => supply.machineId)).toEqual(members.map(input => input.machineId));
+    expect(scans).toBe(0);
 });
 
 it('does not rescan retained union members during unchanged renders', () => {
@@ -415,22 +438,26 @@ it('keeps independent mounted-reader merges from invalidating the AppShell merge
     const installed = { ...machineProjection({ generation: 1, entriesById: { [entry.id]: { ...entry, occurrenceId: undefined } } }), generation: null };
     const shellRuntime = machineProjection({ generation: 2, entriesById: { [entry.id]: entry } });
     const mountedRuntime = machineProjection({ generation: 3, entriesById: { [entry.id]: entry } });
-    const shell = mergeInstalledPluginUiProjections([installed], shellRuntime);
-    const mounted = mergeInstalledPluginUiProjections([installed], mountedRuntime);
+    const shellPublication = projectionUnion.createInstalledPluginUiProjectionPublication();
+    const mountedPublication = projectionUnion.createInstalledPluginUiProjectionPublication();
+    const shell = shellPublication.publish([installed], shellRuntime);
+    const mounted = mountedPublication.publish([installed], mountedRuntime);
     let recomputations = 0;
     for (let index = 0; index < 100; index += 1) {
-        if (mergeInstalledPluginUiProjections([installed], shellRuntime) !== shell) recomputations += 1;
-        if (mergeInstalledPluginUiProjections([installed], mountedRuntime) !== mounted) recomputations += 1;
+        if (shellPublication.publish([installed], shellRuntime) !== shell) recomputations += 1;
+        if (mountedPublication.publish([installed], mountedRuntime) !== mounted) recomputations += 1;
     }
     console.info('R-C shared merge counts', { inputs: 2, reads: 200, recomputations });
     expect(recomputations).toBe(0);
     expect(shell?.generation).toBe(2);
     expect(mounted?.generation).toBe(3);
     expect(mergeInstalledPluginUiProjections([installed], null)?.generation).toBeNull();
-    expect(mergeInstalledPluginUiProjections([installed], shellRuntime)).toBe(shell);
+    expect(shellPublication.getSnapshot()).toBe(shell);
+    expect(shellPublication.publish([installed], shellRuntime)).toBe(shell);
 });
 
 it('does not remerge unchanged origin selections when another selectable origin report republishes the map', () => {
+    const mergeInstalledPluginUiProjections = projectionUnion.createInstalledPluginUiProjectionPublication().publish;
     const pluginId = 'acme.equal-selection';
     const entry = placementEntry({ pluginId, localId: 'panel', container: 'appPage' });
     const installed = { ...machineProjection({ generation: 1, entriesById: { [entry.id]: entry } }), generation: null };
@@ -443,12 +470,15 @@ it('does not remerge unchanged origin selections when another selectable origin 
     }
     console.info('R-C equal-selection merge counts', { reads: 100, recomputations });
     expect(recomputations).toBe(0);
+    // These declarations have no development override, so an irrelevant
+    // selection change also retains their unchanged descriptive output.
     expect(mergeInstalledPluginUiProjections([installed], runtime, undefined,
-        selectedOrigins(selectedOrigin(pluginId, 'machine-b')))).not.toBe(merged);
-    expect(mergeInstalledPluginUiProjections([installed], runtime, undefined, new Map())).not.toBe(merged);
+        selectedOrigins(selectedOrigin(pluginId, 'machine-b')))).toBe(merged);
+    expect(mergeInstalledPluginUiProjections([installed], runtime, undefined, new Map())).toBe(merged);
 });
 
 it('reuses the live occurrence for the same declared root without confusing runtime identity with content', () => {
+    const mergeInstalledPluginUiProjections = projectionUnion.createInstalledPluginUiProjectionPublication().publish;
     const pluginId = 'acme.channels';
     const entry = placementEntry({ pluginId, localId: 'channels', container: 'appPage' });
     const declarative = {
@@ -488,6 +518,7 @@ it('reuses the live occurrence for the same declared root without confusing runt
 });
 
 it('reuses validated declaration comparisons when only fleet execution selection changes', () => {
+    const unionPluginUiProjections = projectionUnion.createPluginUiProjectionUnionPublication().publish;
     const pluginId = 'acme.stable-declaration';
     const entry = placementEntry({ pluginId, localId: 'stable', container: 'appPage' });
     const model = {
@@ -617,7 +648,7 @@ it('projects only a real current source occurrence for execution and retains its
         expect(readPluginUiExecutionOriginCandidates({ projection: many, pluginId })).toEqual(retainedCandidates);
         // All declarations share one producer occurrence. Revalidating that
         // same origin and custody per declaration is fleet-wide repeated work.
-        expect(originParse).toHaveBeenCalledTimes(2);
+        expect(originParse).toHaveBeenCalledTimes(1);
         expect(custodyParse).toHaveBeenCalledTimes(1);
         originParse.mockClear();
         custodyParse.mockClear();
@@ -641,6 +672,13 @@ it('projects only a real current source occurrence for execution and retains its
         .toEqual({ kind: 'development', registeredRootId: 'replacement-root' });
     mutableSupply.sourceCustody.kind = 'invalid';
     expect(readPluginUiContributionSupplies(mutableEntry)[0]?.sourceCustody).toBeNull();
+    // Freezing an arbitrary array is not a producer validation proof, nor does
+    // it freeze the nested facts a caller can replace between reads.
+    const frozenEntry = { hostSupplies: Object.freeze([mutableSupply]) };
+    expect(readPluginUiContributionSupplies(frozenEntry)[0]?.sourceCustody).toBeNull();
+    mutableSupply.sourceCustody.kind = 'development';
+    expect(readPluginUiContributionSupplies(frozenEntry)[0]?.sourceCustody)
+        .toEqual({ kind: 'development', registeredRootId: 'replacement-root' });
     expect(read(source).sourceCandidates).toEqual([expect.objectContaining({ source: {
         origin: { serverIdentityId: 'srv_test', sourceRef: { machineId: 'machine-a', pluginId, sourceCustody } },
         version: '1.0.0', occurrenceId, serverId: 'server-1', generation: 7,

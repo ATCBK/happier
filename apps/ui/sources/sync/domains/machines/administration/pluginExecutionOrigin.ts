@@ -133,8 +133,9 @@ export function serializePluginMachineExecutionOriginMachineFacts(params: Machin
     pluginId: string;
     materializations: readonly PluginMachineMaterializationV1[];
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
+    targets?: readonly PluginExecutionOriginContextualTarget[];
 }>): Readonly<{ eligibilityKey: string; activityKey: string }> {
-    const targets = readPluginExecutionOriginMachineTargets(params);
+    const targets = params.targets ?? readPluginExecutionOriginMachineTargets(params);
     // Capture activity once per target. Sorting used to rescan the whole fleet
     // twice per comparison for every mounted plugin during census hydration.
     const facts = targets.map(target => ({ target, ...readMachineFact(params, target) }));

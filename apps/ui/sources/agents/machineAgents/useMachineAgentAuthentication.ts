@@ -9,7 +9,7 @@ import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAc
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import { resolveConnectedAccountUiNegotiation } from '@/sync/domains/connectedServices/resolveConnectedAccountUiNegotiation';
 import { useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { mergeConnectedAccountDescriptorProjections, readConnectedAccountDescriptorProjection } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
+import { mergeConnectedAccountDescriptorProjections } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 import { projectConnectedServiceRegistryEntries } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import { resolveConnectedServiceRegistryEntryDisplayName } from '@/components/settings/connectedServices/model/resolveConnectedServiceDisplayName';
 import { buildQualifiedConnectedAccountGroupOptionsByServiceId, resolveProjectedConnectedAccountServiceKeys } from '@/sync/domains/connectedServices/qualifiedConnectedAccountServiceOptions';
@@ -45,7 +45,7 @@ export function useMachineAgentAuthentication(input: Readonly<{
         if (!projection.inputs) return {};
         const agents = Object.entries(projection.inputs?.pluginProjectionV2?.agentsById ?? {});
         const resolution = mergeConnectedAccountDescriptorProjections([
-            readConnectedAccountDescriptorProjection(projection.inputs?.pluginProjectionV2 ?? null),
+            projection.inputs.connectedAccountProjection,
         ]);
         const entries = resolution.kind === 'error' ? [] : projectConnectedServiceRegistryEntries({
             scopeKey: lifetime ? JSON.stringify(lifetime.scope) : '', status: resolution.kind,

@@ -1,6 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it, onTestFinished, vi } from 'vitest';
+import * as canonicalDigest from '@happier-dev/protocol/crypto/canonicalDigest';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
+import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
+import { createPluginAccountAvailabilityReaderStore } from './reader';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderWithAppProviders } from '@/dev/testkit/render/renderWithAppProviders';
@@ -172,7 +177,10 @@ const { normalizePluginInstalledUiDeclarations } = await import('@/sync/domains/
 const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
 const { mergeInstalledPluginUiProjections, unionPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
-const { createInstalledPluginUiReactNativeRuntimeProjectionSource } = await import('@/components/plugins/reactNative/projectionInvalidation');
+const { createInstalledPluginUiReactNativeRuntimeProjectionSource, createPluginUiReactNativeRuntimeProjectionReconciler } = await import('@/components/plugins/reactNative/projectionInvalidation');
+const { createPluginReactNativeBundleCache } = await import('@/components/plugins/reactNative/bundleCache');
+const { createPluginReactNativeModuleRegistry } = await import('@/components/plugins/reactNative/moduleRegistry');
+const { resolveProjectedPluginUiClientExecutables } = await import('@/components/plugins/reactNative/clientExecutableProjection');
 const { readCurrentAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
 const { resolvePluginUiClientActionRegistration } = await import('@/components/plugins/reactNative/clientExecutableContributions');
 const { resolvePluginUiClientExecutablePlatform } = await import('@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness');
@@ -186,6 +194,87 @@ afterEach(async () => {
     await account.reset();
     storage.setState(storage.getInitialState(), true);
     vi.restoreAllMocks();
+});
+
+it('retains bundled Account custody across admission reads while observing current disablement and Account retirement', () => {
+    const scope = { serverId: 'srv-local-a', accountId: 'account-a' } as const;
+    const artifactDigest = `sha256:${'b'.repeat(64)}`;
+    const graph = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: 'portable', tier: 'reactNative',
+        entry: 'react-native/portable/entry.cjs.bundle', digest: artifactDigest,
+        files: [{ relativePath: 'react-native/portable/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
+        builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0' });
+    const manifest = PluginPortableReleaseManifestV1Schema.parse({
+        schemaVersion: 2, id: 'happier.fixture', version: '1.0.0', displayName: 'Fixture', runtime: { apiVersion: 1 },
+        hostAccess: { required: [{ id: 'account-storage', capability: 'storage.account', reason: 'Store notes', scope: { enabled: true } }], optional: [] },
+        contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui', 'cli'], placementBindings: [],
+            dangerLevel: 'safe', hostAccess: ['account-storage'], execution: { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } } }] },
+    });
+    const digests = vi.spyOn(canonicalDigest, 'computeCanonicalDomainSeparatedHexDigest');
+    onTestFinished(() => digests.mockRestore());
+    const store = createPluginAccountAvailabilityReaderStore({
+        hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+            packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, artifactGraphs: [graph],
+            entriesById: projectPluginPortableUiDeclarationsV1(manifest, [graph]) }],
+    });
+    const initial = { availabilityCursor: 42, intentReads: [], materializations: [], snapshots: [] };
+    store.replace({ scope, snapshot: initial });
+    const reader = store.bind(scope);
+    const selections = Array.from({ length: 201 }, () => store.bind(scope).readCurrentAccountExecution(manifest.id));
+    expect(selections.every(selection => selection.kind === 'available')).toBe(true);
+    const declarationHashes = digests.mock.calls.filter(([domain]) => domain === 'happier.plugin.account.declaration.v1').length;
+    const custodyHashes = digests.mock.calls.filter(([domain]) => domain === 'happier.plugin.account.bundled-custody.v1').length;
+    console.info('R-C bundled reader digest counts', { reads: selections.length, declarationHashes, custodyHashes });
+    expect(declarationHashes).toBe(1);
+    expect(custodyHashes).toBe(1);
+    digests.mockClear();
+    expect(reader.readCurrentAccountExecutionDeclarations()).toMatchObject([{ kind: 'available', manifest,
+        sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle' } } }]);
+    expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
+        .toMatchObject({ kind: 'available', artifact: { artifactId: graph.artifactId, digest: graph.digest } });
+    expect(reader.readCurrentAccountKvCapability({ pluginId: manifest.id })).toMatchObject({ kind: 'available' });
+    expect(reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`]?.authorization?.serviceAvailability)
+        .toEqual([{ id: 'account-storage', required: true, status: 'available' }]);
+    const projection = reader.readAccountUiProjection();
+    expect(digests).not.toHaveBeenCalled();
+    const target = resolveProjectedPluginUiClientExecutables({ actionProjection: projection ? { projection } : null, platform: 'web' })[0];
+    expect(target).toBeDefined();
+    if (!target) throw new Error('Expected Account executable target');
+    const cache = createPluginReactNativeBundleCache();
+    const runtimeSource = createPluginUiReactNativeRuntimeProjectionReconciler({ cache,
+        surfaceModules: createPluginReactNativeModuleRegistry() }).createSource();
+    onTestFinished(runtimeSource.dispose);
+    const runtimeLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+    runtimeSource.update({ projection, accountLifetime: runtimeLifetime, isCurrent: () => true });
+    // The real runtime projection owner must admit a dedicated Account
+    // executable, without a renderer accidentally retaining the same digest.
+    expect(cache.putInstalledArtifact({ identity: target.cacheIdentity, bytes: new Uint8Array([1]), format: 'plainJs',
+        accountScope: scope }, cache.captureWriteFence(target.cacheIdentity))).toEqual({ ok: true, cacheKey: graph.digest });
+    const admitted = reader.readCurrentAccountExecution(manifest.id);
+    const repeated = store.bind(scope).readCurrentAccountExecution(manifest.id);
+    expect(admitted.kind).toBe('available');
+    expect(repeated.kind).toBe('available');
+    if (admitted.kind !== 'available' || repeated.kind !== 'available') throw new Error('Expected bundled custody');
+    expect(repeated.sourceCustody).toBe(admitted.sourceCustody);
+    expect(repeated.manifest).toBe(admitted.manifest);
+    const disabled = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+        availabilityCursor: 42, hostingCapability: { enabled: false },
+        intent: { pluginId: manifest.id, desiredVersion: null, enabled: false, offlineUiHosting: 'enabled',
+            writableCollections: [], revision: 'intent-1' },
+        release: null, uiArtifacts: [], packageAssets: [],
+    });
+    store.replace({ scope, snapshot: { ...initial,
+        intentReads: [{ pluginId: manifest.id, response: disabled }] } });
+    expect(reader.readCurrentAccountExecution(manifest.id)).toEqual({ kind: 'unavailable', code: 'plugin_disabled' });
+    expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
+        .toMatchObject({ kind: 'unavailable' });
+    runtimeSource.update({ projection: reader.readAccountUiProjection(), accountLifetime: runtimeLifetime, isCurrent: () => true });
+    expect(cache.readInstalledArtifact(target.cacheIdentity)).toBeNull();
+    store.replace({ scope: { ...scope, accountId: 'account-b' }, snapshot: initial });
+    expect(reader.readCurrentAccountExecution(manifest.id))
+        .toEqual({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });
+    store.clear();
+    expect(reader.readCurrentAccountExecution(manifest.id))
+        .toEqual({ kind: 'unavailable', code: 'account_availability_not_loaded' });
 });
 
 it('reuses bundled digests through current mounted admission while checking every access and remaining idle without polling', async () => {

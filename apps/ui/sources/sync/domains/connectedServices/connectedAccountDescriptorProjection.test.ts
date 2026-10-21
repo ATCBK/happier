@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ConnectedAccountUiProjectionEntryV1 } from '@happier-dev/protocol';
 import type { DaemonContributionRegistryProjection } from '@/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
@@ -6,6 +6,7 @@ import type { DaemonContributionRegistryProjection } from '@/sync/api/daemon/dae
 import {
   advanceConnectedAccountDescriptorProjectionState,
   createConnectedAccountDescriptorProjectionLoadingState,
+  createConnectedAccountDescriptorProjectionPublication,
   mergeConnectedAccountDescriptorProjections,
   readConnectedAccountDescriptorProjection,
 } from './connectedAccountDescriptorProjection';
@@ -63,6 +64,94 @@ function projection(entries: Record<string, Readonly<{ id: string }> & Record<st
 }
 
 describe('connectedAccountDescriptorProjection', () => {
+  it('prepares declaration content once for agreement and diagnostics', () => {
+    const entry = descriptor({ diagnostics: ['machine_refused'] });
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      const merged = mergeConnectedAccountDescriptorProjections([{ kind: 'ready', descriptors: [entry] }]);
+      const declarationSerializations = stringify.mock.calls.filter(([value]) => (
+        typeof value === 'object' && value !== null && 'authentication' in value
+      ));
+      expect(declarationSerializations).toHaveLength(1);
+      expect(merged.descriptors?.[0]?.diagnostics).toEqual(['machine_refused']);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('publishes stable snapshots without fingerprint work for unchanged immutable source revisions', () => {
+    const source = readConnectedAccountDescriptorProjection(projection({ account: descriptor() }));
+    const publication = createConnectedAccountDescriptorProjectionPublication();
+    const first = publication.publish([source]);
+    const stringify = vi.spyOn(JSON, 'stringify');
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        expect(publication.getSnapshot()).toBe(first);
+        expect(publication.publish([{ ...source }])).toBe(first);
+      }
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
+  it('does not trust arbitrary frozen inputs or retain mutable descriptors as snapshots', () => {
+    const entry = descriptor();
+    const source = Object.freeze({ kind: 'ready' as const, descriptors: Object.freeze([Object.freeze(entry)]) });
+    const publication = createConnectedAccountDescriptorProjectionPublication();
+    const first = publication.publish([source]);
+    const mode = entry.authentication.modes[0]!;
+    if (mode.kind !== 'manual') throw new Error('expected manual authentication');
+    mode.fields[0]!.title = 'Changed token';
+    const second = publication.publish([source]);
+    expect(second).not.toBe(first);
+    expect(second.descriptors?.[0]?.authentication.modes[0]).toMatchObject({ fields: [{ title: 'Changed token' }] });
+    expect(first.descriptors?.[0]?.authentication.modes[0]).toMatchObject({ fields: [{ title: 'Token' }] });
+  });
+
+  it('shares unaffected declaration, diagnostic and conflict rows when another source revision changes', () => {
+    const stable = readConnectedAccountDescriptorProjection(projection({ account: descriptor({ diagnostics: ['machine_refused'] }) }));
+    const divergent = readConnectedAccountDescriptorProjection(projection({ account: descriptor({ title: 'Divergent account' }) }));
+    const other = readConnectedAccountDescriptorProjection(projection({ other: descriptor({ id: 'other', serviceId: 'other' }) }));
+    const publication = createConnectedAccountDescriptorProjectionPublication();
+    const first = publication.publish([stable, divergent, other]);
+    const changed = readConnectedAccountDescriptorProjection(projection({ other: descriptor({ id: 'other', serviceId: 'other', title: 'Updated other' }) }));
+    const second = publication.publish([stable, divergent, changed]);
+    expect(second.kind).toBe('conflict');
+    expect(second.conflicts?.[0]).toBe(first.conflicts?.[0]);
+    for (const row of first.descriptors?.filter(entry => entry.id === 'account') ?? []) {
+      const unchanged = second.descriptors?.find(entry => entry.id === row.id && entry.title === row.title);
+      expect(unchanged).toBe(row);
+      expect(unchanged?.diagnostics).toBe(row.diagnostics);
+    }
+    expect(second.descriptors?.find(entry => entry.id === 'other')?.title).toBe('Updated other');
+  });
+
+  it('publishes execution withdrawal and recovery with unchanged descriptor revisions', () => {
+    const source = readConnectedAccountDescriptorProjection(projection({ account: descriptor() }));
+    if (source.kind !== 'ready') throw new Error('expected ready descriptors');
+    const publication = createConnectedAccountDescriptorProjectionPublication();
+    const available = publication.publish([source]);
+    const withdrawn = publication.publish([{ ...source, executionUnavailablePluginIds: ['acme.accounts'] }]);
+    expect(withdrawn.descriptors?.[0]).toMatchObject({
+      title: 'Acme account', availability: { state: 'blocked', reason: 'execution_origin_unavailable' },
+    });
+    const state = advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'), withdrawn,
+    );
+    expect(projectConnectedServiceRegistryEntries(state)[0]?.executable).toBe(false);
+    const stringify = vi.spyOn(JSON, 'stringify');
+    let restored: ReturnType<typeof publication.publish>;
+    try {
+      restored = publication.publish([source]);
+      expect(stringify).not.toHaveBeenCalled();
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(restored).toEqual(available);
+    expect(projectConnectedServiceRegistryEntries(advanceConnectedAccountDescriptorProjectionState(state, restored))[0]?.executable).toBe(true);
+  });
+
   it('retains static descriptors without execution admission and prefers an admitted declaration when it returns', () => {
     const projected = descriptor();
     const unavailable = { kind: 'ready' as const, descriptors: [projected], executionUnavailablePluginIds: ['acme.accounts'] };
