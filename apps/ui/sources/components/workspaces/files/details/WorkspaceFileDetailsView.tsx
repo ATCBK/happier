@@ -42,6 +42,7 @@ import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
 import { FileEditorPanel, FileMarkdownEditorPanel, type FileEditorPanelProps } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import { FileEditorAskControls } from '@/components/workspaces/files/file/editor/FileEditorAskControls';
 import { FileReadAskControls } from '@/components/workspaces/files/file/FileReadAskControls';
+import { useAskSelectionTargetContext } from '@/components/ui/code/selection/useAskSelection';
 import { FileEditorNoticeLine } from '@/components/workspaces/files/file/editor/FileEditorNoticeLine';
 import { buildEditorChangeMarkers } from '@/components/ui/code/editor/editorChangeMarkers';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
@@ -614,6 +615,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const checkoutReachability = useCheckoutReachability(props.scope);
     const constrainWidth = presentation === 'screen';
     const pane = useAppPaneScope(props.scopeId);
+    const getAskTargetContext = useAskSelectionTargetContext(React.useCallback(() => ({ openDetailsTab: pane.openDetailsTab }), [pane.openDetailsTab]));
     const editorAccountScope = useActiveServerAccountScope(props.scope?.serverId ?? null);
     const patchDetailsTabState = pane.patchDetailsTabState;
     const filePath = props.filePath;
@@ -1244,6 +1246,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         onReplacedUnsavedEdits: cancelEditingFile,
         offerWholeTurnRollback,
         workspaceRefId: props.workspaceRefId,
+        getAskTargetContext,
         changedPaths,
     });
     // The peek names who made the change: the agent, and its turn when the marks come from one turn (ED3 "Claude, turn 3").

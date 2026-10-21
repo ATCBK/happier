@@ -16,7 +16,7 @@ import { useFileChangesActions } from './useFileChangesActions';
 import { buildFileChangesLiveFiles } from './fileChangesNavigation';
 import { rangeOfReviewUnit, useHunkDiscard } from '@/components/workspaces/scm/review/hunkReview/useHunkDiscard';
 import { useWorkspaceFileOpener } from '@/components/workspaces/files/useWorkspaceFileOpener';
-import { askAboutRanges } from '@/components/ui/code/selection/askAboutRanges';
+import { askAboutRanges, type AskSelectionTargetContext } from '@/components/ui/code/selection/askAboutRanges';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import { usePaneMainColumn } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
 import {
@@ -45,6 +45,8 @@ export type FileChangesReviewParams = Readonly<{
   onOpenFile?: (path: string) => void;
   /** The project the page belongs to; without a Session, other files open in it. */
   workspaceRefId?: string | null;
+  /** The File page's same destination context used by selection Ask without a Session. */
+  getAskTargetContext?: () => AskSelectionTargetContext;
   /** Uncommitted: the checkout's changed files in review order, so a reviewed file can lead to the next. */
   changedPaths?: readonly string[];
   hasUnsavedEdits?: () => boolean;
@@ -132,22 +134,23 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
   const { target, refresh, sessionTarget, remember, retireUndo, undo, undoAvailable, discardDisabledReason } = hunkDiscard;
   const messages = React.useMemo(() => hunkDiscard.messagesFor(filePath), [hunkDiscard.messagesFor, filePath]);
   const readCurrentText = React.useMemo(() => hunkDiscard.readCurrentTextFor(filePath), [hunkDiscard.readCurrentTextFor, filePath]);
-  React.useEffect(() => retireUndo, [retireUndo, filePath]);
+  React.useEffect(() => retireUndo, [retireUndo, target, filePath]);
   const onDiscard = hunkDiscard.discard;
 
   // Ask about this change (`/`, row): the one Ask owner builds an anchored draft over the change's lines.
   const onAsk = React.useCallback(async (hunkTarget: HunkReviewActionTarget) => {
-    if (!sessionId || !unifiedDiff) return;
+    if (!unifiedDiff) return;
     const range = rangeOfReviewUnit(hunkTarget);
     const deletion = !hunkTarget.unit.hunk.lines.some(line => line.kind === 'add');
     await askAboutRanges({
       workspaceScope: scope,
-      sessionTarget: { sessionId, revealSessionColumn: () => { if (mainColumn?.hidden) mainColumn.setHidden(false); } },
+      sessionTarget: sessionId ? { sessionId, revealSessionColumn: () => { if (mainColumn?.hidden) mainColumn.setHidden(false); } } : null,
+      targetContext: params.getAskTargetContext?.(),
       filePath: hunkTarget.path, source: 'diff', savedText: unifiedDiff,
       lines: buildCodeLinesFromUnifiedDiff({ unifiedDiff, hideFilePrelude: true }),
       ranges: [{ startLine: range.rangeStart, endLine: range.rangeEnd, side: deletion ? 'before' : 'after' }],
     });
-  }, [sessionId, unifiedDiff, scope, mainColumn]);
+  }, [sessionId, unifiedDiff, scope, mainColumn, params.getAskTargetContext]);
 
   const liveFiles = React.useMemo(
     () => live && params.changedPaths ? buildFileChangesLiveFiles(params.changedPaths, filePath, unifiedDiff ?? '') : undefined,
@@ -166,7 +169,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     host,
     serverId: scope.serverId,
     onDiscard,
-    ...(sessionId ? { onAsk } : {}),
+    ...(sessionId || params.getAskTargetContext ? { onAsk } : {}),
     onOutOfDate: changes.refresh,
     discardDisabledReason,
     undo: undoAvailable ? undo : undefined,
