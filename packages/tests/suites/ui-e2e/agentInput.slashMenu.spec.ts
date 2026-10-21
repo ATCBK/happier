@@ -1,5 +1,4 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { createRequire } from 'node:module';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
@@ -21,8 +20,6 @@ import { waitForInitialAppUi } from '../../src/testkit/uiE2e/waitForInitialAppUi
 import { spawnSessionFromDaemon } from '../../src/testkit/uiE2e/spawnSessionFromDaemon';
 import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
 
-const require = createRequire(import.meta.url);
-const textareaCaretScriptPath = require.resolve('textarea-caret');
 const run = createRunDirs({ runLabel: 'ui-e2e' });
 
 type RectSnapshot = Readonly<{
@@ -61,28 +58,24 @@ async function writeFakeCodexAuthFile(params: Readonly<{ cliHomeDir: string }>):
     );
 }
 
-function composerTextarea(page: Page): Locator {
-    return page.locator('textarea[data-testid="session-composer-input"]:visible');
+function composerEditor(page: Page): Locator {
+    return page.locator('[data-testid="session-composer-input"][contenteditable="true"]:visible');
 }
 
-async function readCaretSnapshot(textarea: Locator): Promise<CaretSnapshot> {
-    return await textarea.evaluate((node) => {
-        const element = node as HTMLTextAreaElement;
-        const browserWindow = window as Window & {
-            getCaretCoordinates?: (
-                element: HTMLTextAreaElement,
-                position: number,
-            ) => Readonly<{ left: number; top: number; height: number }>;
-        };
-        if (!browserWindow.getCaretCoordinates) {
-            throw new Error('textarea-caret script was not installed in the page');
+async function readCaretSnapshot(editor: Locator): Promise<CaretSnapshot> {
+    return await editor.evaluate((element) => {
+        const selection = element.ownerDocument.getSelection();
+        if (!selection?.rangeCount || !selection.focusNode || !element.contains(selection.focusNode)) {
+            throw new Error('Expected a selection inside the composer editor');
         }
-
+        // The editor exposes a native DOM selection. Measure its head in window
+        // coordinates, the same coordinate space as MultiTextInput.getCaretRect().
+        const range = element.ownerDocument.createRange();
+        range.setStart(selection.focusNode, selection.focusOffset);
+        range.collapse(true);
+        const caret = range.getClientRects()[0];
+        if (!caret || caret.height === 0) throw new Error('Expected a measurable composer caret');
         const inputRect = element.getBoundingClientRect();
-        const position = element.selectionStart ?? element.value.length;
-        const caret = browserWindow.getCaretCoordinates(element, position);
-        const caretLeft = inputRect.left + caret.left - element.scrollLeft;
-        const caretTop = inputRect.top + caret.top - element.scrollTop;
 
         return {
             input: {
@@ -94,11 +87,11 @@ async function readCaretSnapshot(textarea: Locator): Promise<CaretSnapshot> {
                 height: inputRect.height,
             },
             caret: {
-                left: caretLeft,
-                top: caretTop,
-                right: caretLeft,
-                bottom: caretTop + caret.height,
-                width: 0,
+                left: caret.left,
+                top: caret.top,
+                right: caret.right,
+                bottom: caret.bottom,
+                width: caret.width,
                 height: caret.height,
             },
         };
@@ -118,17 +111,15 @@ async function visibleBoundingBox(locator: Locator, label: string): Promise<Read
     return box;
 }
 
-async function expectSlashMenuAnchoredToTextareaCaret(params: Readonly<{
+async function expectSlashMenuAnchoredToEditorCaret(params: Readonly<{
     page: Page;
-    textarea: Locator;
+    editor: Locator;
 }>): Promise<void> {
-    await params.page.addScriptTag({ path: textareaCaretScriptPath });
-
     const menuSurface = params.page.getByTestId('agent-input-command-menu:surface');
     await expect(menuSurface).toHaveCount(1, { timeout: 60_000 });
     await expect(menuSurface).toBeVisible({ timeout: 60_000 });
 
-    const caret = await readCaretSnapshot(params.textarea);
+    const caret = await readCaretSnapshot(params.editor);
     const menuBox = await visibleBoundingBox(menuSurface, 'agent input command menu');
     const menuBottomToCaret = Math.abs((menuBox.y + menuBox.height) - caret.caret.top);
     const menuBottomToInputTop = Math.abs((menuBox.y + menuBox.height) - caret.input.top);
@@ -142,16 +133,20 @@ async function expectSlashMenuAnchoredToTextareaCaret(params: Readonly<{
 
 async function selectAutocompleteSuggestion(params: Readonly<{
     page: Page;
-    textarea: Locator;
+    editor: Locator;
     query: string;
     optionTestId: string;
     expectedValue: RegExp;
+    expectedChip?: RegExp;
 }>): Promise<void> {
-    await params.textarea.fill(params.query);
+    await params.editor.fill(params.query);
     const option = params.page.getByTestId(params.optionTestId);
     await expect(option).toHaveCount(1, { timeout: 120_000 });
     await params.page.keyboard.press('Enter');
-    await expect(params.textarea).toHaveValue(params.expectedValue, { timeout: 60_000 });
+    await expect(params.editor).toHaveText(params.expectedValue, { timeout: 60_000 });
+    const chips = params.editor.locator('[data-composer-chip][contenteditable="false"]');
+    await expect(chips).toHaveCount(params.expectedChip ? 1 : 0);
+    if (params.expectedChip) await expect(chips).toHaveText(params.expectedChip);
     await expect(params.page.getByTestId('agent-input-command-menu:surface')).toHaveCount(0, { timeout: 60_000 });
 }
 
@@ -200,7 +195,7 @@ test.describe('UI e2e: AgentInput slash command menu', () => {
         await server?.stop().catch(() => {});
     });
 
-    test('anchors the command menu to the textarea caret and inserts slash, file, and skill mentions', async ({
+    test('anchors the command menu to the editor caret and inserts slash, file, and skill mentions', async ({
         page,
     }) => {
         test.setTimeout(900_000);
@@ -269,17 +264,17 @@ test.describe('UI e2e: AgentInput slash command menu', () => {
                 browserDiagnostics,
             });
 
-            const textarea = composerTextarea(page);
-            await expect(textarea).toHaveCount(1, { timeout: 120_000 });
-            await expect(textarea).toBeEnabled({ timeout: 120_000 });
-            await textarea.fill('first line with enough text\nsecond line before slash ');
-            await textarea.focus();
+            const editor = composerEditor(page);
+            await expect(editor).toHaveCount(1, { timeout: 120_000 });
+            await expect(editor).toBeEditable({ timeout: 120_000 });
+            await editor.fill('first line with enough text\nsecond line before slash ');
+            await editor.focus();
             await page.keyboard.type('/');
-            await expectSlashMenuAnchoredToTextareaCaret({ page, textarea });
+            await expectSlashMenuAnchoredToEditorCaret({ page, editor });
 
             await selectAutocompleteSuggestion({
                 page,
-                textarea,
+                editor,
                 query: '/go',
                 optionTestId: 'agent-input-command-menu:list:command-menu-root:option:cmd-goal',
                 expectedValue: /^\/goal\s*$/,
@@ -287,18 +282,20 @@ test.describe('UI e2e: AgentInput slash command menu', () => {
 
             await selectAutocompleteSuggestion({
                 page,
-                textarea,
+                editor,
                 query: '@REA',
                 optionTestId: 'agent-input-command-menu:list:command-menu-root:option:file-README.md',
-                expectedValue: /^@README\.md\s*$/,
+                expectedValue: /^README\.md\s*$/,
+                expectedChip: /^README\.md$/,
             });
 
             await selectAutocompleteSuggestion({
                 page,
-                textarea,
+                editor,
                 query: '$code',
                 optionTestId: 'agent-input-command-menu:list:command-menu-root:option:skill-code-review',
-                expectedValue: /^\$code-review\s*$/,
+                expectedValue: /^code-review\s*$/,
+                expectedChip: /^code-review$/,
             });
         } catch (error) {
             throw appendBrowserDiagnostics(error, browserDiagnostics());
