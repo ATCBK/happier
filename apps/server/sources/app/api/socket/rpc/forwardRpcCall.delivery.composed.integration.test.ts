@@ -3,6 +3,7 @@ import { io as connect, type Socket as ClientSocket } from 'socket.io-client';
 import type { Socket } from 'socket.io';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { callSocketRpc } from '@happier-dev/sync-client';
 import { startRedisAdapterRecoveryCluster } from '@/testkit/redisAdapterRecoveryCluster';
@@ -46,6 +47,47 @@ describe('client to daemon RPC reply delivery across Redis adapter nodes', () =>
         await targetSocket.join(buildRpcMethodRoom({ userId: 'account-one', method }));
         return { source, target, targetSocket, method };
     }
+
+    it('delivers binding status and preserves the Home timeout code through the real client codec', async () => {
+        const { source, target, targetSocket, method: fixtureMethod } = await fixture(0);
+        const machineId = fixtureMethod.slice(0, fixtureMethod.indexOf(':'));
+        const rpcMethod = RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS;
+        const method = `${machineId}:${rpcMethod}`;
+        await targetSocket.leave(buildRpcMethodRoom({ userId: 'account-one', method: fixtureMethod }));
+        await targetSocket.join(buildRpcMethodRoom({ userId: 'account-one', method }));
+        let release!: () => void;
+        const pending = new Promise<void>(resolve => { release = resolve; });
+        let hold = true;
+        const manager = new RpcHandlerManager({ scopePrefix: machineId, encryptionMode: 'plain', logger() {} });
+        manager.registerHandler(rpcMethod, async () => {
+            if (hold) await pending;
+            return { status: 'current' };
+        });
+        target.on(SOCKET_RPC_EVENTS.REQUEST, async (request: SocketRpcRequestPayload, acknowledge: (value: unknown) => void) => {
+            acknowledge(await manager.handleRequest(request));
+        });
+        const relay = (socket: Socket) => socket.on(SOCKET_RPC_EVENTS.CALL,
+            async (request: SocketRpcRequestPayload, acknowledge: (value: unknown) => void) => {
+                // The Home deadline is the controlled transport boundary; the
+                // client stays alive to consume its actual error envelope.
+                acknowledge(await forwardRpcCall({ io: source.io, targetUserId: 'account-one',
+                    method: request.method, callParams: request.params, timeoutMs: 10, callerSocketId: socket.id }));
+            });
+        source.io.on('connection', relay);
+        const ui = connect(`http://127.0.0.1:${source.port}`, {
+            path: '/v1/updates', transports: ['websocket'], reconnection: false, forceNew: true,
+        });
+        clients.push(ui);
+        const call = () => callSocketRpc({ socket: ui, target: { kind: 'machine', id: machineId },
+            method: rpcMethod, params: {}, content: { mode: 'plain' }, timeoutMs: null });
+        try {
+            await new Promise<void>(resolve => ui.once('connect', resolve));
+            expect(await call().catch((error: unknown) => error)).toMatchObject({ rpcErrorCode: 'MACHINE_RPC_TIMEOUT' });
+            hold = false;
+            release();
+            await expect(call()).resolves.toEqual({ status: 'current' });
+        } finally { release(); source.io.off('connection', relay); }
+    });
 
     it('distinguishes a connected predecessor missing a method from failed discovery and recovers through real forwarding', async () => {
         const { source, target, targetSocket, method } = await fixture();

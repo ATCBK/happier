@@ -676,6 +676,7 @@ describe('forwardRpcCall', () => {
         })).resolves.toEqual({
             ok: false,
             error: 'operation has timed out',
+            errorCode: 'MACHINE_RPC_TIMEOUT',
         });
         expect(emitWithAck).toHaveBeenCalledTimes(1);
         expect(onSubmittedUnknown).toHaveBeenCalledTimes(1);
