@@ -7,6 +7,7 @@ import type {
 } from '../../domains/state/storageTypes';
 import type { NormalizedMessage } from '../../typesRaw';
 import type { SessionListViewItem } from '../../domains/session/listing/sessionListViewData';
+import { readSessionArchivePending, type SessionArchiveOperation, type SessionArchiveOperations } from '../../domains/session/listing/sessionArchiveState';
 import { readStoredSessionMessagesFromStateLike } from '../../domains/messages/readStoredSessionMessages';
 import { isTranscriptRenderableAggregate } from '../../domains/messages/transcriptRenderableAggregate';
 import {
@@ -74,7 +75,8 @@ import {
     SESSION_RESUMING_PRESENTATION_TIMEOUT_MS,
 } from '../../domains/session/attention/deriveSessionRuntimePresentationState';
 import { normalizeSessionOrderingNumber, reconcileSessionLifecycleProjection, resolveSessionPresence } from '../../domains/session/sessionLifecycleProjection';
-import { setActiveServerSessionListCache } from '../sessionListCache';
+import { setActiveServerSessionListCache, setServerSessionListCache } from '../sessionListCache';
+import { resolveSessionListCacheServerId } from '../../domains/session/listing/sessionListPresentation';
 import { getActiveServerSnapshot } from '../../domains/server/serverRuntime';
 import { areScmWorkingSnapshotsEquivalentIgnoringFetchedAt } from '@/scm/sync/snapshotDiff';
 import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
@@ -90,13 +92,13 @@ import { persistSessionPermissionData } from './sessionPermissionPersistence';
 import { resolveMergedSessionPermissionMode } from './resolveMergedSessionPermissionMode';
 import {
     applySessionListRenderableCommitPlan,
+    refreshSessionListViewDataRowsForRenderables,
     buildNextSessionListRenderableDelta,
     buildSessionListViewDataForRenderableState,
     didSessionListRenderableListViewFieldsChangeForSettings,
     planSessionListRenderableMergeCommit,
     planSessionListRenderablePatchesCommit,
     planSessionListRenderableReplacementCommit,
-    refreshSessionListViewDataRowsForRenderables,
     shouldRebuildOnSessionPlacementFieldsChange,
 } from './sessionListRenderableCommit';
 import { clearAgentInputLocalUiStateForSession } from '@/sync/domains/input/draftValues/agentInputLocalUiStateStore';
@@ -157,6 +159,9 @@ export type SessionsDomain = {
     sessionsData: (string | Session)[] | null;
     sessionListViewData: SessionListViewItem[] | null;
     sessionListViewDataByServerId: Record<string, SessionListViewItem[] | null>;
+    sessionArchiveOperations: SessionArchiveOperations;
+    beginSessionArchive: (sessionId: string, serverId: string) => SessionArchiveOperation | null;
+    finishSessionArchive: (operation: SessionArchiveOperation) => void;
     sessionScmStatus: Record<string, ScmStatus | null>;
     sessionLastViewed: Record<string, number>;
     sessionRepositoryTreeExpandedPathsBySessionId: Record<string, string[]>;
@@ -175,11 +180,13 @@ export type SessionsDomain = {
         options?: SessionListRenderableReplacementOptions,
     ) => void;
     mergeSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
+    /** Omit the scope for active-server patches; explicit scopes are canonical server IDs. */
     applySessionListRenderablePatches: (
         patches: ReadonlyArray<Readonly<{
             sessionId: string;
             patch: Readonly<Partial<Omit<SessionListRenderableSession, 'id'>>>;
         }>>,
+        serverId?: string | null,
     ) => void;
     applyLoaded: () => void;
     applyReady: () => void;
@@ -573,6 +580,34 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
         sessionsData: null,  // Legacy - to be removed
         sessionListViewData: null,
         sessionListViewDataByServerId: {},
+        sessionArchiveOperations: {},
+        beginSessionArchive: (sessionId, serverId) => {
+            const operation = { sessionId, serverId };
+            let admitted = false;
+            set((state) => {
+                if (readSessionArchivePending(state, sessionId, serverId)) return state;
+                admitted = true;
+                return {
+                    ...state,
+                    sessionArchiveOperations: {
+                        ...state.sessionArchiveOperations,
+                        [serverId]: { ...state.sessionArchiveOperations[serverId], [sessionId]: operation },
+                    },
+                };
+            });
+            return admitted ? operation : null;
+        },
+        finishSessionArchive: (operation) => set((state) => {
+            const bucket = state.sessionArchiveOperations[operation.serverId];
+            // An account reset may have admitted a different operation while this one was awaiting I/O.
+            if (bucket?.[operation.sessionId] !== operation) return state;
+            const remaining = { ...bucket };
+            delete remaining[operation.sessionId];
+            const operations = { ...state.sessionArchiveOperations };
+            if (Object.keys(remaining).length === 0) delete operations[operation.serverId];
+            else operations[operation.serverId] = remaining;
+            return { ...state, sessionArchiveOperations: operations };
+        }),
         sessionScmStatus: {},
         sessionLastViewed,
         sessionRepositoryTreeExpandedPathsBySessionId,
@@ -1331,9 +1366,33 @@ export function createSessionsDomain<S extends SessionsDomain & SessionsDomainDe
             }
             return next;
         }),
-        applySessionListRenderablePatches: (patches) => set((state) => {
+        applySessionListRenderablePatches: (patches, serverId) => set((state) => {
             if (patches.length === 0) {
                 return state;
+            }
+
+            const targetServerId = serverId;
+            if (targetServerId && targetServerId !== getActiveServerSnapshot().serverId) {
+                const cacheServerId = resolveSessionListCacheServerId(state.sessionListViewDataByServerId, targetServerId);
+                const cached = cacheServerId ? state.sessionListViewDataByServerId[cacheServerId] : null;
+                if (!cached) return state;
+                const renderables: Record<string, SessionListRenderableSession> = {};
+                for (const item of cached) {
+                    if (item.type === 'session') renderables[item.session.id] = item.session;
+                }
+                const plan = planSessionListRenderablePatchesCommit({
+                    state: { ...state, sessionListRenderables: renderables, sessionListViewData: cached }, patches,
+                });
+                if (plan.noop) return state;
+                const projected = refreshSessionListViewDataRowsForRenderables({
+                    sessionListViewData: cached,
+                    renderables: plan.nextRenderables,
+                    sessionIds: plan.changedSessionIds,
+                });
+                return {
+                    ...state,
+                    sessionListViewDataByServerId: setServerSessionListCache(state.sessionListViewDataByServerId, targetServerId, projected),
+                };
             }
 
             const plan = planSessionListRenderablePatchesCommit({

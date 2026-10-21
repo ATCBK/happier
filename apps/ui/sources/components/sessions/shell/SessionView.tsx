@@ -1402,6 +1402,8 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
             ? t('connectedServices.authSwitch.switchFailed')
             : sessionStatus.state === 'resuming'
             ? t('session.resuming')
+            : sessionStatus.state === 'archiving'
+            ? sessionStatus.statusText
             : (inactiveStatusText || sessionStatus.statusText),
         color: sessionStatus.statusColor,
         dotColor: sessionStatus.statusDotColor,

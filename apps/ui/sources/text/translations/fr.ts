@@ -1161,6 +1161,7 @@ export const fr: TranslationStructure = {
         working: 'en cours…',
         workingRetained: 'en cours, en attente de mises à jour…',
         keptInAttention: 'maintenue en attention',
+        archiving: 'archivage…',
         backgroundActive: ({ count }: { count: number }) => `${count} en arrière-plan`,
         activityUnknown: 'statut d’activité indisponible',
         readyForReview: 'prêt pour relecture',

@@ -143,7 +143,6 @@ import {
     sessionUnarchiveWithServerScope,
 } from '@/sync/ops';
 import {
-    clearSessionVisibleWhenInactive,
     stopSessionAndMaybeArchive,
 } from '@/components/sessions/sessionStopArchiveFlow';
 import {
@@ -1322,12 +1321,8 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             stopErrorMessage: t('sessionInfo.failedToStopSession'),
             archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
             stopSession: async (target) => await sessionStopWithServerScope(target.sessionId, { serverId: target.serverId ?? null }),
-            archiveSession: async (target) => {
-                const result = await sessionArchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null });
-                if (result.success) {
-                    clearSessionVisibleWhenInactive(target.sessionId);
-                }
-                return result;
+            archiveSession: async (target, options) => {
+                return await sessionArchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null, ...options });
             },
             unarchiveSession: async (target) => await sessionUnarchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null }),
             setManualReadState: async (target, readState) => await sessionSetManualReadStateWithServerScope(
@@ -1336,8 +1331,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                 { serverId: target.serverId ?? null },
             ),
             stopSessionAndMaybeArchive: async (params) => {
-                await stopSessionAndMaybeArchive({
+                return await stopSessionAndMaybeArchive({
                     sessionId: params.sessionId,
+                    serverId: params.target.serverId,
                     hideInactiveSessions: params.hideInactiveSessions,
                     isPinned: params.isPinned,
                     archiveAfterStop: params.archiveAfterStop,

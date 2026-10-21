@@ -138,6 +138,11 @@ export interface SessionListRenderableSession {
      */
     unreadSince?: number | null;
     keepVisibleWhenInactive?: boolean;
+    /**
+     * Derived local presentation of the canonical server-scoped archive operation.
+     * Never persisted or server-materialized.
+     */
+    archiving?: boolean;
     metadataUnavailable?: boolean;
 }
 

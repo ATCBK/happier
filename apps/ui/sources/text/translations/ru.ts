@@ -5754,6 +5754,7 @@ export const ru: TranslationStructure = {
     working: "работаю...",
     workingRetained: "работает, ожидание обновлений…",
     keptInAttention: "оставлено в разделе внимания",
+    archiving: "архивация…",
     backgroundActive: ({ count }: { count: number }) => `${count} выполняется в фоне`,
     activityUnknown: "статус активности недоступен",
     readyForReview: "готово к проверке",

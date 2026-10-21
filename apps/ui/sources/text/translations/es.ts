@@ -1316,6 +1316,7 @@ export const es: TranslationStructure = {
     working: "trabajando...",
     workingRetained: "trabajando, esperando actualizaciones…",
     keptInAttention: "mantenida en atención",
+    archiving: "archivando…",
     backgroundActive: ({ count }: { count: number }) => `${count} en ejecución en segundo plano`,
     activityUnknown: "estado de actividad no disponible",
     readyForReview: "listo para revisión",

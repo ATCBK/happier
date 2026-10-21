@@ -37,7 +37,7 @@ export {
 } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 export { isFreshTimestamp };
 
-export type SessionState = 'disconnected' | 'recoverable_unservable' | 'resuming' | 'thinking' | 'background_active' | 'waiting' | 'permission_required' | 'action_required' | 'failed';
+export type SessionState = 'disconnected' | 'recoverable_unservable' | 'archiving' | 'resuming' | 'thinking' | 'background_active' | 'waiting' | 'permission_required' | 'action_required' | 'failed';
 
 export interface SessionStatus {
     state: SessionState;
@@ -262,6 +262,9 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
     // bounded post-acceptance fallback).
     // Header, composer, and list all read this same derived state, so they never disagree.
     const isResuming = (session.resumingAt ?? null) !== null;
+    // Client-owned archive lifecycle marker (see `sessionStopArchiveFlow`): the archive is
+    // committed and in flight, so it outranks every runtime state until it settles.
+    const isArchiving = 'archiving' in session && session.archiving === true;
 
     if (isArchived) {
         return {
@@ -272,6 +275,18 @@ export function getSessionStatus(session: SessionStatusSource, nowMs: number = D
             statusColor: statusColors.default,
             statusDotColor: statusColors.default,
             isPulsing: false,
+        };
+    }
+
+    if (isArchiving) {
+        return {
+            state: 'archiving',
+            isConnected: isOnline,
+            statusText: t('status.archiving'),
+            shouldShowStatus: true,
+            statusColor: statusColors.connecting,
+            statusDotColor: statusColors.connecting,
+            isPulsing: true,
         };
     }
 

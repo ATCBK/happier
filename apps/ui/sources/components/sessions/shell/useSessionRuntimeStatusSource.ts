@@ -3,6 +3,8 @@ import { useShallow } from 'zustand/react/shallow';
 
 import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { useSessionArchivePending } from '@/hooks/session/useSessionArchivePending';
 
 type SessionRuntimeStatusFields = Pick<
     Session,
@@ -63,10 +65,12 @@ function selectSessionRuntimeStatusFields(
         : foregroundFields;
 }
 
+export type SessionRuntimeStatusSource = Session & Pick<SessionListRenderableSession, 'archiving'>;
+
 export function useSessionRuntimeStatusSource(
     session: Session,
     options: UseSessionRuntimeStatusSourceOptions = {},
-): Session {
+): SessionRuntimeStatusSource {
     const sessionId = session.id;
     const subscribeToRuntimeActivity = options.subscribeToRuntimeActivity !== false;
     const runtimeFields = storage(
@@ -78,11 +82,14 @@ export function useSessionRuntimeStatusSource(
         }),
     );
 
+    const archiving = useSessionArchivePending(sessionId, session.serverId);
+
     return React.useMemo(() => {
-        if (!runtimeFields && subscribeToRuntimeActivity) return session;
+        if (!runtimeFields && subscribeToRuntimeActivity && !archiving) return session;
         return {
             ...session,
             ...runtimeFields,
+            archiving,
             ...(subscribeToRuntimeActivity
                 ? {}
                 : {
@@ -92,5 +99,5 @@ export function useSessionRuntimeStatusSource(
                     runtimeActivityRevision: undefined,
                 }),
         };
-    }, [runtimeFields, session, subscribeToRuntimeActivity]);
+    }, [archiving, runtimeFields, session, subscribeToRuntimeActivity]);
 }

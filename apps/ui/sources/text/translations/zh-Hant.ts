@@ -1992,6 +1992,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
         working: '正在工作...',
         workingRetained: '工作中，等待更新…',
         keptInAttention: '已保留在需要注意',
+        archiving: '正在封存…',
         backgroundActive: ({ count }: { count: number }) => `背景執行 ${count} 項`,
         activityUnknown: '活動狀態無法使用',
         readyForReview: '已可審閱',

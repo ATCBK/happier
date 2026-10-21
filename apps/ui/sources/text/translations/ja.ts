@@ -1634,6 +1634,7 @@ export const ja: TranslationStructure = {
     working: "作業中...",
     workingRetained: "作業中、更新待ち…",
     keptInAttention: "「確認が必要」に保持中",
+    archiving: "アーカイブ中…",
     backgroundActive: ({ count }: { count: number }) => `バックグラウンドで${count}件実行中`,
     activityUnknown: "アクティビティの状態を確認できません",
     readyForReview: "レビュー準備完了",

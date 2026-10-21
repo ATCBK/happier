@@ -128,7 +128,7 @@ function getStorageStateForTest() {
             sessionMessageSendMode: 'agent_queue',
             sessionBusySteerSendPolicy: 'steerImmediately',
         },
-        sessionListViewDataByServerId: sessionListViewDataByServerIdState,
+        sessionListRenderables: {}, sessionListViewDataByServerId: sessionListViewDataByServerIdState,
     };
 }
 

@@ -108,12 +108,12 @@ installSessionShellCommonModuleMocks({
             sessionListViewDataByServerId: Record<string, unknown>;
           }) => unknown,
         ) => {
-          const snapshot = { sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} };
+          const snapshot = { sessions: { s1: sessionState.session }, settings: {}, sessionListRenderables: {}, sessionListViewDataByServerId: {} };
           return typeof selector === 'function' ? selector(snapshot) : snapshot;
         },
         {
-          getState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} }),
-          getInitialState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListViewDataByServerId: {} }),
+          getState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListRenderables: {}, sessionListViewDataByServerId: {} }),
+          getInitialState: () => ({ sessions: { s1: sessionState.session }, settings: {}, sessionListRenderables: {}, sessionListViewDataByServerId: {} }),
           setState: () => undefined,
           subscribe: () => () => undefined,
           destroy: () => undefined,

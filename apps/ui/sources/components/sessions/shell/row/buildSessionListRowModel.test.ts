@@ -456,6 +456,25 @@ describe('buildSessionListRowModel', () => {
         expect(model.status.state).toBe('thinking');
     });
 
+    it('preserves shared archive progress when live runtime fields overlay the list row', () => {
+        const rowSession = createRenderable('s1', { active: true, activeAt: NOW_MS - 10 });
+        const model = buildSessionListRowModel({
+            item: createSessionItem({ ...rowSession, archiving: true }, { groupKind: 'date', workingPlacementReason: 'working-retained' }),
+            state: { renderable: rowSession },
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings({ runtimeNowMs: NOW_MS }),
+        });
+
+        expect(model.status.state).toBe('archiving');
+        expect(model.status.shouldShowStatus).toBe(true);
+        expect(model.presentation.secondaryLine).toBe('status');
+        expect(model.presentation.attentionIndicator).toBe('working');
+        expect(model.presentation.statusTextKey).toBeUndefined();
+        expect(model.workingIndicatorPaused).toBe(false);
+    });
+
     it('presents retained working placement as a paused working row', () => {
         const model = buildSessionListRowModel({
             item: createSessionItem(createRenderable('s1', {
