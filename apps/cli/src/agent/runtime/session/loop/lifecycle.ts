@@ -54,6 +54,7 @@ import {
   type RemoteModeStaticControl,
 } from '@/ui/remoteControl/remoteModeControl';
 import { logger } from '@/ui/logger';
+import type { StructuredInputCatalogReaders } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
@@ -216,6 +217,7 @@ async function observeAgentStreamTokenEvent(params: Readonly<{
 }
 
 export type SessionLoopLifecycleParams = Readonly<{
+  readReferenceAction?: StructuredInputCatalogReaders['readReferenceAction'];
   opts: CanonicalHostSessionRuntimeRunOptions;
   config: HostSessionRuntimeConfig;
   api: HostSessionRuntimeLoopApi;
@@ -1447,6 +1449,7 @@ export async function runSessionLoopLifecycle(params: SessionLoopLifecycleParams
       pendingQueueDrainMaxPopPerWake: resolveSessionPendingQueueMaxPopPerWake(params.opts.accountSettingsContext?.settings ?? null),
       pendingQueueDeliveryTiming: resolveSessionPendingQueueDeliveryTiming(params.opts.accountSettingsContext?.settings ?? null),
       setActiveAgentCompositionToolSelection: params.setActiveAgentCompositionToolSelection,
+      readReferenceAction: params.readReferenceAction,
       ...(daemonTurnContributionsBridge
         ? {
             resolveComposerAttachmentForDispatch: async (input) =>

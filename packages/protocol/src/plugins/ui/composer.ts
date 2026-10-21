@@ -11,6 +11,7 @@ import {
 } from '../../runtime/input/composerAttachmentV1.js';
 import { ComposerStagedMediaContentV1Schema } from '../../runtime/input/composerContentV1.js';
 import { MentionRefV1Schema } from '../../runtime/input/mentionRefV1.js';
+import { ComposerReferenceTriggerV1Schema } from '../contributions/composerReferenceProviders.js';
 import { ReviewCommentDraftMessageV1Schema } from '../../messages/structured/reviewCommentsV1.js';
 import {
   PluginContributionIdentityV1Schema,
@@ -102,6 +103,7 @@ const ComposerMentionRefV1Schema = lazyZodSchema(() => (<T extends zMini.ZodMini
   start: z.number().check(z.int(), z.nonnegative()),
   end: z.number().check(z.int(), z.positive()),
   composerReference: zMini.optional(asProtocolZod(PluginContributionIdentityV1Schema)),
+  composerReferenceTrigger: zMini.optional(ComposerReferenceTriggerV1Schema),
 })).check(zMini.refine((reference) => reference.start < reference.end, {
   path: ['end'],
   message: 'Composer reference end must be after its start.',
@@ -172,6 +174,8 @@ export const ComposerOperationV1Schema = lazyZodSchema(() => z.discriminatedUnio
     // Content stays separate from attachment-defined JSON value semantics.
     // Repeating this key is the existing attachment-add upsert path.
     content: zMini.optional(ComposerStagedMediaContentV1Schema),
+    // Insert a bound token after the host mints this attachment's identity.
+    mentionAt: z.optional(ComposerTextRangeV1Schema),
   }),
   z.strictObject({
     kind: z.literal('attachment.update'),

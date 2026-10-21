@@ -381,12 +381,10 @@ export class VoiceAgentManager {
     followContext?: SessionFollowPreparedContext | null,
     durableUserTranscriptLocalId?: string,
   ): Promise<void> {
-    const composedPrompt = followContext
-      ? renderSessionInputContextPromptV1({
-          transformedUserText: prompt,
-          sessionFollowUpdates: followContext.updates,
-        })
-      : prompt;
+    const composedPrompt = renderSessionInputContextPromptV1({
+      transformedUserText: prompt,
+      ...(followContext ? { sessionFollowUpdates: followContext.updates } : {}),
+    });
     const localInputId = durableUserTranscriptLocalId ?? randomUUID();
     let settled = false;
     let unsubscribe: (() => void) | null = null;

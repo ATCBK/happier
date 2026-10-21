@@ -8,10 +8,11 @@ import type { ComposerAttachmentResolveRequestV1, ComposerAttachmentResolveReque
 import { ComposerAttachmentResolveResultV1Schema } from '@happier-dev/protocol/plugins/contributions/composerAttachmentRuntimeV1';
 import { SessionSkillCatalogListResponseV1Schema, SessionVendorPluginCatalogListResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND } from '@happier-dev/protocol/runtime/input/imageInputV1';
-import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
-import {
-  buildSessionReferenceContextBlockForDispatch,
-} from '../prompt/sessionReferenceBlock';
+import { projectSessionInputReferencesV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
+import type { SessionAttachmentDescriptorV1 } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
+import { WorkflowDefinitionGetResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { isSameWidgetDefinitionV1, parseWidgetInstanceRefKeyV1, WidgetInstanceActionOutputSchemasV1 } from '@happier-dev/protocol/widgets';
+import type { SessionInputReferencesV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 import { browserMediaToStructuredImageInput } from '@/session/attachments/resolveTrustedSessionAttachmentLocalImagePaths';
 import { logger } from '@/ui/logger';
 
@@ -35,6 +36,7 @@ type MetadataRecord = Record<string, unknown>;
 export type StructuredInputCatalogReaders = Readonly<{
   listSkills?: () => Promise<unknown>;
   listVendorPlugins?: () => Promise<unknown>;
+  readReferenceAction?: (actionId: 'workflow.definition.get' | 'widgets.item.list' | 'widgets.catalog.list', input: unknown, signal?: AbortSignal) => Promise<unknown>;
 }>;
 
 export type StructuredInputResolutionDiagnostic = Readonly<{
@@ -177,14 +179,6 @@ function readString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function contextCharacterLength(value: string): number {
-  return Array.from(value).length;
-}
-
-function resolvedRecordsContextCharacterLength(records: readonly MetadataRecord[]): number {
-  return records.length > 0 ? contextCharacterLength(JSON.stringify(records)) : 0;
-}
-
 type CatalogRead<TItem> =
   | Readonly<{ ok: true; items: readonly TItem[] }>
   | Readonly<{ ok: false; reason: StructuredInputResolutionDiagnostic['reason'] }>;
@@ -283,7 +277,7 @@ function buildVendorPluginMentionRecord(item: MetadataRecord): MetadataRecord {
  */
 function collectReferencedOpaques(
   mentions: readonly MentionRefV1[],
-  kind: typeof MENTION_KIND_V1.skill | typeof MENTION_KIND_V1.vendorPlugin,
+  kind: typeof MENTION_KIND_V1.skill | typeof MENTION_KIND_V1.vendorPlugin | typeof MENTION_KIND_V1.workflow | typeof MENTION_KIND_V1.widget,
 ): ReadonlyArray<Readonly<{ ref: string; opaque: string }>> {
   const out: Array<Readonly<{ ref: string; opaque: string }>> = [];
   const seen = new Set<string>();
@@ -296,6 +290,48 @@ function collectReferencedOpaques(
     out.push({ ref: mention.ref, opaque });
   }
   return out;
+}
+
+async function resolveEntityMentions(params: Readonly<{
+  mentions: readonly MentionRefV1[];
+  read: StructuredInputCatalogReaders['readReferenceAction'];
+  signal?: AbortSignal;
+}>): Promise<NonNullable<SessionInputReferencesV1['resolvedMentions']>> {
+  const read = async (actionId: Parameters<NonNullable<StructuredInputCatalogReaders['readReferenceAction']>>[0], input: unknown) => {
+    params.signal?.throwIfAborted();
+    try {
+      const result = await params.read?.(actionId, input, params.signal);
+      params.signal?.throwIfAborted();
+      return result;
+    } catch {
+      params.signal?.throwIfAborted();
+      logger.infoFile(`[PromptDispatch] ${actionId} reference lookup unavailable`);
+      return null;
+    }
+  };
+  const workflows = collectReferencedOpaques(params.mentions, MENTION_KIND_V1.workflow).map(async reference => {
+    const result = WorkflowDefinitionGetResultV1Schema.safeParse(await read('workflow.definition.get', { definitionId: reference.opaque }));
+    return result.success && result.data.definitionId === reference.opaque
+      ? { ref: reference.ref, available: true, label: result.data.metadata.title, readAction: 'workflow.definition.get' }
+      : { ref: reference.ref, available: false };
+  });
+  const widgets = collectReferencedOpaques(params.mentions, MENTION_KIND_V1.widget).map(async reference => {
+    const ref = parseWidgetInstanceRefKeyV1(reference.opaque);
+    if (!ref) return { ref: reference.ref, available: false };
+    const result = WidgetInstanceActionOutputSchemasV1['widgets.item.list'].safeParse(await read('widgets.item.list', { surface: ref.surface }));
+    if (!result.success || JSON.stringify(result.data.surface) !== JSON.stringify(ref.surface)) return { ref: reference.ref, available: false };
+    const instance = result.data.instances.find(entry => entry.instance.id === ref.instanceId)?.instance;
+    if (!instance) return { ref: reference.ref, available: false };
+    let label = instance.displayName;
+    if (!label) {
+      const catalog = WidgetInstanceActionOutputSchemasV1['widgets.catalog.list'].safeParse(await read('widgets.catalog.list', { surface: ref.surface }));
+      if (catalog.success && JSON.stringify(catalog.data.surface) === JSON.stringify(ref.surface)) {
+        label = catalog.data.entries.find(entry => isSameWidgetDefinitionV1(entry.definition, instance.definition))?.title;
+      }
+    }
+    return { ref: reference.ref, available: true, ...(label ? { label } : {}), readAction: 'widgets.item.list' };
+  });
+  return await Promise.all([...workflows, ...widgets]);
 }
 
 async function resolveKind(params: Readonly<{
@@ -746,9 +782,11 @@ function projectSessionMediaImageInputs(params: Readonly<{
  */
 export async function resolveStructuredInputProviderDispatchContext(params: Readonly<{
   structuredInput: HappierStructuredInputV1 | null | undefined;
+  attachments?: readonly SessionAttachmentDescriptorV1[];
   /** Exact durable items read from the canonical SessionMedia message envelope. */
   sessionMedia?: readonly SessionMediaItemV1[];
   catalogs?: StructuredInputCatalogReaders;
+  signal?: AbortSignal;
   composerReferences?: Readonly<{
     resolve: StructuredInputComposerReferenceResolver['resolve'];
     signal: AbortSignal;
@@ -766,9 +804,7 @@ export async function resolveStructuredInputProviderDispatchContext(params: Read
     return Object.freeze({
       structuredInput: envelope,
       promptContext: Object.freeze({
-        sessionReferenceBlock: '',
-        composerReferences: Object.freeze([]),
-        composerAttachments: Object.freeze([]),
+        references: Object.freeze({ uploads: params.attachments ?? [] }),
       }),
     });
   }
@@ -783,7 +819,7 @@ export async function resolveStructuredInputProviderDispatchContext(params: Read
   const catalogs = params.catalogs ?? {};
   const unresolved: string[] = [];
   const composerReferences = collectComposerReferences(sources.mentions, unresolved);
-  const [skillMentions, vendorPluginMentions, composerContextEntries, attachmentProjection] = await Promise.all([
+  const [skillMentions, vendorPluginMentions, composerContextEntries, attachmentProjection, resolvedMentions] = await Promise.all([
     resolveKind({
       references: collectReferencedOpaques(sources.mentions, MENTION_KIND_V1.skill),
       read: catalogs.listSkills,
@@ -828,33 +864,10 @@ export async function resolveStructuredInputProviderDispatchContext(params: Read
           }
         : {}),
     }),
+    resolveEntityMentions({ mentions: sources.mentions, read: catalogs.readReferenceAction, signal: params.signal }),
   ]);
 
   if (unresolved.length > 0) throw new StructuredInputMentionResolutionError(unresolved);
-
-  const sessionReferenceContextBlock =
-    buildSessionReferenceContextBlockForDispatch(sources.mentions);
-  const promptContext = Object.freeze({
-    sessionReferenceBlock: sessionReferenceContextBlock,
-    ...(envelope.browserContext ? { browserContext: envelope.browserContext } : {}),
-    composerReferences: Object.freeze([...composerContextEntries]),
-    composerAttachments: Object.freeze([...attachmentProjection.contextEntries]),
-  });
-  const contextBlock = renderSessionInputContextPromptV1({
-    ...promptContext,
-    // The mention resolver's budget is not an additional browser-context cutoff.
-    browserContext: undefined,
-    transformedUserText: '',
-  });
-  const resolvedContextChars = contextCharacterLength(contextBlock)
-    + resolvedRecordsContextCharacterLength(skillMentions)
-    + resolvedRecordsContextCharacterLength(vendorPluginMentions);
-  if (resolvedContextChars > MENTION_BOUNDS.maxResolvedContextChars) {
-    throw new ResolvedMentionContextTooLargeError(
-      resolvedContextChars,
-      MENTION_BOUNDS.maxResolvedContextChars,
-    );
-  }
 
   const resolvedEnvelope: MetadataRecord = { ...envelope };
   // This is the only owner permitted to publish an Agent-facing resolved projection. A
@@ -897,8 +910,28 @@ export async function resolveStructuredInputProviderDispatchContext(params: Read
     }
     resolvedEnvelope.imageInputs = [...(envelope.imageInputs ?? []), ...projectedImages];
   }
+  const structuredInput = AgentDispatchStructuredInputV1Schema.parse(resolvedEnvelope);
+  const references = Object.freeze({
+    mentions: sources.mentions,
+    resolvedMentions,
+    composerReferences: composerContextEntries,
+    composerAttachments: attachmentProjection.contextEntries,
+    composerAttachmentInputs: attachments,
+    uploads: params.attachments ?? [],
+    imageInputs: structuredInput.imageInputs ?? [],
+    skillMentions: structuredInput.skillMentions ?? [],
+    vendorPluginMentions: structuredInput.vendorPluginMentions ?? [],
+  });
+  const resolvedContextChars = projectSessionInputReferencesV1({ text: '', references }).resolvedContextChars;
+  if (resolvedContextChars > MENTION_BOUNDS.maxResolvedContextChars) {
+    throw new ResolvedMentionContextTooLargeError(resolvedContextChars, MENTION_BOUNDS.maxResolvedContextChars);
+  }
+  const promptContext = Object.freeze({
+    references,
+    ...(envelope.browserContext ? { browserContext: envelope.browserContext } : {}),
+  });
   return Object.freeze({
-    structuredInput: AgentDispatchStructuredInputV1Schema.parse(resolvedEnvelope),
+    structuredInput,
     promptContext,
   });
 }

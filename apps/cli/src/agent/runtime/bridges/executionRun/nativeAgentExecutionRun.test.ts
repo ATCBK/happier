@@ -969,14 +969,14 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
             const delivery = createRetainedExecutionRunInputDelivery(options);
             const outcomes: unknown[] = [];
             const unsubscribe = delivery.delivery.subscribeProviderInputOutcomes?.((outcome) => outcomes.push(outcome));
+            const token = '[Source](happier-ref:session:source-session)';
             const reviewInput = buildReviewCommentsOutboundMessage({ sessionId: 'session-parent',
                 drafts: [{ id: 'saved-change', filePath: 'src/value.ts', source: 'diff',
                     anchor: { kind: 'diffLine', startLine: 1, side: 'after', oldLine: 1, newLine: 1 },
                     snapshot: { selectedLines: ['+const value = "blue";'], beforeContext: [], afterContext: [] },
                     body: 'Explain the saved blue value.', createdAt: 1 }],
-                additionalMessage: '@session:source First input',
+                additionalMessage: `${token} First input`,
             });
-            const token = '@session:source';
             const mentionStart = reviewInput.text.indexOf(token);
             const firstInput = {
                 role: 'user' as const, content: { type: 'text' as const, text: reviewInput.text },
@@ -1008,8 +1008,9 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 expect(requests.at(-1)?.input.text).toContain('Saved captured explanation');
                 expect(requests.at(-1)?.input.text).toContain('Explain the saved blue value.');
                 expect(requests.at(-1)?.input.text).toContain('const value');
-                expect(requests.at(-1)?.input.text).toContain('<happier_session_reference>');
+                expect(requests.at(-1)?.input.text).toContain('<happier_references v="1">');
                 expect(requests.at(-1)?.input.text).toContain('source-session');
+                expect(requests.at(-1)?.input.text).not.toContain('happier-ref:');
                 expect(requests.at(-1)?.input.text).toContain('discussion-1');
                 expect(requests.at(-1)?.input.text).toContain('session.transcript.get');
                 expect(requests.at(-1)?.input.text).toContain('discussion.read');

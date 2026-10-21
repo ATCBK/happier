@@ -209,7 +209,7 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
 
     expect(runtime.beginTurnLifecycle).toHaveBeenCalledOnce();
     expect(runtime.sendTurnPrompt).toHaveBeenCalledWith(
-      expect.stringContaining('<happier_session_reference>'),
+      expect.stringContaining('<happier_references v="1">'),
       {
         localId: 'local-session-reference',
         localIds: ['local-session-reference'],
@@ -289,7 +289,7 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
 
     const dispatchPrompt = result.runtime.sendTurnPrompt.mock.calls[0]?.[0] ?? '';
     const provenance = dispatchPrompt.indexOf('PROVENANCE_MARKER');
-    const sessionReference = dispatchPrompt.indexOf('<happier_session_reference>');
+    const sessionReference = dispatchPrompt.indexOf('<happier_references v="1">');
     const composerReference = dispatchPrompt.indexOf('COMPOSER_REFERENCE_MARKER');
     const attachment = dispatchPrompt.indexOf('ATTACHMENT_MARKER');
     const prose = dispatchPrompt.indexOf('PROSE_MARKER');
@@ -582,8 +582,12 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
       withSessionReference: boolean;
       sessionMentionCount?: number;
       sessionMentionLabel?: string;
+      sessionToken?: string;
       seedTextChars?: number;
       seedText?: string;
+      userText?: string;
+      extraMentions?: NonNullable<PermissionModeQueuedPrompt['structuredInput']>['mentions'];
+      attachments?: PermissionModeQueuedPrompt['attachments'];
       failAssociationRelease?: boolean;
       onHarnessCreated?: (harness: Readonly<{
         runtime: ReturnType<typeof createRuntime>;
@@ -632,13 +636,14 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
       const runtime = createRuntime();
       params.onHarnessCreated?.({ runtime, session });
       queue.push({
-        text: USER_TEXT,
+        text: params.userText ?? USER_TEXT,
         localId: 'local-seeded-budget',
+        ...(params.attachments ? { attachments: params.attachments } : {}),
         ...(params.withSessionReference
           ? {
               structuredInput: {
                 v: 1 as const,
-                mentions: Array.from(
+                mentions: [...Array.from(
                   { length: params.sessionMentionCount ?? 1 },
                   (_unused, index) => ({
                     kind: MENTION_KIND_V1.session,
@@ -646,14 +651,14 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
                       MENTION_KIND_V1.session,
                       index === 0 ? 'source-session' : `source-session-${index}`,
                     ),
-                    token: '@session:source',
+                    token: params.sessionToken ?? '@session:source',
                     start: 0,
                     end: 15,
                     ...(params.sessionMentionLabel === undefined
                       ? {}
                       : { label: params.sessionMentionLabel }),
                   }),
-                ),
+                ), ...params.extraMentions ?? []],
               },
             }
           : {}),
@@ -691,12 +696,35 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
 
     const USER_TEXT = 'continue please';
 
+    it('preserves the reserved seed with Session, contributed and upload references in one projection', async () => {
+      const sessionRef = buildMentionRefForKindV1(MENTION_KIND_V1.session, 'source-session');
+      const selected = buildComposerReferenceMentionPayloadV1({ reference: { pluginId: 'acme.issues', localId: 'issues' },
+        candidate: { id: 'issue:42', label: 'Issue 42' } });
+      const issueToken = `[Issue 42](happier-ref:${selected.ref})`;
+      const sessionToken = `[Auth](happier-ref:${sessionRef})`;
+      const seedTextChars = configuration.replaySeedMaxChars - HAPPIER_REPLAY_SEED_DISPATCH_RESERVED_CHARS;
+      const { prompt } = await runSeededPrompt({ withSessionReference: true, seedTextChars, sessionToken, sessionMentionLabel: 'Auth',
+        userText: `continue ${sessionToken} ${issueToken} [report](happier-ref:attachment:report)`,
+        extraMentions: [{ ...selected, token: issueToken }],
+        attachments: [{ id: 'report', name: 'report.txt', path: '.happier/uploads/messages/input/report.txt', sizeBytes: 42 }],
+        onHarnessCreated: ({ runtime }) => Object.assign(runtime, { resolveComposerReference: async () => ({
+          id: 'issue:42', label: 'Issue 42', context: 'Current issue context',
+        }) }),
+      });
+      expect(prompt).toContain('S'.repeat(seedTextChars));
+      expect(prompt).toContain('Current issue context');
+      expect(prompt).toContain('[File: report.txt]');
+      expect(prompt).toContain('@Session "Auth"');
+      expect(prompt).not.toContain('happier-ref:');
+      expect(prompt.match(/<happier_references v="1">/g)).toHaveLength(1);
+    });
+
     it('keeps the seed at its full configured cap when no Session reference is composed', async () => {
       const { prompt } = await runSeededPrompt({ withSessionReference: false });
 
       // Control: without the block the seed spends the whole total, so the clip
       // below is caused by the reference block and not by some other bound.
-      expect(prompt).not.toContain('<happier_session_reference>');
+      expect(prompt).not.toContain('<happier_references v="1">');
       expect(prompt.length - USER_TEXT.length - 2).toBe(configuration.replaySeedMaxChars);
     });
 
@@ -723,7 +751,7 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
         seedText: oversizedSeed,
       });
 
-      expect(prompt).not.toContain('<happier_session_reference>');
+      expect(prompt).not.toContain('<happier_references v="1">');
       expect(prompt.length - USER_TEXT.length - 2).toBeLessThanOrEqual(configuration.replaySeedMaxChars);
       expect(prompt).toContain('omitted to fit the context budget');
     });
@@ -759,7 +787,7 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
 
       // Control: this really is the no-room case, not an ordinary clip — the
       // reference block is there and not one character of the seed is.
-      expect(prompt).toContain('<happier_session_reference>');
+      expect(prompt).toContain('<happier_references v="1">');
       expect(prompt).toContain(USER_TEXT);
       expect(prompt).not.toContain('SSSSSSSSSS');
 
@@ -823,7 +851,7 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
       });
 
       // Control: the astral block really was composed into this prompt.
-      expect(prompt).toContain('<happier_session_reference>');
+      expect(prompt).toContain('<happier_references v="1">');
       expect(prompt).toContain('\u{1F680}');
       // The seed arrives WHOLE. This fixture's seed is not sealed transcript, so
       // a refit that fires cannot fit it by grammar and drops it entirely —
@@ -835,7 +863,7 @@ describe('runPermissionModePromptLoop Session reference dispatch', () => {
     it('clips the seed so the seed plus the Session reference stay inside one configured total', async () => {
       const { prompt } = await runSeededPrompt({ withSessionReference: true });
 
-      expect(prompt).toContain('<happier_session_reference>');
+      expect(prompt).toContain('<happier_references v="1">');
       expect(prompt).toContain('source-session');
       // prompt = referenceBlock + "\n\n" + seed + "\n\n" + userText
       expect(prompt.length - USER_TEXT.length - 4).toBeLessThanOrEqual(configuration.replaySeedMaxChars);

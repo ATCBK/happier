@@ -267,7 +267,8 @@ describe('session input prompt context V1', () => {
   it('owns the complete provenance, Session, Composer, attachment, and prose order', () => {
     const rendered = renderSessionInputContextPromptV1({
       provenanceBlock: 'PROVENANCE_MARKER',
-      sessionReferenceBlock: 'SESSION_REFERENCE_MARKER',
+      references: {
+      mentions: [{ kind: 'happier.session', ref: 'session:source', token: '@source', label: 'SESSION_REFERENCE_MARKER' }],
       composerReferences: [{
         reference: { pluginId: 'acme.issues', localId: 'issues' },
         candidateId: 'issue:42',
@@ -288,6 +289,7 @@ describe('session input prompt context V1', () => {
         },
         context: 'ATTACHMENT_MARKER',
       }],
+      },
       transformedUserText: 'PROSE_MARKER',
     });
 

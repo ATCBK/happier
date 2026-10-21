@@ -2169,12 +2169,15 @@ describe('runPermissionModePromptLoop', () => {
       formatPromptErrorMessage: (error) => `Error: ${String(error)}`,
     });
 
-    expect(registerProviderAcceptedEffect).toHaveBeenCalledWith('local-1', expect.any(Function));
+    expect(registerProviderAcceptedEffect.mock.calls[0]?.[0]).toBe('local-1');
+    expect(registerProviderAcceptedEffect.mock.calls[0]?.[1]).toBeTypeOf('function');
     expect(runtime.sendTurnPrompt).toHaveBeenCalledWith('hello', localIdentityMeta('local-1'));
   });
 
   it('passes queued structured input through the runtime prompt metadata', async () => {
     const session = createPromptLoopSession();
+    // The Session persistence/transport boundary admits this protected input.
+    session.reconcileSessionInputForProviderDispatch = async () => 'admitted';
     const queue = createModeQueue();
     const runtime = createRuntime();
     const structuredInput = {
@@ -4049,7 +4052,7 @@ describe('runPermissionModePromptLoop', () => {
         vendorPluginMentions: [{ vendorPluginRef: 'plugin://linear@happier', label: 'Linear' }],
       },
     });
-    expect(runtime.sendTurnPrompt).toHaveBeenCalledWith(expect.stringContaining('<happier_composer_reference_context v="1">'), expect.anything());
+    expect(runtime.sendTurnPrompt).toHaveBeenCalledWith(expect.stringContaining('<happier_references v="1">'), expect.anything());
     expect(JSON.stringify(runtime.sendTurnPrompt.mock.calls[0]?.[1])).not.toContain('The issue is ready for review.');
   });
 

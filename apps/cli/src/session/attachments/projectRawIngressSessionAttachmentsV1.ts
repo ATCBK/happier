@@ -1,5 +1,5 @@
 import { RawIngressStructuredInputV1Schema, HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, normalizeSessionAttachmentUploadPath, sanitizeHappierStructuredInputV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
-import { buildAttachmentMessageMeta, buildUploadedAttachment, formatAttachmentsBlock, type UploadedAttachment } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
+import { buildAttachmentMessageMeta, buildUploadedAttachment, type UploadedAttachment } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 import type { TransferSessionStore } from '@happier-dev/transfers/node';
 import type { SessionAttachmentHandleV1 } from '@happier-dev/protocol';
 import { SessionStructuredInputAdmissionError } from '../services/admitSessionStructuredInputV1';
@@ -40,7 +40,7 @@ export function projectRawIngressSessionAttachmentsV1(params: Readonly<{
     const issued = params.resolveSessionAttachment(handle);
     if (!issued) throw new SessionAttachmentIssuedRecordMissingError();
     const mimeType = inferSessionMediaMimeTypeFromName(issued.name);
-    return buildUploadedAttachment({ name: issued.name, path: issued.displayPath,
+    return buildUploadedAttachment({ id: issued.handle.id, name: issued.name, path: issued.displayPath,
       sizeBytes: issued.sizeBytes, sha256: issued.sha256, attachmentHandle: { ...issued.handle },
       ...(mimeType ? { mimeType } : {}),
     });
@@ -75,7 +75,7 @@ export function projectSessionAttachmentInputV1(params: Readonly<{
     allowedLocalImagePaths,
   })?.imageInputs ?? [];
   return {
-    text: [params.text, formatAttachmentsBlock(uploaded)].filter(Boolean).join('\n\n'),
+    text: params.text,
     meta: {
       ...params.meta, [slot]: attachmentMeta.happier,
       [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: { ...envelope,

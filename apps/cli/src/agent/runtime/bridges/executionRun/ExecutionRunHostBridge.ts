@@ -797,6 +797,7 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
       authorizeProviderEffect: () => this.authorizeConnectedServicesProviderEffect(runId),
       structuredInputContext: {
         catalogs: {
+          ...(host.readReferenceAction ? { readReferenceAction: host.readReferenceAction } : {}),
           ...(typeof host.listSkills === 'function' ? { listSkills: host.listSkills } : {}),
           ...(typeof host.listVendorPlugins === 'function'
             ? { listVendorPlugins: host.listVendorPlugins }

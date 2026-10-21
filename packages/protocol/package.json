@@ -2895,6 +2895,21 @@
       "types": "./dist/sessions/metadata/sessionWorkspaceLocationV1.d.ts",
       "default": "./dist/sessions/metadata/sessionWorkspaceLocationV1.js"
     },
+    "./sessions/messages/sessionInputReferenceProjectionV1": {
+      "happier-source": "./src/sessions/messages/sessionInputReferenceProjectionV1.ts",
+      "types": "./dist/sessions/messages/sessionInputReferenceProjectionV1.d.ts",
+      "default": "./dist/sessions/messages/sessionInputReferenceProjectionV1.js"
+    },
+    "./runtime/input/composerSuggestionTokenV1": {
+      "happier-source": "./src/runtime/input/composerSuggestionTokenV1.ts",
+      "types": "./dist/runtime/input/composerSuggestionTokenV1.d.ts",
+      "default": "./dist/runtime/input/composerSuggestionTokenV1.js"
+    },
+    "./runtime/input/inlineReferenceTokenV1": {
+      "happier-source": "./src/runtime/input/inlineReferenceTokenV1.ts",
+      "types": "./dist/runtime/input/inlineReferenceTokenV1.d.ts",
+      "default": "./dist/runtime/input/inlineReferenceTokenV1.js"
+    },
     "./runtime/input/mentionRefV1": {
       "happier-source": "./src/runtime/input/mentionRefV1.ts",
       "types": "./dist/runtime/input/mentionRefV1.d.ts",

@@ -1,3 +1,4 @@
+export { projectInlineReferenceLabelsV1, projectSessionInputReferencesV1, type SessionInputReferencesV1 } from './messages/sessionInputReferenceProjectionV1.js';
 export {
   SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
   SessionUsageLimitRecoveryV1Schema,

@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { AgentSessionStartupInstructionsV1Schema } from '@happier-dev/protocol/runtime/agentSessionStartupInstructionsV1';
-import { readStructuredInputMentionSourcesV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { validatePluginHookPayloadV1 } from '@happier-dev/protocol/plugins/hooks';
 import { isModelRefGrantedV1, isPermissionModeGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import type { SessionPendingQueueDeliveryTiming, ProviderBoundModelRef, SessionModelTransitionResultV1, AgentSessionStartupInstructionsMarkerV1 } from '@happier-dev/protocol';
@@ -49,7 +48,7 @@ import {
   type ReplaySeedSettlementOutcome,
 } from '@/agent/runtime/replaySeed/replaySeedV1';
 import type { UnsettledReplaySeedRetirement } from '@/agent/runtime/replaySeed/unsettledReplaySeedRetirement';
-import { buildSessionReferenceContextBlockForDispatch } from '@/agent/runtime/prompt/sessionReferenceBlock';
+import { projectSessionInputReferencesV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 import { isAbortLikeError } from '@/agent/runtime/lifecycle/classifyAbortLikeError';
 import { isAgentNativeResumeIdentityMismatchError } from '@/session/agentTransition/agentNativeReturn';
 import {
@@ -73,8 +72,8 @@ import {
   resetAssistantTextSnapshotTurnScope,
   type AssistantTextSnapshotTurnScope,
 } from '@/agent/runtime/turns/assistantTextSnapshotTurnScope';
-import type { StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
-import { prepareSessionInputForProviderDispatch, readStructuredInputPreparationFailure, type ComposerAttachmentDispatchResolver } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
+import type { StructuredInputCatalogReaders, StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
+import { prepareSessionInputForProviderDispatch, resolveSessionInputForProviderDispatch, readStructuredInputPreparationFailure, type ComposerAttachmentDispatchResolver } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 import { logger } from '@/ui/logger';
 import type { AgentCompositionToolSelection } from '@/plugins/runtime/hooks/execution/dispatchAgentTurnHooks';
 import type { HostPreparedContext } from '@/agent/runtime/session/contextOnly/hostContextOnlyInput';
@@ -684,6 +683,7 @@ export async function runPermissionModePromptLoop(opts: {
    * only its immediately-before-dispatch call and supplies cancellation.
    */
   resolveComposerAttachmentForDispatch?: ComposerAttachmentDispatchResolver;
+  readReferenceAction?: StructuredInputCatalogReaders['readReferenceAction'];
   transformAgentContextBeforeDispatch?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown>;
   transformAgentContextErrorPolicy?: 'fallback' | 'throw';
   transitionModelSelectionBeforePrompt?: (
@@ -1396,39 +1396,36 @@ export async function runPermissionModePromptLoop(opts: {
         releaseUndispatchedReplaySeed = resolvedReplaySeed?.seedApplied
           ? resolvedReplaySeed.releaseUndispatchedSeed
           : null;
-        // ONE total, not two. The replay seed's cap was enforced when the seed was built
-        // and sealed into Session metadata, but the Happier Session-reference block is
-        // composed into the dispatch prompt below — so without this refit the prompt
-        // exceeds the configured seed total by up to the reference bound. The seed is the
-        // part that gives way: the block carries Session identities that must not be
-        // truncated, while the seed states its own budget loss. The block is a pure
-        // projection of this message's own mention envelope, derived here from the same
-        // canonical owners the composition below uses, so the reservation and the rendered
-        // block cannot disagree.
-        //
-        // The charge below is the block's UTF-16 length plus the 2 units of the `\n\n`
-        // that joins it — the unit `@happier-dev/agents` counts this total in, and the
-        // unit `HAPPIER_REPLAY_SEED_DISPATCH_RESERVED_CHARS` reserved when the seed was
-        // built. The block's renderer bounds itself in that same unit, so this charge can
-        // never exceed the reservation and the refit is a no-op unless the total itself
-        // shrank between sealing and dispatch (a lowered `HAPPIER_REPLAY_MAX_SEED_CHARS`,
-        // or an ingress that sealed against a larger per-request `maxSeedChars`).
+        const referenceServices = {
+          sessionId: opts.session.sessionId,
+          catalogs: {
+            readReferenceAction: opts.readReferenceAction,
+            ...(typeof opts.runtime.listSkills === 'function' ? { listSkills: () => opts.runtime.listSkills!() } : {}),
+            ...(typeof opts.runtime.listVendorPlugins === 'function' ? { listVendorPlugins: () => opts.runtime.listVendorPlugins!() } : {}),
+          },
+          ...(opts.runtime.resolveComposerReference ? { resolveComposerReference: (input: Parameters<StructuredInputComposerReferenceResolver['resolve']>[0]) => opts.runtime.resolveComposerReference!(input) } : {}),
+          ...(opts.resolveComposerAttachmentForDispatch ? { resolveComposerAttachmentForDispatch: opts.resolveComposerAttachmentForDispatch } : {}),
+        };
+        const resolvedInputContext = await resolveSessionInputForProviderDispatch({
+          prompt: message.message, signal: dispatchAbortSignal,
+          localId: localIds.length === 1 ? localId : null, services: referenceServices,
+        });
+        // Replay and dispatch consume the same current projection. Only its bounded
+        // context spends the existing UTF-16 reservation; upload listings remain outside.
         let replaySeedWasOmitted = false;
         const seedResolution = ((): { providerPrompt: string } => {
           if (!resolvedReplaySeed) return { providerPrompt: message.message.text };
           if (!resolvedReplaySeed.seedApplied) return resolvedReplaySeed;
-          const sessionReferenceBlock = message.message.structuredInput
-            ? buildSessionReferenceContextBlockForDispatch(
-                readStructuredInputMentionSourcesV1(message.message.structuredInput).mentions,
-              )
-            : '';
+          const referenceChars = projectSessionInputReferencesV1({
+            text: '', references: resolvedInputContext.promptContext.references,
+          }).boundedBlockChars;
           const fittedSeedText = fitHappierReplaySeedWithinTotalBudget({
             seedText: resolvedReplaySeed.seedText,
             // A persisted seed may have been sealed under a larger Account or
             // wire cap than this daemon allows. Even without a Session
             // reference it therefore goes through the one dispatch budget;
             // only the actual rendered reference block consumes a reservation.
-            reservedChars: sessionReferenceBlock.length === 0 ? 0 : sessionReferenceBlock.length + 2,
+            reservedChars: referenceChars === 0 ? 0 : referenceChars + 2,
             maxPromptChars: configuration.replaySeedMaxChars,
           });
           if (!fittedSeedText) {
@@ -1561,8 +1558,9 @@ export async function runPermissionModePromptLoop(opts: {
           providerNativeCommand,
           signal: dispatchAbortSignal,
           localId: localIds.length === 1 ? localId : null,
+          resolvedContext: resolvedInputContext,
           services: {
-            sessionId: opts.session.sessionId,
+            ...referenceServices,
             reconcileSessionInputForProviderDispatch: input => opts.session.reconcileSessionInputForProviderDispatch(input),
             ...(opts.readActiveModelSelection ? { modelRequest: { scope: modelRequestScope,
               startupInstructions: effectiveAppendSystemPrompt,
@@ -1574,12 +1572,6 @@ export async function runPermissionModePromptLoop(opts: {
             retainPromptComposition: async composition => {
               await opts.session.enqueueSessionEventCommitted({ type: 'prompt-composition', composition });
             },
-            catalogs: {
-              ...(typeof opts.runtime.listSkills === 'function' ? { listSkills: () => opts.runtime.listSkills!() } : {}),
-              ...(typeof opts.runtime.listVendorPlugins === 'function' ? { listVendorPlugins: () => opts.runtime.listVendorPlugins!() } : {}),
-            },
-            ...(opts.runtime.resolveComposerReference ? { resolveComposerReference: (input) => opts.runtime.resolveComposerReference!(input) } : {}),
-            ...(opts.resolveComposerAttachmentForDispatch ? { resolveComposerAttachmentForDispatch: opts.resolveComposerAttachmentForDispatch } : {}),
           },
         });
         recordPreparationPhase('input_preparation');

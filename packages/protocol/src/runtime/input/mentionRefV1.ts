@@ -21,6 +21,8 @@ export const MENTION_KIND_V1 = {
   skill: 'happier.skill',
   vendorPlugin: 'happier.vendorPlugin',
   session: 'happier.session',
+  workflow: 'happier.workflow',
+  widget: 'happier.widget',
   workflowInput: 'happier.workflowInput',
 } as const;
 
@@ -32,15 +34,20 @@ export const MENTION_REF_SCHEME_V1 = {
   [MENTION_KIND_V1.skill]: 'skill',
   [MENTION_KIND_V1.vendorPlugin]: 'vendorPlugin',
   [MENTION_KIND_V1.session]: 'session',
+  [MENTION_KIND_V1.workflow]: 'workflow',
+  [MENTION_KIND_V1.widget]: 'widget',
   [MENTION_KIND_V1.workflowInput]: 'workflowInput',
 } as const satisfies Readonly<Record<BuiltInMentionKindV1, string>>;
+
+const MAX_MENTION_LABEL_CHARS = 256;
+const MAX_MENTION_REF_CHARS = 512;
 
 export const MENTION_BOUNDS = {
   maxPerMessage: 64,
   maxKindChars: 64,
-  maxRefChars: 512,
-  maxTokenChars: 256,
-  maxLabelChars: 256,
+  maxRefChars: MAX_MENTION_REF_CHARS,
+  maxTokenChars: 2 * MAX_MENTION_LABEL_CHARS + MAX_MENTION_REF_CHARS + 16,
+  maxLabelChars: MAX_MENTION_LABEL_CHARS,
   maxReferenceBlockChars: 2_000,
   /** Bounds the sum of all resolved reference context in one message (D-27). */
   maxResolvedContextChars: 2_000,
@@ -117,7 +124,7 @@ export function parseMentionRefV1(ref: string): Readonly<{ scheme: string; opaqu
  *
  * A reference is IDENTITY plus the token that names it — never a position. Offsets were the
  * original contract and were removed once it was clear that no consumer read one: the
- * provider projection (`sessionReferenceBlock`) and the transcript row
+ * provider projection (`sessionInputReferenceProjectionV1`) and the transcript row
  * (`messageStructuredReferences`) both work from `{kind, ref}` and both deduplicate position
  * away. What positions did instead was delete correct references, because the submitted text
  * is a TRANSFORM of the composed text — `messageToSend.trim()`, an attachments block, a
@@ -175,7 +182,7 @@ export function readMentionRefOpaqueForKindV1(kind: BuiltInMentionKindV1, ref: s
  * - `happier.vendorPlugin` — opaque is the marketplace ref; the token is the plugin
  *   name. **Refused.**
  * - `happier.session` — opaque is the session id; the token is a title slug plus a
- *   short id tail, so `sessionReferenceBlock` has nothing to resolve. **Refused.**
+ *   short id tail, so the reference projection has nothing to resolve. **Refused.**
  * - `happier.composerReference` — opaque is a provider-defined candidate id and the
  *   contributing plugin identity rides alongside it; the token is the candidate label.
  *   **Refused.**

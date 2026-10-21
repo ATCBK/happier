@@ -1,0 +1,28 @@
+{
+  "text": "Read @session:source\n\nAttachments: open and analyze these files before answering.\n[attachments]\n- .happier/uploads/messages/m1/notes.txt (notes.txt, text/plain, 42 bytes)\n[/attachments]",
+  "meta": {
+    "happierStructuredInputV1": {
+      "v": 1,
+      "mentions": [
+        {
+          "kind": "happier.session",
+          "ref": "session:source-session",
+          "token": "@session:source"
+        }
+      ]
+    },
+    "happier": {
+      "kind": "attachments.v1",
+      "payload": {
+        "attachments": [
+          {
+            "name": "notes.txt",
+            "path": ".happier/uploads/messages/m1/notes.txt",
+            "mimeType": "text/plain",
+            "sizeBytes": 42
+          }
+        ]
+      }
+    }
+  }
+}

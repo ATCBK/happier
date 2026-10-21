@@ -9222,13 +9222,24 @@ export {
   type StructuredInputDispatchContextV1,
 } from './runtime/input/structuredInputV1.js';
 export {
+  INLINE_REFERENCE_HREF_PREFIX_V1,
+  INLINE_REFERENCE_ATTACHMENT_SCHEME_V1,
+  formatInlineReferenceTokenV1,
+  scanInlineReferenceTokensV1,
+  type InlineReferenceTokenV1,
+} from './runtime/input/inlineReferenceTokenV1.js';
+export {
+  projectInlineReferenceLabelsV1,
+  projectSessionInputReferencesV1,
+  type SessionInputReferencesV1,
+} from './sessions/messages/sessionInputReferenceProjectionV1.js';
+export {
   COMPOSER_REFERENCE_MENTION_KIND_V1,
   COMPOSER_REFERENCE_MENTION_REF_SCHEME_V1,
   ComposerReferenceContextBlockEntryV1Schema,
   ComposerAttachmentContextBlockEntryV1Schema,
   buildComposerReferenceMentionPayloadV1,
   readComposerReferenceMentionV1,
-  renderComposerReferenceContextBlockV1,
   type ComposerReferenceContextBlockEntryV1,
   type ComposerAttachmentContextBlockEntryV1,
   type ComposerReferenceMentionPayloadV1,

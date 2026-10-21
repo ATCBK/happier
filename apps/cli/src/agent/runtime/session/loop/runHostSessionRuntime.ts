@@ -150,6 +150,7 @@ import { createSessionPromptPlanResolver, type SessionPromptPlanResolver } from 
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { registerHappierSessionAgentToolRpc } from '@/mcp/startHappyServer';
+import type { StructuredInputCatalogReaders } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
 import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
 import { classifyPrimarySessionRuntimeIssue, readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { resolveCliMemoryRecallGuidanceEnabled } from '@/agent/prompts/library/resolveCliMemoryRecallGuidanceEnabled';
@@ -1907,6 +1908,23 @@ export async function runHostSessionRuntime(
   const isSessionOpenAccountCurrent = () => sessionOpenContext.scopeKey !== null
     && getActiveAccountSettingsSnapshot()?.scopeKey === sessionOpenContext.scopeKey
     && getActiveAccountSettingsSnapshotLifetimeToken() === sessionOpenContext.lifetimeToken;
+  let referenceActionExecutor: ReturnType<typeof import('@/session/actions/createCliActionExecutorFromCredentials')['createCliActionExecutorFromCredentials']> | undefined;
+  const readReferenceAction: StructuredInputCatalogReaders['readReferenceAction'] = async (actionId, input, signal) => {
+    const credentials = sessionOpenContext.credentials;
+    if (!credentials || !isSessionOpenAccountCurrent()) return null;
+    signal?.throwIfAborted();
+    if (!referenceActionExecutor) {
+      const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
+      referenceActionExecutor = createCliActionExecutorFromCredentials({ credentials,
+        serverId: sessionOpenContext.home.serverId, serverApiUrl: sessionOpenContext.home.serverUrl,
+        readCredentials: async () => isSessionOpenAccountCurrent() ? credentials : null,
+        ...(config.runtimeActionSettingsProvider ? { actionsSettingsProvider: config.runtimeActionSettingsProvider } : {}) });
+    }
+    if (!isSessionOpenAccountCurrent()) return null;
+    const result = await referenceActionExecutor.execute(actionId, input, { surface: 'cli', actionCaller: { kind: 'host' }, signal });
+    signal?.throwIfAborted();
+    return isSessionOpenAccountCurrent() && result.ok ? result.result : null;
+  };
   let capturedOpenAccountOperation: SavedSecretOperationContextV1 | undefined;
   const readSessionOpenAccountOperation = (): SavedSecretOperationContextV1 | undefined => {
     const snapshot = getActiveAccountSettingsSnapshot();
@@ -2252,6 +2270,7 @@ export async function runHostSessionRuntime(
           await targetSession.enqueueSessionEventCommitted({ type: 'prompt-composition', composition });
         },
         catalogs: {
+          readReferenceAction,
           ...(runtimeForInFlightSteer?.listSkills ? { listSkills: () => runtimeForInFlightSteer!.listSkills!() } : {}),
           ...(runtimeForInFlightSteer?.listVendorPlugins ? { listVendorPlugins: () => runtimeForInFlightSteer!.listVendorPlugins!() } : {}),
         },
@@ -3665,6 +3684,7 @@ export async function runHostSessionRuntime(
         }).dispose;
     }
     currentLifecycleSession.setSessionRuntimeControls({
+      readReferenceAction,
       readPermissionHandler: () => permissionHandler,
       readCodingPromptBehavior: () => resolveFreshSessionSystemPrompt?.readCodingPromptBehavior?.() ?? null,
       readEffectiveInputConfiguration: () => ({
@@ -3851,6 +3871,7 @@ export async function runHostSessionRuntime(
   recordStartupPhase('runtime_controls');
   try {
     await runSessionLoopLifecycleFn({
+      readReferenceAction,
       opts: runtimeOpts,
       config: {
         ...config,

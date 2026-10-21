@@ -113,7 +113,10 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     expect(JSON.stringify(events)).not.toContain('/private/repo');
   });
   it.each([false, true])('resolves a selected skill at dispatch and steers its structured evidence (native command: %s)', async (nativeCommand) => {
-    const text = nativeCommand ? '/goal $review' : 'run $review';
+    const ref = buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'vendor:codex:review');
+    const token = `[review](happier-ref:${ref})`;
+    const text = nativeCommand ? `/goal ${token}` : `run ${token}`;
+    const projectedText = nativeCommand ? '/goal $review' : 'run $review';
     const { session, emitUserMessage } = createSessionHarness();
     const { queue } = createQueue();
     const steerText = vi.fn(async (_text: string, _meta?: unknown) => {});
@@ -135,12 +138,13 @@ describe('registerPermissionModeMessageQueueBinding (in-flight steer)', () => {
     });
     emitUserMessage({ content: { text }, localId: 'structured-steer', meta: {
       happierStructuredInputV1: { v: 1, mentions: [{ kind: MENTION_KIND_V1.skill,
-        ref: buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'vendor:codex:review'), token: '$review', start: text.indexOf('$review'), end: text.length }] },
+        ref, token, start: text.indexOf(token), end: text.length }] },
     } });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(queue.size()).toBe(0);
-    expect(steerText.mock.calls[0]?.[0]).toContain(text);
-    if (nativeCommand) expect(steerText.mock.calls[0]?.[0].startsWith(text)).toBe(true);
+    expect(steerText.mock.calls[0]?.[0]).toContain(projectedText);
+    expect(steerText.mock.calls[0]?.[0]).not.toContain('happier-ref:');
+    if (nativeCommand) expect(steerText.mock.calls[0]?.[0].startsWith(projectedText)).toBe(true);
     expect(steerText.mock.calls[0]?.[1]).toMatchObject({ localId: 'structured-steer', structuredInput: {
       v: 1, skillMentions: [{ name: 'review', path: '/w/review/SKILL.md' }],
     } });

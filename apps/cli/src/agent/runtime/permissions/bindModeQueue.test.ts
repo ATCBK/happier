@@ -26,6 +26,29 @@ source_kind="legacyUnknown"
 </happier_input_context>`;
 
 describe('registerPermissionModeMessageQueueBinding', () => {
+  it('keeps non-image upload metadata isolated through queue admission and final projection', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
+      batcher: combinePermissionModeQueuedPrompts,
+    });
+    const harness = createSessionHarness();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {} });
+    const attachment = { id: 'report', name: 'report.txt', path: '.happier/uploads/messages/input/report.txt', sizeBytes: 42 };
+    const text = 'Read [report](happier-ref:attachment:report)';
+    harness.emit({ role: 'user', localId: 'upload-input', content: { type: 'text', text },
+      meta: { happier: { kind: 'attachments.v1', payload: { attachments: [attachment] } } } });
+    harness.emit({ role: 'user', localId: 'following-input', content: { type: 'text', text: 'Then continue' }, meta: {} });
+    const batch = await queue.waitForMessagesAndGetAsString();
+    expect(batch?.message.localId).toBe('upload-input');
+    expect(batch?.message.attachments).toEqual([attachment]);
+    const prepared = await prepareSessionInputForProviderDispatch({ prompt: batch!.message,
+      transformedUserText: batch!.message.text, providerNativeCommand: false,
+      signal: new AbortController().signal, localId: 'upload-input' });
+    expect(prepared.requiredPrompt).toContain('Read [File: report.txt]');
+    expect(prepared.requiredPrompt).not.toContain('happier-ref:');
+    expect(prepared.requiredPrompt).not.toContain('Then continue');
+    expect((await queue.waitForMessagesAndGetAsString())?.message.localId).toBe('following-input');
+  });
   it.each([false, true])('retains file review notes until actual input without steering or waking (running=%s)', async running => {
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
       batcher: combinePermissionModeQueuedPrompts, isContextOnly: isNextTurnContextQueuedPrompt,

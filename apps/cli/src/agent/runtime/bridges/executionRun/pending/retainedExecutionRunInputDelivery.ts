@@ -1,4 +1,5 @@
 import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { readSessionAttachmentDescriptorsV1 } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { readSessionInputCausalPermissionAuthorityV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { resolveSessionInputPromptProvenanceV1, renderSessionInputContextBlockV1, renderSessionInputContextPromptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
@@ -236,6 +237,7 @@ export function createRetainedExecutionRunInputDelivery(
                     }
                     : {}),
                 structuredInput,
+                attachments: readSessionAttachmentDescriptorsV1(input.meta),
                 ...(media.status === 'admitted' ? { sessionMedia: media.media } : {}),
             });
         } catch {

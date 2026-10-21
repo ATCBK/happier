@@ -500,7 +500,7 @@ describe('resolveStructuredInputProviderContext', () => {
     });
 
     const contextBlock = renderPromptContext(result);
-    expect(contextBlock).toContain('<happier_composer_attachment_context');
+    expect(contextBlock).toContain('<happier_references v="1">');
     expect(contextBlock).toContain('attachment_plugin_id="acme.review-comments"');
     expect(contextBlock).toContain('attachment_local_id="review-comment"');
     expect(contextBlock).toContain('attachment_instance_id="review-comment-1"');
@@ -580,7 +580,7 @@ describe('resolveStructuredInputProviderContext', () => {
     });
 
     const contextBlock = renderPromptContext(result);
-    expect(contextBlock).toContain('<happier_session_reference>');
+    expect(contextBlock).toContain('<happier_references v="1">');
     expect(contextBlock).toContain('source-session');
     expect(contextBlock).toContain('No transcript content is included');
     expect(contextBlock).not.toContain('<happier_session_reference_context');

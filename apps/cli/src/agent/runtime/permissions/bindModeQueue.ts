@@ -1,5 +1,6 @@
 import type { Metadata, PermissionMode, UserMessage } from '@/api/types';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { readSessionAttachmentDescriptorsV1 } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 import { FILE_REVIEW_NOTE_KIND, formatFileReviewNoteV1, readFileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
 import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { isConditionalPendingSteerClaim } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
@@ -7,6 +8,8 @@ import { normalizePendingRequestedActionV1 } from '@happier-dev/protocol/session
 import { readHappierStructuredInputV1FromMeta } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { assertSessionInputAdmissionReceiptForAuthorityV1, readSessionInputCausalPermissionAuthorityV1, readSessionMessageProvenance, readSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { resolveSessionInputPromptProvenanceV1, renderSessionInputContextBlockV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
+import { projectSessionInputReferencesV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
+import { fitHappierReplaySeedWithinTotalBudget } from '@happier-dev/agents';
 import { readSessionMessageModelSelectionV1 } from '@happier-dev/protocol/providers/model-selection';
 import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import { isModelRefGrantedV1, isPermissionModeGrantedV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
@@ -15,6 +18,7 @@ import { readAdmittedHappierStructuredInputV1FromMeta } from '@happier-dev/proto
 
 import { isAbortLikeError } from '@/agent/runtime/lifecycle/classifyAbortLikeError';
 import { logger } from '@/ui/logger';
+import { configuration } from '@/configuration';
 import { pushMessageToQueueWithSpecialCommands, type SpecialCommandQueue } from '@/agent/runtime/queueSpecialCommands';
 import { resolveAppendSystemPromptModeOverride } from '@/agent/runtime/permissions/appendSystemPrompt';
 import { resolveProviderPromptWithReplaySeed } from '@/agent/runtime/replaySeed/replaySeedV1';
@@ -33,7 +37,7 @@ import type {
   PermissionModeQueuedPrompt,
   PermissionModeQueuedPromptMode,
 } from '@/agent/runtime/permissions/queuedPrompt';
-import { prepareSessionInputForProviderDispatch, readStructuredInputPreparationFailure, type SessionInputDispatchServices } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
+import { prepareSessionInputForProviderDispatch, resolveSessionInputForProviderDispatch, readStructuredInputPreparationFailure, type SessionInputDispatchServices } from '@/agent/runtime/turns/prepareSessionInputForProviderDispatch';
 import type { RuntimeTurnPromptMeta } from '@/agent/runtime/turns/runtimeTurnOperations';
 import type { HostPreparedContext } from '@/agent/runtime/session/contextOnly/hostContextOnlyInput';
 import type { SessionProviderInputConsumer } from '@/api/session/sessionClientPort';
@@ -404,6 +408,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       ...(inputProvenance ? { inputProvenance } : {}),
       ...(returnedAnswer ? { returnedAnswer } : {}),
     };
+    const attachments = readSessionAttachmentDescriptorsV1(message.meta);
     const queuedPrompt: PermissionModeQueuedPrompt = {
       ...(discussionAddressing ? { discussionAddressing } : {}),
       ...(actionRequestAttributionV1 ? { actionRequestAttributionV1 } : {}),
@@ -411,6 +416,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
       localId,
       ...queuedPromptIdentityFields,
       ...(structuredInput ? { structuredInput } : {}),
+      ...(attachments.length ? { attachments } : {}),
       ...(admittedSessionMedia.status === 'admitted'
         ? { sessionMedia: admittedSessionMedia.media }
         : {}),
@@ -448,7 +454,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     }
 
     const enqueuePrompt = (): void => {
-      if (structuredInput) {
+      if (structuredInput || attachments.length) {
         opts.queue.pushIsolate(queuedPrompt, queueMode);
       } else {
         pushMessageToQueueWithSpecialCommands({
@@ -466,7 +472,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
 
     if (pendingProviderAction === 'send' || pendingProviderAction === 'interrupt_and_send') {
       const enqueueClaimedSend = (): void => {
-        if (structuredInput || isNonSteerablePromptPayload(text)) {
+        if (structuredInput || attachments.length || isNonSteerablePromptPayload(text)) {
           enqueuePrompt();
           return;
         }
@@ -646,7 +652,12 @@ export function registerPermissionModeMessageQueueBinding(opts: {
           try {
             if (stopForLostBinding()) return;
             const providerNativeCommand = steer.isProviderNativeCommand?.(text) === true;
+            const services = steer.readStructuredInputDispatchServices?.();
+            const resolvedContext = await resolveSessionInputForProviderDispatch({
+              prompt: queuedPrompt, signal: messageBindingAbortSignal, localId, services,
+            });
             let providerText = text;
+            let replaySeedText: string | null = null;
             let settleReplaySeedOnProviderAcceptance: ReplaySeedSettlement | null = null;
             if (typeof session.getMetadataSnapshot === 'function') {
               try {
@@ -694,9 +705,25 @@ export function registerPermissionModeMessageQueueBinding(opts: {
                 settleReplaySeedOnProviderAcceptance = seedResolution.seedApplied
                   ? seedResolution.settleOnProviderAcceptance
                   : null;
+                replaySeedText = seedResolution.seedApplied ? seedResolution.seedText : null;
               } catch {
                 if (stopForLostBinding()) return;
                 // Best-effort only; fall back to steering the raw user text.
+              }
+            }
+
+            if (replaySeedText !== null) {
+              const referenceChars = projectSessionInputReferencesV1({ text: '',
+                references: resolvedContext.promptContext.references }).boundedBlockChars;
+              const fitted = fitHappierReplaySeedWithinTotalBudget({ seedText: replaySeedText,
+                reservedChars: referenceChars ? referenceChars + 2 : 0, maxPromptChars: configuration.replaySeedMaxChars });
+              if (fitted) providerText = `${fitted}\n\n${text}`;
+              else {
+                // A seed that never reached the provider must not be retired on acceptance.
+                await releaseUndispatchedReplaySeed?.();
+                releaseUndispatchedReplaySeed = null;
+                settleReplaySeedOnProviderAcceptance = null;
+                providerText = text;
               }
             }
 
@@ -718,7 +745,8 @@ export function registerPermissionModeMessageQueueBinding(opts: {
               providerNativeCommand,
               signal: messageBindingAbortSignal,
               localId,
-              services: steer.readStructuredInputDispatchServices?.(),
+              services,
+              resolvedContext,
             });
             if (stopForUnavailableSteer()) return;
             let preparedSessionFollowContext = localId

@@ -2,9 +2,11 @@ import { SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND } from '../.
 import { SessionAttachmentHandleV1Schema, type SessionAttachmentHandleV1 } from '../../transfers/sessions/sessionAttachmentHandleV1.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { readSessionAttachmentEnvelopeRecordsV1 } from '../../runtime/input/structuredInputV1.js';
 
 /** Presentation of an upload; parsing it does not authorize reading its path. */
 export const SessionAttachmentDescriptorV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.optional(z.string().check(z.minLength(1))),
   name: z.string().check(z.minLength(1)),
   path: z.string().check(z.minLength(1)),
   mimeType: z.optional(z.string()),
@@ -21,12 +23,14 @@ export const SessionAttachmentsMessageMetaV1Schema = lazyZodSchema(() => z.stric
 export type SessionAttachmentsMessageMetaV1 = Readonly<z.infer<typeof SessionAttachmentsMessageMetaV1Schema>>;
 
 type StructuredInputImageInput = Readonly<{
+  id?: string;
   type: 'localImage'; kind: 'image'; localPath: string; path: string;
   provenance?: Readonly<{ kind: string }>;
   name: string; mimeType?: string; sizeBytes: number; sha256?: string;
 }>;
 
 export type UploadedAttachment = Readonly<{
+  id?: string;
   name: string; path: string; mimeType?: string; sizeBytes: number; sha256?: string;
   attachmentHandle?: SessionAttachmentHandleV1;
   structuredInput?: StructuredInputImageInput;
@@ -35,7 +39,7 @@ export type UploadedAttachment = Readonly<{
 /** Shared projection for ordinary uploads and target-owned issued selections. */
 export function buildUploadedAttachment(args: Omit<UploadedAttachment, 'structuredInput'>): UploadedAttachment {
   const structuredInput: StructuredInputImageInput | undefined = args.mimeType?.toLowerCase().startsWith('image/')
-    ? { type: 'localImage', kind: 'image', localPath: args.path, path: args.path,
+    ? { ...(args.id ? { id: args.id } : {}), type: 'localImage', kind: 'image', localPath: args.path, path: args.path,
       provenance: { kind: SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND },
       name: args.name, mimeType: args.mimeType, sizeBytes: args.sizeBytes,
       ...(args.sha256 ? { sha256: args.sha256 } : {}) }
@@ -45,10 +49,11 @@ export function buildUploadedAttachment(args: Omit<UploadedAttachment, 'structur
 
 export function buildAttachmentMessageMeta(uploaded: readonly UploadedAttachment[]): Record<string, unknown> {
   const imageInputs = uploaded.flatMap(attachment => attachment.structuredInput
-    ? [{ ...attachment.structuredInput, provenance: { kind: SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND } }]
+    ? [{ ...attachment.structuredInput, ...(attachment.id ? { id: attachment.id } : {}), provenance: { kind: SESSION_ATTACHMENT_UPLOAD_STRUCTURED_INPUT_PROVENANCE_KIND } }]
     : []);
   return {
     happier: { kind: 'attachments.v1', payload: { attachments: uploaded.map(attachment => ({
+      ...(attachment.id ? { id: attachment.id } : {}),
       name: attachment.name, path: attachment.path, mimeType: attachment.mimeType,
       sizeBytes: attachment.sizeBytes, sha256: attachment.sha256,
       ...(attachment.attachmentHandle ? { attachmentHandle: attachment.attachmentHandle } : {}),

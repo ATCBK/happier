@@ -84,6 +84,8 @@ describe('built-in kind reference schemes', () => {
       'happier.skill': 'skill',
       'happier.vendorPlugin': 'vendorPlugin',
       'happier.session': 'session',
+      'happier.workflow': 'workflow',
+      'happier.widget': 'widget',
       'happier.workflowInput': 'workflowInput',
     });
     expect(buildMentionRefForKindV1(MENTION_KIND_V1.skill, 'vendor:codex:review'))

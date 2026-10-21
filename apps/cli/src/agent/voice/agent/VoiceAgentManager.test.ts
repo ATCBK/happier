@@ -3106,10 +3106,11 @@ describe('VoiceAgentManager', () => {
     expect(backend.prompts.length).toBe(1);
     expect(backend.prompts[0]).toContain('Warm-up step: reply with exactly READY');
 
-    await manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: 'hello' });
+    await manager.sendTurn({ voiceAgentId: started.voiceAgentId, userText: '[hello](happier-ref:session:unbound)' });
 
     expect(backend.prompts.length).toBe(2);
     expect(backend.prompts[1]).toContain('User: hello');
+    expect(backend.prompts[1]).not.toContain('happier-ref:');
     expect(backend.prompts[1]).not.toContain('Initial context:');
   });
 

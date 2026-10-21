@@ -40,11 +40,12 @@ const addressHints = [
 export const COMPOSER_INGRESS_ACTION_SPECS = [{
   ...client, id: 'composer.transaction.apply', approval: {result: 'required'}, title: 'Apply composer transaction',
   cli: { commands: [{ path: ['composer', 'transaction', 'apply'], visibility: 'canonical' }] },
-  description: 'Apply a revision-bound transaction to the exact mounted editable composer. reviewComment.add adds anchored review context to the Session workspace draft; attachment selection is validated against its current composition. Never submits input or grants staged-media custody.',
+  description: 'Apply a revision-bound transaction to the exact mounted editable composer. Mention in composer uses the text insertion and reference.insert operations from the shared composer reference insertion owner, at the current caret or the end without a selection. reviewComment.add adds anchored review context to the Session workspace draft; attachment selection is validated against its current composition. Never submits input or grants staged-media custody.',
   safety: 'safe', sideEffectClass: 'external', bindings: { mcpToolName: 'composer_transaction_apply' },
   inputSchema: ComposerTransactionApplyInputV1Schema, outputSchema: ComposerTransactionResultV1Schema,
   inputHints: { title: 'Apply composer transaction', fields: [...addressHints,
-    { path: 'transaction', title: 'Revision-bound transaction', widget: 'json', required: true },
+    { path: 'transaction', title: 'Revision-bound transaction', widget: 'json', required: true,
+      prompt: 'For Mention in composer, use the text and reference.insert operations from planComposerReferenceInsertion with at.kind=caret. For attachment.add, mentionAt is the captured caret or drop range {start,end}; the host inserts its chip after minting the attachment identity.' },
     { path: 'attachmentContributor', title: 'Current attachment selection', widget: 'json', required: false }] },
   examples: { mcp: { argsExample: '{"scope":{"serverId":"home-a","accountId":"account-a"},"ref":{"kind":"newSession","instanceId":"composer-a"},"transaction":{"expectedRevision":1,"operations":[{"kind":"text.insert","position":{"offset":0},"text":"Context"}]}}' } },
 }, {

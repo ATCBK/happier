@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { formatAttachmentSelectionSummary } from './sessionAttachmentsInputV1.js';
+import { buildUploadedAttachment, buildAttachmentMessageMeta, SessionAttachmentsMessageMetaV1Schema } from './sessionAttachmentsInputV1.js';
+
+it('carries the tray id unchanged through image dispatch and attachment metadata', () => {
+  const uploaded = buildUploadedAttachment({ id: 'tray-1', name: 'photo.png', path: '/uploads/photo.png', mimeType: 'image/png', sizeBytes: 12 });
+  const meta = buildAttachmentMessageMeta([uploaded]);
+  expect(uploaded.structuredInput).toMatchObject({ id: 'tray-1' });
+  expect(SessionAttachmentsMessageMetaV1Schema.parse(meta.happier).payload.attachments[0]).toMatchObject({ id: 'tray-1' });
+  const recovered = buildAttachmentMessageMeta([{ ...uploaded, structuredInput: { ...uploaded.structuredInput!, id: 'old-image-id' } }]);
+  expect(recovered.happierStructuredInputV1).toMatchObject({ imageInputs: [{ id: 'tray-1' }] });
+});
 
 describe('formatAttachmentSelectionSummary', () => {
   it('describes actual selected names and known metadata without implying an uploaded path', () => {

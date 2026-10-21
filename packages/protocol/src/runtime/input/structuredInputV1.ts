@@ -25,10 +25,7 @@ import {
   type ComposerAttachmentInputV1,
   type ResolvedComposerAttachmentDispatchV1,
 } from './composerAttachmentV1.js';
-import type {
-  ComposerAttachmentContextBlockEntryV1,
-  ComposerReferenceContextBlockEntryV1,
-} from './composerReferenceProviderV1.js';
+import type { SessionInputReferencesV1 } from '../../sessions/messages/sessionInputReferenceProjectionV1.js';
 import {
   MentionRefV1Schema,
   admitMentionRefsV1ForText,
@@ -506,10 +503,8 @@ export type AgentDispatchStructuredInputV1 = Readonly<
 export type StructuredInputDispatchContextV1 = Readonly<{
   structuredInput: AgentDispatchStructuredInputV1 | null | undefined;
   promptContext: Readonly<{
-    sessionReferenceBlock: string;
     browserContext?: HappierStructuredInputV1['browserContext'];
-    composerReferences: readonly ComposerReferenceContextBlockEntryV1[];
-    composerAttachments: readonly ComposerAttachmentContextBlockEntryV1[];
+    references: SessionInputReferencesV1;
   }>;
 }>;
 

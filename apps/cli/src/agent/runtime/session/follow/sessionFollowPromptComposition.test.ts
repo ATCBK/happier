@@ -50,7 +50,7 @@ describe('Session Follow prompt composition through the canonical owner', () => 
               meaningfulActivityAt: null, agentStateVersion: 0 },
             messages: [{ seq: 1, localId: 'direction-original', createdAt: 1, messageRole: 'agent', content: { t: 'plain', v: { role: 'agent',
               content: kind === 'goal_changed' ? { type: 'event', data: { type: 'goal-changed' } }
-                : { type: 'codex', data: { type: 'message', message: 'Please review' } } } } }], hasMore: false,
+                : { type: 'codex', data: { type: 'message', message: 'Please review [Source](happier-ref:session:source)' } } } } }], hasMore: false,
           }),
         } });
       const reconciler = createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 });
@@ -63,6 +63,7 @@ describe('Session Follow prompt composition through the canonical owner', () => 
         transformedUserText: 'ACTUAL_INPUT' });
       expect(prompt).toContain('<session_follow>');
       expect(prompt).toContain(kind === 'goal_changed' ? 'goal changed' : 'Please review');
+      expect(prompt).not.toContain('happier-ref:');
       expect(prompt.endsWith('ACTUAL_INPUT')).toBe(true);
       prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'another-input', userMessageSeq: 2 });
       expect(acknowledgeSessionFollow).not.toHaveBeenCalled();
@@ -70,7 +71,9 @@ describe('Session Follow prompt composition through the canonical owner', () => 
         session.__setMetadata(createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }));
         const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode,
           { batcher: combinePermissionModeQueuedPrompts });
-        queue.push({ text: 'ACTUAL_INPUT', localId: 'natural-input', userMessageSeq: 3,
+        const token = '[Source](happier-ref:session:source)';
+        queue.push({ text: `ACTUAL_INPUT ${token}`, localId: 'natural-input', userMessageSeq: 3,
+          structuredInput: { v: 1, mentions: [{ kind: 'happier.session', ref: 'session:source', token, label: 'Source' }] },
           causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'read-only' },
           followDeliveries: [{ delivery, localInputId, userMessageSeq: 2 }] }, { permissionMode: 'default' });
         let emitNative: ((event: AgentSessionRuntimeEvent) => void) | undefined;
@@ -138,7 +141,8 @@ describe('Session Follow prompt composition through the canonical owner', () => 
           expect(sent).toHaveLength(1);
           expect(sent[0]?.inputIds).toEqual(['natural-input']);
           expect(sent[0]?.text).toContain('Please review');
-          expect(sent[0]?.text.endsWith('ACTUAL_INPUT')).toBe(true);
+          expect(sent[0]?.text).toContain('ACTUAL_INPUT @Session "Source"');
+          expect(sent[0]?.text).not.toContain('happier-ref:');
           await vi.waitFor(() => expect(settled).toEqual([localInputId, 'natural-input']));
         } finally {
           unbind();

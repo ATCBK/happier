@@ -1,5 +1,6 @@
 import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { renderSessionInputContextPromptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
+import { projectSessionInputReferencesV1 } from '@happier-dev/protocol/sessions/messages/sessionInputReferenceProjectionV1';
 import type { ComposerAttachmentValueV1, ComposerAttachmentResolveRequestV1, ComposerAttachmentResolveResultV1, PluginContributionIdentityV1, ProviderBoundModelRef } from '@happier-dev/protocol';
 import { randomUUID } from 'node:crypto';
 import { UsagePromptCompositionSchema, type UsagePromptComposition, type UsagePromptCompositionComponent } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
@@ -19,6 +20,7 @@ import {
   type StructuredInputCatalogReaders,
   type StructuredInputComposerAttachmentResolver,
   type StructuredInputComposerReferenceResolver,
+  type StructuredInputProviderDispatchContext,
 } from './resolveStructuredInputProviderContext';
 
 export type ComposerAttachmentDispatchResolver = (input: Readonly<{
@@ -66,24 +68,22 @@ export type SessionInputDispatchServices = Readonly<{
     selection?: ProviderBoundModelRef; readSelection?: () => ProviderBoundModelRef }>;
 }>;
 
-/** The shared final host preparation boundary for normal input and in-flight steer. */
-export async function prepareSessionInputForProviderDispatch(input: Readonly<{
+/** Resolve one message's current reference context once for budgeting and final dispatch. */
+export async function resolveSessionInputForProviderDispatch(input: Readonly<{
   prompt: PermissionModeQueuedPrompt;
-  transformedUserText: string;
-  providerNativeCommand: boolean;
   signal: AbortSignal;
   localId: string | null;
   services?: SessionInputDispatchServices;
-}>) {
+}>): Promise<StructuredInputProviderDispatchContext> {
   const services = input.services;
-  const compositionScope = createPromptCompositionScope();
-  let finalPrompt = '';
   const sessionId = services?.sessionId;
   const attachmentResolver = services?.resolveComposerAttachmentForDispatch;
-  const context = await resolveStructuredInputProviderDispatchContext({
+  return await resolveStructuredInputProviderDispatchContext({
     structuredInput: input.prompt.structuredInput,
+    attachments: input.prompt.attachments,
     sessionMedia: input.prompt.sessionMedia,
     catalogs: services?.catalogs,
+    signal: input.signal,
     ...(services?.resolveComposerReference ? { composerReferences: {
       resolve: services.resolveComposerReference,
       signal: input.signal,
@@ -106,6 +106,24 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
       },
     } } : {}),
   });
+}
+
+/** The shared final host preparation boundary for normal input and in-flight steer. */
+export async function prepareSessionInputForProviderDispatch(input: Readonly<{
+  prompt: PermissionModeQueuedPrompt;
+  transformedUserText: string;
+  providerNativeCommand: boolean;
+  signal: AbortSignal;
+  localId: string | null;
+  services?: SessionInputDispatchServices;
+  /** A context resolved by this same owner before replay-seed fitting. */
+  resolvedContext?: StructuredInputProviderDispatchContext;
+}>) {
+  const services = input.services;
+  const sessionId = services?.sessionId;
+  const compositionScope = createPromptCompositionScope();
+  let finalPrompt = '';
+  const context = input.resolvedContext ?? await resolveSessionInputForProviderDispatch(input);
   const renderPrompt = (optionalContext: Pick<Parameters<typeof renderSessionInputContextPromptV1>[0], 'sessionFollowUpdates' | 'workerUpdates'> & {
     runFollowDeliveries?: PermissionModeQueuedPrompt['followDeliveries'];
   } = {}) => {
@@ -114,20 +132,19 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
       ...context.promptContext,
       ...optionalContext,
       returnedAnswers: [...input.prompt.returnedAnswerContext ?? [],
-        ...(input.prompt.returnedAnswer ? [{ reply: input.prompt.returnedAnswer, text: input.transformedUserText }] : [])],
-      transformedUserText: input.providerNativeCommand || input.prompt.returnedAnswer ? '' : input.transformedUserText,
+        ...(input.prompt.returnedAnswer ? [{ reply: input.prompt.returnedAnswer,
+          text: projectSessionInputReferencesV1({ text: input.transformedUserText, references: context.promptContext.references }).text }] : [])],
+      transformedUserText: input.prompt.returnedAnswer ? '' : input.transformedUserText,
+      ...(input.providerNativeCommand ? { userTextPlacement: 'beforeContext' as const } : {}),
     });
     const runFollowNotices = (optionalContext.runFollowDeliveries ?? []).flatMap(({ delivery }) => 'source' in delivery.original
       ? [`<happier_run_follow>${JSON.stringify({ original: delivery.original,
         ...('event' in delivery ? { event: delivery.event } : {}) }).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')}</happier_run_follow>\nRead the original Run result.`] : []);
-    const nativePrompt = input.providerNativeCommand
-      ? [input.transformedUserText, rendered].filter(Boolean).join('\n\n')
-      : rendered;
     // Keep primary slash/native command grammar untouched in queue custody.
     // Informational review facts join only the final actual provider input.
     const reviewNoteText = input.providerNativeCommand ? ''
       : (input.prompt.fileReviewNoteContext ?? []).map(note => note.text).join('\n\n');
-    finalPrompt = [nativePrompt, reviewNoteText].filter(Boolean).join('\n\n');
+    finalPrompt = [rendered, reviewNoteText].filter(Boolean).join('\n\n');
     finalPrompt = [finalPrompt, ...runFollowNotices].filter(Boolean).join('\n');
     return finalPrompt;
   };

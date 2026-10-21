@@ -33,7 +33,7 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import type { SessionFollowPreparedContext } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import type { ComposerAttachmentDispatchResolver } from '@/agent/runtime/runPermissionModePromptLoop';
-import type { StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
+import type { StructuredInputCatalogReaders, StructuredInputComposerReferenceResolver } from '@/agent/runtime/turns/resolveStructuredInputProviderContext';
 import type { RuntimeAuthRefreshViaDaemon } from '@/plugins/runtime/context/runtimeAuthRefresh';
 
 /**
@@ -146,6 +146,7 @@ export type NativeAgentSessionInteractionHostBinding = Readonly<{
     readCodingPromptBehavior?: () => CodingPromptBehaviorV1 | null;
     /** Exact owning Session's current structured-input catalogs. */
     listSkills?: () => Promise<unknown>;
+    readReferenceAction?: StructuredInputCatalogReaders['readReferenceAction'];
     listVendorPlugins?: () => Promise<unknown>;
     /** Exact owning Session's current-generation Composer contribution resolvers. */
     resolveComposerReference?: StructuredInputComposerReferenceResolver['resolve'];

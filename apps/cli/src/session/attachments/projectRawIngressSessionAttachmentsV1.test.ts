@@ -41,6 +41,58 @@ function createTranscriptIntake(params: Readonly<{
 }
 
 describe('issued Session attachments at target intake', () => {
+  it.each([false, true])('issues one directory descriptor preserving empty folders (empty root=%s)', async (empty) => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-folder-intake-'));
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session-1', encryptionMode: 'plain' });
+    const registration = registerSessionHandlers(rpc, directory, { sessionId: 'session-1' });
+    const call = async (method: string, params: unknown) => await rpc.handleRequest({ method: `session-1:${method}`, params });
+    try {
+      let folderHandle: unknown;
+      for (const [index, relativePath] of (empty ? [] : ['a.txt', 'nested/b.txt']).entries()) {
+        const bytes = Buffer.from(index === 0 ? 'hello' : 'world!');
+        const init = await call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, {
+          t: 'session_attachment_upload_v1', sessionId: 'session-1', messageLocalId: 'folder-input',
+          fileName: relativePath.split('/').at(-1), relativePath: `draft-1/project/${relativePath}`,
+          sizeBytes: bytes.length,
+          uploadLocation: 'workspace', workspaceRelativeDir: '.uploads', vcsIgnoreStrategy: 'none', vcsIgnoreWritesEnabled: false,
+        }) as { success: boolean; uploadId: string; recipientPublicKeyBase64: string };
+        expect(init.success).toBe(true);
+        const chunk = createEncryptedTransferChunkEnvelope({ transferId: init.uploadId, sequence: 0,
+          payload: bytes, recipientPublicKeyBase64: init.recipientPublicKeyBase64 });
+        expect(await call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_CHUNK, { uploadId: init.uploadId, index: 0,
+          payloadBase64: chunk.payloadBase64, encryptedDataKeyEnvelopeBase64: chunk.encryptedDataKeyEnvelopeBase64 })).toEqual({ success: true });
+        const finalized = await call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE, { uploadId: init.uploadId }) as {
+          success: boolean; attachmentHandle: unknown;
+        };
+        expect(finalized.success).toBe(true);
+        folderHandle = finalized.attachmentHandle;
+        expect(await readFile(join(directory, '.uploads/messages/folder-input/draft-1/project', relativePath))).toEqual(bytes);
+      }
+      const folderInit = await call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT, {
+        t: 'session_attachment_upload_v1', sessionId: 'session-1', messageLocalId: 'folder-input',
+        fileName: 'project', relativePath: 'draft-1/project', directoryEntries: ['empty-child', 'nested/empty'], sizeBytes: 0,
+        uploadLocation: 'workspace', workspaceRelativeDir: '.uploads', vcsIgnoreStrategy: 'none', vcsIgnoreWritesEnabled: false,
+      }) as { success: boolean; uploadId: string };
+      expect(folderInit.success).toBe(true);
+      const folderResult = await call(RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE, { uploadId: folderInit.uploadId }) as {
+        success: boolean; attachmentHandle: unknown;
+      };
+      expect(folderResult.success).toBe(true);
+      folderHandle = folderResult.attachmentHandle;
+      const { stat } = await import('node:fs/promises');
+      expect((await stat(join(directory, '.uploads/messages/folder-input/draft-1/project/empty-child'))).isDirectory()).toBe(true);
+      expect((await stat(join(directory, '.uploads/messages/folder-input/draft-1/project/nested/empty'))).isDirectory()).toBe(true);
+      const projected = projectRawIngressSessionAttachmentsV1({ sessionId: 'session-1', text: 'Read this folder',
+        meta: { happierStructuredInputV1: { v: 1, sessionAttachments: [folderHandle] } },
+        resolveSessionAttachment: registration.resolveSessionAttachment });
+      expect(projected.meta).toMatchObject({ happier: { kind: 'attachments.v1', payload: { attachments: [{
+        name: 'project', path: '.uploads/messages/folder-input/draft-1/project', mimeType: 'inode/directory', sizeBytes: empty ? 0 : 11,
+      }] } } });
+    } finally {
+      await registration.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it.each([
     { name: 'notes.txt', bytes: Buffer.from('real target attachment\n'), mimeType: null, text: '' },
     { name: 'pixel.png', bytes: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=', 'base64'), mimeType: 'image/png', text: 'Read this' },
@@ -97,7 +149,7 @@ describe('issued Session attachments at target intake', () => {
       if (mimeType) expect(admitted.structuredInput).toMatchObject({ imageInputs: [{
         path: finalized.path, mimeType, sha256: createHash('sha256').update(bytes).digest('hex'),
       }] });
-      expect(projected.text).toContain(finalized.path);
+      expect(projected.text).toBe(text);
       expect(await readFile(join(directory, finalized.path))).toEqual(bytes);
       const published = projected.meta.happier as { payload: { attachments: { attachmentHandle: { id: string } }[] } };
       published.payload.attachments[0].attachmentHandle.id = 'mutated-presentation';
@@ -173,7 +225,7 @@ describe('issued Session attachments at target intake', () => {
       // Reconstruct current intent; only the original writer may decide equality.
       expect(await call(SESSION_RPC_METHODS.SESSION_PENDING_MESSAGE_COMPOSER_ADMISSION_PREPARE_V1, {
         localId: 'target-input', text: 'Changed instructions', structuredInput,
-      })).toMatchObject({ ok: true, text: expect.stringContaining('Changed instructions\n\nAttachments:') });
+      })).toMatchObject({ ok: true, text: 'Changed instructions' });
       expect(await call(SESSION_RPC_METHODS.SESSION_PENDING_MESSAGE_COMPOSER_ADMISSION_PREPARE_V1, {
         localId: 'target-input', text, structuredInput: { ...structuredInput,
           sessionAttachments: [{ ...handle, id: 'changed-selection' }],

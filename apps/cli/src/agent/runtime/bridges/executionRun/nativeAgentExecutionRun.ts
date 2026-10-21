@@ -558,10 +558,10 @@ export function createNativeAgentExecutionRunContextLeaseFactory(params: Readonl
             signal: AbortSignal;
         }>) {
             const parsed = HappierStructuredInputV1Schema.safeParse(input.input.structuredInput);
-            if (!parsed.success) return input.input;
+            if (!parsed.success) return { ...input.input, text: renderSessionInputContextPromptV1({ transformedUserText: input.input.text }) };
             const envelope = parsed.data as Readonly<Record<string, unknown>>;
             if (!Object.hasOwn(envelope, 'mentions') && !Object.hasOwn(envelope, 'composerAttachments')) {
-                return input.input;
+                return { ...input.input, text: renderSessionInputContextPromptV1({ transformedUserText: input.input.text }) };
             }
             const resolved = await resolveStructuredInputProviderDispatchContext({
                 structuredInput: parsed.data,

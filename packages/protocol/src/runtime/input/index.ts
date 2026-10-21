@@ -3,6 +3,8 @@ export * from './composerAttachmentV1.js';
 export * from './composerContentV1.js';
 export * from './composerReferenceProviderV1.js';
 export * from './mentionRefV1.js';
+export * from './inlineReferenceTokenV1.js';
+export * from './composerSuggestionTokenV1.js';
 export * from './skillMentionV1.js';
 export * from './structuredInputV1.js';
 export * from './v1.js';

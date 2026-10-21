@@ -16,6 +16,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { SessionInputReturnedAnswerV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/participants';
 import type { FileReviewNoteV1 } from '@happier-dev/protocol/messages/structured/fileReviewNoteV1';
+import type { SessionAttachmentDescriptorV1 } from '@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1';
 
 export type HostContextOnlyInput = (
   | Readonly<{ kind: 'session_follow'; prepared: SessionFollowReconciledContext }>
@@ -62,6 +63,8 @@ export type PermissionModeQueuedPrompt = Readonly<{
   localId: string | null;
   localIds?: readonly string[];
   structuredInput?: HappierStructuredInputV1;
+  /** Upload descriptors from this message's canonical attachments.v1 metadata. */
+  attachments?: readonly SessionAttachmentDescriptorV1[];
   /** Exact durable items matched to the admitted Composer SessionMedia refs. */
   sessionMedia?: readonly SessionMediaItemV1[];
   /** Exact transcript rows used only to suppress replay of host-consumed local commands. */
@@ -130,7 +133,7 @@ export function combinePermissionModeQueuedPrompts(
   if (prompts.some((prompt) => prompt.hostContextOnly)) {
     throw new Error('Host context-only prompts cannot be queued or batched');
   }
-  if (prompts.length > 1 && prompts.some((prompt) => prompt.structuredInput)) {
+  if (prompts.length > 1 && prompts.some((prompt) => prompt.structuredInput || prompt.attachments?.length)) {
     // Structured input carries one message's fresh dispatch-time context. Queue insertion must
     // isolate it, so reaching the prose batcher would either merge incompatible context or drop
     // a later structured entry.
@@ -162,6 +165,7 @@ export function combinePermissionModeQueuedPrompts(
     localId: first?.localId ?? null,
     ...(first?.actionRequestAttributionV1 ? { actionRequestAttributionV1: first.actionRequestAttributionV1 } : {}),
     ...(first?.structuredInput ? { structuredInput: first.structuredInput } : {}),
+    ...(first?.attachments ? { attachments: first.attachments } : {}),
     ...(first?.sessionMedia ? { sessionMedia: first.sessionMedia } : {}),
     ...(localIds.length === 0 ? {} : { localIds }),
     ...(maxUserMessageSeq === null ? {} : { userMessageSeq: maxUserMessageSeq }),

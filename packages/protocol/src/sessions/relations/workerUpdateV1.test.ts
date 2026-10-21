@@ -198,14 +198,15 @@ describe('WorkerUpdate prompt block', () => {
   it('composes worker data before the actual input without changing neighboring prompt context', () => {
     const rendered = renderSessionInputContextPromptV1({
       provenanceBlock: 'PROVENANCE',
-      sessionReferenceBlock: 'REFERENCE',
+      references: { mentions: [{ kind: 'happier.session', ref: 'session:source', token: '@source', label: 'REFERENCE' }] },
       workerUpdates: [{
         v: 1, workerKind: 'session', workerId: 'worker-session', ownerState: 'settled',
         wake: 'finished', headline: 'Finished', result: 'WORKER_RESULT', canInspect: true,
       }],
       transformedUserText: 'ACTUAL_INPUT',
     });
-    expect(rendered.startsWith('PROVENANCE\n\nREFERENCE\n\n<worker_update>')).toBe(true);
+    expect(rendered.startsWith('PROVENANCE\n\n<happier_references v="1">')).toBe(true);
+    expect(rendered.indexOf('REFERENCE')).toBeLessThan(rendered.indexOf('<worker_update>'));
     expect(rendered).toContain('WORKER_RESULT');
     expect(rendered.endsWith('</worker_update>\n\nACTUAL_INPUT')).toBe(true);
     expect(renderSessionInputContextPromptV1({ transformedUserText: 'ACTUAL_INPUT' })).toBe('ACTUAL_INPUT');
