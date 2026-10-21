@@ -43,6 +43,60 @@ describe('AuthContext credential invalidation handling', () => {
     });
     afterAll(async () => { await homes.dispose(); });
 
+    it('keeps auth through currentness loss and socket disconnect but retires a genuinely rejected credential', async () => {
+        const credentials = { token: homes.homeA.token };
+        const screen = await renderScreen(<AuthProvider initialCredentials={credentials}><React.Fragment /></AuthProvider>);
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
+        const { fetchAccountEncryptionIdentity } = await import('@/sync/api/account/apiAccountEncryptionMode');
+        const { createServerFetchForActiveServer } = await import('@/sync/http/client');
+        const { subscribeAuthCredentialsInvalidation } = await import('@/sync/runtime/orchestration/authCredentialsInvalidation');
+        const invalidations: string[] = [];
+        const unsubscribe = subscribeAuthCredentialsInvalidation(event => { invalidations.push(event.kind); });
+        try {
+            const binding = apiSocket.getAccountEncryptionObservationBinding(credentials);
+            if (!binding) throw new Error('Expected the restored Account socket');
+            await expect(binding.read()).resolves.toMatchObject({ mode: 'plain' });
+            const socket = homes.network.socketBoundaries.find(boundary => boundary.serverUrl === homes.homeA.serverUrl
+                && boundary.options.auth?.clientPurpose === 'sync');
+            if (!socket) throw new Error('Expected the active Home transport');
+            homes.setResponder(async input => new URL(String(input)).pathname === '/v1/account/encryption/currentness'
+                ? Response.json({ error: 'temporarily_unavailable' }, { status: 503 }) : null);
+            // A matching malformed publication withdraws the observation; it
+            // is not a credential-revocation fact or permission to sign out.
+            await act(async () => { socket.trigger('update', { body: {
+                t: 'update-account', id: homes.homeA.accountId, encryptionCurrentness: { mode: 'unknown' },
+            } }); });
+            await expect(binding.read()).rejects.toMatchObject({ code: 'account-encryption-currentness-unavailable', status: 503 });
+            await act(async () => { socket.trigger('disconnect', 'transport close'); });
+            await expect(fetchAccountEncryptionIdentity(credentials, {
+                request: createServerFetchForActiveServer(undefined, { credentials }), usage: 'fresh-authority',
+            })).rejects.toMatchObject({ code: 'account-encryption-currentness-unavailable', status: 503 });
+            expect(getCurrentAuth()).toMatchObject({ isAuthenticated: true, credentials });
+            expect(await homes.TokenStorage.getCredentialsForServerUrl(homes.homeA.serverUrl, { serverId: homes.homeA.id }))
+                .toEqual(credentials);
+            expect(invalidations).toEqual([]);
+
+            homes.setResponder(null);
+            await act(async () => { socket.trigger('connect'); await binding.read(); });
+            expect(getCurrentAuth()).toMatchObject({ isAuthenticated: true, credentials });
+
+            homes.setResponder(async input => new URL(String(input)).pathname === '/q8-auth-rejected'
+                ? Response.json({ error: 'invalid_token' }, { status: 401 }) : null);
+            // Exercise the actual HTTP rejection and exact-token removal, not
+            // a direct AuthContext event or a mocked credential mutation.
+            await act(async () => {
+                await Promise.allSettled([createServerFetchForActiveServer()('/q8-auth-rejected', {
+                    headers: { Authorization: `Bearer ${credentials.token}` },
+                }, { includeAuth: false, retry: 'none' })]);
+            });
+            await vi.waitFor(() => expect(getCurrentAuth()?.isAuthenticated).toBe(false));
+            expect(await homes.TokenStorage.getCredentialsForServerUrl(homes.homeA.serverUrl, { serverId: homes.homeA.id }))
+                .toBeNull();
+            expect(homes.requests('/q8-auth-rejected')).toHaveLength(1);
+            expect(invalidations).toEqual(['credentials_removed']);
+        } finally { unsubscribe(); await screen.unmount(); }
+    });
+
     it('disconnects first-key rejected auth through the connection owner without stopping secondary-server continuity', async () => {
         const credentials = { token: homes.homeA.token };
         const screen = await renderScreen(<AuthProvider initialCredentials={credentials}>
