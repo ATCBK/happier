@@ -501,6 +501,14 @@ export interface ConnectedAccountRuntime {
             status: 'consumed' | 'already_consumed' | 'not_available' | 'nothing_to_reset';
         }>>;
     }>;
+    /** Optional metadata-only credential enrichment; never substitutes a token refresh. */
+    enrichCredentialContext?(
+        context: PluginConnectedAccountMutationContext,
+        options?: Readonly<{ signal?: AbortSignal }>,
+    ): Promise<
+        | PluginConnectedAccountHealthResult
+        | Readonly<{ status: 'outcomeUnknown'; diagnostic: import('./diagnostics.js').PluginDiagnosticData }>
+    >;
     refresh(
         context: PluginConnectedAccountMutationContext,
         options?: Readonly<{ signal?: AbortSignal }>,
@@ -527,6 +535,8 @@ export interface ConnectedAccountRuntime {
         options?: Readonly<{ signal?: AbortSignal }>,
     ): Promise<Readonly<{
         observedAtMs: number;
+        /** Organization that supplied this observation; the account subject remains the provider user. */
+        providerOrganizationId?: string;
         /** Provider-declared plan fact; absence never infers a plan from allowances. */
         planLabel?: string | null;
         subscription?: ProviderAccountSubscriptionV1;

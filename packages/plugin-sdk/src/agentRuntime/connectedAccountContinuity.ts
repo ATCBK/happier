@@ -50,6 +50,7 @@ export type AgentConnectedAccountRuntimeFailureClassificationV1 = Readonly<{
   planType: string | null;
   providerLimitId?: string | null;
   sourceProviderAccountId?: string | null;
+  sourceProviderOrganizationId?: string | null;
   sourceAccountLabel?: string | null;
   failingAccessTokenFingerprint?: string | null;
   expectedCredentialRevision?: AgentConnectedAccountCredentialRevisionV1 | null;
@@ -77,6 +78,7 @@ export type AgentConnectedAccountRuntimeAuthSelectionV1 = Readonly<{
   groupGeneration?: number | null;
   credentialRevision?: AgentConnectedAccountCredentialRevisionV1 | null;
   sourceProviderAccountId?: string | null;
+  sourceProviderOrganizationId?: string | null;
   sourceAccountLabel?: string | null;
   applyReason?: string | null;
 }>;
@@ -84,6 +86,8 @@ export type AgentConnectedAccountRuntimeAuthSelectionV1 = Readonly<{
 export type AgentConnectedAccountNativeAuthCodecMaterializeInputV1 = Readonly<{
   selection: AgentConnectedAccountRuntimeAuthSelectionV1;
   credential: ConnectedServiceCredentialRecordV1;
+  /** Current bytes from the Agent's declared secret entries in the selected native home. */
+  files?: Readonly<Record<string, Uint8Array>>;
 }>;
 
 export type AgentConnectedAccountNativeAuthCodecInspectInputV1 = Readonly<{
@@ -206,6 +210,7 @@ export type AgentConnectedAccountTransitionVerificationResultV1 =
   | Readonly<{
       status: 'verified';
       providerAccountId?: string | null;
+      providerOrganizationId?: string | null;
       activeAccountId?: string | null;
       sharedAuthSurfaceId?: string | null;
       proofStrength?: 'exact' | 'weak' | 'diagnostic';
@@ -225,6 +230,7 @@ export type AgentConnectedAccountTransitionVerificationResultV1 =
   | Readonly<{
       status: 'weakly_verified';
       providerAccountId?: string | null;
+      providerOrganizationId?: string | null;
       activeAccountId?: string | null;
       sharedAuthSurfaceId?: string | null;
       proofStrength?: 'exact' | 'weak' | 'diagnostic';

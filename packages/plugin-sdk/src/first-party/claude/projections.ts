@@ -115,3 +115,11 @@ export const readClaudeSettingSourcesV2: (
     defaults: Readonly<{ claudeRemoteSettingSourcesV2: readonly ClaudeSettingSourceV2[] }>,
     settings: Readonly<Record<string, unknown>>,
 ) => readonly ClaudeSettingSourceV2[] = readCanonicalClaudeSettingSourcesV2;
+
+export {
+  CLAUDE_OAUTH_PROFILE_URL, CLAUDE_OAUTH_PROFILE_HEADERS,
+  normalizeClaudeOauthProfileEntitlement,
+  readClaudeOauthCredentialMetadata,
+  readClaudeOauthCredentialOrganizationId,
+} from '@happier-dev/protocol/providers/claude/oauth-profile';
+export type { ClaudeOauthCredentialMetadata, ClaudeOauthEntitlementMetadata } from '@happier-dev/protocol/providers/claude/oauth-profile';

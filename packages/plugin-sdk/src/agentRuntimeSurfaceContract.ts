@@ -872,6 +872,7 @@ type _ConnectedAccountRuntimeSelectionMustBeGeneric = AssertTrue<
     | 'groupGeneration'
     | 'credentialRevision'
     | 'sourceProviderAccountId'
+    | 'sourceProviderOrganizationId'
     | 'sourceAccountLabel'
     | 'applyReason'
   >
@@ -884,7 +885,7 @@ type _ConnectedAccountRuntimeTargetMustBeBounded = AssertNever<
 type _ConnectedAccountNativeAuthCodecMustOnlyReceiveExactAuthorFacts = AssertTrue<
   Equal<
     keyof AgentConnectedAccountNativeAuthCodecMaterializeInputV1,
-    'selection' | 'credential'
+    'selection' | 'credential' | 'files'
   >
 >;
 

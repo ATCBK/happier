@@ -119,3 +119,9 @@ export { requireOauthCredentialRecordWithExpiry } from '../connectedAccounts.js'
 export { requireTokenCredentialRecord } from '../connectedAccounts.js';
 export { unsupportedAccountUsage } from '../connectedAccounts.js';
 export { resolveConnectedServiceQuotaMeterLabel } from '../connectedAccounts.js';
+
+export {
+  computeConnectedAccountAccessTokenFingerprint,
+  normalizeConnectedAccountAccessTokenFingerprint,
+  type ConnectedAccountAccessTokenFingerprint,
+} from './tokenFingerprint.js';

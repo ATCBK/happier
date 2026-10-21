@@ -735,6 +735,12 @@ export function snapshotConnectedAccountRuntime(
         'Connected-account runtime.quota',
         false,
     );
+    const enrichCredentialContext = captureStaticRegistrationMethod<PluginConnectedAccountRuntime['enrichCredentialContext']>(
+        receiver,
+        'enrichCredentialContext',
+        'Connected-account runtime.enrichCredentialContext',
+        false,
+    );
     const recoveryReceiverValue = readMember(receiver, 'recoveryCredits');
     const recoveryReceiver = recoveryReceiverValue === undefined
         ? undefined
@@ -775,6 +781,7 @@ export function snapshotConnectedAccountRuntime(
             true,
         )!,
         ...(quota ? { quota } : {}),
+        ...(enrichCredentialContext ? { enrichCredentialContext } : {}),
         ...(recoveryCredits ? { recoveryCredits } : {}),
     }) as PluginConnectedAccountRuntime;
 }

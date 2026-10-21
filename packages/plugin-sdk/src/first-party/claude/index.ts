@@ -25,3 +25,11 @@ export { normalizeClaudeUnifiedTerminalHost } from './projections.js';
 export { normalizeClaudeUnifiedTerminalResumeChoice } from './projections.js';
 export { normalizeClaudeUnifiedTerminalWorkspaceTrustPolicy } from './projections.js';
 export { readClaudeSettingSourcesV2 } from './projections.js';
+
+export {
+  CLAUDE_OAUTH_PROFILE_URL, CLAUDE_OAUTH_PROFILE_HEADERS,
+  normalizeClaudeOauthProfileEntitlement,
+  readClaudeOauthCredentialMetadata,
+  readClaudeOauthCredentialOrganizationId,
+} from './projections.js';
+export type { ClaudeOauthCredentialMetadata, ClaudeOauthEntitlementMetadata } from './projections.js';

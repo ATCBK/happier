@@ -231,6 +231,8 @@ export type AgentAccountUsageSourceContext = Readonly<{
 
 export type AgentAccountUsageRecordSnapshotInput = Readonly<{
   snapshot: AgentAccountUsageSnapshot;
+  /** Observed native credential material; the host verifies it against the current source. */
+  credentialProof?: Readonly<{ providerAccountId: string; credentialFingerprint: string }>;
   /**
    * Evidence read after an already-surfaced hard failure. The host records it but must not
    * start predictive switching; the runtime-auth failure owner already owns recovery.

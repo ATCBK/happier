@@ -79,6 +79,13 @@ export type PluginConnectedAccountFailureRetryEvidence =
         retryNotBeforeMs?: number;
     }>;
 
+/** Nonsecret provider identity bound to the credential; null marks an unknown fact. */
+export type ConnectedAccountProviderIdentity = Readonly<{
+    accountId?: string | null;
+    email?: string | null;
+    organizationId?: string | null;
+}>;
+
 export type PluginConnectedAccountAuthCompletionResult =
     | Readonly<{
         status: 'connected';
@@ -89,10 +96,7 @@ export type PluginConnectedAccountAuthCompletionResult =
          * exact account.
          */
         accountId?: string;
-        providerIdentity?: Readonly<{
-            accountId?: string;
-            email?: string;
-        }>;
+        providerIdentity?: ConnectedAccountProviderIdentity;
         displayName: string;
         scopes: readonly string[];
     }>
@@ -188,7 +192,7 @@ export type PluginConnectedAccountAuthenticationModeRuntime =
         ): Promise<PluginConnectedAccountReconciliationResult>;
     }>;
 export type PluginConnectedAccountHealthResult =
-    | Readonly<{ status: ConnectedAccountListedState; displayName?: string; scopes?: readonly string[]; diagnostic?: PluginDiagnosticData }>
+    | Readonly<{ status: ConnectedAccountListedState; providerIdentity?: ConnectedAccountProviderIdentity; displayName?: string; scopes?: readonly string[]; diagnostic?: PluginDiagnosticData }>
     | Readonly<{ status: 'rejected'; diagnostic: PluginDiagnosticData }>;
 export type PluginConnectedAccountReadContext = Omit<PluginInvocationContext, 'operation'> & Readonly<{
     account: ConnectedAccountRef;
