@@ -43,6 +43,7 @@ const { machineLanguageIntelligenceApplyAction } =
 const { FileRenameEditSet, CodeEditSetPopover } = await import('@/components/workspaces/files/intelligence/CodeEditSetPopover');
 const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
 const { useBoundPluginSurfaceController } = await import('@/components/plugins/surfaces/boundPluginSurfaceController');
+const { createPluginActionInputSelectionFactsPublication } = await import('@/components/plugins/surfaces/pluginActionInputSelectionFacts');
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
 const { PluginUiJsonValueV1Schema } = await import('@happier-dev/protocol/plugins/ui');
@@ -163,7 +164,7 @@ describe('semantic rename apply from the File page', () => {
         },
         workspaceFilesReplace: async (input, context) => {
           restoreInput = input;
-          restoreRequestId = context.actionRequestId;
+          restoreRequestId = context.actionRequestId ?? undefined;
           return { operation: { operationId: 'approved-restore' } };
         },
       },
@@ -199,6 +200,8 @@ describe('semantic rename apply from the File page', () => {
       await waitForHomeGovernance(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
       expect(Boolean(screen.findByTestId('code-edit-set-note'))).toBe(false);
       expect(Boolean(screen.findByTestId('code-edit-set-review'))).toBe(true);
+      // The review says it waits on the person and offers the way to the request.
+      await vi.waitFor(() => expect(Boolean(screen.findByTestId('code-edit-set-approval'))).toBe(true), { timeout: 15_000 });
       expect(effectCount).toBe(0);
       const artifactId = homes.artifacts(serverId).list()[0]!.id;
       const decision = await decideApprovalAsInbox(serverId, artifactId, 'approve');
@@ -207,11 +210,13 @@ describe('semantic rename apply from the File page', () => {
       await act(async () => { publishHomeAccountChange(serverId, [artifactId]); });
       await waitForHomeGovernance(() => expect(Boolean(screen.findByTestId('code-edit-set-result'))).toBe(true));
       expect(screen.findAllByTestId('code-edit-set-result-file').length).toBeGreaterThanOrEqual(2);
+      expect(Boolean(screen.findByTestId('code-edit-set-approval'))).toBe(false);
       expect(effectCount).toBe(1);
       expect(writes).toEqual([{ path: 'src/retry.ts', hash: null }, { path: 'src/renamed.ts', hash: nextHash }, { path: 'src/importer.ts', hash: nextHash }]);
       await act(async () => { screen.pressByTestId('code-edit-set-undo'); });
       await waitForHomeGovernance(() => expect(homes.artifacts(serverId).list()).toHaveLength(2));
       const undoId = homes.artifacts(serverId).list().find(item => item.id !== artifactId)!.id;
+      await waitForHomeGovernance(() => expect(Boolean(screen.findByTestId('code-edit-set-approval'))).toBe(true));
       const undoRequest = StoredApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(undoId)!));
       expect(undoRequest).toMatchObject({ status: 'open', actionId: 'workspace.files.replace',
         actionArgs: { machineId: 'machine', rootPath: '/repo', operation: buildWorkspaceFileRestoreOperation(movedReceipt.results) } });
@@ -224,11 +229,46 @@ describe('semantic rename apply from the File page', () => {
       expect(writes).toHaveLength(3);
       await act(async () => { releaseTerminal(); });
       await waitForHomeGovernance(() => expect(Boolean(screen.findByTestId('code-edit-set-undo'))).toBe(false));
+      expect(Boolean(screen.findByTestId('code-edit-set-approval'))).toBe(false);
       expect(writes).toEqual([{ path: 'src/retry.ts', hash: null }, { path: 'src/renamed.ts', hash: nextHash }, { path: 'src/importer.ts', hash: nextHash },
         { path: 'src/importer.ts', hash }, { path: 'src/renamed.ts', hash: null }, { path: 'src/retry.ts', hash }]);
       expect(effectCount).toBe(1);
       expect(terminalReads).toBe(1);
     } finally { releaseTerminal(); for (const unsubscribe of unsubscribes) unsubscribe(); restoreModuleLoader(); }
+  });
+
+  it('keeps the review after the person declines the apply, saying nothing was changed', async () => {
+    const restoreModuleLoader = await installRealActionExecutorModuleLoader();
+    await homes.requireUiApproval(serverId, ['code.file.rename.apply']);
+    let effectCount = 0;
+    await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId, accountId: 'alice', machineId: 'machine',
+      machineFilesystemEffects: {
+        languageIntelligenceApply: async () => { effectCount++; return receipt; },
+        workspaceFilesReplace: async () => ({ operation: { operationId: 'unused' } }),
+      },
+    });
+    const screen = await renderScreen(React.createElement(FileRenameEditSet, {
+      request: { op: 'fileRename', newPath: 'src/renamed.ts', files: [
+        { path: 'src/retry.ts', expectedHash: hash, edits: [], renameTo: 'src/renamed.ts' },
+        { ...files[0], path: 'src/importer.ts' },
+      ] },
+      scope: { serverId, machineId: 'machine', rootPath: '/repo' }, accountId: 'alice', filePath: 'src/retry.ts',
+      onRenameOnly() {}, onRequestClose() {},
+    }));
+    try {
+      await act(async () => { screen.pressByTestId('code-edit-set-apply'); });
+      await waitForHomeGovernance(() => expect(homes.artifacts(serverId).list()).toHaveLength(1));
+      const artifactId = homes.artifacts(serverId).list()[0]!.id;
+      expect(await decideApprovalAsInbox(serverId, artifactId, 'reject')).toMatchObject({ ok: true });
+      await act(async () => { publishHomeAccountChange(serverId, [artifactId]); });
+      await vi.waitFor(() => expect(Boolean(screen.findByTestId('code-edit-set-declined'))).toBe(true), { timeout: 15_000 });
+      expect(Boolean(screen.findByTestId('code-edit-set-note'))).toBe(false);
+      expect(Boolean(screen.findByTestId('code-edit-set-review'))).toBe(true);
+      expect(Boolean(screen.findByTestId('code-edit-set-approval'))).toBe(false);
+      const button = screen.findAllByType(RoundButton).find(node => node.props.testID === 'code-edit-set-apply');
+      expect(button?.props.loading).toBeFalsy();
+      expect(effectCount).toBe(0);
+    } finally { restoreModuleLoader(); }
   });
 
   it.each(['dismiss', 'change target'] as const)('does not issue an Action after %s while pre-apply document sync is pending', async reason => {
@@ -379,6 +419,7 @@ describe('ordinary mounted plugin Machine writes', () => {
           executionOrigin: { serverIdentityId: 'srv_rename_action', sourceRef: {
             machineId: 'machine', pluginId: 'qa.semantic', sourceCustody,
           } }, accountLifetime: account.accountOnlyLifetime, interactionEnabled: true, daemonInteractionEnabled: true,
+          actionInputSelectionFactsKey: createPluginActionInputSelectionFactsPublication().publish({ targetPluginId: 'qa.semantic' }),
         };
         const hook = await renderHook(({ occurrenceId }) => useBoundPluginSurfaceController({ facts: { ...facts, occurrenceId } }),
           { initialProps: { occurrenceId: 'semantic-occurrence' } });
