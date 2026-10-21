@@ -884,7 +884,7 @@ const CODEBUDDY_CORE: AgentCoreConfig = {
     tools: buildAgentToolsUiConfig({ agentId: 'codebuddy' }),
     sessionStorage: buildAgentSessionStorageUiConfig({ agentId: 'codebuddy' }),
     ui: {
-        agentPickerIconName: 'code-slash-outline',
+        agentPickerIconName: 'code',
         cliGlyphScale: 1,
         profileCompatibilityGlyphScale: 1,
     },
