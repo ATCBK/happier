@@ -90,7 +90,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running' 
   }));
   app.get('/v1/auth/ping', async () => ({ ok: true }));
   const finalText = { role: 'agent', content: { type: 'codex', data: { type: 'message', message: 'Actual final result' } } };
-  const messages: (RawTranscriptRow & { seq: number })[] = [{ seq: 1, createdAt: 1,
+  const messages: (RawTranscriptRow & { seq: number })[] = [{ seq: 1, localId: null, createdAt: 1,
     content: review?.keyState ? { t: 'encrypted', c: encryptSessionPayload({ ctx, payload: finalText }) } : { t: 'plain', v: finalText } }];
   app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture(
     review?.keyState ? witness : { mode: 'plain' }));

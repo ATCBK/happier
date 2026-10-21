@@ -1508,7 +1508,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
     await outbox.close();
   });
 
-  it('keeps 400 session turn mutation rejections queued without emitting update-state', async () => {
+  it('retains typed 400 session turn rejections without active retry custody, fallback or replay', async () => {
     process.env.HAPPIER_SESSION_MUTATION_OUTBOX_BASE_RETRY_MS = '60000';
     process.env.HAPPIER_SESSION_MUTATION_OUTBOX_JITTER_MS = '0';
     const axiosPost = await getAxiosPostMock();
@@ -1536,24 +1536,47 @@ describe('ApiSessionClient durable mutation outbox', () => {
     });
 
     await expect.poll(() => deliveredEvents).toEqual(['session-turn-mutation']);
-    await expect.poll(() => readPersistedOutboxMutations('s1')).toEqual([
+    await expect.poll(() => readPersistedOutboxDeadLetters('s1')).toEqual([
       expect.objectContaining({
+        mutationId: mutation.mutationId,
         kind: 'session_turn_mutation',
-        payload: expect.objectContaining({ action: 'fail' }),
+        reason: 'session_turn_mutation_rejected',
+        queuedMutation: expect.objectContaining({
+          payload: expect.objectContaining({ action: 'fail' }),
+        }),
         attempts: 1,
         firstFailedAt: expect.any(Number),
         lastAttempt: {
           v: 1,
-          reason: 'delivery_not_confirmed',
+          reason: 'session_turn_mutation_rejected',
           attemptedAt: expect.any(Number),
         },
       }),
     ]);
+    await expect.poll(() => readPersistedOutboxMutations('s1')).toEqual([]);
+    await outbox.flush('flush');
+    await outbox.close();
+    const reopened = createRuntimeSessionClientDurableMutationOutbox({
+      token: 'tok',
+      sessionId: 's1',
+      getSocket: () => sessionSocketStub,
+      requestReconnect: () => {},
+    });
+    try {
+      await reopened.awaitReady();
+      await reopened.flush('startup');
+      expect(deliveredEvents).toEqual(['session-turn-mutation']);
+      await expect(readPersistedOutboxMutations('s1')).resolves.toEqual([]);
+      await expect(readPersistedOutboxDeadLetters('s1')).resolves.toEqual([
+        expect.objectContaining({ mutationId: mutation.mutationId, reason: 'session_turn_mutation_rejected' }),
+      ]);
+    } finally {
+      await reopened.close();
+    }
     expect(sessionSocketStub.emitWithAck).not.toHaveBeenCalledWith(
       'update-state',
       expect.anything(),
     );
-    await outbox.close();
   });
 
   it('keeps authoritative session turn mutations queued after retry exhaustion', async () => {
