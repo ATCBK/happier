@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import Color from 'color';
 import { PLANET_ATTENTION_HEX } from '@happier-dev/brand/planet';
+import { HAPPIER_DEFAULT_SURFACE_COLORS } from '@happier-dev/plugin-ui/environment';
 import {
     buildDarkShadowLevels,
     buildGlassBorderColor,
@@ -46,8 +47,8 @@ const lightThemeBase = {
         //
 
         text: {
-            primary: '#222222',
-            secondary: '#6c6c70',
+            primary: HAPPIER_DEFAULT_SURFACE_COLORS.light.foreground,
+            secondary: HAPPIER_DEFAULT_SURFACE_COLORS.light.secondary,
             tertiary: '#99999d',
             link: '#2BACCC',
             destructive: '#FF3B30',
@@ -116,7 +117,7 @@ const lightThemeBase = {
             canvas: '#F5F5F5',
         },
         surface: {
-            base: '#ffffff',
+            base: HAPPIER_DEFAULT_SURFACE_COLORS.light.background,
             inset: '#F8F8F8',
             elevated: '#f0f0f0',
             ripple: 'rgba(0, 0, 0, 0.08)',
@@ -135,7 +136,7 @@ const lightThemeBase = {
         // Borders are ink in three weights — border 8%, divider (`subtle`) 6%, selection 5.5% — so they sit
         // right on every surface, tint and theme profile (lab `ui-refine` R1). `strong` is a control's border.
         border: {
-            default: 'rgba(0, 0, 0, 0.08)',
+            default: HAPPIER_DEFAULT_SURFACE_COLORS.light.border,
             surface: 'rgba(0, 0, 0, 0.08)',
             strong: 'rgba(0, 0, 0, 0.1)',
             // The keyboard focus ring, and the ONE token any focus-visible treatment may use.
@@ -426,8 +427,8 @@ const darkThemeBase = {
         //
 
         text: {
-            primary: '#EFEFEF',
-            secondary: '#9A918C',
+            primary: HAPPIER_DEFAULT_SURFACE_COLORS.dark.foreground,
+            secondary: HAPPIER_DEFAULT_SURFACE_COLORS.dark.secondary,
             tertiary: '#6C625D',
             link: '#9EB9FF',
             destructive: '#EE6E6C',
@@ -493,7 +494,7 @@ const darkThemeBase = {
             canvas: '#141212',
         },
         surface: {
-            base: '#1B1919',
+            base: HAPPIER_DEFAULT_SURFACE_COLORS.dark.background,
             inset: '#171515',
             elevated: '#221C1C',
             ripple: 'rgba(255, 255, 255, 0.055)',
@@ -504,7 +505,7 @@ const darkThemeBase = {
             sectionTint: 'rgba(255,255,255,0.014)',
         },
         border: {
-            default: 'rgba(255,255,255,0.060)',
+            default: HAPPIER_DEFAULT_SURFACE_COLORS.dark.border,
             surface: 'rgba(255,255,255,0.060)',
             strong: 'rgba(255,255,255,0.100)',
             // See the light theme's note. Tracks dark `state.active.foreground`.
