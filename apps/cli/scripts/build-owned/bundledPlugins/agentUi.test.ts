@@ -4,9 +4,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
+import { ModuleKind, transpileModule } from 'typescript';
 import { ScriptKind, ScriptTarget, createSourceFile, isCallExpression, isIdentifier, isObjectLiteralExpression, isPropertyAssignment, isSatisfiesExpression, isVariableStatement } from 'typescript';
 
-import { renderUiBundledPluginEntriesTs } from './agentUi.ts';
+import { renderBundledAgentPresentationTs, renderUiBundledPluginEntriesTs } from './agentUi.ts';
+import { CLAUDE_UI_DESCRIPTOR } from '../../../../../packages/plugins/claude/src/ui/descriptor';
 import { renderCliBundledPluginEntriesTs, renderCliBundledPluginManifestEntriesTs } from './registry.ts';
 import { renderAgentIdsTs } from './agentFacts.ts';
 import type { BundledPluginPackage } from './projectionFacts.ts';
@@ -35,6 +38,27 @@ function emittedMapKeys(source: string, name: string): string[] {
 }
 
 describe('bundled Agent exclusion projections', () => {
+    it('publishes exact contributed presentation through the existing no-execute producer', () => {
+        const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.agent.claude');
+        const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);
+        if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
+        const manifest = { ...parsed.manifest, contributes: { ...parsed.manifest.contributes,
+            agents: parsed.manifest.contributes.agents!.map(agent => ({ ...agent,
+                title: { key: 'research.agent.title', fallback: 'Declared Research Agent' },
+            })),
+        } };
+        const source = renderBundledAgentPresentationTs([{
+            pluginPackageId: 'claude', pluginId: manifest.id, packageName: '@happier-dev/plugins-claude',
+            packageVersion: '0.0.0', agentId: 'claude', manifest,
+            agentUiDescriptor: { ...CLAUDE_UI_DESCRIPTOR, identityColor: { light: '#112233', dark: '#aabbcc' } },
+        }]);
+        const exports: Record<string, unknown> = {};
+        runInNewContext(transpileModule(source, { compilerOptions: { module: ModuleKind.CommonJS } }).outputText, { exports });
+        expect(exports.BUNDLED_AGENT_PRESENTATION).toEqual({
+            claude: { name: 'Declared Research Agent', identityColor: { light: '#112233', dark: '#aabbcc' } },
+        });
+    });
+
     it('publishes declared provisioner kinds and billing without activating their runtimes', () => {
         const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(entry => entry.pluginId === 'happier.machine.boat');
         const parsed = ingestPluginManifestV2(locator ? readBundledPluginManifest(locator) : undefined);

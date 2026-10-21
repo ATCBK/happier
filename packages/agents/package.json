@@ -31,6 +31,16 @@
       "types": "./dist/manifest.d.ts",
       "default": "./dist/manifest.js"
     },
+    "./presentation": {
+      "happier-source": "./src/presentation.ts",
+      "types": "./dist/presentation.d.ts",
+      "default": "./dist/presentation.js"
+    },
+    "./declaredAgentTitle": {
+      "happier-source": "./src/declaredAgentTitle.ts",
+      "types": "./dist/declaredAgentTitle.d.ts",
+      "default": "./dist/declaredAgentTitle.js"
+    },
     "./cli/runtime": {
       "happier-source": "./src/cli/runtime.ts",
       "types": "./dist/cli/runtime.d.ts",

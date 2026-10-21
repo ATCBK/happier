@@ -25,6 +25,7 @@ import { buildAgentResumeUiConfig } from '@/agents/registry/buildAgentResumeUiCo
 import { buildAgentSessionStorageUiConfig } from '@/agents/registry/buildAgentSessionStorageUiConfig';
 import { buildAgentToolsUiConfig } from '@/agents/registry/buildAgentToolsUiConfig';
 import { getAgentModelConfig, getAgentSessionModesKind } from '@happier-dev/agents';
+import { readBundledAgentPresentation } from '@happier-dev/agents/presentation';
 
 function normalizeGeneratedSvgXml(xml: string): string {
     return xml.replace(/\s{2,}/g, ' ').trim();
@@ -78,7 +79,7 @@ const CLAUDE_CORE: AgentCoreConfig = {
 const CLAUDE_UI: AgentUiConfig = {
     id: 'claude',
     icon: null,
-    identityColor: {"light":"#eb6834","dark":"#d95926"},
+    identityColor: readBundledAgentPresentation('claude')?.identityColor ?? undefined,
     svgIconXml: AGENT_LOGO_SVG_XML.claude ?? null,
     pickerIconScale: 1.1,
     tintColor: null,
@@ -129,7 +130,7 @@ const CODEX_CORE: AgentCoreConfig = {
 const CODEX_UI: AgentUiConfig = {
     id: 'codex',
     icon: null,
-    identityColor: {"light":"#2a78d6","dark":"#3987e5"},
+    identityColor: readBundledAgentPresentation('codex')?.identityColor ?? undefined,
     svgIconXml: AGENT_LOGO_SVG_XML.codex ?? null,
     tintColor: null,
     avatarOverlay: {
@@ -236,7 +237,7 @@ const OPENCODE_CORE: AgentCoreConfig = {
 const OPENCODE_UI: AgentUiConfig = {
     id: 'opencode',
     icon: null,
-    identityColor: {"light":"#4a3aa7","dark":"#9085e9"},
+    identityColor: readBundledAgentPresentation('opencode')?.identityColor ?? undefined,
     svgIconXml: OPENCODE_SVG_ICON_XML,
     pickerIconScale: 0.9,
     tintColor: null,
@@ -335,7 +336,7 @@ const GEMINI_CORE: AgentCoreConfig = {
 const GEMINI_UI: AgentUiConfig = {
     id: 'gemini',
     icon: null,
-    identityColor: {"light":"#1baf7a","dark":"#199e70"},
+    identityColor: readBundledAgentPresentation('gemini')?.identityColor ?? undefined,
     svgIconXml: AGENT_LOGO_SVG_XML.gemini ?? null,
     tintColor: null,
     avatarOverlay: {
@@ -944,7 +945,7 @@ const PI_CORE: AgentCoreConfig = {
 const PI_UI: AgentUiConfig = {
     id: 'pi',
     icon: null,
-    identityColor: {"light":"#e87ba4","dark":"#d55181"},
+    identityColor: readBundledAgentPresentation('pi')?.identityColor ?? undefined,
     svgIconXml: AGENT_LOGO_SVG_XML.pi ?? null,
     pickerIconScale: 0.9,
     tintColor: null,

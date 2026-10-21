@@ -8,6 +8,8 @@ import type {
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { isPluginAgentCliAuthBackgroundCheckSafe } from '@happier-dev/protocol/plugins/contributions/agentCliMetadata';
 import type { AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
+import { readDeclaredAgentTitle } from '@happier-dev/agents/declaredAgentTitle';
+export { readDeclaredAgentTitle } from '@happier-dev/agents/declaredAgentTitle';
 
 import type { CliAuthSpec, CliAuthStatusDraft } from '@/capabilities/cliAuth/types';
 import { readJsonFileSafe } from '@/capabilities/cliAuth/shared';
@@ -15,22 +17,6 @@ import { expandHomeDirPath } from '@/utils/path/expandHomeDirPath';
 import { readAgentExecutionRunCapabilities, readAgentSessionCapabilities } from './agentContributionDefinition';
 import { resolveFirstPartyLegacyAgentConnectedAccountServiceId } from './connectedAccountPurposeCompatibility';
 import type { ResolvedCatalogEntry, ResolvedContributionProvenance } from './types';
-
-/**
- * Read a declared manifest title, accepting both the plain-string and the
- * localized `{ key, fallback }` authoring shapes. Returns null when the
- * declaration carries no usable text, so callers decide their own fallback.
- */
-export function readDeclaredAgentTitle(title: unknown): string | null {
-    if (typeof title === 'string' && title.trim().length > 0) return title.trim();
-    if (title && typeof title === 'object' && !Array.isArray(title)) {
-        const localizedFallback = Reflect.get(title, 'fallback');
-        if (typeof localizedFallback === 'string' && localizedFallback.trim().length > 0) {
-            return localizedFallback.trim();
-        }
-    }
-    return null;
-}
 
 export function readAgentDisplayTitle(title: unknown, fallback: string): string {
     return readDeclaredAgentTitle(title) ?? fallback;

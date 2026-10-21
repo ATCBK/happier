@@ -20,6 +20,8 @@ type RegistryUiModule = typeof import('@/agents/registry/registryUi');
 type AgentIconTintTheme = Parameters<RegistryUiModule['getAgentIconTintColor']>[1];
 import * as RegistryUi from '@/agents/registry/registryUi';
 import { AgentUiIdentityColorV1Schema } from '@happier-dev/protocol/plugins/contributions/agentUiGrammar';
+import { getNeutralAgentIdentityColor } from '@happier-dev/agents/presentation';
+export { getNeutralAgentIdentityColor } from '@happier-dev/agents/presentation';
 import { resolveProjectedAgentUiBehaviorEntry } from '@/agents/registry/agentUiBehaviorProjection';
 
 import type { AgentUiBehavior } from '@/agents/registry/registryUiBehavior';
@@ -60,11 +62,6 @@ export function getAgentCore(id: AgentId): AgentCoreConfig | null {
 
 export function getAgentUi(id: AgentId): AgentUiConfig {
     return registryUi().getAgentUiConfig(id);
-}
-
-/** Shared neutral for an Agent without an admitted identity hue, or a folded Other series. */
-export function getNeutralAgentIdentityColor(theme: Readonly<{ dark: boolean }>): string {
-    return theme.dark ? '#6C625D' : '#A3A3A8';
 }
 
 export function getAgentIdentityColor(
