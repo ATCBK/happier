@@ -9,6 +9,8 @@ import { deriveDiscussionFollowInputLocalIdV1, type SessionFollowDiscussionPendi
 import { resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { renderSessionInputContextPromptV1, type DiscussionPromptAuthorV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import { readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
+import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
+import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { resolveAccountDisplayLabelV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 import { readAgentStartCallerWorkDepthV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { deriveSessionInputActionRequestAttributionV1, materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
@@ -24,7 +26,7 @@ import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/sha
 import { stampTurnFacts } from '../turn/stampTurnFacts';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { resolveSessionInputTargetMachineId } from '@/session/services/sessionInputAdmissionIdentity';
-import { sealSessionStoredContent, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { readSessionPresentationContent, sealSessionStoredContent, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 
 /** The existing Follow observation becomes one original input through the incumbent Pending owner. */
 export function createDiscussionFollowInputIntake(input: Readonly<{
@@ -109,7 +111,19 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         ...(question.producerV1 ? { sessionId: question.producerV1.sessionId } : {}),
         ...(displayName ? { displayName } : {}),
       };
-      const questionText = renderSessionInputContextPromptV1({
+      if (question.producerV1) {
+        const producerSessionId = question.producerV1.sessionId;
+        const roster = DiscussionParticipantsListResponseV1Schema.safeParse(await discussionAction({
+          actionId: 'discussion.participants.list', input: { discussionId: addressing.discussionId },
+          context: { surface: 'cli', authority: 'account_automation', serverId: binding.serverId }, signal,
+        }));
+        if (!roster.success || roster.data.discussionId !== addressing.discussionId) return false;
+        if (roster.data.participants.some(participant => participant.participant.kind === 'model'
+          && 'sessionId' in participant && participant.sessionId === producerSessionId)) sender.kind = 'model';
+      }
+      // Render after the existing source read has supplied its display identity.
+      // Neither the roster label nor the Bot marker supplies causal authority.
+      const renderQuestionText = () => renderSessionInputContextPromptV1({
         discussionRequest: { discussionId: addressing.discussionId, messageId: addressing.messageId,
           throughSeq: addressing.throughSeq, sender, ...(doc ? { readActions: ['doc.read'] } : {}) },
         transformedUserText: readDiscussionMessagePartsV1(content).map(part => part.t === 'text' ? part.text
@@ -127,7 +141,18 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         if (!sourceSession?.sourceInputId) return false;
         const serverFeaturesSnapshot = input.session.getServerFeaturesSnapshot();
         const accountId = readAccountIdFromToken(input.credentials.token);
-        if (accountId && question.authorAccountId && question.authorAccountId !== accountId) {
+        const foreignSource = Boolean(accountId && question.authorAccountId && question.authorAccountId !== accountId);
+        const sourceRead = resolveSessionTransportContext({ credentials: input.credentials, idOrPrefix: sourceSession.sourceSessionId,
+          signal, ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}) });
+        // The authorized presentation read may identify a shared foreign Bot.
+        // Unavailable presentation must not replace Pending's private-source hold.
+        const source = foreignSource ? await sourceRead.catch(() => { signal.throwIfAborted(); return null; }) : await sourceRead;
+        if (source?.ok && source.sessionId === sourceSession.sourceSessionId) {
+          const sourceMetadata = readSessionPresentationContent({ credentials: input.credentials, rawSession: source.rawSession,
+            accountEncryptionMode: source.accountEncryptionCurrentness.mode }).metadata;
+          if (sender.kind !== 'model' && readSessionBotV1(sourceMetadata?.bot)) sender.kind = 'bot';
+        }
+        if (foreignSource) {
           // This only requests custody. Pending proves the committed producer
           // and retains its own hold; no source authority or permission is made
           // up when the other Account's private original cannot be hydrated.
@@ -142,14 +167,12 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
           if (!targetMachineId) return false;
           const result = await transport({ v: 1, sessionId: input.session.sessionId, targetMachineId, localId,
             requestedAction: { v: 1, kind: 'enqueue' }, reply: { ...reply, sourceSession },
-            content: sealSessionStoredContent({ ...target, payload: { role: 'user', content: { type: 'text', text: questionText } },
+            content: sealSessionStoredContent({ ...target, payload: { role: 'user', content: { type: 'text', text: renderQuestionText() } },
               idempotencyKey: `session-input:v1:${input.session.sessionId}:${localId}` }),
           }, { timeoutMs: resolveSessionMessageAdmissionTimeoutMs(), signal });
           return result.status === 'accepted' || result.status === 'alreadyAccepted';
         }
-        const source = await resolveSessionTransportContext({ credentials: input.credentials, idOrPrefix: sourceSession.sourceSessionId,
-          signal, ...(serverFeaturesSnapshot ? { serverFeaturesSnapshot } : {}) });
-        if (!source.ok || source.sessionId !== sourceSession.sourceSessionId || typeof source.rawSession.workDepth !== 'number') return false;
+        if (!source?.ok || source.sessionId !== sourceSession.sourceSessionId || typeof source.rawSession.workDepth !== 'number') return false;
         const original = await findTranscriptEncryptedMessageByLocalIdV2({ token: input.credentials.token, serverUrl: binding.serverUrl,
           sessionId: sourceSession.sourceSessionId, localId: sourceSession.sourceInputId, signal });
         if (original.type !== 'found' || original.message.messageRole !== 'user') return false;
@@ -175,7 +198,7 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
       const machineAdmissionTransport = input.session.getMachineAdmissionTransport();
       const result = await sendSessionMessage({ credentials: input.credentials, idOrPrefix: input.session.sessionId,
         localId, wait: false, timeoutMs: resolveSessionMessageAdmissionTimeoutMs(),
-        message: questionText,
+        message: renderQuestionText(),
         inputAdmission: { provenance: admission.provenance, request: SessionInputRequestV1Schema.parse({ ...admission.request,
           discussionAddressing: addressing, actionRequestAttributionV1, replyIntent: { mode: reply.mode } }) },
         executionAuthority: 'account_automation', resumeInactiveSession: delivery.session.wake,

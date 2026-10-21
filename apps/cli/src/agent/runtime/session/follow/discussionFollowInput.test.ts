@@ -12,6 +12,7 @@ import { settleSessionInputRequestV1, withSessionInputAuthorityV1 } from '@happi
 import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
 import { createDiscussionFollowInputIntake } from './discussionFollowInput';
 import type { FollowEventV1, FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn() }));
 // Only the HTTP and authenticated Machine socket are replaced; resource opening,
@@ -40,6 +41,9 @@ beforeEach(() => {
   });
   http.request.mockImplementation(async ({ url }: { url: string }) => {
     const path = new URL(url).pathname;
+    if (path === '/v1/discussions/discussion/participants') return { status: 200, data: {
+      discussionId: 'discussion', ownerAccountId: 'owner', access: 'owner', grants: [], participants: [],
+    } };
     if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200, data: { sessions: [], nextCursor: null, hasNext: false } };
     if (path.endsWith('/messages')) return { status: 200, data: { messages: [message], hasMoreOlder: false, messageSeq: 2 } };
     if (path === '/v1/discussions/discussion') return { status: 200, data: { discussion: {
@@ -188,7 +192,15 @@ it('admits a human-addressed original into existing Machine Pending without inve
   expect(request).not.toHaveProperty('content.v.meta.happierInputRequestV1.sourceSession');
 });
 
-it.each(['available', 'private', 'missing_original'] as const)('retains the Agent original causal ceiling without substituting receiver authority (%s)', async state => {
+it.each([
+  { state: 'available', kind: 'agent_session', bot: false, modelSession: null },
+  { state: 'available', kind: 'bot', bot: true, modelSession: null },
+  { state: 'available', kind: 'model', bot: false, modelSession: 'source' },
+  { state: 'available', kind: 'model', bot: true, modelSession: 'source' },
+  { state: 'available', kind: 'agent_session', bot: false, modelSession: 'other' },
+  { state: 'private', kind: 'agent_session', bot: false, modelSession: null },
+  { state: 'missing_original', kind: 'agent_session', bot: false, modelSession: null },
+] as const)('labels the authorized $kind sender and retains its causal ceiling ($state, model=$modelSession, bot=$bot)', async ({ state, kind, bot, modelSession }) => {
   const sourceId = 'c223456789012345678901234';
   const sourceSession = { sourceSessionId: sourceId, sourceTurnId: 'source-turn', sourceInputId: 'source-input', via: 'action' as const };
   const originalAttribution = { requestRef: 'causal-original', requester: { serverId: 'home', accountId: 'original-person' },
@@ -204,6 +216,15 @@ it.each(['available', 'private', 'missing_original'] as const)('retains the Agen
   const sessionTransport = http.get.getMockImplementation()!;
   http.request.mockImplementation(async (request: { url: string }) => {
     const response = await resourceTransport(request);
+    if (new URL(request.url).pathname.endsWith('/participants')) return { ...response, data: DiscussionParticipantsListResponseV1Schema.parse({
+      ...response.data, participants: [
+        ...(modelSession === 'source' ? [] : [{ participant: { kind: 'session', sessionId: sourceId }, answerPolicy: 'when_addressed', createdAt: 1 }]),
+        ...(modelSession ? [{ participant: { kind: 'model', participantSlotId: 'model-slot' },
+          launch: { executionTarget: { serverId: 'home', machineId: 'machine' }, directory: { kind: 'path', path: '/repo' },
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+          sessionId: modelSession === 'source' ? sourceId : sessionId, answerPolicy: 'when_addressed', createdAt: 1 }] : []),
+      ],
+    }) };
     return new URL(request.url).pathname.endsWith('/messages') ? { ...response, data: { ...response.data, messages: [
       { ...message, producerV1: { v: 1, kind: 'agent', sessionId: sourceId, sourceSession } },
     ] } } : response;
@@ -212,7 +233,7 @@ it.each(['available', 'private', 'missing_original'] as const)('retains the Agen
     const path = new URL(url).pathname;
     if (path === `/v2/sessions/${sourceId}`) return state === 'private' ? { status: 404, data: { error: 'Session not found' } }
       : { status: 200, data: { session: { ...createSessionNotificationContextFixture(sourceId), encryptionMode: 'plain', workDepth: 3,
-        metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }) } } };
+        metadata: JSON.stringify({ machineId: 'machine', path: '/repo', ...(bot ? { bot: { kind: 'bot' } } : {}) }) } } };
     if (path.endsWith('/messages/by-local-id/source-input')) return state === 'missing_original'
       ? { status: 404, data: { error: 'Message not found' } } : { status: 200, data: { message: {
         id: 'original', localId: 'source-input', seq: 1, sidechainId: null, createdAt: 1, updatedAt: 1, messageRole: 'user', inputAdmissionReceipt,
@@ -238,6 +259,9 @@ it.each(['available', 'private', 'missing_original'] as const)('retains the Agen
     return;
   }
   expect(admitted).toBe(true);
+  expect(admission.mock.calls[0]?.[0].content).toMatchObject({ t: 'plain', v: { content: {
+    text: expect.stringContaining(`discussion_sender_kind="${kind}"`),
+  } } });
   expect(admission).toHaveBeenCalledWith(expect.objectContaining({ reply: { mode: 'return', discussion: addressing, sourceSession,
     actionRequestAttributionV1: originalAttribution },
     content: { t: 'plain', v: expect.objectContaining({ meta: expect.objectContaining({ happierInputRequestV1: expect.objectContaining({ sourceSession,
@@ -247,12 +271,16 @@ it.each(['available', 'private', 'missing_original'] as const)('retains the Agen
   }), expect.anything());
 });
 
-it('submits the private foreign question for canonical held custody without reading or fabricating source authority', async () => {
+it.each(['private', 'unavailable', 'shared_bot'] as const)('labels a foreign sender from authorized presentation while leaving private input authority to held custody (%s)', async state => {
   const sourceId = 'c223456789012345678901234';
   const sourceSession = { sourceSessionId: sourceId, sourceTurnId: 'private-turn', sourceInputId: 'private-input', via: 'action' as const };
   const sessionTransport = http.get.getMockImplementation()!;
   http.get.mockImplementation(async (url: string, ...options: unknown[]) => new URL(url).pathname === `/v2/sessions/${sourceId}`
-    ? { status: 404, data: { error: 'Session not found' } } : sessionTransport(url, ...options));
+    ? state === 'private' ? { status: 404, data: { error: 'Session not found' } }
+      : state === 'unavailable' ? { status: 503, data: { error: 'unavailable' } }
+      : { status: 200, data: { session: { ...createSessionNotificationContextFixture(sourceId), encryptionMode: 'plain',
+        metadata: JSON.stringify({ machineId: 'machine', path: '/repo', bot: { kind: 'bot' } }) } } }
+    : sessionTransport(url, ...options));
   const resourceTransport = http.request.getMockImplementation()!;
   http.request.mockImplementation(async (request: { url: string }) => {
     const response = await resourceTransport(request);
@@ -276,7 +304,10 @@ it('submits the private foreign question for canonical held custody without read
     content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: expect.stringContaining('What changed?') } } },
   }), expect.anything());
   expect(admission.mock.calls[0]?.[0].content).not.toHaveProperty('v.meta');
-  expect(http.get.mock.calls.some(([url]) => String(url).includes(sourceId))).toBe(false);
+  expect(admission.mock.calls[0]?.[0].content).toMatchObject({ t: 'plain', v: { content: {
+    text: expect.stringContaining(`discussion_sender_kind="${state === 'shared_bot' ? 'bot' : 'agent_session'}"`),
+  } } });
+  expect(http.get.mock.calls.some(([url]) => String(url).includes(`/v2/sessions/${sourceId}/messages`))).toBe(false);
 });
 
 it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'creator-label', 'redo-labels', 'foreign-row'] as const)('admits only the compact authorized Doc card and authored question (%s)', async variant => {
