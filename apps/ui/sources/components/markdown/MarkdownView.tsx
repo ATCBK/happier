@@ -53,6 +53,12 @@ export type MarkdownSourceMarkKind = 'find' | 'passage';
 export type MarkdownSourceRangeLayoutObserver = Readonly<{
     onRanges: (ranges: readonly MarkdownSourceRangeAction[]) => void;
     onLayout: (range: MarkdownSourceRangeAction, layout: Readonly<{ y: number; height: number }>) => void;
+    /**
+     * `block` (default) measures every block on its own. `run` measures the segments the renderer
+     * already draws, so a native prose run stays one selectable text view (cross-paragraph selection)
+     * and a range may span several blocks.
+     */
+    granularity?: 'block' | 'run';
 }>;
 
 export const MarkdownView = React.memo((props: {

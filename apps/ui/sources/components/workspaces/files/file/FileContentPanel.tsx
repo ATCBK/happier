@@ -273,10 +273,12 @@ function FileContentPanelInner({
         ? MARKDOWN_PREVIEW_WIDE_BOTTOM_PADDING
         : MARKDOWN_PREVIEW_COMPACT_PADDING;
 
-    // Only web observes blocks: native prose must share one text view for cross-paragraph selection.
+    // Native prose shares one text view for cross-paragraph selection, so it is read by rendered run;
+    // web and native Find measure each block.
     const rememberedLine = React.useMemo(() => readingMemory?.line, [readingMemory?.identity]);
-    const markdownReading = useMarkdownReadingAnchor(`${_sessionId}:${filePath}:${displayMode}`, markdownPreviewTopPadding, Platform.OS === 'web' && !jumpToAnchor && !find?.open ? rememberedLine : undefined);
-    const canReadMarkdown = displayMode === 'markdown' && (Platform.OS === 'web' || find?.open === true);
+    const markdownReading = useMarkdownReadingAnchor(`${_sessionId}:${filePath}:${displayMode}`, markdownPreviewTopPadding,
+        !jumpToAnchor && !find?.open ? rememberedLine : undefined, Platform.OS === 'web' || find?.open ? 'block' : 'run');
+    const canReadMarkdown = displayMode === 'markdown';
     React.useLayoutEffect(() => {
         if (!readingMemory?.active || !canReadMarkdown) return;
         return () => {
@@ -731,7 +733,7 @@ function FileContentPanelInner({
                                 filePath={filePath}
                                 testID="file-markdown-preview"
                                 markdown={fileContent}
-                                sourceRangeLayoutObserver={Platform.OS === 'web' || find?.open ? markdownReading.observer : undefined}
+                                sourceRangeLayoutObserver={markdownReading.observer}
                                 profile="default"
                                 streamingMode="static"
                                 selectable

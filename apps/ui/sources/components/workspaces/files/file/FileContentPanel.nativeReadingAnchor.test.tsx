@@ -35,6 +35,41 @@ describe('native file panel reading continuity', () => {
             expect(remember).toHaveBeenCalledWith(3);
         } finally { await screen.unmount(); }
     });
+    it('restores and remembers a rendered Markdown source line while prose stays one selectable text view', async () => {
+        const remember = vi.fn();
+        let scrollY = 0;
+        const markdown = '# Guide\n\nFirst paragraph.\n\nSecond paragraph\ncontinues here.\n\n```ts\nconst a = 1;\n```\n\nClosing words.';
+        const props = { theme: { colors: { text: { secondary: '#999' } } }, sessionId: 's1', filePath: 'README.md',
+            diffContent: '@@ -1 +1 @@\n-# Guide\n+# Guide', language: null, fileContent: markdown, scrollTestID: 'markdown-scroll',
+            selectedLineKeys: new Set<string>(), lineSelectionEnabled: false, onToggleLine: vi.fn() };
+        const screen = await renderScreen(<FileContentPanel {...props} displayMode="markdown"
+            readingMemory={{ identity: 'README.md', line: 5, active: true, remember }} />, {
+            createNodeMock: (element) => element.type === 'ScrollView'
+                ? { scrollTo: ({ y }: { y: number }) => { scrollY = y; } }
+                : null,
+        });
+        try {
+            // Native selection spans paragraphs only inside one text view, so the prose run is not split per block.
+            const runs = screen.findAllByType('EnrichedMarkdownText').map((node) => String(node.props.markdown));
+            expect(runs.filter((run) => run.includes('# Guide'))).toEqual([expect.stringContaining('continues here.')]);
+            const scroll = screen.findHostByTestId('markdown-scroll')!;
+            const paddingTop = Number(scroll.findAll((node) => typeof node.props.style?.paddingTop === 'number')[0]!.props.style.paddingTop);
+            // Native layout is the platform boundary: each rendered segment reports its measured frame.
+            const segments = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'View'
+                && typeof node.props.onLayout === 'function'
+                && node.findAll((child) => String(child.props.testID ?? '').startsWith('markdown-source-range-trigger:')).length > 0
+                && node.findAll((child) => typeof child.type === 'string' && String(child.type) === 'View' && typeof child.props.onLayout === 'function'
+                    && child !== node && child.findAll((inner) => String(inner.props.testID ?? '').startsWith('markdown-source-range-trigger:')).length > 0).length === 0);
+            expect(segments).toHaveLength(3);
+            const frames = [{ y: 0, height: 300 }, { y: 300, height: 100 }, { y: 400, height: 50 }];
+            await act(async () => segments.forEach((segment, index) => segment.props.onLayout({ nativeEvent: { layout: frames[index] } })));
+            // Line 5 of the six-line prose run (lines 1-6) starts four sixths into its measured height.
+            expect(scrollY).toBe(paddingTop + 200);
+            await act(async () => scroll.props.onScroll({ nativeEvent: { contentOffset: { x: 0, y: paddingTop + 250 } } }));
+            await screen.update(<FileContentPanel {...props} displayMode="diff" />);
+            expect(remember).toHaveBeenLastCalledWith(6);
+        } finally { await screen.unmount(); }
+    });
     it.each([true, false])('retains nonvirtualized commented file reading with wrapLines=%s', async (wrapLines) => {
         let scrollY = 55;
         const props = {

@@ -77,13 +77,16 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
         markdown: props.markdown,
         mode: props.streamingMode,
     });
-    const sourceRangeInteractionsActive = Boolean(
-        props.sourceRangeLayoutObserver ||
+    const blockTargetsActive = Boolean(
         props.onPressSourceRange ||
         props.selectionActions?.length ||
         props.renderAfterSourceRange ||
         props.highlightSourceRange,
     );
+    const sourceRangeInteractionsActive = blockTargetsActive || Boolean(props.sourceRangeLayoutObserver);
+    // A run-granularity observer measures the existing segments; only block targets split prose runs.
+    const splitEnrichedSourceRanges = blockTargetsActive
+        || (props.sourceRangeLayoutObserver !== undefined && props.sourceRangeLayoutObserver.granularity !== 'run');
     const segments = React.useMemo(() => {
         const cacheKey = buildMarkdownRenderSegmentsCacheKey({
             renderCacheKey: props.renderCacheKey,
@@ -99,12 +102,12 @@ export const MarkdownViewRenderer = React.memo((props: MarkdownViewRendererProps
             markdown: preparedMarkdown,
             streamingMode: props.streamingMode,
             streamingRepair: 'prepared',
-            splitEnrichedSourceRanges: sourceRangeInteractionsActive,
+            splitEnrichedSourceRanges,
             imagesEnabled,
         });
         if (cacheKey) writeMarkdownRenderSegmentsCache(cacheKey, preparedMarkdown, next);
         return next;
-    }, [preparedMarkdown, props.renderCacheKey, props.streamingMode, sourceRangeInteractionsActive, imagesEnabled]);
+    }, [preparedMarkdown, props.renderCacheKey, props.streamingMode, sourceRangeInteractionsActive, splitEnrichedSourceRanges, imagesEnabled]);
     const imageDocument = React.useMemo(() => props.images
         ? buildMarkdownImageDocument({ markdown: preparedMarkdown, images: props.images, segments })
         : undefined, [preparedMarkdown, props.images, segments]);
