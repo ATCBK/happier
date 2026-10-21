@@ -4,6 +4,8 @@
  * exercises its actual execution owner instead of using this wire fixture.
  * This module has no platform or mock-registration side effects.
  */
+import type { ExecutionRunPublicState } from '@happier-dev/protocol/execution/runs/responseSchemas';
+
 export async function createRetainedVoiceAgentRpcBoundary(params: Readonly<{
     /** Identity assigned by this synthetic daemon, parsed by the real public schema. */
     runId?: string;
@@ -22,7 +24,7 @@ export async function createRetainedVoiceAgentRpcBoundary(params: Readonly<{
     const requests: Array<{ method: string; input: unknown }> = [];
     return {
         requests,
-        readRetainedRun: () => retainedRun,
+        readRetainedRun: (): ExecutionRunPublicState | null => retainedRun,
         async dispatch(method: string, input: unknown): Promise<unknown> {
             requests.push({ method, input });
             params.onRpc?.(method, input);

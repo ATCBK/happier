@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { Platform } from 'react-native';
 
 import type { ItemAction } from '@/components/ui/lists/itemActions';
@@ -146,7 +147,14 @@ function useNativeSshBootstrapInterruptions(
 /** Whether this device can manage remote hosts at all. */
 export type RemoteHostsAvailability = 'available' | 'desktopOnly' | 'managementDisabled';
 
-export function useRemoteHostsGates() {
+export function useRemoteHostsGates(): Readonly<{
+    availability: RemoteHostsAvailability;
+    runner: ReturnType<typeof getDefaultSystemTaskRunner>;
+    secretMaterialAllowed: boolean;
+    remoteSshMachineSetupAllowed: boolean;
+    nativeSshTransportAllowed: boolean;
+    supportsWholeRowPress: boolean;
+}> {
     const isDesktop = isDesktopHost();
     const runner = getDefaultSystemTaskRunner();
     const supportsRemoteHostManagementSurface = isDesktop || runner.mode === 'native';
@@ -175,7 +183,37 @@ export type RemoteHostsGates = ReturnType<typeof useRemoteHostsGates>;
 export type RemoteHostSaveReceipt = Readonly<{ ok: false }>
     | Readonly<{ ok: true; revision: number; host: RemoteHost; localOverrides: 'saved' | 'pending' | 'retired' }>;
 
-export function useRemoteHostsCollectionController(gates: RemoteHostsGates) {
+export function useRemoteHostsCollectionController(gates: RemoteHostsGates): Readonly<RemoteHostsGates & {
+    hosts: ReturnType<typeof sortByLastUsedDesc>;
+    remoteHosts: NonNullable<NonNullable<ReturnType<typeof useRemoteHostCatalogSnapshot>>['data']>;
+    scope: ReturnType<typeof useActiveServerAccountScope>;
+    catalogRevision: number | 'absent' | null;
+    catalogStatus: 'loading' | 'partial' | 'ready' | 'unavailable';
+    catalogComplete: boolean;
+    canMutate: boolean;
+    openHost: (hostId: string | null, openRoute: NonNullable<UiActionExecutorContext['openRoute']>) => Promise<ActionExecuteResult | null>;
+    hostNameById: Map<string, string>;
+    buildHostActions: (host: RemoteHost) => ItemAction[];
+    saveHost: (input: Readonly<{
+        remoteHost: RemoteHost;
+        localOverrides: RemoteHostLocalOverrides | null;
+        credentialChanges?: RemoteHostCredentialChanges;
+        accountDirty?: boolean;
+    }>) => Promise<RemoteHostSaveReceipt>;
+    deleteHost: (remoteHostId: string) => Promise<boolean>;
+    startManageHostAction: (remoteHost: RemoteHost, action: keyof typeof REMOTE_HOST_MAINTENANCE_ACTION_IDS, title: string) => Promise<void>;
+    canRunRemoteHostMaintenanceTasks: boolean;
+    remoteHostOutcomeActions: ReturnType<typeof useRemoteHostOutcomeActions>;
+    sshTunnelControl: ReturnType<typeof useRemoteHostSshTunnelControl>;
+    activeRemoteHostSshTunnels: ReturnType<typeof useRemoteHostSshTunnelControl>['tunnels'][number][];
+    accessChannels: ReturnType<typeof buildAccessChannelProjection>;
+    accessEndpointProjection: ReturnType<typeof buildAccessEndpointProjection>;
+    handleAccessEndpointRemediationActionPress: (payload: Readonly<{
+        action: Readonly<{ ownerSurface: string; payload?: Readonly<Record<string, unknown>> }>;
+    }>) => void;
+    nativeSshBootstrapInterruptions: ReturnType<typeof useNativeSshBootstrapInterruptions>;
+    activeTask: { snapshot: NonNullable<ReturnType<typeof useSystemTaskSnapshot>>; title: string | null; cancel: (() => void) | undefined } | null;
+}> {
     const router = useRouter();
     const scope = useActiveServerAccountScope();
     const tunnelExecution = useMountedActionExecution(scope, { onApprovalPending: registration => {

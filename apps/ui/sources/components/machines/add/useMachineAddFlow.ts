@@ -141,7 +141,49 @@ async function discardMachineAddThroughActions(execute: MachineAddActionExecute)
     return true;
 }
 
-export function useMachineAddFlow(options: Readonly<{ serverId?: string; initialPath?: MachineAddPathId; runner?: SystemTaskRunner }> = {}) {
+export function useMachineAddFlow(options: Readonly<{ serverId?: string; initialPath?: MachineAddPathId; runner?: SystemTaskRunner }> = {}): {
+    serverId: string;
+    homeName: string;
+    paths: ReturnType<typeof useMachineAddPaths>;
+    path: MachineAddPathId | null;
+    choosePath: (id: MachineAddPathId) => void;
+    os: MachineAddCommandOs;
+    detectedOs: MachineAddCommandOs | null;
+    setOs: (os: MachineAddCommandOs) => void;
+    commands: Record<MachineAddCommandOs, string> | null;
+    ssh: {
+        draft: ReturnType<typeof readMachineAddFlowDraft>['sshDraft'];
+        setDraft: (draft: SshCredentialsDraft) => void;
+        ready: boolean;
+        hostError: string | null;
+        suggestions: { id: string; title: string; subtitle: string; apply: () => void }[];
+        supportedAuthModes: ReturnType<typeof getMachineAddSshSupportedAuthModes>;
+        privateKeyMaterial: string;
+        setPrivateKeyMaterial: (value: string) => void;
+    };
+    thisComputer: MachineAddThisComputer;
+    run: {
+        kind: 'ssh' | 'thisComputer';
+        running: boolean;
+        steps: readonly MachineAddStep[];
+        failure: { title: string; body: string; details: null } | null;
+        prompt: ReturnType<typeof resolveRemoteSshBootstrapPrompt> | ReturnType<typeof resolveThisComputerSetupPrompt>;
+    } | null;
+    approval: ReturnType<typeof useMountedActionExecution>['approval'];
+    watch: { status: 'arrived' | 'idle' | 'watching'; startedAtMs: number | null; notSeeing: boolean };
+    arrived: { machineId: string; name: string; facts: string } | null;
+    draftRow: MachineAddDraftRow | null;
+    startThisComputer: () => void;
+    resolveOnAnotherHome: (choice: 'move' | 'keep') => void;
+    startSsh: () => void;
+    startWatching: () => void;
+    retry: () => void;
+    cancel: () => Promise<boolean>;
+    discard: () => Promise<boolean>;
+    addAnother: () => Promise<void>;
+    continueSshPrompt: () => void;
+    declineSshPrompt: () => void;
+} {
     const { draft, update, notSeeing } = useMachineAddFlowDraft();
     const active = useActiveServerSnapshot();
     const serverId = draft.serverId ?? options.serverId ?? active.serverId;

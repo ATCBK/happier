@@ -1,4 +1,4 @@
-import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { SessionCurrentProjectionRecordV1Schema, type SessionCurrentProjectionRecordV1 } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionOwnerMetadataEnvelopeV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { z } from 'zod/mini';
 import { createSessionAccessFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -6,15 +6,23 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 
+export interface SessionMetadataHttpBoundary {
+    writes: string[];
+    replaceSession(sessionId: string, record?: SessionCurrentProjectionRecordV1): void;
+    createSessionFromPost(sessionId: string, init: RequestInit): Response;
+    rejectNextPatch(sessionId: string): void;
+    handle(input: URL | RequestInfo, init?: RequestInit): Response | null;
+}
+
 /** Home HTTP persistence boundary; the Sync metadata codec and writer stay real. */
-export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<Record<string, Session>>) {
+export function createSessionMetadataHttpBoundary(readSessions: () => Readonly<Record<string, Session>>): SessionMetadataHttpBoundary {
     const records = new Map<string, ReturnType<typeof SessionCurrentProjectionRecordV1Schema.parse>>();
     let rejectPatchFor: string | null = null;
     const writes: string[] = [];
     return {
         writes,
         /** Replace a persisted seed after a test installs a new server-side fixture. */
-        replaceSession(sessionId: string, record?: ReturnType<typeof SessionCurrentProjectionRecordV1Schema.parse>) {
+        replaceSession(sessionId: string, record?: SessionCurrentProjectionRecordV1) {
             if (record) records.set(sessionId, SessionCurrentProjectionRecordV1Schema.parse(record));
             else records.delete(sessionId);
         },
