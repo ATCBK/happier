@@ -129,7 +129,7 @@ describe('usageAnalyticsExport', () => {
         expect(payload.recapCards.map((card) => card.id)).toEqual(['streak', 'usage', 'model', 'rhythm']);
         expect(payload.recapCards[2]).toEqual(expect.objectContaining({
             label: 'Go-to model',
-            value: 'Claude 3.7 Sonnet',
+            value: 'claude-3.7-sonnet',
         }));
     });
 

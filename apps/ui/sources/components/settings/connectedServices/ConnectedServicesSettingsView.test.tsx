@@ -484,7 +484,7 @@ describe('ConnectedServicesSettingsView', () => {
         const screen = await renderScreen(<ConnectedServicesSettingsView />);
 
         const empty = screen.tree.root.findAll((node) => node.props.testID === 'connected-services-empty')[0];
-        expect(empty?.props.reason).toBe('connectedServicesSettings.emptyNoServiceOnMachine lima-happier-fresh');
+        expect(empty?.props.reason).toBe('connectedServicesSettings.emptyNoServiceOnMachine lima-\u2060happier-\u2060fresh');
         empty?.props.action?.onPress();
         expect(connectedServicesModuleState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/agents');
         machineState.machines = [];

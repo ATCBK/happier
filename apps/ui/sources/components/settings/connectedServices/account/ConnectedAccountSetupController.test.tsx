@@ -296,7 +296,9 @@ describe('ConnectedAccountSetupController real ownership', () => {
         let settingsVersion = 3;
         let raw: Readonly<Record<string, unknown>> | null = null;
         const rowWrites: Array<Extract<ConnectedAccountCatalogRecordV1, { key: 'purposes' }>> = [];
-        const source = () => raw ??= { ...storage.getState().settings, connectedAccountPurposeBindingsV1: { v: 1, bindings } };
+        // The Home stores Settings sparsely: only what the person set. A full defaults document would make the
+        // Sync engine's storage normalization rewrite it (a Settings POST) between the source read and the row write.
+        const source = () => raw ??= { connectedAccountPurposeBindingsV1: { v: 1, bindings } };
         return {
             readBindings: () => record?.value.bindings,
             readSource: source,

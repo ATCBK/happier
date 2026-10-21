@@ -37,13 +37,16 @@ vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testk
 // its real storage graph contains reciprocal facade imports.
 await import('./SessionSettingPreviews');
 const hooks = await import('@/sync/store/hooks');
-// Observe the settled real facade. A partial-module replacement during its reciprocal
+// Display-setting reads live in the leaf module that Text and the previews import directly;
+// only the mutable variants are still owned by the facade.
+const readHooks = await import('@/sync/store/settingsReadHooks');
+// Observe the settled real modules. A partial-module replacement during the reciprocal
 // imports leaves already-loaded Text adapters holding unobserved original hooks.
 const settingsHookSpies = [
-    ['useSetting', vi.spyOn(hooks, 'useSetting')],
-    ['useSettings', vi.spyOn(hooks, 'useSettings')],
+    ['useSetting', vi.spyOn(readHooks, 'useSetting')],
+    ['useSettings', vi.spyOn(readHooks, 'useSettings')],
     ['useSettingMutable', vi.spyOn(hooks, 'useSettingMutable')],
-    ['useLocalSetting', vi.spyOn(hooks, 'useLocalSetting')],
+    ['useLocalSetting', vi.spyOn(readHooks, 'useLocalSetting')],
     ['useLocalSettingMutable', vi.spyOn(hooks, 'useLocalSettingMutable')],
 ] as const;
 function readSettingsKeys() {

@@ -36,7 +36,6 @@ const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains
 const { readPluginMachineExecutionTargetPreference } = await import('@/sync/domains/machines/administration/selectionPreferences');
 const { useAllProfileMachineInventorySnapshots } = await import('@/sync/domains/machines/useMachineInventorySnapshots');
 const { buildMachineAdministrationCandidatesFromSnapshots } = await import('@/sync/domains/machines/administration/targetState');
-let peerServerId = '';
 
 function installLogSocketBoundary() {
     installDisconnectedServerSocketBoundary((socket, serverUrl) => {
@@ -68,8 +67,10 @@ const ORIGIN_A = {
     },
 } as const;
 
+// A second Machine of the same Home: only the focused Home supplies an automatic origin, so a
+// foreign Home's Machine cannot take over an unpinned plugin (pluginExecutionOrigin.test.ts).
 const ORIGIN_B = {
-    serverIdentityId: 'srv_b',
+    serverIdentityId: 'srv_a',
     materializationRef: {
         machineId: 'machine-b',
         materializationId: 'materialization-b',
@@ -225,11 +226,7 @@ describe('PluginDetailScreen execution-origin ownership', () => {
     beforeEach(async () => {
         installLogSocketBoundary();
         await account.restore({ accountId: 'account-origin-detail', serverIdentityId: ORIGIN_A.serverIdentityId,
-            machines: [machineFor(ORIGIN_A)] });
-        peerServerId = await account.addHome({ name: 'Peer Home', serverUrl: 'https://origin-peer.example.test',
-            serverIdentityId: ORIGIN_B.serverIdentityId, accountId: 'account-origin-detail', active: false });
-        await account.publishMachines(peerServerId, [machineFor(ORIGIN_B)]);
-        await account.home.selectHomes([account.serverId, peerServerId]);
+            machines: [machineFor(ORIGIN_A), machineFor(ORIGIN_B)] });
         await publishAvailability(1, [materializationFor(ORIGIN_A)]);
         logRequests.length = 0;
         fixture.installedPluginById = new Map([['acme.plugin', {
@@ -308,16 +305,16 @@ describe('PluginDetailScreen execution-origin ownership', () => {
         // The current-origin row names the server and, on its own line, the
         // materialized version running there.
         expect(screen.findByTestId('settings.plugins.detail.executionOrigin.current')?.props)
-            .toMatchObject({ title: 'machine-b', subtitle: 'Peer Home\nsettingsPlugins.surfaces.runOnAutoHint · common.version 1.0.0', selected: true });
+            .toMatchObject({ title: 'machine-b', subtitle: 'Provider settings\nsettingsPlugins.surfaces.runOnAutoHint · common.version 1.0.0', selected: true });
         expect(screen.findByTestId('settings.plugins.detail.acme.plugin.invocationLogs.target')?.props)
-            .toMatchObject({ title: 'machine-b', subtitle: 'Peer Home', selected: true });
+            .toMatchObject({ title: 'machine-b', subtitle: 'Provider settings', selected: true });
         await act(async () => {
             screen.pressByTestId('settings.plugins.detail.acme.plugin.invocationLogs.refresh');
             await flushAsync();
         });
         expect(logRequests.at(-1)).toMatchObject({
             machineId: 'machine-b',
-            serverUrl: 'https://origin-peer.example.test',
+            serverUrl: 'https://provider-settings-account.test',
         });
 
         // Execution origin moved A -> B, but the administration target this

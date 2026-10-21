@@ -48,11 +48,20 @@ it('retains the answered pool order during refresh and failed reads, but not aft
   const query = normalizeUsageQuery({});
   const pool = { group, memberAccountIds: ['work'], activeAccountId: null,
     selection: { status: 'error' as const, machineId: 'machine', errorCode: 'MACHINE_RPC_TIMEOUT' } };
-  let slice = resolveUsagePageAggregation({ queries: [query], pools: [{ query, value: [pool] }] }).results[0]!;
+  // The hook projects the Resource's admitted slice; retaining an answered pool order across a
+  // refresh, a failed read or a re-batch is the aggregation's (`previous`), so the slices come from it.
+  type Selection = NonNullable<ReturnType<typeof resolveUsagePageAggregation>['results'][number]['pools']>[number]['selection'];
+  let aggregation: ReturnType<typeof resolveUsagePageAggregation> | undefined;
+  const aggregate = (selection: Selection, members = ['work'], previous: typeof aggregation | null = aggregation) => {
+    aggregation = resolveUsagePageAggregation({ queries: [query],
+      pools: [{ query, value: [{ ...pool, memberAccountIds: members, selection }] }], previous: previous ?? undefined });
+    return aggregation.results[0]!;
+  };
+  let slice = aggregate(pool.selection, ['work'], null);
   let hook = await renderHook(() => useUsagePoolSelections(slice));
   const key = `${group.service.pluginId}/${group.service.localId}:${group.groupId}`;
-  const update = async (selection: NonNullable<typeof slice.pools>[number]['selection'], members = ['work']) => {
-    slice = { ...slice, pools: [{ ...pool, memberAccountIds: members, selection }] };
+  const update = async (selection: Selection, members = ['work']) => {
+    slice = aggregate(selection, members);
     await hook.rerender();
   };
   expect(hook.getCurrent().get(key)).toBe('failed');
@@ -82,15 +91,19 @@ it('retains the answered pool order during refresh and failed reads, but not aft
   expect(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 2, refreshError: 'no_machine' });
   await update({ status: 'available', machineId: 'machine', value: answer(2) });
   await hook.unmount();
-  const warm = await renderHook(() => useUsagePoolSelections({ ...slice,
-    pools: [{ ...pool, selection: { status: 'pending', machineId: 'machine' } }] }));
+  // A newly mounted reader of the same Resource sees the retained answer too.
+  const warmSlice = resolveUsagePageAggregation({ queries: [query], previous: aggregation,
+    pools: [{ query, value: [{ ...pool, selection: { status: 'pending', machineId: 'machine' } }] }] }).results[0]!;
+  const warm = await renderHook(() => useUsagePoolSelections(warmSlice));
   expect.soft(warm.getCurrent().get(key)).toMatchObject({ observedAtMs: 2 });
   await warm.unmount();
   hook = await renderHook(() => useUsagePoolSelections(slice));
   await update({ status: 'pending', machineId: 'other-machine' });
   expect(hook.getCurrent().get(key)).toBe('loading');
+  await update({ status: 'available', machineId: 'machine', value: answer(2) });
   await update({ status: 'pending', machineId: 'machine' }, ['other-account']);
   expect(hook.getCurrent().get(key)).toBe('loading');
+  await update({ status: 'available', machineId: 'machine', value: answer(2) });
   await update({ status: 'error', machineId: 'machine', errorCode: 'denied' });
   expect(hook.getCurrent().get(key)).toBe('failed');
   await update({ status: 'pending', machineId: 'machine' });
@@ -100,8 +113,9 @@ it('retains the answered pool order during refresh and failed reads, but not aft
   await update({ status: 'pending', machineId: 'machine' });
   expect(hook.getCurrent().get(key)).toBe('loading');
   await update({ status: 'available', machineId: 'machine', value: answer(4) });
-  retireActiveServerAccountScopeLifetime();
-  await update({ status: 'pending', machineId: 'machine' });
+  // A Resource opened for another authority starts without the retired one's answer.
+  slice = aggregate({ status: 'pending', machineId: 'machine' }, ['work'], null);
+  await hook.rerender();
   expect(hook.getCurrent().get(key)).toBe('loading');
 });
 

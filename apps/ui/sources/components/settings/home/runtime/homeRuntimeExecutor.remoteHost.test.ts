@@ -67,9 +67,7 @@ async function prepareHome() {
     const catalog = { status: 'ready' as const, revision: 4, hosts: [host], diagnostics: [] };
     home.answer(serverId, '/v1/account/entity-rows/remote-hosts', { body: { status: 'present', revision: 4,
         content: { t: 'plain', v: { v: 1, hosts: [host] } } } });
-    home.answer(serverId, '/v2/account/settings', { body: { version: 4, content: { t: 'plain', v: {
-        actionsSettingsV1: { v: 1, actions: { 'remote_hosts.relay.restart': { approvalRequiredSurfaces: ['ui'] } } },
-    } } } });
+    home.answer(serverId, '/v2/account/settings', { body: { version: 4, content: { t: 'plain', v: {} } } });
     home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }) });
     home.answer(serverId, '/v2/account/settings/history', { body: { snapshots: [] } });
     home.answer(serverId, '/v1/account/entity-rows/profiles/transfer', { body: { status: 'absent' } });
@@ -82,6 +80,8 @@ async function prepareHome() {
     const credentials = await TokenStorage.getCredentialsForServerUrl('https://ssh-home.test', { serverId });
     if (!credentials) throw new Error('SSH Home credentials were not stored');
     connection = await restoreServerAccountForTest({ serverUrl: 'https://ssh-home.test', accountId: 'account', credentials, request: home.request });
+    // The Account's Action policy is the applied store plus its Home answer; the harness owns seeding both.
+    await home.requireUiApproval(serverId, 'remote_hosts.relay.restart');
     applyRemoteHostCatalogSnapshot(scope, catalog, true);
     nativeTasks.bridge.start.mockClear();
     const manual = { ...nativeTasks, runner: runtime.getSystemTasksRunner() };

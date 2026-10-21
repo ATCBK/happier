@@ -166,8 +166,11 @@ async function renderAuthenticated(element: React.ReactNode) {
 
 async function renderPhone() {
     const screen = await renderAuthenticated(<AddPhoneSettingsView />);
+    // The code slot is `add-phone-qr` from the first moment of making a code (it holds the spinner);
+    // it is the answer only once the ready code labels itself.
     await waitForHomeGovernance(() => expect(
-        ['add-phone-qr', 'add-phone-expired', 'add-phone-update-required', 'add-phone-invalid-request', 'add-phone-complete']
+        screen.findByTestId('add-phone-qr')?.props.accessibilityLabel !== undefined
+        || ['add-phone-expired', 'add-phone-update-required', 'add-phone-invalid-request', 'add-phone-complete']
             .some(testId => screen.findByTestId(testId) !== null),
     ).toBe(true));
     return screen;
@@ -244,7 +247,7 @@ describe('AddPhoneSettingsView', () => {
         Modal.hideAll();
         const screen = await renderAuthenticated(<ModalProvider>{null}</ModalProvider>);
         await act(async () => showHomePairingModal('phone', background.profileId));
-        await waitForHomeGovernance(() => expect(screen.findByTestId('home-pairing-modal-qr') !== null).toBe(true));
+        await waitForHomeGovernance(() => expect(screen.findByTestId('home-pairing-modal-qr')?.props.accessibilityLabel !== undefined).toBe(true));
         const start = requestsFor('/v1/auth/pairing/start').at(-1);
         expect({ serverId: start?.serverId, authenticated: start?.authenticatedForTarget })
             .toEqual({ serverId: background.profileId, authenticated: true });

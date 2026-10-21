@@ -245,10 +245,11 @@ describe('Profile editor entity writer', () => {
             if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(secretMaterials);
             if (path === '/v2/account/settings' && init?.method !== 'POST') return Response.json({ content: { t: 'plain', v: accountSettings }, version: accountSettingsVersion });
             if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
-            if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json([...artifacts.values()]);
+            // The Home classifies every row it serves (coarse kind), so inventory sync has no hint to repair.
+            if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json([...artifacts.values()].map(row => ({ ...row, kind: 'other' })));
             if (path.startsWith('/v1/artifacts/') && init?.method !== 'POST' && init?.method !== 'PUT') {
                 const artifact = artifacts.get(decodeURIComponent(path.slice('/v1/artifacts/'.length)));
-                if (artifact) return Response.json(artifact);
+                if (artifact) return Response.json({ ...artifact, kind: 'other' });
             }
             if (path === PROFILE_ROWS_ROUTE_V1) {
                 await beforeProfileRead?.();

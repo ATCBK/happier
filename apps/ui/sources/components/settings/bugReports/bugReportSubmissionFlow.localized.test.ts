@@ -28,7 +28,6 @@ describe('bug report validation copy', () => {
         expect(getBugReportDraftFieldErrors({ ...input, title: 'x', summary: 'y', acceptedPrivacyNotice: false })).toEqual({
             title: 'bugReports.composer.validation.titleTooShort:{"min":3}',
             summary: 'bugReports.composer.validation.summaryTooShort:{"min":3}',
-            privacy: 'bugReports.composer.validation.privacyRequired',
         });
         expect(validateBugReportDraft({ ...input, title: 'x' })).toEqual({
             code: 'title',
@@ -38,11 +37,8 @@ describe('bug report validation copy', () => {
         expect(validateBugReportDraft({ ...input, summary: 'y' })).toMatchObject({
             code: 'details', title: 'bugReports.composer.validation.incompleteReport',
         });
-        expect(validateBugReportDraft({ ...input, acceptedPrivacyNotice: false })).toEqual({
-            code: 'privacy',
-            title: 'bugReports.composer.validation.privacyRequiredTitle',
-            message: 'bugReports.composer.validation.privacyRequiredMessage',
-        });
+        // The Action review is the only acknowledgement; an unticked notice is not a draft problem.
+        expect(validateBugReportDraft({ ...input, acceptedPrivacyNotice: false })).toEqual({ code: 'ok' });
     });
 });
 

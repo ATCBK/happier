@@ -16,6 +16,7 @@ import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/session
 import { createAccountSettingsHttpBoundary } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { readExternalSessionFollowPolicy } from '@/sync/domains/session/external/externalSessionFollowMetadata';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -131,6 +132,11 @@ installDisconnectedServerSocketBoundary((socket, serverUrl) => {
         throw new Error(`Unexpected External Sessions Socket request: ${method}`);
     });
 });
+
+// The Home's scope identity (its portable identity when it has one), which every Home-scoped call carries.
+function scopeIdOf(serverId: string): string {
+    return resolveServerProfileScopeIdForIdentifier(serverId);
+}
 
 function createExternalSession(params: Readonly<{
     id: string;
@@ -289,7 +295,7 @@ async function renderSettingsView(element: React.ReactElement) {
         await Promise.all([...new Set([...effectBoundary.machines.map(machine => machine.id),
             ...effectBoundary.sessions.map(session => readExternalSessionLink(session.metadata)?.machineId).filter((id): id is string => Boolean(id))])]
             .map(async machineId => {
-                const result = await projection.loadDaemonMergedProjectionCacheEntry({ machineId, serverId: account.serverId });
+                const result = await projection.loadDaemonMergedProjectionCacheEntry({ machineId, serverId: scopeIdOf(account.serverId) });
                 expect(result, 'The fixture daemon must publish a schema-admitted current projection').toMatchObject({ kind: 'ready' });
             }));
     } else if (effectBoundary.daemonProjection.phase === 'loading') {
@@ -521,7 +527,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         await waitForHomeGovernance(() => expect(effectBoundary.machineRpc).toHaveBeenCalledOnce());
         expect(effectBoundary.machineRpc).toHaveBeenCalledWith({
             machineId: 'machine-1',
-            serverId: account.serverId,
+            serverId: scopeIdOf(account.serverId),
             method: 'daemon.plugins.sessionHooks.status.get',
             payload: {
                 machineId: 'machine-1',
@@ -598,7 +604,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         await waitForHomeGovernance(() => expect(effectBoundary.machineRpc).toHaveBeenCalledTimes(2));
         expect(effectBoundary.machineRpc).toHaveBeenLastCalledWith({
             machineId: 'machine-1',
-            serverId: account.serverId,
+            serverId: scopeIdOf(account.serverId),
             method: 'daemon.plugins.sessionHooks.status.get',
             payload: {
                 machineId: 'machine-1',
@@ -658,11 +664,11 @@ describe('ExternalSessionsSettingsView passive shell', () => {
 
         await waitForHomeGovernance(() => expect(daemonProjectionRequest).toHaveBeenCalledWith({
             machineId: 'machine-2',
-            serverId: peerServerId,
+            serverId: scopeIdOf(peerServerId),
         }));
         expect(effectBoundary.machineRpc).toHaveBeenCalledWith(expect.objectContaining({
             machineId: 'machine-2',
-            serverId: peerServerId,
+            serverId: scopeIdOf(peerServerId),
             payload: expect.objectContaining({
                 machineId: 'machine-2',
             }),
@@ -1345,7 +1351,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
             },
             enabled: true,
         }, {
-            serverId: account.serverId,
+            serverId: scopeIdOf(account.serverId),
         });
         const updated = await currentMetadata('selected');
         expect(readExternalSessionLink(updated)?.followPolicyV1).toEqual({
@@ -1383,7 +1389,7 @@ describe('ExternalSessionsSettingsView passive shell', () => {
                 sessionId: 'selected',
                 enabled: false,
             }),
-            { serverId: account.serverId },
+            { serverId: scopeIdOf(account.serverId) },
         );
         const disabled = await currentMetadata('selected');
         expect(readExternalSessionLink(disabled)?.followPolicyV1).toEqual({

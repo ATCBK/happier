@@ -207,7 +207,9 @@ describe('HomeAdministrationPeopleScreen', () => {
         harness.answer(home, LIST_PATH, {
             body: { items: [homeAccountRowFixture('ada')], nextCursor: null },
         });
-        // No answer registered for the search path: this Home does not serve it.
+        // A Home without the operation answers 404 with no typed code; a typed `not_found` is a
+        // concealed refusal from a Home that does serve it (homeDomainFailureKindForHttpStatus).
+        harness.answer(home, SEARCH_PATH, { status: 404 });
 
         const screen = await renderPeople(home);
         await waitForHomeGovernance(() => {
