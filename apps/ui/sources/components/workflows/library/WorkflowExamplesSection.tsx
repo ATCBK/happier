@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierPageSheet } from '@happier-dev/plugin-ui/presentation';
 import { WORKFLOW_STARTER_EXAMPLES_V1, materializeWorkflowStarterExample, type WorkflowStarterExampleSelection, type WorkflowStarterSessionTarget, type WorkflowStarterExampleKeyV1, type WorkflowStarterExampleV1 } from '@happier-dev/protocol/workflows/builtins/examples';
@@ -13,6 +13,8 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ItemGroupColumn, ItemGroupColumns } from '@/components/ui/lists/ItemGroupColumns';
 import { SectionActionButton } from '@/components/ui/lists/SectionActionButton';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { ITEM_GROUP_CONTENT_MARGIN_HORIZONTAL_PX } from '@/components/ui/lists/itemGroupSpacing';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -97,7 +99,10 @@ export function WorkflowExamplesSection(props: Readonly<{
         const forSession = [...examples.filter((example) => example.triggerSeed !== undefined),
             ...examples.filter((example) => example.triggerSeed === undefined)];
         return <ListPresentationProvider value="page"><ItemGroup surface="none"
-            title={props.hideTitle ? undefined : t('workflows.examples.title')} description={t('workflows.examples.sessionDescription')}>
+            title={props.hideTitle ? undefined : t('workflows.examples.title')} description={t('workflows.examples.sessionDescription')}
+            // The heading sits on the rows' text edge, and a sheet that already names the picker in its own
+            // header has the description follow it directly.
+            headerStyle={props.hideTitle ? [styles.listHeader, { paddingTop: 0 }] : styles.listHeader}>
             {forSession.map((example) => {
                 const sessionDescriptionKey = SESSION_DESCRIPTION_KEYS[example.key];
                 return <Item key={example.key} testID={`workflow-examples:${example.key}`}
@@ -230,6 +235,7 @@ function ExampleCard(props: Readonly<{ example: WorkflowStarterExampleV1; onUse:
 }
 
 const styles = StyleSheet.create((theme) => ({
+    listHeader: { paddingHorizontal: (Platform.select(ITEM_GROUP_CONTENT_MARGIN_HORIZONTAL_PX) ?? 12) + PAGE_LIST_METRICS.rowPaddingHorizontalPx },
     // A row's cells share its height, and each card fills its cell, so cards side by side end together.
     cell: { flexGrow: 1 },
     // The map band runs edge to edge, so the sheet clips it to its own corners.
