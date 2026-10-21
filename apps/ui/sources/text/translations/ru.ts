@@ -10699,8 +10699,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       url: ({ value }: { value: string }) => `URL: ${value}`,
       inventory: ({ value }: { value: string }) => `Inventory: ${value}`,
       diagnostic: ({ value }: { value: string }) => `Diagnostic: ${value}`,
-      stopActionA11y: 'Остановить управляемый сервис',
-      restartActionA11y: 'Перезапустить управляемый сервис',
+      stopActionA11y: 'Остановить локальный сервис',
+      restartActionA11y: 'Перезапустить локальный сервис',
       status: {
         starting: 'Запускается',
         detecting: 'Определяется',

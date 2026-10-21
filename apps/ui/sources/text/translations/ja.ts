@@ -11145,8 +11145,8 @@ localTailscale: {
       url: ({ value }: { value: string }) => `URL: ${value}`,
       inventory: ({ value }: { value: string }) => `Inventory: ${value}`,
       diagnostic: ({ value }: { value: string }) => `Diagnostic: ${value}`,
-      stopActionA11y: '管理サービスを停止',
-      restartActionA11y: '管理サービスを再起動',
+      stopActionA11y: 'ローカルサービスを停止',
+      restartActionA11y: 'ローカルサービスを再起動',
       status: {
         starting: '起動中',
         detecting: '検出中',

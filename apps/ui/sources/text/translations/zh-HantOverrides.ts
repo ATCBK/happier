@@ -8854,8 +8854,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
             url: ({ value }: { value: string }) => `URL: ${value}`,
             inventory: ({ value }: { value: string }) => `Inventory: ${value}`,
             diagnostic: ({ value }: { value: string }) => `Diagnostic: ${value}`,
-            stopActionA11y: '停止受管理服務',
-            restartActionA11y: '重新啟動受管理服務',
+            stopActionA11y: '停止本機服務',
+            restartActionA11y: '重新啟動本機服務',
             status: {
                 starting: '正在啟動',
                 detecting: '正在偵測',

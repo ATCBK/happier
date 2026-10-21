@@ -10481,8 +10481,8 @@ const zhHansValues = {
       url: ({ value }: { value: string }) => `URL: ${value}`,
       inventory: ({ value }: { value: string }) => `Inventory: ${value}`,
       diagnostic: ({ value }: { value: string }) => `Diagnostic: ${value}`,
-      stopActionA11y: '停止托管服务',
-      restartActionA11y: '重启托管服务',
+      stopActionA11y: '停止本地服务',
+      restartActionA11y: '重启本地服务',
       status: {
         starting: '正在启动',
         detecting: '正在检测',

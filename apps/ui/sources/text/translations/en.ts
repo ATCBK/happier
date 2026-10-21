@@ -12683,8 +12683,8 @@ const enLocalServices = {
     url: ({ value }: { value: string }) => `URL: ${value}`,
     inventory: ({ value }: { value: string }) => `Inventory: ${value}`,
     diagnostic: ({ value }: { value: string }) => `Diagnostic: ${value}`,
-    stopActionA11y: 'Stop managed local service',
-    restartActionA11y: 'Restart managed local service',
+    stopActionA11y: 'Stop a local service',
+    restartActionA11y: 'Restart a local service',
     status: {
       starting: 'Starting',
       detecting: 'Detecting',
