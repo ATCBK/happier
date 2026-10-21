@@ -2,6 +2,8 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { createPluginReactNativeBundleCache } from './bundleCache';
 import { createPluginUiExecutableModuleHost } from './executableModuleHost';
+import { createPluginUiCommonJsLoaderBackend } from './commonJsLoaderBackend';
+import * as commonJs from './commonJsEvaluator';
 import type { PluginReactNativeExecutableExport, PluginReactNativeLoaderBackend } from './loader';
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 import { log } from '@/log';
@@ -42,6 +44,29 @@ function backend(exported: PluginReactNativeExecutableExport): PluginReactNative
 }
 
 describe('PluginUiExecutableModuleHost', () => {
+    it('evaluates unchanged CommonJS bytes once per admitted activation lifetime, not per reconciliation', async () => {
+        // Forward the real loader and evaluator; count the expensive operation itself.
+        const evaluations = vi.spyOn(commonJs, 'evaluatePluginUiCommonJsBundle');
+        onTestFinished(() => evaluations.mockRestore());
+        const host = createPluginUiExecutableModuleHost();
+        onTestFinished(() => host.unload());
+        const cache = createPluginReactNativeBundleCache();
+        cache.putInstalledArtifact({ identity, format: 'plainJs',
+            bytes: new TextEncoder().encode('exports.activateClientRuntime = function () {};') });
+        const input = { cache, identity, moduleReference, authority, hostPlatform: 'web',
+            backend: createPluginUiCommonJsLoaderBackend(),
+            createScope: () => ({ api: Object.freeze({}), commit: () => {}, unwind: () => {} }) };
+        await host.replaceAuthority(authority);
+        const results = await Promise.all(Array.from({ length: 100 }, () => host.activate(input)));
+        expect(results.every(result => result.ok)).toBe(true);
+        for (let index = 0; index < 100; index += 1) expect(await host.activate(input)).toEqual({ ok: true });
+        expect(evaluations).toHaveBeenCalledTimes(1);
+        await host.invalidatePlugin(identity.pluginId);
+        expect(await host.activate(input)).toEqual({ ok: true });
+        expect(evaluations).toHaveBeenCalledTimes(2);
+        console.info('R-C CommonJS evaluation counts', { unchangedActivations: 200, evaluations: 1, afterInvalidation: 2 });
+    });
+
     it('fails closed until the canonical projection owner establishes a generation', async () => {
         const createScope = vi.fn(() => ({ api: Object.freeze({}), commit: vi.fn(), unwind: vi.fn() }));
         const host = createPluginUiExecutableModuleHost();
