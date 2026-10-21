@@ -1650,6 +1650,45 @@ describe('default Action executor mode and catalog contracts', () => {
     expect(read().metadataLayoutVersion).toBe(0);
   });
 
+  it.each([false, true])('authorizes selected-model choices without bypassing global overrides (disabled=%s)', async (disabled) => {
+    const reasoning = {
+      id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'medium',
+      options: [{ value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }],
+    };
+    const read = installSession('s1', {
+      path: '/tmp/project', host: 'localhost', flavor: 'opencode',
+      modelSelectionIntentV1: { v: 1, updatedAt: 2, selection: {
+        agentTargetKey: 'agent:happier.agent.opencode/opencode', providerConnectionId: null, modelId: 'selected',
+      } },
+      sessionModelsV1: {
+        v: 1, agentId: 'opencode', updatedAt: 1, currentModelId: 'selected',
+        availableModels: [{ id: 'selected', name: 'Selected', modelOptions: [reasoning] }],
+      },
+      ...(disabled ? { sessionConfigOptionsV1: {
+        v: 1 as const, agentId: 'opencode', updatedAt: 1,
+        configOptions: [reasoning, { id: 'automatic', name: 'Automatic', type: 'boolean', currentValue: 'true',
+          overridesWhenOn: { optionIds: ['reasoning_effort'], forcedValue: 'medium' } }],
+      } } : {}),
+    });
+    expect(await createDefaultActionExecutor().execute('session.config_option.set', {
+      sessionId: 's1', configId: 'reasoning_effort', valueId: 'unoffered',
+    }, context())).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    expect(read().metadataLayoutVersion).toBe(0);
+    const result = await createDefaultActionExecutor().execute('session.config_option.set', {
+      sessionId: 's1', configId: 'reasoning_effort', valueId: 'high',
+    }, context());
+    if (disabled) {
+      expect(result).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+      expect(read().metadataLayoutVersion).toBe(0);
+    } else {
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+      const owner = SessionOwnerMetadataEnvelopeV1Schema.parse(read().ownerMetadata);
+      if (owner.t !== 'plain') throw new Error('Unreadable owner metadata');
+      expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(read().metadata), ownerMetadata: owner.v }))
+        .toMatchObject({ acpConfigOptionOverridesV1: { overrides: { reasoning_effort: { value: 'high' } } } });
+    }
+  });
+
 
   it('routes a confirmed connected-account chip mutation through its Action owner', async () => {
     daemonAnswer = () => ({ ok: true, action: 'metadata_updated' });

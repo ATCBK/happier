@@ -4,6 +4,7 @@ import {
     getModelOptionsForAgentType,
     getModelOptionsForModes,
     getModelOptionsForSession,
+    computeSessionModelConfigOptionControls,
     getSelectableModelIdsForSession,
     hasDynamicModelListForSession,
     supportsFreeformModelSelectionForSession,
@@ -25,6 +26,25 @@ function withMetadata(overrides: Partial<Metadata>): Metadata {
 }
 
 describe('modelOptions', () => {
+    it('uses only the selected model options and their published valid overrides', () => {
+        const metadata = withMetadata({
+            sessionModelsV1: {
+                v: 1, agentId: 'codex', updatedAt: 1, currentModelId: 'small', availableModels: [
+                    { id: 'small', name: 'Small', modelOptions: [{ id: 'thinking', name: 'Thinking', type: 'select', currentValue: 'low',
+                        options: [{ value: 'low', name: 'Low' }] }] },
+                    { id: 'large', name: 'Large', modelOptions: [{ id: 'thinking', name: 'Thinking', type: 'select', currentValue: 'medium',
+                        options: [{ value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] }] },
+                ],
+            },
+            sessionConfigOptionOverridesV1: { v: 1, updatedAt: 2, overrides: { thinking: { updatedAt: 2, value: 'high' } } },
+        });
+        const small = computeSessionModelConfigOptionControls({ agentId: 'codex', metadata, modelId: 'small' });
+        expect(small).toMatchObject([{ option: { id: 'thinking', options: [{ value: 'low' }] }, effectiveValue: 'low' }]);
+        expect(small?.[0]?.requestedValue).toBeUndefined();
+        expect(computeSessionModelConfigOptionControls({ agentId: 'codex', metadata, modelId: 'large' }))
+            .toMatchObject([{ option: { id: 'thinking' }, requestedValue: 'high', effectiveValue: 'high', isPending: true }]);
+        expect(computeSessionModelConfigOptionControls({ agentId: 'codex', metadata, modelId: 'absent' })).toBeNull();
+    });
     it('retains the stored model intent resolved through a backend routing reference in the Work autopsy', () => {
         const metadata = withMetadata({ modelSelectionIntentV1: {
             v: 1, updatedAt: 5, selection: {

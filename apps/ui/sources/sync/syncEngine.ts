@@ -6030,13 +6030,18 @@ class Sync {
         configId: string;
         value: AcpConfigOptionOverrideValueId;
         updatedAt: number;
+        serverId?: string | null;
+        accountLifetime?: ServerAccountScopeLifetime;
     }): Promise<void> {
         await publishAcpConfigOptionOverrideToMetadataEngine({
             sessionId: params.sessionId,
             configId: params.configId,
             value: params.value,
             updatedAt: params.updatedAt,
-            updateSessionMetadataWithRetry: (sessionId, updater) => this.updateSessionMetadataWithRetry(sessionId, updater),
+            updateSessionMetadataWithRetry: (sessionId, updater) => this.patchSessionMetadataWithRetry(sessionId, updater, {
+                ...(params.serverId ? { serverId: params.serverId } : {}),
+                ...(params.accountLifetime ? { accountLifetime: params.accountLifetime } : {}),
+            }),
         });
     }
 

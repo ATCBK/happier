@@ -212,6 +212,7 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 import { resolveAgentIdForPermissionUi } from '@/agents/catalog/resolve';
 import { computeSessionConfigOptionControls } from '@/sync/domains/sessionControl/configOptionsControl';
+import { computeSessionModelConfigOptionControls } from '@/sync/domains/models/modelOptions';
 import { resolveSessionPermissionBehavior } from '@/sync/ops/sessionPermissionAnswers';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { createSettingsDeclarationAction, isBuiltInLocalSettingMutation, resolveSettingsDeclarationOperationApprovalRequired } from './settingsDeclarationAction';
@@ -3484,19 +3485,27 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
       return { ok: true, sessionId, modeId: normalizedModeId };
     },
     sessionConfigOptionSet: async ({ sessionId, configId, valueId }) => {
-      const session = (storage.getState() as any)?.sessions?.[sessionId] ?? null;
+      const session = storage.getState().sessions[sessionId] ?? null;
       const metadata = session ? readSessionOwnerMetadataView(session) : null;
       const agentId = resolveAgentIdForPermissionUi({
         metadata,
         flavor: metadata?.flavor ?? undefined,
         toolName: '',
       });
-      const control = agentId === null ? undefined : computeSessionConfigOptionControls({ agentId, metadata })
+      const target = session ? resolveSessionActionDefaultTarget(resolveSessionActionDefaultBackend({ session })) : null;
+      const selection = session && target ? getModelOverrideForSpawn(session, buildBackendTargetKeyV2(target))?.modelSelection.ref : null;
+      const modelControls = agentId === null || selection?.providerConnectionId ? null : computeSessionModelConfigOptionControls({
+        agentId,
+        metadata: session?.composerOptionsInput === undefined ? metadata : session.composerOptionsInput,
+        modelId: selection?.modelId ?? 'default',
+      });
+      const sessionControl = agentId === null ? undefined : computeSessionConfigOptionControls({ agentId, metadata })
         ?.find((candidate) => candidate.option.id === configId);
+      const control = modelControls?.find((candidate) => candidate.option.id === configId) ?? sessionControl;
       const choiceIds = control?.option.options?.map((choice) => choice.value)
         ?? control?.option.groups?.flatMap((group) => group.options.map((choice) => choice.value))
         ?? [];
-      if (!control || control.disabled || !choiceIds.includes(valueId)) {
+      if (!control || control.disabled || sessionControl?.disabled || !choiceIds.includes(valueId)) {
         return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
       }
       await sync.publishSessionAcpConfigOptionOverrideToMetadata({
@@ -3504,6 +3513,7 @@ function finishSessionArchiveInvocation(invocation: SessionArchiveInvocation | u
         configId,
         value: valueId,
         updatedAt: Date.now(),
+        ...(accountContext ? { serverId: accountContext.serverId, accountLifetime: accountContext.accountLifetime } : {}),
       });
       return { ok: true, sessionId, configId, valueId };
     },

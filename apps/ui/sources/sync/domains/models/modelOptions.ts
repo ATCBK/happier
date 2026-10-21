@@ -4,7 +4,7 @@ import { t } from '@/text';
 import { isBundledAgentId } from '@/agents/catalog/catalog';
 import { readAgentUniverseBackendTargetKey } from '@/agents/catalog/agentUniverse';
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
-import { normalizeAcpConfigOptionsArray, type AcpConfigOption } from '@/sync/domains/sessionControl/configOptionsControl';
+import { computeSessionConfigOptionControlsFromOverride, normalizeAcpConfigOptionsArray, resolveSessionConfigOptionOverridesFromMetadata, type AcpConfigOption, type SessionConfigOptionControl } from '@/sync/domains/sessionControl/configOptionsControl';
 import { readSessionModelsState } from '@/sync/domains/sessionControl/readSessionControlMetadata';
 import {
     getAgentStaticModels,
@@ -358,6 +358,25 @@ export function isModelSelectableForSession(agentType: AgentType, metadata: Comp
 
 export function getModelOptionsForSession(agentType: AgentType, metadata: ComposerOptionsInputV1 | null | undefined, context?: SessionModelOptionsContext): readonly ModelOption[] {
     return resolveModelOptionsForSession(agentType, metadata, context);
+}
+
+/** The selected native model's controls, shared by its picker and Action admission. */
+export function computeSessionModelConfigOptionControls(params: Readonly<{
+    agentId: string;
+    metadata: ComposerOptionsInputV1 | null | undefined;
+    modelId: string;
+    modelOptions?: readonly ModelOption[];
+}>): SessionConfigOptionControl[] | null {
+    const model = findModelOptionForEffectiveModelId(
+        params.modelOptions ?? getModelOptionsForSession(params.agentId, params.metadata),
+        params.modelId,
+    );
+    const configOptions = model?.modelOptions ?? null;
+    return computeSessionConfigOptionControlsFromOverride({
+        agentId: params.agentId,
+        configOptions,
+        overrides: resolveSessionConfigOptionOverridesFromMetadata({ metadata: params.metadata, configOptions }),
+    });
 }
 
 /**
