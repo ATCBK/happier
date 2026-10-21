@@ -6,6 +6,7 @@ import {
 import type { ReachRulesV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/useMachineInventorySnapshots';
 import { useMachinePresenceSummaries } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { formatMachineDisplayNameParts, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import { useMachineAgentsByMachine } from '@/agents/machineAgents/useMachineAgents';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useReachRulesCatalog } from '@/sync/store/useReachRulesCatalog';
@@ -116,6 +117,9 @@ export function useReachMachines(): Readonly<{
     load: false,
   });
   const presence = useMachinePresenceSummaries(scope?.serverId, machineIds);
+  // Reach shows the Account's machines together (map, legend, Where it's on), so same-name machines
+  // carry the suffix every machine list uses to tell them apart.
+  const nameHints = React.useMemo(() => resolveMachineDisplayNameParts(machines), [machines]);
   const declarationsRef = React.useRef<readonly DaemonMergedProjectionSummary[]>([]);
   const readDeclarations = React.useCallback(() => {
     const next = machineIds.map(machineId => readDaemonMergedProjectionSummary({ machineId, serverId }));
@@ -149,14 +153,18 @@ export function useReachMachines(): Readonly<{
           agentIds: inventory.agentIds,
           agentInventoryComplete: inventory.complete,
           agentDeclarationsById: declarations[index]?.inputs?.agentDeclarationsById ?? null,
-          name: presence[index]?.name ?? null,
+          name: withMachineNameHint(presence[index]?.name ?? null, nameHints.get(machine.id)?.hint ?? null),
           offline: presence[index]?.reachability === 'unreachable',
           lastSeenAt: presence[index]?.lastSeenAt ?? null,
         };
       }),
-    [machines, installed, presence, declarations, definitionIds],
+    [machines, installed, presence, declarations, definitionIds, nameHints],
   );
   return React.useMemo(() => ({ scope, machines: reach }), [scope, reach]);
+}
+
+function withMachineNameHint(name: string | null, hint: string | null): string | null {
+  return name && hint ? formatMachineDisplayNameParts({ name, hint }) : name;
 }
 
 /** One item's reach on each Account machine, through P2's projection. */

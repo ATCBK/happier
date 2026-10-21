@@ -216,6 +216,25 @@ afterEach(async () => { await standardCleanup(); storage.setState(before, true);
     resetAcpCatalogSnapshotsForTests(); });
 afterAll(() => network.dispose());
 
+it('names same-name Account machines apart, as every machine list does', async () => {
+    const serverUrl = 'https://reach-same-name.test';
+    await network.addHome(serverUrl, 'reach-same-name-account');
+    const home = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
+        homeServerIdentityId: 'srv_reach_same_name', canonicalServerUrl: serverUrl, revision: 1,
+        endpoints: [{ kind: 'https', url: serverUrl }] } });
+    await setActiveServerId(home.id);
+    if (!home.serverIdentityId) throw new Error('Expected qualified Home');
+    const scope = { serverId: home.serverIdentityId, accountId: 'reach-same-name-account' };
+    const machines = ['08ccb961', '6a1f02d4', 'b7c3aa10'].map((id, index) => createMachineFixture({ id, activeAt: Date.now(),
+        metadata: { ...createMachineFixture().metadata!, host: 'shared-host', displayName: index < 2 ? 'Build box' : 'Laptop' } }));
+    storage.setState({ settingsScope: scope, profileScope: scope, machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+        machineListByServerId: { [scope.serverId]: machines }, machineListStatusByServerId: { [scope.serverId]: 'idle' } });
+    const facts = await renderHook(() => useReachMachines());
+    try {
+        expect(facts.getCurrent().machines.map(machine => machine.name)).toEqual(['Build box · 08cc', 'Build box · 6a1f', 'Laptop']);
+    } finally { await facts.unmount(); }
+});
+
 it('composes installed Machine publication and real catalog demand into passive skill-plan reach', async () => {
     const serverUrl = 'https://skill-plans-reach.test';
     await network.addHome(serverUrl, 'skill-plans-account');

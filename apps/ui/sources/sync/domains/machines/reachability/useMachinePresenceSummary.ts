@@ -33,7 +33,7 @@ import {
 export type MachinePresenceSummary = Readonly<{
     name: string | null;
     /** The name as a sentence uses it ("Reading it from {machine}"): "this machine" while its details load or are locked. */
-    sentenceName: string | null;
+    sentenceName?: string | null;
     homeDir: string | null;
     reachability: SessionMachineReachability;
     /** The machine's last heartbeat while it is unreachable ("last seen 09:12"); null otherwise, so heartbeats re-render nothing. */
