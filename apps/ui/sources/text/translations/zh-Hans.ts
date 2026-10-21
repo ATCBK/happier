@@ -8280,6 +8280,7 @@ const zhHansValues = {
             replacedTitle: ({ matches, files }: { matches: number; files: number }) => `已在 ${files} 个文件中替换 ${matches} 处`,
             undoneTitle: "已撤销。文件已恢复原样。",
             undoFailed: ({ machine }: { machine: string }) => `无法在 ${machine} 上撤销替换。`,
+            undoDidntRun: ({ machine }: { machine: string }) => `撤销未在 ${machine} 上执行，文件保留替换后的内容。`,
             undoneExceptChanged: ({ count }: { count: number }) => `已撤销，但替换后被修改的 ${count} 个文件保持不变。`,
             previewApprovalSubject: "替换预览",
             replaceDeclined: "替换未获批准，没有文件被更改。",

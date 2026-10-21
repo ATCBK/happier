@@ -8990,6 +8990,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
             replacedTitle: ({ matches, files }: { matches: number; files: number }) => `Заменено совпадений: ${matches} · файлов: ${files}`,
             undoneTitle: "Отменено. Файлы снова такие, как были.",
             undoFailed: ({ machine }: { machine: string }) => `Не удалось отменить замену на ${machine}.`,
+            undoDidntRun: ({ machine }: { machine: string }) => `Отмена не выполнялась на ${machine}. В файлах остаётся замена.`,
             undoneExceptChanged: ({ count }: { count: number }) => `Отменено, кроме ${count === 1 ? '1 файла' : `${count} файлов`}, изменённых после замены: их не трогали.`,
             previewApprovalSubject: "Предпросмотр замены",
             replaceDeclined: "Замена не одобрена. Файлы не изменены.",

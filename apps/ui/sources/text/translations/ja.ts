@@ -8912,6 +8912,7 @@ localTailscale: {
             replacedTitle: ({ matches, files }: { matches: number; files: number }) => `${files} 個のファイルで ${matches} 件を置換しました`,
             undoneTitle: "元に戻しました。ファイルは元の状態です。",
             undoFailed: ({ machine }: { machine: string }) => `${machine} で置換を元に戻せませんでした。`,
+            undoDidntRun: ({ machine }: { machine: string }) => `${machine} で元に戻す操作は実行されませんでした。ファイルは置換後のままです。`,
             undoneExceptChanged: ({ count }: { count: number }) => `元に戻しました。置換後に変更された ${count} 件のファイルはそのままです。`,
             previewApprovalSubject: "置換のプレビュー",
             replaceDeclined: "置換は承認されませんでした。ファイルは変更されていません。",

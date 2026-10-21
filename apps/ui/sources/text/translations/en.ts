@@ -10228,6 +10228,7 @@ const enUniversalSearch = {
       replacedTitle: ({ matches, files }: { matches: number; files: number }) => `Replaced ${matches} ${matches === 1 ? 'match' : 'matches'} in ${files} ${files === 1 ? 'file' : 'files'}`,
       undoneTitle: "Undone. The files are back as they were.",
       undoFailed: ({ machine }: { machine: string }) => `Couldn’t undo the replace on ${machine}.`,
+      undoDidntRun: ({ machine }: { machine: string }) => `Undo didn’t run on ${machine}. The files keep the replacement.`,
       undoneExceptChanged: ({ count }: { count: number }) => `Undone, except ${count === 1 ? '1 file' : `${count} files`} changed since the replace and left alone.`,
       previewApprovalSubject: "Replacement preview",
       replaceDeclined: "Replace wasn’t approved. No files were changed.",
