@@ -1,6 +1,5 @@
-import { PatchSessionDataKeyEnvelopesResultV1Schema, SessionDataKeyEnvelopeErrorCodeV1Schema, SessionDataKeyEnvelopePageV1Schema, type SessionDataKeyEnvelopeItemV1, type SessionDataKeyEnvelopeSummaryV1 } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
+import { type SessionDataKeyEnvelopeItemV1, type SessionDataKeyEnvelopeSummaryV1 } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 import { runSessionDataKeyPreparationDetached } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyPreparationPass';
-import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import { serverAccountScopedResourceKey } from '@/sync/domains/scope/serverAccountScope';
 import {
@@ -13,7 +12,6 @@ import { readTransferableSessionDataKey } from '@/sync/encryption/readTransferab
 import { captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryption';
 import {
     runWithServerRequestAuthorityForServerAccountScope,
-    type ServerAccountRequestAuthority,
 } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import {
     readSessionSnapshotForAuthority,
@@ -21,10 +19,12 @@ import {
 } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import {
     runWithServerAccountScopeRequestGuard,
-    type ServerAccountScopeRequestGuard,
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
 
-import { SessionAccessApiError, type SessionAccessRequestOptions } from './sessionAccessApi';
+import type { SessionAccessRequestOptions } from './sessionAccessApi';
+import { SessionAccessApiError } from './sessionAccessHttpFailure';
+import { createEnvelopeTransport, type BoundEnvelopeCollection, type SessionDataKeyEnvelopeCollectionState } from './sessionDataKeyEnvelopeTransport';
+export type { SessionDataKeyEnvelopeCollectionState } from './sessionDataKeyEnvelopeTransport';
 
 /**
  * The exact-Account transport for one Session's recipient data-key envelope
@@ -43,83 +43,6 @@ import { SessionAccessApiError, type SessionAccessRequestOptions } from './sessi
 export type SessionDataKeyEnvelopeRequestOptions = SessionAccessRequestOptions & Readonly<{
     sessionId: string;
 }>;
-
-/**
- * Which slice of the authorized audience a caller wants.
- *
- * `action_required` is the default everywhere: discovery, refresh and preparation
- * only ever need the exceptions. `all` is the explicit `Show all recipients`
- * diagnostic — the same resource and the same summary, with healthy rows included
- * — and is never fetched merely to render the aggregate.
- */
-export type SessionDataKeyEnvelopeCollectionState = 'action_required' | 'all';
-
-function envelopeCollectionPath(sessionId: string): string {
-    return `/v2/sessions/${encodeURIComponent(sessionId)}/data-key/envelopes`;
-}
-
-/**
- * Only the working page is requested. `limit` is deliberately omitted so the one
- * Protocol owner of the page bound stays the server-side default rather than a
- * second copy of that measurement here.
- */
-function envelopePageQuery(cursor: string | null, state: SessionDataKeyEnvelopeCollectionState = 'action_required'): string {
-    const query = new URLSearchParams({ state });
-    if (cursor) query.set('cursor', cursor);
-    return `?${query.toString()}`;
-}
-
-type BoundEnvelopeCollection = Readonly<{
-    authority: ServerAccountRequestAuthority;
-    guard: ServerAccountScopeRequestGuard;
-    sessionId: string;
-}>;
-
-async function requestEnvelopeCollection(
-    bound: BoundEnvelopeCollection,
-    params: Readonly<{ path: string; init?: RequestInit }>,
-): Promise<unknown> {
-    bound.guard.check();
-    const response = await bound.authority.request(params.path, {
-        ...params.init,
-        signal: bound.guard.signal,
-    });
-    bound.guard.check();
-    const payload: unknown = await response.json();
-    bound.guard.check();
-    if (!response.ok) {
-        const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
-        if (scopeDenial) throw new SessionAccessApiError(scopeDenial.errorCode, response.status);
-        const record = typeof payload === 'object' && payload !== null
-            ? payload as Record<string, unknown>
-            : {};
-        const code = SessionDataKeyEnvelopeErrorCodeV1Schema.safeParse(record.error);
-        throw new SessionAccessApiError(
-            code.success ? code.data : 'session_data_key_envelope_request_failed',
-            response.status,
-        );
-    }
-    return payload;
-}
-
-function createEnvelopeTransport(bound: BoundEnvelopeCollection, state: SessionDataKeyEnvelopeCollectionState = 'action_required'): CurrentSessionDataKeyEnvelopeTransport {
-    const path = envelopeCollectionPath(bound.sessionId);
-    return {
-        fetchPage: async (cursor) => SessionDataKeyEnvelopePageV1Schema.parse(
-            await requestEnvelopeCollection(bound, { path: `${path}${envelopePageQuery(cursor, state)}` }),
-        ),
-        patchPage: async (request) => PatchSessionDataKeyEnvelopesResultV1Schema.parse(
-            await requestEnvelopeCollection(bound, {
-                path,
-                init: {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(request),
-                },
-            }),
-        ),
-    };
-}
 
 async function runWithEnvelopeCollectionAuthority<TResult>(
     options: SessionDataKeyEnvelopeRequestOptions,

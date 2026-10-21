@@ -45,6 +45,11 @@ export type SessionMetadataTupleWriterContext = Readonly<{
         SessionMetadataOwnerMigrationCurrentnessV1;
 }>;
 
+/**
+ * Exact HTTP witness retained only for this finite operation's metadata/key
+ * correspondence. Its Account/Settings cursors must never come from a socket
+ * encryption-identity observation, even when that socket remains connected.
+ */
 export function createOperationAccountCurrentnessSource(params: Readonly<{
     credentials: AuthCredentials;
     request: (path: string, init: RequestInit) => Promise<Response>;
@@ -318,6 +323,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
     getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
     log: { log: (message: string) => void };
     timeoutMs?: number;
+    signal?: AbortSignal;
     includeTurnsProjection?: boolean | 'required';
     authority?: ServerAccountRequestAuthority;
     accountCurrentness?: AccountEncryptionCurrentnessResponse;
@@ -343,10 +349,11 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             accountMode: params.accountMode,
             encryption: getScopedSessionByIdEncryption(params.activeEncryption ?? null),
             sessionDataKeys: params.sessionDataKeys, sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
-            request: params.activeRequest, requestAuthority: params.activeRequest,
+            request: params.activeRequest,
             applySessions: params.applySessions, getExistingSession: params.getExistingSession,
             getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
             log: params.log, timeoutMs: params.timeoutMs,
+            signal: params.signal,
             includeTurnsProjection: params.includeTurnsProjection, isCurrent: params.isCurrent,
             accessProjectionVersion: 1,
         });
@@ -362,6 +369,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
     const context = params.authority?.context ?? await resolveServerAccountRequestContext({
         serverId: params.serverId ?? null,
         timeoutMs: params.timeoutMs,
+        signal: params.signal,
     });
     const ownsContext = !params.authority;
     let ownedAccountCurrentnessSource: ReturnType<typeof createOperationAccountCurrentnessSource> | undefined;
@@ -389,7 +397,8 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             sessionDataKeys: params.sessionDataKeys,
             sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
             request: params.activeRequest,
-            requestAuthority: params.authority ?? request,
+            readTransport: params.authority?.readTransport,
+            signal: params.signal,
             applySessions: params.applySessions,
             getExistingSession: params.getExistingSession,
             getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,
@@ -458,7 +467,8 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
         sessionDataKeys: params.sessionDataKeys,
         sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
         request,
-        requestAuthority: params.authority ?? request,
+        readTransport: params.authority?.readTransport ?? context.readTransport,
+        signal: params.signal,
         applySessions: params.applySessions,
         getExistingSession: params.getExistingSession,
         getCurrentSessionListRenderable: params.getCurrentSessionListRenderable,

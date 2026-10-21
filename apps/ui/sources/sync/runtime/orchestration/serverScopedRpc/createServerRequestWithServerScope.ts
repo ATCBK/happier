@@ -13,6 +13,9 @@ import { onceAsync } from './resolveServerScopedTransport';
 import type {
     ResolvedServerAccountRequestContext,
 } from './resolveServerAccountRequestContext';
+import type { CapturedServerReadTransport } from './capturedServerReadTransport';
+
+export { createCapturedServerReadTransport, type CapturedServerReadTransport } from './capturedServerReadTransport';
 
 type ScopedServerAccountRequestContext = Extract<
     ResolvedServerAccountRequestContext,
@@ -80,6 +83,8 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
 export type ServerAccountRequestAuthority = Readonly<{
     scope: ServerAccountScope;
     context: ScopedServerAccountRequestContext;
+    /** Runtime captures expose neutral physical reads; opaque injected requests remain unshared. */
+    readTransport?: CapturedServerReadTransport;
     request: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
     release: () => Promise<void>;
     /**
@@ -212,6 +217,7 @@ export async function captureServerRequestAuthorityForServerAccountScope(params:
     return {
         scope: resolvedScope,
         context,
+        ...(context.readTransport ? { readTransport: context.readTransport } : {}),
         request: createServerRequestForResolvedServerScope({
             context,
             activeRequest: params.activeRequest,

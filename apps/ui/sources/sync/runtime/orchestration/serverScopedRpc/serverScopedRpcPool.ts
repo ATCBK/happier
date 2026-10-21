@@ -3,12 +3,9 @@ import type { Encryption, MachineEncryptionContext, MachineEncryptionContextInpu
 import { areMachineEncryptionContextInputsEqual, readMachineEncryptionContextInput } from '@/sync/encryption/machineEncryption';
 import { MachineKeyBasisStoredReadV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import {
-    createNotAuthenticatedError,
-    isAuthenticationResponseStatus,
     isTerminalAuthError,
 } from '@/sync/runtime/connectivity/authErrors';
 import { createRpcCallError } from '@/sync/runtime/rpcErrors';
-import { HappyError } from '@/utils/errors/errors';
 import {
     isPlainMachineDataKeyMarker,
     resolvePublishedMachineDataEncryptionKeyV1,
@@ -16,7 +13,8 @@ import {
 } from '@happier-dev/protocol/machines/machineStoredContent';
 
 import { getOrCreateScopedCacheTokenKey, resetScopedCacheTokenKeysForTests } from './scopedCacheTokenKey';
-import { createServerRequestForExplicitServerScope } from './createServerRequestWithServerScope';
+import type { CapturedServerReadTransport } from './capturedServerReadTransport';
+import { readExplicitMachineTransportRow, readMachineRows, resetMachineRowReadsForTests } from '@/sync/api/machines/machineRowsApi';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 
 type MachineContextAuthority = Pick<Encryption, 'captureMachineEncryptionContext' | 'getMachineEncryptionContext'>;
@@ -53,13 +51,6 @@ type MachineTransportEvidence = Readonly<{
 }>;
 
 const machineTransportCache = new Map<string, MachineTransportEvidence>();
-const machineTransportResolutions = new Map<string, {
-    cacheKey: string;
-    timeoutMs: number;
-    rowPending: boolean;
-    timedOut: boolean;
-    result: Promise<MachineTransportEvidence | null>;
-}>();
 
 function readMaxMachineKeyCacheEntriesFromEnv(): number {
     const raw = String(process.env.EXPO_PUBLIC_HAPPIER_SCOPED_RPC_MACHINE_KEY_CACHE_MAX ?? '').trim();
@@ -101,39 +92,21 @@ async function fetchMachineTransport(params: Readonly<{
     encryption?: MachineContextAuthority;
     decryptEncryptionKey?: (value: string) => Promise<Uint8Array | null>;
     timeoutMs: number;
-    onRowObserved?: () => void;
-    onTimeout?: () => void;
+    readTransport?: CapturedServerReadTransport;
 }>): Promise<MachineTransportEvidence | null> {
     const incumbentContext = params.encryption?.getMachineEncryptionContext(params.machineId);
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timeoutId = controller
-        ? setTimeout(() => { params.onTimeout?.(); controller.abort(); }, Math.max(1, params.timeoutMs))
+        ? setTimeout(() => controller.abort(), Math.max(1, params.timeoutMs))
         : null;
 
     try {
-        const request = createServerRequestForExplicitServerScope({
-            serverUrl: params.serverUrl,
-            token: params.token,
-            ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
-            ...(params.homeCarrier ? { homeCarrier: params.homeCarrier } : {}),
-            timeoutMs: params.timeoutMs,
-        });
-        const response = await request(`/v1/machines/${encodeURIComponent(params.machineId)}`, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            ...(controller ? { signal: controller.signal } : {}),
-        });
-        if (!response.ok) {
-            if (isAuthenticationResponseStatus(response.status)) {
-                throw createNotAuthenticatedError(response.status);
-            }
-            if (response.status === 404) return null;
-            throw new HappyError(`Machine row request failed (${response.status})`, response.status >= 500 || response.status === 429, {
-                status: response.status, kind: response.status >= 500 ? 'server' : 'config',
-            });
-        }
-
-        const body = await response.json() as {
+        const payload = params.readTransport
+            ? { machine: (await readMachineRows({ readTransport: params.readTransport, machineIds: [params.machineId],
+                signal: controller?.signal })).get(params.machineId) }
+            : await readExplicitMachineTransportRow({ ...params, authorityKey: params.cacheKey,
+                signal: controller?.signal ?? new AbortController().signal });
+        const body = payload as {
             machine?: {
                 id?: unknown;
                 kind?: 'persistent' | 'ephemeral_session_runner';
@@ -147,7 +120,6 @@ async function fetchMachineTransport(params: Readonly<{
                 daemonStateVersion?: number;
             };
         };
-        params.onRowObserved?.();
         const machine = body?.machine;
         if (params.encryption && params.encryption.getMachineEncryptionContext(params.machineId) !== incumbentContext) return null;
         if (normalizeId(machine?.id) !== params.machineId) {
@@ -204,49 +176,6 @@ async function fetchMachineTransport(params: Readonly<{
     }
 }
 
-async function resolveMachineTransportEvidence(
-    params: Parameters<typeof fetchMachineTransport>[0],
-    deadlineAt = Date.now() + params.timeoutMs,
-): Promise<MachineTransportEvidence | null> {
-    const remainingMs = deadlineAt - Date.now();
-    if (remainingMs <= 0) throw machineRowTimeoutError();
-    const flightKey = `${params.cacheKey}::${params.timeoutMs}`;
-    const exact = machineTransportResolutions.get(flightKey);
-    const existing = (exact?.timedOut === false ? exact : undefined)
-        ?? [...machineTransportResolutions.values()].find(entry => entry.cacheKey === params.cacheKey
-            && entry.rowPending && !entry.timedOut);
-    if (existing) {
-        // Each joiner keeps its own supplied deadline and cannot abort the
-        // shared authenticated read when only its own wait expires.
-        let timeoutId: ReturnType<typeof setTimeout> | undefined;
-        let evidence: MachineTransportEvidence | null;
-        try {
-            evidence = await Promise.race([existing.result, new Promise<never>((_resolve, reject) => {
-                timeoutId = setTimeout(() => reject(machineRowTimeoutError()), remainingMs);
-            })]);
-        } catch (error) {
-            // An earlier caller's timeout cannot decide a later caller while
-            // its original budget remains. Other failures are not retried.
-            const retryRemainingMs = deadlineAt - Date.now();
-            if (existing.timedOut && retryRemainingMs > 0) {
-                return await resolveMachineTransportEvidence({ ...params, timeoutMs: retryRemainingMs }, deadlineAt);
-            }
-            throw error;
-        } finally {
-            if (timeoutId !== undefined) clearTimeout(timeoutId);
-        }
-        return evidence;
-    }
-    const result = fetchMachineTransport({ ...params, timeoutMs: remainingMs,
-        onRowObserved: () => { entry.rowPending = false; }, onTimeout: () => { entry.timedOut = true; } })
-        .finally(() => {
-            if (machineTransportResolutions.get(flightKey) === entry) machineTransportResolutions.delete(flightKey);
-        });
-    const entry = { cacheKey: params.cacheKey, timeoutMs: params.timeoutMs, rowPending: true, timedOut: false, result };
-    machineTransportResolutions.set(flightKey, entry);
-    return await result;
-}
-
 export async function resolveScopedMachineTransport(params: Readonly<{
     serverId: string;
     serverUrl: string;
@@ -262,6 +191,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
     trustedMachineKind?: 'ephemeral_session_runner';
     decryptEncryptionKey?: (value: string) => Promise<Uint8Array | null>;
     timeoutMs?: number;
+    readTransport?: CapturedServerReadTransport;
 }>): Promise<ScopedMachineTransport | null> {
     const machineId = normalizeId(params.machineId);
     const serverId = normalizeId(params.serverId);
@@ -271,10 +201,9 @@ export async function resolveScopedMachineTransport(params: Readonly<{
     const incumbentContext = params.encryption?.getMachineEncryptionContext(machineId);
     // Refresh the Home row each call; cached openings are reusable only after
     // that row confirms the exact envelope and authenticated access identity.
-    // Remaining RPC budgets vary after context/trust setup. Share a pending
-    // row read while preserving each caller's deadline; after a row is observed,
-    // a different-budget read stays fresh even while its key open is pending.
-    const evidence = await resolveMachineTransportEvidence({
+    // Only physical row work is shared. Every caller still selects and fences
+    // its own crypto context; settled observations never authorize another read.
+    const evidence = await fetchMachineTransport({
             serverId,
             serverUrl: params.serverUrl,
             ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
@@ -286,6 +215,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
             ...(params.encryption ? { encryption: params.encryption } : {}),
             decryptEncryptionKey: params.decryptEncryptionKey,
             timeoutMs,
+            readTransport: params.readTransport,
         });
     if (!evidence) return null;
     const isLocalReadCurrent = () => {
@@ -322,6 +252,6 @@ export async function resolveScopedMachineTransport(params: Readonly<{
 
 export function resetScopedMachineTransportCacheForTests(): void {
     machineTransportCache.clear();
-    machineTransportResolutions.clear();
+    resetMachineRowReadsForTests();
     resetScopedCacheTokenKeysForTests();
 }

@@ -97,6 +97,7 @@ function artifactAccessProjection(artifact: Artifact) {
 
 async function sharedArtifactWriteContext(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; signal?: AbortSignal;
+    readTransport?: ArtifactApiOptions['readTransport'];
     artifactId: string; current: DecryptedArtifact; header: Readonly<Record<string, unknown>>; candidateBody?: ArtifactBodyV1 | null;
 }>) {
     const currentHeader = params.current.rawHeader;
@@ -107,7 +108,7 @@ async function sharedArtifactWriteContext(params: Readonly<{
     if (params.candidateBody !== undefined && canShareArtifactWriteContentV1(candidate, params.header, params.candidateBody)) return undefined;
     // A cached private row can precede publication. Re-read exposure at the same
     // authenticated boundary as CLI writes instead of trusting cached none.
-    const artifact = await fetchArtifactApi(params.credentials, params.artifactId, params);
+    const artifact = await fetchArtifactApi(params.credentials, params.artifactId, { ...params, fresh: true });
     const current = { ...candidate, ownerAccountId: artifact.ownerAccountId, access: artifact.access,
         publicAudience: artifact.publicAudience };
     const shared = await readArtifactSharedAudienceV1({ current, signal: params.signal,
@@ -665,6 +666,7 @@ export function awaitPendingArtifactInventory(params: Readonly<{
 export async function fetchAndApplyArtifactsList(params: {
     credentials: AuthCredentials | null | undefined;
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
     signal?: AbortSignal;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
@@ -741,7 +743,7 @@ export async function fetchAndApplyArtifactsList(params: {
                 cursor = page.nextCursor;
             }
             if (cursor !== null) {
-                const details = changedIds.size === 0 ? [] : await fetchArtifactReadBatch(credentials, [...changedIds], params);
+                const details = changedIds.size === 0 ? [] : await fetchArtifactReadBatch(credentials, [...changedIds], { ...params, fresh: true });
                 if (!shouldContinue()) return;
                 const changed: Artifact[] = [];
                 for (const item of details) {
@@ -770,7 +772,8 @@ export async function fetchAndApplyArtifactsList(params: {
                 encodeCursor: encodeArtifactListCursor,
                 readPage: async (options) => {
                     if (!shouldContinue()) return { items: [] };
-                    const page = await fetchArtifactsApi(credentials, { ...options, request: params.request, signal: params.signal });
+                    const page = await fetchArtifactsApi(credentials, { ...options, request: params.request,
+                        readTransport: params.readTransport, signal: params.signal, retry: 'none' });
                     if (!shouldContinue()) return { items: [] };
                     // The decoder batches changed envelopes, retaining locked structural rows.
                     const opened = await decryptArtifactListItems({ artifacts: page, encryption, artifactDataKeys,
@@ -861,6 +864,7 @@ export async function fetchAndApplyArtifactBodies(params: Readonly<{
     credentials: AuthCredentials;
     artifactIds: readonly string[];
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
     signal?: AbortSignal;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
@@ -879,11 +883,13 @@ export async function fetchAndApplyArtifactBodies(params: Readonly<{
     if (hydrated.length > 0) params.applyArtifacts(hydrated);
 }
 
-/** Exact reads share transport and key opening, while each identity keeps its own refusal. */
+/** Exact reads share transport; each borrower opens with its own keys and keeps per-id refusals. */
 export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
     credentials: AuthCredentials;
     artifactIds: readonly string[];
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
+    fresh?: boolean;
     signal?: AbortSignal;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
@@ -914,6 +920,8 @@ export async function fetchArtifactsWithBodiesFromApi(params: Readonly<{
 export async function fetchArtifactWithBodyFromApi(params: {
     credentials: AuthCredentials;
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
+    fresh?: boolean;
     artifactId: string;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
@@ -973,6 +981,7 @@ async function openArtifactWithRecipientKeyPreparation(params: Readonly<{
 
 export async function fetchArtifactBinaryFromApi(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; artifactId: string;
+    readTransport?: ArtifactApiOptions['readTransport'];
     reference: ArtifactBlobReferenceV1; encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache; signal?: AbortSignal;
     /** A row already opened by the same captured keyholding operation, never a stored view row. */
     artifact?: DecryptedArtifact;
@@ -1004,6 +1013,7 @@ async function openFetchedArtifactBinary(params: Readonly<{
 
 export async function fetchArtifactHtmlPreviewFromApi(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; artifactId: string;
+    readTransport?: ArtifactApiOptions['readTransport'];
     encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache; signal?: AbortSignal;
     forbiddenOrigins?: readonly string[];
     /** A row already opened by the same captured keyholding operation. */
@@ -1042,6 +1052,7 @@ function assertArtifactDocumentReadAllowed(artifact: DecryptedArtifact | null): 
 /** Open the head and its preview within one finite captured Account operation. */
 export async function fetchArtifactForViewFromApi(params: Readonly<{
     credentials: AuthCredentials; request?: ArtifactApiOptions['request']; artifactId: string;
+    readTransport?: ArtifactApiOptions['readTransport'];
     encryption: Encryption | null; artifactDataKeys: ArtifactDataKeyCache; signal?: AbortSignal;
     forbiddenOrigins?: readonly string[];
 }>): Promise<ArtifactViewRead | null> {
@@ -1065,6 +1076,7 @@ export async function fetchArtifactForViewFromApi(params: Readonly<{
 type ArtifactRevisionReadParams = Readonly<{
     credentials: AuthCredentials;
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
     artifactId: string;
     encryption: Encryption | null;
     artifactDataKeys: ArtifactDataKeyCache;
@@ -1106,7 +1118,7 @@ export async function restoreArtifactBodyRevisionViaApi(params: ArtifactRevision
     savedBy?: ArtifactSavedByV1;
     updateArtifact: (artifact: DecryptedArtifact) => void;
 }>) {
-    const artifact = await fetchArtifactApi(params.credentials, params.artifactId, params);
+    const artifact = await fetchArtifactApi(params.credentials, params.artifactId, { ...params, fresh: true });
     if (artifact.headerVersion !== params.expectedRevision.headerVersion || artifact.bodyVersion !== params.expectedRevision.bodyVersion)
         throw Object.assign(new Error('Artifact was modified by another client'), { code: 'version_mismatch' });
     const current = await decryptArtifactWithBody({ ...params, artifact });
@@ -1135,7 +1147,7 @@ export async function restoreArtifactBodyRevisionViaApi(params: ArtifactRevision
         kind: deriveArtifactCoarseKindV1(rawHeader),
         bodyVersion: params.bodyVersion, expectedRevision: params.expectedRevision, header, body, ...privateMetadata.write }, params);
     await acknowledgeArtifactProvenanceWrite(params, privateMetadata);
-    const restored = await fetchArtifactWithBodyFromApi(params);
+    const restored = await fetchArtifactWithBodyFromApi({ ...params, fresh: true });
     params.signal?.throwIfAborted();
     if (!restored?.isDecrypted) throw Object.assign(new Error('Artifact content is unavailable'), { code: 'content_unavailable' });
     params.updateArtifact(restored);
@@ -1322,6 +1334,7 @@ export async function updateArtifactWithHeaderViaApi(params: {
     memoryDecisionSource?: CoordinationMessageRefV1;
     credentials: AuthCredentials;
     request?: ArtifactApiOptions['request'];
+    readTransport?: ArtifactApiOptions['readTransport'];
     serverId?: string;
     artifactId: string;
     expectedRevision?: Readonly<{ headerVersion: number; bodyVersion: number }>;
@@ -1365,7 +1378,8 @@ export async function updateArtifactWithHeaderViaApi(params: {
         || storageMode === undefined
         || (storageMode === 'e2ee' && !dataEncryptionKey)
     ) {
-        const fullArtifact = await fetchArtifactApi(credentials, artifactId, { request: params.request, signal: params.signal });
+        const fullArtifact = await fetchArtifactApi(credentials, artifactId, { request: params.request,
+            readTransport: params.readTransport, signal: params.signal, fresh: true });
         // Key recovery must never rebase the full CAS token supplied by the caller.
         if (!params.expectedRevision) {
             headerVersion = fullArtifact.headerVersion;
@@ -1422,7 +1436,8 @@ export async function updateArtifactWithHeaderViaApi(params: {
     if (params.expectedRevision || bodyChanged) {
         // Recover the private custody before a write; legacy rows initialize it in this same CAS.
         if (provenance && storageMode === 'e2ee' && !artifactDataKeys.get(artifactId)?.provenanceDataKey) {
-            const stored = await fetchArtifactApi(credentials, artifactId, { request: params.request, signal: params.signal });
+            const stored = await fetchArtifactApi(credentials, artifactId, { request: params.request,
+                readTransport: params.readTransport, signal: params.signal, fresh: true });
             await resolveArtifactProvenanceDataKey({ ...params, artifact: stored });
         }
         updateRequest.body = storageMode === 'plain'

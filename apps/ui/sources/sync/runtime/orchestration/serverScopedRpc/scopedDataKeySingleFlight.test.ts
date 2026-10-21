@@ -5,9 +5,35 @@ import {
     resolveScopedMachineTransport,
 } from './serverScopedRpcPool';
 import {
-    resetScopedSessionDataKeyCacheForTests,
     resolveScopedSessionCryptoContext,
 } from './resolveScopedSessionDataKey';
+import { resetSessionByIdHttpReadsForTests } from '@/sync/engine/sessions/sessionByIdHttp';
+import { Encryption } from '@/sync/encryption/encryption';
+import { encodeBase64 } from '@/encryption/base64';
+import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol';
+import { createCapturedServerReadTransport } from './capturedServerReadTransport';
+import { SessionReadBatchRequestV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
+import { MachineReadBatchRequestV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
+import { createFakeCryptoWorker } from '@/sync/encryption/nativeCryptoWorker/fakeCryptoWorker';
+
+async function createMachineKeyOpeningFixture() {
+    const secret = new Uint8Array(32).fill(11);
+    const encryption = await Encryption.create(secret);
+    const worker = createFakeCryptoWorker();
+    const openedEnvelopes: string[] = [];
+    encryption.configureNativeCryptoWorker({ worker: { ...worker,
+        decryptDataKeyEnvelopeV1: async request => {
+            openedEnvelopes.push(...request.items.map(item => item.envelopeBase64));
+            return worker.decryptDataKeyEnvelopeV1(request);
+        },
+    }, routing: { mode: 'auto', minPayloadBytes: 0 } });
+    const credentials = { token: 'token-b', secret: encodeBase64(secret, 'base64') };
+    const readTransport = createCapturedServerReadTransport({ serverId: 'server-b',
+        profile: { serverUrl: 'https://server-b.example.test' }, credentials });
+    const seal = (value: number) => encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(value),
+        recipientPublicKey: encryption.contentDataKey, randomBytes: length => new Uint8Array(length).fill(3) }), 'base64');
+    return { encryption, credentials, readTransport, openedEnvelopes, seal };
+}
 
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 
@@ -62,7 +88,7 @@ describe('scoped data-key resolution coalesces concurrent callers', () => {
     afterEach(async () => {
         runtimeFetchMock.mockReset();
         resetScopedMachineTransportCacheForTests();
-        resetScopedSessionDataKeyCacheForTests();
+        resetSessionByIdHttpReadsForTests();
         try {
             const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
             await resetServerReachabilitySupervisors();
@@ -72,50 +98,50 @@ describe('scoped data-key resolution coalesces concurrent callers', () => {
     });
 
     it('opens the machine data-key envelope once for a burst of concurrent probes', async () => {
-        runtimeFetchMock.mockImplementation(async (input: unknown) => {
+        const { encryption, credentials, readTransport, openedEnvelopes, seal } = await createMachineKeyOpeningFixture();
+        const envelope = seal(9);
+        runtimeFetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
             if (isReachabilityProbe(input)) return reachabilityOk();
-            return { ok: true, status: 200, json: async () => machineBody('machine-1', 'envelope-1') };
+            const demand = MachineReadBatchRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            return Response.json({ results: demand.machineIds.map(machineId => ({ machineId, status: 'found',
+                machine: { id: machineId, metadata: null, metadataVersion: 0, daemonState: null,
+                    daemonStateVersion: 0, dataEncryptionKey: envelope } })) });
         });
-        const decrypt = vi.fn(async () => new Uint8Array([1, 2, 3]));
 
         // The new-session screen fires ~8-10 capability preflight probes against one
         // machine at once; every one of them resolves the same machine transport.
         const results = await Promise.all(Array.from({ length: 8 }, () => resolveScopedMachineTransport({
             serverId: 'server-b',
             serverUrl: 'https://server-b.example.test',
-            token: 'token-b',
+            token: credentials.token, readTransport, encryption,
             machineId: 'machine-1',
-            decryptEncryptionKey: decrypt,
+            decryptEncryptionKey: value => encryption.decryptEncryptionKey(value),
         })));
 
         for (const result of results) {
-            expectMachineDataKey(result, [1, 2, 3]);
+            expectMachineDataKey(result, Array.from(new Uint8Array(32).fill(9)));
         }
-        expect(decrypt).toHaveBeenCalledTimes(1);
-        expect(countCalls('/v1/machines/machine-1')).toBe(1);
+        expect(openedEnvelopes).toEqual([envelope]);
+        expect(countCalls('/v1/machines/read-batch')).toBe(1);
     });
 
     it('keeps concurrent machine transports separate per machine id', async () => {
-        runtimeFetchMock.mockImplementation(async (input: unknown) => {
+        const { encryption, credentials, readTransport, openedEnvelopes, seal } = await createMachineKeyOpeningFixture();
+        const envelopes = { first: seal(1), second: seal(2) };
+        runtimeFetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
             if (isReachabilityProbe(input)) return reachabilityOk();
-            const url = String(input ?? '');
-            const machineId = url.includes('machine-2') ? 'machine-2' : 'machine-1';
-            return {
-                ok: true,
-                status: 200,
-                json: async () => machineBody(machineId, machineId === 'machine-2' ? 'envelope-2' : 'envelope-1'),
-            };
+            const demand = MachineReadBatchRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            return Response.json({ results: demand.machineIds.map(machineId => ({ machineId, status: 'found',
+                machine: { id: machineId, metadata: null, metadataVersion: 0, daemonState: null,
+                    daemonStateVersion: 0, dataEncryptionKey: machineId === 'machine-2' ? envelopes.second : envelopes.first } })) });
         });
-        const decrypt = vi.fn(async (value: string) => (
-            value === 'envelope-2' ? new Uint8Array([2]) : new Uint8Array([1])
-        ));
 
         const request = (machineId: string) => resolveScopedMachineTransport({
             serverId: 'server-b',
             serverUrl: 'https://server-b.example.test',
-            token: 'token-b',
+            token: credentials.token, readTransport, encryption,
             machineId,
-            decryptEncryptionKey: decrypt,
+            decryptEncryptionKey: value => encryption.decryptEncryptionKey(value),
         });
 
         const [a, b, c, d] = await Promise.all([
@@ -125,11 +151,12 @@ describe('scoped data-key resolution coalesces concurrent callers', () => {
             request('machine-2'),
         ]);
 
-        expectMachineDataKey(a, [1]);
-        expectMachineDataKey(c, [1]);
-        expectMachineDataKey(b, [2]);
-        expectMachineDataKey(d, [2]);
-        expect(decrypt).toHaveBeenCalledTimes(2);
+        expectMachineDataKey(a, Array.from(new Uint8Array(32).fill(1)));
+        expectMachineDataKey(c, Array.from(new Uint8Array(32).fill(1)));
+        expectMachineDataKey(b, Array.from(new Uint8Array(32).fill(2)));
+        expectMachineDataKey(d, Array.from(new Uint8Array(32).fill(2)));
+        expect(openedEnvelopes.sort()).toEqual([envelopes.first, envelopes.second].sort());
+        expect(countCalls('/v1/machines/read-batch')).toBe(1);
     });
 
     it('does not retain a failed machine transport resolution for later callers', async () => {
@@ -167,49 +194,63 @@ describe('scoped data-key resolution coalesces concurrent callers', () => {
         expect(machineCalls).toBe(2);
     });
 
-    it('opens the session data-key envelope once for concurrent scoped session callers', async () => {
-        runtimeFetchMock.mockImplementation(async (input: unknown) => {
+    it('shares the authenticated Session observation while the real encryption owner admits its envelope', async () => {
+        const secret = new Uint8Array(32).fill(7);
+        const encryption = await Encryption.create(secret);
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const key = new Uint8Array(32).fill(9);
+        const envelope = encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: key,
+            recipientPublicKey: encryption.contentDataKey, randomBytes: length => new Uint8Array(length).fill(3) }), 'base64');
+        const credentials = { token: 'token', secret: encodeBase64(secret, 'base64') };
+        const readTransport = createCapturedServerReadTransport({ serverId: 's-id',
+            profile: { serverUrl: 'https://server.example.test' }, credentials });
+        runtimeFetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
             if (isReachabilityProbe(input)) return reachabilityOk();
-            return { ok: true, status: 200, json: async () => sessionByIdBody('session-1', 'k1') };
+            const demand = SessionReadBatchRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            return Response.json({ results: demand.sessionIds.map(sessionId => ({ sessionId,
+                detail: { status: 200, body: sessionByIdBody(sessionId, envelope) } })) });
         });
-        const decrypt = vi.fn(async () => new Uint8Array(32).fill(9));
 
         const results = await Promise.all(Array.from({ length: 6 }, () => resolveScopedSessionCryptoContext({
             serverId: 's-id',
             serverUrl: 'https://server.example.test',
             token: 'token',
             sessionId: 'session-1',
-            decryptEncryptionKey: decrypt,
+            credentials, readTransport,
+            decryptEncryptionKey: value => encryption.decryptEncryptionKey(value),
         })));
 
         for (const result of results) {
             expect(result).toEqual({ encryptionMode: 'e2ee', sessionDataKey: new Uint8Array(32).fill(9) });
         }
-        expect(decrypt).toHaveBeenCalledTimes(1);
-        expect(countCalls('/v2/sessions/session-1')).toBe(1);
+        expect(countCalls('/v2/sessions/read-batch')).toBe(1);
+        expect(encryption.getSessionEncryption('session-1')).toBeNull();
     });
 
     it('keeps concurrent session keys separate per session id', async () => {
-        runtimeFetchMock.mockImplementation(async (input: unknown) => {
+        const secret = new Uint8Array(32).fill(7);
+        const encryption = await Encryption.create(secret);
+        encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const seal = (value: number) => encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(value),
+            recipientPublicKey: encryption.contentDataKey, randomBytes: length => new Uint8Array(length).fill(3) }), 'base64');
+        const envelopes = { first: seal(1), second: seal(2) };
+        const credentials = { token: 'token', secret: encodeBase64(secret, 'base64') };
+        const readTransport = createCapturedServerReadTransport({ serverId: 's-id',
+            profile: { serverUrl: 'https://server.example.test' }, credentials });
+        runtimeFetchMock.mockImplementation(async (input: unknown, init?: RequestInit) => {
             if (isReachabilityProbe(input)) return reachabilityOk();
-            const url = String(input ?? '');
-            const sessionId = url.includes('session-2') ? 'session-2' : 'session-1';
-            return {
-                ok: true,
-                status: 200,
-                json: async () => sessionByIdBody(sessionId, sessionId === 'session-2' ? 'k2' : 'k1'),
-            };
+            const demand = SessionReadBatchRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            return Response.json({ results: demand.sessionIds.map(sessionId => ({ sessionId,
+                detail: { status: 200, body: sessionByIdBody(sessionId, sessionId === 'session-2' ? envelopes.second : envelopes.first) } })) });
         });
-        const decrypt = vi.fn(async (value: string) => (
-            value === 'k2' ? new Uint8Array(32).fill(2) : new Uint8Array(32).fill(1)
-        ));
 
         const request = async (sessionId: string) => (await resolveScopedSessionCryptoContext({
             serverId: 's-id',
             serverUrl: 'https://server.example.test',
             token: 'token',
             sessionId,
-            decryptEncryptionKey: decrypt,
+            credentials, readTransport,
+            decryptEncryptionKey: value => encryption.decryptEncryptionKey(value),
         })).sessionDataKey;
 
         const [a, b, c, d] = await Promise.all([
@@ -223,6 +264,8 @@ describe('scoped data-key resolution coalesces concurrent callers', () => {
         expect(c).toEqual(new Uint8Array(32).fill(1));
         expect(b).toEqual(new Uint8Array(32).fill(2));
         expect(d).toEqual(new Uint8Array(32).fill(2));
-        expect(decrypt).toHaveBeenCalledTimes(2);
+        expect(countCalls('/v2/sessions/read-batch')).toBe(1);
+        const input = runtimeFetchMock.mock.calls.find(([path]) => String(path).includes('/v2/sessions/read-batch'))?.[1];
+        expect(SessionReadBatchRequestV1Schema.parse(JSON.parse(String(input?.body))).sessionIds).toEqual(['session-1', 'session-2']);
     });
 });

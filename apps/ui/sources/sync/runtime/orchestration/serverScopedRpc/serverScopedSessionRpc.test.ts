@@ -16,7 +16,7 @@ import { RPC_METHODS, SESSION_RPC_METHODS, SOCKET_RPC_AUTHORIZATION_CONTEXT_KIND
 import { CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD } from '@happier-dev/protocol/sessions';
 import { raceSocketIoAckTimeout, socketRpcCodec } from '@happier-dev/sync-client';
 
-import { resetScopedSessionDataKeyCacheForTests } from './resolveScopedSessionDataKey';
+import { resetSessionByIdHttpReadsForTests } from '@/sync/engine/sessions/sessionByIdHttp';
 import { sessionRpcWithPreferredSessionScope } from './sessionRpcWithPreferredSessionScope';
 
 const TOKEN_A = `hdr.${btoa(JSON.stringify({ sub: 'account-a' }))}.sig`;
@@ -141,7 +141,7 @@ describe('sessionRpcWithServerScope', () => {
     listServerProfilesSpy.mockReset();
     getActiveServerSnapshotSpy.mockReset();
     vi.unstubAllGlobals();
-    resetScopedSessionDataKeyCacheForTests();
+    resetSessionByIdHttpReadsForTests();
   });
 
   it('keeps a native permission answer pending until the owner acknowledges beyond the generic RPC cutoff', async () => {

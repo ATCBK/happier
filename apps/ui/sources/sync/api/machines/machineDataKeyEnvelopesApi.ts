@@ -158,7 +158,10 @@ export function prepareMachineDataKeyEnvelopesDetachedForScope(
     );
 }
 
-function recipientPreparationInputs(machine: Machine, recipientChangeCursor: number | undefined) {
+type MachineRecipientPreparationInput = Pick<Machine, 'id' | 'dataEncryptionKey' | 'keyBasis' | 'metadataVersion'
+    | 'access' | 'storageMode' | 'revokedAt' | 'replacedByMachineId'> & Readonly<{ daemonStateVersion?: number }>;
+
+function recipientPreparationInputs(machine: MachineRecipientPreparationInput, recipientChangeCursor: number | undefined) {
     return { dataEncryptionKey: machine.dataEncryptionKey, keyBasis: machine.keyBasis,
         // Warm projections can retain older decrypted display versions. Recipient
         // preparation follows the published authority, not that hydration progress.
@@ -178,13 +181,12 @@ const machineRecipientPreparations = new Map<string, Readonly<{
 
 /** Refresh admission is keyed by content/key/access inputs and canonical Machine change cursors,
  * not presence or row sequence. Only successful preparation is retained across reads; failed/pending
- * work remains retryable by the next read (a recipient's missing Account binding can be repaired without
- * a Machine edit) but is asked once per read: one read's warm and hydration publications share its
- * `isCurrent`, so they must not each re-ask the Home about the same Machine.
+ * work remains retryable by the next admitted census (a recipient's missing Account binding can be
+ * repaired without a Machine edit). Display/hydration publication is not new recipient demand.
  * Explicit Actions still use the fresh scoped owner above. */
 export async function prepareMachineDataKeyEnvelopesForMachines(params: Readonly<{
     scope: ServerAccountScope;
-    machines: readonly Machine[];
+    machines: readonly MachineRecipientPreparationInput[];
     publishedRows?: readonly FetchedMachineRow[];
     recipientChangeCursors: ReadonlyMap<string, number>;
     isCurrent: () => boolean;
@@ -205,7 +207,7 @@ export async function prepareMachineDataKeyEnvelopesForMachines(params: Readonly
         const previous = machineRecipientPreparations.get(key);
         if (previous) {
             if (!previous.invalidated && sameStrictJsonValue(previous.inputs, inputs)
-                && (!previous.unprepared || previous.isCurrent === params.isCurrent)) return previous.result;
+                && !previous.unprepared) return previous.result;
             // A changed recipient input must not be mistaken for the old in-flight result.
             await previous.result;
             if (!params.isCurrent()) return;

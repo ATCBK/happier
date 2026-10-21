@@ -4,6 +4,13 @@ import {
 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
+export class SessionAccessApiError extends Error {
+    constructor(readonly code: string, readonly status?: number) {
+        super(code);
+        this.name = 'SessionAccessApiError';
+    }
+}
+
 export type SessionAccessHttpFailureCode =
     | SessionAccessErrorCodeV1
     | 'credential_scope_denied'

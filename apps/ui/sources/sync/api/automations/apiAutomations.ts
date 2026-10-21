@@ -1,5 +1,5 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import { serverFetch, type ServerFetch } from '@/sync/http/client';
+import { serverFetch } from '@/sync/http/client';
 import {
     AutomationAssignmentUpdateRequestSchema,
     AutomationV3ClearRunHistoryResponseSchema,
@@ -34,9 +34,13 @@ import {
     AutomationApiError,
     getAutomationAuthHeaders,
     readAutomationJsonOrThrow,
+    readAutomationApiJson,
+    invalidateAutomationReadAcquisitions,
+    type AutomationRequestContext,
 } from './apiAutomationHttp';
 
 export { AutomationApiError, isAutomationApiErrorCode } from './apiAutomationHttp';
+export type { AutomationRequestContext } from './apiAutomationHttp';
 
 export type AutomationAssignmentInput = Readonly<{
     machineId: string;
@@ -44,18 +48,17 @@ export type AutomationAssignmentInput = Readonly<{
     priority?: number;
 }>;
 
-/** A Sync-captured direct request for one applied Home. */
-export type AutomationRequestContext = Readonly<{
-    request: ServerFetch;
-    serverId: string;
-}>;
-
 function requestAutomation(
+    credentials: AuthCredentials,
     context: AutomationRequestContext | undefined,
     path: string,
     init?: RequestInit,
 ): Promise<Response> {
-    return (context?.request ?? serverFetch)(path, init, { includeAuth: false });
+    const mutation = init?.method !== undefined && !['GET', 'HEAD'].includes(init.method.toUpperCase());
+    if (mutation) invalidateAutomationReadAcquisitions(context);
+    return (context?.request ?? serverFetch)(path, init, { includeAuth: false }).finally(() => {
+        if (mutation) invalidateAutomationReadAcquisitions(context);
+    });
 }
 
 /** Once sent, a missing or invalid write acknowledgement cannot prove rollback. */
@@ -84,10 +87,9 @@ export async function listAutomationDefinitions(
     if (query.workflowDefinitionId !== undefined) search.set('workflowDefinitionId', query.workflowDefinitionId);
     if (query.scopeSessionId !== undefined) search.set('scopeSessionId', query.scopeSessionId);
     if (query.scope !== undefined) search.set('scope', query.scope);
-    const response = await requestAutomation(context, `/v3/automations?${search.toString()}`, {
+    const raw = await readAutomationApiJson(`/v3/automations?${search.toString()}`, {
         headers: getAutomationAuthHeaders(credentials),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
+    }, { includeAuth: false }, context, context?.request ?? serverFetch);
     return AutomationDefinitionListResponseSchema.parse(raw);
 }
 
@@ -96,10 +98,9 @@ export async function getAutomationSettings(
     credentials: AuthCredentials,
     context?: AutomationRequestContext,
 ): Promise<AutomationV3Settings> {
-    const response = await requestAutomation(context, '/v3/automations/settings', {
+    const raw = await readAutomationApiJson('/v3/automations/settings', {
         headers: getAutomationAuthHeaders(credentials),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
+    }, { includeAuth: false }, context, context?.request ?? serverFetch);
     return AutomationV3SettingsSchema.parse(raw);
 }
 
@@ -110,7 +111,7 @@ export async function updateAutomationSettings(
     context?: AutomationRequestContext,
 ): Promise<AutomationV3Settings> {
     const body = AutomationV3SettingsUpdateRequestSchema.parse(input);
-    const response = await requestAutomation(context, '/v3/automations/settings', {
+    const response = await requestAutomation(credentials, context, '/v3/automations/settings', {
         method: 'PUT',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
@@ -125,10 +126,9 @@ export async function getAutomationDefinition(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
+    const raw = await readAutomationApiJson(`/v3/automations/${encodeURIComponent(automationId)}`, {
         headers: getAutomationAuthHeaders(credentials),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
+    }, { includeAuth: false }, context, context?.request ?? serverFetch);
     return AutomationDefinitionDetailSchema.parse(raw);
 }
 
@@ -138,7 +138,7 @@ export async function createAutomationDefinition(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationDefinitionCreateRequestSchema.parse(input);
-    return readAutomationMutationReceipt(requestAutomation(context, '/v3/automations', {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, '/v3/automations', {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
@@ -152,7 +152,7 @@ export async function updateAutomationDefinition(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationDefinitionPatchRequestSchema.parse(input);
-    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}`, {
         method: 'PATCH',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
@@ -167,7 +167,7 @@ export async function reconcileAutomationDefinition(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationDefinitionReconcileRequestSchema.parse(input);
-    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}`, {
         method: 'PUT',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
@@ -180,7 +180,7 @@ export async function pauseAutomationDefinition(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
-    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/pause`, {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}/pause`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials),
     }), raw => AutomationDefinitionDetailSchema.parse(raw));
@@ -191,7 +191,7 @@ export async function resumeAutomationDefinition(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
-    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/resume`, {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}/resume`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials),
     }), raw => AutomationDefinitionDetailSchema.parse(raw));
@@ -204,7 +204,7 @@ export async function replaceAutomationDefinitionAssignments(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationAssignmentUpdateRequestSchema.parse({ assignments });
-    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/assignments`, {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}/assignments`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
@@ -227,7 +227,7 @@ export async function runAutomationDefinitionNow(
     context?: AutomationRequestContext,
     options?: Readonly<{ idempotencyKey?: string }>,
 ): Promise<AutomationV3RunMutationResponse> {
-    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/run-now`, {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}/run-now`, {
         method: 'POST',
         headers: { ...getAutomationAuthHeaders(credentials), ...(options?.idempotencyKey === undefined
             ? {} : { 'Idempotency-Key': options.idempotencyKey }) },
@@ -246,12 +246,11 @@ export async function getAutomationRunDetail(
     runId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationV3RunDetail> {
-    const response = await requestAutomation(
-        context,
+    const raw = await readAutomationApiJson(
         `/v3/automations/${encodeURIComponent(automationId)}/runs/${encodeURIComponent(runId)}`,
         { headers: getAutomationAuthHeaders(credentials) },
+        { includeAuth: false }, context, context?.request ?? serverFetch,
     );
-    const raw = await readAutomationJsonOrThrow(response);
     return AutomationV3RunDetailSchema.parse(raw);
 }
 
@@ -261,7 +260,7 @@ export async function clearAutomationRunHistory(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationV3ClearRunHistoryResponse> {
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/runs/clear-history`, {
+    const response = await requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}/runs/clear-history`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials),
     });
@@ -275,7 +274,7 @@ export async function cancelAutomationRun(
     runId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationV3RunListItem> {
-    const response = await requestAutomation(context, `/v3/automations/runs/${encodeURIComponent(runId)}/cancel`, {
+    const response = await requestAutomation(credentials, context, `/v3/automations/runs/${encodeURIComponent(runId)}/cancel`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials),
     });
@@ -290,7 +289,7 @@ export async function retryAutomationReplyHandoff(
     context?: AutomationRequestContext,
 ): Promise<AutomationV3RunListItem> {
     const response = await requestAutomation(
-        context,
+        credentials, context,
         `/v3/automations/runs/${encodeURIComponent(runId)}/retry-reply-handoff`,
         {
             method: 'POST',
@@ -316,7 +315,7 @@ export async function deliverAutomationResultAgain(
         expectedRevision: input.expectedRevision,
     });
     const response = await requestAutomation(
-        context,
+        credentials, context,
         `/v3/automations/runs/${encodeURIComponent(input.runId)}/deliver-result-again`,
         {
             method: 'POST',
@@ -333,7 +332,7 @@ export async function deleteAutomationDefinition(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationDeleteResponse> {
-    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
+    return readAutomationMutationReceipt(requestAutomation(credentials, context, `/v3/automations/${encodeURIComponent(automationId)}`, {
         method: 'DELETE',
         headers: getAutomationAuthHeaders(credentials),
     }), raw => AutomationDeleteResponseSchema.parse(raw));

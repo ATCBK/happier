@@ -3,6 +3,9 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installSessionRouteCommonModuleMocks } from '@/__tests__/routes/(app)/session/[id]/sessionRouteTestHelpers';
 
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 type Navigate = ReturnType<typeof import('./useNavigateToSession').useNavigateToSession>;

@@ -11,7 +11,7 @@ import type { ScopedServerRpcContext } from './serverScopedRpcTypes';
 /** Active and scoped streams open the same exact, admitted Machine material on a cold read. */
 export async function resolveMachineLiveStreamContent(
     context: Pick<ScopedServerRpcContext, 'machineId' | 'targetServerId' | 'targetServerUrl' | 'targetAccountId'
-        | 'runtimeOrigin' | 'homeCarrier' | 'token' | 'credentials' | 'encryption'> & Readonly<{ timeoutMs?: number }>,
+        | 'runtimeOrigin' | 'homeCarrier' | 'token' | 'credentials' | 'encryption' | 'readTransport'> & Readonly<{ timeoutMs?: number }>,
 ): Promise<ResolvedMachineLiveStreamContent> {
     const machineId = context.machineId;
     const credentials = context.credentials ?? { token: context.token };
@@ -22,6 +22,7 @@ export async function resolveMachineLiveStreamContent(
         serverId: context.targetServerId, serverUrl: context.targetServerUrl,
         runtimeOrigin: context.runtimeOrigin, homeCarrier: context.homeCarrier,
         token: context.token, machineId, accountId: context.targetAccountId,
+        readTransport: context.readTransport,
         readAccountMode: async () => (await fetchAccountEncryptionMode(credentials, {
             request: createServerRequestForExplicitServerScope({
                 serverUrl: context.targetServerUrl, token: context.token,

@@ -379,6 +379,7 @@ describe('conversation search through real Account/store wiring', () => {
     });
 
     it('keeps the selected scan and its first page through reorders and unrelated availability changes', async () => {
+        input = { ...input, source: { ...input.source!, source: { kind: 'claudeConfig', claudeConfigDir: '/fixture/.claude' } } };
         await start();
         await changeInventory(rows => [...rows].reverse().map(row => row.id === 'unrelated' ? { ...row, active: false } : row));
         await hook!.rerender({ ...input, machineIds: ['selected', 'selected'] });
@@ -388,6 +389,10 @@ describe('conversation search through real Account/store wiring', () => {
         await vi.waitFor(() => expect(hook!.getCurrent()).toMatchObject({ loading: false, result: {
             hits: [{ candidate: { remoteSessionId: 'native-hit' } }],
         } }));
+        const result = hook!.getCurrent().result;
+        await hook!.rerender({ ...input, source: { ...input.source!, source: { claudeConfigDir: '/fixture/.claude', kind: 'claudeConfig' } } });
+        expect(hook!.getCurrent().result).toBe(result);
+        expect(scans).toHaveLength(1);
     });
 
     it('keeps all-Machine hits and cursors when background inventory membership and presence change', async () => {

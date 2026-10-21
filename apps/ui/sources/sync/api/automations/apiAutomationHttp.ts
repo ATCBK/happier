@@ -1,5 +1,47 @@
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { HappyError } from '@/utils/errors/errors';
+import type { ServerFetch, ServerFetchOptions } from '@/sync/http/client';
+import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+
+export type AutomationRequestContext = Readonly<{
+    request: ServerFetch;
+    serverId: string;
+    readTransport?: CapturedServerReadTransport;
+    accountLifetime?: ServerAccountScopeLifetime;
+    invocationSignal?: AbortSignal;
+    assertCurrent?: () => void;
+}>;
+
+// JSON acquisition only. Strict family parsing and per-invocation admission stay
+// in the Automation/Workflow owners; no opened definition or Run is retained.
+const automationReads = createScopedResolutionSingleFlight<unknown>();
+
+export async function readAutomationApiJson(path: string, init: RequestInit, options: ServerFetchOptions,
+    context: AutomationRequestContext | undefined, fallback: ServerFetch): Promise<unknown> {
+    context?.assertCurrent?.();
+    if (!context?.readTransport) return await readAutomationJsonOrThrow(await fallback(path, init, options));
+    const transport = context.readTransport;
+    const scope = transport.key;
+    const abort = new AbortController();
+    const retirement = context.accountLifetime?.onRetire(() => abort.abort());
+    const cancellation = mergeAbortSignals([init.signal ?? undefined, context.invocationSignal, abort.signal]);
+    try {
+        const result = await automationReads.run(path,
+            signal => transport.read(path, { ...init, signal }, options, readAutomationJsonOrThrow),
+            { scope, signal: cancellation.signal });
+        context.assertCurrent?.();
+        return result;
+    } finally { cancellation.dispose(); retirement?.dispose(); }
+}
+
+/** Local mutations also fence direct API readers that have no mounted Action. */
+export function invalidateAutomationReadAcquisitions(context?: AutomationRequestContext): void {
+    const transport = context?.readTransport;
+    if (transport) automationReads.invalidate(transport.key);
+}
 
 export type AutomationApiErrorPayload = Readonly<{
     code: string;

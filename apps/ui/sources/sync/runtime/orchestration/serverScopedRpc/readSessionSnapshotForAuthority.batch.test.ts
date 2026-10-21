@@ -13,9 +13,67 @@ import { createOperationAccountCurrentnessSource } from './fetchSessionByIdWithS
 import { runWithServerRequestAuthorityForServerAccountScope } from './createServerRequestWithServerScope';
 import { readSessionSnapshotForAuthority, readSessionSnapshotsForAuthority } from './readSessionSnapshotForAuthority';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { readSessionBatchForAuthority } from './readSessionBatchForAuthority';
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined; });
+
+it('shares exact observations across captured transports while fencing a retired borrower independently', async () => {
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const boundary = createSessionReadBatchHttpBoundary(async request => {
+            if (request.path !== '/v2/sessions/captured') return undefined;
+            await held;
+            return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'captured' }) });
+    });
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://session-captured.test', accountId: 'account-a' }],
+        route: request => boundary.handle(request) });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    const context = captureUiUsageQueryAccountContext(credentials)!;
+    let firstCurrent = true;
+    const read = (isCurrent: () => boolean) => runWithServerRequestAuthorityForServerAccountScope({
+        scope: context.accountLifetime.scope, activeRequest: context.request,
+    }, authority => readSessionSnapshotForAuthority({ authority, sessionId: 'captured', isCurrent }));
+    const first = read(() => firstCurrent).then(() => 'published', () => 'retired');
+    const second = read(() => true);
+    await expect.poll(() => home!.requests.filter(request => request.path === '/v2/sessions/read-batch').length).toBeGreaterThan(0);
+    firstCurrent = false;
+    release();
+    await expect(first).resolves.toBe('retired');
+    await expect(second).resolves.toMatchObject({ session: { id: 'captured' } });
+    expect(home!.requests.filter(request => request.path === '/v2/sessions/read-batch')).toHaveLength(1);
+    expect(home!.requests.filter(request => request.path === '/v2/sessions/captured')).toHaveLength(0);
+});
+
+it('gathers overlapping same-authority Session projections across independent consumers without retaining settled observations', async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://session-gather.test', accountId: 'account-a' }],
+        route: request => {
+            if (request.path !== '/v2/sessions/read-batch') return undefined;
+            const { sessionIds } = SessionReadBatchRequestV1Schema.parse(request.body);
+            return Response.json({ results: sessionIds.map(sessionId => ({ sessionId,
+                detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId }) } },
+                turns: { status: 200, body: { v: 1, sessionId, updatedAt: 900, turns: [] } },
+            })) });
+        } });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    const context = captureUiUsageQueryAccountContext(credentials)!;
+    await runWithServerRequestAuthorityForServerAccountScope({ scope: context.accountLifetime.scope, activeRequest: context.request }, async authority => {
+        const read = (sessionIds: string[]) => readSessionBatchForAuthority({ authority, sessionIds,
+            includeSnapshot: true, includeMessages: false, assertCurrent: () => {} });
+        const [left, right] = await Promise.all([read(['first', 'shared']), read(['shared', 'last'])]);
+        expect([...left.keys()]).toEqual(['first', 'shared']);
+        expect([...right.keys()]).toEqual(['shared', 'last']);
+        const gathered = home!.requests.filter(request => request.path === '/v2/sessions/read-batch');
+        expect(gathered).toHaveLength(1);
+        expect(SessionReadBatchRequestV1Schema.parse(gathered[0]!.body).sessionIds).toEqual(['first', 'shared', 'last']);
+        await read(['shared']);
+        expect(home!.requests.filter(request => request.path === '/v2/sessions/read-batch')).toHaveLength(2);
+    });
+});
 
 it.each(['single', 'batch'] as const)('requires admitted turns only for interval demand through %s reads', async transport => {
     let turnsOutcome: 'failed' | 'invalid' | 'empty' | 'populated' = 'failed';
@@ -77,15 +135,13 @@ it.each([false, true])('opens identical single and batch Usage evidence with sha
             if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({ features: {
                 sharing: { session: { enabled: sharingEnabled } },
             } }));
-            if (request.path === '/v2/sessions/read-batch') return Response.json({ results: [
-                ...ids.map(sessionId => ({ sessionId: duplicateResult ? 'first' : sessionId,
-                    detail: { status: 200, body: detail(sessionId) }, turns: { status: 200, body: turns(sessionId) } })),
-                { sessionId: 'denied', detail: { status: 404, body: { error: 'Session not found' } } },
-            ] });
-            const single = /^\/v2\/sessions\/(first|second)$/.exec(request.path);
-            if (single) return Response.json(detail(single[1]!));
-            const turn = /^\/v1\/sessions\/(first|second)\/turns$/.exec(request.path);
-            if (turn) return Response.json(turns(turn[1]!));
+            if (request.path === '/v2/sessions/read-batch') {
+                const demand = SessionReadBatchRequestV1Schema.parse(request.body);
+                return Response.json({ results: demand.sessionIds.map(sessionId => sessionId === 'denied'
+                    ? { sessionId, detail: { status: 404, body: { error: 'Session not found' } } }
+                    : { sessionId: duplicateResult ? 'first' : sessionId,
+                        detail: { status: 200, body: detail(sessionId) }, turns: { status: 200, body: turns(sessionId) } }) });
+            }
             return undefined;
         } });
     publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
@@ -109,13 +165,14 @@ it.each([false, true])('opens identical single and batch Usage evidence with sha
             });
             expect(batch.get('denied')).toMatchObject({ ok: false });
             const batchRequests = home!.requests.filter(request => request.path === '/v2/sessions/read-batch');
-            expect(batchRequests).toHaveLength(1);
-            expect(SessionReadBatchRequestV1Schema.parse(batchRequests[0]!.body).accessProjectionVersion).toBe(sharingEnabled ? 1 : undefined);
+            expect(batchRequests).toHaveLength(2);
+            expect(batchRequests.every(request => SessionReadBatchRequestV1Schema.parse(request.body).accessProjectionVersion
+                === (sharingEnabled ? 1 : undefined))).toBe(true);
             expect(home!.requests.filter(request => /^\/v2\/sessions\/(first|second)$/.test(request.path))
-                .every(request => request.url.searchParams.get('accessProjectionVersion') === (sharingEnabled ? '1' : null))).toBe(true);
+                ).toHaveLength(0);
             await expect(readSessionSnapshotsForAuthority({ authority, sessionIds: ids, accountCurrentnessSource: currentness,
                 isCurrent: () => false })).rejects.toMatchObject({ errorCode: 'stale_response' });
-            expect(home!.requests.filter(request => request.path === '/v2/sessions/read-batch')).toHaveLength(1);
+            expect(home!.requests.filter(request => request.path === '/v2/sessions/read-batch')).toHaveLength(2);
             duplicateResult = true;
             await expect(readSessionSnapshotsForAuthority({ authority, sessionIds: [...ids, 'denied'], accountCurrentnessSource: currentness }))
                 .rejects.toThrow('Invalid Session batch response');

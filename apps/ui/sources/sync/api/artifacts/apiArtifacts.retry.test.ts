@@ -11,6 +11,24 @@ import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 
 import { encodeBase64 } from '@/encryption/base64';
 import { encodeUTF8 } from '@/encryption/text';
+import { createDeferred } from '@/dev/testkit';
+import type { ServerFetch } from '@/sync/http/client';
+
+async function capturedArtifactRead(request: ServerFetch) {
+    const { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } = await import('@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1');
+    runtimeFetchSpy.mockImplementation(async (input: unknown, init?: RequestInit) => {
+        const url = new URL(String(input));
+        if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({});
+        if (url.pathname === '/v1/features') return Response.json({ features: {}, capabilities: { accountStoredContentCompatibility: {
+            v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+            currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+        } } });
+        return request(url.pathname + url.search, init);
+    });
+    const { createCapturedServerReadTransport } = await import('@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope');
+    return createCapturedServerReadTransport({ serverId: 'artifact-retry-test',
+        profile: { serverUrl: 'https://artifact-retry.test' }, credentials: { token: 'captured-token' } });
+}
 
 function buildTokenWithSub(sub: string): string {
     const payload = encodeBase64(encodeUTF8(JSON.stringify({ sub })), 'base64');
@@ -27,6 +45,87 @@ describe('apiArtifacts retry modes', () => {
         vi.resetModules();
         vi.useRealTimers();
         vi.restoreAllMocks();
+    });
+
+    it.each(['detail', 'inventory'] as const)('shares the existing automatic %s recovery cadence across borrowers', async (projection) => {
+        vi.useFakeTimers();
+        const { fetchArtifact, fetchArtifactListPage } = await import('./apiArtifacts');
+        const { ARTIFACT_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        let attempts = 0;
+        const request = async () => {
+            attempts++;
+            if (attempts === 1) return Response.json({ error: 'unavailable' }, { status: 503 });
+            return Response.json(projection === 'inventory' ? [] : { id: 'document', ownerAccountId: 'owner', access: 'owner',
+                encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, publicAudience: 'none' });
+        };
+        const readTransport = await capturedArtifactRead(request);
+        const read = () => projection === 'detail'
+            ? fetchArtifact({ token: 'captured-token' }, 'document', { readTransport })
+            : fetchArtifactListPage({ token: 'captured-token' }, { readTransport });
+        const pending = Promise.all([read(), read()]);
+        await vi.runAllTimersAsync();
+        expect(await pending).toHaveLength(2);
+        expect(attempts).toBe(2);
+    });
+
+    it('shares pending opaque details without retaining them after settlement', async () => {
+        const { fetchArtifact } = await import('./apiArtifacts');
+        const { ARTIFACT_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol/storage/artifactStoredContent');
+        const release = createDeferred<void>();
+        let attempts = 0;
+        const request = async () => {
+            attempts++;
+            await release.promise;
+            return Response.json({ id: 'document', ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+                dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, publicAudience: 'none' });
+        };
+        const readTransport = await capturedArtifactRead(request);
+        const first = fetchArtifact({ token: 'captured-token' }, 'document', { readTransport });
+        const sibling = fetchArtifact({ token: 'captured-token' }, 'document', { readTransport });
+        release.resolve();
+        await expect(Promise.all([first, sibling])).resolves.toMatchObject([{ id: 'document' }, { id: 'document' }]);
+        expect(attempts).toBe(1);
+        await fetchArtifact({ token: 'captured-token' }, 'document', { readTransport });
+        expect(attempts).toBe(2);
+    });
+
+    it('shares identical inventory pages and keeps opaque cursors distinct', async () => {
+        const { fetchArtifactListPage } = await import('./apiArtifacts');
+        const release = createDeferred<void>();
+        const paths: string[] = [];
+        const request = async (path: string) => {
+            paths.push(path);
+            await release.promise;
+            return Response.json([]);
+        };
+        const readTransport = await capturedArtifactRead(request);
+        const first = fetchArtifactListPage({ token: 'captured-token' }, { readTransport, cursor: 'first', limit: 100 });
+        const sibling = fetchArtifactListPage({ token: 'captured-token' }, { readTransport, cursor: 'first', limit: 100 });
+        const other = fetchArtifactListPage({ token: 'captured-token' }, { readTransport, cursor: 'other', limit: 100 });
+        release.resolve();
+        await Promise.all([first, sibling, other]);
+        expect(paths.sort()).toEqual(['/v1/artifacts?limit=100&cursor=first', '/v1/artifacts?limit=100&cursor=other']);
+    });
+
+    it('issues no more HTTP after its final borrower leaves during automatic recovery', async () => {
+        vi.useFakeTimers();
+        const { fetchArtifact } = await import('./apiArtifacts');
+        const failedAttempt = createDeferred<void>();
+        let attempts = 0;
+        const readTransport = await capturedArtifactRead(async () => {
+            attempts++;
+            failedAttempt.resolve();
+            return Response.json({ error: 'unavailable' }, { status: 503 });
+        });
+        const controller = new AbortController();
+        const pending = fetchArtifact({ token: 'captured-token' }, 'document', { readTransport, signal: controller.signal });
+        const cancelled = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+        await failedAttempt.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        controller.abort();
+        await cancelled;
+        await vi.runAllTimersAsync();
+        expect(attempts).toBe(1);
     });
 
     it('does not retry when retry mode is none', async () => {

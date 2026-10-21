@@ -14,6 +14,7 @@ import {
 } from '@/sync/runtime/orchestration/connectionManager';
 import { parseToken } from '@/utils/auth/parseToken';
 import { resolveServerScopedTransport } from './resolveServerScopedTransport';
+import { createCapturedServerReadTransport } from './capturedServerReadTransport';
 
 import {
     DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS,
@@ -101,6 +102,7 @@ export async function resolveServerScopedContext(params: Readonly<{
         release: transport.release,
         token: credentials.token,
         credentials,
+        readTransport: createCapturedServerReadTransport({ serverId: resolvedTargetServerId, profile: targetProfile, credentials }),
         encryption,
     };
 }

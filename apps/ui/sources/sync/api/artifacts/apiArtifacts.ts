@@ -15,6 +15,13 @@ import { ArtifactPublicAudienceV1ReadSchema, ArtifactRevisionListResponseV1Schem
 import { ArtifactBlobReadResponseV1Schema, ArtifactBlobAccountEncryptionStageV1Schema, type ArtifactBlobStoredContentV1, type ArtifactBlobAccountEncryptionStageV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { ArtifactHtmlPreviewResponseV1Schema } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { ArtifactReadBatchInputV1Schema, ArtifactReadBatchResponseV1Schema, type ArtifactReadBatchResponseV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { createServerHttpRequestBodyItemBudgetV1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { createScopedBatchResolutionSingleFlight, createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
+import { readHomeAccountReadRevision } from '@/sync/runtime/orchestration/homeAccountChange';
 /** The /v1/artifacts transport cursor; shared by complete sync and Action paging. */
 export function encodeArtifactListCursor(row: Readonly<{ artifactId: string; updatedAt: number }>): string {
     return encodeBase64(new TextEncoder().encode(JSON.stringify({ updatedAt: row.updatedAt, id: row.artifactId })), 'base64url');
@@ -99,12 +106,39 @@ export type ArtifactApiOptions = Readonly<{
     includeBody?: boolean;
     retry?: 'default' | 'none';
     request?: ServerFetch;
+    /** A captured neutral transport; each consumer still owns disclosure admission. */
+    readTransport?: CapturedServerReadTransport;
+    /** An exact frontier or mutation witness must not borrow an earlier observation. */
+    fresh?: boolean;
     limit?: number;
     cursor?: string;
     signal?: AbortSignal;
     /** Inventory selection only; the server remains the access authority. */
     ownerAccountId?: string;
 }>;
+
+type ArtifactReadBatchItem = ArtifactReadBatchResponseV1['items'][number];
+type ArtifactListPage = Readonly<{ items: Artifact[]; hasUnclassified?: boolean }>;
+const artifactDetailReads = createScopedBatchResolutionSingleFlight<ArtifactReadBatchItem>();
+const artifactOpaqueReads = createScopedResolutionSingleFlight<Artifact>();
+const artifactInventoryReads = createScopedResolutionSingleFlight<ArtifactListPage>();
+
+function captureArtifactReadBinding(opts: Pick<ArtifactApiOptions, 'request' | 'readTransport'>) {
+    const active = getActiveServerSnapshot();
+    const activeRequest = opts.request ? undefined : createServerFetchForActiveServer(active);
+    // Opaque callbacks may own another caller's cancellation or carrier lease.
+    // Only a proven neutral binding can share its physical continuation.
+    const scope = opts.readTransport?.key ?? (opts.request ? {} : JSON.stringify([
+        active.serverId, active.serverUrl, active.generation, readHomeAccountReadRevision(active.serverId),
+    ]));
+    const read = async <T>(path: string, init: RequestInit, consume: (response: Response) => Promise<T>): Promise<T> => {
+        const options = { includeAuth: false, retry: 'none' } as const;
+        if (opts.readTransport) return opts.readTransport.read(path, init, options, consume);
+        if (activeRequest) return activeRequest(path, init, options, consume);
+        return consume(await opts.request!(path, init, options));
+    };
+    return { scope, read };
+}
 
 /** Both HTTP read forms retain the incumbent single-read status classification. */
 async function artifactHttpReadError(response: Response, fallback: string, code?: string): Promise<HappyError> {
@@ -123,24 +157,54 @@ async function artifactHttpReadError(response: Response, fallback: string, code?
 
 /** Read only the selected details and their current authorized recipient census. */
 export async function fetchArtifactReadBatch(credentials: AuthCredentials, artifactIds: readonly string[],
-    opts: Pick<ArtifactApiOptions, 'request' | 'signal'> = {}): Promise<ArtifactReadBatchResponseV1['items']> {
-    opts.signal?.throwIfAborted();
+    opts: Pick<ArtifactApiOptions, 'request' | 'signal' | 'readTransport' | 'fresh'> = {}): Promise<ArtifactReadBatchResponseV1['items']> {
+    throwIfAborted(opts.signal);
     if (artifactIds.length === 0) return [];
-    const input = ArtifactReadBatchInputV1Schema.parse({ artifactIds });
-    const response = await (opts.request ?? serverFetch)('/v1/artifacts/read', {
-        method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(input), ...(opts.signal ? { signal: opts.signal } : {}),
-    }, { includeAuth: false, retry: 'none' });
-    opts.signal?.throwIfAborted();
-    if (!response.ok) throw await artifactHttpReadError(response, 'Artifact details are unavailable', 'artifact_content_unavailable');
-    const parsed = ArtifactReadBatchResponseV1Schema.safeParse(await response.json());
-    opts.signal?.throwIfAborted();
-    if (!parsed.success || parsed.data.items.length !== artifactIds.length
-        || parsed.data.items.some((item, index) => item.artifactId !== artifactIds[index])) {
-        throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
-    }
-    for (const item of parsed.data.items) if (item.ok) readArtifactResponse(item.artifact);
-    return parsed.data.items;
+    ArtifactReadBatchInputV1Schema.parse({ artifactIds });
+    const binding = captureArtifactReadBinding(opts);
+    const result = await artifactDetailReads.run(JSON.stringify(['artifact-detail-census', resolveAuthCredentialsScopeKey(credentials)]),
+        artifactIds, async (demandedIds, sharedSignal) => {
+            const items = new Map<string, ArtifactReadBatchItem>();
+            const batches: string[][] = [];
+            let batch: string[] = [];
+            let budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
+            for (const id of demandedIds) {
+                if (!budget.tryAdmit(id)) {
+                    if (batch.length === 0) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
+                    batches.push(batch);
+                    batch = [];
+                    budget = createServerHttpRequestBodyItemBudgetV1({ artifactIds: [] });
+                    if (!budget.tryAdmit(id)) throw new HappyError('Artifact identity exceeds the HTTP request body limit', false, { status: 413 });
+                }
+                batch.push(id);
+            }
+            if (batch.length) batches.push(batch);
+            for (const ids of batches) {
+                throwIfAborted(sharedSignal);
+                const consume = async (response: Response) => {
+                    if (!response.ok) throw await artifactHttpReadError(response, 'Artifact details are unavailable', 'artifact_content_unavailable');
+                    const parsed = ArtifactReadBatchResponseV1Schema.safeParse(await response.json());
+                    throwIfAborted(sharedSignal);
+                    if (!parsed.success || parsed.data.items.length !== ids.length
+                        || parsed.data.items.some((item, index) => item.artifactId !== ids[index])) {
+                        throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
+                    }
+                    for (const item of parsed.data.items) if (item.ok) readArtifactResponse(item.artifact);
+                    return parsed.data.items;
+                };
+                const init = { method: 'POST', headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify(ArtifactReadBatchInputV1Schema.parse({ artifactIds: ids })), signal: sharedSignal };
+                const page = await binding.read('/v1/artifacts/read', init, consume);
+                for (const item of page) items.set(item.artifactId, item);
+            }
+            return items;
+        }, { scope: binding.scope, signal: opts.signal, fresh: opts.fresh });
+    throwIfAborted(opts.signal);
+    return artifactIds.map(id => {
+        const item = result.get(id);
+        if (!item) throw new HappyError('Artifact detail inventory is incomplete', false, { code: 'artifact_content_unavailable' });
+        return item;
+    });
 }
 
 /** The Home supplies only the isolated shell location, never opened HTML or a public grant. */
@@ -293,56 +357,50 @@ export async function fetchArtifacts(
     return (await fetchArtifactListPage(credentials, opts)).items;
 }
 
-export async function fetchArtifactListPage(credentials: AuthCredentials, opts: ArtifactApiOptions = {}): Promise<Readonly<{
-    items: Artifact[]; hasUnclassified?: boolean;
-}>> {
-    const request = opts.request ?? createServerFetchForActiveServer();
+export async function fetchArtifactListPage(credentials: AuthCredentials, opts: ArtifactApiOptions = {}): Promise<ArtifactListPage> {
+    throwIfAborted(opts.signal);
+    const binding = captureArtifactReadBinding(opts);
     const filtered = opts.coarseKind !== undefined;
-    const run = async () => {
-        const query = new URLSearchParams();
-        if (opts.limit !== undefined) query.set('limit', String(opts.limit));
-        if (opts.cursor !== undefined) query.set('cursor', opts.cursor);
-        if (opts.includeBody) query.set('includeBody', 'true');
-        if (filtered && opts.coarseKind) query.set('kind', opts.coarseKind);
-        const search = query.toString();
-        const response = await request(`/v1/artifacts${search ? `?${search}` : ''}`, {
-            ...(opts.signal ? { signal: opts.signal } : {}),
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`,
-                'Content-Type': 'application/json'
-            }
-        }, { includeAuth: false, retry: opts.retry });
-
-        if (!response.ok) {
-            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-                let message = 'Failed to fetch artifacts';
-                try {
-                    const error = await response.json();
-                    if (error?.error) message = error.error;
-                } catch {
-                    // ignore
+    const query = new URLSearchParams();
+    if (opts.limit !== undefined) query.set('limit', String(opts.limit));
+    if (opts.cursor !== undefined) query.set('cursor', opts.cursor);
+    if (opts.includeBody) query.set('includeBody', 'true');
+    if (filtered && opts.coarseKind) query.set('kind', opts.coarseKind);
+    const search = query.toString();
+    const key = JSON.stringify(['artifact-inventory', resolveAuthCredentialsScopeKey(credentials), search, opts.ownerAccountId, opts.retry ?? 'default']);
+    const result = await artifactInventoryReads.run(key, async sharedSignal => {
+        const run = () => {
+            throwIfAborted(sharedSignal);
+            return binding.read(`/v1/artifacts${search ? `?${search}` : ''}`, {
+                signal: sharedSignal,
+                headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
+            }, async response => {
+                throwIfAborted(sharedSignal);
+                if (!response.ok) {
+                    if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+                        let message = 'Failed to fetch artifacts';
+                        const error: unknown = await response.json().catch(() => null);
+                        if (error && typeof error === 'object' && typeof Reflect.get(error, 'error') === 'string') message = String(Reflect.get(error, 'error'));
+                        throw new HappyError(message, false, { status: response.status, ...(response.status === 400 ? { code: 'invalid_cursor' } : {}) });
+                    }
+                    throw new HappyError(`Failed to fetch artifacts: ${response.status}`, true, { status: response.status });
                 }
-                throw new HappyError(message, false, { status: response.status, ...(response.status === 400 ? { code: 'invalid_cursor' } : {}) });
-            }
-            throw new HappyError(`Failed to fetch artifacts: ${response.status}`, true, { status: response.status });
-        }
-
-        const value: unknown = await response.json();
-        const items: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'items') : value;
-        const hasUnclassified: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'hasUnclassified') : undefined;
-        if (!Array.isArray(items) || (filtered && typeof hasUnclassified !== 'boolean')) {
-            throw new HappyError('Artifact content is unavailable', false, { code: 'artifact_content_unavailable' });
-        }
-        const data = items.map(readArtifactResponse);
-        return { items: opts.ownerAccountId === undefined ? data : data.filter(artifact => artifact.ownerAccountId === opts.ownerAccountId),
-            ...(filtered ? { hasUnclassified: hasUnclassified as boolean } : {}) };
-    };
-
-    if (opts.retry === 'none') {
-        return await run();
-    }
-
-    return await backoff(run);
+                const value: unknown = await response.json();
+                throwIfAborted(sharedSignal);
+                const items: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'items') : value;
+                const hasUnclassified: unknown = filtered && value && typeof value === 'object' ? Reflect.get(value, 'hasUnclassified') : undefined;
+                if (!Array.isArray(items) || (filtered && typeof hasUnclassified !== 'boolean')) {
+                    throw new HappyError('Artifact content is unavailable', false, { code: 'artifact_content_unavailable' });
+                }
+                const data = items.map(readArtifactResponse);
+                return { items: opts.ownerAccountId === undefined ? data : data.filter(artifact => artifact.ownerAccountId === opts.ownerAccountId),
+                    ...(filtered ? { hasUnclassified: hasUnclassified as boolean } : {}) };
+            });
+        };
+        return opts.retry === 'none' ? run() : backoff(run);
+    }, { scope: binding.scope, signal: opts.signal, fresh: opts.fresh });
+    throwIfAborted(opts.signal);
+    return result;
 }
 
 /**
@@ -353,28 +411,27 @@ export async function fetchArtifact(
     artifactId: string,
     opts: ArtifactApiOptions = {},
 ): Promise<Artifact> {
-    const request = opts.request ?? createServerFetchForActiveServer();
-    const run = async () => {
-        const response = await request(`/v1/artifacts/${artifactId}`, {
-            ...(opts.signal ? { signal: opts.signal } : {}),
-            headers: {
-                'Authorization': `Bearer ${credentials.token}`,
-                'Content-Type': 'application/json'
-            }
-        }, { includeAuth: false, retry: opts.retry });
-
-        if (!response.ok) {
-            throw await artifactHttpReadError(response, 'Failed to fetch artifact');
-        }
-
-        return readArtifactResponse(await response.json());
-    };
-
-    if (opts.retry === 'none') {
-        return await run();
-    }
-
-    return await backoff(run);
+    throwIfAborted(opts.signal);
+    const binding = captureArtifactReadBinding(opts);
+    const key = JSON.stringify(['artifact-opaque-detail', resolveAuthCredentialsScopeKey(credentials), artifactId, opts.retry ?? 'default']);
+    const result = await artifactOpaqueReads.run(key, async sharedSignal => {
+        const run = () => {
+            throwIfAborted(sharedSignal);
+            return binding.read(`/v1/artifacts/${artifactId}`, {
+                signal: sharedSignal,
+                headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
+            }, async response => {
+                throwIfAborted(sharedSignal);
+                if (!response.ok) throw await artifactHttpReadError(response, 'Failed to fetch artifact');
+                const value: unknown = await response.json();
+                throwIfAborted(sharedSignal);
+                return readArtifactResponse(value);
+            });
+        };
+        return opts.retry === 'none' ? run() : backoff(run);
+    }, { scope: binding.scope, signal: opts.signal, fresh: opts.fresh });
+    throwIfAborted(opts.signal);
+    return result;
 }
 
 /**

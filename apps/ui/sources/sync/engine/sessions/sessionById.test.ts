@@ -19,10 +19,30 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { voiceHooks } from '@/voice/context/voiceHooks';
+import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import {
   fetchAndApplySessionById as fetchAndApplySessionByIdSource,
   type SessionByIdEncryption,
 } from './sessionById';
+
+const runtimeFetch = vi.hoisted(() => vi.fn());
+vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => runtimeFetch(...args) }));
+
+function capturedSessionHttp(request: (path: string, init: RequestInit) => Promise<Response>) {
+  runtimeFetch.mockReset();
+  const boundary = createSessionReadBatchHttpBoundary(observation => observation.path === '/v2/sessions/read-batch' ? undefined
+    : request(`${observation.path}${observation.url.search}`, { method: 'GET', headers: observation.headers, signal: observation.signal }));
+  runtimeFetch.mockImplementation(async (input: unknown, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return Response.json({});
+    return await boundary.handle({ home: 'home', method: init?.method ?? 'GET', path: url.pathname,
+      url, accountId: 'account', headers: new Headers(init?.headers), signal: init?.signal,
+      body: init?.body ? JSON.parse(String(init.body)) : undefined }) ?? Response.json({}, { status: 404 });
+  });
+  return createCapturedServerReadTransport({ serverId: 'server-a', profile: { serverUrl: 'https://session.example.test' }, credentials: { token: 't' } });
+}
 
 const E2EE_ACCOUNT_CURRENTNESS = {
   mode: 'e2ee',
@@ -2372,6 +2392,7 @@ describe('fetchAndApplySessionById', () => {
       encryption,
       sessionDataKeys: new Map<string, Uint8Array>(),
       request,
+      readTransport: capturedSessionHttp(request),
       log: { log: () => {} },
     };
 
@@ -2388,8 +2409,44 @@ describe('fetchAndApplySessionById', () => {
       expect.objectContaining({ ok: true }),
     ]);
     expect(request.mock.calls.filter((call) => call[0] === '/v2/sessions/s_coalesced')).toHaveLength(1);
+    expect(request.mock.calls.filter((call) => call[0] === '/v1/sessions/s_coalesced/turns')).toHaveLength(1);
+    expect(runtimeFetch.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/v2/sessions/read-batch')).toHaveLength(1);
     expect(firstApplySessions).toHaveBeenCalledWith([expect.objectContaining({ id: 's_coalesced' })]);
     expect(secondApplySessions).toHaveBeenCalledWith([expect.objectContaining({ id: 's_coalesced' })]);
+  });
+
+  it('detaches one exact-read deadline without cancelling another borrower of the same authority', async () => {
+    const detailGate = createDeferred<void>();
+    let physicalSignal: AbortSignal | null | undefined;
+    const request = vi.fn(async (_path: string, init: RequestInit) => {
+      physicalSignal = init.signal;
+      await Promise.race([
+        detailGate.promise,
+        new Promise<never>((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true })),
+      ]);
+      return Response.json({ session: {
+        id: 's_deadline', createdAt: 1, updatedAt: 2, seq: 3, active: true, activeAt: 2,
+        encryptionMode: 'plain', dataEncryptionKey: null, metadataVersion: 1,
+        metadata: JSON.stringify({ readStateV1: null }), agentStateVersion: 1,
+        agentState: null, share: null,
+      } });
+    });
+    const common = {
+      sessionId: 's_deadline', credentials: { token: 't' }, request,
+      readTransport: capturedSessionHttp(request),
+      encryption: PLAINTEXT_ACCOUNT_SESSION_ENCRYPTION, sessionDataKeys: new Map<string, Uint8Array>(),
+      accountCurrentness: PLAIN_ACCOUNT_CURRENTNESS, contentDemand: 'encryption-context' as const,
+      applySessions: vi.fn(), log: { log: () => {} },
+    };
+    const short = fetchAndApplySessionById({ ...common, timeoutMs: 10 });
+    const surviving = fetchAndApplySessionById({ ...common, timeoutMs: 1000 });
+    await expect(short).resolves.toMatchObject({ ok: false });
+    const cancelledSurvivor = physicalSignal?.aborted;
+    detailGate.resolve();
+    const result = await surviving;
+    expect(cancelledSurvivor).toBe(false);
+    expect(result).toMatchObject({ ok: true, encryptionMode: 'plain' });
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it('coalesces concurrent scoped session detail HTTP reads across request wrappers', async () => {
@@ -2437,7 +2494,7 @@ describe('fetchAndApplySessionById', () => {
       encryption,
       sessionDataKeys: new Map<string, Uint8Array>(),
       log: { log: () => {} },
-      requestAuthority: {},
+      readTransport: capturedSessionHttp(createRequest()),
     };
 
     const firstApplySessions = vi.fn();
@@ -2461,80 +2518,12 @@ describe('fetchAndApplySessionById', () => {
       expect.objectContaining({ ok: true }),
     ]);
     expect(detailRequests).toBe(1);
+    expect(runtimeFetch.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/v2/sessions/read-batch')).toHaveLength(1);
     expect(firstApplySessions).toHaveBeenCalledWith([expect.objectContaining({ id: 's_scoped_coalesced' })]);
     expect(secondApplySessions).toHaveBeenCalledWith([expect.objectContaining({ id: 's_scoped_coalesced' })]);
   });
 
-  it('does not coalesce distinct qualified detail reads whose parts contain the legacy delimiter', async () => {
-    const detailGate = createDeferred<void>();
-    let detailRequests = 0;
-    const requestAuthority = {};
-    const createRequest = () => vi.fn(async (path: string) => {
-      if (path === '/v2/sessions/s_delimiter_collision') {
-        detailRequests += 1;
-        await detailGate.promise;
-        return new Response(JSON.stringify({
-          session: {
-            id: 's_delimiter_collision',
-            createdAt: 1,
-            updatedAt: 2,
-            seq: 3,
-            active: true,
-            activeAt: 2,
-            encryptionMode: 'plain',
-            dataEncryptionKey: null,
-            metadataVersion: 1,
-            metadata: JSON.stringify({ readStateV1: null }),
-            agentStateVersion: 1,
-            agentState: JSON.stringify({ controlledByUser: true }),
-            share: null,
-          },
-        }), { status: 200 });
-      }
-
-      if (path === '/v1/sessions/s_delimiter_collision/turns') {
-        return new Response(JSON.stringify({ error: 'Not found' }), { status: 404 });
-      }
-
-      throw new Error(`unexpected path ${path}`);
-    });
-    const encryption = {
-      decryptEncryptionKey: async () => null,
-      initializeSessions: async () => {},
-      getSessionEncryption: () => null,
-    } satisfies SessionByIdEncryption;
-    const baseParams = {
-      sessionId: 's_delimiter_collision',
-      encryption,
-      sessionDataKeys: new Map<string, Uint8Array>(),
-      log: { log: () => {} },
-      requestAuthority,
-    };
-
-    const first = fetchAndApplySessionById({
-      ...baseParams,
-      serverId: 'home\u0000credential-part',
-      credentials: { token: 'credential' } as any,
-      request: createRequest(),
-      applySessions: vi.fn(),
-    });
-    const second = fetchAndApplySessionById({
-      ...baseParams,
-      serverId: 'home',
-      credentials: { token: 'credential-part\u0000credential' } as any,
-      request: createRequest(),
-      applySessions: vi.fn(),
-    });
-
-    await expect.poll(() => detailRequests, { timeout: 100 }).toBe(2);
-    detailGate.resolve();
-    await expect(Promise.all([first, second])).resolves.toEqual([
-      expect.objectContaining({ ok: true }),
-      expect.objectContaining({ ok: true }),
-    ]);
-  });
-
-  it('does not adopt an old in-flight detail response under a new request authority', async () => {
+  it('does not adopt a pre-wake in-flight detail observation for a later captured demand', async () => {
     const oldDetailGate = createDeferred<void>();
     let oldDetailRequests = 0;
     let newDetailRequests = 0;
@@ -2564,6 +2553,8 @@ describe('fetchAndApplySessionById', () => {
       newDetailRequests += 1;
       return buildResponse('/new-authority');
     });
+    let currentRequest = oldRequest;
+    const readTransport = capturedSessionHttp(() => currentRequest());
     const encryption = {
       decryptEncryptionKey: async () => null,
       initializeSessions: async () => {},
@@ -2577,20 +2568,21 @@ describe('fetchAndApplySessionById', () => {
       sessionDataKeys: new Map<string, Uint8Array>(),
       log: { log: () => {} },
       includeTurnsProjection: false,
+      readTransport,
     };
     const oldApplySessions = vi.fn();
     const newApplySessions = vi.fn();
     const oldRead = fetchAndApplySessionById({
       ...baseParams,
       request: oldRequest,
-      requestAuthority: {},
       applySessions: oldApplySessions,
     });
     await expect.poll(() => oldDetailRequests).toBe(1);
+    currentRequest = newRequest;
+    publishHomeAccountChange('server-a', ['s_authority_rotation']);
     const newRead = fetchAndApplySessionById({
       ...baseParams,
       request: newRequest,
-      requestAuthority: {},
       applySessions: newApplySessions,
     });
     await Promise.resolve();

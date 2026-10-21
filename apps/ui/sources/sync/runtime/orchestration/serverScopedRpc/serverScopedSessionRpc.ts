@@ -80,6 +80,8 @@ async function callScopedSessionRpc<R, A>(params: Readonly<{
       ...(params.context.credentials ? { credentials: params.context.credentials } : {}),
       sessionId: params.sessionId,
       timeoutMs: params.context.timeoutMs,
+      readTransport: params.context.readTransport,
+      signal: params.signal,
       ...(params.context.encryption
         ? {
             decryptEncryptionKey: (value: string) =>

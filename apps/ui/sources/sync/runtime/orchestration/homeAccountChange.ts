@@ -3,6 +3,7 @@ import {
     subscribeHomeCredentialMutations,
     type HomeCredentialMutationEvent,
 } from '@/auth/storage/tokenStorage';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 /**
  * Observers of the content-free Account-change wake this owner already receives
@@ -66,6 +67,13 @@ type HomeAccountChangeObserver = (event: HomeAccountChangeEvent) => void;
 
 const homeAccountChangeObservers = new Map<HomeAccountChangeObserver, boolean>();
 
+// This fences pending raw reads only; it is not an Account cursor or a currentness fact.
+const homeAccountReadRevisions = new Map<string, number>();
+
+export function readHomeAccountReadRevision(serverId: string): number {
+    return homeAccountReadRevisions.get(resolveServerProfileScopeIdForIdentifier(serverId)) ?? 0;
+}
+
 type HomeCredentialChangeObserver = (event: HomeCredentialMutationEvent) => void;
 const homeCredentialChangeObservers = new Set<HomeCredentialChangeObserver>();
 let unsubscribeHomeCredentialMutations: (() => void) | null = null;
@@ -118,6 +126,9 @@ export function publishHomeAccountChange(
     entityIds?: readonly string[],
     details?: HomeAccountChangeDetails,
 ): void {
+    // Advance before any consumer can synchronously start its refresh. An adapter
+    // listener would depend on insertion order and could join a pre-wake read.
+    homeAccountReadRevisions.set(resolveServerProfileScopeIdForIdentifier(serverId), readHomeAccountReadRevision(serverId) + 1);
     if (homeAccountChangeObservers.size === 0) return;
     const event = Object.freeze({
         serverId,

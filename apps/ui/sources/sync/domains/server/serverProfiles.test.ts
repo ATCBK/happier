@@ -3253,6 +3253,42 @@ describe('serverProfiles', () => {
         expect(profiles.resolveServerProfileScopeIdForIdentifier('unknown-home')).toBe('unknown-home');
     });
 
+    it('captures profile identifiers once for a Workspace resolution and sees the next identity publication', async () => {
+        process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
+        stubWebRuntime('https://scope.example.test');
+        const profiles = await importFresh();
+        const created = await profiles.upsertServerProfile({ serverUrl: 'https://scope.example.test', name: 'Scope' });
+        await profiles.setServerProfileIdentityForUrl(created.serverUrl, 'srv_scope_one');
+        const captured = profiles.captureServerProfileScopeResolver();
+        expect(profiles.captureServerProfileScopeResolver()).toBe(captured);
+        const { resolveWorkspaceRefById } = await import('@/sync/domains/workspaces/workspaceRefs');
+        const refs = Array.from({ length: 100 }, (_, index) => ({
+            id: `workspace-${index}`, serverId: created.id, machineId: 'machine', rootPath: `/workspace-${index}`,
+            label: null, createdAtMs: 0, lastOpenedAtMs: null,
+        }));
+        const reads = vi.spyOn(window.localStorage, 'getItem');
+        let acquisitions: number;
+        try {
+            expect(resolveWorkspaceRefById(refs, 'workspace-99', 'srv_scope_one')).toMatchObject({
+                kind: 'resolved', ref: refs[99],
+            });
+            acquisitions = reads.mock.calls.filter(([key]) => key.endsWith(':server-state-v1')).length;
+        } finally { reads.mockRestore(); }
+        expect(acquisitions).toBe(1);
+
+        const second = await profiles.upsertServerProfile({ serverUrl: 'https://second.example.test', name: 'Second' });
+        await profiles.setServerProfileIdentityForUrl(second.serverUrl, 'srv_scope_two');
+        const nextCaptured = profiles.captureServerProfileScopeResolver();
+        expect(nextCaptured).not.toBe(captured);
+        expect(nextCaptured(second.id)).toBe('srv_scope_two');
+        expect(captured(second.id)).toBe(second.id);
+        const nextRefs = refs.map(ref => ({ ...ref, serverId: second.id }));
+        expect(resolveWorkspaceRefById(nextRefs, 'workspace-99', 'srv_scope_two')).toMatchObject({
+            kind: 'resolved', ref: nextRefs[99],
+        });
+        expect(profiles.resolveServerProfileScopeIdForIdentifier(created.id)).toBe('srv_scope_one');
+    });
+
     it('resolves a portable server identity to its current device-local routing profile', async () => {
         const scope = randomScope();
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = scope;

@@ -16,6 +16,7 @@ import {
 } from '@/sync/runtime/orchestration/connectionManager';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import { parseToken } from '@/utils/auth/parseToken';
+import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
 import {
   readRegisteredStorageState,
   subscribeRegisteredStorageState,
@@ -31,6 +32,7 @@ import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
+import { createCapturedServerReadTransport, type CapturedServerReadTransport } from './capturedServerReadTransport';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -52,6 +54,7 @@ export type ResolvedServerAccountRequestContext =
       carrier?: 'https' | 'iroh';
       /** Semantic carrier for a Home with no reachable URL origin (browser Iroh). */
       homeCarrier?: HomeCarrier;
+      readTransport?: CapturedServerReadTransport;
       release?: () => Promise<void>;
     }>;
 
@@ -88,6 +91,10 @@ async function buildScopedContext(params: Readonly<{
     token: credentials.token,
     credentials,
     encryption,
+    ...(readCredentialAuthorityKind(credentials.token) === 'api_token' ? {} : {
+      readTransport: createCapturedServerReadTransport({ serverId: params.serverId,
+        profile: params.profile ?? { serverUrl: params.serverUrl }, credentials }),
+    }),
     runtimeOrigin: transport.runtimeOrigin,
     carrier: transport.carrier,
     ...(transport.homeCarrier ? { homeCarrier: transport.homeCarrier } : {}),

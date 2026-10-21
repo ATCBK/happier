@@ -6,6 +6,7 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import { searchConversationsForAccount } from '@/sync/ops/searchConversations';
 import { mergeConversationSearchHits, type ConversationSearchResult, type ConversationSearchSource } from './searchConversations';
 import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 /** Data-only owner for explicit scans, coverage and producer-qualified Search more. */
 export function useConversationSearch(input: Readonly<{
@@ -19,7 +20,7 @@ export function useConversationSearch(input: Readonly<{
     // Per-request admission belongs to the Account operation. A successful Retry
     // must not invalidate its own still-running search as it restores reachability.
     const selectedMachineIds = input.machineIds === undefined ? undefined : [...new Set(input.machineIds)].sort();
-    const intentKey = JSON.stringify([input.accountLifetime?.scope, input.query, selectedMachineIds, input.mode, input.providers,
+    const intentKey = stableJsonStringify([input.accountLifetime?.scope, input.query, selectedMachineIds, input.mode, input.providers,
         enabled, input.source && [input.source.agentId, input.source.sourceKey, input.source.source, input.source.contentSearch], input.includeThreads]);
     // Presence is admission input at each Account operation, not new search
     // intent. Heartbeats and inventory refreshes must not erase hits or cursors.

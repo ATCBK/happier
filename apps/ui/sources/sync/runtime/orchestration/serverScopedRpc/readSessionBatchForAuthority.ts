@@ -2,61 +2,100 @@ import { SessionReadBatchRequestV1Schema, SessionReadBatchResponseV1Schema,
     type SessionReadBatchResponseV1 } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 import { createServerHttpRequestBodyItemBudgetV1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import type { ServerAccountRequestAuthority } from './createServerRequestWithServerScope';
+import type { CapturedServerReadTransport } from './capturedServerReadTransport';
+import { createScopedBatchResolutionSingleFlight } from './scopedResolutionSingleFlight';
 
-/** Finite exact-Account transport batch. Admission and opening remain with the component readers. */
-export async function readSessionBatchForAuthority(params: Readonly<{
-    authority: ServerAccountRequestAuthority;
+type SessionReadPart = SessionReadBatchResponseV1['results'][number];
+const sessionParts = createScopedBatchResolutionSingleFlight<SessionReadPart>();
+
+export class SessionPartsHttpError extends Error {
+    constructor(readonly httpStatus: number, readonly body: unknown) {
+        super('Session batch unavailable');
+    }
+}
+
+export type SessionPartsReadOptions = Readonly<{
+    request: (path: string, init: RequestInit) => Promise<Response>;
+    readTransport?: CapturedServerReadTransport;
     sessionIds: readonly string[];
     includeSnapshot: boolean;
+    includeTurns?: boolean;
     includeMessages: boolean;
     accessProjectionVersion?: 1;
     signal?: AbortSignal;
+    fresh?: boolean;
+    retry?: 'none';
     assertCurrent: () => void;
-}>): Promise<ReadonlyMap<string, SessionReadBatchResponseV1['results'][number]>> {
+}>;
+
+/** The one parsed Session-parts acquisition owner; admission and opening remain per borrower. */
+export async function readSessionParts(params: SessionPartsReadOptions): Promise<ReadonlyMap<string, SessionReadPart>> {
     const assertCurrent = () => {
         params.assertCurrent();
         // Hermes AbortSignal implementations need not expose throwIfAborted.
         if (params.signal?.aborted) throw params.signal.reason ?? Object.assign(new Error('Session batch cancelled'), { name: 'AbortError' });
     };
-    const result = new Map<string, SessionReadBatchResponseV1['results'][number]>();
-    const ids = [...new Set(params.sessionIds)];
-    const emptyBody = { sessionIds: [] as string[], includeSnapshot: params.includeSnapshot, includeMessages: params.includeMessages,
-        ...(params.accessProjectionVersion === 1 ? { accessProjectionVersion: 1 as const } : {}) };
-    let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
-    const batches: string[][] = [];
-    let batch: string[] = [];
-    for (const id of ids) {
-        if (!budget.tryAdmit(id)) {
-            if (!batch.length) throw new Error('Session id exceeds the HTTP request body limit');
-            batches.push(batch);
-            batch = [];
-            budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
-            if (!budget.tryAdmit(id)) throw new Error('Session id exceeds the HTTP request body limit');
-        }
-        batch.push(id);
-    }
-    if (batch.length) batches.push(batch);
-    for (const sessionIds of batches) {
-        assertCurrent();
-        const input = SessionReadBatchRequestV1Schema.parse({ ...emptyBody, sessionIds });
-        const response = await params.authority.request('/v2/sessions/read-batch', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: params.signal,
-        });
-        assertCurrent();
-        if (!response.ok) throw Object.assign(new Error('Session batch unavailable'), { httpStatus: response.status });
-        const body = SessionReadBatchResponseV1Schema.parse(await response.json());
-        assertCurrent();
-        const expected = new Set(sessionIds);
-        for (const row of body.results) {
-            if (!expected.delete(row.sessionId)
-                || (params.includeSnapshot && !row.detail)
-                || (params.includeSnapshot && row.detail?.status === 200 && !row.turns)
-                || (params.includeMessages && (!params.includeSnapshot || row.detail?.status === 200) && !row.messages)) {
-                throw new Error('Invalid Session batch response');
+    assertCurrent();
+    const demand = SessionReadBatchRequestV1Schema.parse({ sessionIds: [], includeSnapshot: params.includeSnapshot,
+        includeMessages: params.includeMessages, includeTurns: params.includeTurns,
+        accessProjectionVersion: params.accessProjectionVersion });
+    const includeTurns = demand.includeSnapshot && demand.includeTurns !== false;
+    const emptyBody = { ...demand, includeTurns };
+    const transport = params.readTransport;
+    const scope = transport?.key;
+    try {
+        return await sessionParts.run(JSON.stringify([params.includeSnapshot, includeTurns, params.includeMessages,
+            params.accessProjectionVersion ?? null, params.retry ?? null]), params.sessionIds, async (ids, signal) => {
+            const result = new Map<string, SessionReadPart>();
+            let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
+            const batches: string[][] = [];
+            let batch: string[] = [];
+            for (const id of ids) {
+                if (!budget.tryAdmit(id)) {
+                    if (!batch.length) throw new Error('Session id exceeds the HTTP request body limit');
+                    batches.push(batch);
+                    batch = [];
+                    budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);
+                    if (!budget.tryAdmit(id)) throw new Error('Session id exceeds the HTTP request body limit');
+                }
+                batch.push(id);
             }
-            result.set(row.sessionId, row);
-        }
-        if (expected.size) throw new Error('Incomplete Session batch response');
+            if (batch.length) batches.push(batch);
+            for (const sessionIds of batches) {
+                const input = SessionReadBatchRequestV1Schema.parse({ ...emptyBody, sessionIds });
+                const init = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal };
+                const consume = async (response: Response) => {
+                    const payload: unknown = await response.json().catch(() => null);
+                    if (!response.ok) throw new SessionPartsHttpError(response.status, payload);
+                    return SessionReadBatchResponseV1Schema.parse(payload);
+                };
+                const body = transport
+                    ? await transport.read('/v2/sessions/read-batch', init, params.retry ? { retry: params.retry } : undefined, consume)
+                    : await consume(await params.request('/v2/sessions/read-batch', init));
+                const expected = new Set(sessionIds);
+                for (const row of body.results) {
+                    if (!expected.delete(row.sessionId)
+                        || (params.includeSnapshot && !row.detail)
+                        || (includeTurns && row.detail?.status === 200 && !row.turns)
+                        || (params.includeMessages && (!params.includeSnapshot || row.detail?.status === 200) && !row.messages)) {
+                        throw new Error('Invalid Session batch response');
+                    }
+                    result.set(row.sessionId, row);
+                }
+                if (expected.size) throw new Error('Incomplete Session batch response');
+            }
+            return result;
+        }, { scope, signal: params.signal, fresh: params.fresh || !transport });
+    } finally {
+        assertCurrent();
     }
-    return result;
 }
+
+/** Finite exact-Account batch facade; all projections use the same pending-only owner. */
+export function readSessionBatchForAuthority(params: Omit<SessionPartsReadOptions, 'request' | 'readTransport'> & Readonly<{
+    authority: ServerAccountRequestAuthority;
+}>): Promise<ReadonlyMap<string, SessionReadPart>> {
+    return readSessionParts({ ...params, request: params.authority.request, readTransport: params.authority.readTransport });
+}
+
+export function resetSessionPartsReadsForTests(): void { sessionParts.reset(); }

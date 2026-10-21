@@ -13,7 +13,7 @@ import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 import { readAuthTokenProvenance } from '@happier-dev/protocol/auth/authToken';
-import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { parseTokenPayload } from '@/utils/auth/parseToken';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { fetchMachineRows, type FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
@@ -58,8 +58,9 @@ function projectActionMachine(source: Pick<FetchedMachineRow, 'id' | 'kind' | 'a
 
 /** Account discovery has content; validate the canonical identity projection. */
 export async function readOriginalAccountActionMachine(account: LazyActionAccountContext, machineId: string, signal?: AbortSignal) {
-    const machines = await fetchMachineRows({ credentials: account.credentials,
-        request: (path, init) => account.request(path, { ...init, ...(signal ? { signal } : {}) }) });
+    const machines = await withActionAccountRequestSignal(account, signal, ownedSignal => fetchMachineRows({ credentials: account.credentials,
+        readTransport: account.readTransport, signal: ownedSignal,
+        request: (path, init) => account.request(path, { ...init, signal: ownedSignal }) }));
     account.assertCurrent();
     if (!Array.isArray(machines)) return null;
     return projectActionMachine(machines.find(candidate => candidate && typeof candidate === 'object' && candidate.id === machineId));

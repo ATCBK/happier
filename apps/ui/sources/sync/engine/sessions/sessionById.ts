@@ -68,6 +68,8 @@ import {
 import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { buildRenderableFromRowAndCache } from './sessionSnapshot';
+import { readSessionByIdHttp } from './sessionByIdHttp';
+import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 
 type SessionEncryption = {
   encryptRaw?: (payload: unknown) => Promise<string>;
@@ -89,12 +91,6 @@ export type SessionByIdEncryption = {
 export type SessionByIdContentDemand = 'session' | 'encryption-context' | 'list-projection';
 
 type SessionDataKeyEnvelopeCache = Map<string, string>;
-type SessionByIdRequest = (path: string, init: RequestInit) => Promise<Response>;
-type SessionByIdHttpRead = Readonly<{
-  ok: boolean;
-  status: number;
-  body: unknown;
-}>;
 
 /** Transport inputs only; the ordinary Session reader still admits and opens each row. */
 export type SessionByIdPrefetchedRead = Readonly<{
@@ -144,90 +140,6 @@ type HydratedSessionById = Omit<
 export type HydratedSessionMetadataTupleMutationSnapshot =
   SessionMetadataTupleMutationSnapshotV1<Metadata, AgentState>;
 
-const sessionByIdHttpReadsByAuthority = new WeakMap<object, Map<string, Promise<SessionByIdHttpRead>>>();
-
-function buildSessionByIdHttpReadKey(params: Readonly<{
-  sessionId: string;
-  serverId?: string | null;
-  token: string;
-  accessProjectionVersion?: 1;
-}>): string {
-  return JSON.stringify([
-    String(params.serverId ?? '').trim(),
-    params.token,
-    params.sessionId,
-    params.accessProjectionVersion ?? null,
-  ]);
-}
-
-async function readSessionByIdHttp(params: Readonly<{
-  sessionId: string;
-  serverId?: string | null;
-  token: string;
-  request: SessionByIdRequest;
-  requestAuthority?: object;
-  timeoutMs?: number;
-  accessProjectionVersion?: 1;
-}>): Promise<SessionByIdHttpRead> {
-  const key = buildSessionByIdHttpReadKey(params);
-  const requestAuthority = params.requestAuthority ?? params.request;
-  const existingReadsForAuthority = sessionByIdHttpReadsByAuthority.get(
-    requestAuthority,
-  );
-  let readsForRequest: Map<string, Promise<SessionByIdHttpRead>>;
-  if (existingReadsForAuthority) {
-    readsForRequest = existingReadsForAuthority;
-  } else {
-    readsForRequest = new Map<string, Promise<SessionByIdHttpRead>>();
-    sessionByIdHttpReadsByAuthority.set(requestAuthority, readsForRequest);
-  }
-
-  const existing = readsForRequest.get(key);
-  if (existing) {
-    syncPerformanceTelemetry.count('sync.sessionById.http.coalesced', { hit: 1 });
-    return await existing;
-  }
-
-  const promise = (async () => {
-    // The transport owns reachability/recovery. Only an explicit caller deadline may shorten it.
-    const timeoutMs = typeof params.timeoutMs === 'number' && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
-      ? params.timeoutMs : null;
-    const controller = timeoutMs !== null && typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timeoutId = controller && timeoutMs !== null ? setTimeout(() => controller.abort(), timeoutMs) : null;
-    try {
-      const response = await params.request(
-        `/v2/sessions/${encodeURIComponent(params.sessionId)}${params.accessProjectionVersion === 1 ? '?accessProjectionVersion=1' : ''}`,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${params.token}`,
-            'Content-Type': 'application/json',
-          },
-          ...(controller ? { signal: controller.signal } : null),
-        },
-      );
-      const body = await response.json().catch(() => null);
-      syncPerformanceTelemetry.count('sync.sessionById.http.coalesced', { miss: 1 });
-      return {
-        ok: response.ok,
-        status: response.status,
-        body,
-      };
-    } finally {
-      if (timeoutId) clearTimeout(timeoutId);
-    }
-  })();
-
-  readsForRequest.set(key, promise);
-  try {
-    return await promise;
-  } finally {
-    if (readsForRequest.get(key) === promise) {
-      readsForRequest.delete(key);
-    }
-  }
-}
-
 function listRollbackEligibleTurnStarts(projection: SessionTurnsProjectionV1): number[] {
   const starts: number[] = [];
   for (const turn of projection.turns) {
@@ -254,6 +166,9 @@ async function fetchSessionTurnsProjection(params: Readonly<{
   sessionId: string;
   credentials: AuthCredentials;
   request: (path: string, init: RequestInit) => Promise<Response>;
+  serverId?: string | null;
+  readTransport?: CapturedServerReadTransport;
+  signal?: AbortSignal;
   log: { log: (message: string) => void };
   prefetched?: SessionByIdPrefetchedRead;
   required: boolean;
@@ -266,15 +181,9 @@ async function fetchSessionTurnsProjection(params: Readonly<{
     status = read.status;
     body = read.body;
   } else {
-    let response: Response;
+    let response: Awaited<ReturnType<typeof readSessionByIdHttp>>;
     try {
-      response = await params.request(`/v1/sessions/${encodeURIComponent(params.sessionId)}/turns`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${params.credentials.token}`,
-          'Content-Type': 'application/json',
-        },
-      });
+      response = await readSessionByIdHttp({ ...params, token: params.credentials.token, projection: 'turns' });
     } catch (err) {
       if (isTerminalAuthError(err)) throw err;
       if (params.required) throw err;
@@ -282,7 +191,7 @@ async function fetchSessionTurnsProjection(params: Readonly<{
       return null;
     }
     status = response.status;
-    body = response.ok ? await response.json().catch(() => null) : null;
+    body = response.ok ? response.body : null;
   }
 
   if (status < 200 || status >= 300) {
@@ -386,7 +295,8 @@ export async function fetchAndApplySessionById(params: Readonly<{
   sessionDataKeys: Map<string, Uint8Array>;
   sessionDataKeyEnvelopes?: SessionDataKeyEnvelopeCache;
   request: (path: string, init: RequestInit) => Promise<Response>;
-  requestAuthority?: object;
+  readTransport?: CapturedServerReadTransport;
+  signal?: AbortSignal;
   applySessions: (sessions: Array<Omit<Session, 'presence'> & { presence?: 'online' | number }>) => void;
   getExistingSession?: (sessionId: string) => Session | null | undefined;
   getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
@@ -411,7 +321,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
 }> {
   const sessionId = String(params.sessionId ?? '').trim();
   if (!sessionId) return { ok: false, session: null, errorCode: 'invalid_session_id' };
-  const isCurrent = () => params.isCurrent?.() !== false;
+  const isCurrent = () => !params.signal?.aborted && params.isCurrent?.() !== false;
   const staleResult = () => ({
     ok: false as const,
     session: null,
@@ -424,23 +334,30 @@ export async function fetchAndApplySessionById(params: Readonly<{
   let responseOk = false;
   let responseStatus = 0;
   let body: unknown = null;
+  let acquiredTurns: SessionByIdPrefetchedRead['turns'];
   try {
     const response = params.prefetched ? {
       ok: params.prefetched.detail.status === 200,
       status: params.prefetched.detail.status,
       body: params.prefetched.detail.body,
+      turns: params.prefetched.turns,
     } : await readSessionByIdHttp({
       sessionId,
       serverId: params.serverId,
       token: params.credentials.token,
       request: params.request,
-      requestAuthority: params.requestAuthority,
+      readTransport: params.readTransport,
+      projection: params.readTransport && (params.contentDemand === undefined || params.contentDemand === 'session')
+        && params.includeTurnsProjection !== false ? 'snapshot' : 'detail',
+      signal: params.signal,
+      fresh: params.includeMetadataTupleMutationSnapshot === true,
       timeoutMs: params.timeoutMs,
       accessProjectionVersion: params.accessProjectionVersion,
     });
     responseOk = response.ok;
     responseStatus = response.status;
     body = response.body;
+    acquiredTurns = response.turns;
   } catch (err) {
     if (isTerminalAuthError(err)) {
       throw err;
@@ -894,8 +811,11 @@ export async function fetchAndApplySessionById(params: Readonly<{
       sessionId,
       credentials: params.credentials,
       request: params.request,
+      readTransport: params.readTransport,
+      serverId: params.serverId,
+      signal: params.signal,
       log: params.log,
-      prefetched: params.prefetched,
+      prefetched: params.prefetched ?? (acquiredTurns ? { detail: { status: responseStatus, body }, turns: acquiredTurns } : undefined),
       required: params.includeTurnsProjection === 'required',
     });
   if (!isHydrationCurrent()) return staleResult();

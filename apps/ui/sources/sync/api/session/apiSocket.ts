@@ -12,10 +12,11 @@ import {
     socketRpcCodec,
     type HappierSocketRole,
     type SocketRpcContent,
+    waitForAccountEncryptionObservation,
 } from '@happier-dev/sync-client';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { createPrivateContinuationTransportError } from '@/sync/domains/machines/peer/mediation/rpc/client';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { Encryption } from '@/sync/encryption/encryption';
 import { observeServerTimestamp } from '@/sync/runtime/time';
 import { MACHINE_LIVE_STREAM_SOCKET_EVENT, type MachineLiveStreamRelayEnvelopeV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
@@ -78,6 +79,7 @@ import { ServerScopedTransportUnavailableError } from '@/sync/runtime/homeCarrie
 import { MachineLiveStreamPayloadErrorV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
 import { createMachineLiveStreamSocketTransport, type ResolvedMachineLiveStreamContent } from '@/sync/domains/machines/peer/mediation/stream/socketTransport';
 import { resolveMachineLiveStreamContent } from '@/sync/runtime/orchestration/serverScopedRpc/resolveMachineLiveStreamContent';
+import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
 import { EphemeralUpdateSchema } from '@happier-dev/protocol/updates';
@@ -88,6 +90,8 @@ import {
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
+import { createSocketAccountEncryptionObservation, invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
+import { bindAccountEncryptionObservation, matchesAccountEncryptionObservationCredentials, type AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 
 const STATIC_EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS =
     process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS;
@@ -226,6 +230,8 @@ function getGlobalInFlightHttpRequestsByKey(): Map<string, Promise<InFlightHttpR
 export interface SyncSocketConfig {
     endpoint: string;
     token: string;
+    /** Exact credential admitted by the containing Account runtime. */
+    credentials?: AuthCredentials;
     socketRole?: HappierSocketRole;
     /** An admitted frame authority has no stored credential or endpoint supervisor. */
     request?: ServerResponseRequest;
@@ -279,6 +285,7 @@ class ApiSocket {
     private socket: Socket | null = null;
     private socketClientType: HappierSocketRole['clientType'] | null = null;
     private socketTransportKey: string | null = null;
+    private accountEncryptionObservation: ReturnType<typeof createSocketAccountEncryptionObservation> | null = null;
     private config: SyncSocketConfig | null = null;
     private requestConfigurationAbortController = new AbortController();
     private encryption: Encryption | null = null;
@@ -444,6 +451,12 @@ class ApiSocket {
                     || (this.config.generation !== undefined && this.config.generation !== nextSnapshot.generation)
                     || canonicalizeServerUrl(this.config.endpoint) !== canonicalizeServerUrl(nextSnapshot.serverUrl)
                 ) return;
+                const nextHomeCarrier = getActiveServerHomeCarrier();
+                const nextOrigin = resolveActiveServerRuntimeOrigin(nextSnapshot) || this.config.endpoint;
+                if (nextOrigin !== (this.config.runtimeOrigin || this.config.endpoint)
+                    || (nextHomeCarrier?.endpointId ?? null) !== (this.config.homeCarrier?.endpointId ?? null)) {
+                    this.accountEncryptionObservation?.disconnected();
+                }
                 this.config.carrier = nextSnapshot.carrier;
                 this.config.homeCarrier = getActiveServerHomeCarrier();
                 if (!isServerRuntimeTransportPublished(nextSnapshot)) {
@@ -480,6 +493,12 @@ class ApiSocket {
     }
 
     disconnect() {
+        if (this.accountEncryptionObservation) {
+            this.accountEncryptionObservation.dispose();
+            this.accountEncryptionObservation = null;
+        } else if (this.socketClientType === 'user-scoped') {
+            invalidateAccountEncryptionModeCache({ serverId: this.config?.serverId });
+        }
         const scopedSupervisor = this.scopedConnectionSupervisor;
         this.scopedConnectionSupervisor = null;
         void scopedSupervisor?.stop();
@@ -539,6 +558,15 @@ class ApiSocket {
     getSessionScopedTarget(): string | null {
         return this.config?.request && this.config.socketRole?.clientType === 'session-scoped'
             ? this.config.socketRole.sessionId : null;
+    }
+
+    getAccountEncryptionObservationBinding(credentials: AuthCredentials): AccountEncryptionObservationBinding | null {
+        const binding = this.accountEncryptionObservation?.binding;
+        const snapshot = getActiveServerSnapshot();
+        if (!this.config?.request && this.config && (canonicalizeServerUrl(this.config.endpoint) !== canonicalizeServerUrl(snapshot.serverUrl)
+            || (this.config.serverId && this.config.serverId !== snapshot.serverId)
+            || (this.config.generation !== undefined && this.config.generation !== snapshot.generation))) return null;
+        return binding && matchesAccountEncryptionObservationCredentials(binding, credentials) && binding.isCurrent() ? binding : null;
     }
 
     /** Capture the bearer identity used by this concrete Account socket before an RPC begins. */
@@ -880,13 +908,27 @@ class ApiSocket {
      */
     createRequestForPreparedTarget(target: PreparedSocketRequestTarget): ServerResponseRequest {
         const socket = this;
+        const signal = this.requestConfigurationAbortController.signal;
         function request(path: string, init?: RequestInit, options?: ServerFetchOptions): Promise<Response>;
         function request<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
         async function request<T>(path: string, init?: RequestInit, options?: ServerFetchOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
             if (!socket.isPreparedRequestTargetCurrent(target)) throw new StaleServerGenerationError();
             return consumeResponse ? await socket.request(path, init, options, consumeResponse) : await socket.request(path, init, options);
         }
-        return request;
+        const binding = this.accountEncryptionObservation?.binding;
+        if (!binding || !this.isPreparedRequestTargetCurrent(target)) return request;
+        const isCurrent = () => !signal.aborted && socket.isPreparedRequestTargetCurrent(target) && binding.isCurrent();
+        return bindAccountEncryptionObservation(request, {
+            ...binding,
+            isCurrent,
+            read: async readerSignal => {
+                if (!isCurrent()) throw new StaleServerGenerationError();
+                const identity = await waitForAccountEncryptionObservation(binding.read(readerSignal), signal);
+                if (!isCurrent()) throw new StaleServerGenerationError();
+                return identity;
+            },
+            peek: () => isCurrent() ? binding.peek() : null,
+        });
     }
 
     private isPreparedRequestTargetCurrent(target: PreparedSocketRequestTarget): boolean {
@@ -1329,6 +1371,8 @@ class ApiSocket {
         for (const detach of this.detachSocketTransportListeners.splice(0)) {
             detach();
         }
+        this.accountEncryptionObservation?.dispose();
+        this.accountEncryptionObservation = null;
         void this.socketTransport?.disconnect({ intentional: true });
         void this.socketTransport?.destroy();
         this.socketTransport = null;
@@ -1367,6 +1411,25 @@ class ApiSocket {
         const machineRequestScope = accountScoped ? this.getMachineRequestScope() : null;
         const detachInboundRequests = this.installSocketEventHandlers(socket, statusDemandTransport?.observeEphemeral ?? (() => {}), messageContext, socketRole, machineRequestScope);
         const transportConfig = this.config;
+        const credentials = transportConfig.credentials;
+        const accountEncryptionObservation = accountScoped && credentials && credentials.token === transportConfig.token
+            ? createSocketAccountEncryptionObservation({
+                credentials,
+                serverId: transportConfig.serverId,
+                endpointUrl: transportConfig.endpoint,
+                runtimeOrigin: transportEndpoint,
+                homeCarrierEndpointId: homeCarrier?.endpointId ?? null,
+                request: createServerFetchAtEndpoint({ endpointUrl: transportConfig.endpoint,
+                    credentials, serverId: transportConfig.serverId, runtimeOrigin: transportConfig.runtimeOrigin,
+                    ...(homeCarrier ? { homeCarrier } : {}),
+                }),
+                isCurrent: () => this.socket === socket && this.config === transportConfig
+                    && transportConfig.token === credentials.token && transportConfig.isCurrent?.() !== false
+                    && this.socketTransportKey === key
+                    && (transportConfig.runtimeOrigin || transportConfig.endpoint) === transportEndpoint
+                    && ((transportConfig.homeCarrier ?? getActiveServerHomeCarrier())?.endpointId ?? null) === (homeCarrier?.endpointId ?? null),
+            }) : null;
+        this.accountEncryptionObservation = accountEncryptionObservation;
 
         this.detachSocketTransportListeners = [
             detachInboundRequests,
@@ -1376,6 +1439,7 @@ class ApiSocket {
             })] : []),
             transport.onConnected(() => {
                 if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                accountEncryptionObservation?.connected();
                 this.clearError();
                 this.updateStatus('connected');
                 if (machineRequestScope) clearMachineRequestReachabilityForScope(machineRequestScope);
@@ -1396,6 +1460,8 @@ class ApiSocket {
             }),
             transport.onDisconnected((event: TransportDisconnectEvent) => {
                 if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                if (accountEncryptionObservation) accountEncryptionObservation.disconnected();
+                else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId });
                 if (!event.intentional && event.reason === 'io server disconnect' && transportConfig?.request) {
                     // Revocation and expiry are server-forced disconnects, not transient transport loss.
                     const supervisor = this.scopedConnectionSupervisor;
@@ -1414,7 +1480,9 @@ class ApiSocket {
                 this.invalidateReachabilityAfterSocketTransportFailure(event.error ?? new Error(event.reason ?? 'socket disconnect'));
             }),
             transport.onError((error: unknown) => {
-                if (this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                if (this.socket !== socket || this.config !== transportConfig || transportConfig?.isCurrent?.() === false) return;
+                if (accountEncryptionObservation) accountEncryptionObservation.disconnected();
+                else if (accountScoped) invalidateAccountEncryptionModeCache({ serverId: transportConfig.serverId });
                 this.setError(error instanceof Error ? error : new Error(String(error)));
                 this.invalidateReachabilityAfterSocketTransportFailure(error);
             }),
@@ -1516,6 +1584,14 @@ class ApiSocket {
                     targetAccountId: parseToken(installedConfig.token), token: installedConfig.token,
                     credentials, encryption, runtimeOrigin: installedConfig.runtimeOrigin,
                     homeCarrier: installedConfig.homeCarrier ?? undefined,
+                    ...(!installedConfig.request && installedConfig.credentials && installedConfig.serverId
+                        && typeof installedConfig.generation === 'number' ? {
+                            readTransport: createCapturedServerReadTransport({ serverId, credentials: installedConfig.credentials,
+                                prepared: { ...installedConfig, generation: installedConfig.generation,
+                                    endpointUrl: installedConfig.endpoint,
+                                    request: this.createRequestForPreparedTarget({ ...installedConfig, serverId,
+                                        generation: installedConfig.generation }) } }),
+                        } : {}),
                 });
                 if (liveStreamLifetime.signal.aborted || this.socket !== socket || this.config !== installedConfig
                     || this.encryption !== encryption || installedConfig.isCurrent?.() === false) {
@@ -1579,6 +1655,7 @@ class ApiSocket {
         }
         socket.onAny((event, data) => {
             if (this.socket !== socket || this.config !== installedConfig || installedConfig?.isCurrent?.() === false) return;
+            if (event === 'update') this.accountEncryptionObservation?.update(data);
             if (event === MACHINE_LIVE_STREAM_SOCKET_EVENT) {
                 liveStreamTransport.receive(data);
                 return;

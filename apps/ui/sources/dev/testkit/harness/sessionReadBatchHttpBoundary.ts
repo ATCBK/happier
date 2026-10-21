@@ -21,7 +21,7 @@ export function createSessionReadBatchHttpBoundary(route: (request: ServedHomeRe
             const results = await Promise.all(input.sessionIds.map(async sessionId => {
                 const detail = input.includeSnapshot ? await read(`/v2/sessions/${encodeURIComponent(sessionId)}${input.accessProjectionVersion === 1 ? '?accessProjectionVersion=1' : ''}`) : undefined;
                 const admitted = !detail || detail.status === 200;
-                const turns = input.includeSnapshot && admitted ? await read(`/v1/sessions/${encodeURIComponent(sessionId)}/turns`) : undefined;
+                const turns = input.includeSnapshot && input.includeTurns !== false && admitted ? await read(`/v1/sessions/${encodeURIComponent(sessionId)}/turns`) : undefined;
                 const messages = input.includeMessages && admitted ? await read(buildSessionMessagesPath({ sessionId, scope: 'all', roles: ['user', 'agent', 'event'] })) : undefined;
                 return { sessionId, ...(detail ? { detail } : {}), ...(turns ? { turns } : {}), ...(messages ? { messages } : {}) };
             }));

@@ -1,4 +1,4 @@
-import { createServer, type Server as HttpServer } from 'node:http';
+import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import { Server } from 'socket.io';
 import { afterEach, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema, MACHINE_PLAIN_DATA_KEY_MARKER, PEER_MEDIATION_RECEIPTS,
@@ -21,6 +21,16 @@ import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serve
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { machineWorkspaceFileList } from '@/sync/ops/machineWorkspaceFileList';
 import { DaemonWorkspaceFileListRequestSchema, DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
+import type { MachinePublishedRowV1 } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+
+/** This in-process Home boundary serves the current exact-read wire contract. */
+function serializeMachineReadFixture(request: Pick<IncomingMessage, 'url'>, machine: Pick<MachinePublishedRowV1, 'id'> & Partial<MachinePublishedRowV1>) {
+    const row = { metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0, ...machine };
+    return JSON.stringify(request.url === '/v1/machines/read-batch'
+        ? MachineReadBatchResponseV1Schema.parse({ results: [{ machineId: row.id, status: 'found', machine: row }] })
+        : { machine: row });
+}
 
 const credentials = vi.hoisted(() => ({ token: '', secret: undefined as string | undefined }));
 
@@ -68,7 +78,7 @@ it('detects Agent readiness through real scoped E2EE HTTP, crypto and Socket.IO 
     const http = createServer((request, response) => {
         response.setHeader('content-type', 'application/json');
         if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
-        else if (request.url === '/v1/machines/machine-1') response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: envelope } }));
+        else if (request.url === '/v1/machines/machine-1' || request.url === '/v1/machines/read-batch') response.end(serializeMachineReadFixture(request, { id: 'machine-1', dataEncryptionKey: envelope }));
         else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }));
         else { response.statusCode = 404; response.end('{}'); }
     });
@@ -129,9 +139,9 @@ it.each(['cli.external-agent/mode-reader', 'cli.external-agent/lost-mode-reader'
         const http = createServer((request, response) => {
             response.setHeader('content-type', 'application/json');
             if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
-            else if (request.url === '/v1/machines/mode-machine') response.end(JSON.stringify({ machine: {
+            else if (request.url === '/v1/machines/mode-machine' || request.url === '/v1/machines/read-batch') response.end(serializeMachineReadFixture(request, {
                 id: 'mode-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            } }));
+            }));
             else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
             else { response.statusCode = 404; response.end('{}'); }
         });
@@ -191,13 +201,13 @@ it('connects the scoped socket while the fresh Machine row is still being read',
     const http = createServer(async (request, response) => {
         response.setHeader('content-type', 'application/json');
         if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
-        else if (request.url === '/v1/machines/parallel-machine') {
+        else if (request.url === '/v1/machines/parallel-machine' || request.url === '/v1/machines/read-batch') {
             // Both are independent network preparations. Holding this response
             // until the real socket connects distinguishes overlap from serial setup.
             await connected.promise;
-            if (!response.destroyed) response.end(JSON.stringify({ machine: {
+            if (!response.destroyed) response.end(serializeMachineReadFixture(request, {
                 id: 'parallel-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-            } }));
+            }));
         } else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
         else { response.statusCode = 404; response.end('{}'); }
     });
@@ -273,8 +283,8 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
         else if (request.url === '/v1/account/encryption') {
             setTimeout(() => response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 })), accountReadDelayMs);
         }
-        else if (request.url === '/v1/machines/machine-1') {
-            response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }));
+        else if (request.url === '/v1/machines/machine-1' || request.url === '/v1/machines/read-batch') {
+            response.end(serializeMachineReadFixture(request, { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER }));
         } else if (request.url === '/v1/machines/peer/mediation/route-grants') {
             await grantReply;
             const chunks: Buffer[] = [];
@@ -528,8 +538,8 @@ it('spends the caller deadline through the real Home HTTP and Socket.IO transpor
             response.end('{}');
         } else if (request.url === '/v1/account/encryption') {
             response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
-        } else if (request.url === '/v1/machines/machine-1') {
-            response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }));
+        } else if (request.url === '/v1/machines/machine-1' || request.url === '/v1/machines/read-batch') {
+            response.end(serializeMachineReadFixture(request, { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER }));
         } else if (request.url === '/v1/features') {
             response.statusCode = 404;
             response.end('{}');

@@ -261,6 +261,7 @@ export async function readMemorySearchSessionForServerScope(
         getExistingSession: () => null,
         isCurrent: () => !args.signal.aborted,
         includeTurnsProjection: false,
+        signal: args.signal,
         log: { log: () => {} },
     });
     const hydratedSession = hydratedRef.current;

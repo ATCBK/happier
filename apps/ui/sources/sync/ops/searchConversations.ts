@@ -95,6 +95,7 @@ export async function searchConversationsForAccount(input: Readonly<{
             const credentials = authority.context.credentials;
             if (!credentials) throw new Error('Conversation machine inventory credentials are unavailable');
             inventory = (await fetchMachineRows({ credentials,
+                readTransport: authority.readTransport, signal: controller.signal,
                 request: (path, init) => authority!.request(path, { ...init, signal: controller.signal }),
             })).filter(isMachineVisibleForSelection);
             controller.signal.throwIfAborted();

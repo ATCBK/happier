@@ -96,7 +96,7 @@ describe('Session draft collection context batching', () => {
                         detail: { status: 404, body: { error: 'Session not found' } },
                     } : {
                         detail: { status: 200, body: { session: row(sessionId) } },
-                        turns: { status: 200, body: { v: 1, sessionId, updatedAt: 1, turns: [] } },
+                        ...(request.includeTurns === false ? {} : { turns: { status: 200, body: { v: 1, sessionId, updatedAt: 1, turns: [] } } }),
                     }),
                 })) });
             }

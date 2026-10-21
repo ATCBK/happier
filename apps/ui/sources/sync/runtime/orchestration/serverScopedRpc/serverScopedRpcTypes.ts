@@ -4,6 +4,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { Encryption, EncryptionGenerationScopeAuthority, EncryptionScopeInput } from '@/sync/encryption/encryption';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import type { Metadata } from '@happier-dev/session-core/state';
+import type { CapturedServerReadTransport } from './capturedServerReadTransport';
 
 /**
  * Default connection/setup budget for server-scoped RPC.
@@ -63,6 +64,8 @@ export type ScopedServerRpcContext = Readonly<{
     token: string;
     /** Runtime-produced contexts retain the exact credentials already resolved by the scope owner. */
     credentials?: AuthCredentials;
+    /** Borrow-safe HTTP reads from this captured Home/credential selection. */
+    readTransport?: CapturedServerReadTransport;
     encryption: ScopedRpcEncryptionContext | null;
 }>;
 

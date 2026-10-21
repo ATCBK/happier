@@ -3,6 +3,10 @@ import { deriveAutomationOccurrenceKeyV1 } from '@happier-dev/protocol';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { listAutomationDefinitionRuns } from './apiAutomationRuns';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 beforeEach(async () => {
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
@@ -63,6 +67,37 @@ describe('apiAutomationRuns', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+    });
+
+    it.each([false, true])('shares native summary bytes under captured authority (explicit credentials: %s)', async explicit => {
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+        const basis = getActiveServerSnapshot();
+        publishAppliedActiveServerSnapshot(basis);
+        const nativeCredentials = { token: createAccountTokenForTests('summary-account') };
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(nativeCredentials);
+        const held = createDeferred<void>();
+        let requests = 0;
+        vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+            if (isServerFetchConnectivityProbeRequest(input)) return Response.json({ ok: true });
+            requests += 1;
+            await held.promise;
+            return Response.json({ runs: [eventRun], nextCursor: 'opaque_cursor' });
+        }));
+        const abort = new AbortController();
+        const input = { attention: 'required' as const, ...(explicit ? { credentials: nativeCredentials } : {}) };
+        const left = listAutomationDefinitionRuns({ ...input, signal: abort.signal });
+        void left.catch(() => {});
+        const right = listAutomationDefinitionRuns(input);
+        try {
+            await vi.waitFor(() => expect(requests).toBeGreaterThan(0));
+            for (let tick = 0; tick < 50; tick++) await Promise.resolve();
+            expect(requests).toBe(1);
+            abort.abort();
+            await expect(left).rejects.toMatchObject({ name: 'AbortError' });
+            held.resolve();
+            expect(await right).toMatchObject({ nextCursor: 'opaque_cursor' });
+        } finally { held.resolve(); await Promise.allSettled([left, right]); }
     });
 
     it('reads Account attention in one paged summary request with cancellation', async () => {

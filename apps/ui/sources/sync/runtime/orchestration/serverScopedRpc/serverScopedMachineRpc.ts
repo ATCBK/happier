@@ -381,6 +381,7 @@ async function machineRpcWithServerTransport<R, A>(
                     token: context.token,
                     machineId: context.machineId,
                     accountId: context.targetAccountId,
+                    readTransport: context.readTransport,
                     readAccountMode: async () => (await fetchAccountEncryptionMode(credentials ?? { token: context.token }, {
                         request: createServerRequestForExplicitServerScope({
                             serverUrl: context.targetServerUrl, token: context.token,

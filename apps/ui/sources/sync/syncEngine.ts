@@ -26,6 +26,8 @@ import {
 import {
     apiSocket,
 } from '@/sync/api/session/apiSocket';
+import type { AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
+import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { emitSessionReadCursorUpdateWithServerScope } from '@/sync/api/session/emitSessionReadCursorUpdateWithServerScope';
 import { isDemoModeActive } from '@/demoMode/runtime/enterExitDemoMode';
 import { ensureSessionRuntimeForPendingInput } from '@/sync/ops';
@@ -57,6 +59,8 @@ import {
 } from './domains/state/storageTypes';
 import { MetadataSchema, type AgentState, type Metadata } from '@happier-dev/session-core/state';
 import { InvalidateSync } from '@/utils/sessions/sync';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { PauseController } from '@/utils/timing/pauseController';
 import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
 import { consumeActionOperationSnapshotPush } from '@/sync/domains/actionOperations/consumeActionOperationSnapshotPush';
@@ -262,6 +266,7 @@ import {
     clearWarmCacheAccountScope,
     loadMachineDisplayWarmCacheEntries,
     loadSessionListWarmCacheEntries,
+    preparePluginUiProjectionWarmCacheEntries,
     resolveWarmCacheAccountScope,
     setWarmCacheAccountScope,
 } from './domains/state/warmCachePersistence';
@@ -1442,7 +1447,7 @@ class Sync {
       private machineDataKeys = new Map<string, MachineDataKeyCacheEntry>(); // Unwrapped machine data keys + the envelope each came from, so an unchanged envelope is never re-opened
       private machineRecipientChangeCursors = new Map<string, number>();
       private artifactDataKeys: ArtifactDataKeyCache = new Map(); // Unwrapped artifact data keys + the envelope each came from, so an unchanged envelope is never re-opened
-      private artifactBodyHydrations = new Map<string, Promise<void>>();
+      private artifactBodyHydrations = createScopedResolutionSingleFlight<void>();
     private settingsSync: InvalidateSync;
     private profileSync: InvalidateSync;
     private purchasesSync: InvalidateSync;
@@ -2902,6 +2907,7 @@ class Sync {
         const accountId = options?.accountId ?? resolveWarmCacheAccountScope(loadPersistedProfile().id);
         if (!serverId || !accountId) return;
 
+        preparePluginUiProjectionWarmCacheEntries(serverId, accountId);
         const currentState = storage.getState();
         const shouldHydrateMachineDisplays = options?.preserveFetchedState !== true
             || Object.keys(currentState.machineDisplayById).length === 0;
@@ -8629,6 +8635,10 @@ class Sync {
         return this.credentials?.token ? this.credentials : null;
     }
 
+    public getAccountEncryptionObservationBinding(credentials: AuthCredentials): AccountEncryptionObservationBinding | null {
+        return apiSocket.getAccountEncryptionObservationBinding(credentials);
+    }
+
     // Artifact methods
     /** Mounted Artifact browsers consume private attribution on subsequent syncs too. */
     public observeArtifactProvenance(): () => void {
@@ -8657,47 +8667,49 @@ class Sync {
         }));
     }
 
-    public async fetchArtifactWithBody(artifactId: string): Promise<DecryptedArtifact | null> {
+    public async fetchArtifactWithBody(artifactId: string, options?: Readonly<{ fresh?: boolean }>): Promise<DecryptedArtifact | null> {
         if (!this.credentials) return null;
-        return this.withArtifactReadAuthority(undefined, params => fetchArtifactWithBodyFromApi({ ...params, artifactId }));
+        return this.withArtifactReadAuthority(undefined, params => fetchArtifactWithBodyFromApi({ ...params, artifactId, fresh: options?.fresh }));
     }
 
     /** A mounted transcript demands bodies only for its own linked approval headers. */
     public hydrateSessionApprovalArtifacts(serverId: string, artifactIds: readonly string[]): Promise<void> {
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime || !this.credentials || !areServerProfileIdentifiersEquivalent(lifetime.scope.serverId, serverId)) return Promise.resolve();
-        const scope = lifetime.scope;
         const pendingIds = artifactIds.filter(id => storage.getState().artifacts[id]?.body === undefined).sort();
         if (pendingIds.length === 0) return Promise.resolve();
-        const key = JSON.stringify([scope.serverId, scope.accountId, pendingIds]);
-        const existing = this.artifactBodyHydrations.get(key);
-        if (existing) return existing;
-        const controller = new AbortController();
-        const hydration = new InvalidateSync(async () => {
-            if (!lifetime.isCurrent()) return;
-            await this.withArtifactReadAuthority(controller.signal, params => fetchAndApplyArtifactBodies({
-                ...params, artifactIds: pendingIds,
-                applyArtifacts: artifacts => storage.getState().applyArtifacts(artifacts),
-            }));
-        }, {
-            pause: this.pauseController,
-            backoff: {
-                minDelayMs: this.syncTuning.invalidateSyncBackoffMinDelayMs,
-                maxDelayMs: this.syncTuning.invalidateSyncBackoffMaxDelayMs,
-                maxFailureCount: 'infinite',
-            },
-            shouldRetry: (error: unknown) => lifetime.isCurrent() && shouldRetrySyncInvalidation(error),
-            onRetryFailure: (error: unknown) => log.log(`Approval artifact hydration retry: ${error}`),
-        });
-        const retirement = lifetime.onRetire(() => { controller.abort(); hydration.stop(); });
-        const pending = hydration.invalidateAndAwait().finally(() => {
-            retirement.dispose();
-            controller.abort();
-            hydration.stop();
-            if (this.artifactBodyHydrations.get(key) === pending) this.artifactBodyHydrations.delete(key);
-        });
-        this.artifactBodyHydrations.set(key, pending);
-        return pending;
+        const credentialScope = resolveAuthCredentialsScopeKey(this.credentials);
+        return Promise.all(pendingIds.map(artifactId => this.artifactBodyHydrations.run(JSON.stringify([credentialScope, artifactId]), async sharedSignal => {
+            const controller = new AbortController();
+            const cancel = () => { controller.abort(); hydration.stop(); };
+            const hydration = new InvalidateSync(async () => {
+                if (!lifetime.isCurrent()) return;
+                await this.withArtifactReadAuthority(controller.signal, params => fetchAndApplyArtifactBodies({
+                    ...params, artifactIds: [artifactId],
+                    applyArtifacts: artifacts => storage.getState().applyArtifacts(artifacts),
+                }));
+            }, {
+                pause: this.pauseController,
+                backoff: {
+                    minDelayMs: this.syncTuning.invalidateSyncBackoffMinDelayMs,
+                    maxDelayMs: this.syncTuning.invalidateSyncBackoffMaxDelayMs,
+                    maxFailureCount: 'infinite',
+                },
+                shouldRetry: (error: unknown) => !sharedSignal.aborted && lifetime.isCurrent() && shouldRetrySyncInvalidation(error),
+                onRetryFailure: (error: unknown) => log.log(`Approval artifact hydration retry: ${error}`),
+            });
+            sharedSignal.addEventListener('abort', cancel, { once: true });
+            const retirement = lifetime.onRetire(cancel);
+            try {
+                if (sharedSignal.aborted) cancel();
+                await hydration.invalidateAndAwait();
+            } finally {
+                retirement.dispose();
+                sharedSignal.removeEventListener('abort', cancel);
+                controller.abort();
+                hydration.stop();
+            }
+        }, { scope: lifetime }))).then(() => undefined);
     }
 
     private async withArtifactReadAuthority<TResult>(signal: AbortSignal | undefined,
@@ -8723,6 +8735,7 @@ class Sync {
                 guard.check();
                 if (authority.context.token !== credentials.token) throw staleError();
                 result = await operation({ credentials, encryption, artifactDataKeys: this.artifactDataKeys,
+                    readTransport: authority.readTransport,
                     signal: guard.signal,
                     forbiddenOrigins: [authority.context.targetServerUrl,
                         ...(authority.context.runtimeOrigin ? [authority.context.runtimeOrigin] : [])],
@@ -8829,11 +8842,17 @@ class Sync {
         const sourceServerId = appliedTransportTarget.serverId;
         const cachedMachineDisplayEntries = buildMachineDisplayCacheEntriesFromRenderables(storage.getState().machineDisplayById);
         const recipientEncryptionLifetime = captureEncryptionGenerationCurrentness(this.encryption);
+        const readTransport = this.embedSessionScope ? undefined : createCapturedServerReadTransport({
+            serverId: sourceServerId, credentials,
+            prepared: { ...appliedTransportTarget, endpointUrl: appliedTransportTarget.serverUrl,
+                request: apiSocket.createRequestForPreparedTarget({ ...appliedTransportTarget, endpoint: appliedTransportTarget.serverUrl }) },
+        });
 
         await fetchAndApplyMachines({
             credentials,
             readAccountMode: async () => (await fetchAccountEncryptionMode(credentials, { request: this.createAppliedTransportRequest(appliedTransportTarget) })).mode,
             request: this.createAppliedTransportRequest(appliedTransportTarget),
+            readTransport,
             encryption: this.encryption,
             machineDataKeys: this.machineDataKeys,
             throwOnError: true,
@@ -8846,9 +8865,12 @@ class Sync {
                 storage.getState().replaceMachineDisplays(machines, { sourceServerId, replace: options?.replace });
             },
             machineDisplayHydrationConcurrencyLimit: this.syncTuning.machineDisplayHydrationConcurrencyLimit,
-            applyMachines: (machines, replace, publishedRows) => {
+            applyMachines: (machines, replace) => {
                 if (!shouldContinue()) return;
                 storage.getState().applyMachines(machines, replace, { sourceServerId });
+            },
+            onRowsObserved: machines => {
+                if (!shouldContinue()) return;
                 const scope = getActiveServerAccountScope();
                 if (!scope || scope.serverId !== sourceServerId) return;
                 // Role selects an attempt, not permission: the worklist reauthorizes every read
@@ -8856,7 +8878,7 @@ class Sync {
                 // the same invalidation lifecycle, including when the custodian is offline.
                 void import('./api/machines/machineDataKeyEnvelopesApi').then(owner => {
                     if (!shouldContinue()) return;
-                    return owner.prepareMachineDataKeyEnvelopesForMachines({ scope, machines, publishedRows,
+                    return owner.prepareMachineDataKeyEnvelopesForMachines({ scope, machines, publishedRows: machines,
                         recipientChangeCursors: this.machineRecipientChangeCursors,
                         isCurrent: () => shouldContinue() && recipientEncryptionLifetime.isCurrent() });
                 }).catch(() => { /* The next canonical invalidation retries unavailable local loading. */ });
@@ -13576,6 +13598,7 @@ function buildSyncSocketConfig(credentials: AuthCredentials, target?: SyncServer
     return {
         endpoint: snapshot.serverUrl,
         token: credentials.token,
+        credentials,
         serverId: snapshot.serverId,
         generation: snapshot.generation,
         ...(snapshot.runtimeOrigin ? { runtimeOrigin: snapshot.runtimeOrigin } : {}),

@@ -12,25 +12,20 @@ import {
   readSessionDataKeyCredentialKind,
 } from '@/sync/encryption/sessionDataKeyHydration';
 import { readSessionAccessRole } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
-import { buildSessionDetailAccessProjectionQuery } from '@/sync/api/session/sessionDetailAccessProjection';
+import { readSessionDetailAccessProjectionVersion } from '@/sync/api/session/sessionDetailAccessProjection';
+import { readSessionByIdHttp } from '@/sync/engine/sessions/sessionByIdHttp';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 import { createSessionEncryptionUnavailableError } from '@/sync/encryption/sessionEncryptionUnavailableError';
 
-import { getOrCreateScopedCacheTokenKey, resetScopedCacheTokenKeysForTests } from './scopedCacheTokenKey';
-import { createScopedResolutionSingleFlight } from './scopedResolutionSingleFlight';
 import { createServerRequestForExplicitServerScope } from './createServerRequestWithServerScope';
+import type { CapturedServerReadTransport } from './capturedServerReadTransport';
 import type { ResolvedServerAccountRequestContext } from './resolveServerAccountRequestContext';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
-import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { throwIfAborted } from '@/utils/runtime/abortSignals';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
-}
-
-function toSessionDataKeyCacheKey(serverId: string, sessionId: string, token: string): string {
-  const tokenKey = getOrCreateScopedCacheTokenKey(token, readMaxSessionKeyCacheEntriesFromEnv());
-  return `${serverId}::${sessionId}::${tokenKey}`;
 }
 
 /**
@@ -99,16 +94,6 @@ export async function initializeScopedSessionReader(params: Readonly<{
   return true;
 }
 
-const sessionCryptoContextResolutions = createScopedResolutionSingleFlight<ScopedSessionCryptoContext>();
-
-function readMaxSessionKeyCacheEntriesFromEnv(): number {
-  const raw = String(process.env.EXPO_PUBLIC_HAPPIER_SCOPED_RPC_SESSION_KEY_CACHE_MAX ?? '').trim();
-  if (!raw) return 256;
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) return 256;
-  return Math.max(1, Math.min(10_000, parsed));
-}
-
 async function fetchSessionCryptoContext(params: Readonly<SessionAddress & {
   serverUrl: string;
   runtimeOrigin?: string;
@@ -119,25 +104,20 @@ async function fetchSessionCryptoContext(params: Readonly<SessionAddress & {
   timeoutMs: number;
   explicitRetry?: true;
   signal?: AbortSignal;
+  readTransport?: CapturedServerReadTransport;
 }>): Promise<ScopedSessionCryptoContext> {
-  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const cancellation = mergeAbortSignals([controller?.signal, params.signal]);
-  const timeoutId = controller ? setTimeout(() => controller.abort(), Math.max(1, params.timeoutMs)) : null;
-
   try {
-    cancellation.signal?.throwIfAborted();
+    throwIfAborted(params.signal);
     const request = createServerRequestForExplicitServerScope({
       serverUrl: params.serverUrl,
       token: params.token,
       ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
       ...(params.homeCarrier ? { homeCarrier: params.homeCarrier } : {}),
-      timeoutMs: params.timeoutMs,
     });
-    const response = await request(`/v2/sessions/${encodeURIComponent(params.sessionId)}${buildSessionDetailAccessProjectionQuery(params.serverId)}`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
-      ...(cancellation.signal ? { signal: cancellation.signal } : {}),
-    }, params.explicitRetry ? { retry: 'none' } : undefined);
+    const response = await readSessionByIdHttp({ sessionId: params.sessionId, serverId: params.serverId,
+      token: params.token, request: (path, init) => request(path, init, params.explicitRetry ? { retry: 'none' } : undefined),
+      readTransport: params.readTransport, accessProjectionVersion: readSessionDetailAccessProjectionVersion(params.serverId),
+      timeoutMs: params.timeoutMs, signal: params.signal, retry: params.explicitRetry ? 'none' : undefined });
     if (!response.ok) {
       if (isAuthenticationResponseStatus(response.status)) {
         throw createNotAuthenticatedError(response.status);
@@ -145,8 +125,8 @@ async function fetchSessionCryptoContext(params: Readonly<SessionAddress & {
       return { encryptionMode: 'unknown', sessionDataKey: null };
     }
 
-    const body = (await response.json()) as unknown;
-    cancellation.signal?.throwIfAborted();
+    const body = response.body;
+    throwIfAborted(params.signal);
     const parsed = V2SessionByIdResponseSchema.safeParse(body);
     if (!parsed.success) return { encryptionMode: 'unknown', sessionDataKey: null };
     const session: V2SessionByIdResponse['session'] = parsed.data.session;
@@ -156,15 +136,13 @@ async function fetchSessionCryptoContext(params: Readonly<SessionAddress & {
     return await hydrateScopedSessionCryptoContext({ sessionId: session.id, encryptionMode: session.encryptionMode,
       dataEncryptionKey: session.dataEncryptionKey,
       viewerRole: readSessionAccessRole(session, { allowLegacy: true }) === 'owner' ? 'owner' : 'recipient',
-      credentials: params.credentials, decryptEncryptionKey: params.decryptEncryptionKey });
+      credentials: params.credentials, decryptEncryptionKey: params.decryptEncryptionKey,
+      isCurrent: () => !params.signal?.aborted });
   } catch (error) {
     if (isTerminalAuthError(error)) {
       throw error;
     }
     return { encryptionMode: 'unknown', sessionDataKey: null };
-  } finally {
-    cancellation.dispose();
-    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
@@ -179,23 +157,15 @@ export async function resolveScopedSessionCryptoContext(params: Readonly<Session
   timeoutMs?: number;
   explicitRetry?: true;
   signal?: AbortSignal;
+  readTransport?: CapturedServerReadTransport;
 }>): Promise<ScopedSessionCryptoContext> {
   const sessionId = normalizeId(params.sessionId);
   const serverId = normalizeId(params.serverId);
   const token = String(params.token ?? '');
   const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
-  const keyCacheKey = `${toSessionDataKeyCacheKey(serverId, sessionId, token)}${params.explicitRetry ? '::retry' : ''}`;
-
-  // Coalesce concurrent callers for the same operation; without this, a burst of
-  // callers repeats the by-id fetch and asymmetric envelope open. Settled results
-  // deliberately do not survive the operation: the Home may repair or rotate the
-  // published envelope while the bearer remains unchanged.
-  // `keyCacheKey` covers the target server, the session and the bearer token, and the
-  // token determines the credentials behind the caller's `decryptEncryptionKey`. An explicit
-  // retry has different request admission and must not join a passively paused read, so a
-  // joiner can only ever adopt a result computed from its own inputs.
-  const resolve = async () => {
-    const context = await fetchSessionCryptoContext({
+  // Share only the captured raw observation. Each caller's encryption owner opens
+  // and admits its own envelope; a token alone does not identify that crypto owner.
+  return await fetchSessionCryptoContext({
       serverId,
       serverUrl: params.serverUrl,
       ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
@@ -207,12 +177,8 @@ export async function resolveScopedSessionCryptoContext(params: Readonly<Session
       timeoutMs,
       ...(params.explicitRetry ? { explicitRetry: true } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
+      readTransport: params.readTransport,
     });
-    return context;
-  };
-  // A caller-owned request must not share another caller's cancellation lifetime.
-  // Unsignalled reads retain the existing coalescing owner and its request budget.
-  return params.signal ? await resolve() : await sessionCryptoContextResolutions.run(keyCacheKey, resolve);
 }
 
 type ScopedSessionEncryptionContext = Extract<ResolvedServerAccountRequestContext, { scope: 'scoped' }>;
@@ -262,6 +228,7 @@ export async function resolveScopedSessionEncryption(params: Readonly<{
     ...(context.credentials ? { credentials: context.credentials } : {}),
     sessionId,
     timeoutMs: context.timeoutMs,
+    readTransport: context.readTransport,
     decryptEncryptionKey: (value) => encryption.decryptEncryptionKey(value),
   });
   assertCurrent();
@@ -288,9 +255,4 @@ export function createScopedSessionEncryptionSource(context: ScopedSessionEncryp
   return {
     getSessionEncryption: (sessionId) => resolveScopedSessionEncryption({ context, sessionId }),
   };
-}
-
-export function resetScopedSessionDataKeyCacheForTests(): void {
-  sessionCryptoContextResolutions.reset();
-  resetScopedCacheTokenKeysForTests();
 }

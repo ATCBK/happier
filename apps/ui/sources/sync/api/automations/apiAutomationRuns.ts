@@ -6,7 +6,7 @@ import {
     type AutomationV3RunListItem,
 } from '@happier-dev/protocol/automations/automationApiV3';
 
-import { getAutomationAuthHeaders, readAutomationJsonOrThrow } from './apiAutomationHttp';
+import { getAutomationAuthHeaders, readAutomationApiJson } from './apiAutomationHttp';
 import type { AutomationRequestContext } from './apiAutomations';
 
 /** Current bounded Run summaries for every Automation trigger kind. */
@@ -25,14 +25,13 @@ export async function listAutomationDefinitionRuns(params: Readonly<{
     const path = params.automationId === undefined
         ? '/v3/automations/runs'
         : `/v3/automations/${encodeURIComponent(params.automationId)}/runs`;
-    const response = await (params.requestContext?.request ?? serverFetch)(
+    const raw = await readAutomationApiJson(
         `${path}?limit=${limit}${cursorParam}${attentionParam}`,
         {
             ...(params.credentials ? { headers: getAutomationAuthHeaders(params.credentials) } : {}),
             ...(params.signal ? { signal: params.signal } : {}),
         },
-        { includeAuth: params.credentials === undefined },
+        { includeAuth: params.credentials === undefined }, params.requestContext, params.requestContext?.request ?? serverFetch,
     );
-    const raw = await readAutomationJsonOrThrow(response);
     return AutomationV3RunListResponseSchema.parse(raw);
 }

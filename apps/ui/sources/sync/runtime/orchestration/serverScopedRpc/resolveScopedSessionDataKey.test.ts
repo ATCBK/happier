@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resetScopedSessionDataKeyCacheForTests, resolveScopedSessionCryptoContext } from './resolveScopedSessionDataKey';
+import { resolveScopedSessionCryptoContext } from './resolveScopedSessionDataKey';
+import { resetSessionByIdHttpReadsForTests } from '@/sync/engine/sessions/sessionByIdHttp';
+import { createCapturedServerReadTransport } from './capturedServerReadTransport';
 
 /** The standalone, transferable Session DEK the scoped crypto context yields, if any. */
 async function resolveScopedSessionDataKey(
@@ -36,7 +38,7 @@ const validSessionById = {
 describe('resolveScopedSessionDataKey', () => {
   afterEach(async () => {
     runtimeFetchMock.mockReset();
-    resetScopedSessionDataKeyCacheForTests();
+    resetSessionByIdHttpReadsForTests();
     try {
       const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
       await resetServerReachabilitySupervisors();
@@ -56,14 +58,16 @@ describe('resolveScopedSessionDataKey', () => {
     });
     const first = new AbortController();
     const second = new AbortController();
-    const params = { serverId: 's-id', serverUrl: 'https://server.example.test', token: 'token', sessionId: 'session-1' };
+    const params = { serverId: 's-id', serverUrl: 'https://server.example.test', token: 'token', sessionId: 'session-1',
+      readTransport: createCapturedServerReadTransport({ serverId: 's-id', profile: { serverUrl: 'https://server.example.test' }, credentials: { token: 'token' } }) };
     const cancelled = resolveScopedSessionCryptoContext({ ...params, signal: first.signal });
     const retained = resolveScopedSessionCryptoContext({ ...params, signal: second.signal });
-    await vi.waitFor(() => expect(requests).toHaveLength(2));
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
     first.abort();
     await expect(cancelled).resolves.toMatchObject({ encryptionMode: 'unknown' });
-    expect(requests[1]?.signal?.aborted).toBe(false);
-    requests[1]!.resolve(Response.json({ session: { ...validSessionById, encryptionMode: 'plain', dataEncryptionKey: null } }));
+    expect(requests[0]?.signal?.aborted).toBe(false);
+    requests[0]!.resolve(Response.json({ results: [{ sessionId: 'session-1', detail: { status: 200,
+      body: { session: { ...validSessionById, encryptionMode: 'plain', dataEncryptionKey: null } } } }] }));
     await expect(retained).resolves.toEqual({ encryptionMode: 'plain', sessionDataKey: null });
   });
 

@@ -19,6 +19,7 @@ import { fetchAndApplySessions } from './sessionSnapshot';
 import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { isUserFacingSession } from '@/sync/domains/session/listing/isUserFacingSession';
+import { sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 
 /**
  * Single-Session hydration must settle. A Session the viewer is authorized to see but cannot
@@ -356,6 +357,7 @@ describe('fetchAndApplySessionById locked continuity', () => {
             ownerMetadata: {
                 v: 1,
                 system: { systemSessionV1: { v: 1, key, hidden } },
+                workspace: { name: 'Account-owned locked title', path: '/private/worktree', host: 'private-host' },
             },
             randomBytes: (length) => new Uint8Array(length).fill(3),
         });
@@ -391,6 +393,12 @@ describe('fetchAndApplySessionById locked continuity', () => {
 
         expect(result.ok).toBe(true);
         expect(applied).toHaveLength(1);
+        expect(result.session?.ownerMetadataView).toEqual({
+            name: 'Account-owned locked title', path: '', host: '', systemSessionV1: { v: 1, key, hidden },
+        });
+        expect(result.session?.metadata).toBeNull();
+        expect(result.session?.encryptedContentAvailability).toBe('encrypted_access_pending');
+        expect(result.session && sessionDisplayTitle({ ...result.session, id: 's_locked' })).toBe('Account-owned locked title');
         expect(isUserFacingSession(applied[0] as Parameters<typeof isUserFacingSession>[0]))
             .toBe(visible);
     });
@@ -408,7 +416,7 @@ describe('fetchAndApplySessionById locked continuity', () => {
         } satisfies AuthCredentials;
         const ownerMetadata = sealSessionOwnerMetadataEnvelopeV1({
             material: resolveAccountScopedCryptoMaterialFromCredentials(credentials),
-            ownerMetadata: { v: 1, workspace: { path: '/home/u/owner' } },
+            ownerMetadata: { v: 1, workspace: { path: '/home/u/owner', name: 'Owner title' } },
             randomBytes: (length) => new Uint8Array(length).fill(3),
         });
         const encryption = await Encryption.createFromContentKeyPair({

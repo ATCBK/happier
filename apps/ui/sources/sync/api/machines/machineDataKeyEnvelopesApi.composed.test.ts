@@ -18,8 +18,59 @@ import { prepareMachineDataKeyEnvelopesForScope, prepareMachineDataKeyEnvelopesF
 import { createMachineFixture, createDeferred } from '@/dev/testkit';
 import { executeMachineAccessHttpAction } from './machineAccessApi';
 import * as network from '@/utils/system/runtimeFetch';
+import { Encryption } from '@/sync/encryption/encryption';
+import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
+import { flushHookEffects } from '@/dev/testkit';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+await loadSyncSingletonForTests();
 
 describe('captured Machine recipient preparation transport', () => {
+    it('keeps pending recipient work once per real Sync census across warm and hydrated publications, then retries a new census', async () => {
+        const secret = new Uint8Array(32).fill(39);
+        const author = await Encryption.create(secret);
+        author.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const ids = ['sync-recipient-a', 'sync-recipient-b'];
+        const keys = new Map(ids.map((id, index) => [id, new Uint8Array(32).fill(index + 7)]));
+        await author.initializeMachines(keys);
+        const access = { custodian: { accountId: 'carol', displayName: 'Carol' }, role: 'manage' as const,
+            resourceMode: 'e2ee' as const, accessState: 'ready' as const };
+        const authored = await Promise.all(ids.map(async id => {
+            const machine = createMachineFixture({ id, activeAt: Date.now(), access });
+            const envelope = encodeBase64(await author.encryptEncryptionKey(keys.get(id)!));
+            return { ...machine, kind: 'persistent' as const, revokedAt: null, replacedByMachineId: null,
+                metadata: await author.getMachineEncryption(id)!.encryptMetadata(machine.metadata!),
+                daemonState: null, daemonStateVersion: 0,
+                keyBasis: { dataEncryptionKey: envelope, metadataVersion: 1, daemonStateVersion: 0 },
+                dataEncryptionKey: envelope } satisfies FetchedMachineRow;
+        }));
+        let rows: readonly FetchedMachineRow[] = [];
+        const home = await serveAccountHomes({ homes: [{ key: 'resource', serverUrl: 'https://sync-recipient-pass.test',
+            accountId: 'alice', accountMode: 'e2ee', credentials: { token: createAccountTokenForTests('alice'), secret: encodeBase64(secret) } }],
+            route: request => {
+                if (request.path === '/v1/machines') return Response.json(rows);
+                if (!request.path.endsWith('/data-key-envelopes')) return undefined;
+                // A current holder's missing recipient key is retryable at the next census,
+                // not once for every display/hydration publication of this census.
+                return Response.json({ machineId: request.path.split('/')[3], custodianAccountId: 'carol', encryptionMode: 'e2ee',
+                    machineOwnerEnvelopeFingerprint: null, callerDataEncryptionKey: null, nextCursor: null,
+                    content: { metadata: '', metadataVersion: 1, daemonState: null, daemonStateVersion: 0 }, recipients: [] });
+            } });
+        try {
+            const { sync } = await import('@/sync/sync');
+            const { storage } = await import('@/sync/domains/state/storage');
+            rows = authored;
+            const reads = () => home.requests.filter(request => request.path.endsWith('/data-key-envelopes'));
+            await sync.refreshMachines();
+            await vi.waitFor(() => expect(ids.map(id => storage.getState().machines[id]?.metadataVersion)).toEqual([1, 1]));
+            await flushHookEffects({ cycles: 12, turns: 2 });
+            expect.soft(reads().map(request => request.path.split('/')[3]).sort()).toEqual([...ids].sort());
+            await sync.refreshMachines();
+            await flushHookEffects({ cycles: 12, turns: 2 });
+            expect(reads().map(request => request.path.split('/')[3]).sort()).toEqual([...ids, ...ids].sort());
+        } finally { await home.dispose(); }
+    });
+
     it.each(['replaced', 'revoked'] as const)('does not prepare a %s Machine despite a stale Manage-ready projection', async retirement => {
         const secret = new Uint8Array(32).fill(27);
         const terminal = retirement === 'replaced' ? { replacedByMachineId: 'replacement', revokedAt: null }
@@ -51,7 +102,7 @@ describe('captured Machine recipient preparation transport', () => {
         } finally { await home.dispose(); }
     });
 
-    it('asks the Home about each Manage Machine once per list read, however many publications that read makes', async () => {
+    it('retries an unprepared recipient on a later census even under the same current authority', async () => {
         const secret = new Uint8Array(32).fill(27);
         const access = { custodian: { accountId: 'carol', displayName: 'Carol' }, role: 'manage' as const,
             resourceMode: 'e2ee' as const, accessState: 'ready' as const };
@@ -71,15 +122,13 @@ describe('captured Machine recipient preparation transport', () => {
         const scope = { serverId: home.homes.resource!.id, accountId: 'alice' };
         const machines = ids.map(id => createMachineFixture({ id, access }));
         const publishedRows = ids.map(id => ({ ...createMachineFixture({ id, access }), ...rowFor(id) }));
-        const isCurrent = () => true; // One list read owns one closure across its warm and hydration publications.
+        const isCurrent = () => true;
         try {
-            // The warm publication, then each hydration batch of the same read.
-            await prepareMachineDataKeyEnvelopesForMachines({ scope, machines, publishedRows, recipientChangeCursors: new Map(), isCurrent });
-            for (const machine of machines) {
-                await prepareMachineDataKeyEnvelopesForMachines({ scope, machines: [machine], publishedRows, recipientChangeCursors: new Map(), isCurrent });
+            for (let census = 0; census < 3; census++) {
+                await prepareMachineDataKeyEnvelopesForMachines({ scope, machines, publishedRows, recipientChangeCursors: new Map(), isCurrent });
             }
             const requests = home.requests.filter(request => request.path.startsWith('/v1/machines/'));
-            expect(requests.filter(request => request.path.endsWith('/data-key-envelopes'))).toHaveLength(ids.length);
+            expect(requests.filter(request => request.path.endsWith('/data-key-envelopes'))).toHaveLength(ids.length * 3);
             expect(requests.filter(request => !request.path.endsWith('/data-key-envelopes'))).toEqual([]);
         } finally { await home.dispose(); }
     });

@@ -22,7 +22,8 @@ import { getRandomBytes } from '@/platform/cryptoRandom';
 import type { ServerAccountRequestAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { captureEncryptionGenerationCurrentness } from '@/sync/encryption/encryption';
 import { searchUsersPageByUsername } from '@/sync/api/social/apiFriends';
-import { readSessionAccessHttpFailureCode } from './sessionAccessHttpFailure';
+import { readSessionAccessHttpFailureCode, SessionAccessApiError } from './sessionAccessHttpFailure';
+export { SessionAccessApiError } from './sessionAccessHttpFailure';
 import type { SessionPublicVisualNetworkConsequence } from './sessionPublicVisualNetworkConsequence';
 import { SessionAccessCandidatesInspectRequestV1Schema, SessionAccessCandidatesInspectResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 
@@ -48,13 +49,6 @@ export async function inspectSessionAccessCandidates(options: SessionAccessReque
         if (!response.ok) throw createSessionAccessApiErrorFromResponse(payload, response.status);
         return SessionAccessCandidatesInspectResponseV1Schema.parse(payload);
     });
-}
-
-export class SessionAccessApiError extends Error {
-    constructor(readonly code: string, readonly status?: number) {
-        super(code);
-        this.name = 'SessionAccessApiError';
-    }
 }
 
 /**

@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedConnectionState } from '@happier-dev/connection-supervisor';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 const ioSpy = vi.hoisted(() => vi.fn());
 let activeSocket: typeof import('./apiSocket')['apiSocket'] | undefined;
@@ -42,12 +45,14 @@ async function readCurrentRpcRequestDisposition(error: unknown) {
     const { readRpcRequestDisposition } = await import('@happier-dev/sync-client');
     return readRpcRequestDisposition(error);
 }
-async function boot(options: Readonly<{ autoConnect?: boolean; token?: string }> = {}) {
+async function boot(options: Readonly<{ autoConnect?: boolean; token?: string; credentials?: AuthCredentials }> = {}) {
     const boundary = createSocketIoBoundaryStub(options);
     ioSpy.mockReturnValue(boundary.socket);
     const { apiSocket } = await import('./apiSocket');
     activeSocket = apiSocket;
-    apiSocket.initialize({ endpoint, token: options.token ?? 'token-1' }, null);
+    const config = { endpoint, token: options.token ?? options.credentials?.token ?? 'token-1',
+        ...(options.credentials ? { credentials: options.credentials } : {}) };
+    apiSocket.initialize(config, null);
     return { apiSocket, ...boundary };
 }
 async function connect(socket: ReturnType<typeof createSocketIoBoundaryStub>['socket']) {
@@ -64,6 +69,95 @@ describe('apiSocket reconnect semantics', () => {
         reachability.listeners.clear(); reachability.invalidate.mockClear();
         reachability.restart.mockClear(); reachability.report.mockClear();
         ioSpy.mockReset(); vi.useRealTimers();
+        resetRuntimeFetch(); vi.restoreAllMocks();
+    });
+
+    it('withdraws captured Account disclosure synchronously on its socket disconnect', async () => {
+        const { captureAccountEncryptionCurrentness } = await import('../account/apiAccountEncryptionMode');
+        const { socket, trigger } = await boot();
+        await connect(socket);
+        const disclosure = captureAccountEncryptionCurrentness();
+        try {
+            expect(disclosure.isCurrent()).toBe(true);
+            trigger('disconnect', 'transport close');
+            expect(disclosure.isCurrent()).toBe(false);
+        } finally { disclosure.dispose(); }
+    });
+
+    it('borrows the admitted Account socket identity without recurring mode HTTP after warm-up', async () => {
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        await upsertAndActivateServer({ serverUrl: endpoint, scope: 'device' });
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const credentials: AuthCredentials = { token: `hdr.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'socket-account' })), 'base64')}.sig` };
+        const reads: string[] = [];
+        setRuntimeFetch(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/health' || path === '/v1/auth/ping') return Response.json({});
+            reads.push(path);
+            return Response.json(path === '/v1/account/encryption/currentness'
+                ? createPlainAccountEncryptionCurrentnessFixture() : { mode: 'plain', updatedAt: 1 });
+        });
+        const activeApiSocket = (await import('./apiSocket')).apiSocket;
+        const { subscribeAccountEncryptionModeCacheInvalidation } = await import('../account/apiAccountEncryptionMode');
+        let immediateRead: Promise<unknown> | undefined;
+        ownedSubscriptions.push(subscribeAccountEncryptionModeCacheInvalidation(() => {
+            const binding = activeApiSocket.getAccountEncryptionObservationBinding(credentials);
+            if (!immediateRead && binding) immediateRead = binding.read().then(value => ({ value }), error => ({ error }));
+        }));
+        const { socket, trigger, apiSocket } = await boot({ credentials });
+        await connect(socket);
+        expect(immediateRead).toBeDefined();
+        await expect(immediateRead).resolves.toMatchObject({ value: { mode: 'plain' } });
+        const { fetchAccountEncryptionMode } = await import('../account/apiAccountEncryptionMode');
+        const binding = apiSocket.getAccountEncryptionObservationBinding(credentials);
+        expect(binding).not.toBeNull();
+        const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+        const request = createServerFetchAtEndpoint({ endpointUrl: endpoint, credentials,
+            ...(binding ? { accountEncryptionObservation: binding } : {}) });
+        const now = Date.now();
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(now);
+        expect(await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).toMatchObject({ mode: 'plain' });
+        clock.mockReturnValue(now + 6_000);
+        expect(await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).toMatchObject({ mode: 'plain' });
+        expect(reads).toEqual(['/v1/account/encryption/currentness']);
+        expect(await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).toMatchObject({ mode: 'plain' });
+        expect(reads).toHaveLength(1);
+        const { UpdateContainerSchema } = await import('@happier-dev/protocol/updates');
+        const updated = createPlainAccountEncryptionCurrentnessFixture({ version: 2, updatedAt: 2 });
+        trigger('update', UpdateContainerSchema.parse({ id: 'other-update', seq: 2, createdAt: 2,
+            body: { t: 'update-account', id: 'another-account', encryptionCurrentness: updated } }));
+        expect(await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).toMatchObject({ updatedAt: 1 });
+        trigger('update', UpdateContainerSchema.parse({ id: 'own-update', seq: 2, createdAt: 2,
+            body: { t: 'update-account', id: 'socket-account', encryptionCurrentness: updated } }));
+        expect(await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).toMatchObject({ updatedAt: 2 });
+        expect(reads).toHaveLength(1);
+        // A final authority check cannot borrow the still-connected socket fact.
+        expect(await fetchAccountEncryptionMode(credentials, { request, usage: 'fresh-authority' })).toMatchObject({ updatedAt: 1 });
+        expect(reads).toEqual(['/v1/account/encryption/currentness', '/v1/account/encryption']);
+        const foreignRequest = createServerFetchAtEndpoint({ endpointUrl: 'https://other-account-home.test', credentials,
+            ...(binding ? { accountEncryptionObservation: binding } : {}) });
+        await fetchAccountEncryptionMode(credentials, { request: foreignRequest, usage: 'identity' });
+        await fetchAccountEncryptionMode({ ...credentials }, { request, usage: 'identity' });
+        expect(reads).toHaveLength(3);
+        await fetchAccountEncryptionMode({ ...credentials, secret: 'changed-key-material' }, { request, usage: 'identity' });
+        await fetchAccountEncryptionMode({ token: `${credentials.token}-forged` }, { request, usage: 'identity' });
+        expect(reads).toHaveLength(5);
+        const changedOriginRequest = createServerFetchAtEndpoint({ endpointUrl: endpoint, runtimeOrigin: 'https://another-carrier.test', credentials,
+            ...(binding ? { accountEncryptionObservation: binding } : {}) });
+        await fetchAccountEncryptionMode(credentials, { request: changedOriginRequest, usage: 'identity' });
+        expect(reads).toHaveLength(6);
+        const cancelled = new AbortController();
+        const cancelledRequest = createServerFetchAtEndpoint({ endpointUrl: endpoint, credentials, signal: cancelled.signal,
+            ...(binding ? { accountEncryptionObservation: binding } : {}) });
+        cancelled.abort();
+        await expect(fetchAccountEncryptionMode(credentials, { request: cancelledRequest, usage: 'identity' })).rejects.toMatchObject({ name: 'AbortError' });
+        expect(await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).toMatchObject({ updatedAt: 2 });
+        expect(reads).toHaveLength(6);
+        trigger('disconnect', 'transport close');
+        await expect(fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).rejects.toMatchObject({
+            code: 'account-encryption-currentness-unavailable',
+        });
+        expect(reads).toHaveLength(6);
     });
 
     it.each(['revoked', 'invalid-token'] as const)('retires the explicit frame authority on %s without Account supervision', async (failure) => {

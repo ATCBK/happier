@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import tweetnacl from 'tweetnacl';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 // Transform the real transport graph during collection, before per-request assertions.
 import './sessionDataKeyEnvelopesApi';
@@ -39,15 +40,82 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
         } : {}),
     }));
     const request = vi.fn(async (_url: string, _init?: RequestInit): Promise<Response> => new Response(JSON.stringify({ status: 'not_required' })));
+    const sessionBoundary = createSessionReadBatchHttpBoundary(component => component.path === '/v2/sessions/read-batch'
+        ? undefined : request(String(component.url), { method: component.method, headers: component.headers, signal: component.signal }));
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     setRuntimeFetch(async (url, init) => {
-        if (new URL(String(url)).pathname === '/v1/auth/ping') return new Response('{}');
+        const targetUrl = new URL(String(url));
+        if (targetUrl.pathname === '/v1/auth/ping') return new Response('{}');
+        if (targetUrl.pathname === '/v2/sessions/read-batch') {
+            const response = await sessionBoundary.handle({ home: targetUrl.origin, method: init?.method ?? 'GET',
+                path: targetUrl.pathname, url: targetUrl, accountId: null, headers: new Headers(init?.headers),
+                body: JSON.parse(String(init?.body)), signal: init?.signal });
+            if (!response) throw new Error('Session batch boundary omitted its response');
+            return response;
+        }
         return request(String(url), init);
     });
     return { target, request, token, TokenStorage };
 }
 
 describe('Session envelope exact Account transport', () => {
+    it('shares equivalent page reads across captured callers while cancellation detaches only one reader', async () => {
+        const env = await setup();
+        const { createSessionDataKeyEnvelopeClient } = await import('./sessionDataKeyEnvelopesApi');
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        const signals: Array<AbortSignal | null | undefined> = [];
+        env.request.mockImplementation(async (_url, init) => {
+            signals.push(init?.signal);
+            await Promise.race([held, new Promise<never>((_resolve, reject) => init?.signal?.addEventListener('abort',
+                () => reject(new DOMException('Aborted', 'AbortError')), { once: true }))]);
+            return Response.json({ status: 'not_required' });
+        });
+        const firstAbort = new AbortController();
+        const options = { scope: { serverId: env.target.id, accountId: 'target-account' }, sessionId: 'same', availability: 'available' as const };
+        const departed = createSessionDataKeyEnvelopeClient({ ...options, signal: firstAbort.signal }).fetchPage(null)
+            .then(() => 'disclosed', () => 'cancelled');
+        const survivor = createSessionDataKeyEnvelopeClient(options).fetchPage(null);
+        await vi.waitFor(() => expect(signals.length).toBeGreaterThan(0));
+        firstAbort.abort();
+        await expect(departed).resolves.toBe('cancelled');
+        const cancelledSurvivor = signals.at(-1)?.aborted;
+        release();
+        await expect(survivor).resolves.toEqual({ status: 'not_required' });
+        expect(cancelledSurvivor).toBe(false);
+        expect(env.request).toHaveBeenCalledTimes(1);
+    });
+
+    it('separates audience and cursor pages and never lets a post-PATCH read join a pre-write observation', async () => {
+        const env = await setup();
+        const { createSessionDataKeyEnvelopeClient } = await import('./sessionDataKeyEnvelopesApi');
+        const { encodeSessionDataKeyEnvelopeCursorV1 } = await import('@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes');
+        let release!: () => void;
+        const held = new Promise<void>(resolve => { release = resolve; });
+        let getCount = 0;
+        env.request.mockImplementation(async (_url, init) => {
+            if (init?.method === 'PATCH') return Response.json({ appliedCount: 0 });
+            getCount += 1;
+            if (getCount === 1) await held;
+            return Response.json({ status: 'not_required' });
+        });
+        const options = { scope: { serverId: env.target.id, accountId: 'target-account' }, sessionId: 'same', availability: 'available' as const };
+        const client = createSessionDataKeyEnvelopeClient(options);
+        const old = client.fetchPage(null);
+        try {
+            await vi.waitFor(() => expect(getCount).toBe(1));
+            await client.patchPage({ entries: [] });
+            const current = client.fetchPage(null);
+            await vi.waitFor(() => expect(getCount).toBe(2));
+            release();
+            await Promise.all([old, current]);
+            await Promise.all([client.fetchPage(null),
+                createSessionDataKeyEnvelopeClient({ ...options, state: 'all' }).fetchPage(null),
+                client.fetchPage(encodeSessionDataKeyEnvelopeCursorV1('recipient'))]);
+            expect(getCount).toBe(5);
+        } finally { release(); await old; }
+    });
+
     it.each([
         { payload: { error: 'credential_scope_denied' }, code: 'credential_scope_denied' },
         { payload: { error: 'credential_scope_denied', details: {} }, code: 'session_data_key_envelope_request_failed' },

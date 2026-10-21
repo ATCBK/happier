@@ -20,6 +20,8 @@ import { encodeBase64 } from '@/encryption/base64';
 import { yieldToEventLoop } from '@/sync/encryption/cryptoBatchYield';
 import { isMachineOnline } from '@/utils/sessions/machineUtils';
 import { hasCurrentMachineContent } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { readMachineCensus } from '@/sync/api/machines/machineRowsApi';
+import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 
 type MachineEncryption = {
     decryptMetadata: (version: number, value: string) => Promise<any>;
@@ -102,6 +104,9 @@ export type FetchedMachineRow = Readonly<{
 export async function fetchMachineRows(params: Readonly<{
     credentials: AuthCredentials;
     request?: (path: string, init: RequestInit) => Promise<Response>;
+    readTransport?: CapturedServerReadTransport;
+    signal?: AbortSignal;
+    fresh?: boolean;
 }>): Promise<readonly FetchedMachineRow[]> {
     const request =
         params.request
@@ -109,16 +114,12 @@ export async function fetchMachineRows(params: Readonly<{
             serverFetch(path, init, { includeAuth: false }));
     // Sync also supplies retained Session/recent-path replacement identity. The
     // visible Machine selectors still exclude revoked rows from discovery.
-    const response = await request('/v1/machines?includeRevoked=true', {
+    return readMachineCensus({ request, readTransport: params.readTransport, signal: params.signal, fresh: params.fresh,
         headers: {
             'Authorization': `Bearer ${params.credentials.token}`,
             'Content-Type': 'application/json',
         },
     });
-    if (!response.ok) {
-        throw new Error(`Failed to fetch machines: ${response.status}`);
-    }
-    return await response.json() as FetchedMachineRow[];
 }
 
 function readMachineIdentityFields(source: MachineIdentityFieldSource): MachineIdentityFields {
@@ -473,8 +474,12 @@ export async function fetchAndApplyMachines(params: {
     encryption: SyncEncryption | null;
     machineDataKeys: Map<string, MachineDataKeyCacheEntry>;
     request?: (path: string, init: RequestInit) => Promise<Response>;
+    readTransport?: CapturedServerReadTransport;
+    signal?: AbortSignal;
     /** Accepted raw rows carry the published key/content basis beside hydrated display rows. */
     applyMachines: (machines: Machine[], replace: boolean, publishedRows: readonly FetchedMachineRow[]) => void;
+    /** One admitted census, independently of warm and display-hydration publications. */
+    onRowsObserved?: (machines: readonly FetchedMachineRow[]) => void;
     getExistingMachine?: (machineId: string) => Machine | null | undefined;
     /** Canonical immutable rows also fence keyless Plain/access reads before HTTP yields. */
     getMachineSnapshot?: () => Readonly<Record<string, Machine | undefined>>;
@@ -519,6 +524,8 @@ export async function fetchAndApplyMachines(params: {
         machines = await fetchMachineRows({
             credentials,
             ...(params.request ? { request: params.request } : {}),
+            readTransport: params.readTransport,
+            signal: params.signal,
         });
     } catch (error) {
         if (shouldContinue()) params.onListUnavailable?.(error);
@@ -572,6 +579,7 @@ export async function fetchAndApplyMachines(params: {
     const machineContexts = new Map(machines.map((machine) => [machine.id, encryption?.captureMachineEncryptionContext(
         machine.id, readMachineEncryptionContextInput(machine, viewerAccountId),
     )] as const));
+    params.onRowsObserved?.(machines);
     const capturedRows = new Map(machines.map((machine) => [machine.id, machine] as const));
     const incumbentRows = new Map(machines.map((machine) => [machine.id,
         currentMachineSnapshot?.[machine.id] ?? params.getExistingMachine?.(machine.id) ?? null,

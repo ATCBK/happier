@@ -4,10 +4,11 @@ import { V2SessionByIdResponseSchema } from '@happier-dev/protocol/sessions/cont
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { runWithServerAccountScopeRequestGuard } from '@/sync/runtime/orchestration/serverScopedRpc/serverAccountScopeRequestGuard';
-import { SessionAccessApiError, SessionAccessApprovalPendingError, createSessionAccessClient } from './sessionAccessApi';
+import { SessionAccessApprovalPendingError, createSessionAccessClient } from './sessionAccessApi';
 import type { SessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
-import { buildSessionDetailAccessProjectionQuery } from './sessionDetailAccessProjection';
-import { readSessionAccessHttpFailureCode } from './sessionAccessHttpFailure';
+import { readSessionDetailAccessProjectionVersion } from './sessionDetailAccessProjection';
+import { readSessionByIdHttp } from '@/sync/engine/sessions/sessionByIdHttp';
+import { readSessionAccessHttpFailureCode, SessionAccessApiError } from './sessionAccessHttpFailure';
 
 /**
  * The typed outcomes the responsibility surface must distinguish.
@@ -210,13 +211,13 @@ export async function readSessionResponsibleAccount(
             activeRequest: async () => { throw new Error('Responsibility requires exact Account authority'); },
         }, async authority => {
             check();
-            const response = await authority.request(`/v2/sessions/${encodeURIComponent(sessionId)}${buildSessionDetailAccessProjectionQuery(scope.serverId)}`, {
-                method: 'GET',
-                signal,
+            const response = await readSessionByIdHttp({
+                sessionId, serverId: scope.serverId, token: authority.context.token,
+                request: authority.request, readTransport: authority.readTransport,
+                accessProjectionVersion: readSessionDetailAccessProjectionVersion(scope.serverId), signal, fresh: true,
             });
             check();
-            const payload: unknown = await response.json().catch(() => null);
-            check();
+            const payload = response.body;
             if (!response.ok) throw new SessionResponsibilityError(readFailure(response.status, payload));
             const record = V2SessionByIdResponseSchema.parse(payload).session;
             if (record.responsibleAccountId === undefined || record.responsibleAccount === undefined) {

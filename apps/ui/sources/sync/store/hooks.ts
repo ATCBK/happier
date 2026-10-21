@@ -137,6 +137,7 @@ import type { MachineDisplayRenderable } from '../domains/machines/machineDispla
 import { normalizeTrimmedString } from '../domains/session/listing/normalizeTrimmedString';
 import {
   buildSessionListServerScopedRowKey,
+  type NormalizedSessionListKeyParts,
 } from '../domains/session/listing/sessionListKeyNormalization';
 import {
   buildSessionListRuntimePriorityRowKeys,
@@ -950,8 +951,9 @@ const sessionListReachabilityRenderableCache = new Map<string, Readonly<{
 export function buildSessionListReachabilityRenderableKey(
   serverId: string | null | undefined,
   sessionId: string | null | undefined,
+  keyParts?: NormalizedSessionListKeyParts,
 ): string | null {
-  return buildSessionListServerScopedRowKey(serverId, sessionId);
+  return buildSessionListServerScopedRowKey(serverId, sessionId, keyParts);
 }
 
 function projectSessionListReachabilityRenderable(
@@ -982,7 +984,7 @@ export function useSessionListReachabilityRenderablesForItems(
     const next: SessionListReachabilityItemKey[] = [];
     for (const item of items) {
       if (!item || item.type !== 'session') continue;
-      const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId);
+      const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId, item.keyParts);
       if (!key) continue;
       next.push({
         key,
@@ -1022,7 +1024,7 @@ export function useSessionListRowRenderablesForItems(
     const next: SessionListReachabilityItemKey[] = [];
     for (const item of items) {
       if (!item || item.type !== 'session') continue;
-      const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId);
+      const key = buildSessionListReachabilityRenderableKey(item.serverId, item.sessionId, item.keyParts);
       if (!key) continue;
       next.push({
         key,

@@ -7,8 +7,6 @@ import { notifyExecutionRunActivityFromUpdate, notifyExecutionRunActivityReconne
 import {
     TokenStorage,
     type AuthCredentials,
-    isDataKeyAuthCredentials,
-    isLegacyAuthCredentials,
     isTokenOnlyAuthCredentials,
     subscribeHomeCredentialMutations,
 } from '@/auth/storage/tokenStorage';
@@ -89,6 +87,10 @@ import {
 } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
 import { isAuthenticationResponseStatus } from '@/sync/runtime/connectivity/authErrors';
 import { createServerFetchAtEndpoint } from '@/sync/http/client';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { bindAccountEncryptionObservation, matchesAccountEncryptionObservationCredentials, readAccountEncryptionObservationBinding, type AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
+import { createSocketAccountEncryptionObservation } from '@/sync/api/account/apiAccountEncryptionMode';
+import { createCapturedServerReadTransport, type CapturedServerReadTransport } from './serverScopedRpc/capturedServerReadTransport';
 import {
     resolveServerScopedTransport,
     type ResolvedServerScopedTransport,
@@ -158,6 +160,7 @@ type ManagedConcurrentServer = {
     credentials: AuthCredentials;
     socket: ConcurrentServerSocket | null;
     socketTransport: ManagedConnectionTransport | null;
+    accountEncryptionObservation: ReturnType<typeof createSocketAccountEncryptionObservation> | null;
     reachabilityUnsubscribe: (() => void) | null;
     reachabilityRelease: (() => Promise<void>) | null;
     reachabilityAcquireGeneration: number;
@@ -260,20 +263,7 @@ export function prepareSessionListAccountScope(scope: ServerAccountScope): void 
 }
 
 function areAuthCredentialsEquivalent(a: AuthCredentials, b: AuthCredentials): boolean {
-    if (a.token !== b.token) return false;
-    const aLegacy = isLegacyAuthCredentials(a);
-    const bLegacy = isLegacyAuthCredentials(b);
-    if (aLegacy && bLegacy) return a.secret === b.secret;
-    const aDataKey = isDataKeyAuthCredentials(a);
-    const bDataKey = isDataKeyAuthCredentials(b);
-    if (aDataKey && bDataKey) {
-        return (
-            a.encryption.publicKey === b.encryption.publicKey
-            && a.encryption.machineKey === b.encryption.machineKey
-        );
-    }
-    if (isTokenOnlyAuthCredentials(a) && isTokenOnlyAuthCredentials(b)) return true;
-    return false;
+    return a === b || resolveAuthCredentialsScopeKey(a) === resolveAuthCredentialsScopeKey(b);
 }
 let started = false;
 let storageUnsubscribe: (() => void) | null = null;
@@ -332,15 +322,26 @@ function createServerRequest(
         ...(entry.irohLease ? { runtimeOrigin: entry.irohLease.runtimeOrigin } : {}),
         ...(entry.irohLease?.homeCarrier ? { homeCarrier: entry.irohLease.homeCarrier } : {}),
         credentials: entry.credentials,
+        accountEncryptionObservation: entry.accountEncryptionObservation?.binding,
         serverId: entry.id,
         signal,
     });
-    return async (path: string, init?: RequestInit) => {
+    const observedRequest = async (path: string, init?: RequestInit) => {
         const requestPath = String(path ?? '').startsWith('/') ? String(path) : `/${String(path ?? '')}`;
         const response = await request(requestPath, init);
         observeResponse(response);
         return response;
     };
+    return bindAccountEncryptionObservation(observedRequest, readAccountEncryptionObservationBinding(request, entry.credentials) ?? undefined);
+}
+
+/** Existing secondary runtime is the sole source of an admitted inactive Home binding. */
+export function getConcurrentAccountEncryptionObservationBinding(
+    serverId: string,
+    credentials: AuthCredentials,
+): AccountEncryptionObservationBinding | null {
+    const binding = getManagedServer(serverId)?.accountEncryptionObservation?.binding;
+    return binding && matchesAccountEncryptionObservationCredentials(binding, credentials) && binding.isCurrent() ? binding : null;
 }
 
 export function resolveConcurrentTargets(params: Readonly<{
@@ -713,9 +714,10 @@ async function refreshServerSnapshot(
     intent: ConcurrentRefreshIntent,
 ): Promise<void> {
     const startedAt = Date.now();
+    const capturedReadTransport = createCapturedServerReadTransport({ serverId: entry.id, profile: entry, credentials: entry.credentials });
     let responseBytes = 0;
     const encryption = await getOrCreateEncryption(entry);
-    const request = createServerRequest(entry, (response) => {
+    const observeResponse = (response: Response) => {
         if (isAuthenticationResponseStatus(response.status)) {
             reportServerAuthFailed(entry.serverUrl, response.status, undefined, entry.credentials.token);
         }
@@ -723,7 +725,17 @@ async function refreshServerSnapshot(
         if (Number.isFinite(contentLength) && contentLength > 0) {
             responseBytes += contentLength;
         }
-    }, signal);
+    };
+    const request = createServerRequest(entry, observeResponse, signal);
+    const readTransport: CapturedServerReadTransport = {
+        get key() { return capturedReadTransport.key; },
+        read(path, init, options, consumeResponse) {
+            return capturedReadTransport.read(path, init, options, async response => {
+                observeResponse(response);
+                return await consumeResponse(response);
+            });
+        },
+    };
     const shouldContinue = () => (
         !signal.aborted
         && managedServers.get(entry.id) === entry
@@ -733,10 +745,12 @@ async function refreshServerSnapshot(
         let machines: Machine[] = [];
         await fetchAndApplyMachines({
             credentials: entry.credentials,
-            readAccountMode: async () => (await fetchAccountEncryptionMode(entry.credentials, { request })).mode,
+            readAccountMode: async () => (await fetchAccountEncryptionMode(entry.credentials, { request, usage: 'identity' })).mode,
             encryption,
             machineDataKeys: entry.machineDataKeys,
             request,
+            readTransport,
+            signal,
             shouldContinue,
             throwOnError: true,
             sourceServerId: entry.id,
@@ -849,7 +863,8 @@ async function refreshServerSnapshot(
                 sessionDataKeys: entry.sessionDataKeys,
                 sessionDataKeyEnvelopes: entry.sessionDataKeyEnvelopes,
                 request,
-                requestAuthority: entry,
+                readTransport,
+                signal,
                 clientEncryptionRequirement: resolveEntryClientEncryptionRequirement(entry),
                 accessProjectionVersion: readSessionDetailAccessProjectionVersion(entry.id),
                 includeTurnsProjection: false,
@@ -1236,6 +1251,8 @@ async function runRefresh(
 }
 
 async function disposeManagedServer(entry: ManagedConcurrentServer): Promise<void> {
+    entry.accountEncryptionObservation?.dispose();
+    entry.accountEncryptionObservation = null;
     entry.reachabilityAcquireGeneration += 1;
     entry.refreshQueued = null;
     entry.refreshAbortController?.abort('secondary-runtime-disposed');
@@ -1288,6 +1305,7 @@ function createManagedServer(
         credentials,
         socket: null,
         socketTransport: null,
+        accountEncryptionObservation: null,
         reachabilityUnsubscribe: null,
         reachabilityRelease: null,
         reachabilityAcquireGeneration: 0,
@@ -1408,8 +1426,21 @@ async function connectManagedServer(
             } catch {
                 // Authentication/reachability owns invalid credentials. Action ingress fails closed.
             }
+            const accountEncryptionObservation = ingressAccountId ? createSocketAccountEncryptionObservation({
+                credentials, serverId: entry.id,
+                endpointUrl: entry.serverUrl,
+                runtimeOrigin: entry.irohLease?.runtimeOrigin ?? entry.serverUrl,
+                homeCarrierEndpointId: entry.irohLease?.homeCarrier?.endpointId ?? null,
+                request: createServerFetchAtEndpoint({ endpointUrl: entry.serverUrl, serverId: entry.id, credentials,
+                    ...(entry.irohLease ? { runtimeOrigin: entry.irohLease.runtimeOrigin } : {}),
+                    ...(entry.irohLease?.homeCarrier ? { homeCarrier: entry.irohLease.homeCarrier } : {}),
+                }),
+                isCurrent: () => isManagedServerActive(entry) && entry.socket === socket && entry.credentials === credentials,
+            }) : null;
+            entry.accountEncryptionObservation = accountEncryptionObservation;
             socket.on('update', (raw: unknown) => {
-                if (!isManagedServerActive(entry)) return;
+                if (!isManagedServerActive(entry) || entry.socket !== socket) return;
+                accountEncryptionObservation?.update(raw);
                 if (isAccountChangeUpdate(raw)) {
                     schedulePushTokenReconciliation();
                     publishHomeAccountChange(entry.id);
@@ -1491,11 +1522,12 @@ async function connectManagedServer(
                 const isCurrent = () => isManagedServerActive(entry) && entry.credentials === credentials
                     && entry.encryption === encryption && entry.irohLease === carrier && cipherLifetime.isCurrent();
                 const request = createServerFetchAtEndpoint({ endpointUrl: entry.serverUrl, serverId: entry.id, credentials,
+                    accountEncryptionObservation: entry.accountEncryptionObservation?.binding,
                     ...(carrier ? { runtimeOrigin: carrier.runtimeOrigin } : {}),
                     ...(carrier?.homeCarrier ? { homeCarrier: carrier.homeCarrier } : {}),
                 });
                 fireAndForget((async () => {
-                    const mode = (await fetchAccountEncryptionMode(credentials, { request })).mode;
+                    const mode = (await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).mode;
                     if (!isCurrent()) return;
                     await consumeActionOperationSnapshotPush({ update, accountId, accountEncryptionMode: mode,
                         sourceServerId: entry.id,
@@ -1513,6 +1545,8 @@ async function connectManagedServer(
                     serverId: entry.id, token: credentials.token, socket, transport,
                 }),
                 transport.onConnected(() => {
+                    if (!isManagedServerActive(entry) || entry.socket !== socket) return;
+                    accountEncryptionObservation?.connected();
                     notifyExecutionRunActivityReconnect(entry.id);
                     statusDemandTransport.resend();
                     // This content-free secondary transport has no changes
@@ -1523,10 +1557,14 @@ async function connectManagedServer(
                     queueRefresh(entry);
                 }),
                 transport.onDisconnected((event: TransportDisconnectEvent) => {
+                    if (!isManagedServerActive(entry) || entry.socket !== socket) return;
+                    accountEncryptionObservation?.disconnected();
                     if (event.intentional) return;
                     reportServerUnreachable(normalizedServerUrl, event.error ?? new Error(event.reason ?? 'socket disconnect'), credentials.token);
                 }),
                 transport.onError((error: unknown) => {
+                    if (!isManagedServerActive(entry) || entry.socket !== socket) return;
+                    accountEncryptionObservation?.disconnected();
                     reportServerUnreachable(normalizedServerUrl, error, credentials.token);
                 }),
                 () => statusDemandTransport.dispose(),

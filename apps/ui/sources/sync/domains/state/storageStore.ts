@@ -5,7 +5,7 @@ import { createAuthoringMemoryDomain } from '../../store/domains/authoringMemory
 import { createAutomationsDomain } from '../../store/domains/automations';
 import { createFeedDomain } from '../../store/domains/feed';
 import { createFriendsDomain } from '../../store/domains/friends';
-import { createMachinesDomain } from '../../store/domains/machines';
+import { createMachinesDomain, subscribeMachineUpdates } from '../../store/domains/machines';
 import { createMachinePoolsDomain } from '../../store/domains/machinePools';
 import { createProjectAccountRowsDomain } from '../../store/domains/projectAccountRows';
 import { createMessagesDomain } from '../../store/domains/messages';
@@ -20,7 +20,7 @@ import { createTodosDomain } from '../../store/domains/todos';
 import { createTranscriptLoadingDomain } from '../../store/domains/transcriptLoading';
 import { createWorkflowRunsDomain } from '../../store/domains/workflowRuns';
 import type { StorageState } from '../../store/types';
-import { registerStorageStateReader, registerStorageStateSubscribe } from './storageStateReaderBridge';
+import { registerStorageStateReader, registerStorageStateSubscribe, registerStorageMachineUpdateSubscribe } from './storageStateReaderBridge';
 import { syncPerformanceTelemetry } from '../../runtime/syncPerformanceTelemetry';
 import { observeStoragePerformance } from '../../store/storagePerformance';
 
@@ -73,6 +73,7 @@ export const storage = observeStoragePerformance(create<StorageState>()((set, ge
 
 registerStorageStateReader(() => storage.getState());
 registerStorageStateSubscribe((listener) => storage.subscribe((state) => listener(state)));
+registerStorageMachineUpdateSubscribe(subscribeMachineUpdates);
 
 export function getStorage() {
     return storage;

@@ -30,6 +30,7 @@ export async function readSessionSnapshotForAuthority(params: Readonly<{
     prefetched?: SessionByIdPrefetchedRead;
     /** Interval consumers need an admitted projection, including a successful empty one. */
     requireTurns?: boolean;
+    signal?: AbortSignal;
     isCurrent?: () => boolean;
     accountCurrentnessSource?: ReturnType<typeof createOperationAccountCurrentnessSource>;
 }>): Promise<Readonly<{ session: SessionSnapshot; callerDataKeyEnvelope: string | null }>> {
@@ -52,6 +53,7 @@ export async function readSessionSnapshotForAuthority(params: Readonly<{
             applySessions: (sessions) => { projection.session = sessions.find((session) => session.id === params.sessionId) ?? null; },
             log: { log: () => {} },
             isCurrent: params.isCurrent,
+            signal: params.signal,
             accountCurrentnessSource: params.accountCurrentnessSource,
         });
     } catch (error) {
@@ -131,7 +133,7 @@ export async function readSessionEncryptionContextsForAuthority(params: Readonly
     };
     const accessProjectionVersion = readSessionDetailAccessProjectionVersion(params.authority.scope.serverId);
     const rows = await readSessionBatchForAuthority({ ...params, accessProjectionVersion,
-        includeSnapshot: true, includeMessages: false, assertCurrent });
+        includeSnapshot: true, includeTurns: false, includeMessages: false, assertCurrent });
     const results = await Promise.all([...rows].map(async ([sessionId, row]) => {
         assertCurrent();
         if (!row.detail) throw new SessionSnapshotReadError('invalid_response');
