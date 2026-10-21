@@ -66,3 +66,54 @@ printf '%s' '{"assets":[]}'
   assert.match(stderr, /Unable to locate release assets/i);
   assert.doesNotMatch(stderr, /unbound variable/i);
 });
+
+test('install.sh retries GitHub requests without a rejected GitHub token', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-installer-rejected-token-'));
+  const binDir = join(root, 'bin');
+  const installDir = join(root, 'install');
+  const outBinDir = join(root, 'out-bin');
+  await mkdir(binDir, { recursive: true });
+  await mkdir(installDir, { recursive: true });
+  await mkdir(outBinDir, { recursive: true });
+
+  // GitHub rejects an expired or revoked token with 401 even for public release metadata.
+  const curlStubPath = join(binDir, 'curl');
+  await writeFile(
+    curlStubPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+for arg in "$@"; do
+  if [[ "$arg" == Authorization:* ]]; then
+    echo "curl: (22) The requested URL returned error: 401" >&2
+    exit 22
+  fi
+done
+printf '%s' '{"assets":[]}'
+`,
+    'utf8',
+  );
+  await chmod(curlStubPath, 0o755);
+
+  const installerPath = join(repoRoot, 'scripts', 'release', 'installers', 'install.sh');
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH ?? ''}`,
+    HAPPIER_CHANNEL: 'preview',
+    HAPPIER_PRODUCT: 'cli',
+    HAPPIER_INSTALL_DIR: installDir,
+    HAPPIER_BIN_DIR: outBinDir,
+    HAPPIER_NO_PATH_UPDATE: '1',
+    HAPPIER_NONINTERACTIVE: '1',
+    HAPPIER_INSTALLER_DOWNLOAD_RETRY_DELAY_SECONDS: '0',
+    // Successful steps only replay their stderr in verbose mode.
+    HAPPIER_INSTALLER_VERBOSE: '1',
+    HAPPIER_GITHUB_TOKEN: '',
+    GITHUB_TOKEN: 'ghp_revoked',
+  };
+
+  const res = spawnSync('bash', [installerPath], { env, encoding: 'utf8' });
+  const stderr = String(res.stderr ?? '');
+  // Metadata was fetched anonymously, so the run reaches asset resolution instead of failing the fetch.
+  assert.match(stderr, /Unable to locate release assets/i);
+  assert.match(stderr, /retrying without the token/i);
+});

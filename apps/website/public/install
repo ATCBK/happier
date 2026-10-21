@@ -598,6 +598,21 @@ validate_requested_install_version() {
   return 0
 }
 
+# GitHub rejects an expired or revoked token even for public releases, so a failed
+# authenticated request is retried anonymously instead of failing the install.
+curl_auth() {
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    if curl -fsSL --show-error \
+      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "$@"; then
+      return 0
+    fi
+    echo "GitHub request with GITHUB_TOKEN/HAPPIER_GITHUB_TOKEN failed; retrying without the token..." >&2
+  fi
+  curl -fsSL --show-error "$@"
+}
+
 fetch_release_metadata_with_retry() {
   local source="$1"
   local attempts="${HAPPIER_INSTALLER_DOWNLOAD_RETRY_ATTEMPTS:-3}"
@@ -1730,17 +1745,6 @@ action_version() {
 
   local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${tag}"
   info "Fetching ${tag} release metadata..."
-  curl_auth() {
-    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-      curl -fsSL \
-        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "$@"
-      return
-    fi
-    curl -fsSL "$@"
-  }
-
   local release_json=""
   if [[ -z "${RELEASE_ASSETS_DIR}" ]]; then
     if ! release_json="$(fetch_release_metadata_with_retry "${api_url}")"; then
@@ -2613,19 +2617,6 @@ print_installer_welcome
 installer_phase "Download"
 
 API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG}"
-curl_auth() {
-  local -a curl_args
-  curl_args=(-fsSL --show-error)
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    curl "${curl_args[@]}" \
-      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "$@"
-    return
-  fi
-  curl "${curl_args[@]}" "$@"
-}
-
 RELEASE_JSON=""
 if [[ -z "${RELEASE_ASSETS_DIR}" ]]; then
   if ! capture_installer_step_output "Fetching ${TAG} release metadata" RELEASE_JSON fetch_release_metadata_with_retry "${API_URL}"; then

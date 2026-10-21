@@ -1644,6 +1644,21 @@ function Test-InstallerTransientWebException {
   return $false
 }
 
+# GitHub rejects an expired or revoked token even for public releases, so the first failed
+# authenticated request drops the token and the caller retries anonymously.
+function Remove-InstallerGitHubTokenAfterFailure {
+  param (
+    [hashtable] $Headers
+  )
+
+  if (-not $Headers -or -not $Headers.ContainsKey("Authorization")) {
+    return $false
+  }
+  Write-Warning "GitHub request with GITHUB_TOKEN/HAPPIER_GITHUB_TOKEN failed; retrying without the token."
+  $Headers.Remove("Authorization")
+  return $true
+}
+
 function Invoke-InstallerWebRequestWithRetry {
   param (
     [Parameter(Mandatory = $true)] [string] $Uri,
@@ -1670,6 +1685,10 @@ function Invoke-InstallerWebRequestWithRetry {
         return Invoke-WebRequest @params
       }
       catch {
+        if (Remove-InstallerGitHubTokenAfterFailure -Headers $Headers) {
+          $attempt -= 1
+          continue
+        }
         if ($attempt -ge $retryDelaysMs.Length -or -not (Test-InstallerTransientWebException -ErrorRecord $_)) {
           throw
         }
@@ -1698,6 +1717,10 @@ function Invoke-InstallerRestMethodWithRetry {
       return Invoke-RestMethod @params
     }
     catch {
+      if (Remove-InstallerGitHubTokenAfterFailure -Headers $Headers) {
+        $attempt -= 1
+        continue
+      }
       if ($attempt -ge $retryDelaysMs.Length -or -not (Test-InstallerTransientWebException -ErrorRecord $_)) {
         throw
       }
