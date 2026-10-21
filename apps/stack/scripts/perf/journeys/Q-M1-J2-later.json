@@ -1,0 +1,7 @@
+{
+  "id": "Q-M1-J2-later",
+  "intent": "M1 later five-minute control using B1's existing later-window preparation: reload the same authenticated Home/corpus with count hooks installed before the document, wait the first five minutes, then record a separate five minutes. This is a reload-plus-settling control, not continuous coverage after the original cold restore. Elapsed time does not establish hydration or quiet.",
+  "readiness": "Home shell after explicit reload and five-minute preparation; ordinary inventory hydration is separately observed.",
+  "prepare": [{ "op": "open" }, { "op": "home" }, { "op": "idle", "ms": 300000 }],
+  "steps": [{ "op": "idle", "ms": 300000 }]
+}
