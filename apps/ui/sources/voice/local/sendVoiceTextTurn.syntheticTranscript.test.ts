@@ -346,7 +346,7 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
         expect(speech.speak).not.toHaveBeenCalled();
         return;
       }
-      const reply = { id: 'slow-reply', kind: 'agent-text', text: 'Here is the slow reply.', localId: null, createdAt: Date.now(),
+      const reply = { id: 'slow-reply', kind: 'agent-text', text: 'Here is the slow reply.', localId: null, seq: 18, createdAt: Date.now(),
         meta: { happierStreamSegmentV1: { v: 1, segmentKind: 'assistant', segmentLocalId: 'reply-local',
           segmentState: 'complete', startedAtMs: Date.now(), updatedAtMs: Date.now() } },
       } satisfies Message;
@@ -373,7 +373,12 @@ describe('sendVoiceTextTurn native-session transcript ownership', () => {
         expect(readMountedSessionRealtimeTranscriptConsumerSessionIds(account.homes.voice!.id)).toContain('s1');
       }
       const messages = [...readStoredSessionMessages(storage.getState(), 's1').filter(message => message.kind === 'user-text'), reply];
-      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+      storage.setState({ ...(outcome === 'reply' ? { sessions: { ...storage.getState().sessions,
+        s1: { ...storage.getState().sessions.s1!, sessionTurns: buildSessionTurnsProjectionV1({
+          sessionId: 's1', updatedAt: Date.now(), turns: [{ turnId: 'coding-turn', startedAt: Date.now(), updatedAt: Date.now(),
+            status: 'completed', transcriptAnchors: { userMessageSeqs: [17], finalAssistantMessageSeq: reply.seq } }],
+        }) },
+      } } : {}), sessionMessages: { s1: createSessionMessagesFixture({
         messageIdsOldestFirst: messages.map(message => message.id), messagesById: Object.fromEntries(messages.map(message => [message.id, message])),
       }) } });
       await turn;
