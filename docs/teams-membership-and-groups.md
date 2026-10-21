@@ -137,7 +137,9 @@ string, and a client that tried would become a second authority for the same dec
   active owner.
 
 Both projections render and precheck. Every mutation re-decides from the same facts inside
-its own serializable transaction.
+its own transaction after ordered Account admission. Direct member addition uses exclusive
+admission of its complete Team, Session and Machine audience before these reads and runs
+at ReadCommitted isolation in development source.
 
 ### Owner invariants
 

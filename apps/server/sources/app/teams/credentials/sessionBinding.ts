@@ -6,7 +6,8 @@ import type { RequiredSessionTeamCredentialV1, SessionTeamCredentialBindingConse
 import type { Tx } from "@/storage/inTx";
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { assertSessionTeamReadableGrantInTx } from "@/app/session/access/sessionAccess";
-import { putSessionAccessGrantInTx } from "@/app/session/access/sessionAccessGrantService";
+import { putSessionAccessGrantInTx, sessionAccessGrantMutationCursorLockOptions } from "@/app/session/access/sessionAccessGrantService";
+import { acquireSessionAccessTransitionCursorLocksInTx } from "@/app/session/access/sessionAccessTransitionEffects";
 import {
     qualifySessionTeamAuthenticationInTx,
     type SessionAccessAuthentication,
@@ -241,6 +242,10 @@ export async function grantRequiredTeamVisibilityAndValidateBindingInTx(
     if (input.intent.teamId !== undefined && input.intent.teamId !== input.consentTeamId) {
         return { ok: false, reason: "invalid_input" };
     }
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [input.sessionId], [],
+        sessionAccessGrantMutationCursorLockOptions({ actorAccountId: input.accountId, sessionId: input.sessionId,
+            subjects: [{ kind: "team", teamId: input.consentTeamId }],
+        }));
     const admitted = await validateRequiredTeamVisibilityInTx(tx, {
         ...input,
         requiredTeamCredential: input.intent,

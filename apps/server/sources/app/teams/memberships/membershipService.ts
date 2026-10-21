@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx, type TeamSessionAccessImpacts } from "./sessionAccessEffects";
 import type { SessionAccessMembershipChange } from "@/app/session/access/sessionAccessMembershipImpact";
+import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import {
     AccountStatus,
     type SessionHistoryAccess,
@@ -39,7 +40,7 @@ export type TeamMemberAdmissionResult =
  * actor/target batch before callers reread current authority or mutate resources. */
 export async function acquireTeamMembershipAccountAdmissionInTx(
     tx: Tx,
-    input: Readonly<{ teamId: string; accountIds: readonly string[]; membershipIds: readonly string[]; membershipChange?: SessionAccessMembershipChange }>,
+    input: Readonly<{ teamId: string; accountIds: readonly string[]; membershipIds: readonly string[]; membershipChange?: SessionAccessMembershipChange; intent?: AccountAdmissionIntent }>,
 ): Promise<() => Promise<void>> {
     const memberships = input.membershipIds.length === 0 ? [] : await tx.teamMembership.findMany({
         where: { id: { in: [...input.membershipIds] } },
@@ -47,7 +48,7 @@ export async function acquireTeamMembershipAccountAdmissionInTx(
     });
     const accountIds = [...input.accountIds, ...memberships.map(member => member.accountId)];
     const recheck = await acquireTeamMutationAccountAdmissionInTx(tx, {
-        teamId: input.teamId, accountIds, membershipChange: input.membershipChange, affectedAccountIds: accountIds,
+        teamId: input.teamId, accountIds, membershipChange: input.membershipChange, affectedAccountIds: accountIds, intent: input.intent,
     });
     if (memberships.length > 0) {
         const current = await tx.teamMembership.findMany({

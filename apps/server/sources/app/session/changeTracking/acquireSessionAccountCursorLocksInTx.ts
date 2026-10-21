@@ -10,6 +10,9 @@ import type { AccountAdmissionIntent } from "@/app/encryption/accountSessionOwne
 export type SessionAccountCursorLockOptions = Readonly<{
     includeLifecyclePublications?: boolean;
     intent?: AccountAdmissionIntent;
+    /** Prospective recipients/authority scopes supplied by the mutation owner.
+     * Pure census only: every fence and publication recheck repeats this read. */
+    readAdditionalAccountIdsInTx?: (tx: Tx) => Promise<readonly string[]>;
 }>;
 
 /** One census serves pre-attempt discovery and transactional currentness checks. */
@@ -38,7 +41,8 @@ export async function readSessionAccountCursorAudienceInTx(
     const recipients = await resolveCurrentSessionRecipientAccountIdsBySessionInTx(tx, {
         sessionIds: projectionSessionIds, includeUnpublishedGrants: true, includeInactiveAccounts: true,
     });
-    const accountIds = [...new Set([...recipients.values()].flat().concat([...additionalAccountIds], lifecycle.accountIds))].sort();
+    const additionalAudience = await options?.readAdditionalAccountIdsInTx?.(tx) ?? [];
+    const accountIds = [...new Set([...recipients.values()].flat().concat([...additionalAccountIds], lifecycle.accountIds, [...additionalAudience]))].sort();
     return { projectionSessionIds, accountIds };
 }
 

@@ -1457,7 +1457,7 @@ export function registerTeamCredentialResourceRoutes(
                     const projected = await projectTeamCredentialResourceSummaryInTx(tx, created.resourceId, request.userId);
                     if (!projected.ok) throw new TeamCredentialCreateProjectionFailure(projected.error);
                     return { ok: true as const, resource: projected.resource };
-                }, { isolationLevel: "Serializable" /* Resource creation composes source, audience, broker and recipient currentness. */ });
+                }, { isolationLevel: "ReadCommitted" /* Exclusive complete Team/recipient admission precedes source, audience and broker currentness reads. */ });
                 let attempted = await attempt();
                 if (!attempted.ok && attempted.error === "update_required" && body.data.requestPolicy !== null) {
                     const prepared = await inTx(tx => prepareTeamCredentialRequestPolicySupportInTx(tx, {

@@ -164,7 +164,11 @@ The server returns `TeamCapabilitiesV1` with every Team projection and clients r
 A client never reconstructs a capability from a role, and a projection is never a substitute
 for the authorization the mutation itself performs: every mutation re-reads the actor's
 Account status, Home authority, Team membership, and the Team's archived state inside its
-serializable transaction.
+transaction after ordered Account admission. In development source, Team creation, direct
+member addition, and credential-resource creation use exclusive admission of their complete
+Account audience before authority reads and run at ReadCommitted isolation. The existing
+audience rechecks and resource-specific locks preserve their mutation invariants while
+unrelated Account publications cannot repeatedly invalidate a Serializable snapshot.
 
 Role alone never makes every boolean true. An inactive Account, a suspended membership, or
 an archived Team each withdraw capabilities the role would otherwise imply.

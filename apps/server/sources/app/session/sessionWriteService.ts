@@ -11,6 +11,8 @@ import { markSessionProjectionRecipientsChanged, type SessionRecipientCursor, ty
 import { sessionRecipientPublicationResult, type SessionRecipientPublicationResult } from "@/app/session/changeTracking/sessionRecipientPublicationResult";
 import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { acquireSessionAccountCursorLocksInTx, prepareSessionAccountCursorLocks } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { sessionAccessGrantMutationCursorLockOptions } from "@/app/session/access/sessionAccessGrantService";
+import { acquireSessionAccessTransitionCursorLocksInTx } from "@/app/session/access/sessionAccessTransitionEffects";
 import { reconcileAutonomousExchangeAcceptedTurnInTx } from "@/app/session/pending/reconcileAutonomousExchangeAcceptedTurnInTx";
 import { observeCreateSessionMessageStage } from "@/app/monitoring/metrics/sessionWriteMetrics";
 import { db } from "@/storage/db";
@@ -4811,7 +4813,15 @@ export async function updateSessionMetadataEnvelopeTupleInTx(
 
     // Transaction-composing callers admit their complete audience and lock
     // Session resources before entering the shared metadata mutation body.
-    await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.actorUserId]);
+    const consent = params.mode === "owner_team_credential_binding" ? params.teamVisibilityGrantConsent : undefined;
+    if (consent) {
+        await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], [],
+            sessionAccessGrantMutationCursorLockOptions({ actorAccountId: params.actorUserId, sessionId: params.sessionId,
+                subjects: [{ kind: "team", teamId: consent.teamId }],
+            }));
+    } else {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId], [params.actorUserId]);
+    }
     return updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(tx, params, preconditions);
 }
 
@@ -5436,12 +5446,18 @@ export async function updateSessionMetadataEnvelopeTuple(
         if (!isValidSessionMetadataEnvelopeTupleInput(params)) {
             return { ok: false, error: "invalid-params" };
         }
+        const consent = params.mode === "owner_team_credential_binding" ? params.teamVisibilityGrantConsent : undefined;
         return await inTx(async (tx) =>
             updateSessionMetadataEnvelopeTupleAfterCursorFenceInTx(tx, params), {
-                // Discovery does not consume the mutation's execution budget.
-                // The prepared fence still verifies the current audience before
-                // the shared mutation body admits authority and writes its CAS.
-                prepare: () => prepareSessionAccountCursorLocks([params.sessionId], [params.actorUserId]),
+                // Consent changes access, so admit its prospective Team audience
+                // with the strongest intent before the shared CAS body. Ordinary
+                // metadata retains its prepared content-audience discovery.
+                prepare: consent
+                    ? async () => tx => acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], [],
+                        sessionAccessGrantMutationCursorLockOptions({ actorAccountId: params.actorUserId, sessionId: params.sessionId,
+                            subjects: [{ kind: "team", teamId: consent.teamId }],
+                        }))
+                    : () => prepareSessionAccountCursorLocks([params.sessionId], [params.actorUserId]),
             });
     } catch (error) {
         if (error instanceof SessionTeamCredentialBindingMutationError) {

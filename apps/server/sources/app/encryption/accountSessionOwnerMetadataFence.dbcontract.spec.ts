@@ -198,9 +198,24 @@ describe("Account Session owner-metadata fence database contract", () => {
         const firstAcquired = deferred();
         const releaseFirst = deferred();
         let secondAcquired = false;
+        let firstFenceQueries = 0;
 
         const first = inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
+            // Observe the real SQL boundary; admission and publication stay real.
+            const observed = new Proxy(tx, {
+                get(target, property) {
+                    if (property === "$queryRawUnsafe") return (sql: string, ...values: unknown[]) => {
+                        if (/FOR (?:KEY SHARE|UPDATE)/u.test(sql)) firstFenceQueries += 1;
+                        return target.$queryRawUnsafe(sql, ...values);
+                    };
+                    return Reflect.get(target, property, target);
+                },
+            });
+            await acquireAccountSessionOwnerMetadataFenceInTx(observed, account.id, "exclusive");
+            // Nested owners request an already-held admission. None should add
+            // another SQL/control round trip while the Account is held.
+            await acquireAccountSessionOwnerMetadataFenceInTx(observed, account.id, "content");
+            await acquireAccountSessionOwnerMetadataFenceInTx(observed, account.id, "exclusive");
             firstAcquired.resolve();
             await releaseFirst.promise;
         });
@@ -220,6 +235,7 @@ describe("Account Session owner-metadata fence database contract", () => {
 
         await first;
         await second;
+        expect(firstFenceQueries).toBe(1);
         await expect(db.account.findUnique({
             where: { id: account.id },
             select: {

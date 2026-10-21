@@ -140,7 +140,7 @@ export function registerTeamRoutes(
             requestKey: request.body.requestKey,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }), { isolationLevel: "Serializable" /* Team creation composes Home admission policy, initial-owner eligibility and membership admission. */ });
+        }), { isolationLevel: "ReadCommitted" /* Exclusive ordered creation audience precedes Home policy, owner eligibility and dedupe reads. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });

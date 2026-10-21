@@ -3,7 +3,8 @@ import { SessionAccessGrantsListRequestV1Schema, SessionAccessGrantsListResponse
 import { ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDisplayProfile";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
 import { inspectSessionAccessGrants } from "@/app/session/access/sessionAccessGrantInspection";
-import { assertSessionAccessManageAccessInTx, putSessionAccessGrantInTx, deleteSessionAccessGrantInTx, setSessionAccessContextInTx, type SessionAccessGrantErrorCode } from "@/app/session/access/sessionAccessGrantService";
+import { assertSessionAccessManageAccessInTx, putSessionAccessGrantInTx, deleteSessionAccessGrantInTx, setSessionAccessContextInTx, sessionAccessGrantMutationCursorLockOptions, type SessionAccessGrantErrorCode } from "@/app/session/access/sessionAccessGrantService";
+import { acquireSessionAccessTransitionCursorLocksInTx } from "@/app/session/access/sessionAccessTransitionEffects";
 import { projectReleasedDirectShareEvent, scheduleReleasedDirectShareEvent } from "@/app/session/access/publishSessionAccessChange";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { validateRequiredTeamVisibilityInTx } from "@/app/teams/credentials/sessionBinding";
@@ -89,11 +90,13 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
             // Session/resource exists before the canonical access owner admits
             // this actor as its manager. The grant writer repeats this check
             // after the binding validation in the same transaction.
-            const accessError = await assertSessionAccessManageAccessInTx(tx, {
-                actorAccountId: request.userId, sessionId, authentication,
-            });
-            if (accessError) return { ok: false as const, error: accessError };
             if (requiredTeamCredential) {
+                await acquireSessionAccessTransitionCursorLocksInTx(tx, [sessionId], [],
+                    sessionAccessGrantMutationCursorLockOptions({ actorAccountId: request.userId, sessionId, subjects: [subject] }));
+                const accessError = await assertSessionAccessManageAccessInTx(tx, {
+                    actorAccountId: request.userId, sessionId, authentication,
+                });
+                if (accessError) return { ok: false as const, error: accessError };
                 const admission = subject.kind === "team"
                     ? await validateRequiredTeamVisibilityInTx(tx, {
                         sessionId, accountId: request.userId, consentTeamId: subject.teamId,
@@ -127,7 +130,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 });
             }
             return mutation;
-        }, { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */ });
+        }, { isolationLevel: "ReadCommitted" /* Exclusive complete audience admission precedes authority reads and Session effects. */ });
         if (!result.ok) {
             if (result.error === "session_team_credential_binding_rejected") {
                 return reply.code(409).send({ error: result.error, reason: result.reason });
@@ -178,7 +181,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 });
             }
             return mutation;
-        }, { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */ });
+        }, { isolationLevel: "ReadCommitted" /* The grant owner fences authority, tracking, responsibility and deletion before reads. */ });
         if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });
         return reply.send({ changed: result.changed, subject: result.subject });
     });
@@ -193,7 +196,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
             sessionId: request.body.sessionId,
             primaryTeamId: request.body.primaryTeamId,
             authentication: readSessionAccessAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Grant admission and removal must serialize with tracking, responsibility and deletion census. */ });
+        }), { isolationLevel: "ReadCommitted" /* The grant owner fences current and prospective Team audiences before reads. */ });
         if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });
         return reply.send({ changed: result.changed, primaryTeamId: result.primaryTeamId });
     });

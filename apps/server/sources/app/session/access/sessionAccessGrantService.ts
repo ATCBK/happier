@@ -21,6 +21,7 @@ import {
     resolveSubjectMemberAccountIdsInTx,
 } from "./sessionGrantSubjects";
 import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
+import type { SessionAccountCursorLockOptions } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import {
     resolveSessionAccessGrantSubjectInTx,
     validateSessionAccessGrantAccountSubjectIdentity,
@@ -116,6 +117,40 @@ export type DeleteSessionAccessGrantResult =
 export type SetSessionAccessContextResult =
     | Readonly<{ ok: true; changed: boolean; primaryTeamId: string | null }>
     | Readonly<{ ok: false; error: SessionAccessGrantErrorCode }>;
+
+/** Grant writes and compound callers admit the same complete audience before
+ * authority reads. Retained Team memberships fence policy and native membership
+ * changes, including Accounts not currently eligible to read the transcript. */
+export function sessionAccessGrantMutationCursorLockOptions(input: Readonly<{
+    actorAccountId: string;
+    sessionId: string;
+    subjects: readonly SessionAccessGrantSubject[];
+}>): SessionAccountCursorLockOptions {
+    return {
+        intent: "exclusive",
+        readAdditionalAccountIdsInTx: async tx => {
+            const session = await tx.session.findUnique({
+                where: { id: input.sessionId },
+                select: {
+                    primaryTeamId: true,
+                    teamGrants: { select: { teamId: true } },
+                    groupGrants: { select: { teamGroup: { select: { teamId: true } } } },
+                },
+            });
+            const teamIds = [...new Set([
+                ...(session?.primaryTeamId ? [session.primaryTeamId] : []),
+                ...(session?.teamGrants.map(grant => grant.teamId) ?? []),
+                ...(session?.groupGrants.map(grant => grant.teamGroup.teamId) ?? []),
+                ...input.subjects.flatMap(subject => subject.kind === "account" ? [] : [subject.teamId]),
+            ])];
+            const memberships = teamIds.length === 0 ? [] : await tx.teamMembership.findMany({
+                where: { teamId: { in: teamIds } }, select: { accountId: true },
+            });
+            return [input.actorAccountId, ...memberships.map(member => member.accountId),
+                ...input.subjects.flatMap(subject => subject.kind === "account" ? [subject.accountId] : [])];
+        },
+    };
+}
 
 async function assertMutationCapabilityInTx(
     tx: Tx,
@@ -547,6 +582,8 @@ export async function putSessionAccessGrantInTx(
         authentication: SessionAccessAuthentication;
     }>,
 ): Promise<PutSessionAccessGrantResult> {
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], [],
+        sessionAccessGrantMutationCursorLockOptions({ ...params, subjects: [params.subject] }));
     const admission = await assertMutationCapabilityInTx(tx, { ...params, capability: "manageAccess" });
     if (admission !== "allowed") return {
         ok: false,
@@ -689,7 +726,6 @@ export async function putSessionAccessGrantInTx(
     }
 
     const affectedAccountIds = await resolveAffectedAccountIdsInTx(tx, subject);
-    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], affectedAccountIds);
     const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {
         sessionId: params.sessionId,
         accountIds: affectedAccountIds,
@@ -816,6 +852,8 @@ export async function deleteSessionAccessGrantInTx(
         authentication: SessionAccessAuthentication;
     }>,
 ): Promise<DeleteSessionAccessGrantResult> {
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], [],
+        sessionAccessGrantMutationCursorLockOptions({ ...params, subjects: [params.subject] }));
     // Authorize before revealing whether the grant exists, so removal cannot be
     // used to probe another Session's roster.
     const admission = await assertMutationCapabilityInTx(tx, { ...params, capability: "manageAccess" });
@@ -874,7 +912,6 @@ export async function deleteSessionAccessGrantInTx(
     }
 
     const affectedAccountIds = await resolveAffectedAccountIdsInTx(tx, subject);
-    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], affectedAccountIds);
     const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {
         sessionId: params.sessionId,
         accountIds: affectedAccountIds,
@@ -947,6 +984,10 @@ export async function setSessionAccessContextInTx(
         authentication: SessionAccessAuthentication;
     }>,
 ): Promise<SetSessionAccessContextResult> {
+    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], [],
+        sessionAccessGrantMutationCursorLockOptions({ ...params,
+            subjects: params.primaryTeamId === null ? [] : [{ kind: "team", teamId: params.primaryTeamId }],
+        }));
     const admission = await assertMutationCapabilityInTx(tx, { ...params, capability: "manageAccess" });
     if (admission !== "allowed") return {
         ok: false,
@@ -1026,7 +1067,6 @@ export async function setSessionAccessContextInTx(
             affectedAccountIds.add(accountId);
         }
     }
-    await acquireSessionAccessTransitionCursorLocksInTx(tx, [params.sessionId], [...affectedAccountIds]);
     const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {
         sessionId: params.sessionId,
         accountIds: [...affectedAccountIds],

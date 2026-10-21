@@ -5,9 +5,10 @@ import { resolveDbSqlDialect } from "@/config/databaseProvider";
 export type AccountAdmissionIntent = "content" | "exclusive";
 
 const admissionSymbol = Symbol("account-admission");
-type AdmissionContext = { [admissionSymbol]?: ReadonlyMap<string, boolean> };
+type AccountAdmission = { readonly exclusive: boolean; held: boolean };
+type AdmissionContext = { [admissionSymbol]?: ReadonlyMap<string, AccountAdmission> };
 
-function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], exclusive: boolean): void {
+function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], exclusive: boolean) {
     const context = getTransactionContext(tx, { optional: true });
     // Unmanaged callers retain the primitive SQL contract. Read snapshots do
     // not participate in a managed write transaction's publication ordering.
@@ -15,14 +16,14 @@ function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], exclusiv
     const owner = context as typeof context & AdmissionContext;
     const admitted = owner[admissionSymbol];
     if (!admitted) {
-        owner[admissionSymbol] = new Map(ids.map(id => [id, exclusive]));
-        return;
+        return owner[admissionSymbol] = new Map(ids.map(id => [id, { exclusive, held: false }]));
     }
-    if (ids.some(id => !admitted.has(id) || exclusive && !admitted.get(id))) {
+    if (ids.some(id => !admitted.has(id) || exclusive && !admitted.get(id)?.exclusive)) {
         // The first batch must contain all prospective publication recipients.
         // Never acquire a newly discovered or stronger lock after domain work.
         throw new TransactionReplayRequiredError("transaction-account-audience-changed");
     }
+    return admitted;
 }
 
 /** Verify queued recipients against the same entry cohort, without acquiring locks. */
@@ -90,9 +91,13 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
     const ids = [...new Set(accountIds)].sort();
     if (ids.length === 0) return [];
     const dialect = resolveDbSqlDialect(getDbProviderFromEnv(process.env, "postgres"));
-    if (dialect !== "sqlite") {
-        assertManagedAdmissionAudience(tx, ids, intent === "exclusive" || dialect === "mysql");
-    }
+    const admitted = dialect !== "sqlite"
+        ? assertManagedAdmissionAudience(tx, ids, intent === "exclusive" || dialect === "mysql") : undefined;
+    // Native row locks survive until the containing attempt ends. Nested
+    // owners need no second SQL/budget refresh for an already-held cohort.
+    // Missing rows and failed acquisitions must never count as held locks;
+    // unmanaged/read-snapshot callers retain their primitive SQL behavior.
+    if (admitted && ids.every(id => admitted.get(id)?.held)) return ids;
 
     if (dialect === "sqlite") {
         const present: string[] = [];
@@ -126,6 +131,10 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
     const present = rows.map(row => row.id);
     if (new Set(present).size !== present.length) {
         throw new Error(`Account Session owner-metadata fence requires exactly one Account row for ${ids.join(", ")}`);
+    }
+    for (const id of present) {
+        const admission = admitted?.get(id);
+        if (admission) admission.held = true;
     }
     return present;
 }

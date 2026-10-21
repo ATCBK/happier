@@ -500,7 +500,7 @@ export async function addTeamMemberForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamMemberServiceResult<TeamMembershipV1>> {
-    await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], membershipIds: [], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], membershipIds: [], membershipChange: { kind: "teamMembership", teamId: input.teamId }, intent: "exclusive" });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;

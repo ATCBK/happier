@@ -184,7 +184,7 @@ export function registerTeamMemberRoutes(app: Fastify) {
             accountId: request.body.accountId,
             role: request.body.role,
             historyAccess: request.body.historyAccess,
-        }), { isolationLevel: "Serializable" /* Member admission and Session-access effects depend on current Team and Account eligibility. */ });
+        }), { isolationLevel: "ReadCommitted" /* Exclusive complete Team/Session/Machine audience precedes authority and eligibility reads. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.value);
     });

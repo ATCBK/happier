@@ -68,6 +68,7 @@ export async function createTeamCredentialResourceInTx(tx: Tx, input: CreateTeam
     const body = parsed.data;
     await acquireTeamMembershipAccountAdmissionInTx(tx, {
         teamId: body.teamId,
+        intent: "exclusive",
         accountIds: [input.actorAccountId, ...body.usageLimits.flatMap(limit => limit.subjectKind === 'team_member' ? [limit.subjectId] : [])],
         membershipIds: body.memberGrants.map(grant => grant.teamMembershipId),
     });

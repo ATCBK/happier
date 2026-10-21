@@ -154,7 +154,21 @@ describe("acquireAccountSessionOwnerMetadataFenceInTx", () => {
             if (provider === "postgres") await expect(stronger).rejects.toMatchObject({ reason: "transaction-account-audience-changed" });
             else await expect(stronger).resolves.toEqual(["a"]);
         });
-        expect(provider === "sqlite" ? reserveWriter : admissionSql).toHaveBeenCalledTimes(provider === "postgres" ? 1 : 2);
+        expect(provider === "sqlite" ? reserveWriter : admissionSql).toHaveBeenCalledTimes(provider === "sqlite" ? 2 : 1);
+    });
+
+    it("does not remember an absent row as a held admission", async () => {
+        applyEnvValues({ HAPPY_DB_PROVIDER: undefined, HAPPIER_DB_PROVIDER: "postgres" });
+        const admissionSql = vi.fn().mockResolvedValueOnce([]).mockResolvedValue([{ id: "a" }]);
+        transaction.mockImplementationOnce(async work => work({ ...inTxPostgresControlStatementMock,
+            $queryRawUnsafe: admissionSql,
+        }));
+        await inTx(async tx => {
+            await expect(acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], "content")).resolves.toEqual([]);
+            await expect(acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], "content")).resolves.toEqual(["a"]);
+            await expect(acquireAccountSessionOwnerMetadataFencesInTx(tx, ["a"], "content")).resolves.toEqual(["a"]);
+        });
+        expect(admissionSql).toHaveBeenCalledTimes(2);
     });
 
     it("refuses a newly queued terminal recipient before any terminal Account SQL", async () => {

@@ -45,9 +45,9 @@ import { resolveTeamCapabilitiesV1 } from "./capabilities";
  * field-level owners on the same row.
  *
  * Each mutation re-reads the actor's Account lifecycle, Home authority, Team
- * membership, and the Team's archived state inside the caller's serializable
- * transaction. A capability projection the client rendered a minute ago is a
- * hint; only this re-read decides.
+ * membership, and the Team's archived state after ordered Account admission
+ * inside the caller's transaction. A capability projection the client rendered
+ * a minute ago is a hint; only this re-read decides.
  */
 
 export type TeamLifecycleError =
@@ -136,7 +136,7 @@ export async function createTeamInTx(
 ): Promise<TeamLifecycleResult<CreateTeamError>> {
     const initialAccountIds = [input.actorAccountId, input.initialOwnerAccountId ?? input.actorAccountId];
     const admissionAccountIds = await readTeamCreationPublicationAudienceInTx(tx, initialAccountIds);
-    await acquireAccountChangePublicationLocksInTx(tx, admissionAccountIds, { includeSingleAccount: true });
+    await acquireAccountChangePublicationLocksInTx(tx, admissionAccountIds, { includeSingleAccount: true, intent: "exclusive" });
     const admitted = new Set(admissionAccountIds);
     if ((await readTeamCreationPublicationAudienceInTx(tx, initialAccountIds)).some(accountId => !admitted.has(accountId))) {
         throw new TransactionReplayRequiredError("transaction-account-audience-changed");
