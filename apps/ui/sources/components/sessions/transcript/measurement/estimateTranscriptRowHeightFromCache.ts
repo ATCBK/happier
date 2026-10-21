@@ -247,7 +247,7 @@ function estimateWrappedLineCount(text: string): number {
  *
  * | variant           | header | expand | tool | footer |
  * |-------------------|--------|--------|------|--------|
- * | `feed`            |   27   |   28   |  28  |   28   |
+ * | `feed`            |   27   |   28   |  28  |    —   |
  * | `feed_background` |   33   |   28   |  28  |   34   |
  *
  * Evidence basis: measured live in Chrome in the sibling repo (2026-07-29) by rendering the real
@@ -259,6 +259,9 @@ function estimateWrappedLineCount(text: string): number {
  * and a pin-resolution detail, and every geometry-bearing style in `toolCallsGroupChrome`
  * (paddings, gaps, font sizes, gutter widths) is byte-identical. That is derived, not re-measured
  * here; any future divergence in those shells has to re-derive these caps.
+ *
+ * Plain feed groups emit no footer unit because they have no card cap.
+ * Background footers retain their rounded card cap.
  *
  * `cards` is deliberately NOT a key here: a tool GROUP cannot exist in that mode. Grouping is
  * gated on the same setting the variant is resolved from — `useChatListRootState` computes
@@ -442,13 +445,13 @@ type ToolGroupUnitRowHeights = Readonly<{
     header: number;
     expand: number;
     tool: number;
-    footer: number;
+    footer?: number;
 }>;
 
 type ToolCallsGroupFeedChromeVariant = Exclude<ToolCallsGroupChromeVariant, 'cards'>;
 
 const TOOL_GROUP_UNIT_ROW_PX_BY_CHROME_VARIANT: Readonly<Record<ToolCallsGroupFeedChromeVariant, ToolGroupUnitRowHeights>> = {
-    feed: { header: 27, expand: 28, tool: ESTIMATE_TOOL_ROW_PX, footer: 28 },
+    feed: { header: 27, expand: 28, tool: ESTIMATE_TOOL_ROW_PX },
     feed_background: { header: 33, expand: 28, tool: ESTIMATE_TOOL_ROW_PX, footer: 34 },
 };
 

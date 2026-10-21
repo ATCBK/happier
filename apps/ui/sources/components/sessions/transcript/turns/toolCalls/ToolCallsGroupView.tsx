@@ -197,7 +197,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
                 </View>
                 <View style={styles.contentBody}>
                     {showExpandButton || showCollapsedPreview ? (
-                        <View style={[styles.preview, normalizedChromeMode === 'activity_feed' ? styles.previewFeed : styles.previewCards]}>
+                        <View style={[styles.preview, normalizedChromeMode === 'activity_feed' && !showFeedBackground ? styles.previewFeed : styles.previewCards]}>
                             {showCollapsedPreview ? previewMessages.map((m) => {
                                 const nestedMessageId = resolveToolRouteMessageId(m);
                                 const toolPinAction = renderToolPinAction(m, nestedMessageId);
@@ -240,7 +240,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
 
                     {expanded ? (
                         <TranscriptCollapsible id={collapsibleId} createdAt={createdAt} expanded={expanded}>
-                            <View style={[styles.body, normalizedChromeMode === 'activity_feed' ? styles.bodyFeed : styles.bodyCards]}>
+                            <View style={[styles.body, normalizedChromeMode === 'activity_feed' && !showFeedBackground ? styles.bodyFeed : styles.bodyCards]}>
                                 {props.toolMessages.map((m) => {
                                     const nestedMessageId = resolveToolRouteMessageId(m);
                                     const toolPinAction = renderToolPinAction(m, nestedMessageId);
@@ -296,6 +296,7 @@ const styles = StyleSheet.create((theme) => ({
         overflow: 'hidden',
     },
     containerFeed: {
+        marginBottom: 0,
         borderRadius: 0,
         backgroundColor: 'transparent',
         overflow: 'visible',
@@ -334,6 +335,7 @@ const styles = StyleSheet.create((theme) => ({
     },
     previewFeed: {
         paddingHorizontal: 0,
+        paddingBottom: 0,
     },
     previewRow: {
     },
@@ -347,7 +349,7 @@ const styles = StyleSheet.create((theme) => ({
         paddingBottom: theme.space.s6,
     },
     bodyCards: {},
-    bodyFeed: {},
+    bodyFeed: { paddingBottom: 0 },
     toolRow: {
     },
     toolRowCards: {

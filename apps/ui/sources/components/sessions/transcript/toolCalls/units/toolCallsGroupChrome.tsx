@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Pressable, View, type StyleProp, type ViewStyle } from 'react-native';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type { ToolCallMessage } from "@happier-dev/session-core/messages";
@@ -153,12 +154,12 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
                     : null;
 
     return (
-        <Pressable
+        <HappierPressable
             testID="transcript-tool-calls-header"
             onPress={props.onToggleExpanded}
             accessibilityRole="button"
-            accessibilityLabel={t('session.toolCalls')}
-            accessibilityState={{ expanded: props.expanded }}
+            accessibilityLabel={`${t('session.toolCalls')}: ${props.count}`}
+            expanded={props.expanded}
             style={({ pressed }) => [
                 chromeStyles.header,
                 pressed && (props.chromeMode === 'activity_feed' ? chromeStyles.headerFeedPressed : chromeStyles.headerCardsPressed),
@@ -200,7 +201,7 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
                     color={theme.colors.text.tertiary}
                 />
             </View>
-        </Pressable>
+        </HappierPressable>
     );
 });
 
@@ -213,7 +214,7 @@ export const ToolCallsGroupExpandMoreChrome = React.memo(function ToolCallsGroup
     onExpand: () => void;
 }>) {
     return (
-        <Pressable
+        <HappierPressable
             testID="transcript-tool-calls-preview-more"
             onPress={props.onExpand}
             style={({ pressed }) => [chromeStyles.previewMore, pressed && chromeStyles.previewMorePressed]}
@@ -221,7 +222,7 @@ export const ToolCallsGroupExpandMoreChrome = React.memo(function ToolCallsGroup
             <Text style={chromeStyles.previewMoreText}>
                 {t('session.toolCallsCollapsedPreviewMore', { count: props.hiddenCount })}
             </Text>
-        </Pressable>
+        </HappierPressable>
     );
 });
 

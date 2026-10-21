@@ -34,7 +34,7 @@ export function shouldAutoExpandToolCallsGroupForShortTranscript(params: {
     if (params.showToolCalls === false) return false;
     const toolMessageCount = normalizeCount(params.toolMessageCount);
     const collapsedPreviewCount = normalizeCount(params.collapsedPreviewCount);
-    if (toolMessageCount <= collapsedPreviewCount) return false;
+    if (collapsedPreviewCount === 0 || toolMessageCount <= collapsedPreviewCount) return false;
 
     return toolMessageCount <= resolveToolCallsGroupAutoExpandLimit({
         collapsedPreviewCount,

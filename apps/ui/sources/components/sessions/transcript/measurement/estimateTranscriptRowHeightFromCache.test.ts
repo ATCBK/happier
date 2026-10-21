@@ -271,10 +271,9 @@ describe('P · a tool row is sized by the chrome it actually paints', () => {
     it('keeps the feed variants on their measured single-line caps', () => {
         expect(estimateFor(toolUnitItem('tool-group-tool', false), 'feed')).toBe(MEASURED_FEED_TOOL_ROW_PX);
         expect(estimateFor(toolUnitItem('tool-group-tool', false), 'feed_background')).toBe(MEASURED_FEED_TOOL_ROW_PX);
-        // The chrome caps differ between the two feed variants; the group background adds 6px to
-        // both the header and the footer (measured: feed 27/28, feed_background 33/34).
+        // Background groups retain their header padding and footer cap; plain groups have no footer.
         expect(estimateFor(toolUnitItem('tool-group-header', false), 'feed')).toBe(27);
-        expect(estimateFor(toolUnitItem('tool-group-footer', false), 'feed')).toBe(28);
+        expect(estimateFor(toolUnitItem('tool-group-footer', false), 'feed')).toBeUndefined();
         expect(estimateFor(toolUnitItem('tool-group-header', false), 'feed_background')).toBe(33);
         expect(estimateFor(toolUnitItem('tool-group-footer', false), 'feed_background')).toBe(34);
         // The "show N more" row is the same single-line cap in both (measured 28).

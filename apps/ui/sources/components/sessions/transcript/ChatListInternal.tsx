@@ -999,6 +999,10 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         webStablePaintRetryTick,
     } = telemetryHost;
     const tuning = sync.getSyncTuning();
+    const toolCallsGroupChromeVariant = React.useMemo(
+        () => resolveToolCallsGroupChromeVariant(props.toolChromeCommon),
+        [props.toolChromeCommon],
+    );
     const itemsPipeline = useTranscriptItemsPipeline({
         showToolCalls: props.toolChromeCommon.showToolCalls,
         activeTargetWindowTargetRef,
@@ -1028,6 +1032,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         tailContiguousBoundary,
         targetWindowActiveRef,
         transcriptToolCallsCollapsedPreviewCountSetting,
+        toolCallsGroupChromeVariant,
     });
     const {
         buildRowShellSignature,
@@ -1157,10 +1162,6 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
     // the estimate below consumes one decision instead of re-deriving a second one from the
     // underlying settings: in `cards` mode a tool row paints a whole ToolView card, not the
     // single-line timeline row the flat estimate was calibrated on.
-    const toolCallsGroupChromeVariant = React.useMemo(
-        () => resolveToolCallsGroupChromeVariant(props.toolChromeCommon),
-        [props.toolChromeCommon],
-    );
     // Renderer size estimates come from the app's own measured-height cache: a prior
     // exact measurement beats the renderer's average-size learning for rows it has
     // not mounted yet (legend-list#492; live reopen/switch-back oscillation captures

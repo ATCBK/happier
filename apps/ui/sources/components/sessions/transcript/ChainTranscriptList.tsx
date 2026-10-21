@@ -1,3 +1,4 @@
+import { resolveToolCallsGroupChromeVariant } from './toolCalls/units/toolCallsGroupChrome';
 import * as React from 'react';
 import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { readSessionOwnerMetadataViewPreferences } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -300,6 +301,7 @@ function ChainTranscriptListContent(props: ChainTranscriptListProps) {
         prepareExpansionStateChange: prepareRowLayoutMutation,
     });
 
+    const toolCallsGroupChromeVariant = resolveToolCallsGroupChromeVariant(transcriptSessionCommon.toolChrome);
     const items = React.useMemo<ChainTranscriptListItem[]>(() => {
         if (groupingMode === 'turns') {
             // N2c stable virtualization units: turns decompose into per-unit rows so
@@ -310,6 +312,7 @@ function ChainTranscriptListContent(props: ChainTranscriptListProps) {
                 getMessageById: (messageId) => messagesById[messageId] ?? null,
                 isGroupExpanded: (toolMessageIds) => toolMessageIds.some((id) => expandedToolCallsAnchorMessageIds.has(id)),
                 collapsedPreviewCount: resolveTranscriptToolCallsCollapsedPreviewCount(transcriptToolCallsCollapsedPreviewCountSetting),
+                toolCallsGroupChromeVariant,
             });
             // Pending/discarded input is a synthetic transcript row owned by
             // buildChatListItems in linear mode too. Reuse that owner so turn
@@ -334,7 +337,7 @@ function ChainTranscriptListContent(props: ChainTranscriptListProps) {
             actionDrafts: [],
             groupConsecutiveToolCalls: groupToolCalls,
         });
-    }, [expandedToolCallsAnchorMessageIds, groupToolCalls, groupingMode, linearCache, messageIdsOldestFirst, messagesById, targetDiscardedMessages, targetPendingMessages, transcriptToolCallsCollapsedPreviewCountSetting, turnsCache]);
+    }, [expandedToolCallsAnchorMessageIds, groupToolCalls, groupingMode, linearCache, messageIdsOldestFirst, messagesById, targetDiscardedMessages, targetPendingMessages, transcriptToolCallsCollapsedPreviewCountSetting, toolCallsGroupChromeVariant, turnsCache]);
     const renderedItems = React.useMemo<ChainTranscriptListItem[]>(() => {
         if (shellFrame.dataOrder === 'newest-first') {
             return [...items].reverse();

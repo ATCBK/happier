@@ -6,6 +6,14 @@ import {
 } from './resolveToolCallsGroupAutoExpandPolicy';
 
 describe('resolveToolCallsGroupAutoExpandPolicy', () => {
+    it('keeps groups collapsed when the user selected header-only previews', () => {
+        expect(shouldAutoExpandToolCallsGroupForShortTranscript({
+            toolMessageCount: 5,
+            collapsedPreviewCount: 0,
+            maxTurnEntriesPerListItem: 8,
+        })).toBe(false);
+    });
+
     it('never auto-expands hidden tool calls even when the group and transcript are short', () => {
         expect(shouldAutoExpandToolCallsGroupForShortTranscript({
             showToolCalls: false, toolMessageCount: 2, collapsedPreviewCount: 0, maxTurnEntriesPerListItem: 3,
