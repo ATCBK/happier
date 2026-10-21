@@ -1689,7 +1689,9 @@ handler's acknowledgement under the native synchronous hook's timeout and proces
 lifetime, without a shorter local delivery deadline. Normal native progression
 therefore waits for authenticated transcript grant and follower acquisition.
 Other observational hooks, including qualified external Session hooks, retain
-their fail-silent 500ms attempt. Transport rejection or disconnection still exits
+their non-controlling 500ms attempt. Failed HTTP delivery, transport error codes,
+and unreadable secret-file error codes are reported on stderr without secrets, paths,
+hook payloads, or response bodies. Transport rejection or disconnection still exits
 without a native policy decision; missing transcript proof keeps Activity unknown.
 The [native hook owner](https://code.claude.com/docs/en/hooks#timeouts) retains
 cancellation and timeout behavior. This is a 0.3 development-source contract.
@@ -2093,7 +2095,12 @@ turn scheduler or permission ledger.
 In 0.3 development source, Session Follow progress ACKs use the publisher owner's
 Serializable snapshot path. They validate the exact current publisher, source
 access, accepted input and route frontier in that transaction, without joining
-the socket's heartbeat queue or allocating an Account change cursor. An admission
+the socket's heartbeat queue. Admitted original ACKs that advance manager or
+explicit Follow progress publish the destination's content-free Account change,
+as rule progress already does. The existing destination/audience admission and
+post-lock authority recheck precede that settlement and publication. Repeated
+settled ACKs publish no new wake; legacy no-original frontier ACKs allocate no
+Account change cursor. An admission
 deadline or unavailable transaction returns the typed `retryable` refusal. The
 existing reconciler retains the accepted request and retries its ACK at the next
 preparation boundary, suppressing another delivery of that accepted context while
@@ -2132,6 +2139,12 @@ Follow intake keeps an ordered prefix per source: a partially represented or
 deferred original also defers its later originals, without blocking unrelated
 sources. Source notifications reuse the receiver's existing prefix-admission
 traversal, so a failed admission cannot be bypassed by a later notification.
+After accepted progress, the destination invalidation re-enters that same
+ordered range from its acknowledged cursor. The requester Account's own receiver
+changes and reconnect/gap observations re-observe all configured sources,
+including manager and explicit Follow without private rules. Private-rule
+discovery filters unrelated source changes; currentness and binding lifetime
+still govern every recovery.
 A manager's optional terminal context likewise cannot consume a selected
 transcript original that still belongs to admitted-input delivery. Both Account
 reads and restricted Runner projections retain the original's stable local id;
@@ -2238,8 +2251,8 @@ retains the interrupted checkpoint. Named streams use the same finalizer under t
 native localId, including Session-scoped and sidechain output. A final snapshot replaces
 the text even when empty, publishes terminal segment metadata, drains live publication
 before durable admission, and retains unresolved custody for retry. Durable admission
-preserves the caller's cancellation and deadline. A matching named writer takes precedence over the unnamed foreground
-handoff; Session-scoped output does not acquire that unnamed handoff. Loaded native retry
+preserves the caller's cancellation and deadline. A matching named writer takes precedence
+over the unnamed foreground handoff; Session-scoped output does not acquire that unnamed handoff. Loaded native retry
 recovery still requires a fresh runner after the CLI host reload.
 The host's metadata reader recognizes the recorded source identity for both follow/replay
 and cold reconciliation. Follow opens metadata through the existing Session-mode decoder
