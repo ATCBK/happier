@@ -100,6 +100,38 @@ describe('DetailsTabHeader', () => {
         }
     });
 
+    it('folds a phone header\'s quiet buttons into `⋯` when they would sit alone on a row beneath the band', async () => {
+        const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+        const { PageHeaderMenu } = await import('@/components/ui/layout/PageHeaderEntityParts');
+        const onStage = vi.fn();
+        const stage = { label: 'Add to commit', onPress: onStage, testID: 'stage' };
+        const shown = (screen: Awaited<ReturnType<typeof renderScreen>>) =>
+            screen.findAll((node) => node.props.testID === 'stage' && node.props.label !== undefined).length > 0;
+        // The phone File page reading a changed file: its view controls live in the bottom toolbar, so the
+        // header's one quiet file action would otherwise take a row of its own (lab FV1p has none).
+        const alone = await renderScreen(
+            <SurfaceStateSizeProvider size="phone">
+                <DetailsTabHeader testID="hdr" title="retry.ts" buttons={[stage]}
+                    menuActions={[{ id: 'copy', title: 'Copy path', onSelect: () => {} }]} />
+            </SurfaceStateSizeProvider>,
+        );
+        expect(shown(alone)).toBe(false);
+        const menu = alone.findAllByType(PageHeaderMenu)[0]!;
+        expect(menu.props.actions.map((action: { testID?: string; id: string }) => action.testID ?? action.id)).toEqual(['stage', 'copy']);
+        await menu.props.actions[0].onSelect();
+        expect(onStage).toHaveBeenCalledTimes(1);
+        await alone.unmount();
+        // Beside view controls the same button keeps its place on the row.
+        const { Text } = await import('@/components/ui/text/Text');
+        const withControls = await renderScreen(
+            <SurfaceStateSizeProvider size="phone">
+                <DetailsTabHeader testID="hdr" title="retry.ts" buttons={[stage]} controls={<Text testID="ctl">View | Changes</Text>} />
+            </SurfaceStateSizeProvider>,
+        );
+        expect(shown(withControls)).toBe(true);
+        await withControls.unmount();
+    });
+
     it('keeps a phone header in one band when its quiet toggles are all it carries', async () => {
         const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
         const { Text } = await import('@/components/ui/text/Text');
@@ -360,6 +392,85 @@ describe('DetailsTabHeader', () => {
         await measure(1400);
         expect(buttons.every((button) => inBand(button.testID))).toBe(true);
         expect(inBand('icons')).toBe(true);
+    });
+
+    it('keeps the facts line whole beside the actions by folding a quiet button into `⋯` first (lab FV1c)', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const { PageHeaderMenu } = await import('@/components/ui/layout/PageHeaderEntityParts');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } });
+        const buttons = [
+            { label: 'Add to commit', onPress: () => {}, testID: 'stage' },
+            { label: 'Edit', onPress: () => {}, testID: 'edit' },
+        ];
+        const widths: Record<string, number> = { stage: 100, edit: 62 };
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="retry.ts"
+                meta={[{ key: 'dir', text: 'src' }, { key: 'status', text: 'Modified' }, { key: 'counts', text: '+9 −3' }]}
+                buttons={buttons} menuActions={[{ id: 'copy', title: 'Copy path', onSelect: () => {} }]}
+                actions={<Text testID="icons">icons</Text>} controls={<Text testID="ctl">View | Changes</Text>} />,
+        );
+        const inBand = (id: string) => (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === id).length ?? 0) > 0;
+        const measure = async (root: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
+                screen.findHostByTestId('hdr.icons')?.props.onLayout(layout(92));
+                screen.findHostByTestId('hdr.controls')!.props.onLayout(layout(125));
+                screen.findHostByTestId('hdr.trailing')!.props.onLayout(layout(64));
+                screen.findHostByTestId('hdr.titleMeasure')!.props.onLayout(layout(90));
+                screen.findHostByTestId('hdr.lineMeasure')?.props.onLayout(layout(150));
+                for (const button of buttons) {
+                    const host = screen.findAll((node) => node.props.testID === button.testID && node.props.label !== undefined)[0];
+                    host?.parent?.props.onLayout?.(layout(widths[button.testID]!));
+                }
+            });
+        };
+        // A wide pane holds everything on the band and the whole line.
+        await measure(1100);
+        expect(inBand('stage') && inBand('edit') && inBand('icons') && inBand('ctl')).toBe(true);
+        // The ~600 px Changes pane: all of it beside the name would cut "+9 −3" off the line, so the quiet
+        // "Add to commit" waits in `⋯`; the file's own Edit, the toggles and the view controls keep their place.
+        await measure(600);
+        expect(inBand('stage')).toBe(false);
+        expect(inBand('edit') && inBand('icons') && inBand('ctl')).toBe(true);
+        const menu = screen.findAllByType(PageHeaderMenu)[0]!;
+        expect(menu.props.actions.map((action: { testID?: string }) => action.testID).filter(Boolean)).toEqual(['stage']);
+    });
+
+    it('gives the actions the row beneath when even the ones that never fold would cut the facts line (Edit, H-T3)', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } });
+        // Editing in the ~600 px drawer: View | Changes, the Editing pill and Find, then the file's one Done.
+        const buttons = [{ label: 'Done', onPress: () => {}, testID: 'done' }];
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="retry.ts"
+                meta={[{ key: 'dir', text: 'src' }, { key: 'status', text: 'Modified' }, { key: 'counts', text: '+9 −3' },
+                    { key: 'problems', text: '9 problems' }]}
+                buttons={buttons} menuActions={[{ id: 'copy', title: 'Copy path', onSelect: () => {} }]}
+                actions={<Text testID="icons">View | Changes · Editing · Find</Text>} />,
+        );
+        const inBand = (id: string) => (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === id).length ?? 0) > 0;
+        const shown = (id: string) => screen.findAll((node) => node.props.testID === id).length > 0;
+        const measure = async (root: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
+                screen.findHostByTestId('hdr.icons')?.props.onLayout(layout(300));
+                screen.findHostByTestId('hdr.trailing')?.props.onLayout(layout(64));
+                screen.findHostByTestId('hdr.titleMeasure')!.props.onLayout(layout(90));
+                screen.findHostByTestId('hdr.lineMeasure')?.props.onLayout(layout(240));
+                const host = screen.findAll((node) => node.props.testID === 'done' && node.props.label !== undefined)[0];
+                host?.parent?.props.onLayout?.(layout(58));
+            });
+        };
+        // A wide pane: name, whole line and every control on the band.
+        await measure(1100);
+        expect(inBand('icons') && inBand('done')).toBe(true);
+        // The drawer: nothing beside the name can fold (Done is the file's action), so the controls move to the
+        // row beneath, whole, and the facts line ("· 9 problems") keeps the band instead of being cut.
+        await measure(600);
+        expect(inBand('icons') || inBand('done')).toBe(false);
+        expect(shown('icons') && shown('done')).toBe(true);
     });
 
     it('does not offer a busy action again', async () => {

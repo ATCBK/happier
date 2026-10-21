@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { DetailsTabHeader } from '@/components/appShell/panes/details/header/DetailsTabHeader';
+import { PaneMainColumnContext, type PaneMainColumnState } from '@/components/appShell/panes/mainColumn/usePaneMainColumn';
+import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 
 import { DetailsTabGroupPanel } from './DetailsTabGroupPanel';
 import type {
@@ -163,5 +165,64 @@ describe('DetailsTabGroupPanel with one tab (lab session-D)', () => {
     );
     expect(withStrip.findAllHostsByTestId('open-browser')).toHaveLength(1);
     expect(withStrip.findAllHostsByTestId('pane-close')).toHaveLength(1);
+  });
+  it('keeps the strip while the main column is hidden, so its restore chip has the strip edge to sit on (lab H1/H3)', async () => {
+    const hiddenMain: PaneMainColumnState = {
+      hidden: true,
+      canHide: true,
+      folded: false,
+      labels: { hideLabel: 'Hide project', showLabel: 'Show project' },
+      identity: { name: 'files-editor-demo' },
+      setHidden: vi.fn(),
+      toggle: vi.fn(),
+    };
+    const screen = await renderScreen(
+      <PaneMainColumnContext.Provider value={hiddenMain}>
+        <DetailsTabGroupPanel
+          pane={pane}
+          group={group([tab('peek', 'retry.ts')])}
+          collapseSingleTabStrip
+          testIds={testIds}
+          renderHeaderActions={renderPaneActions}
+          renderTabContent={() => <DetailsTabHeader testID="peek-header" title="retry.ts" />}
+        />
+      </PaneMainColumnContext.Provider>,
+    );
+
+    expect(screen.findAllHostsByTestId('pane-main-restore-chip')).toHaveLength(1);
+    expect(screen.findAllHostsByTestId('strip-tab-peek')).toHaveLength(1);
+    expect(screen.findAllHostsByTestId('pane-close')).toHaveLength(1);
+  });
+  it('drops the one-tab strip on a phone too when the screen bar above already carries Back (lab FV1p)', async () => {
+    const screen = await renderScreen(
+      <SurfaceStateSizeProvider size="phone">
+        <DetailsTabGroupPanel
+          pane={pane}
+          group={group([tab('peek', 'retry.ts')])}
+          collapseSingleTabStrip
+          testIds={testIds}
+          renderTabContent={() => <DetailsTabHeader testID="peek-header" title="retry.ts" />}
+        />
+      </SurfaceStateSizeProvider>,
+    );
+    expect(screen.findAllHostsByTestId('strip-tab-peek')).toHaveLength(0);
+    expect(screen.findHostByTestId('peek-header.root')).not.toBeNull();
+  });
+
+  it('keeps the phone strip when it carries the screen’s own leading control', async () => {
+    const screen = await renderScreen(
+      <SurfaceStateSizeProvider size="phone">
+        <DetailsTabGroupPanel
+          pane={pane}
+          group={group([tab('peek', 'retry.ts')])}
+          collapseSingleTabStrip
+          testIds={testIds}
+          renderHeaderLeadingActions={() => <View testID="screen-back" />}
+          renderTabContent={() => <DetailsTabHeader testID="peek-header" title="retry.ts" />}
+        />
+      </SurfaceStateSizeProvider>,
+    );
+    expect(screen.findAllHostsByTestId('strip-tab-peek')).toHaveLength(1);
+    expect(screen.findAllHostsByTestId('screen-back')).toHaveLength(1);
   });
 });

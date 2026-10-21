@@ -3,7 +3,7 @@ import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HAPPIER_ICON_BUTTON_SIZE, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 
-import { PaneHeader, type PaneHeaderLineSegment } from '@/components/appShell/panes/PaneHeader';
+import { PaneHeader, PaneHeaderLineView, type PaneHeaderLineSegment } from '@/components/appShell/panes/PaneHeader';
 import { useClaimedStackHeaderActions } from '@/components/navigation/stackHeaderActions';
 import { ToolbarButton } from '@/components/ui/buttons/ToolbarButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
@@ -145,6 +145,21 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     // move to the row beneath.
     // A short name needs only its own width (lab ED1: "retry.ts · Editing · Find · Done" on one row).
     const [titleNeed, setTitleNeed] = React.useState(0);
+    // The facts line's own width (lab FV1c: "src · Modified · +9 −3"), measured out of flow like the title.
+    const [factsNeed, setLineNeed] = React.useState(0);
+    // The leading part of the line (the folder crumb, live status) as laid out; it shrinks by its own rule.
+    const [leadingWidth, setLeadingWidth] = React.useState(0);
+    const measureLeading = (event: LayoutChangeEvent) => {
+        const width = Math.ceil(event.nativeEvent.layout.width);
+        setLeadingWidth((current) => current === width ? current : width);
+    };
+    const lineNeed = factsNeed > 0 ? factsNeed + (props.metaLeading ? leadingWidth + theme.space.s4 : 0) : 0;
+    // The measured copy carries no ids or presses of its own (the visible line owns them).
+    const measureSegments = React.useMemo(() => segments.map((segment) => {
+        if (typeof segment === 'string') return segment;
+        const { testID: _id, onPress: _press, ...rest } = segment as typeof segment & { testID?: string; onPress?: () => void };
+        return rest as PaneHeaderLineSegment;
+    }), [segments]);
     const besideFits = (width: number, room: number) => width > 0 && room - width >= (titleNeed > 0 ? Math.min(width, titleNeed) : width);
     // The quieter buttons (first to last; never the last, never a primary) move into `⋯` until the rest `fits`.
     const foldQuietButtons = (fits: (visible: readonly DetailsTabHeaderAction[]) => boolean): ReadonlySet<string> => {
@@ -170,7 +185,14 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     const besideWidth = besideFolded ? actionsWidth(buttonList.filter((button) => !besideFolded.has(keyOf(button))), false) : 0;
     const togglesFoldBesideTitle = besideFolded !== null && besideFits(besideWidth, foldedRoom);
     const lineRoom = togglesFoldBesideTitle ? foldedRoom - besideWidth : bandRoom - naturalActions;
-    const actionsBelow = !phone && band.root > 0 && naturalActions > 0 && !besideFits(naturalActions, bandRoom) && !togglesFoldBesideTitle;
+    // The buttons that never fold (the last, a primary) and the toggles, beside the name, against the facts line: when
+    // even they would cut it (Edit: View | Changes, Editing, Find, Done in a ~600 px drawer, "· 9 problems" dropped),
+    // the actions take the row beneath whole and the line keeps the band (H-T3).
+    const stayingButtons = buttonList.filter((button, index) => index === buttonList.length - 1 || button.tone === 'primary');
+    const lineCutBeside = !phone && lineNeed > 0 && buttonsMeasured && band.root > 0 && props.menu === undefined
+        && roomBesideTitle - menuSlot - actionsWidth(stayingButtons) - theme.space.s4 - controlsWidth < lineNeed;
+    const actionsBelow = !phone && band.root > 0 && naturalActions > 0
+        && ((!besideFits(naturalActions, bandRoom) && !togglesFoldBesideTitle) || lineCutBeside);
     const controlsBelow = !phone && Boolean(props.controls) && band.root > 0 && (actionsBelow || lineRoom < band.controls * 2);
     // Beneath the band the one row folds the same way, and when it still runs out the quiet toggles follow into `⋯`,
     // so the row never breaks in two.
@@ -183,9 +205,35 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
         iconsFolded = Boolean(props.actions) && band.actions > 0
             && !rowFits(buttonList.filter((button) => !folded.has(keyOf(button))));
     }
-    const buttons = buttonList.length > 0 ? buttonList.map((button) => {
+    // Beside the title the facts line shares the room the actions leave: a fact that does not fit drops
+    // whole ("+9 −3" lost in a 600 px pane). Before cutting the line, the quieter buttons wait in `⋯`.
+    const controlsOnLine = Boolean(props.controls) && !controlsBelow;
+    if (!phone && !actionsBelow && lineNeed > 0 && buttonsMeasured && band.root > 0 && props.menu === undefined) {
+        const lineFits = (visible: readonly DetailsTabHeaderAction[]) => {
+            const withMenu = menuForced || visible.length < buttonList.length || iconsFolded;
+            const room = roomBesideTitle - (withMenu ? menuSlot : 0) - actionsWidth(visible, !iconsFolded) - theme.space.s4;
+            return room - (controlsOnLine ? controlsWidth : 0) >= lineNeed;
+        };
+        const already = folded;
+        const visible = () => buttonList.filter((button) => !already.has(keyOf(button)));
+        if (!lineFits(visible())) {
+            const lineFolded = new Set(already);
+            for (const button of buttonList.slice(0, -1)) {
+                if (lineFits(buttonList.filter((entry) => !lineFolded.has(keyOf(entry))))) break;
+                if (button.tone !== 'primary') lineFolded.add(keyOf(button));
+            }
+            folded = lineFolded;
+        }
+    }
+    // A phone row beneath the band holding only quiet buttons reads as an afterthought and costs the content
+    // a band of height: they wait in `⋯` instead (lab FV1p). A primary, view controls or toggles keep the row.
+    const phoneQuietButtonsAlone = phone && props.menu === undefined && !props.controls && !props.actions && !paneControls
+        && buttonList.length > 0 && buttonList.every((button) => button.tone !== 'primary');
+    if (phoneQuietButtonsAlone) folded = new Set(buttonList.map(keyOf));
+    const visibleButtons = buttonList.filter((button) => !folded.has(keyOf(button)));
+    const buttons = visibleButtons.length > 0 ? visibleButtons.map((button) => {
         const key = keyOf(button);
-        return folded.has(key) ? null : (
+        return (
             <View key={key} style={styles.measured} onLayout={measureButton(key)}>
                 <ToolbarButton
                     testID={button.testID}
@@ -270,6 +318,15 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
         </View>
     ) : null;
 
+    // The line at its natural width, out of flow and unseen (the beside-title fit protects it).
+    const lineMeasure = !phone && segments.length > 0 ? (
+        <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" pointerEvents="none" style={styles.lineMeasure}
+            onLayout={(event) => { const width = Math.ceil(event.nativeEvent.layout.width); setLineNeed((current) => current === width ? current : width); }}
+            testID={`${testID}.lineMeasure`}>
+            <PaneHeaderLineView line={{ segments: measureSegments }} testID={`${testID}.lineMeasureLine`} />
+        </View>
+    ) : null;
+
     return (
         <View testID={`${testID}.root`} onLayout={measure('root')} style={[styles.root, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}>
             <PaneHeader
@@ -284,7 +341,7 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                 lineEnd={props.metaTrailing}
                 line={segments.length > 0 || props.metaLeading ? {
                     segments,
-                    leading: props.metaLeading ? <View style={styles.liveFacts}>
+                    leading: props.metaLeading ? <View style={styles.liveFacts} onLayout={phone ? undefined : measureLeading}>
                         {props.metaLeading}
                         {segments.length > 0 && props.metaLeadingKind !== 'mark' ? <Text style={[styles.metaSeparator, metrics.meta]}>·</Text> : null}
                     </View> : undefined,
@@ -303,6 +360,7 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                 </View>
             ) : null}
             {props.notice ?? null}
+            {lineMeasure}
         </View>
     );
 });
@@ -352,6 +410,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         flexShrink: 0,
     },
+    lineMeasure: { position: 'absolute', left: 0, top: 0, opacity: 0, flexDirection: 'row' },
     measured: {
         flexDirection: 'row',
         alignItems: 'center',

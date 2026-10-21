@@ -1,5 +1,5 @@
 import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
-import { PaneMainRestoreChip } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
+import { PaneMainRestoreChip, usePaneMainRestoreChipVisible } from '@/components/appShell/panes/mainColumn/PaneMainColumnControls';
 import * as React from 'react';
 import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -169,9 +169,14 @@ export const DetailsTabGroupPanel = React.memo((props: DetailsTabGroupPanelProps
 
 
     const headerPaddingTop = props.headerPaddingTop ?? 0;
-    // A phone keeps its strip: its leading control is the screen's Back, which belongs on that row.
+    // A phone keeps its strip only while it carries the screen's leading control (Back belongs on that
+    // row). When the screen bar above already holds Back, a one-tab strip is a second header (lab FV1p).
     const phone = useSurfaceStateSize() === 'phone';
-    const lendsControls = props.collapseSingleTabStrip === true && !phone && !forceEmptyState && props.group.tabs.length === 1;
+    const phoneStripCarriesLeading = phone && Boolean(props.renderHeaderLeadingActions);
+    // A hidden main column's restore chip lives on the strip edge the column went to (lab H1/H3), so the
+    // focused group keeps its strip while that chip has something to show.
+    const restoreChipOnStrip = usePaneMainRestoreChipVisible() && props.group.isFocused;
+    const lendsControls = props.collapseSingleTabStrip === true && !phoneStripCarriesLeading && !forceEmptyState && !restoreChipOnStrip && props.group.tabs.length === 1;
     const headerActionsScopeKey = `details-group:${React.useId()}`;
     const { renderHeaderLeadingActions, renderHeaderActions } = props;
     const renderLentControls = React.useCallback(() => (
