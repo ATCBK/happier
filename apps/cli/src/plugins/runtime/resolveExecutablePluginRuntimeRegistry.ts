@@ -4442,6 +4442,7 @@ export async function resolveExecutablePluginRuntimeRegistry(
             resolvePluginNotifications: () => invocationServiceOwners.notifications,
             readPluginVoiceProviders: () => resolvedRuntimeRegistryOwner?.contributes.voiceProviders ?? [],
             revalidatePluginActionCallerMaterialization,
+            revalidatePluginActionCallerOccurrence,
             invokeContributedAction: createHostContributedActionInvoker({
                 invokeContributedAction,
                 revalidatePluginActionCallerMaterialization,

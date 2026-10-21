@@ -8,10 +8,12 @@ import {
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
-import { activateAgentRuntimeContributionOnDemand } from '@/agent/runtime/registry/activationDemand';
+import { resolveRunnerAgentSessionDescriptorForLease } from '@/daemon/spawn/prepareAgentRuntimeSessionBridge';
 import { createMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { loadBundledPluginLocators } from '@/plugins/projection/registry/builtIn/locators';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '@/plugins/projection/registry/sources/generatedBundledPluginManifests';
 
 import { createPluginReloadController } from './reload/controller';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from './reload/runtimeLease';
@@ -126,7 +128,11 @@ describe('Agent runtime activation isolation', () => {
                 expect(lease.registry.agentRuntimesByAgentId.has('codex')).toBe(false);
                 expect(lease.registry.agentRuntimesByAgentId.has('claude')).toBe(false);
 
-                await activateAgentRuntimeContributionOnDemand(lease.registry, 'claude');
+                const claudeDescriptor = await resolveRunnerAgentSessionDescriptorForLease({
+                    target: { kind: 'backend', sourceKind: 'built_in', backendId: 'claude' },
+                    lease,
+                });
+                expect(claudeDescriptor).toMatchObject({ pluginId: 'happier.agent.claude', agentId: 'claude' });
 
                 const claude = lease.registry.agentRuntimesByAgentId.get('claude');
                 expect(claude).toMatchObject({
@@ -139,13 +145,29 @@ describe('Agent runtime activation isolation', () => {
                 });
                 expect(claudeRuntime?.sessions).toBeDefined();
 
-                await activateAgentRuntimeContributionOnDemand(lease.registry, 'codex');
+                const codexDescriptor = await resolveRunnerAgentSessionDescriptorForLease({
+                    target: { kind: 'backend', sourceKind: 'built_in', backendId: 'codex' },
+                    lease,
+                });
+                expect(codexDescriptor).toMatchObject({ pluginId: 'happier.agent.codex', agentId: 'codex' });
 
                 expect(lease.registry.agentRuntimesByAgentId.get('codex')).toMatchObject({
                     pluginId: 'happier.agent.codex',
                     agentId: 'codex',
                     hasPrimaryRuntime: true,
                 });
+                for (const agentId of ['claude', 'codex']) {
+                    const pluginId = `happier.agent.${agentId}`;
+                    const bundled = loadBundledPluginLocators(BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.filter(
+                        locator => locator.pluginId === pluginId,
+                    ))[0];
+                    const declaredFactory = bundled?.manifest.runtime.agentFactories?.find(
+                        factory => factory.localAgentId === agentId,
+                    );
+                    expect(declaredFactory).toBeDefined();
+                    expect(lease.registry.agentRuntimesByAgentId.get(agentId)?.sessionRunnerFactoryBinding?.locator)
+                        .toEqual(declaredFactory?.locator);
+                }
             } finally {
                 await lease.release();
             }
