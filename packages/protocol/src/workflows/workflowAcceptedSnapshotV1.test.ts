@@ -38,6 +38,14 @@ const workspaceTarget = {
 const frozen = { startedBy: 'user', authoredDefinition: definition, materializedLeaves: [], frozenChildren: {}, workDepth: 0, metadata: null };
 
 describe('WorkflowAcceptedSnapshotV1', () => {
+  it('retains canonical opaque Automation identity without rewriting accepted snapshot bytes', () => {
+    for (const automationId of ['a'.repeat(256), 'e\u0301']) {
+      const snapshot = { ...frozen, definition, inputs: {}, machineId: 'machine-1', executionTarget: { kind: 'session' },
+        workspaceTarget, authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
+        source: { kind: 'automation', automationId } };
+      expect(WorkflowAcceptedSnapshotV1Schema.parse(snapshot)).toEqual(snapshot);
+    }
+  });
   it('requires an explicit frozen authorship observation for saved sources', () => {
     const saved = { kind: 'saved' as const, definitionId: 'definition-1',
       revision: { headerVersion: 2, bodyVersion: 4 } };

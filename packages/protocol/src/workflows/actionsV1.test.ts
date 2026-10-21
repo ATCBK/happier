@@ -8,6 +8,8 @@ import {
   WorkflowInvocationListRequestV1Schema,
   WorkflowInvocationListResultV1Schema,
   WorkflowRunListRequestV1Schema,
+  WorkflowRunAcceptedContextV1Schema,
+  WorkflowRunOriginV1Schema,
   WorkflowActionFailureV1Schema,
   parseWorkflowRunStartActionResultReferenceV1,
   validateWorkflowDefinition,
@@ -83,6 +85,37 @@ describe('workflow Action contracts', () => {
     expect(schema?.safeParse({ sourceArtifactIds: ['definition-1', 'definition-2'], recent: 3 }).success).toBe(true);
     expect(schema?.safeParse({ sourceArtifactIds: ['definition-1', 'definition-1'], recent: 3 }).success).toBe(false);
     expect(schema?.safeParse({ sourceArtifactIds: ['definition-1'], recent: 0 }).success).toBe(false);
+  });
+  it('selects latest Automation statuses exclusively without changing saved-source summaries', () => {
+    const input = WorkflowActionInputSchemasV1['workflow.run.summaries'];
+    expect(input.parse({ automationIds: ['habit-a', 'habit-b'] })).toEqual({ automationIds: ['habit-a', 'habit-b'] });
+    for (const invalid of [
+      { automationIds: ['habit-a', 'habit-a'] },
+      { automationIds: ['habit-a'], recent: 1 },
+      { automationIds: ['habit-a'], sourceArtifactIds: ['definition-a'], recent: 1 },
+    ]) expect(input.safeParse(invalid).success).toBe(false);
+    const result = { automationSummaries: [{ automationId: 'habit-a', lastRun: {
+      id: 'run-a', state: 'succeeded', workflowCustodyState: 'settled', attentionRequired: false,
+      createdAt: '2026-10-21T00:00:00.000Z',
+    } }, { automationId: 'habit-b', lastRun: null }], remainingAutomationIds: [] };
+    expect(WorkflowActionOutputSchemasV1['workflow.run.summaries'].parse(result)).toEqual(result);
+    expect(WorkflowActionOutputSchemasV1['workflow.run.summaries'].safeParse({ ...result, remainingSourceArtifactIds: [] }).success).toBe(false);
+  });
+  it('preserves canonical opaque Automation identity at the summary request and result boundary', () => {
+    const automationIds = ['a'.repeat(256), 'e\u0301'];
+    expect(WorkflowActionInputSchemasV1['workflow.run.summaries'].parse({ automationIds })).toEqual({ automationIds });
+    const result = { automationSummaries: automationIds.map(automationId => ({ automationId, lastRun: null })), remainingAutomationIds: automationIds };
+    expect(WorkflowActionOutputSchemasV1['workflow.run.summaries'].parse(result)).toEqual(result);
+  });
+  it('preserves canonical opaque Automation identity in list selection, public origin and accepted context', () => {
+    for (const automationId of ['a'.repeat(256), 'e\u0301']) {
+      expect(WorkflowRunListRequestV1Schema.parse({ automationId })).toEqual({ automationId });
+      expect(WorkflowRunOriginV1Schema.parse({ kind: 'automation', automationId })).toEqual({ kind: 'automation', automationId });
+      const context = { startedBy: 'trigger', source: { kind: 'automation', automationId }, inputs: {}, machineId: 'machine-1',
+        executionTarget: { kind: 'session' }, materializedLeaves: [], frozenChildren: {},
+        workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } } };
+      expect(WorkflowRunAcceptedContextV1Schema.parse(context)).toEqual(context);
+    }
   });
   it('admits typed partial edits with structured currentness and a closed result', () => {
     const input = { definitionId: 'definition-1', expectedRevision: { headerVersion: 2, bodyVersion: 3 },

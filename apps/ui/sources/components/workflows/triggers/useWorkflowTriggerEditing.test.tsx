@@ -7,7 +7,7 @@ import { WorkflowTriggerSetV1Schema, AutomationDefinitionCreateRequestSchema, Au
     ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, WorkflowDefinitionArtifactHeaderV1Schema,
     WorkflowDefinitionArtifactBodyV1Schema, AutomationTriggerIdSchema, AutomationTriggerDetailSchema, type AutomationDefinitionDetail,
     type AutomationTriggerDefinitionInput, type WorkflowTriggerSetV1 } from '@happier-dev/protocol';
-import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -19,6 +19,8 @@ import { WORKFLOW_STARTER_EXAMPLES_V1, materializeWorkflowStarterExample } from 
 
 // Native confirmation is the user-input boundary; these Save/history cases accept it.
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+// Locale presentation is outside these read/Action contracts; use the shared translation boundary.
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 // Native portal and vendor Markdown are platform boundaries; the editor and Actions stay real.
 vi.mock('@/components/ui/popover', async importOriginal =>
     (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal, { maxHeight: 640, maxWidth: 280, placement: 'bottom' }));
@@ -714,9 +716,8 @@ describe('workflow trigger editing lifetime', () => {
         expect(hook.getCurrent().draft.adds.map((add) => add.clientId)).toEqual(['first']);
     });
 
-    it('reports cold Account reads as failed and recovers through its original query', async () => {
-        // This failure is settled; reconnecting Homes retain their loading state.
-        storage.setState({ endpointStatus: 'offline' });
+    it('reports a settled Account read failure while its Home reconnects and recovers through the original query', async () => {
+        storage.setState({ endpointStatus: 'connecting', socketStatus: 'connecting' });
         listReply = async () => { listReply = undefined; throw new Error('offline'); };
         const query = { scope: 'account_inline' } as const;
         const hook = await renderHook(() => useWorkflowTriggerSets(query));
@@ -725,6 +726,42 @@ describe('workflow trigger editing lifetime', () => {
         await act(async () => hook.getCurrent().retry());
         expect(hook.getCurrent().status).toBe('ready');
         expect(listRequests().map(request => new URL(request.path, 'https://home.test').searchParams.get('scope'))).toEqual(['account_inline', 'account_inline']);
+    });
+
+    it('shows a failed Account census in Session Habits while the Session query is pending, then retries into its targeted Account row', async () => {
+        const example = WORKFLOW_STARTER_EXAMPLES_V1.find(value => value.key === 'daily-summary-in-session')!;
+        const selection = materializeWorkflowStarterExample(example, { session: { sessionId: 'session-a', machineId: 'm1' } });
+        if (selection.status !== 'ready') throw new Error('Session-bound example required');
+        seed(set);
+        rows = rows.map(row => AutomationDefinitionDetailSchema.parse({ ...row, workflowDefinitionId: null,
+            executionRecipe: { v: 2, templateVersion: 1, triggerEvidence: null, workflow: { t: 'plain', v: {
+                workspace: { directory: '/repo' }, executionTarget: { kind: 'session' }, inlineDefinition: selection.example.definition,
+            } } } }));
+        const sessionRead = createDeferred<void>();
+        let failAccountRead = true;
+        home.answer(serverId, 'GET /v3/automations', { select: async (_input, request) => {
+            if (new URL(request.url).searchParams.has('scopeSessionId')) {
+                await sessionRead.promise;
+                return { body: AutomationDefinitionListResponseSchema.parse({ automations: [], nextCursor: null }) };
+            }
+            return failAccountRead ? { status: 503, body: { error: 'storage_unavailable' } } : { body: listRows() };
+        } });
+        storage.setState({ endpointStatus: 'connecting', socketStatus: 'connecting' });
+        const screen = await renderScreen(<SessionTriggersSection sessionId="session-a" serverId={serverId} />);
+        try {
+            await flushHookEffects();
+            expect(screen.findByTestId('session-work-triggers-failed')).not.toBeNull();
+            expect(screen.findByTestId('session-work-triggers-loading')).toBeNull();
+            expect(screen.findByTestId('session-work-triggers-empty')).toBeNull();
+            failAccountRead = false;
+            const retry = screen.findAll(node => node.props.testID === 'session-work-triggers-failed'
+                && typeof node.props.action?.onPress === 'function')[0];
+            expect(retry).toBeDefined();
+            await act(async () => { retry!.props.action.onPress(); sessionRead.resolve(); });
+            await waitForHomeGovernance(() => expect(screen.findByTestId('session-work-trigger:set-1:t1')).not.toBeNull());
+            expect(screen.findByTestId('session-work-triggers-failed')).toBeNull();
+            expect(storage.getState().workflowTriggerSetIdsByQuery).toMatchObject({ account_all: ['set-1'], 'session:session-a': [] });
+        } finally { await act(async () => sessionRead.resolve()); }
     });
 
     /** A refresh shows the last-known answer: a workflow with no triggers keeps reading Manual, not Loading. */

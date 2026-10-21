@@ -3,8 +3,8 @@ import {
     WorkflowRunListRequestV1Schema,
     WorkflowRunListResultV1Schema,
     WorkflowRunSummariesRequestV1Schema,
-    WorkflowRunSummariesResultV1Schema,
-    type WorkflowRunSummariesResultV1,
+    WorkflowRunSourceSummariesResultV1Schema,
+    type WorkflowRunSourceSummariesResultV1,
     type WorkflowRunAcceptedContextV1,
     type WorkflowRunGetResultV1,
 } from '@happier-dev/protocol/workflows/actionsV1';
@@ -174,11 +174,11 @@ export async function readWorkflowRunRolePrefill(params: Readonly<{
 /** Lean batch for the rendered saved-workflow page; no Run-detail cache or reads. */
 export async function summarizeWorkflowRuns(params: Readonly<{
     sourceArtifactIds: readonly string[]; recent: number; signal?: AbortSignal;
-}>): Promise<WorkflowRunSummariesResultV1> {
+}>): Promise<WorkflowRunSourceSummariesResultV1> {
     return await callWorkflowAction({
         actionId: 'workflow.run.summaries',
         input: WorkflowRunSummariesRequestV1Schema.parse({ sourceArtifactIds: params.sourceArtifactIds, recent: params.recent }),
-        parseResult: (value) => WorkflowRunSummariesResultV1Schema.parse(value),
+        parseResult: (value) => WorkflowRunSourceSummariesResultV1Schema.parse(value),
         fallbackMessage: 'Workflow run summaries request failed',
         ...(params.signal ? { signal: params.signal } : {}),
     });

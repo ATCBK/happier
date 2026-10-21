@@ -18,6 +18,7 @@ import { StrictJsonValueSchema, sameStrictJsonValue } from '../json/strictJsonVa
 import { AgentPermissionIntentV1Schema, type AgentPermissionIntentV1 } from '../runtime/permissionIntentV1.js';
 import { resolvePermissionPrivilegeOrdinal } from '../actions/permissionPrivilege.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+import { AutomationIdV1Schema } from '../automations/automationIdV1.js';
 import { SessionInputSourceAuthorityV1Schema } from '../sessions/messages/sessionInputAdmission.js';
 import { WorkflowBlockIdSchema, WorkflowInputNameSchema } from './workflowReferenceV1.js';
 import { WorkflowAcceptedWorkspaceTargetV1Schema } from './workflowWorkspaceV1.js';
@@ -222,7 +223,7 @@ const WorkflowAcceptedSnapshotAutomationV1Schema = lazyZodSchema(() => z.strictO
   authorization: z.lazy((): typeof WorkflowAcceptedAuthorizationV1Schema => WorkflowAcceptedAuthorizationV1Schema),
   source: z.strictObject({
     kind: z.literal('automation'),
-    automationId: preservedBoundedNfcString(191, 'Automation ids'),
+    automationId: asProtocolZod(AutomationIdV1Schema),
     definitionId: zMini.optional(WorkflowDefinitionIdV1Schema),
     revision: z.optional(WorkflowArtifactRevisionV1Schema),
     savedBy: zMini.optional(zMini.nullable(WorkflowDefinitionSavedByV1Schema)),

@@ -8,7 +8,7 @@ import { prepareWorkflowRunDataKeyV1, resolveWorkflowRunDataKeyV1 } from '../../
 
 import { validateWorkflowDefinition } from '../../workflows/workflowValidationV1.js';
 import { materializeWorkflowAcceptedSnapshotV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
-import { WorkflowRunGetResultV1Schema, WorkflowRunStartRequestV1Schema, WorkflowRunWaitRequestV1Schema, WorkflowRunListRequestV1Schema } from '../../workflows/actionsV1.js';
+import { WorkflowRunGetResultV1Schema, WorkflowRunStartRequestV1Schema, WorkflowRunWaitRequestV1Schema, WorkflowRunListRequestV1Schema, WorkflowRunSummariesRequestV1Schema } from '../../workflows/actionsV1.js';
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
 import { WorkflowRunSummaryV1Schema, WorkflowRunInvocationIndexV1Schema, WorkflowProgressEnvelopeV1Schema } from '../../workflows/workflowProgressV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
@@ -2121,6 +2121,26 @@ describe('shared Account workflow run owner', () => {
       resolveEncryption: async () => { throw new Error('must_not_resolve_private_keys'); },
     });
     await expect(owner.execute({ actionId: 'workflow.run.summaries', input: { sourceArtifactIds: ['def-1', 'def-2'], recent: 3 }, context: {} })).resolves.toEqual(result);
+  });
+  it('reads public Automation statuses without opening accepted private content and refuses the wrong summary family', async () => {
+    const result = { automationSummaries: [{ automationId: 'habit-a', lastRun: {
+      id: runId, state: 'succeeded', workflowCustodyState: 'settled', attentionRequired: false,
+      createdAt: '2026-10-21T00:00:00.000Z',
+    } }], remainingAutomationIds: [] };
+    let response: unknown = result;
+    const deps = ownerDeps({ execute: async (operation, options) => {
+      if (operation.operation !== 'summaries' || options?.publisherMachineId) throw new Error('unexpected_storage_boundary');
+      return response;
+    } });
+    const owner = createWorkflowAccountRunActionOwner(deps);
+    const input = WorkflowRunSummariesRequestV1Schema.parse({ automationIds: ['habit-a'] });
+    await expect(owner.execute({ actionId: 'workflow.run.summaries', input, context: {} })).resolves.toEqual(result);
+    response = { summaries: [], remainingSourceArtifactIds: [] };
+    await expect(owner.execute({ actionId: 'workflow.run.summaries', input, context: {} }))
+      .rejects.toMatchObject({ code: 'content_unavailable' });
+    response = result;
+    await expect(owner.execute({ actionId: 'workflow.run.summaries', input: { sourceArtifactIds: ['def-a'], recent: 1 }, context: {} }))
+      .rejects.toMatchObject({ code: 'content_unavailable' });
   });
   it('refuses unaccepted plugin catalog sources before any run effect', async () => {
     const owner = createWorkflowAccountRunActionOwner(ownerDeps({ execute: async () => { throw new Error('must_not_access_run'); } }));

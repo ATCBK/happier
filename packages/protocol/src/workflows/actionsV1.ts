@@ -14,6 +14,8 @@ import {
 
 import { OPAQUE_CURSOR_SCHEMA } from '../automations/automationActionSpecsV1.js';
 import { AutomationV3RunMutationResponseSchema } from '../automations/automationApiV3.js';
+import { AutomationIdV1Schema } from '../automations/automationIdV1.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import {
   WORKFLOW_ACTION_IDS_V1,
   type WorkflowActionIdV1,
@@ -208,7 +210,7 @@ export const WorkflowRunListRequestV1Schema = lazyZodSchema(() => z.strictObject
   targetSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   /** Server-proved root and readable descendants of this managed Session. */
   underSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
-  automationId: zMini.optional(preservedBoundedNfcString(191, 'Automation ids')),
+  automationId: zMini.optional(asProtocolZod(AutomationIdV1Schema)),
   machineId: zMini.optional(WorkflowMachineIdV1Schema),
 }).check(z.superRefine((value, context) => {
   if (value.projection !== 'membership') return;
@@ -274,14 +276,23 @@ export const WorkflowRunListResultV1Schema = lazyZodSchema(() => z.strictObject(
   }
 })));
 export const WorkflowRunGetRequestV1Schema = lazyZodSchema(() => z.strictObject({ runId: WorkflowRunIdV1Schema }));
-export const WorkflowRunSummariesRequestV1Schema = lazyZodSchema(() => z.strictObject({
+export const WorkflowRunSourceSummariesRequestV1Schema = lazyZodSchema(() => z.strictObject({
   sourceArtifactIds: z.array(WorkflowDefinitionIdV1Schema).check(z.superRefine((ids, context) => {
     if (new Set(ids).size !== ids.length) context.addIssue({ code: "custom", message: 'Duplicate source artifacts' });
   })),
   recent: PositivePagePreferenceSchema,
 }));
+export const WorkflowRunAutomationSummariesRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  automationIds: z.array(asProtocolZod(AutomationIdV1Schema)).check(z.superRefine((ids, context) => {
+    if (new Set(ids).size !== ids.length) context.addIssue({ code: 'custom', message: 'Duplicate Automations' });
+  })),
+}));
+export const WorkflowRunSummariesRequestV1Schema = lazyZodSchema(() => z.union([
+  WorkflowRunSourceSummariesRequestV1Schema, WorkflowRunAutomationSummariesRequestV1Schema,
+]));
+export type WorkflowRunSummariesRequestV1 = z.infer<typeof WorkflowRunSummariesRequestV1Schema>;
 const WorkflowRunRecentSummaryV1Schema = lazyZodSchema(() => z.strictObject({ runId: WorkflowRunIdV1Schema, state: WorkflowRunStateV1Schema }));
-export const WorkflowRunSummariesResultV1Schema = lazyZodSchema(() => z.strictObject({
+export const WorkflowRunSourceSummariesResultV1Schema = lazyZodSchema(() => z.strictObject({
   summaries: z.array(z.strictObject({
     sourceArtifactId: WorkflowDefinitionIdV1Schema,
     lastRun: z.nullable((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(WorkflowRunRecentSummaryV1Schema, { createdAt: z.string().check(z.iso.datetime()), finishedAt: z.nullable(z.string().check(z.iso.datetime())) }))),
@@ -291,10 +302,28 @@ export const WorkflowRunSummariesResultV1Schema = lazyZodSchema(() => z.strictOb
   })),
   remainingSourceArtifactIds: z.array(WorkflowDefinitionIdV1Schema),
 }));
+export type WorkflowRunSourceSummariesResultV1 = z.infer<typeof WorkflowRunSourceSummariesResultV1Schema>;
+export const WorkflowRunAutomationSummariesResultV1Schema = lazyZodSchema(() => z.strictObject({
+  automationSummaries: z.array(z.strictObject({
+    automationId: asProtocolZod(AutomationIdV1Schema),
+    lastRun: z.nullable(z.strictObject({
+      id: WorkflowRunIdV1Schema,
+      state: WorkflowRunStateV1Schema,
+      workflowCustodyState: WorkflowRunSummaryV1Schema.shape.workflowCustodyState,
+      attentionRequired: z.boolean(),
+      createdAt: z.string().check(z.iso.datetime()),
+    })),
+  })),
+  remainingAutomationIds: z.array(asProtocolZod(AutomationIdV1Schema)),
+}));
+export type WorkflowRunAutomationSummariesResultV1 = z.infer<typeof WorkflowRunAutomationSummariesResultV1Schema>;
+export const WorkflowRunSummariesResultV1Schema = lazyZodSchema(() => z.union([
+  WorkflowRunSourceSummariesResultV1Schema, WorkflowRunAutomationSummariesResultV1Schema,
+]));
 export type WorkflowRunSummariesResultV1 = z.infer<typeof WorkflowRunSummariesResultV1Schema>;
 const WorkflowRunAcceptedAutomationSourceV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('automation'),
-  automationId: preservedBoundedNfcString(191, 'Automation ids'),
+  automationId: asProtocolZod(AutomationIdV1Schema),
   definitionId: zMini.optional(WorkflowDefinitionIdV1Schema),
   revision: zMini.optional(WorkflowArtifactRevisionV1Schema),
   savedBy: zMini.optional(zMini.nullable(WorkflowDefinitionSavedByV1Schema)),

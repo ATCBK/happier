@@ -11,7 +11,7 @@ import { logger } from "@/utils/logging/log";
 import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
-import { listWorkflowRuns } from "./workflowRunService";
+import { listWorkflowRuns, summarizeWorkflowRuns } from "./workflowRunService";
 
 // Native database boundary only: all SQL, snapshots, policy and keys stay real.
 type NativeDatabaseBoundary = Pick<typeof db, "$transaction" | "$executeRawUnsafe">;
@@ -70,7 +70,93 @@ afterAll(async () => {
     if (harness) await harness.close();
 });
 
-it("freshly readmits compact Team membership after capture and refuses a revoked source grant", async () => {
+it.each(["mode", "change-cursor", "deletion"] as const)("freshly readmits public latest status after an Account %s change", async change => {
+    const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+    const automation = await db.automation.create({ data: { accountId: owner.id, name: "Latest status", targetType: null, templateCiphertext: "{}" } });
+    const runId = crypto.randomUUID();
+    await db.automationRun.create({ data: { id: runId, accountId: owner.id, automationId: automation.id,
+        originKind: "automation", causeKind: "manual", causeOccurredAt: new Date(), state: "failed",
+        scheduledAt: new Date(), dueAt: new Date(), workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: "unopened" } });
+    let changed = false;
+    const leases: number[] = [];
+    const debug = vi.spyOn(logger, "debug").mockImplementation(record => {
+        if (record && typeof record === "object" && "phase" in record && record.phase === "workflow.summaries.materialize") leases.push(nativeTransactions.leases);
+    });
+    nativeTransactions.afterCommit = async () => {
+        changed = true;
+        if (change === "deletion") await db.automationRun.delete({ where: { id: runId } });
+        else await db.account.update({ where: { id: owner.id }, data: change === "mode" ? { encryptionMode: "e2ee" } : { seq: { increment: 1 } } });
+    };
+    try {
+        const result = await Promise.allSettled([summarizeWorkflowRuns({ accountId: owner.id, automationIds: [automation.id], pageByteLimit: 1_000_000 })]);
+        if (!changed && result[0].status === "rejected") throw result[0].reason;
+        expect(changed).toBe(true);
+        expect(leases).toEqual([0]);
+        expect(nativeTransactions.leases).toBe(0);
+        if (change === "change-cursor") expect(result).toMatchObject([{ status: "fulfilled", value: {
+            automationSummaries: [{ automationId: automation.id, lastRun: { id: runId, attentionRequired: true } }], remainingAutomationIds: [],
+        } }]);
+        else expect(result).toMatchObject([{ status: "rejected", reason: { code: change === "mode" ? "content_unavailable" : "run_not_found" } }]);
+    } finally { nativeTransactions.afterCommit = undefined; debug.mockRestore(); }
+});
+
+it("keeps summary queries set-oriented for 1129 requested ids without acquiring private payload columns or imposing a cap", async () => {
+    const owner = await db.account.create({ data: { encryptionMode: "plain" } });
+    const automationIds = Array.from({ length: 129 }, () => crypto.randomUUID());
+    await db.automation.createMany({ data: automationIds.map(id => ({ id, accountId: owner.id, name: "Status", targetType: null, templateCiphertext: "{}" })) });
+    await db.automationRun.createMany({ data: automationIds.map(automationId => ({ id: crypto.randomUUID(), automationId, accountId: owner.id,
+        originKind: "automation", causeKind: "manual", causeOccurredAt: new Date(), state: "succeeded", workflowCustodyState: "settled",
+        scheduledAt: new Date(), dueAt: new Date(), workflowAcceptedSnapshotEnvelope: "unopened accepted", workflowCheckpointEnvelope: "unopened checkpoint" })) });
+    // Initialize the storage-owned SQLite read connection before observing domain queries.
+    await summarizeWorkflowRuns({ accountId: owner.id, automationIds: automationIds.slice(0, 1), pageByteLimit: 1_000_000 });
+    const client: unknown = Reflect.get(db, "_originalClient");
+    if (!client || typeof client !== "object") throw new Error("Native Prisma boundary unavailable");
+    // SQLite's coherent reads use a second native client of this same provider constructor.
+    const boundary: unknown = Object.getPrototypeOf(client);
+    if (!boundary || typeof boundary !== "object") throw new Error("Native Prisma prototype unavailable");
+    const request: unknown = Reflect.get(boundary, "_request");
+    if (typeof request !== "function") throw new Error("Native Prisma request boundary unavailable");
+    let rawQueries = 0;
+    let privatePayloadColumns = 0;
+    Reflect.set(boundary, "_request", new Proxy(request, { async apply(target, receiver, args) {
+        const result: unknown = await Reflect.apply(target, receiver, args);
+        if (args[0] && typeof args[0] === "object" && "action" in args[0] && args[0].action === "queryRaw") {
+            rawQueries++;
+        }
+        for (const row of Array.isArray(result) ? result : [result]) if (row && typeof row === "object") {
+            for (const field of ["workflowAcceptedSnapshotEnvelope", "workflowCheckpointEnvelope", "contentEnvelope"]) {
+                if (Object.hasOwn(row, field)) privatePayloadColumns++;
+            }
+        }
+        return result;
+    } }));
+    try {
+        const one = await summarizeWorkflowRuns({ accountId: owner.id, automationIds: automationIds.slice(0, 1), pageByteLimit: 1_000_000 });
+        expect(one.automationSummaries).toHaveLength(1);
+        const singleQueries = rawQueries;
+        rawQueries = 0;
+        const many = await summarizeWorkflowRuns({ accountId: owner.id, automationIds, pageByteLimit: 1_000_000 });
+        expect(many.automationSummaries.map(summary => summary.automationId)).toEqual(automationIds);
+        expect({ singleQueries, pageQueries: rawQueries, privatePayloadColumns }).toEqual({ singleQueries: 1, pageQueries: 1, privatePayloadColumns: 0 });
+        const oversizedIds = [...automationIds, ...Array.from({ length: 1000 }, () => crypto.randomUUID())];
+        rawQueries = 0;
+        const oversized = await summarizeWorkflowRuns({ accountId: owner.id, automationIds: oversizedIds, pageByteLimit: 1_000_000 });
+        expect(oversized.automationSummaries.map(summary => summary.automationId)).toEqual(oversizedIds);
+        expect(oversized.remainingAutomationIds).toEqual([]);
+        const automationQueries = rawQueries;
+        rawQueries = 0;
+        const sources = await summarizeWorkflowRuns({ accountId: owner.id, sourceArtifactIds: oversizedIds, recent: 1, pageByteLimit: 1_000_000 });
+        expect(sources.summaries.map(summary => summary.sourceArtifactId)).toEqual(oversizedIds);
+        expect(sources.summaries.every(summary => summary.lastRun === null)).toBe(true);
+        expect(sources.remainingSourceArtifactIds).toEqual([]);
+        expect({ automationQueries, sourceQueries: rawQueries, privatePayloadColumns })
+            .toEqual({ automationQueries: 1, sourceQueries: 1, privatePayloadColumns: 0 });
+        console.info("PERF-S4-workflow-summary-queries", { singleQueries, pageQueries: 1, requestedIds: oversizedIds.length,
+            automationQueries, sourceQueries: rawQueries, privatePayloadColumns });
+    } finally { Reflect.set(boundary, "_request", request); }
+});
+
+it.each(["membership", "automation-status"] as const)("freshly readmits Team %s after capture and refuses a revoked source grant", async projection => {
     const owner = await db.account.create({ data: { encryptionMode: "plain" } });
     const viewer = await db.account.create({ data: { encryptionMode: "plain" } });
     const team = await db.team.create({ data: { name: "Compact attention" } });
@@ -82,8 +168,9 @@ it("freshly readmits compact Team membership after capture and refuses a revoked
     await db.artifactTeamGrant.create({ data: { artifactId: artifact.id, teamId: team.id, accessLevel: "view", createdByAccountId: owner.id } });
     const machine = await db.machine.create({ data: { id: crypto.randomUUID(), accountId: owner.id, metadata: "test" } });
     const runId = crypto.randomUUID();
+    const automation = await db.automation.create({ data: { accountId: owner.id, name: "Team status", targetType: null, templateCiphertext: "{}" } });
     await db.automationRun.create({ data: { id: runId, accountId: owner.id, sourceArtifactId: artifact.id, visibleTeamId: team.id,
-        originKind: "direct", causeKind: null, state: "failed", scheduledAt: new Date(), dueAt: new Date(),
+        originKind: "automation", automationId: automation.id, causeKind: "manual", causeOccurredAt: new Date(), state: "failed", scheduledAt: new Date(), dueAt: new Date(),
         workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: "unopened private content",
         assignments: { create: { machineId: machine.id, priority: 0 } } } });
     let revoked = false;
@@ -92,7 +179,9 @@ it("freshly readmits compact Team membership after capture and refuses a revoked
         await db.artifactTeamGrant.deleteMany({ where: { artifactId: artifact.id, teamId: team.id } });
     };
     try {
-        await expect(listWorkflowRuns({ accountId: viewer.id, attention: "required", projection: "membership", pageByteLimit: 1_000_000 }))
+        await expect(projection === "membership"
+            ? listWorkflowRuns({ accountId: viewer.id, attention: "required", projection: "membership", pageByteLimit: 1_000_000 })
+            : summarizeWorkflowRuns({ accountId: viewer.id, automationIds: [automation.id], pageByteLimit: 1_000_000 }))
             .rejects.toMatchObject({ code: "run_not_found" });
         expect(revoked).toBe(true);
         expect(nativeTransactions.leases).toBe(0);

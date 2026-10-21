@@ -1,4 +1,4 @@
-import type { WorkflowRunSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import type { WorkflowRunSourceSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 
 import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
@@ -18,7 +18,7 @@ export type WorkflowRunStrip = Readonly<{
     accessibilityLabel: string;
 }>;
 
-type SummaryInput = Pick<WorkflowRunSummariesResultV1['summaries'][number], 'recent' | 'needsYouCount' | 'needsYouRunId'>;
+type SummaryInput = Pick<WorkflowRunSourceSummariesResultV1['summaries'][number], 'recent' | 'needsYouCount' | 'needsYouRunId'>;
 
 /** Column status and Library view membership classify the same summary facts. */
 export function hasWorkingWorkflowLibraryRun(summary: Pick<SummaryInput, 'recent'> | undefined): boolean {

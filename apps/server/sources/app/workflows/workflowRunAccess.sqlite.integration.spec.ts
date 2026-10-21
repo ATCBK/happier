@@ -130,7 +130,9 @@ describe("Workflow Run live Team access (real SQLite)", () => {
 
     it("projects attention membership through real HTTP and Protocol without private content, preserving locked Team rows and revocation", async () => {
         const f = await fixture();
-        await db.automationRun.update({ where: { id: f.runId }, data: { state: "failed" } });
+        const automation = await db.automation.create({ data: { accountId: f.owner.id, name: "Public trigger status", targetType: null, templateCiphertext: "{}" } });
+        await db.automationRun.update({ where: { id: f.runId }, data: { state: "failed", originKind: "automation",
+            automationId: automation.id, causeKind: "manual", causeOccurredAt: new Date() } });
         await withAuthenticatedTestApp(app => registerWorkflowRunStorageRoutes(app), async app => {
             const storage = { execute: async (operation: Readonly<Record<string, unknown>>) => {
                 const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
@@ -157,6 +159,11 @@ describe("Workflow Run live Team access (real SQLite)", () => {
             });
             expect(WorkflowRunListResultV1Schema.parse(await owner.execute({ actionId: "workflow.run.list",
                 input: request, context: {} }))).toMatchObject({ projection: "membership", runs: [{ id: f.runId }], metadataByRunId: {} });
+            const statusRequest = { automationIds: [automation.id] };
+            const expectedStatus = { automationSummaries: [{ automationId: automation.id, lastRun: expect.objectContaining({
+                id: f.runId, state: "failed", workflowCustodyState: "pending", attentionRequired: true,
+            }) }], remainingAutomationIds: [] };
+            expect(await owner.execute({ actionId: "workflow.run.summaries", input: statusRequest, context: {} })).toEqual(expectedStatus);
             const full = await storage.execute({ operation: "list", request: { attention: "required" }, pageByteLimit: 1_000_000 });
             expect(full).not.toHaveProperty("projection");
             expect(full.acceptedEnvelopesByRunId[f.runId]).toBe(f.acceptedEnvelope);
@@ -180,9 +187,17 @@ describe("Workflow Run live Team access (real SQLite)", () => {
             const locked = WorkflowRunListResultV1Schema.parse(await owner.execute({ actionId: "workflow.run.list", input: request, context: {} }));
             expect(locked.runs.map(run => run.id)).toEqual([f.runId]);
             expect(locked.metadataByRunId).toEqual({});
+            const lockedFull = await storage.execute({ operation: "list", request: { attention: "required" }, pageByteLimit: 1_000_000 });
+            expect(lockedFull.runs).toEqual(raw.runs);
+            expect(lockedFull.keyCensusByRunId[f.runId].callerDataEncryptionKey).toBeNull();
+            expect(lockedFull.acceptedEnvelopesByRunId[f.runId]).toBeNull();
+            expect(await owner.execute({ actionId: "workflow.run.summaries", input: statusRequest, context: {} })).toEqual(expectedStatus);
             await db.artifactTeamGrant.deleteMany({ where: { artifactId: f.artifact.id, teamId: f.team.id } });
             expect(await owner.execute({ actionId: "workflow.run.list", input: request, context: {} }))
                 .toMatchObject({ projection: "membership", runs: [], metadataByRunId: {} });
+            expect(await owner.execute({ actionId: "workflow.run.summaries", input: statusRequest, context: {} })).toEqual({
+                automationSummaries: [{ automationId: automation.id, lastRun: null }], remainingAutomationIds: [],
+            });
         });
     });
 

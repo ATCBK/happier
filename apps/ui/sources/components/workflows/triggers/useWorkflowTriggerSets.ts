@@ -100,8 +100,8 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
         };
     }, [attempt, changeSignal, identity, readRequest, addressed, accountLifetime, lifetime]);
     const retry = React.useCallback(() => setAttempt((value) => value + 1), []);
-    // A read that failed while the Home was still being reached (right after sign-in or a restart) has not
-    // settled into a failure: it reads as loading, and is read again once the Home has answered.
+    // A settled failure stays actionable even while realtime reconnects. Home recovery
+    // still retries the read automatically without turning its failed answer into loading.
     const homeSettling = useActiveHomeSettling() && !addressed;
     const failedRef = React.useRef(false);
     failedRef.current = state.identity === identity && state.status === 'failed';
@@ -110,8 +110,7 @@ export function useWorkflowTriggerSets(request: WorkflowTriggerListRequestV1 | n
         if (wasSettling.current && !homeSettling && failedRef.current) setAttempt((value) => value + 1);
         wasSettling.current = homeSettling;
     }, [homeSettling]);
-    const status = state.identity !== identity ? 'loading' as const
-        : state.status === 'failed' && homeSettling ? 'loading' as const : state.status;
+    const status = state.identity !== identity ? 'loading' as const : state.status;
     return { sets: request === null ? EMPTY_SETS : addressed ? state.identity === identity && accountLifetime?.isCurrent()
         ? focused ? sets : snapshot.current?.identity === identity ? snapshot.current.sets : EMPTY_SETS
         : EMPTY_SETS : sets, status: request === null ? 'ready' as const : status, retry, acknowledge };

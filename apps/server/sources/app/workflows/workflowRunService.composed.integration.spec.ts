@@ -60,7 +60,7 @@ import { AUTOMATION_RUN_TERMINAL_STATES } from "@/app/automations/automationType
 import { createAutomation, deleteAutomation, updateAutomation } from "@/app/automations/automationCrudService";
 import { createAutomationWorkflowRecipeFixture } from "@/testkit/automationWorkflowRecipe";
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
-import { WorkflowRunWaitResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
+import { WorkflowRunWaitResultV1Schema, WorkflowRunSummariesResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import { createMaterializedEphemeralRunnerFixture } from "@/app/ephemeralRunner/materializedRunner.testkit";
 import { createSignedPluginInstallationPublisherHeader, createTrustedMachineInstallation } from "@/testkit/pluginInstallationPublisherTestkit";
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
@@ -726,6 +726,14 @@ describe("workflowRunService (integration)", () => {
                 } : { sourceArtifactId: id, lastRun: null, recent: [], needsYouCount: 0, needsYouRunId: null }),
                     remainingSourceArtifactIds: [] });
             }
+            const sourceIds = [sourceArtifactId, missingSourceArtifactId];
+            const sourcePage = await read({ operation: "summaries", request: { sourceArtifactIds: sourceIds, recent: 8 }, pageByteLimit });
+            const sourcePrefix = { summaries: sourcePage.summaries.slice(0, 1), remainingSourceArtifactIds: sourceIds.slice(1) };
+            const boundedSource = await read({ operation: "summaries", request: { sourceArtifactIds: sourceIds, recent: 8 },
+                pageByteLimit: measureExternalActionResultResponseEnvelopeUtf8BytesV1(sourcePrefix) });
+            expect(JSON.stringify(boundedSource)).toBe(JSON.stringify(sourcePrefix));
+            const sourceRest = await read({ operation: "summaries", request: { sourceArtifactIds: boundedSource.remainingSourceArtifactIds, recent: 8 }, pageByteLimit });
+            expect([...boundedSource.summaries, ...sourceRest.summaries]).toEqual(sourcePage.summaries);
             const snapshot = await read({ operation: "get", runId: seeded.runId });
             expect(snapshot.acceptedEnvelope).toBeTypeOf("string");
             expect(snapshot.keyCensus.ownerAccountId).toBe(seeded.accountId);
@@ -739,6 +747,69 @@ describe("workflowRunService (integration)", () => {
             await db.artifact.deleteMany({ where: { accountId: seeded.accountId } });
             await app.close();
         }
+    });
+
+    it("serves byte-paged latest Automation statuses without opening private Workflow content", async () => {
+        const seeded = await seedPendingAdmission();
+        const automations = await Promise.all(["First", "Second", "Empty"].map(name => db.automation.create({
+            data: { ...(name === "First" ? { id: `opaque-e\u0301-${randomUUID()}` } : {}),
+                accountId: seeded.accountId, name, targetType: null, templateCiphertext: "{}" }, select: { id: true },
+        })));
+        const [first, second, empty] = automations;
+        const createdAt = new Date("2026-10-21T00:00:00.000Z");
+        const artifact = await db.artifact.create({ data: { id: randomUUID(), accountId: seeded.accountId,
+            header: new Uint8Array(), body: new Uint8Array(), dataEncryptionKey: new Uint8Array() } });
+        await db.automationRun.update({ where: { id: seeded.runId }, data: {
+            originKind: "automation", automationId: first.id, causeKind: "manual", causeOccurredAt: createdAt, createdAt,
+        } });
+        const latestId = "ffffffff-ffff-4fff-bfff-ffffffffffff";
+        const succeededId = randomUUID();
+        await db.automationRun.createMany({ data: [
+            { id: latestId, automationId: first.id, state: "failed", workflowCustodyState: "pending" },
+            { id: succeededId, automationId: second.id, state: "succeeded", workflowCustodyState: "settled" },
+        ].map(row => ({ ...row, accountId: seeded.accountId, originKind: "automation", causeKind: "manual",
+            causeOccurredAt: createdAt, scheduledAt: createdAt, dueAt: createdAt, createdAt,
+            sourceArtifactId: artifact.id,
+            // Public status does not depend on opening even malformed/unavailable private content.
+            workflowAcceptedSnapshotEnvelope: "unopened private content", workflowCheckpointEnvelope: "private checkpoint" })) });
+        await db.automationRunAssignment.createMany({ data: [latestId, succeededId].map(runId => ({ runId, machineId: seeded.machineId, priority: 0 })) });
+        const { app, headers } = await createReviewStorageApp(seeded.accountId);
+        try {
+            const requested = [second.id, first.id, empty.id, "foreign-or-absent"];
+            const read = async (automationIds: string[], pageByteLimit = EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES) => {
+                const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage", headers,
+                    payload: { operation: "summaries", request: { automationIds }, pageByteLimit } });
+                expect(response.statusCode, response.body).toBe(200);
+                const result = WorkflowRunSummariesResultV1Schema.parse(response.json());
+                if (!("automationSummaries" in result)) throw new Error("Expected Automation status summaries");
+                return result;
+            };
+            const result = await read(requested);
+            expect(result).toEqual({ automationSummaries: [
+                { automationId: second.id, lastRun: { id: succeededId, state: "succeeded", workflowCustodyState: "settled", attentionRequired: false, createdAt: createdAt.toISOString() } },
+                { automationId: first.id, lastRun: { id: latestId, state: "failed", workflowCustodyState: "pending", attentionRequired: true, createdAt: createdAt.toISOString() } },
+                { automationId: empty.id, lastRun: null }, { automationId: "foreign-or-absent", lastRun: null },
+            ], remainingAutomationIds: [] });
+            const fullResponse = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage", headers,
+                payload: { operation: "list", request: {}, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } });
+            expect(fullResponse.statusCode, fullResponse.body).toBe(200);
+            const full: Awaited<ReturnType<typeof listWorkflowRuns>> = fullResponse.json();
+            for (const summary of result.automationSummaries) if (summary.lastRun) {
+                expect(full.runs.find(run => run.id === summary.lastRun?.id)).toMatchObject(summary.lastRun);
+            }
+            console.info("PERF-S4-workflow-summary", JSON.stringify({ fullBytes: Buffer.byteLength(fullResponse.body),
+                statusBytes: Buffer.byteLength(JSON.stringify(result)), fullRuns: full.runs.length, statusRows: result.automationSummaries.length }));
+            const byteLimit = measureExternalActionResultResponseEnvelopeUtf8BytesV1({
+                automationSummaries: result.automationSummaries.slice(0, 1), remainingAutomationIds: requested.slice(1),
+            });
+            const page = await read(requested, byteLimit);
+            expect(page).toEqual({ automationSummaries: result.automationSummaries.slice(0, 1), remainingAutomationIds: requested.slice(1) });
+            const rest = await read(page.remainingAutomationIds);
+            expect([...page.automationSummaries, ...rest.automationSummaries]).toEqual(result.automationSummaries);
+            const malformed = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage", headers,
+                payload: { operation: "summaries", request: { automationIds: requested, sourceArtifactIds: [], recent: 1 }, pageByteLimit: byteLimit } });
+            expect(malformed.statusCode).toBe(400);
+        } finally { await db.artifact.delete({ where: { id: artifact.id } }); await app.close(); }
     });
 
     it("reports a real SQLite storage failure as typed unavailability and recovers after storage returns", async () => {

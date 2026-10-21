@@ -2,6 +2,18 @@ import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/w
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { ServerFetch } from '@/sync/http/client';
 import { getAutomationAuthHeaders, readAutomationJsonOrThrow } from './apiAutomationHttp';
+import type { CapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+
+const storageReads = createScopedResolutionSingleFlight<unknown>();
+// Admission and private opening remain at the Action owner. These operations
+// acquire observations; acknowledgements, controls and review writes never share.
+const READ_OPERATIONS = new Set(['get', 'list', 'summaries', 'invocations.list', 'invocations.get', 'invocations.current', 'run-key.census']);
+const UNSHARED_OBSERVATIONS = new Set(['wait', 'delivery.pull']);
 
 /** Account storage carries opaque content and durable intent, never worker publication. */
 export function createWorkflowRunAccountStorage(params: Readonly<{
@@ -9,6 +21,8 @@ export function createWorkflowRunAccountStorage(params: Readonly<{
     serverId: string;
     request: ServerFetch;
     assertCurrent: () => void;
+    readTransport?: CapturedServerReadTransport;
+    accountLifetime?: ServerAccountScopeLifetime;
 }>) {
     return {
         execute: async (operation: Readonly<Record<string, unknown>>, options?: Readonly<{ signal?: AbortSignal; publisherMachineId?: string; onTransportIssued?: () => void }>): Promise<unknown> => {
@@ -19,17 +33,42 @@ export function createWorkflowRunAccountStorage(params: Readonly<{
                 throw Object.assign(new Error('run_access_denied'), { code: 'run_access_denied' });
             }
             options?.signal?.throwIfAborted();
-            const response = await params.request('/v3/automations/runs/workflow-storage', {
-                method: 'POST',
-                headers: getAutomationAuthHeaders(params.credentials, { includeJsonContentType: true }),
-                body: JSON.stringify(operation),
-                ...(options?.signal ? { signal: options.signal } : {}),
-            }, { includeAuth: false,
-                ...(operation.operation === 'delete' && options?.onTransportIssued ? { onIssued: options.onTransportIssued } : {}),
-            });
-            const result = await readAutomationJsonOrThrow(response);
-            params.assertCurrent();
-            return result;
+            const path = '/v3/automations/runs/workflow-storage';
+            const operationName = typeof operation.operation === 'string' ? operation.operation : '';
+            const read = READ_OPERATIONS.has(operationName);
+            if (read && params.readTransport) {
+                const transport = params.readTransport;
+                const scope = transport.key;
+                const abort = new AbortController();
+                const retirement = params.accountLifetime?.onRetire(() => abort.abort());
+                const cancellation = mergeAbortSignals([options?.signal, abort.signal]);
+                try {
+                    const result = await storageReads.run(createCanonicalJsonSigningInput(projectNativeJsonValueForTransport(operation)),
+                        signal => transport.read(path, { method: 'POST',
+                            headers: getAutomationAuthHeaders(params.credentials, { includeJsonContentType: true }),
+                            body: JSON.stringify(operation), signal }, { includeAuth: false }, readAutomationJsonOrThrow),
+                        { scope, signal: cancellation.signal,
+                            fresh: operationName === 'invocations.current' || operationName === 'run-key.census' });
+                    params.assertCurrent();
+                    return result;
+                } finally { cancellation.dispose(); retirement?.dispose(); }
+            }
+            const mutation = !read && !UNSHARED_OBSERVATIONS.has(operationName);
+            const invalidate = () => { if (mutation && params.readTransport) storageReads.invalidate(params.readTransport.key); };
+            invalidate();
+            try {
+                const response = await params.request(path, {
+                    method: 'POST',
+                    headers: getAutomationAuthHeaders(params.credentials, { includeJsonContentType: true }),
+                    body: JSON.stringify(operation),
+                    ...(options?.signal ? { signal: options.signal } : {}),
+                }, { includeAuth: false,
+                    ...(operation.operation === 'delete' && options?.onTransportIssued ? { onIssued: options.onTransportIssued } : {}),
+                });
+                const result = await readAutomationJsonOrThrow(response);
+                params.assertCurrent();
+                return result;
+            } finally { invalidate(); }
         },
     };
 }

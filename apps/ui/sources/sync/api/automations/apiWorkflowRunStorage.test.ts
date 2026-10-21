@@ -7,11 +7,55 @@ import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/wor
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
     serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
 
 // Public capability discovery and captured HTTP are network boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
 vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => runtimeFetch(...args) }));
 afterEach(() => { runtimeFetch.mockReset(); vi.restoreAllMocks(); });
+
+it('shares only admitted read bytes across invocation transports and leaves cancellation and writes independent', async () => {
+    const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+    const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+    const { createCapturedServerReadTransport } = await import('@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport');
+    const { createServerFetchForActiveServer } = await import('@/sync/http/client');
+    const home = await upsertAndActivateServer({ serverUrl: 'https://workflow-storage-sharing.test', scope: 'tab' });
+    const profile = getServerProfileById(home.id);
+    if (!profile) throw new Error('Expected the activated Home profile');
+    const credentials = { token: 'captured-token' };
+    const readTransport = createCapturedServerReadTransport({ serverId: home.id, profile, credentials });
+    const held = createDeferred<void>();
+    let reads = 0;
+    let writes = 0;
+    runtimeFetch.mockImplementation(async (input, init) => {
+        if (isServerFetchConnectivityProbeRequest(input)) return Response.json({ ok: true });
+        const operation = JSON.parse(String(init.body));
+        if (operation.operation === 'delete') { writes++; return Response.json({ deleted: true }); }
+        reads++;
+        await held.promise;
+        return Response.json({ runs: [], nextCursor: 'opaque+/=cursor' });
+    });
+    const first = createWorkflowRunAccountStorage({ credentials, serverId: home.id,
+        request: createServerFetchForActiveServer(), readTransport, assertCurrent: () => {} });
+    const second = createWorkflowRunAccountStorage({ credentials, serverId: home.id,
+        request: createServerFetchForActiveServer(), readTransport, assertCurrent: () => {} });
+    const controller = new AbortController();
+    const departed = first.execute({ operation: 'list', request: { projection: 'membership' } },
+        { signal: controller.signal }).catch(() => 'aborted');
+    const live = second.execute({ operation: 'list', request: { projection: 'membership' } });
+    try {
+        await vi.waitFor(() => expect(reads).toBeGreaterThan(0));
+        expect(reads).toBe(1);
+        controller.abort();
+        held.resolve();
+        expect(await departed).toBe('aborted');
+        await expect(live).resolves.toEqual({ runs: [], nextCursor: 'opaque+/=cursor' });
+        await Promise.all([first.execute({ operation: 'delete', runId: 'one' }), second.execute({ operation: 'delete', runId: 'one' })]);
+        expect(writes).toBe(2);
+        await second.execute({ operation: 'list', request: { projection: 'membership', cursor: 'opaque+/=cursor' } });
+        expect(reads).toBe(2);
+    } finally { held.resolve(); await Promise.allSettled([departed, live]); }
+});
 
 it('witnesses a Run deletion only after issuing its captured HTTP request', async () => {
     const runId = '11111111-1111-4111-8111-111111111111';

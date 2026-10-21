@@ -215,15 +215,26 @@ describe('Account trigger reads through real Action and Automation owners', () =
         ]);
     });
 
-    it('shares one real HTTP read without letting a cancelled consumer abort another', async () => {
+    it('shares lower HTTP reads after independent Action admission without a cancelled caller aborting another', async () => {
         const pending = createDeferred<void>();
         home.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null }, respondAfter: pending.promise });
         const controller = new AbortController();
         const retired = listWorkflowTriggerSets({ scope: 'account_all' }, { signal: controller.signal }).catch(() => 'aborted');
-        const live = listWorkflowTriggerSets({ scope: 'account_all' });
-        await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path.startsWith('/v3/automations'))).toHaveLength(1));
-        controller.abort(); await act(async () => pending.resolve());
-        expect(await retired).toBe('aborted'); expect(await live).toEqual([]);
+        // Explicit caller context keeps this a distinct Action invocation. Only
+        // its admitted Account transport may join the native caller's read.
+        const live = listWorkflowTriggerSets({ scope: 'account_all' }, {
+            context: { surface: 'ui', authority: 'present_user' },
+        });
+        // Attach a terminal observer before a failing request-count assertion,
+        // so cleanup cannot leave a retired Action as an unhandled rejection.
+        void live.catch(() => {});
+        try {
+            await waitForHomeGovernance(() => expect(home.requests.some(request => request.path.startsWith('/v3/automations'))).toBe(true));
+            await act(async () => { for (let turn = 0; turn < 30; turn++) await Promise.resolve(); });
+            expect(home.requests.filter(request => request.path.startsWith('/v3/automations'))).toHaveLength(1);
+            controller.abort(); await act(async () => pending.resolve());
+            expect(await retired).toBe('aborted'); expect(await live).toEqual([]);
+        } finally { pending.resolve(); await Promise.allSettled([retired, live]); }
     });
 
     it.each([false, true])('does not rerender or refetch for unrelated Run and invocation facts (addressed: %s)', async (addressed) => {

@@ -62,6 +62,7 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionByIdHttp } from '@/sync/engine/sessions/sessionByIdHttp';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
@@ -259,12 +260,13 @@ export function createUiWorkflowAction(params: Readonly<{
         resolveEncryption: () => resolveEncryption(),
         resolveRetainedSession: async (sessionId): Promise<AutomationTemplateRetainedSessionV1 | null> => {
             account.assertCurrent();
-            const response = await account.request(`/v2/sessions/${encodeURIComponent(sessionId)}?accessProjectionVersion=1`, {
-                headers: { Authorization: `Bearer ${account.credentials.token}` },
-            }, { includeAuth: false });
+            const response = await readSessionByIdHttp({ sessionId, serverId: account.serverId,
+                token: account.credentials.token, accessProjectionVersion: 1, readTransport: account.readTransport,
+                request: (path, init) => account.request(path, init, { includeAuth: false }),
+                signal: account.invocationSignal });
             account.assertCurrent();
             if (!response.ok) return null;
-            const session = parseCompatSessionByIdResponse(await response.json())?.session;
+            const session = parseCompatSessionByIdResponse(response.body)?.session;
             account.assertCurrent();
             if (!session || session.id !== sessionId || (session.encryptionMode !== 'plain' && session.encryptionMode !== 'e2ee')) return null;
             if (session.encryptionMode === 'plain') return { sessionId, encryptionMode: 'plain' };

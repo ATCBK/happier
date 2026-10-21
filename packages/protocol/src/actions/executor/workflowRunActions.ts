@@ -2172,9 +2172,11 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     if (args.actionId === 'workflow.run.summaries') {
       if (target !== undefined) throw workflowError('target_unavailable');
       try {
-        return WorkflowActionOutputSchemasV1[args.actionId].parse(await deps.storage.execute({
+        const result = WorkflowActionOutputSchemasV1[args.actionId].parse(await deps.storage.execute({
           operation: 'summaries', request: args.input, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
         }, args.context.signal ? { signal: args.context.signal } : {}));
+        if (('automationIds' in args.input) !== ('automationSummaries' in result)) throw workflowError('content_unavailable');
+        return result;
       } catch (error) {
         translateStorageError(error);
       }

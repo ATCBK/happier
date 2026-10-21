@@ -5,7 +5,9 @@ import { projectWorkflowBigIntV1, type WorkflowInvocationLifecycleV1, type Workf
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { toAutomationRunExecutionInputV1Origin } from '@happier-dev/protocol/automations/automationApiV3';
 import { projectAutomationAccountCurrentnessWitnessV1, sameAutomationAccountContentIdentityV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
-import { WorkflowRunListRequestV1Schema, type WorkflowRunSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import { WorkflowRunListRequestV1Schema, WorkflowRunAutomationSummariesRequestV1Schema,
+    type WorkflowRunSummariesResultV1,
+    type WorkflowRunSourceSummariesResultV1, type WorkflowRunAutomationSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import type { Prisma } from "@prisma/client";
 import { WorkflowDirectRunAdmissionIdV1Schema, WorkflowInvocationRecordIdSchema } from '@happier-dev/protocol/workflows/workflowIdsV1';
 import { isWorkflowDraftPublicationLifecycleV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
@@ -1135,14 +1137,7 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
             actorAccountId: params.accountId, runIds: page.rows.map(row => row.id),
         }));
         for (const row of page.rows) {
-            const next = current.get(row.id);
-            if (!next) throw new WorkflowRunServiceError('run_not_found');
-            const { ownerAccountCurrentness: beforeIdentity, ...beforeFacts } = row.keyCensus;
-            const { ownerAccountCurrentness: afterIdentity, ...afterFacts } = next;
-            if (!sameAutomationAccountContentIdentityV1(beforeIdentity, afterIdentity)
-                || !isDeepStrictEqual(beforeFacts, afterFacts)) {
-                throw new WorkflowRunServiceError('currentness_conflict');
-            }
+            assertCapturedWorkflowRunKeysCurrent(row.keyCensus, current.get(row.id));
         }
         return page;
     }, { transactionClass: "workflow-list-runs" });
@@ -1159,10 +1154,59 @@ export async function listWorkflowRuns(params: PageOptions & Readonly<{
     };
 }
 
-/** One indexed batch, with no accepted/private content or per-card queries. */
-export async function summarizeWorkflowRuns(params: Readonly<{
-    accountId: string; sourceArtifactIds: readonly string[]; recent: number; pageByteLimit: number;
-}>): Promise<WorkflowRunSummariesResultV1> {
+function assertCapturedWorkflowRunKeysCurrent(before: WorkflowRunRecipientCensusResponseV1,
+    after: WorkflowRunRecipientCensusResponseV1 | undefined): void {
+    if (!after) throw new WorkflowRunServiceError('run_not_found');
+    const { ownerAccountCurrentness: beforeIdentity, ...beforeFacts } = before;
+    const { ownerAccountCurrentness: afterIdentity, ...afterFacts } = after;
+    if (!sameAutomationAccountContentIdentityV1(beforeIdentity, afterIdentity) || !isDeepStrictEqual(beforeFacts, afterFacts)) {
+        throw new WorkflowRunServiceError('currentness_conflict');
+    }
+}
+
+/** SQL adapts the same canonical owner-or-frozen-Team audience as collection reads. */
+async function workflowSummaryVisibilityInTx(tx: Tx, accountId: string, sourceArtifactIds?: readonly string[]) {
+    const id = workflowRunSqlIdentifier;
+    const scopes = await withWorkflowRunAccess(() => resolveWorkflowRunVisibilityScopesInTx(tx, {
+        actorAccountId: accountId, ...(sourceArtifactIds ? { sourceArtifactIds } : {}),
+    }));
+    const sharedScopes = scopes.filter(scope => scope.visibleTeamIds.length > 0).map(scope => prismaRuntime.sql`
+        (r.${id("sourceArtifactId")} = ${scope.sourceArtifactId} AND r.${id("visibleTeamId")} IN (${prismaRuntime.join([...scope.visibleTeamIds])}))`);
+    return sharedScopes.length === 0 ? prismaRuntime.sql`r.${id("accountId")} = ${accountId}`
+        : prismaRuntime.sql`(r.${id("accountId")} = ${accountId} OR ${prismaRuntime.join(sharedScopes, " OR ")})`;
+}
+
+type SourceSummaryReadParams = Readonly<{ accountId: string; sourceArtifactIds: readonly string[]; recent: number; pageByteLimit: number }>;
+type AutomationSummaryReadParams = Readonly<{ accountId: string; automationIds: readonly string[]; pageByteLimit: number }>;
+type SummaryReadParams = SourceSummaryReadParams | AutomationSummaryReadParams;
+
+/** Both summary selections retain the same input-order, exact response-byte continuation policy. */
+function workflowSummaryPage<Summary, Page>(params: Readonly<{
+    ids: readonly string[]; pageByteLimit: number;
+    summarize: (id: string) => Summary;
+    page: (summaries: Summary[], remainingIds: string[]) => Page;
+}>): Page {
+    const summaries: Summary[] = [];
+    for (const [index, id] of params.ids.entries()) {
+        const summary = params.summarize(id);
+        const candidate = params.page([...summaries, summary], params.ids.slice(index + 1));
+        if (measureExternalActionResultResponseEnvelopeUtf8BytesV1(candidate) > params.pageByteLimit) {
+            if (summaries.length === 0) throw new WorkflowRunServiceError("content_unavailable");
+            const page = params.page(summaries, params.ids.slice(index));
+            if (measureExternalActionResultResponseEnvelopeUtf8BytesV1(page) > params.pageByteLimit) throw new WorkflowRunServiceError("content_unavailable");
+            return page;
+        }
+        summaries.push(summary);
+    }
+    return params.page(summaries, []);
+}
+
+/** One indexed summary owner; selectors do not load accepted/private content or issue per-card queries. */
+export function summarizeWorkflowRuns(params: SourceSummaryReadParams): Promise<WorkflowRunSourceSummariesResultV1>;
+export function summarizeWorkflowRuns(params: AutomationSummaryReadParams): Promise<WorkflowRunAutomationSummariesResultV1>;
+export function summarizeWorkflowRuns(params: SummaryReadParams): Promise<WorkflowRunSummariesResultV1>;
+export async function summarizeWorkflowRuns(params: SummaryReadParams): Promise<WorkflowRunSummariesResultV1> {
+    if ("automationIds" in params) return await summarizeLatestAutomationRuns(params);
     if (!Number.isSafeInteger(params.recent) || params.recent <= 0
         || !Number.isSafeInteger(params.pageByteLimit) || params.pageByteLimit <= 0
         || new Set(params.sourceArtifactIds).size !== params.sourceArtifactIds.length) throw new WorkflowRunServiceError("invalid_input");
@@ -1174,15 +1218,9 @@ export async function summarizeWorkflowRuns(params: Readonly<{
         ordinal: bigint | number; needsYouCount: bigint | number; needsYouRunId: string;
     };
     const rows = await inTx(async (tx) => {
-        const scopes = await withWorkflowRunAccess(() => resolveWorkflowRunVisibilityScopesInTx(tx, {
-            actorAccountId: params.accountId, sourceArtifactIds: params.sourceArtifactIds,
-        }));
-        const sharedScopes = scopes.filter(scope => scope.visibleTeamIds.length > 0).map(scope => prismaRuntime.sql`
-            (r.${id("sourceArtifactId")} = ${scope.sourceArtifactId} AND r.${id("visibleTeamId")} IN (${prismaRuntime.join([...scope.visibleTeamIds])}))`);
         // The SQL adapter consumes the canonical source visibility decision;
         // it does not load content or issue per-card queries.
-        const visibility = sharedScopes.length === 0 ? prismaRuntime.sql`r.${id("accountId")} = ${params.accountId}`
-            : prismaRuntime.sql`(r.${id("accountId")} = ${params.accountId} OR ${prismaRuntime.join(sharedScopes, " OR ")})`;
+        const visibility = await workflowSummaryVisibilityInTx(tx, params.accountId, params.sourceArtifactIds);
         return await tx.$queryRaw<SummaryRow[]>(prismaRuntime.sql`
             WITH facts AS (
                 SELECT r.${id("sourceArtifactId")} AS ${id("sourceArtifactId")}, r.${id("id")} AS ${id("runId")},
@@ -1206,28 +1244,78 @@ export async function summarizeWorkflowRuns(params: Readonly<{
         bySource.set(row.sourceArtifactId, group);
     }
     const timestamp = (value: Date | bigint | number) => (value instanceof Date ? value : new Date(Number(value))).toISOString();
-    const summaries: WorkflowRunSummariesResultV1["summaries"] = [];
-    for (const [index, sourceArtifactId] of params.sourceArtifactIds.entries()) {
-        const recent = bySource.get(sourceArtifactId) ?? [];
-        const first = recent[0];
-        const needsYouCount = Number(first?.needsYouCount ?? 0);
-        if (!Number.isSafeInteger(needsYouCount) || needsYouCount < 0) throw new WorkflowRunServiceError("content_unavailable");
-        const summary: WorkflowRunSummariesResultV1["summaries"][number] = {
-            sourceArtifactId,
-            lastRun: first ? { runId: first.runId, state: first.state, createdAt: timestamp(first.createdAt), finishedAt: first.finishedAt === null ? null : timestamp(first.finishedAt) } : null,
-            recent: recent.map(({ runId, state }) => ({ runId, state })),
-            needsYouCount, needsYouRunId: needsYouCount > 0 && first ? first.needsYouRunId : null,
-        };
-        const candidate = { summaries: [...summaries, summary], remainingSourceArtifactIds: params.sourceArtifactIds.slice(index + 1) };
-        if (measureExternalActionResultResponseEnvelopeUtf8BytesV1(candidate) > params.pageByteLimit) {
-            if (summaries.length === 0) throw new WorkflowRunServiceError("content_unavailable");
-            const page = { summaries, remainingSourceArtifactIds: params.sourceArtifactIds.slice(index) };
-            if (measureExternalActionResultResponseEnvelopeUtf8BytesV1(page) > params.pageByteLimit) throw new WorkflowRunServiceError("content_unavailable");
-            return page;
+    return workflowSummaryPage({ ids: params.sourceArtifactIds, pageByteLimit: params.pageByteLimit,
+        summarize: (sourceArtifactId): WorkflowRunSourceSummariesResultV1["summaries"][number] => {
+            const recent = bySource.get(sourceArtifactId) ?? [];
+            const first = recent[0];
+            const needsYouCount = Number(first?.needsYouCount ?? 0);
+            if (!Number.isSafeInteger(needsYouCount) || needsYouCount < 0) throw new WorkflowRunServiceError("content_unavailable");
+            return {
+                sourceArtifactId,
+                lastRun: first ? { runId: first.runId, state: first.state, createdAt: timestamp(first.createdAt), finishedAt: first.finishedAt === null ? null : timestamp(first.finishedAt) } : null,
+                recent: recent.map(({ runId, state }) => ({ runId, state })),
+                needsYouCount, needsYouRunId: needsYouCount > 0 && first ? first.needsYouRunId : null,
+            };
+        }, page: (summaries, remainingSourceArtifactIds) => ({ summaries, remainingSourceArtifactIds }),
+    });
+}
+
+/** Latest accepted Run per requested Automation; ids filter visibility and never grant it. */
+async function summarizeLatestAutomationRuns(params: AutomationSummaryReadParams): Promise<WorkflowRunAutomationSummariesResultV1> {
+    const { accountId, pageByteLimit, ...request } = params;
+    if (!WorkflowRunAutomationSummariesRequestV1Schema.safeParse(request).success
+        || !Number.isSafeInteger(pageByteLimit) || pageByteLimit <= 0) throw new WorkflowRunServiceError("invalid_input");
+    if (params.automationIds.length === 0) return { automationSummaries: [], remainingAutomationIds: [] };
+    const id = workflowRunSqlIdentifier;
+    type StatusRow = {
+        automationId: string; runId: string; state: WorkflowRunState; workflowCustodyState: WorkflowCustodyState;
+        createdAt: Date | bigint | number; attention: bigint | number;
+    };
+    const page = await readSnapshotWithCurrentAdmission({
+        capture: async tx => {
+            const visibility = await workflowSummaryVisibilityInTx(tx, accountId);
+            const rows = await tx.$queryRaw<StatusRow[]>(prismaRuntime.sql`
+                WITH ranked AS (
+                    SELECT r.${id("automationId")} AS ${id("automationId")}, r.${id("id")} AS ${id("runId")},
+                        ROW_NUMBER() OVER (PARTITION BY r.${id("automationId")} ORDER BY r.${id("createdAt")} DESC, r.${id("id")} DESC) AS ordinal
+                    FROM ${id("AutomationRun")} r
+                    WHERE ${visibility} AND r.${id("automationId")} IN (${prismaRuntime.join([...params.automationIds])})
+                        AND r.${id("originKind")} = ${"automation"} AND r.${id("workflowCustodyState")} IS NOT NULL
+                ) SELECT ranked.${id("automationId")} AS ${id("automationId")}, r.${id("id")} AS ${id("runId")},
+                    r.${id("state")} AS ${id("state")}, r.${id("workflowCustodyState")} AS ${id("workflowCustodyState")},
+                    r.${id("createdAt")} AS ${id("createdAt")},
+                    CASE WHEN ${workflowRunAttentionSql()} THEN 1 ELSE 0 END AS attention
+                FROM ranked JOIN ${id("AutomationRun")} r ON r.${id("id")} = ranked.${id("runId")}
+                WHERE ranked.ordinal = 1`);
+            const keys = await withWorkflowRunAccess(() => readWorkflowRunKeyProjectionsInTx(tx, {
+                actorAccountId: accountId, runIds: rows.map(row => row.runId),
+            }));
+            return { rows, keys };
+        },
+        materialize: async captured => await timeWebLatencyPhase("workflow.summaries.materialize", () => {
+            const byAutomation = new Map(captured.rows.map(row => [row.automationId, row]));
+            const result = workflowSummaryPage({ ids: params.automationIds, pageByteLimit,
+                summarize: (automationId): WorkflowRunAutomationSummariesResultV1["automationSummaries"][number] => {
+                    const row = byAutomation.get(automationId);
+                    return { automationId, lastRun: row ? { id: row.runId, state: row.state,
+                        workflowCustodyState: row.workflowCustodyState, attentionRequired: Number(row.attention) === 1,
+                        createdAt: (row.createdAt instanceof Date ? row.createdAt : new Date(Number(row.createdAt))).toISOString() } : null };
+                }, page: (automationSummaries, remainingAutomationIds) => ({ automationSummaries, remainingAutomationIds }),
+            });
+            return { result, keys: captured.keys };
+        }, "workflow-summarize-runs"),
+    }, async (tx, captured) => {
+        const runIds = captured.result.automationSummaries.flatMap(summary => summary.lastRun ? [summary.lastRun.id] : []);
+        if (runIds.length === 0) return captured;
+        const current = await withWorkflowRunAccess(() => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: accountId, runIds }));
+        for (const runId of runIds) {
+            const before = captured.keys.get(runId);
+            if (!before) throw new WorkflowRunServiceError("run_not_found");
+            assertCapturedWorkflowRunKeysCurrent(before, current.get(runId));
         }
-        summaries.push(summary);
-    }
-    return { summaries, remainingSourceArtifactIds: [] };
+        return captured;
+    }, { transactionClass: "workflow-summarize-runs" });
+    return page.result;
 }
 
 const WORKFLOW_TERMINAL_INVOCATION_LIFECYCLES = [

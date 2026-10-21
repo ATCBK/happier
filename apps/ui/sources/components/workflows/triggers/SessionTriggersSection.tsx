@@ -46,11 +46,6 @@ import { ActionListSection } from '@/components/ui/lists/ActionListSection';
 export type SessionTriggersSectionViewProps = Readonly<{
     groups: readonly SessionTriggerGroupModel[];
     status: 'loading' | 'ready' | 'failed';
-    /**
-     * The session's Machine is offline, which the Work view already says once at its top: a failed read
-     * is then not said a second time here.
-     */
-    machineOffline?: boolean;
     /** Trigger rows whose write is in flight. */
     pendingKeys: ReadonlySet<string>;
     onToggle: (row: SessionTriggerRowModel, next: boolean) => void;
@@ -110,7 +105,7 @@ export const SessionTriggersSectionView = React.memo(function SessionTriggersSec
                 </View>
             )}
         >
-            {props.status === 'failed' && props.machineOffline !== true ? (
+            {props.status === 'failed' ? (
                 <SurfaceFreshnessLine
                     testID="session-work-triggers-failed"
                     tone="warning"
@@ -401,7 +396,6 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
             <SessionTriggersSectionView
                 groups={groups}
                 status={lastRuns.failed ? 'failed' : read.status}
-                machineOffline={!machineReachable}
                 pendingKeys={pendingKeys}
                 onToggle={toggle}
                 onOpen={openRow}

@@ -142,8 +142,8 @@ export function useSessionTriggers(sessionId: string): SessionTriggersRead {
     return {
         machineId: readMachineControlTargetForSession(sessionId)?.machineId ?? null,
         pullRequestLinks: linkScopeKey !== null && links.scopeKey === linkScopeKey ? links.value : { status: 'loading' },
-        status: !owned || state.status === 'loading' || accountRead.status === 'loading' ? 'loading'
-            : state.status === 'failed' || accountRead.status === 'failed' ? 'failed' : 'ready',
+        status: !owned ? 'loading' : state.status === 'failed' || accountRead.status === 'failed' ? 'failed'
+            : state.status === 'loading' || accountRead.status === 'loading' ? 'loading' : 'ready',
         sets,
         lastRunAtByAutomationId,
         retry,

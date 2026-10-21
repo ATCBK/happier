@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import type { WorkflowRunSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import type { WorkflowRunSourceSummariesResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -10,7 +10,7 @@ import { subscribeVisibleWorkflowRunListInvalidation } from '@/sync/domains/work
 
 import { WORKFLOW_RUN_STRIP_LENGTH } from './workflowRunStrip';
 
-export type WorkflowLibraryRunSummary = WorkflowRunSummariesResultV1['summaries'][number];
+export type WorkflowLibraryRunSummary = WorkflowRunSourceSummariesResultV1['summaries'][number];
 type SummaryMap = ReadonlyMap<string, WorkflowLibraryRunSummary>;
 const EMPTY_SUMMARIES: SummaryMap = new Map();
 const subscribeInactive = (_listener: () => void) => () => {};

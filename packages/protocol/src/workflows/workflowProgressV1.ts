@@ -11,6 +11,8 @@ import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { AutomationRunStateV3Schema } from '../automations/automationRunStateV3.js';
 import { AutomationRunCauseSchema } from '../automations/automationRunCause.js';
+import { AutomationIdV1Schema } from '../automations/automationIdV1.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { AutomationEventSourceDisplayLabelV1Schema, MAX_AUTOMATION_SOURCE_DISPLAY_LABEL_CODE_POINTS } from '../automations/automationEventJsonBoundsV1.js';
 import { ExecutionRunResumeHandleProviderSessionV1Schema } from '../execution/runs/startRequest.js';
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
@@ -94,7 +96,7 @@ export type WorkflowControlV1 = z.infer<typeof WorkflowControlV1Schema>;
 
 export const WorkflowRunAutomationOriginV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('automation'),
-  automationId: preservedBoundedNfcString(191, 'Automation ids'),
+  automationId: asProtocolZod(AutomationIdV1Schema),
   originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
   /** Bounded immutable provenance; private occurrence content is never projected here. */
   cause: zMini.optional(AutomationRunCauseSchema),
