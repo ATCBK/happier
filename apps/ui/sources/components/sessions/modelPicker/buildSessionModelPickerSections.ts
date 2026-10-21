@@ -1,4 +1,5 @@
 import { serializeModelVisibilityRefV1, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
+import type { ProviderModelDescriptorV1 } from '@happier-dev/protocol/models/descriptor';
 import type { ProviderSettingsV1 } from '@happier-dev/protocol/providers/settings/v1';
 import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc';
 import type { DaemonProviderCurrentSelectionRecoveryV1 } from '@happier-dev/protocol/rpc';
@@ -27,6 +28,24 @@ export type SessionModelProjectionGroup = Extract<
     DaemonProviderModelProjectionResponseV1,
     { status: 'success' }
 >['groups'][number];
+
+/** Exact source identity owns controls and labels; native same-id rows never substitute. */
+export function resolveSessionModelSourceDescriptor(input: Readonly<{
+    selected: SessionModelPickerOptionValue;
+    providerGroups: readonly SessionModelProjectionGroup[];
+    teamCredentialResources?: readonly TeamCredentialResourceCatalogEntryV1[];
+}>): ProviderModelDescriptorV1 | null {
+    const selected = input.selected;
+    if (!selected) return null;
+    const key = sessionModelSelectionKey(selected);
+    return isTeamCredentialProviderModelPickerValue(selected)
+        ? input.teamCredentialResources?.find(resource => resource.teamId === selected.teamId
+            && resource.id === selected.resourceId
+            && resource.resourceRevision === selected.expectedResourceRevision)
+            ?.providerModels.find(row => sessionModelSelectionKey(row.selection) === key)?.descriptor ?? null
+        : input.providerGroups.find(group => group.connectionId === selected.providerConnectionId)
+            ?.rows.find(row => sessionModelSelectionKey(row.ref) === key)?.descriptor ?? null;
+}
 
 /** One configured vendor slot a Gateway model is served through; display facts, never credential authority. */
 export type SessionModelGatewaySlot = NonNullable<SessionModelProjectionGroup['rows'][number]['gatewaySlots']>[number];

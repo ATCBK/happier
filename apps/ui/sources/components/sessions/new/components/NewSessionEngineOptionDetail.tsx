@@ -36,9 +36,10 @@ import { t } from '@/text';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
 import {
     SessionModelPicker,
+    type SessionModelPickerProps,
     type SessionModelPickerExperimentalConfirmationController,
 } from '@/components/sessions/modelPicker/SessionModelPicker';
-import { hiddenModelVisibilityKeys } from '@/components/sessions/modelPicker/buildSessionModelPickerSections';
+import { hiddenModelVisibilityKeys, resolveSessionModelSourceDescriptor } from '@/components/sessions/modelPicker/buildSessionModelPickerSections';
 import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sessionModelSelectionKey';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -81,6 +82,11 @@ export type NewSessionEngineOptionDetailProps = Readonly<{
      * In-session callers omit this and retain the detail pane's local projection.
      */
     providerProjection?: ReturnType<typeof useProviderModelProjection>;
+    teamModels?: Readonly<Pick<SessionModelPickerProps,
+        'teamCredentialResources' | 'teamNameById' | 'homeNameByTeamId' | 'currentTeamCredentialResourceKeys'
+        | 'selectedTeamCredentialModel' | 'onSelectTeamCredentialModel' | 'onRecoverTeamCredentialResource'> & {
+        onSelectOtherModel: () => void;
+    }>;
     /** The account or pool this Agent's own models run through, for the picker's native heading. */
     nativeSourceLabel?: string | null;
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
@@ -257,11 +263,12 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
     const canEnterCustomModel = preflightModels?.unavailable === true
         ? false
         : preflightModels?.supportsFreeform === true || providerSupportsFreeform;
+    const sourceModelSelected = Boolean(selectedModelSelection?.ref.providerConnectionId || props.teamModels?.selectedTeamCredentialModel);
     const canonicalSelectedModelId = React.useMemo(() => (
-        selectedModelSelection?.ref.providerConnectionId
+        sourceModelSelected
             ? selectedModelId
             : resolveCanonicalModelOptionId(modelOptions, selectedModelId)
-    ), [modelOptions, selectedModelId, selectedModelSelection?.ref.providerConnectionId]);
+    ), [modelOptions, selectedModelId, sourceModelSelected]);
     const effectiveModelLabel = React.useMemo(
         () => resolveEffectiveModelLabel(modelOptions, canonicalSelectedModelId),
         [canonicalSelectedModelId, modelOptions],
@@ -310,12 +317,14 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
     const sanitizeConfigOverridesForModel = React.useCallback((
         modelId: string,
         configOverrides: Readonly<Record<string, string>>,
+        selectedModelConfigOptions?: Parameters<typeof sanitizeNewSessionConfigOverridesForModelSelection>[0]['selectedModelConfigOptions'],
     ) => sanitizeNewSessionConfigOverridesForModelSelection({
         providerId,
         configOptions,
         modelOptions,
         selectedModelId: modelId,
         selectedConfigOverrides: configOverrides,
+        selectedModelConfigOptions,
     }), [configOptions, modelOptions, providerId]);
 
     const favoriteBackendIdentity = React.useMemo(() => buildFavoriteBackendIdentity({
@@ -328,6 +337,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
     const agentTargetKey = favoriteBackendIdentity.backendTargetKey;
     const canonicalSelectedRef = React.useMemo(() => {
         if (selectedModelSelection) {
+            if (sourceModelSelected) return selectedModelSelection.ref;
             return resolveCanonicalNativeModelSelectionRef(modelOptions, selectedModelSelection.ref);
         }
         if (canonicalSelectedModelId === 'default') return null;
@@ -336,11 +346,11 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
             providerConnectionId: null,
             modelId: canonicalSelectedModelId,
         };
-    }, [agentTargetKey, canonicalSelectedModelId, modelOptions, selectedModelSelection]);
+    }, [agentTargetKey, canonicalSelectedModelId, modelOptions, selectedModelSelection, sourceModelSelected]);
 
     React.useEffect(() => {
         if (canonicalSelectedModelId === selectedModelId) return;
-        if (selectedModelSelection?.ref.providerConnectionId) return;
+        if (sourceModelSelected) return;
         publishSelection({
             ...selectionRef.current,
             modelId: canonicalSelectedModelId,
@@ -358,7 +368,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
         publishSelection,
         sanitizeConfigOverridesForModel,
         selectedModelId,
-        selectedModelSelection?.ref.providerConnectionId,
+        sourceModelSelected,
     ]);
     const providersFeatureEnabled = useFeatureEnabled('providers', {
         scopeKind: 'spawn',
@@ -425,6 +435,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
             nativeModels={modelOptions}
             nativeSourceLabel={props.nativeSourceLabel}
             providerGroups={providerGroups}
+            {...props.teamModels}
             providerProjectionAuthoritative={providerProjection.status === 'success'}
             projectionError={providersFeatureEnabled ? providerProjection.error : null}
                 projectionFailures={providersFeatureEnabled ? providerProjection.refreshFailures : []}
@@ -447,6 +458,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
             headerAccessory={modelHeaderAccessory}
             favoriteKeys={props.onToggleFavoriteModel ? providerFavoriteKeys : undefined}
             selectedOptionControls={selectedModelOptionControls ?? undefined}
+            modelOptionOverrides={selectedConfigOverrides}
             onSelectOptionControlValue={(configId, valueId) => {
                 publishSelection({
                     ...selectionRef.current,
@@ -479,6 +491,7 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
                 });
             } : undefined}
             onSelect={(ref) => {
+                props.teamModels?.onSelectOtherModel();
                 const selectedId = ref?.modelId ?? 'default';
                 const modelId = ref?.providerConnectionId
                     ? selectedId
@@ -486,7 +499,12 @@ export function NewSessionEngineOptionDetail(props: NewSessionEngineOptionDetail
                 const canonicalRef = ref && modelId !== ref.modelId
                     ? { ...ref, modelId }
                     : ref;
-                const configOverrides = sanitizeConfigOverridesForModel(modelId, selectionRef.current.configOverrides);
+                const sourceDescriptor = resolveSessionModelSourceDescriptor({
+                    selected: canonicalRef, providerGroups,
+                    teamCredentialResources: props.teamModels?.teamCredentialResources,
+                });
+                const configOverrides = sanitizeConfigOverridesForModel(modelId, selectionRef.current.configOverrides,
+                    canonicalRef?.providerConnectionId ? sourceDescriptor?.modelOptions ?? [] : undefined);
                 publishSelection({
                     ...selectionRef.current,
                     modelId,

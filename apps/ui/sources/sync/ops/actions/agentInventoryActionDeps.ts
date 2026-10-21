@@ -3,7 +3,7 @@ import { resolveActionBackendTargetSelection } from '@happier-dev/protocol/actio
 import type { BackendTargetRefV1 } from '@happier-dev/protocol/backends/targets/backendTargetRef';
 import type { AgentExecutionTargetV1, BackendTargetRefV2, PluginProjectionV2 } from '@happier-dev/protocol';
 import type { AgentInventoryProbeInput } from '@happier-dev/protocol/actions/actionSpecs';
-import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema, type AgentModelsProbeObservation } from '@happier-dev/protocol/capabilities';
+import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema, projectProbedConfigOptionDefinitions, type AgentModelsProbeObservation } from '@happier-dev/protocol/capabilities';
 import type { ConnectedServicesProfileOption } from '@happier-dev/agents';
 import { projectUnexpectedActionFailureV1, type ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
@@ -371,56 +371,21 @@ export async function listAgentConfigOptionsForActions(args: AgentConfigOptionsL
             ...(args.probe ? { probeObservation: probe.result } : {}),
         });
     }
-    const items = dedupeById(optionsRaw
-        .map((entry: unknown): Readonly<{
-            id: string;
-            label: string;
-            type: string;
-            description?: string;
-            options?: readonly Readonly<{ value: unknown; label: string; description?: string }>[];
-        }> | null => {
-            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
-            const record = entry as Record<string, unknown>;
-            const id = normalizeId(record.id);
-            if (!id) return null;
-            const name = normalizeId(record.name);
-            const type = normalizeId(record.type) || 'unknown';
-            const description = normalizeId(record.description);
-            const choices = Array.isArray(record.options)
-                ? record.options
-                    .map((choice: unknown): Readonly<{ value: unknown; label: string; description?: string }> | null => {
-                        if (!choice || typeof choice !== 'object' || Array.isArray(choice)) return null;
-                        const choiceRecord = choice as Record<string, unknown>;
-                        const choiceLabel = normalizeId(choiceRecord.name);
-                        if (!choiceLabel) return null;
-                        const choiceDescription = normalizeId(choiceRecord.description);
-                        return {
-                            value: choiceRecord.value,
-                            label: choiceLabel,
-                            ...(choiceDescription ? { description: choiceDescription } : {}),
-                        };
-                    })
-                    .filter((choice): choice is Readonly<{ value: unknown; label: string; description?: string }> => choice !== null)
-                : [];
-            return {
-                id,
-                label: name || id,
-                type,
-                ...(description ? { description } : {}),
-                ...(choices.length > 0 ? { options: choices } : {}),
-            };
-        })
-        .filter((entry): entry is Readonly<{
-            id: string;
-            label: string;
-            type: string;
-            description?: string;
-            options?: readonly Readonly<{ value: unknown; label: string; description?: string }>[];
-        }> => entry !== null));
+    const modelProbe = args.modelId
+        ? await probeAgentInventory(machineId, target.target, 'probeModels', args.serverId, args.probe, args.signal)
+        : null;
+    if (modelProbe && !modelProbe.ok) return modelProbe.failure;
+    const models = AgentModelsProbeObservationSchema.safeParse(modelProbe?.result);
+    const definitions = projectProbedConfigOptionDefinitions({
+        configOptions: optionsRaw,
+        source,
+        modelId: args.modelId,
+        models: models.success ? models.data : null,
+    });
     return inventoryListResult({
         agentId: target.target.agentId,
-        items,
-        source,
+        items: definitions.items,
+        source: definitions.source,
         limit: readInventoryLimit(args.limit),
         ...(args.probe ? { probeObservation: probe.result } : {}),
     });

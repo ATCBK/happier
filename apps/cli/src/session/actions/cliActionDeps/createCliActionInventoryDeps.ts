@@ -9,7 +9,7 @@ import { configuration } from '@/configuration';
 import { resolveSessionCreationAgentTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
 import { DaemonProviderModelProjectionResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema,
-  AgentConfigOptionsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+  AgentConfigOptionsProbeObservationSchema, projectProbedConfigOptionDefinitions } from '@happier-dev/protocol/capabilities';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
@@ -19,7 +19,7 @@ import { resolveAccountSettingsHttpBaseUrl } from '@/settings/accountSettings/re
 import { readSettings, type StoredCredentials } from '@/persistence';
 import type { ProbedAgentModelsResult } from '@/capabilities/probes/agentModelsProbe';
 import type { ProbedAgentModesResult } from '@/capabilities/probes/agentModesProbe';
-import type { ProbedAgentConfigOption, ProbedAgentConfigOptionsResult } from '@/capabilities/probes/agentConfigOptionsProbe';
+import type { ProbedAgentConfigOptionsResult } from '@/capabilities/probes/agentConfigOptionsProbe';
 import { resolveAvailableAccountSettings } from '@/settings/accountSettings/resolveAvailableAccountSettings';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { AcpCatalogUnavailableError, requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
@@ -66,18 +66,6 @@ type ModeInventoryItem = Readonly<{
   id: string;
   label: string;
   description?: string;
-}>;
-
-type ConfigOptionDefinitionItem = Readonly<{
-  id: string;
-  label: string;
-  description?: string;
-  type: string;
-  options?: readonly Readonly<{
-    value: string | number | boolean | null;
-    label: string;
-    description?: string;
-  }>[];
 }>;
 
 function normalizeStringValue(value: unknown): string {
@@ -144,40 +132,6 @@ function modeInventoryItemsFromProbeResult(result: ProbedAgentModesResult): read
   return result.availableModes
     .map((entry) => modeInventoryItemFromMode(entry))
     .filter((entry): entry is ModeInventoryItem => entry !== null);
-}
-
-function configOptionDefinitions(
-  options: readonly ProbedAgentConfigOption[],
-): readonly ConfigOptionDefinitionItem[] {
-  return options
-    .map((entry): ConfigOptionDefinitionItem | null => {
-      const id = normalizeStringValue(entry.id);
-      if (!id) return null;
-      const label = normalizeStringValue(entry.name) || id;
-      const type = normalizeStringValue(entry.type) || 'unknown';
-      const description = normalizeStringValue(entry.description);
-      const options = Array.isArray(entry.options)
-        ? entry.options
-          .map((choice) => {
-            const choiceLabel = normalizeStringValue(choice.name);
-            if (!choiceLabel) return null;
-            return {
-              value: choice.value,
-              label: choiceLabel,
-              ...(normalizeStringValue(choice.description) ? { description: normalizeStringValue(choice.description) } : {}),
-            };
-          })
-          .filter((choice): choice is NonNullable<typeof choice> => choice !== null)
-        : [];
-      return {
-        id,
-        label,
-        ...(description ? { description } : {}),
-        type,
-        ...(options.length > 0 ? { options } : {}),
-      };
-    })
-    .filter((entry): entry is ConfigOptionDefinitionItem => entry !== null);
 }
 
 function dedupeById<T extends Readonly<{ id: string }>>(items: readonly T[]): readonly T[] {
@@ -825,13 +779,17 @@ export function createCliActionInventoryDeps(params: Readonly<{
       // across models or expose their current selections in this public read.
       const modelResult = args.modelId
         ? await probeActionModelsBestEffort({ ...probeContext, args }) : null;
-      const modelOptions = modelResult?.availableModels.find(model => model.id === args.modelId)?.modelOptions ?? [];
       await captured?.assertCurrent();
-      const items = configOptionDefinitions([...modelOptions, ...(probeResult?.configOptions ?? [])]);
+      const { items, source } = projectProbedConfigOptionDefinitions({
+        configOptions: probeResult?.configOptions ?? [],
+        source: probeResult?.source ?? 'unavailable',
+        modelId: args.modelId,
+        models: modelResult,
+      });
       return {
         ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
-        items: limitItems(dedupeById(items), (args as { limit?: unknown }).limit),
-        source: (modelOptions.length ? modelResult?.source : probeResult?.source) ?? 'unavailable',
+        items: limitItems(items, (args as { limit?: unknown }).limit),
+        source,
         ...(args.probe && probeResult ? { probeObservation: AgentConfigOptionsProbeObservationSchema.parse(probeResult) } : {}),
       };
     },

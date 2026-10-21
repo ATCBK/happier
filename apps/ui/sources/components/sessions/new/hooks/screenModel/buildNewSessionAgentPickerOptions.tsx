@@ -69,6 +69,7 @@ type BuildNewSessionAgentPickerOptionsParams = Readonly<{
     onRemoveFavoriteModelSelection?: (favorite: FavoriteModelSelectionV1) => void;
     onRememberAgentPickerView?: (view: NewSessionAgentPickerViewV1) => void;
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
+    teamModels?: NewSessionEngineOptionDetailProps['teamModels'];
     /** Known only for the selected Agent: the hook that resolves it follows the selection. */
     selectedNativeSourceLabel?: string | null;
     selectedConnectedServices?: ConnectedServiceBindingsV2 | null;
@@ -222,6 +223,7 @@ export function buildNewSessionAgentPickerOptions(
                     },
                 } : undefined,
                 ...(params.providerProjection ? { providerProjection: params.providerProjection } : {}),
+                teamModels: params.teamModels,
                 nativeSourceLabel: entry.backendTargetKey === params.selectedBackendTargetKey ? params.selectedNativeSourceLabel : null,
                 ...(entry.backendTargetKey === params.selectedBackendTargetKey && 'selectedConnectedServices' in params
                     ? { connectedServices: params.selectedConnectedServices } : {}),

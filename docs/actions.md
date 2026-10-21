@@ -4393,8 +4393,9 @@ Supply the selected native `modelId` to `agents.config_options.list` to include
 that model's declared `modelOptions` alongside session-wide controls. A model's
 declaration takes precedence for the same option id; choices from other models
 are not combined. Session lookup reads the model from `modelSelection` or the
-stamped configuration, and Run lookup reads `draftInput.modelId`. Public option
-definitions contain allowed values, never current selections. These inventory
+stamped configuration, and Run lookup reads `draftInput.modelId`. With no
+selected model, only session-wide options are offered; an empty answer can be
+valid. Public option definitions contain allowed values, never current selections. These inventory
 Actions bind their Home from authenticated host context: omit `serverId` in
 `agents.models.list`, `agents.config_options.list`, `agents.session_modes.list`
 and `sessions.spawn.connected_services.list`. A supplied `serverId` is refused

@@ -26,10 +26,12 @@ import type {
     SessionConfigOptionControl,
     SessionConfigOptionValueId,
 } from '@/sync/domains/sessionControl/configOptionsControl';
+import { computeAcpConfigOptionControlsForProvider } from '@/sync/domains/sessionControl/configOptionsControl';
 import type { SelectionListHeightBehavior } from '@/components/ui/selectionList';
 import { t } from '@/text';
 import {
     buildSessionModelPickerSections,
+    resolveSessionModelSourceDescriptor,
     isSessionModelGatewaySlotSection,
     sessionModelConnectionTitle,
     withSessionModelSourceSuffixes,
@@ -179,6 +181,8 @@ export type SessionModelPickerProps = Readonly<{
     favoriteKeys?: ReadonlySet<string>;
     onToggleFavorite?: (ref: ProviderBoundModelRef) => void;
     selectedOptionControls?: ReadonlyArray<SessionConfigOptionControl>;
+    /** Draft/session intent, applied to the selected source's own descriptors. */
+    modelOptionOverrides?: Readonly<Record<string, string>>;
     onSelectOptionControlValue?: (configId: string, valueId: SessionConfigOptionValueId) => void;
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
     fillAvailableSpace?: boolean;
@@ -303,6 +307,9 @@ function SessionModelSourceBrowse(props: Readonly<{
             onRequestClose={picker.onRequestClose}
             multiColumn={picker.multiColumn}
             onSelect={picker.onSelect}
+            selectedOptionControls={picker.selectedOptionControls}
+            modelOptionOverrides={picker.modelOptionOverrides}
+            onSelectOptionControlValue={picker.onSelectOptionControlValue}
             gatewaySlotTitle={gatewaySlotTitle}
             scope={scope}
         />
@@ -318,6 +325,29 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
 }>) {
     const canConfirmExperimental = Boolean(props.experimentalConfirmation);
     const router = useRouter();
+    const selectedOptionControls = React.useMemo(() => {
+        const selected = props.selectedTeamCredentialModel ?? props.selected;
+        if (!selected) return undefined;
+        // Native controls may include runtime-applied/pending state. Source-backed
+        // choices instead use their exact catalog descriptor, never a same-id native row.
+        if (!isTeamCredentialProviderModelPickerValue(selected) && !selected.providerConnectionId) {
+            return props.selectedOptionControls;
+        }
+        // A surface must supply editable intent before these declaration-only
+        // controls can reflect changes. Runtime native controls retain their own state above.
+        if (!props.onSelectOptionControlValue || props.modelOptionOverrides === undefined) return undefined;
+        const descriptor = resolveSessionModelSourceDescriptor({
+            selected, providerGroups: props.providerGroups, teamCredentialResources: props.teamCredentialResources,
+        });
+        return computeAcpConfigOptionControlsForProvider({
+            providerId: props.agentTargetKey,
+            configOptions: descriptor?.modelOptions,
+            overrides: Object.fromEntries(Object.entries(props.modelOptionOverrides ?? {})
+                .map(([id, value]) => [id, { value }])),
+        }) ?? undefined;
+    }, [props.agentTargetKey, props.modelOptionOverrides, props.onSelectOptionControlValue,
+        props.providerGroups, props.selected, props.selectedOptionControls,
+        props.selectedTeamCredentialModel, props.teamCredentialResources]);
     const experimentalApprovalHref = props.experimentalConfirmation?.pending
         ? props.experimentalConfirmation.pendingApproval?.href ?? null
         : null;
@@ -586,22 +616,9 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
             } : { canEnterCustomValue: false as const })}
             favoriteOptions={favoriteOptions}
             probe={hasDiscoveryErrorLine && props.probe?.failed ? { ...props.probe, failed: false } : props.probe}
-            // A provider-connection model has no ACP config options, so the
-            // CONTROL SET is withdrawn for it. That suppression lives here, on
-            // the data, because "which options does this model expose" is a
-            // fact about the selection.
-            //
-            // The HANDLER is not withdrawn with it. It states that this surface
-            // is WIRED for inline row controls, which is a fact about the
-            // surface and never about the current selection — and it is what
-            // `OptionPickerOverlay` declares the popup's ARIA pattern from. A
-            // handler that appeared and disappeared with the selection made
-            // that declaration selection-derived, so picking a provider-
-            // connection model flipped a live popup from `grid` to `listbox`.
-            // With no controls to render, the handler is simply never called.
-            selectedOptionControls={props.selected?.providerConnectionId
-                ? undefined
-                : props.selectedOptionControls}
+            // Keep the handler stable even when a source declares no controls:
+            // it owns the popup's ARIA pattern, independently of the selected row.
+            selectedOptionControls={selectedOptionControls}
             onSelectOptionControlValue={props.onSelectOptionControlValue}
             summary={reportedModelPresentation.label
                 || currentSelectionRecovery

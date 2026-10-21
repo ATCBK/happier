@@ -30,6 +30,7 @@ type BuildNewSessionAgentPickerOptionInteractionsParams = Readonly<{
         onToggle: () => void;
     }>;
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
+    teamModels?: NewSessionEngineOptionDetailProps['teamModels'];
     nativeSourceLabel?: NewSessionEngineOptionDetailProps['nativeSourceLabel'];
     connectedServices?: ConnectedServiceBindingsV2 | null;
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
@@ -99,6 +100,7 @@ export function buildNewSessionAgentPickerOptionInteractions(
                     : undefined,
                 favoriteEngine: params.favoriteEngine,
                 ...(params.providerProjection ? { providerProjection: params.providerProjection } : {}),
+                teamModels: params.teamModels,
                 nativeSourceLabel: params.nativeSourceLabel,
                 ...('connectedServices' in params ? { connectedServices: params.connectedServices } : {}),
                 experimentalConfirmation: params.experimentalConfirmation,

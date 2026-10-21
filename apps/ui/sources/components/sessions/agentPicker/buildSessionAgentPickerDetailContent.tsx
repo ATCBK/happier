@@ -65,6 +65,7 @@ type SessionAgentPickerDetailContentParams = Readonly<{
         onToggle: () => void;
     }>;
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
+    teamModels?: NewSessionEngineOptionDetailProps['teamModels'];
     nativeSourceLabel?: NewSessionEngineOptionDetailProps['nativeSourceLabel'];
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
     onSelectionChange: (selection: SessionAgentPickerSelection) => void;
@@ -118,6 +119,7 @@ function SessionAgentPickerDetailContent(params: SessionAgentPickerDetailContent
             onToggleFavoriteModel={params.onToggleFavoriteModel}
             favoriteEngine={params.favoriteEngine}
             {...(params.providerProjection ? { providerProjection: params.providerProjection } : {})}
+            teamModels={params.teamModels}
             nativeSourceLabel={params.nativeSourceLabel}
             experimentalConfirmation={params.experimentalConfirmation}
             onSelectionChange={(next) => params.onSelectionChange(next)}

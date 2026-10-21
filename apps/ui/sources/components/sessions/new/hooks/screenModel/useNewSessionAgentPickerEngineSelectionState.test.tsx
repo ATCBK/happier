@@ -4,7 +4,7 @@ import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/a
 import { renderHook } from '@/dev/testkit';
 import { formatBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
-import { SessionModelSelectionV1Schema } from '@happier-dev/protocol';
+import { SessionModelSelectionV1Schema, type SessionModelSelectionV1 } from '@happier-dev/protocol';
 
 import { useNewSessionAgentPickerEngineSelectionState } from './useNewSessionAgentPickerEngineSelectionState';
 
@@ -29,6 +29,38 @@ function createBuiltInBackendEntry(backendId: 'claude' | 'codex' | 'kimi' | 'gem
 }
 
 describe('useNewSessionAgentPickerEngineSelectionState', () => {
+    it('does not retain a source-backed model as a native engine selection', async () => {
+        const codexEntry = createBuiltInBackendEntry('codex', 'Codex');
+        const claudeEntry = createBuiltInBackendEntry('claude', 'Claude');
+        const modelSelection = SessionModelSelectionV1Schema.parse({
+            v: 1, updatedAt: 123,
+            ref: { agentTargetKey: codexEntry.backendTargetKey, providerConnectionId: null, modelId: 'team-only-model' },
+        });
+        const remembered: Array<SessionModelSelectionV1 | null> = [];
+        type Props = Parameters<typeof useNewSessionAgentPickerEngineSelectionState>[0];
+        const baseProps: Props = {
+            selectedBackendEntry: codexEntry, selectedBackendTargetKey: codexEntry.backendTargetKey,
+            modelMode: modelSelection.ref.modelId, modelSelection,
+            acpSessionModeId: null, sessionConfigOptionOverrides: null,
+            setBackendTarget: vi.fn(), setModelMode: vi.fn(), setAcpSessionModeId: vi.fn(),
+            setSessionConfigOptionOverrides: vi.fn(),
+            onRememberEngineSelection: (_target, selection) => { remembered.push(selection.modelSelection); },
+            ...{ canRetainModelSelection: (selection: Props['modelSelection']) => selection?.ref.modelId !== 'team-only-model' },
+        };
+        const hook = await renderHook((props: Props) => useNewSessionAgentPickerEngineSelectionState(props), { initialProps: baseProps });
+        try {
+            expect(hook.getCurrent().getEngineSelectionForTargetKey(codexEntry.backendTargetKey).modelSelection).toEqual(modelSelection);
+            hook.getCurrent().selectEngineSelection(codexEntry, {
+                modelId: modelSelection.ref.modelId, modelSelection, sessionModeId: null,
+                configOverrides: { reasoning_effort: 'high' },
+            });
+            expect(remembered).toEqual([]);
+            await hook.rerender({ ...baseProps, selectedBackendEntry: claudeEntry,
+                selectedBackendTargetKey: claudeEntry.backendTargetKey, modelMode: 'default', modelSelection: null });
+            expect(hook.getCurrent().getEngineSelectionForTargetKey(codexEntry.backendTargetKey).modelId).toBe('default');
+        } finally { await hook.unmount(); }
+    });
+
     it('preserves provider connection identity when reapplying the focused model selection', async () => {
         const codexEntry = createBuiltInBackendEntry('codex', 'Codex');
         const modelSelection = SessionModelSelectionV1Schema.parse({

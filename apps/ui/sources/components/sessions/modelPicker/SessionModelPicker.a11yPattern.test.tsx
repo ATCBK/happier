@@ -16,6 +16,7 @@ import { t } from '@/text';
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -90,9 +91,69 @@ const optionControls = [{
 }];
 
 const { SessionModelPicker } = await import('./SessionModelPicker');
+const { NewSessionEngineOptionDetail } = await import('@/components/sessions/new/components/NewSessionEngineOptionDetail');
 const { NewSessionModelSelectionContent } = await import('@/components/sessions/new/components/NewSessionModelSelectionContent');
 
 describe('SessionModelPicker — the popup pattern survives every selection, single column', () => {
+    it.each(['account', 'team', 'engine-team'] as const)('uses the exact %s source descriptor for selected controls and preserves the popup pattern', async (source) => {
+        const descriptor = { id: 'listed', name: 'Listed', modelOptions: [{
+            ...optionControls[0]!.option,
+            currentValue: 'low',
+        }] };
+        const resource = TeamCredentialResourceCatalogEntryV1Schema.parse({
+            id: 'resource', teamId: 'team', displayName: 'Shared gateway', resourceRevision: 7,
+            readiness: { kind: 'available' }, recoveryAction: null,
+            mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
+            sessionUsePolicy: 'personal_allowed', sourcePresentation: null,
+            providerModels: [{
+                selection: { kind: 'team_credential_provider_model', resourceId: 'resource', teamId: 'team',
+                    expectedResourceRevision: 7, deliveryMode: 'brokered',
+                    agentTargetKey: providerSelection.agentTargetKey, modelId: 'listed' },
+                descriptor,
+                application: { agentTargetKey: providerSelection.agentTargetKey,
+                    implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
+                    endpointTemplateId: 'cliproxyapi-openai-responses', protocol: 'openai-responses' },
+                sourceRevision: 'source-v1', availability: 'available',
+            }],
+        });
+        const onChange = vi.fn();
+        const element = (overrides: Readonly<Record<string, string>>) => source === 'engine-team' ? <NewSessionEngineOptionDetail
+            backendTarget={{ kind: 'backend', backendId: 'codex' }}
+            selectedMachineId={null}
+            capabilityServerId="server-1"
+            selectedModelId="listed"
+            selectedModelSelection={{ v: 1, updatedAt: 1, ref: { ...providerSelection, providerConnectionId: null } }}
+            selectedConfigOverrides={overrides}
+            teamModels={{ teamCredentialResources: [resource], selectedTeamCredentialModel: resource.providerModels[0]!.selection,
+                onSelectOtherModel: () => {} }}
+            onSelectionChange={(selection) => onChange('reasoning_effort', selection.configOverrides.reasoning_effort)}
+        /> : <SessionModelPicker
+            agentTargetKey={providerSelection.agentTargetKey}
+            nativeModels={[{ value: 'listed', label: 'Same native id' }]}
+            providerGroups={[{ ...providerGroups[0]!, rows: [{ ...providerGroups[0]!.rows[0]!, descriptor }] }]}
+            providerProjectionAuthoritative
+            selected={source === 'account' ? providerSelection : { ...providerSelection, providerConnectionId: null }}
+            selectedTeamCredentialModel={source === 'team' ? resource.providerModels[0]!.selection : null}
+            teamCredentialResources={[resource]}
+            effectiveLabel="Listed"
+            selectedOptionControls={optionControls}
+            modelOptionOverrides={overrides}
+            onSelectOptionControlValue={onChange}
+            onSelect={() => {}}
+        />;
+        const screen = await renderScreen(element({ reasoning_effort: 'high' }));
+        expect(screen.findByTestId(CONTROLS_TEST_ID)).not.toBeNull();
+        expect(screen.findByTestId(BODY_TEST_ID)?.props.role).toBe('grid');
+        // Source choices and intent are used even when a native row has the same model id.
+        expect(screen.findByTestId('model-picker-overlay-selected-option-control-option:reasoning_effort:high')
+            ?.props.accessibilityState?.checked).toBe(true);
+        await screen.pressByTestIdAsync('model-picker-overlay-selected-option-control-option:reasoning_effort:low');
+        expect(onChange).toHaveBeenCalledWith('reasoning_effort', 'low');
+        await screen.update(element({ reasoning_effort: 'low' }));
+        expect(screen.findByTestId('model-picker-overlay-selected-option-control-option:reasoning_effort:low')
+            ?.props.accessibilityState?.checked).toBe(true);
+        await screen.unmount();
+    });
     it('keeps the selected model controls inside its own row and withdraws them for provider models', async () => {
         const element = (selected: typeof nativeSelection | typeof providerSelection) => <SessionModelPicker
             agentTargetKey="agent:happier.agent.codex/codex" nativeModels={[{ value: 'gpt-5.6-sol', label: '5.6 Sol' }]}

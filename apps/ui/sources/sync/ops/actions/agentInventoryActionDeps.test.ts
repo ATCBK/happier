@@ -472,16 +472,31 @@ describe('defaultActionExecutor canonical agent inventory corridor', () => {
       method: RPC_METHODS.CAPABILITIES_INVOKE, payload: expect.objectContaining({ method: 'probeModes' }) }));
   });
 
-  it('answers agents.config_options.list by probing the selected machine instead of unsupported_action', async () => {
-    network.respond(RPC_METHODS.CAPABILITIES_INVOKE, { ok: true, result: { agentId: 'acme-voice-agent', configOptions: [{
-      id: 'reasoning-effort', name: 'Reasoning effort', type: 'select', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High', description: 'Slower' }],
-    }], source: 'dynamic' } });
-    const res = await createDefaultActionExecutor().execute('agents.config_options.list',
-      { agentId: 'acme-voice-agent', backendTargetKey: 'agent:acme.voice/agent', machineId: 'machine-1' }, { surface: 'voice', serverId });
-    expect(res).toEqual({ ok: true, result: { agentId: 'acme-voice-agent', items: [{ id: 'reasoning-effort', label: 'Reasoning effort', type: 'select',
-      options: [{ value: 'low', label: 'Low' }, { value: 'high', label: 'High', description: 'Slower' }], }], source: 'dynamic' } });
-    expect(network.requests).toContainEqual(expect.objectContaining({ serverUrl: 'https://inventory-actions.test', targetId: 'machine-1',
-      method: RPC_METHODS.CAPABILITIES_INVOKE, payload: expect.objectContaining({ method: 'probeConfigOptions' }) }));
+  it('answers agents.config_options.list with the selected external Agent model’s declarations', async () => {
+    const effort = (values: string[]) => ({ id: 'reasoning_effort', name: 'Thinking', type: 'select', currentValue: 'private-current',
+      options: values.map(value => ({ value, name: value })) });
+    network.setRpcResponder(async request => {
+      if (request.method !== RPC_METHODS.CAPABILITIES_INVOKE || request.targetId !== 'machine-1') throw new Error('Unexpected inventory transport');
+      const payload = request.payload as { method: string };
+      return { ok: true, result: payload.method === 'probeConfigOptions'
+        ? { agentId: 'acme-voice-agent', source: 'dynamic', configOptions: [effort(['session-only']),
+          { id: 'format', name: 'Format', type: 'select', currentValue: 'private-format', options: [{ value: 'text', name: 'Text' }] }] }
+        : AgentModelsProbeObservationSchema.parse({ agentId: 'acme-voice-agent', source: 'dynamic', supportsFreeform: false,
+          availableModels: [{ id: 'small', name: 'Small', modelOptions: [effort(['low', 'high'])] },
+            { id: 'large', name: 'Large', modelOptions: [effort(['medium', 'ultra'])] }] }) };
+    });
+    const executor = createDefaultActionExecutor();
+    const input = { agentId: 'acme-voice-agent', backendTargetKey: 'agent:acme.voice/agent', machineId: 'machine-1' };
+    for (const [modelId, choices] of [['small', ['low', 'high']], ['large', ['medium', 'ultra']]] as const) {
+      const result = await executor.execute('agents.config_options.list', { ...input, modelId }, { surface: 'voice', serverId });
+      expect(result).toMatchObject({ ok: true, result: { items: [
+        { id: 'reasoning_effort', options: choices.map(value => ({ value })) }, { id: 'format', options: [{ value: 'text' }] },
+      ] } });
+      expect(JSON.stringify(result)).not.toContain('private-');
+    }
+    const options = await executor.execute('action.options.resolve', { actionId: 'execution.run.start', fieldPath: 'configOptions',
+      draftInput: { ...input, modelId: 'small' } }, { surface: 'voice', serverId });
+    expect(options).toMatchObject({ ok: true, result: { options: [{ value: 'reasoning_effort' }, { value: 'format' }] } });
   });
 
   it('resolves the connected-services options source through the same canonical action options owner', async () => {

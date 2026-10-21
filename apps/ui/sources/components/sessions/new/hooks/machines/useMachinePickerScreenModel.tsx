@@ -216,6 +216,7 @@ export function useMachinePickerScreenModel() {
     const pickerTeamCredentialCatalog = useHomeTeamCredentialModelCatalog({
         serverId: selectedServerId,
         enabled: pickerCredentialResourcesEnabled,
+        agentTargetKey: pickerBackendTargetKey,
     });
     const pickerCreatorDependencies = React.useMemo(() => (
         createTemporaryComputerCreatorDependencies({

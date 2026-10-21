@@ -244,6 +244,15 @@ Its default-model control uses `providers.defaults.set`, not another Settings
 writer or a running-Session transition. Agent effort/options keep their existing
 configuration owner and do not add fields to the model reference.
 
+In development source, native, Account Provider and Team model choices use the shared
+picker's selected-control owner. A source-backed row supplies its own `modelOptions`;
+an equal native model id does not supply or override those controls. Team discovery
+qualifies each read using the same admitted Agent/Provider application projection as
+the CLI broker path. CLIProxyAPI's pinned catalog carries explicit reasoning levels
+from its SDK registry for both Account and Team projections; budget-only models do
+not acquire guessed level choices. These descriptors describe source controls, not
+Account entitlement or verified execution compatibility.
+
 `providers.models.source_visibility.set` is an Account Action with no machine input.
 In 0.3 development, the UI and CLI use their captured Account catalog read/CAS writer;
 frontends without that writer refuse the operation before transport. A source

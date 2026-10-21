@@ -36,6 +36,9 @@ const { useNewSessionPreflightSessionModesState } = await import('@/components/s
 const { useNewSessionPreflightConfigOptionsState } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightConfigOptionsState');
 const modeCache = await import('@/sync/domains/sessionModes/dynamicSessionModeProbeCache');
 const configCache = await import('@/sync/domains/sessionControl/dynamicConfigOptionsProbeCache');
+const modelCache = await import('@/sync/domains/models/dynamicModelProbeCache');
+const { discoverMachineModels } = await import('@/sync/ops/modelDiscovery');
+const { useNewSessionPreflightModelsState } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState');
 
 afterEach(async () => {
     vi.useRealTimers();
@@ -46,9 +49,10 @@ afterEach(async () => {
     resetServerFeaturesClientForTests();
     modeCache.resetDynamicSessionModeProbeCacheForTests();
     configCache.resetDynamicConfigOptionsProbeCacheForTests();
+    modelCache.resetDynamicModelProbeCacheForTests();
 });
 
-type NativeReply = 'hold' | 'lost' | 'success' | 'unavailable' | 'absent';
+type NativeReply = 'hold' | 'lost' | 'success' | 'unavailable' | 'absent' | 'preflight-refused';
 async function preflightHome(options: Readonly<{ holdLost?: boolean; inventory?: 'config' }> = {}) {
     const issued: string[] = [];
     const cancelled: unknown[] = [];
@@ -97,6 +101,12 @@ async function preflightHome(options: Readonly<{ holdLost?: boolean; inventory?:
                 return;
             }
             if (reply === 'absent') { ack({ ok: false, error: 'not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }); return; }
+            if (reply === 'preflight-refused') {
+                ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, {
+                    ok: false, error: { code: 'connected-service-preflight-failed', message: 'Selected credential could not be prepared.' },
+                }, decoded.callId) });
+                return;
+            }
             const result = options.inventory === 'config'
                 ? (reply === 'unavailable' ? AgentConfigOptionsProbeObservationSchema.parse({ source: 'unavailable', configOptions: [] }) : configObservation)
                 : (reply === 'unavailable' ? AgentSessionModesProbeObservationSchema.parse({ source: 'unavailable', availableModes: [] }) : observation);
@@ -116,6 +126,46 @@ async function preflightHome(options: Readonly<{ holdLost?: boolean; inventory?:
         async dispose() { await serverScopedRpcSocketPool.stopAll(); await new Promise<void>(resolve => relay.close(() => resolve())); } };
 }
 
+it('retains the capability refusal through the real Action, bridge and New Session model resource', async () => {
+    const f = await preflightHome();
+    f.mode.set('refused-machine', 'preflight-refused');
+    try {
+        const result = await createDefaultActionExecutor().execute('agents.models.list', {
+            agentId: 'external.agent/reader', machineId: 'refused-machine', probe: { cwd: '/repo' },
+        }, { surface: 'ui', serverId: f.home.id });
+        expect(ActionExecuteFailureSchema.parse(result)).toMatchObject({ errorCode: 'connected-service-preflight-failed' });
+        expect(await discoverMachineModels({ cacheKey: 'typed-preflight-refusal', agentType: 'external.agent/reader',
+            machineId: 'refused-machine', serverId: f.home.id, capabilityParams: { cwd: '/repo' }, bypassCache: true,
+        })).toMatchObject({ kind: 'error', reason: 'error', errorCode: 'connected-service-preflight-failed' });
+        const picker = await renderHook(useNewSessionPreflightModelsState, { initialProps: f.picker('refused-machine') });
+        try {
+            await vi.waitFor(() => expect(picker.getCurrent().probe).toMatchObject({ failed: true,
+                errorCode: 'connected-service-preflight-failed' }));
+        } finally { await picker.unmount(); }
+    } finally { await f.dispose(); }
+});
+
+it('retains a typed refusal in mode and config resources, including cached remounts', async () => {
+    const f = await preflightHome();
+    f.mode.set('refused-modes', 'preflight-refused');
+    f.mode.set('refused-config', 'preflight-refused');
+    const usePickers = () => ({
+        modes: useNewSessionPreflightSessionModesState(f.picker('refused-modes')),
+        config: useNewSessionPreflightConfigOptionsState(f.picker('refused-config')),
+    });
+    try {
+        for (let occurrence = 0; occurrence < 2; occurrence += 1) {
+            const picker = await renderHook(usePickers);
+            try {
+                await vi.waitFor(() => {
+                    expect(picker.getCurrent().modes.probe).toMatchObject({ reason: 'error', errorCode: 'connected-service-preflight-failed' });
+                    expect(picker.getCurrent().config.probe).toMatchObject({ reason: 'error', errorCode: 'connected-service-preflight-failed' });
+                });
+            } finally { await picker.unmount(); }
+        }
+    } finally { await f.dispose(); }
+});
+
 it('preserves a lost real ACK through the inventory Action failure and bridge', async () => {
     const f = await preflightHome();
     try {
@@ -126,7 +176,7 @@ it('preserves a lost real ACK through the inventory Action failure and bridge', 
         expect(ActionExecuteFailureSchema.parse(result)).toMatchObject({ ok: false, errorCode: 'action_outcome_unknown',
             details: { reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown' } });
         expect(await invokeAgentInventoryProbeAction(f.params('lost-machine'), 'probeModes')).toEqual({
-            supported: false, reason: 'outcomeUnknown', requestDisposition: 'outcomeUnknown' });
+            supported: false, reason: 'outcomeUnknown', errorCode: 'action_outcome_unknown', requestDisposition: 'outcomeUnknown' });
         f.mode.set('unavailable-machine', 'unavailable');
         expect(await invokeAgentInventoryProbeAction(f.params('unavailable-machine'), 'probeModes')).toMatchObject({
             supported: true, response: { ok: true, result: { source: 'unavailable', availableModes: [] } } });

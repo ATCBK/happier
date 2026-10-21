@@ -1,5 +1,6 @@
 import { AgentModelOptionOverrideRuleSchema, type AgentModelOptionOverrideRule } from '../models/descriptor.js';
 import { z } from 'zod/mini';
+import type { AgentModelsProbeObservation } from './agentProbeObservation.js';
 
 /**
  * The single normalizer for a probed session-control option.
@@ -103,4 +104,47 @@ export function normalizeProbedCatalogOption(optionRaw: unknown): ProbedCatalogO
     ...(choices && choices.length > 0 ? { options: choices } : {}),
     ...(overridesWhenOn.success ? { overridesWhenOn: overridesWhenOn.data } : {}),
   };
+}
+
+export type ConfigOptionDefinition = Readonly<{
+  id: string;
+  label: string;
+  type: string;
+  description?: string;
+  options?: readonly Readonly<{
+    value: ProbedCatalogOptionValue;
+    label: string;
+    description?: string;
+  }>[];
+}>;
+
+/** Public discovery combines only the selected model's controls with session-wide controls. */
+export function projectProbedConfigOptionDefinitions(args: Readonly<{
+  configOptions: readonly unknown[];
+  source: 'static' | 'dynamic' | 'unavailable';
+  modelId?: string;
+  models?: Pick<AgentModelsProbeObservation, 'availableModels' | 'source'> | null;
+}>): Readonly<{ items: readonly ConfigOptionDefinition[]; source: 'static' | 'dynamic' | 'unavailable' }> {
+  const modelOptions = args.modelId
+    ? args.models?.availableModels.find(model => model.id === args.modelId)?.modelOptions ?? [] : [];
+  const items: ConfigOptionDefinition[] = [];
+  const seen = new Set<string>();
+  for (const raw of [...modelOptions, ...args.configOptions]) {
+    const option = normalizeProbedCatalogOption(raw);
+    if (!option || seen.has(option.id)) continue;
+    seen.add(option.id);
+    // Definition reads must never disclose the current selection from either native probe.
+    items.push({
+      id: option.id,
+      label: option.name,
+      type: option.type,
+      ...(option.description ? { description: option.description } : {}),
+      ...(option.options?.length ? { options: option.options.map(choice => ({
+        value: choice.value,
+        label: choice.name,
+        ...(choice.description ? { description: choice.description } : {}),
+      })) } : {}),
+    });
+  }
+  return { items, source: (modelOptions.length ? args.models?.source : args.source) ?? 'unavailable' };
 }

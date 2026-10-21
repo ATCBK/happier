@@ -2154,7 +2154,7 @@ const SessionSpawnNewInputHints = {
     { path: 'unlistedTools', title: 'Unlisted tools', widget: 'select',
       options: [{ value: 'ask', label: 'Ask for approval' }, { value: 'deny', label: 'Deny without asking' }] },
     { path: 'agentModeId', title: 'Agent mode', widget: 'text', optionsSourceId: 'agents.session_modes.available' },
-    { path: 'configuration', title: 'Configuration', description: 'Optional full snapshot: {mode:{value:null,updatedAtMs:0},model:{value:null,updatedAtMs:0},permissionIntent:{value:null,updatedAtMs:0},options:{}}. Set model.value to a model-id string or null, permissionIntent.value to a canonical intent or null, and options[option.value] to {value:<scalar>,updatedAtMs:<milliseconds>}. Config-option choices name option ids, not snapshots or selected values; read agents.config_options.list for their value choices. Omit configuration when no override is needed.', widget: 'json', optionsSourceId: 'agents.config_options.available' },
+    { path: 'configuration', title: 'Configuration', description: 'Optional full snapshot: {mode:{value:null,updatedAtMs:0},model:{value:null,updatedAtMs:0},permissionIntent:{value:null,updatedAtMs:0},options:{}}. Set model.value to a model-id string or null, permissionIntent.value to a canonical intent or null, and options[option.value] to {value:<scalar>,updatedAtMs:<milliseconds>}. For model-scoped choices, first supply draftInput.modelSelection or draftInput.configuration.model; without a selected model the inventory contains only session-wide options. Config-option choices name option ids, not snapshots or selected values; read agents.config_options.list with modelId for their value choices. Omit configuration when no override is needed.', widget: 'json', optionsSourceId: 'agents.config_options.available' },
     { path: 'profileId', title: 'Profile id', widget: 'text', optionsSourceId: 'sessions.spawn.profiles.available' },
     { path: 'connectedServices', title: 'Connected services', description: 'Pass the selected option.value through the connected-services input schema; do not put a Connected Account profile id in modelSelection.ref.providerConnectionId.', widget: 'json', optionsSourceId: 'sessions.spawn.connected_services.available' },
     { path: 'capabilitySelection', title: 'Capability selection', widget: 'json', optionsSourceId: 'sessions.spawn.capabilities.preview' },
@@ -6812,7 +6812,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
         {
           path: 'configOptions',
           title: 'Config options (e.g. reasoning effort)',
-          description: 'Optional scalar overrides keyed by config-option ids, e.g. {"reasoning_effort":"high"}. Config-option choices name ids; read agents.config_options.list for their value choices. These are not stamped Session configuration fields. Merged into sessionConfigOptionOverrides at the boundary; a conflict fails with invalid_parameters.',
+          description: 'Optional scalar overrides keyed by config-option ids, e.g. {"reasoning_effort":"high"}. Supply draftInput.modelId for model-scoped choices. Config-option choices name ids; read agents.config_options.list with modelId for their value choices. These are not stamped Session configuration fields. Merged into sessionConfigOptionOverrides at the boundary; a conflict fails with invalid_parameters.',
           widget: 'json',
           optionsSourceId: 'agents.config_options.available',
         },
@@ -8610,7 +8610,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     inputHints: {
       title: 'List agent config options',
       fields: [
-        { path: 'agentId', title: 'Runtime agent id', widget: 'text' },
+        { path: 'agentId', title: 'Runtime agent id', description: 'For an external Agent, retain the runtime agentId returned by backend inventory alongside its qualified backendTargetKey.', widget: 'text' },
         { path: 'backendTargetKey', title: 'Backend target key', widget: 'text' },
         { path: 'modelId', title: 'Model id', widget: 'text' },
         { path: 'machineId', title: 'Machine id (optional)', widget: 'text' },
