@@ -36,7 +36,7 @@ function harness() {
 }
 
 describe('workspace entity Action admission', () => {
-    it('uses the same live screen identity in drag scenes and leaves unresolved nested screens unnamed', () => {
+    it('uses the same live screen identity in drag scenes and gives unresolved nested Session screens the shared untitled fallback', () => {
         const h = harness();
         const ref = resolveDestinationRefFromHref(h.catalog, '/session/existing/info');
         if (!ref) throw new Error('Registered Session info destination required');
@@ -47,8 +47,9 @@ describe('workspace entity Action admission', () => {
         });
         expect(scene('Atlas review').paneTitle).toBe('Atlas review');
         expect(scene('Atlas renamed').locateTab('anchor')).toEqual({ paneId: 'group:1', title: 'Atlas renamed' });
-        expect(scene(null).paneTitle).toBeNull();
-        expect(scene(null).locateTab('anchor')).toBeNull();
+        // An unpublished Session screen is named by the destination catalog's one fallback, not by its stale tab label.
+        expect(scene(null).paneTitle).toBe(t('session.untitled'));
+        expect(scene(null).locateTab('anchor')).toEqual({ paneId: 'group:1', title: t('session.untitled') });
         expect(createWorkspaceDropScene(h.workspace.state, h.catalog, { paneId: 'group:1' }).paneTitle).toBeNull();
     });
     it('applies an existing tab edge drop beside the hovered pane rather than its source pane', () => {

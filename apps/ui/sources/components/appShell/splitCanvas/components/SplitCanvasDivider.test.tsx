@@ -101,7 +101,7 @@ describe('SplitCanvasDivider', () => {
         expect(separatorLine).toBeTruthy();
         expect(flattenStyle(handle.props.style)).toEqual(expect.objectContaining({
             width: 10,
-            cursor: 'col-resize',
+            cursor: 'pointer',
         }));
         expect(separatorLine.props.style).toEqual(expect.objectContaining({
             width: 1,
@@ -133,7 +133,7 @@ describe('SplitCanvasDivider', () => {
 
         expect(flattenStyle(handle.props.style)).toEqual(expect.objectContaining({
             height: 18,
-            cursor: 'row-resize',
+            cursor: 'pointer',
         }));
         expect(grip.props.style).toEqual(expect.objectContaining({
             width: 56,

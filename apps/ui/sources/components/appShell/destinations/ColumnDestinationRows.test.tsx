@@ -271,8 +271,11 @@ describe('ColumnDestinationRows', () => {
             platform: 'web',
             windowWidth: 800,
         }).rowHeight;
-        // The approved desktop decision is exactly the case a blanket floor would undo.
-        expect(densityHeight).toBeLessThan(resolveMinimumInteractiveTargetSize('web'));
+        // A precise pointer only owes the WCAG pointer floor, which the density grid already clears;
+        // the touch floor must not lift the desktop row.
+        const pointerFloor = resolveMinimumInteractiveTargetSize('web');
+        expect(densityHeight).toBeGreaterThanOrEqual(pointerFloor);
+        expect(densityHeight).toBeLessThan(resolveMinimumInteractiveTargetSize('ios'));
 
         const style = await renderActionRowStyle();
 

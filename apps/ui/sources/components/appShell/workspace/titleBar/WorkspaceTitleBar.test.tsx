@@ -22,6 +22,8 @@ import { View } from 'react-native';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
+// Session list surfaces demand content from the sync singleton; the fixture settles that demand without a Home.
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
     const unavailable = () => { throw new Error('Unexpected recipient-envelope API in workspace owner test'); };
     return { createSessionDataKeyEnvelopeClient: unavailable, readSessionDataKeyEnvelopeCollectionPage: unavailable,

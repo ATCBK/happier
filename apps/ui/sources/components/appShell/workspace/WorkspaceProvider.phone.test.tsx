@@ -35,6 +35,8 @@ const boundary = vi.hoisted(() => ({
 }));
 // Socket transport is a genuine boundary; no credentials means no tab-sync RPC should run.
 vi.mock('@/sync/api/session/apiSocket', () => ({ apiSocket: {} }));
+// Session list surfaces demand content from the sync singleton; the fixture settles that demand without a Home.
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 // This navigation journey never renders Markdown; the vendor/native SDK remains a boundary.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => { throw new Error('Unexpected vendor Markdown reveal in workspace navigation test'); },
@@ -82,17 +84,20 @@ vi.mock('@/sync/domains/state/storage', async () => {
     const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
     const { create } = await import('zustand');
     const baseline = createStorageModuleStub({});
-    const store = create<ReturnType<typeof baseline.storage.getState>>(() => ({ ...baseline.storage.getState(), settings: baseline.useSettings() }));
+    const store = create<ReturnType<typeof baseline.storage.getState>>(() => ({
+        ...baseline.storage.getState(), settings: baseline.useSettings(),
+        applyLocalSettings: (delta: Record<string, unknown>) => { boundary.layouts = delta.workspaceLayoutV1 as typeof boundary.layouts; },
+    }));
     return createStorageModuleStub({
     storage: store,
     getStorage: () => store,
     useSetting: (key: keyof ReturnType<typeof baseline.useSettings>) => store.getState().settings[key],
     useIsDataReady: () => true,
     useActiveServerAccountScope: () => ({ serverId: 'home-a', accountId: 'alice' }),
-    useLocalSettingMutable: (key: string) => {
+    // The workspace layout setting is the only device-local value this owner reads; it writes through the storage writer.
+    useLocalSetting: (key: string) => {
         if (key !== 'workspaceLayoutV1') throw new Error(`Unexpected setting ${key}`);
-        // The workspace layout setting is the only device-local value this owner reads.
-        return [boundary.layouts, (next: Record<string, unknown>) => { boundary.layouts = next; }] as never;
+        return boundary.layouts as never;
     },
     });
 });

@@ -26,6 +26,8 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('react-native-gesture-handler', async () => (await import('@/dev/testkit/mocks/gestureHandler')).createGestureHandlerMock());
+// Session list surfaces demand content from the sync singleton; the fixture settles that demand without a Home.
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 // Recipient-envelope HTTP is outside this deterministic mounted carry/admission corridor.
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
     const unavailable = () => { throw new Error('Unexpected recipient-envelope API'); };

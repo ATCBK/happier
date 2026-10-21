@@ -4,16 +4,20 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createSessionFixture, invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { WORKSPACE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol';
+import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { storage } from '@/sync/domains/state/storage';
-import { hrefForDestinationRef, readDestinationInstanceTitle, resolveCompactAppDestinations, resolveDestinationRefFromHref, useActivateAppDestination, useDestinationInstanceTitles, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
+import { hrefForDestinationRef, readDestinationInstanceTitle, resolveCompactAppDestinations, resolveDestinationRefFromHref, useActivateAppDestination, useCompactAppDestinations, useDestinationInstanceTitles, type CompactAppDestination } from '../destinations/compactAppDestinationCatalog';
 import { useHydrateSessionForRoute, useHydrateSession } from '@/hooks/session/useHydrateSessionForRoute';
 import { AppPaneProvider } from '../panes/AppPaneProvider';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { ConnectedAccountActionApprovalNotice } from '@/components/settings/connectedServices/ConnectedAccountActionApprovalNotice';
 import { t } from '@/text';
 import { DestinationInstanceHost, useDestinationInstanceKey, useDestinationParams, useDestinationRouter } from './DestinationInstanceHost';
-import type { WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
+import { useOptionalWorkspaceNavigation, type WorkspaceNavigationContextValue } from './WorkspaceNavigationContext';
 import { WorkspaceProvider } from './WorkspaceProvider';
+import { WorkspaceAppShellProvider } from './WorkspaceAppShellProvider';
+import { AppShellPluginUiProjectionValueProvider } from '../plugins/AppShellPluginUiProjection';
+import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiSurfacePlacementProjection } from '@/sync/domains/plugins/ui/projection';
 import { WorkspaceShell } from './WorkspaceShell';
 import { captureMountedWorkspaceAction, invokeWorkspaceAction } from './workspaceActionRuntime';
 import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard, type ActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
@@ -42,6 +46,8 @@ const boundary = vi.hoisted(() => ({ layouts: {} as Record<string, unknown>, mir
     renderScene: null as (() => React.ReactNode) | null }));
 // Socket transport is a genuine boundary; this layout-owner suite has no authenticated RPCs.
 vi.mock('@/sync/api/session/apiSocket', () => ({ apiSocket: {} }));
+// Session list surfaces demand content from the sync singleton; the fixture settles that demand without a Home.
+vi.mock('@/sync/sync', async () => ({ sync: (await import('@/dev/testkit/mocks/sync')).createSessionListHydrationSyncBoundary() }));
 // This navigation journey never renders Markdown; the vendor/native SDK remains a boundary.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => { throw new Error('Unexpected vendor Markdown reveal in workspace navigation test'); },
@@ -57,7 +63,7 @@ vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
         prepareSessionDataKeyEnvelopesForScope: unavailable, prepareSessionDataKeyEnvelopesDetached: unavailable };
 });
 // Authentication is a boundary of this no-network layout harness.
-vi.mock('@/auth/context/AuthContext', () => ({ useOptionalAuth: () => null }));
+vi.mock('@/auth/context/AuthContext', () => ({ useOptionalAuth: () => null, useAuth: () => ({ isAuthenticated: true }) }));
 // Native has no browser History; Expo is the genuine platform URL boundary here.
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -188,6 +194,84 @@ function installBrowserBoundary(input: Record<string, unknown> & { history: obje
 }
 
 describe('consumed workspace navigation owner', () => {
+    it.each(['web', 'ios'])('requires the exact initial declaration when a %s workspace mounts after another catalog was retained', async (platform) => {
+        boundary.platform = platform;
+        const value = {
+            interactionEnabled: false, pluginBrowserProjection: null, phase: 'current' as const,
+            machineId: null, serverId: 'home-a', platform: 'web' as const, accountLifetime: null,
+            clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {},
+            reloadConnectedAccountProjection: () => {}, pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION,
+        };
+        function Seed() { useCompactAppDestinations(); return null; }
+        const seed = await renderScreen(<AppShellPluginUiProjectionValueProvider value={value}><Seed /></AppShellPluginUiProjectionValueProvider>);
+        await seed.unmount();
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId: 'acme.notes', destinationId: 'notes',
+            rendererId: 'notes-renderer', container: 'appPage', target: { kind: 'app' } });
+        if (!binding) throw new Error('Expected admitted app-page binding');
+        const placement: PluginUiSurfacePlacementProjection = {
+            id: 'surfacePlacement:acme.notes:notes', pluginId: 'acme.notes', contributionKind: 'surfacePlacement',
+            descriptorId: 'notes', binding, target: binding.target,
+            renderer: { kind: 'hostedWeb', contributionId: 'notes-renderer' }, display: { developerFallback: 'Notes' },
+            availability: { state: 'available', reason: 'available', diagnostics: [] }, headerActions: [],
+        };
+        boundary.pathname = '/plugins/acme.notes/notes';
+        boundary.params = { pluginId: 'acme.notes', localId: 'notes' };
+        if (platform === 'web') installBrowserBoundary({ location: { pathname: boundary.pathname, search: '', hash: '' },
+            history: { state: null, replaceState() {}, pushState() {}, go() {} }, sessionStorage: { getItem: () => 'main' } });
+        const firstTargets: unknown[] = [];
+        function Probe() {
+            const navigation = useOptionalWorkspaceNavigation();
+            if (!navigation) throw new Error('Expected workspace');
+            const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            React.useLayoutEffect(() => { firstTargets.push(tab.target); }, []);
+            return null;
+        }
+        await renderScreen(<AppShellPluginUiProjectionValueProvider value={{ ...value,
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1, surfacePlacementsById: { [placement.id]: placement } } }}>
+            <WorkspaceAppShellProvider><Probe /></WorkspaceAppShellProvider>
+        </AppShellPluginUiProjectionValueProvider>);
+        expect(firstTargets).toEqual([{ kind: 'plugin:acme.notes:notes', params: { pluginId: 'acme.notes', localId: 'notes' } }]);
+    });
+
+    it.each(['web', 'ios'])('admits the initial URL before initializing %s workspace state and retains its editor through catalog publication', async (platform) => {
+        boundary.platform = platform;
+        if (platform === 'web') {
+            installBrowserBoundary({ location: { pathname: '/session/A1', search: '?serverId=home-a', hash: '' },
+                history: { state: null, replaceState() {}, pushState() {}, go() {} }, sessionStorage: { getItem: () => 'main' } });
+        }
+        const mountedTargets: unknown[] = [];
+        function Editor() {
+            const navigation = useOptionalWorkspaceNavigation();
+            const [draft, setDraft] = React.useState('');
+            if (!navigation) throw new Error('Expected mounted workspace owner');
+            const tab = navigation.state.tabs[navigation.state.groups[navigation.state.focusedGroupId].activeTabId];
+            React.useLayoutEffect(() => { mountedTargets.push(tab.target); }, []);
+            return React.createElement('PublicationEditor', { draft, setDraft, tab });
+        }
+        const value = {
+            interactionEnabled: false, pluginBrowserProjection: null, phase: 'current' as const,
+            machineId: null, serverId: 'home-a', platform: 'web' as const, accountLifetime: null,
+            clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {},
+            reloadConnectedAccountProjection: () => {}, pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1 },
+        };
+        const render = (generation: number, ready = true) => <AppShellPluginUiProjectionValueProvider declarationReady={ready} value={{ ...value,
+            pluginUiProjection: { ...value.pluginUiProjection, generation } }}>
+            <WorkspaceAppShellProvider><Editor /></WorkspaceAppShellProvider>
+        </AppShellPluginUiProjectionValueProvider>;
+        const screen = await renderScreen(render(1, false));
+        expect(screen.tree.findAllByType('PublicationEditor' as never)).toHaveLength(0);
+        expect(mountedTargets).toEqual([]);
+        await screen.update(render(1));
+        const editor = () => screen.tree.findByType('PublicationEditor' as never);
+        expect(mountedTargets).toEqual([{ kind: 'session', params: { id: 'A1', serverId: 'home-a' } }]);
+        const tabId = editor().props.tab.id;
+        await act(async () => { editor().props.setDraft('unsaved draft'); });
+        await screen.update(render(2));
+        expect(editor().props.draft).toBe('unsaved draft');
+        expect(editor().props.tab.id).toBe(tabId);
+        expect(mountedTargets).toHaveLength(1);
+    });
+
     it.each([
         ['/settings/agents', '/settings/agents/claude', 'Claude', '/settings/agents/codex', 'Codex'],
         ['/settings/profiles', '/settings/profiles/first', 'First profile', '/settings/profiles/second', 'Second profile'],
