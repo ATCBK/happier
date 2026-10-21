@@ -401,9 +401,12 @@ export function ServiceRowView(props: Readonly<{
     const { row } = props;
     const declaration = row.target.declaration;
     const relocation = useProjectServicePlacementObservation(declaration?.selection.kind === 'manifest' ? declaration.selection.name : '',
-        undefined, { declarationWorkspaceRefId: declaration?.workspaceRefId, absent: row.status === 'stopped' });
+        undefined, { declarationWorkspaceRefId: declaration?.workspaceRefId, absent: row.status === 'stopped',
+            bindingPending: row.reasonCode === 'project_service_binding_pending' || row.reasonCode === 'project_service_binding_unavailable',
+            machineId: row.target.machineId,
+            managedServiceId: row.target.sourceClass?.kind === 'managed_service' ? row.target.sourceClass.managedServiceId : undefined });
     const recoverable = relocation.stoppedBeforeStart;
-    const operationActive = relocation.active;
+    const operationActive = relocation.active || relocation.awaitingBinding;
     const operationText = recoverable ? t('localServices.rowStatus.stopped') : operationActive ? relocation.progressText : null;
     // A refused action reads in place under its own row, never in a dialog over the page.
     const runner = useLocalServiceActionRunner({ presentation: 'inline',
@@ -582,7 +585,7 @@ export function ServiceRowView(props: Readonly<{
     const offline = props.offline === true;
     const machineName = props.machineName ?? null;
     // While its own Start is in flight the row reads as Starting (lab STATES 1), then returns to what the feed says.
-    const shown = runner.pendingId === startPendingId ? { ...row, status: 'starting' as const } : row;
+    const shown = runner.pendingId === startPendingId && row.status !== 'running' ? { ...row, status: 'starting' as const } : row;
     const title = <ServiceRowTitle row={shown} operationText={operationText} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
     const subtitle = operationActive ? undefined : <ServiceRowFacts row={shown} machineName={machineName} startedByName={props.startedByName ?? null}
         unavailableMachineName={props.unavailableMachineName ?? null} testID={props.testID} />;

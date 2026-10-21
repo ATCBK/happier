@@ -499,6 +499,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         }
         const runtime = await input.resolveRuntime(ingress);
         if (!runtime) return { status: 'denied', reasonCode: 'project_service_runtime_unavailable' };
+        if (ingress.signal.aborted || context.signal?.aborted) return { status: 'denied', reasonCode: 'cancelled' };
         let outcome: LocalServiceLauncherStartExecutionOutcome | undefined;
         let uncertainError: unknown;
         // The native receiver owns Start observation for UI, approved CLI and Move.
@@ -506,12 +507,21 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         const observed = await runtime.operationRuntime.observeExecution({ actionId: 'localServices.launcher.start', input: request,
             rpcContext: ingress, ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
             execute: async operation => {
+                // Once admitted, the operation owns preparation and launch. A lost
+                // browser ACK ends observation, not the user's accepted Service.
+                // Keep live Machine authority and an enclosing Move's cancellation.
+                const parentSignal = context.operationCancellation
+                    || ingress.callerInputAuthorization?.binding.actionId === 'projects.service.relocate'
+                    ? context.signal ?? ingress.signal : undefined;
+                const acceptedSignal = parentSignal ? AbortSignal.any([operation.signal, parentSignal]) : operation.signal;
+                const acceptedIngress: RpcHandlerContext = { ...ingress, signal: acceptedSignal,
+                    verifyMachineAdmissionCurrent: ingress.verifyMachineAuthorityCurrent ?? ingress.verifyMachineAdmissionCurrent };
                 operation.operationOwnerUpdate.update({ state: 'running', domainRef: { kind: 'projectService', purpose: 'start',
                     sourceWorkspace: { serverId: workspace.serverId, refId: workspace.workspaceId }, workspace, declaration } });
                 operation.operationProgress.update({ phase: 'preparing', label: 'Preparing service' });
                 try {
-                    outcome = await executeManagedDeclaration(selected, request, ingress, { ...context, ...operation,
-                        signal: context.signal ? AbortSignal.any([context.signal, operation.signal]) : operation.signal }, executeCanonicalAction);
+                    outcome = await executeManagedDeclaration(selected, request, acceptedIngress, { ...context, ...operation,
+                        signal: acceptedSignal, verifyMachineAdmissionCurrent: acceptedIngress.verifyMachineAdmissionCurrent }, executeCanonicalAction);
                     return outcome.status === 'succeeded' ? { ok: true, result: outcome }
                         : { ok: false, errorCode: outcome.reasonCode, error: outcome.reasonCode };
                 } catch (error) {
@@ -700,8 +710,12 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                     } }
                 },
             });
-            return { status: 'succeeded', currentTarget: { kind: 'managed_service', managedServiceId: handle.instanceId,
-                machineId: handle.workspace.machineId, workspaceId: handle.workspace.id, cwd: handle.cwd, declaration: handle.declaration } };
+            const currentTarget = { kind: 'managed_service' as const, managedServiceId: handle.instanceId,
+                machineId: handle.workspace.machineId, workspaceId: handle.workspace.id, cwd: handle.cwd, declaration: handle.declaration };
+            context.operationOwnerUpdate?.update({ domainRef: { kind: 'projectService', purpose: 'start',
+                sourceWorkspace: { serverId: request.workspace!.serverId, refId: request.workspace!.workspaceId },
+                workspace: workspaceAddressFromRefV1(handle.workspace), declaration: handle.declaration, currentTarget } });
+            return { status: 'succeeded', currentTarget };
         } catch (error) { uncertain ||= isProjectNativeProcessUncertain(error) || error instanceof ProjectNativeEnvironmentUncertainError;
             if (isProjectNativeProcessUncertain(error) || error instanceof ProjectNativeEnvironmentUncertainError) throw error;
             const denied = refusal(error); return { status: 'denied', reasonCode: denied.reasonCode,

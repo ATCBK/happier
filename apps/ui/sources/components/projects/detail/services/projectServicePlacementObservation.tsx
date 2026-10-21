@@ -22,6 +22,7 @@ import { invalidateLocalServiceLauncherStores } from '@/sync/domains/local/servi
 import { executeProjectWorkerActionV1 } from '@/sync/ops/actions/projectWorkerActions';
 import { resolveMachinePool } from '@/sync/ops/machinePools';
 import { randomUUID } from '@/platform/randomUUID';
+import { LocalServiceManagedServiceActionTargetV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
 
 export type ProjectServicePlacementOperationAttachment = Readonly<{
   operationId: string;
@@ -32,7 +33,7 @@ type OperationObservation = Readonly<{
   operation: ReturnType<typeof useActionOperation>;
   stop: Pick<ReturnType<typeof useActionOperationStopControl>, 'pending' | 'stopRequested' | 'requestStop'>;
 }>;
-type Entry = Readonly<{ attachment: ProjectServicePlacementOperationAttachment; observation?: OperationObservation }>;
+type Entry = Readonly<{ attachment: ProjectServicePlacementOperationAttachment; observation?: OperationObservation; bindingObserved?: boolean }>;
 type ManagedSelection = Readonly<{ scopeKey: string; draft: ManagedMachineSelectionDraft; purpose: 'start' | 'move' }>;
 type ManagedContinuation = ReturnType<typeof useProjectServiceManagedMachine>;
 type ObservationContext = Readonly<{
@@ -40,6 +41,7 @@ type ObservationContext = Readonly<{
   entries: ReadonlyMap<string, Entry>;
   attach: (serviceName: string, attachment: ProjectServicePlacementOperationAttachment) => void;
   clear: (serviceName: string) => void;
+  acknowledgeBinding: (serviceName: string, operationId: string) => void;
   pendingRequests: ReadonlySet<string>;
   executeMove: (serviceName: string, destination: ProjectExecutionChoiceV1,
     execute: (signal: AbortSignal, onApprovalPending: (registration: ActionApprovalRegistration) => void) => Promise<ServiceRelocationOutcome>) => Promise<ServiceRelocationOutcome | null>;
@@ -122,17 +124,17 @@ function ScopedObservationProvider(props: Readonly<{
   runtimeActionExecute?: FrontDoorRuntimeActionExecute;
   children: React.ReactNode;
 }>) {
-  const [entries, setEntries] = React.useState<ReadonlyMap<string, Entry>>(() => new Map());
+  const [retainedEntries, setEntries] = React.useState<ReadonlyMap<string, Entry>>(() => new Map());
   const cleared = React.useRef(new Set<string>());
   const received = useProjectServiceActionOperations({ ...props.source, accountId: props.binding?.accountId ?? null });
-  React.useEffect(() => {
-    setEntries(current => {
+  const entries = React.useMemo(() => {
+      const current = retainedEntries;
       let next: Map<string, Entry> | null = null;
       for (const operation of received) {
         const { snapshot } = operation;
         const domain = snapshot.domainRef;
         if (domain?.kind !== 'projectService' || domain.declaration.selection.kind !== 'manifest'
-          || (snapshot.state === 'succeeded' && snapshot.actionId !== 'localServices.launcher.start') || cleared.current.has(snapshot.operationId)) continue;
+          || cleared.current.has(snapshot.operationId)) continue;
         const name = domain.declaration.selection.name;
         const previous = current.get(name);
         if (previous?.attachment.operationId === snapshot.operationId) continue;
@@ -144,13 +146,14 @@ function ScopedObservationProvider(props: Readonly<{
         const destination = snapshot.actionId === 'localServices.launcher.start' ? snapshot.scope
           : domain.destinationWorkspace ?? domain.workspace;
         next ??= new Map(current);
-        next.set(name, { attachment: { operationId: snapshot.operationId,
+        next.set(name, { bindingObserved: snapshot.state === 'succeeded', attachment: { operationId: snapshot.operationId,
           destination: destination.machineId === props.source.machineId ? { kind: 'primary' }
             : { kind: 'workers', destination: { kind: 'machine', machineId: destination.machineId } } } });
       }
       return next ?? current;
-    });
-  }, [received, props.source.machineId, props.source.serverId]);
+  }, [received, retainedEntries, props.source.machineId, props.source.serverId]);
+  const entriesRef = React.useRef(entries);
+  entriesRef.current = entries;
   const requests = React.useRef(new Map<string, AbortController>());
   const [pendingRequests, setPendingRequests] = React.useState<ReadonlySet<string>>(() => new Set());
   const [approvals, setApprovals] = React.useState<ReadonlyMap<string, ActionApprovalRegistration>>(() => new Map());
@@ -263,21 +266,29 @@ function ScopedObservationProvider(props: Readonly<{
     }
   }, [attach, props.binding, props.source.serverId]);
   const clear = React.useCallback((serviceName: string) => setEntries(current => {
-    if (!current.has(serviceName)) return current;
-    cleared.current.add(current.get(serviceName)!.attachment.operationId);
+    const entry = entriesRef.current.get(serviceName);
+    if (!entry) return current;
+    cleared.current.add(entry.attachment.operationId);
     const next = new Map(current);
     next.delete(serviceName);
     return next;
   }), []);
+  const acknowledgeBinding = React.useCallback((serviceName: string, operationId: string) => setEntries(current => {
+    const retained = current.get(serviceName);
+    const entry = retained?.attachment.operationId === operationId ? retained : entriesRef.current.get(serviceName);
+    if (!entry || entry.attachment.operationId !== operationId || entry.bindingObserved) return current;
+    return new Map(current).set(serviceName, { ...entry, bindingObserved: true });
+  }), []);
   const publish = React.useCallback((serviceName: string, operationId: string, observation: OperationObservation) => setEntries(current => {
-    const entry = current.get(serviceName);
+    const retained = current.get(serviceName);
+    const entry = retained?.attachment.operationId === operationId ? retained : entriesRef.current.get(serviceName);
     if (!entry || entry.attachment.operationId !== operationId || entry.observation === observation) return current;
     return new Map(current).set(serviceName, { ...entry, observation });
   }), []);
   const source = React.useMemo(() => props.source, [props.source.serverId, props.source.refId, props.source.machineId]);
-  const context = React.useMemo(() => ({ source, entries, attach, clear, executeMove, pendingRequests, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged,
+  const context = React.useMemo(() => ({ source, entries, attach, clear, acknowledgeBinding, executeMove, pendingRequests, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged,
     runtimeActionExecute: props.runtimeActionExecute }),
-    [source, attach, clear, executeMove, pendingRequests, entries, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged, props.runtimeActionExecute]);
+    [source, attach, clear, acknowledgeBinding, executeMove, pendingRequests, entries, resolveStart, managedSelections, managedContinuations, selectManaged, observeManaged, props.runtimeActionExecute]);
   return <StartContext.Provider value={resolveStart}><Context.Provider value={context}>
     {[...approvals].map(([serviceName, registration]) => <ServiceMoveApprovalObserver key={serviceName}
       source={props.source} serviceName={serviceName} registration={registration} />)}
@@ -303,7 +314,7 @@ export function ProjectServicePlacementObservationProvider(props: Readonly<{
 }
 
 export function useProjectServicePlacementObservation(serviceName: string, managedScopeKey?: string,
-  native?: Readonly<{ declarationWorkspaceRefId?: string; absent: boolean }>) {
+  native?: Readonly<{ declarationWorkspaceRefId?: string; absent: boolean; bindingPending?: boolean; machineId?: string; managedServiceId?: string }>) {
   const context = React.useContext(Context);
   const attach = React.useCallback((attachment: ProjectServicePlacementOperationAttachment) => context?.attach(serviceName, attachment),
     [context?.attach, serviceName]);
@@ -326,6 +337,19 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
     serverId: context!.source.serverId, operationId: entry.attachment.operationId,
   }) : null);
   const snapshot = operation?.snapshot;
+  const resultTarget = LocalServiceManagedServiceActionTargetV1Schema.safeParse(
+    snapshot?.domainRef?.kind === 'projectService' && snapshot.domainRef.currentTarget ? snapshot.domainRef.currentTarget
+      : snapshot?.result && typeof snapshot.result === 'object' && 'currentTarget' in snapshot.result ? snapshot.result.currentTarget : undefined);
+  const confirmedBinding = snapshot?.state === 'succeeded' && resultTarget.success
+    && native?.managedServiceId === resultTarget.data.managedServiceId && native.machineId === resultTarget.data.machineId;
+  React.useLayoutEffect(() => {
+    if (confirmedBinding && snapshot) context?.acknowledgeBinding(serviceName, snapshot.operationId);
+  }, [confirmedBinding, context?.acknowledgeBinding, serviceName, snapshot?.operationId]);
+  // Native settlement and its binding read are distinct observations. Keep this
+  // exact receipt attached until the binding arrives; success alone proves no URL
+  // or health, and a completeness refusal cannot contradict the accepted Start.
+  const awaitingBinding = snapshot?.state === 'succeeded' && resultTarget.success
+    && !entry?.bindingObserved && native?.bindingPending === true;
   const starting = snapshot?.actionId === 'localServices.launcher.start';
   const phase = snapshot?.progress?.kind === 'phase' ? snapshot.progress.phase : null;
   const unknown = operation?.observation !== 'available' || snapshot?.observation?.kind === 'outcome_uncertain'
@@ -343,7 +367,7 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
   const active = entry !== undefined && snapshot?.state !== 'succeeded' && !stoppedBeforeStart && !failedBeforeStop;
   const relocating = active && !starting;
   const destinationName = (destinationMachine ? getMachineDisplayName(destinationMachine) : null) ?? t('projectServices.otherMachine');
-  const progressText = !active ? null : unknown ? t(starting ? 'localServices.actions.failure.outcomeUnknown' : 'projectServices.moveUnknown')
+  const progressText = awaitingBinding ? t('common.loading') : !active ? null : unknown ? t(starting ? 'localServices.actions.failure.outcomeUnknown' : 'projectServices.moveUnknown')
     : phase === 'stopping' ? t('localServices.rowStatus.stopping')
     : phase === 'stopped' ? t('localServices.rowStatus.stopped')
     : phase === 'copying' ? t('projectWorkers.copying', { machine: destinationName })
@@ -356,8 +380,8 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
   const selectManaged = React.useCallback((draft: ManagedMachineSelectionDraft | null, purpose: 'start' | 'move' = 'start') => {
     if (managedScopeKey) context?.selectManaged(serviceName, managedScopeKey, draft, purpose);
   }, [context?.selectManaged, managedScopeKey, serviceName]);
-  return { hasOwner: context !== null, attachment: starting ? null : entry?.attachment ?? null,
-    operation: operation ?? null, active, relocating, progressText, stoppedBeforeStart, failedBeforeStop, stop: entry?.observation?.stop ?? null, attach, clear,
+  return { hasOwner: context !== null, attachment: starting || snapshot?.state === 'succeeded' ? null : entry?.attachment ?? null,
+    operation: operation ?? null, active, awaitingBinding, relocating, progressText, stoppedBeforeStart, failedBeforeStop, stop: entry?.observation?.stop ?? null, attach, clear,
     executeMove, requestPending: context?.pendingRequests.has(serviceName) ?? false,
     managed, selectManaged, runtimeActionExecute: context?.runtimeActionExecute };
 }

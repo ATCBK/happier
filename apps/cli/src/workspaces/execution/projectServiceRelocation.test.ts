@@ -9,7 +9,7 @@ import { createProjectServiceRelocation, type ProjectServiceRelocationPorts } fr
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
 import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
-import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationGetV1ResponseSchema, ActionOperationDomainRefV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 
 const declaration = { workspaceRefId: 'old-ref', selection: { kind: 'manifest' as const, name: 'worker' } };
 const oldTarget = { kind: 'managed_service' as const, managedServiceId: 'old-native', machineId: 'old', workspaceId: 'old-ref', cwd: '/old', declaration };
@@ -119,11 +119,14 @@ describe('confirmed service relocation', () => {
       const observed = await read(input, signal);
       return observed.status === 'resolved' ? { ...observed, snapshot: { ...observed.snapshot, state } } : observed;
     };
-    const output = await createProjectServiceRelocation(h.ports)(h.request);
+    const observations: unknown[] = [];
+    const output = await createProjectServiceRelocation(h.ports)(h.request, { publishOwnerUpdate: update => observations.push(update.domainRef) });
     expect(output).toMatchObject({ ok: true, result: { status: 'moved', currentTarget: h.newTarget } });
     expect(h.effects).toEqual(['stop', 'prepare', 'start']);
     if (!output.ok) throw new Error('Move did not settle');
     assertActionOutputContract('projects.service.relocate', output.result);
+    expect(ActionOperationDomainRefV1Schema.parse(observations.at(-1))).toMatchObject({ kind: 'projectService',
+      workspace: { machineId: destination.machineId, workspaceId: destination.id }, currentTarget: h.newTarget });
   });
 
   it('rechecks running state after placement is saved and before native Stop', async () => {

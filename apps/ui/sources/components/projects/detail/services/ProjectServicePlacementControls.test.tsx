@@ -26,7 +26,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { buildApprovalRequestArtifactHeaderV1, type ApprovalRequestV2 } from '@happier-dev/protocol';
 import { resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
-import { resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
+import { publishLocalServiceInventorySnapshot, resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { ProjectServiceRelocateInputV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 import { executeServiceRelocationAction } from './serviceRelocationAction';
@@ -58,7 +58,7 @@ vi.mock(
 );
 vi.mock('@/text', async () =>
   (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
-    translate: (key, params) => key === 'projectServices.moveConfirm'
+    translate: (key, params) => key === 'projectServices.moveConfirm' || key === 'localServices.row.startingOn'
       || key === 'localServices.launcher.unavailableReason.bindingUnavailableOnMachine' ? `${key}:${JSON.stringify(params)}` : key,
   }),
 );
@@ -96,6 +96,7 @@ const base: WorkspaceExecutionSettingsV1 = {
 
 async function setup(options: Readonly<{
   running: boolean;
+  onCommit?: () => void;
   serviceState?: LocalServiceLaunchTarget['serviceState'];
   startedAtMs?: number;
   unavailableReason?: string;
@@ -207,7 +208,10 @@ async function setup(options: Readonly<{
   storage.getState().activateProjectAccountRowsScope(scope);
   const baseMachine = createMachineFixture({ id: source.machineId });
   const machine = { ...baseMachine, metadata: { ...baseMachine.metadata!, displayName: 'Source workstation' } };
-  const machines = [machine, ...(options.offerWorker ? [createMachineFixture({ id: 'pool-worker', activeAt: Date.now() })] : [])];
+  const workerMachine = createMachineFixture({ id: worker.machineId });
+  const machines = [machine, ...(options.liveFeeds ? [{ ...workerMachine,
+    metadata: { ...workerMachine.metadata!, displayName: 'Worker workstation' } }] : []),
+    ...(options.offerWorker ? [createMachineFixture({ id: 'pool-worker', activeAt: Date.now() })] : [])];
   storage.setState({ machines: Object.fromEntries(machines.map(value => [value.id, value])), machineListByServerId: { [serverId]: machines } });
   storage
     .getState()
@@ -215,8 +219,8 @@ async function setup(options: Readonly<{
       scope,
       status: 'ready',
       coverage: 'complete',
-      workspaceRefs: options.candidateFails ? [source, worker] : [source],
-      relationships: options.candidateFails ? [{ v: 1, relationshipId: 'linked-copy', controllerMachineId: source.machineId,
+      workspaceRefs: options.candidateFails || options.liveFeeds ? [source, worker] : [source],
+      relationships: options.candidateFails || options.liveFeeds ? [{ v: 1, relationshipId: 'linked-copy', controllerMachineId: source.machineId,
         alphaWorkspaceRefId: source.id, betaWorkspaceRefId: worker.id, mode: 'keep_synced', enabled: false,
         contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1 }] : [],
       organizations: [],
@@ -279,7 +283,11 @@ async function setup(options: Readonly<{
       machineId,
       updatedAt: 1,
       targets:
-        running && machineId === source.machineId ? [target] : options.liveFeeds && !params?.projection ? [{
+        running && machineId === (options.liveFeeds ? rowMachineId : source.machineId) ? [{ ...target,
+          ...(options.liveFeeds && rowMachineId === worker.machineId ? { machineId: worker.machineId, workspaceId: worker.id,
+            workspace: { ...target.workspace, machineId: worker.machineId, workspaceId: worker.id, rootPath: worker.rootPath },
+            cwd: worker.rootPath, declaration: { ...target.declaration, workspaceRefId: worker.id } } : {}),
+        }] : options.liveFeeds && !params?.projection && machineId === source.machineId ? [{
           ...target, sourceClass: undefined, serviceState: undefined, endpointUrl: undefined, readiness: undefined,
           state: 'unavailable', unavailableReason: 'launch_unavailable', actions: [],
         }] : [],
@@ -382,7 +390,7 @@ async function setup(options: Readonly<{
         source={{ serverId, refId, machineId: source.machineId }} declaration={{ portable: options.portable !== false, currentnessKey: declarationBasis }} lifecycleKey={lifecycleKey} /> : null}
     </Provider>;
   }
-  const screen = await renderScreen(<Host />);
+  const screen = await renderScreen(<React.Profiler id="services" onRender={() => options.onCommit?.()}><Host /></React.Profiler>);
   if (options.modelOnly) await vi.waitFor(() => expect(model?.state.kind).toBe('ready'));
   else if (options.waitEnabled !== false) await vi.waitFor(() =>
     expect(screen.findAllByTestId('placement.runsOn')[0]?.props.disabled, JSON.stringify([fixture?.requests, screen.getTextContent(), remote.mock.calls])).toBe(false),
@@ -435,7 +443,7 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         workspace, declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'server' } } },
       progress: { kind: 'phase', phase: 'copying', label: 'Copying current files' } });
     try {
-      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable')).toBeTruthy());
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable'), h.screen.getTextContent()).toBeTruthy());
       await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId, observation: 'available', snapshots: [operation] }));
       await vi.waitFor(() => expect(h.screen.getTextContent()).toContain('projectWorkers.copying'));
       expect(h.screen.findByTestId('service-row-start')).toBeNull();
@@ -447,12 +455,73 @@ describe('Service Runs on through the placement and relocation Actions', () => {
         await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId, observation: 'available', snapshots: [operation] }));
         await vi.waitFor(() => expect(h.screen.getTextContent()).toContain(phase === 'preparing' ? 'projectWorkers.preparing' : 'localServices.row.startingOn'));
       }
-      h.setActualFails(false);
-      await act(async () => h.setRunning(true));
-      operation = ActionOperationSnapshotV1Schema.parse({ ...operation, revision: operation.revision + 1, state: 'succeeded', settledAt: 20 });
+      expect(h.screen.getTextContent()).toContain(`localServices.row.startingOn:{"machine":"${machineId === 'devbox' ? 'Source workstation' : 'Worker workstation'}"}`);
+      if (machineId !== 'devbox') expect(h.screen.getTextContent()).not.toContain('localServices.row.startingOn:{"machine":"Source workstation"}');
+      const workspaceId = machineId === 'devbox' ? 'checkout' : 'worker-checkout';
+      const rootPath = machineId === 'devbox' ? '/src/happier' : '/copy';
+      const declaration = { workspaceRefId: workspaceId, selection: { kind: 'manifest', name: 'server' } };
+      const currentTarget = { kind: 'managed_service', managedServiceId: 'instance', machineId, workspaceId, cwd: rootPath, declaration };
+      operation = ActionOperationSnapshotV1Schema.parse({ ...operation, revision: operation.revision + 1, state: 'succeeded', settledAt: 20,
+        domainRef: { ...operation.domainRef, workspace: { serverId: h.serverId, machineId, workspaceId, rootPath }, declaration, currentTarget },
+        result: { status: 'succeeded', currentTarget } });
       await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId, observation: 'available', snapshots: [operation] }));
+      await flushHookEffects();
+      expect(h.screen.findByTestId('service-row-status-unavailable')).toBeNull();
+      expect(h.screen.findByTestId('service-row-start')).toBeNull();
+      expect(h.screen.getTextContent()).not.toContain('localServices.row.startingOn');
+      h.setActualFails(false);
+      await act(async () => { h.setRowMachine(machineId); h.setRunning(true);
+        publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
+          v: 1, machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
       await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-running'), JSON.stringify({ text: h.screen.getTextContent(),
         calls: remote.mock.calls.slice(-10).map(([call]) => ({ machineId: call.machineId, method: call.method, payload: call.payload })) })).toBeTruthy());
+    } finally { await h.screen.unmount(); }
+  });
+
+  it.each(['devbox', 'hz-build-1'])('keeps received Move feedback through attachment and settlement on %s', async machineId => {
+    const frames: string[] = [];
+    let read = () => '';
+    const h = await setup({ running: false, actualFails: true, liveFeeds: true, sharedObservation: true, waitEnabled: false,
+      onCommit: () => frames.push(read()) });
+    read = () => h.screen.getTextContent();
+    let operation = ActionOperationSnapshotV1Schema.parse({ version: 1, operationId: 'received-move', revision: 1,
+      actionId: 'projects.service.relocate', state: 'running', scope: { accountId: 'artifact-account', machineId: 'devbox' },
+      title: 'Move server', createdAt: 10, startedAt: 11, cancellation: 'supported',
+      domainRef: { kind: 'projectService', purpose: 'relocation', sourceWorkspace: { serverId: h.serverId, refId: 'checkout' },
+        workspace: { serverId: h.serverId, machineId: 'devbox', workspaceId: 'checkout', rootPath: '/src/happier' },
+        destinationWorkspace: { serverId: h.serverId, machineId, workspaceId: machineId === 'devbox' ? 'checkout' : 'worker-checkout', rootPath: machineId === 'devbox' ? '/src/happier' : '/copy' },
+        declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'server' } } },
+      progress: { kind: 'phase', phase: 'stopping', label: 'Stopping service' } });
+    try {
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable'), h.screen.getTextContent()).toBeTruthy());
+      frames.length = 0;
+      await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId: 'devbox', observation: 'available', snapshots: [operation] }));
+      expect(frames.length).toBeGreaterThan(0);
+      expect(frames.every(frame => !frame.includes('localServices.rowStatus.unavailable'))).toBe(true);
+      expect(h.screen.findByTestId('service-row-status-unavailable')).toBeNull();
+      expect(h.screen.getTextContent()).toContain('localServices.rowStatus.stopping');
+      const workspaceId = machineId === 'devbox' ? 'checkout' : 'worker-checkout';
+      const rootPath = machineId === 'devbox' ? '/src/happier' : '/copy';
+      const declaration = { workspaceRefId: workspaceId, selection: { kind: 'manifest', name: 'server' } };
+      const currentTarget = { kind: 'managed_service', managedServiceId: 'instance', machineId, workspaceId, cwd: rootPath, declaration };
+      operation = ActionOperationSnapshotV1Schema.parse({ ...operation, revision: 2, state: 'succeeded', settledAt: 20,
+        domainRef: { ...operation.domainRef, workspace: { serverId: h.serverId, machineId, workspaceId, rootPath }, declaration, currentTarget },
+        result: { status: 'moved', currentTarget } });
+      await act(async () => publishActionOperationObservation({ serverId: h.serverId, machineId: 'devbox', observation: 'available', snapshots: [operation] }));
+      await flushHookEffects();
+      expect(h.screen.findByTestId('service-row-status-unavailable')).toBeNull();
+      expect(h.screen.findByTestId('service-row-start')).toBeNull();
+      h.setActualFails(false);
+      await act(async () => { h.setRowMachine(machineId); h.setRunning(true);
+        publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
+          v: 1, machineId, generatedAt: 2, refreshState: 'idle', entries: [], diagnostics: [] }); });
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-running'), h.screen.getTextContent()).toBeTruthy());
+      // The receipt has handed off. A later failed census must say Unavailable,
+      // rather than replaying this historical success's loading treatment.
+      h.setActualFails(true);
+      await act(async () => publishLocalServiceInventorySnapshot({ serverId: h.serverId, machineId }, {
+        v: 1, machineId, generatedAt: 3, refreshState: 'idle', entries: [], diagnostics: [] }));
+      await vi.waitFor(() => expect(h.screen.findByTestId('service-row-status-unavailable'), h.screen.getTextContent()).toBeTruthy());
     } finally { await h.screen.unmount(); }
   });
 

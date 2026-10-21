@@ -6,7 +6,6 @@ import type {
   ProjectServicePlacementV1,
 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
 import { executeServiceRelocationAction, type ServiceRelocationOutcome } from './serviceRelocationAction';
-import { ProjectServiceRelocateResultV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 import { ProjectServicePlacementObservationProvider, useProjectServicePlacementObservation } from './projectServicePlacementObservation';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
@@ -341,7 +340,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
 
   const operation = observation.operation;
   const stop = observation.stop;
-  const operationState = move?.phase === 'operation' ? operation?.snapshot.state ?? null : null;
+  const operationState = operation?.snapshot.actionId === 'projects.service.relocate' ? operation.snapshot.state : null;
   const terminal = operationState === 'succeeded' || operationState === 'failed' || operationState === 'cancelled';
   React.useEffect(() => {
     // A newly observed native lifetime supersedes a prior failed Move. Returning
@@ -353,11 +352,7 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
     // A terminal Action state alone says nothing about native service custody.
     if (!terminal) return;
     refresh();
-    if (operationState === 'succeeded') {
-      const result = ProjectServiceRelocateResultV1Schema.safeParse(operation?.snapshot.result);
-      if (result.success && (result.data.status === 'moved' || result.data.status === 'unchanged')) observation.clear();
-    }
-  }, [observation.clear, operation?.snapshot.result, operationState, refresh, terminal]);
+  }, [operationState, refresh, terminal]);
   const outcomeUncertain = operation?.snapshot.observation?.kind === 'outcome_uncertain'
     || operation?.snapshot.error?.errorCode === 'outcome_uncertain';
   // The canonical relocation producer publishes `stopped` right after a literally confirmed native

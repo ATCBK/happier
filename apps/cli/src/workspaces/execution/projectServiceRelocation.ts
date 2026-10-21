@@ -181,6 +181,9 @@ export function createProjectServiceRelocation(ports: ProjectServiceRelocationPo
           || target.sessionId !== undefined || !target.cwd || !isWorkspacePathWithin(selected.rootPath, target.cwd)
           || !target.declaration || createCanonicalJsonSigningInput(target.declaration) !== createCanonicalJsonSigningInput(selectedDeclaration)
           || target.managedServiceId === current.currentTarget.managedServiceId) return failure('outcome_uncertain');
+        context.publishOwnerUpdate?.({ domainRef: { kind: 'projectService', purpose: 'relocation', sourceWorkspace, destinationWorkspace,
+          workspace: { serverId: selected.serverId, machineId: selected.machineId, workspaceId: selected.id, rootPath: selected.rootPath },
+          declaration: selectedDeclaration, currentTarget: target } });
         return { ok: true, result: { status: 'moved', currentTarget: target } };
       } catch {
         // Establishment may have taken effect, including cancellation after dispatch.

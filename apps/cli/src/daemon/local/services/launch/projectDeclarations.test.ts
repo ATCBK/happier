@@ -177,7 +177,7 @@ describe('accepted Project Service declaration starter', () => {
         expect(h.owner.listProjectServices()).toEqual([]);
     });
 
-    it('publishes a SOURCE-linked Start operation across real clean copy, preparation and native launch', async () => {
+    it.each([false, true])('retains accepted Start custody on browser disconnect, but still checks Machine authority (revoked=%s)', async revoked => {
         const h = await fixture(false, undefined, true, 'portable');
         let releaseCopy!: () => void;
         const copying = new Promise<void>(resolve => { releaseCopy = resolve; });
@@ -185,8 +185,13 @@ describe('accepted Project Service declaration starter', () => {
         const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
         if (!review.reviewedEffectDigest) throw new Error('Expected service review');
         const request = { ...h.request, expectedEffectDigest: review.reviewedEffectDigest };
-        const completion = h.operationRuntime.runActionOperation({ actionId: 'localServices.launcher.start', input: request, context: h.context,
-            execute: async context => ({ ok: true, result: await h.routes.startTarget!(request, h.ingress, context) }) });
+        const transport = new AbortController();
+        const ingress = { ...h.ingress, signal: transport.signal,
+            verifyMachineAdmissionCurrent: async () => !transport.signal.aborted,
+            verifyMachineAuthorityCurrent: async () => !revoked || !transport.signal.aborted };
+        const completion = h.operationRuntime.runActionOperation({ actionId: 'localServices.launcher.start', input: request,
+            context: { ...h.context, signal: transport.signal },
+            execute: async context => ({ ok: true, result: await h.routes.startTarget!(request, ingress, context) }) });
         const scope = { accountId: 'owner', machineId: h.targetWorkspace.machineId };
         try {
             await expect.poll(() => h.copies()).toBe(1);
@@ -195,9 +200,17 @@ describe('accepted Project Service declaration starter', () => {
                 domainRef: { kind: 'projectService', purpose: 'start', sourceWorkspace: { serverId: 'home', refId: h.workspace.id },
                     declaration: h.request.declaration } });
             expect(ActionOperationSnapshotV1Schema.safeParse(start).success).toBe(true);
+            transport.abort();
             releaseCopy();
-            expect(await completion).toMatchObject({ ok: true, result: { status: 'succeeded' } });
-            expect(h.operationRuntime.store.get(scope, start!.operationId)).toMatchObject({ state: 'succeeded', progress: { phase: 'starting' } });
+            expect(await completion).toMatchObject({ ok: true, result: { status: revoked ? 'failed' : 'succeeded' } });
+            if (revoked) {
+                expect(h.owner.listProjectServices()).toEqual([]);
+                expect(h.operationRuntime.store.get(scope, start!.operationId)).toMatchObject({ state: 'failed' });
+                return;
+            }
+            expect(h.operationRuntime.store.list(scope).items.find(item => item.operationId === start!.operationId)).toMatchObject({ state: 'succeeded',
+                progress: { phase: 'starting' }, domainRef: { currentTarget: { managedServiceId: expect.any(String),
+                    machineId: h.targetWorkspace.machineId, workspaceId: h.targetWorkspace.id } } });
             expect(h.operationSnapshots.some(item => item.actionId === 'localServices.launcher.start'
                 && item.progress?.kind === 'phase' && item.progress.phase === 'preparing')).toBe(true);
             expect(h.operationSnapshots.filter(item => item.actionId === 'localServices.launcher.start')
