@@ -2110,14 +2110,14 @@ also rejected rather than using
 another Account's model-catalog evidence. ACP, daemon-proxy and direct-terminal
 variants without equivalent enforcement do not claim confinement.
 
-The managed Codex installer pins that same qualified release. Its manifest tag,
-native admission check and sanitized repair guidance share the plugin's
 An empty tool allowlist with `unlistedTools: 'deny'` suppresses injected MCP
 servers through Codex's config owner. Native admission validates that same
 effective server set, so an inherited MCP map does not prevent a no-tools Run
 from using a Connected Account or Provider binding. Runtime-version and native
 configuration checks still apply; an unexpectedly enabled server refuses startup.
 
+The managed Codex installer pins that same qualified release. Its manifest tag,
+native admission check and sanitized repair guidance share the plugin's
 `agent/cli/supportedRuntime.ts` owner. Unqualified newer system/native installs
 remain usable for ordinary sessions, but confined launches refuse them and name
 the supported version and `machines.agents.install` reinstall Action. Executable
