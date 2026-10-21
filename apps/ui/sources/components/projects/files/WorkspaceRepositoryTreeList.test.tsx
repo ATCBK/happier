@@ -42,6 +42,8 @@ vi.mock('@/components/workspaces/files/repositoryTree/useScmTreeBadgeIndex', () 
 
 const repositoryTreeBrowserState = vi.hoisted(() => ({
     rootLoading: false,
+    liveFileWrites: new Map(),
+    arrivedPaths: new Set<string>(),
     rootError: null as string | null,
     nodes: [
         { path: 'src', name: 'src', type: 'directory', depth: 0, isExpanded: false, isLoadingChildren: false },
@@ -56,6 +58,8 @@ vi.mock('@/hooks/workspaces/files/useWorkspaceRepositoryTreeBrowser', () => ({
         rootLoading: repositoryTreeBrowserState.rootLoading,
         rootError: repositoryTreeBrowserState.rootError,
         nodes: repositoryTreeBrowserState.nodes,
+        liveFileWrites: repositoryTreeBrowserState.liveFileWrites,
+        arrivedPaths: repositoryTreeBrowserState.arrivedPaths,
         toggleDirectory: (path: string) => toggleDirectorySpy.current?.(path),
         retryRoot: vi.fn(),
         retryDirectory: vi.fn(),

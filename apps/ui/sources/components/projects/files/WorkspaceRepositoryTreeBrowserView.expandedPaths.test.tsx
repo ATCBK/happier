@@ -1,190 +1,99 @@
+// @vitest-environment jsdom
 import * as React from 'react';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ScmWorkingEntrySchema } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { describe, expect, it, vi } from 'vitest';
-import { act } from 'react-test-renderer';
+import { standardCleanup } from '@/dev/testkit';
+import {
+    createSessionFilesViewFixture,
+    fileViewSnapshot,
+    installSessionFilesViewBoundaries,
+    prepareSessionFilesViewTestkit,
+} from '@/components/sessions/files/views/sessionFilesViewTestkit';
+import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 
-import { renderScreen } from '@/dev/testkit';
+installSessionFilesViewBoundaries({ platformOS: 'web' });
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/sync/domains/state/browserRecordStorage', async () => (await import('@/dev/testkit/mocks/browserRecordStorage')).createBrowserRecordStorageModuleMock());
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-const storageSpies = vi.hoisted(() => ({
-    setWorkspaceRepositoryTreeExpandedPaths: vi.fn(),
-}));
-
-const listPropsRef = vi.hoisted(() => ({
-    current: null as null | React.ComponentProps<typeof import('./WorkspaceRepositoryTreeList').WorkspaceRepositoryTreeList>,
-}));
-
-const workspaceScmControllerState = vi.hoisted(() => ({
-    snapshot: {
-        repo: { isRepo: true, rootPath: '/repo' },
-        entries: [
-            {
-                path: 'src/index.ts',
-                kind: 'modified',
-                stats: {
-                    includedAdded: 1,
-                    pendingAdded: 0,
-                    includedRemoved: 0,
-                    pendingRemoved: 0,
-                },
-            },
-        ],
-    } as any,
-    refresh: vi.fn(async () => {}),
-}));
-
-const startDownloadSpy = vi.hoisted(() =>
-    vi.fn(async (_input: { path: string; asZip: boolean }) => ({ ok: true } as const)),
-);
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        Platform: { OS: 'web' },
-        View: (props: any) => React.createElement('View', props, props.children),
-    });
-});
-
-vi.mock('react-native-unistyles', async () => {
-    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock();
-});
-
-vi.mock('@expo/vector-icons', async () => {
-    const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
-    return createExpoVectorIconsMock();
-});
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({ translate: (key) => key });
-});
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-    return createPartialStorageModuleMock(importOriginal, {
-        storage: {
-            getState: () => ({
-                setWorkspaceRepositoryTreeExpandedPaths: storageSpies.setWorkspaceRepositoryTreeExpandedPaths,
-            }),
-        } as any,
-        useWorkspaceRepositoryTreeExpandedPaths: () => ['src'],
-        useMachine: () => ({ id: 'm1', active: true, activeAt: Date.now() }) as any,
-    });
-});
-
-vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
-    useServerFeaturesSnapshotForServerId: () => ({
-        status: 'ready',
-        features: {
-            features: {
-                machines: {
-                    enabled: true,
-                    transfer: { enabled: true },
-                },
-            },
-            capabilities: {},
-        },
-    }),
-}));
-
-vi.mock('@/hooks/workspaces/scm/useWorkspaceScmSnapshotController', () => ({
-    useWorkspaceScmSnapshotController: () => ({
-        snapshot: workspaceScmControllerState.snapshot,
-        loading: false,
-        error: null,
-        refresh: workspaceScmControllerState.refresh,
-    }),
-}));
-
-vi.mock('./WorkspaceRepositoryTreeList', () => ({
-    WorkspaceRepositoryTreeList: (props: any) => {
-        listPropsRef.current = props;
-        return React.createElement('View', { testID: 'workspace-repository-tree-list-stub' });
-    },
-}));
-
-vi.mock('@/hooks/workspaces/transfers/useWorkspaceFileTransfers', () => ({
-    useWorkspaceFileTransfers: () => ({
-        uploadState: { status: 'idle' },
-        downloadState: { status: 'idle' },
-        startUploads: vi.fn(async () => ({ ok: true })),
-        cancelUploads: vi.fn(),
-        startDownload: (input: { path: string; asZip: boolean }) => startDownloadSpy(input),
-        cancelDownload: vi.fn(),
-    }),
-}));
+// Prepare cold modules before each test's Account lifecycle starts its budget.
+const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+const restoreLocks = installWebLockManagerMock().restore;
+await prepareSessionFilesViewTestkit();
+const { WorkspaceRepositoryTreeBrowserView } = await import('./WorkspaceRepositoryTreeBrowserView');
+afterAll(() => restoreLocks());
 
 describe('WorkspaceRepositoryTreeBrowserView (expanded paths)', () => {
-    it('uses the workspace SCM snapshot controller when no scmSnapshot prop is provided', async () => {
-        const { WorkspaceRepositoryTreeBrowserView } = await import('./WorkspaceRepositoryTreeBrowserView');
-
-        await renderScreen(
-            <WorkspaceRepositoryTreeBrowserView
-                scope={{ serverId: 's1', machineId: 'm1', rootPath: '/repo' }}
-                onOpenFile={() => {}}
-                showSearchBar={false}
-            />,
-        );
-
-        expect(listPropsRef.current?.scmSnapshot).toBe(workspaceScmControllerState.snapshot);
+    let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
+    beforeEach(async () => {
+        // Browser worker availability is a platform boundary, not a transfer-policy substitute.
+        vi.stubGlobal('SharedWorker', class SharedWorker {});
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', serverIdentityId: 'srv_expanded_paths', rpc: request => {
+            if (request.method === RPC_METHODS.SCM_STATUS_SNAPSHOT) return { success: true, snapshot: fileViewSnapshot({
+                rootPath: '/repo', entries: [ScmWorkingEntrySchema.parse({
+                    path: 'src/index.ts', kind: 'modified', includeStatus: '.', pendingStatus: 'M', hasPendingDelta: true,
+                    stats: { pendingAdded: 1 },
+                })],
+            }) };
+            if (request.method === RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) {
+                const path = (request.payload as { path: string }).path;
+                return { ok: true, path, entries: path === '/repo'
+                    ? [{ name: 'src', path: '/repo/src', type: 'directory' }]
+                    : [{ name: 'index.ts', path: '/repo/src/index.ts', type: 'file', sizeBytes: 42 }], truncated: false };
+            }
+            // Exercise the real admitted download request without opening an OS save destination.
+            if (request.method === 'daemon.filesystem.download') return { success: false, status: 'failed', error: 'Download refused by the Machine fixture' };
+            return { success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'Unavailable boundary operation' };
+        } });
+        fixture.storage.getState().setWorkspaceRepositoryTreeExpandedPaths(fixture.scope, ['src']);
+    });
+    afterEach(async () => {
+        standardCleanup();
+        await fixture?.dispose();
+        vi.unstubAllGlobals();
     });
 
-    it('uses workspace-scoped expanded paths when uncontrolled and writes updates to storage', async () => {
-        const { WorkspaceRepositoryTreeBrowserView } = await import('./WorkspaceRepositoryTreeBrowserView');
+    const rowId = (path: string) => `repository-tree-row-${toTestIdSafeValue(path)}`;
+    async function renderBrowser() {
+        const screen = await fixture.render(<WorkspaceRepositoryTreeBrowserView
+            scope={fixture.scope} onOpenFile={() => {}} showSearchBar={false} selectedPath="src/index.ts"
+        />);
+        await vi.waitFor(() => expect(screen.findHostByTestId(rowId('src/index.ts'))).not.toBeNull());
+        return screen;
+    }
 
-        const screen = await renderScreen(
-            <WorkspaceRepositoryTreeBrowserView
-                scope={{ serverId: 's1', machineId: 'm1', rootPath: '/repo' }}
-                onOpenFile={() => {}}
-                showSearchBar={false}
-            />,
-        );
-
-        expect(screen.tree.findAll((n) => n.props?.testID === 'workspace-repository-tree-list-stub')).toHaveLength(1);
-        expect(listPropsRef.current?.expandedPaths).toEqual(['src']);
-
-        listPropsRef.current?.onExpandedPathsChange(['src', 'packages']);
-        expect(storageSpies.setWorkspaceRepositoryTreeExpandedPaths).toHaveBeenCalledWith(
-            { serverId: 's1', machineId: 'm1', rootPath: '/repo' },
-            ['src', 'packages'],
-        );
+    it('loads a complete workspace SCM snapshot through the addressed controller when no prop is provided', async () => {
+        await renderBrowser();
+        await vi.waitFor(() => expect(fixture.storage.getState().getWorkspaceScmSnapshot(fixture.scope)?.branch.head).toBe('main'));
+        expect(fixture.storage.getState().getWorkspaceScmSnapshot(fixture.scope)?.entries.map(entry => entry.path)).toEqual(['src/index.ts']);
+        expect(fixture.requests).toContainEqual(expect.objectContaining({
+            targetId: fixture.scope.machineId, method: RPC_METHODS.SCM_STATUS_SNAPSHOT,
+            payload: expect.objectContaining({ cwd: fixture.scope.rootPath }),
+        }));
     });
 
-    it('provides default workspace-scoped row actions that can trigger downloads', async () => {
-        const { WorkspaceRepositoryTreeBrowserView } = await import('./WorkspaceRepositoryTreeBrowserView');
+    it('reads uncontrolled expansion from workspace storage and persists row toggles', async () => {
+        const screen = await renderBrowser();
+        await screen.pressByTestIdAsync(rowId('src'));
+        expect(fixture.storage.getState().getWorkspaceRepositoryTreeExpandedPaths(fixture.scope)).toEqual([]);
+        expect(screen.findHostByTestId(rowId('src/index.ts'))).toBeNull();
+        await screen.pressByTestIdAsync(rowId('src'));
+        await vi.waitFor(() => expect(screen.findHostByTestId(rowId('src/index.ts'))).not.toBeNull());
+        expect(fixture.storage.getState().getWorkspaceRepositoryTreeExpandedPaths(fixture.scope)).toEqual(['src']);
+    });
 
-        await renderScreen(
-            <WorkspaceRepositoryTreeBrowserView
-                scope={{ serverId: 's1', machineId: 'm1', rootPath: '/repo' }}
-                onOpenFile={() => {}}
-                showSearchBar={false}
-            />,
-        );
-
-        const rowActionsNode = listPropsRef.current?.renderRowActions?.({
-            type: 'file',
-            path: 'src/index.ts',
-            name: 'index.ts',
-            sizeBytes: 42,
-            modifiedMs: 1,
-            depth: 0,
-            isExpanded: false,
-            isLoadingChildren: false,
-            parentDirectoryPath: 'src',
-        }, { open: false, onOpenChange: () => {}, triggerHidden: false });
-
-        const rowActionsElement = React.isValidElement<{ path: string; onSelect: (itemId: string) => Promise<void> }>(rowActionsNode)
-            ? rowActionsNode
-            : null;
-        expect(rowActionsElement).toBeTruthy();
-        expect(rowActionsElement?.props.path).toBe('src/index.ts');
-
-        await act(async () => {
-            await rowActionsElement?.props.onSelect('repository-tree-menuitem-download');
-        });
-
-        expect(startDownloadSpy).toHaveBeenCalledWith({ path: 'src/index.ts', asZip: false });
+    it('routes the default row download to the addressed Machine through the real transfer owner', async () => {
+        const screen = await renderBrowser();
+        await screen.pressByTestIdAsync(`repository-tree-row-menu-${toTestIdSafeValue('src/index.ts')}`);
+        const download = screen.findByTestId('repository-tree-menuitem-download');
+        expect(download).not.toBeNull();
+        expect(download?.props.disabled).not.toBe(true);
+        await screen.pressByTestIdAsync('repository-tree-menuitem-download');
+        await vi.waitFor(() => expect(fixture.requests).toContainEqual(expect.objectContaining({
+            targetId: fixture.scope.machineId, method: 'daemon.filesystem.download',
+            payload: expect.objectContaining({ rootPath: '/repo', path: '/repo/src/index.ts', asZip: false }),
+        })));
     });
 });
