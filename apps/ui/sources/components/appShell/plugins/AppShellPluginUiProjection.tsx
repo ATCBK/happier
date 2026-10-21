@@ -191,6 +191,7 @@ const EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_VALUE: AppShellPluginUiProjectionValu
 const AppShellPluginUiProjectionContext = React.createContext<AppShellPluginUiProjectionValue>(
     EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_VALUE,
 );
+const AppShellPluginUiDeclarationProjectionContext = React.createContext<PluginUiProjectionModel | null>(null);
 
 export type AppShellPluginProjectionTarget = Readonly<{ machineId: string; serverId: string | null }>;
 
@@ -370,21 +371,23 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
         return publishCommittedAppShellPluginUiProjection(read);
     }, [lifetime, props.value]);
     return (
-        <AppShellPluginUiProjectionContext.Provider value={props.value}>
-            {/*
-              * The launch input a plugin page is opened with is scoped HERE, by
-              * that page's stamped union contribution: a bounded argument is
-              * addressed to one page, produced by its own generation and
-              * machine, for one server/account. The app-wide union has no
-              * authority of its own; binding to the contribution owner retires
-              * the input when any of those facts changes.
-              */}
-            <PluginAppPageLaunchInputScope
-                pluginUiProjection={props.value.pluginUiProjection}
-            >
-                {props.children}
-            </PluginAppPageLaunchInputScope>
-        </AppShellPluginUiProjectionContext.Provider>
+        <AppShellPluginUiDeclarationProjectionContext.Provider value={props.value.pluginUiProjection}>
+            <AppShellPluginUiProjectionContext.Provider value={props.value}>
+                {/*
+                  * The launch input a plugin page is opened with is scoped HERE, by
+                  * that page's stamped union contribution: a bounded argument is
+                  * addressed to one page, produced by its own generation and
+                  * machine, for one server/account. The app-wide union has no
+                  * authority of its own; binding to the contribution owner retires
+                  * the input when any of those facts changes.
+                  */}
+                <PluginAppPageLaunchInputScope
+                    pluginUiProjection={props.value.pluginUiProjection}
+                >
+                    {props.children}
+                </PluginAppPageLaunchInputScope>
+            </AppShellPluginUiProjectionContext.Provider>
+        </AppShellPluginUiDeclarationProjectionContext.Provider>
     );
 }
 
@@ -1133,6 +1136,11 @@ export function useAppShellPluginUiProjection(): AppShellPluginUiProjectionValue
     return React.useContext(AppShellPluginUiProjectionContext);
 }
 
+/** Descriptive declaration consumers do not need executable diagnostics. */
+export function useAppShellPluginUiDeclarationProjection(): PluginUiProjectionModel | null {
+    return React.useContext(AppShellPluginUiDeclarationProjectionContext);
+}
+
 export function useProjectedConnectedServicesRegistry(): ConnectedServiceRegistrySnapshot {
     useAppShellPluginUiProjection().connectedAccountProjectionRevision;
     return getConnectedServiceRegistrySnapshot();
@@ -1140,7 +1148,7 @@ export function useProjectedConnectedServicesRegistry(): ConnectedServiceRegistr
 
 /** Binds plugin-authored text to the exact current app-scope projection and locale. */
 export function useProjectedPluginLocalizedTextResolver(): PluginLocalizedTextResolver {
-    const projection = useAppShellPluginUiProjection().pluginUiProjection;
+    const projection = useAppShellPluginUiDeclarationProjection();
     const locale = getPreferredLanguage();
     return React.useMemo(
         () => createPluginLocalizedTextResolver({ projection, locale }),

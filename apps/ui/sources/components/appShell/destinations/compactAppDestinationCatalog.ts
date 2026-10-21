@@ -20,7 +20,7 @@ import type {
 } from '@happier-dev/protocol/plugins/ui';
 
 import {
-    useAppShellPluginUiProjection,
+    useAppShellPluginUiDeclarationProjection,
     useProjectedPluginLocalizedTextResolver,
 } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import {
@@ -810,30 +810,30 @@ function useAppBuiltinDestinationAvailability(owners: AppDestinationActivationOw
  * navigable/offline-tombstonable while executable bridge methods are separately unavailable.
  */
 export function useCompactAppDestinations(owners: AppDestinationActivationOwners = {}): readonly CompactAppDestination[] {
-    const projection = useAppShellPluginUiProjection();
+    const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
     const localizePluginText = useProjectedPluginLocalizedTextResolver();
     const builtins = useAppBuiltinDestinationAvailability(owners);
     const pages = React.useMemo(() => (
-        projection.pluginUiProjection
+        pluginUiProjection
             ? resolvePluginAppPages({
-                placements: selectPluginAppPagePlacements(projection.pluginUiProjection),
+                placements: selectPluginAppPagePlacements(pluginUiProjection),
                 localize: localizePluginText,
             })
             : []
-    ), [localizePluginText, projection.pluginUiProjection]);
+    ), [localizePluginText, pluginUiProjection]);
     const rightSidebarTabs = React.useMemo(() => (
-        projection.pluginUiProjection
+        pluginUiProjection
             ? resolveRightSidebarTabs({
                 scope: 'app',
                 pluginPlacements: selectPluginRightSidebarTabPlacements(
-                    projection.pluginUiProjection,
+                    pluginUiProjection,
                     'app',
                 ),
-                projectionGeneration: projection.pluginUiProjection.generation,
+                projectionGeneration: pluginUiProjection.generation,
                 localize: localizePluginText,
             }).filter((tab): tab is RightSidebarPluginTabDefinition => tab.owner === 'plugin')
             : []
-    ), [localizePluginText, projection.pluginUiProjection]);
+    ), [localizePluginText, pluginUiProjection]);
     const destinations = React.useMemo(() => resolveCompactAppDestinations({
         builtins,
         pages,
