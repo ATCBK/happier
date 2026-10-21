@@ -263,7 +263,9 @@ export function CapabilityAddModalBody<Item>(
       ...capabilityAddChrome(config),
       ...(detailBackInHeader
         ? {
+            // The details are the page: the way back stands alone, without the dialog's subtitle beside it.
             title: null,
+            subtitle: null,
             leading: (
               <CapabilityAddBackLink
                 label={config.title}

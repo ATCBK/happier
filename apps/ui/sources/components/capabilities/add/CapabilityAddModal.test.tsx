@@ -3,15 +3,24 @@ import { act } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+// Load the real UI graph during collection, outside each test's behavior deadline.
+import { CapabilityAddModalBody } from './CapabilityAddModal';
+import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/buildCapabilityCollectionAnatomy';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+// Keep responsive classification real; only React Native's window measurements are a boundary.
+const viewport = vi.hoisted(() => ({ width: 1200, height: 800 }));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } =
     await import('@/dev/testkit/mocks/reactNative');
-  return createReactNativeWebMock();
+  const dimensions = () => ({ ...viewport, scale: 1, fontScale: 1 });
+  return createReactNativeWebMock({
+    Dimensions: { get: dimensions },
+    useWindowDimensions: dimensions,
+  });
 });
 vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -20,7 +29,8 @@ vi.mock('react-native-unistyles', async () => {
 
 afterEach(() => {
   standardCleanup();
-  vi.resetModules();
+  viewport.width = 1200;
+  viewport.height = 800;
 });
 
 type Skill = Readonly<{ name: string; description: string }>;
@@ -37,9 +47,6 @@ async function renderBody(
   footerOverrides: Readonly<Record<string, unknown>> = {},
   configOverrides: Readonly<Record<string, unknown>> = {},
 ) {
-  const { CapabilityAddModalBody } = await import('./CapabilityAddModal');
-  const { buildCapabilityCollectionAnatomy } =
-    await import('@/components/capabilities/row/buildCapabilityCollectionAnatomy');
   const onClose = vi.fn();
   const onAdded = vi.fn();
   const setChrome = vi.fn();
@@ -217,6 +224,17 @@ describe('CapabilityAddModalBody', () => {
     await press('registries-back');
     // The chrome owner merges patches over what it has; the root frame must say "no back link, no subtitle" itself.
     expect(setChrome.mock.calls.at(-1)![0]).toMatchObject({ title: 'Add a skill', leading: null, subtitle: null });
+  });
+
+  it('on a phone, open details put only the way back in the header, without the dialog subtitle beside it', async () => {
+    viewport.width = 390;
+    viewport.height = 844;
+    const body = await renderBody(async (skill) => ({ itemId: skill.name }), {}, {}, { subtitle: 'From a registry, a link or your own files.' });
+    expect(body.setChrome.mock.calls.at(-1)![0]).toMatchObject({ title: 'Add a skill', subtitle: 'From a registry, a link or your own files.' });
+    await body.select('docx');
+    const chrome = body.setChrome.mock.calls.at(-1)![0];
+    expect(chrome).toMatchObject({ title: null, subtitle: null });
+    expect(chrome.leading).not.toBeNull();
   });
 
   it('lets Escape close the details before the dialog, whatever has focus', async () => {
