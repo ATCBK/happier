@@ -8,7 +8,7 @@ vi.mock('@/text', async () => {
     return createTextModuleMock();
 });
 
-const { projectSessionTriggerGroups, describeLegacyTriggerSet } = await import('./sessionTriggerGroups');
+const { projectSessionTriggerGroups, describeLegacyTriggerSet, describeTriggerTarget } = await import('./sessionTriggerGroups');
 const { formatClockTime } = await import('./triggerSchedule');
 const { buildTriggerTarget, readTriggerThen } = await import('./sessionTriggerForm');
 
@@ -38,6 +38,12 @@ function set(automationId: string, overrides: Record<string, unknown>): Workflow
 }
 
 describe('projectSessionTriggerGroups', () => {
+    it('names unresolved workflow targets without displaying their private reference id', () => {
+        const target = { kind: 'workflow' as const, ref: '2364abf8-14b8-4877-8f00-a11111111111' };
+        expect(describeTriggerTarget(target, () => null)).toBe('workflows.triggers.then.runWorkflow');
+        expect(describeTriggerTarget(target, () => 'Nightly review')).toBe('Nightly review');
+        expect(describeTriggerTarget(undefined, () => null)).toBe('workflows.triggers.row.workflowDeleted');
+    });
     it('keeps an upkeep example named separately from its complete prompt through compact trigger editing', () => {
         const example = WORKFLOW_STARTER_EXAMPLES_V1.find((entry) => entry.key === 'memory-upkeep-in-session')!;
         const selection = materializeWorkflowStarterExample(example, {

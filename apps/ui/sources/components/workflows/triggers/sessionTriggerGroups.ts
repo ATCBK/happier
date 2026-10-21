@@ -50,7 +50,7 @@ export function describeTriggerTarget(target: TriggerTargetV1 | undefined, resol
     const firstBlock = target.kind === 'inline' ? target.definition.blocks[0] : undefined;
     switch (then.kind) {
         case 'runWorkflow':
-            return then.ref === null ? t('workflows.triggers.then.runWorkflow') : resolveWorkflowTitle(then.ref) ?? then.ref;
+            return (then.ref === null ? null : resolveWorkflowTitle(then.ref)) ?? t('workflows.triggers.then.runWorkflow');
         case 'sendPrompt':
             return firstBlock ? workflowBlockReferenceLabel(firstBlock, t('workflows.triggers.then.sendPrompt'))
                 : t('workflows.triggers.then.sendPrompt');
