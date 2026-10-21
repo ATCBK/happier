@@ -234,3 +234,44 @@ export function layoutHomeOrbitScene(
     canvas: { left: px - size / 2, top: py - size / 2, size },
   };
 }
+
+/** Inter's average advance at the meta size, as a share of the font size: enough to keep a label inside the map. */
+const LABEL_ADVANCE_EM = 0.56;
+const LABEL_GAP_PX = 6;
+
+/**
+ * A moon's name sits on the side with room: after the moon, or before it when the map's edge is
+ * closer than the name. On the planet's row the side facing the planet only reaches the planet's
+ * edge, so a name never runs across it. A name longer than its room ends in an ellipsis, and a
+ * same-name machine's suffix ("Build box · 08cc") stays whole while the name before it shortens.
+ */
+export function placeOrbitMoonLabel(
+  moon: Readonly<{ x: number; y: number; r: number }>,
+  label: string,
+  area: Readonly<{ width: number; px: number; py: number; pr: number }>,
+  fontSize: number,
+): Readonly<{ x: number; textAnchor: 'start' | 'end'; text: string }> {
+  const advance = fontSize * LABEL_ADVANCE_EM;
+  const onPlanetRow = Math.abs(moon.y - area.py) < area.pr + fontSize;
+  // A name keeps a gap from the map's edge and from the planet, so a wide glyph never clips.
+  const afterEdge = (onPlanetRow && moon.x < area.px ? area.px - area.pr : area.width) - LABEL_GAP_PX;
+  const beforeEdge = (onPlanetRow && moon.x > area.px ? area.px + area.pr : 0) + LABEL_GAP_PX;
+  const after = afterEdge - (moon.x + moon.r + LABEL_GAP_PX);
+  const before = moon.x - moon.r - LABEL_GAP_PX - beforeEdge;
+  const needed = label.length * advance;
+  const useAfter = needed <= after || after >= before;
+  const room = Math.max(0, useAfter ? after : before);
+  const text = fitMoonLabel(label, Math.max(1, Math.floor(room / advance)));
+  return useAfter
+    ? { x: Math.round((moon.x + moon.r + LABEL_GAP_PX) * 10) / 10, textAnchor: 'start', text }
+    : { x: Math.round((moon.x - moon.r - LABEL_GAP_PX) * 10) / 10, textAnchor: 'end', text };
+}
+
+/** Shortens a label to `fits` characters, keeping a trailing " · suffix" whole when it leaves room for a name. */
+function fitMoonLabel(label: string, fits: number): string {
+  if (label.length <= fits) return label;
+  const tail = label.lastIndexOf(' · ');
+  const suffix = tail > 0 ? label.slice(tail) : '';
+  if (suffix && fits - suffix.length >= 3) return `${label.slice(0, fits - suffix.length - 1)}…${suffix}`;
+  return `${label.slice(0, Math.max(1, fits - 1))}…`;
+}

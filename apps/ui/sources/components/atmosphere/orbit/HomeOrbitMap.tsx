@@ -15,7 +15,7 @@ import { workStatusGlyphColor } from '@/components/work/status/workStatusTreatme
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
-import type { HomeOrbitScene } from './homeOrbitScene';
+import { placeOrbitMoonLabel, type HomeOrbitScene } from './homeOrbitScene';
 
 // react-native-svg's web WebShape forwards CSS style; its native Circle/Line declarations omit it.
 const Circle = SvgCircle as React.ComponentType<React.ComponentProps<typeof SvgCircle> & { style?: React.CSSProperties }>;
@@ -105,13 +105,13 @@ export const HomeOrbitMap = React.memo(function HomeOrbitMap(
   const labelStyle = Typography.variant('meta');
   const labelFontSize = labelStyle.fontSize ?? 12;
   const placedLabels = React.useMemo(() => {
-    const placed: Record<string, ReturnType<typeof placeMoonLabel>> = {};
+    const placed: Record<string, ReturnType<typeof placeOrbitMoonLabel>> = {};
     for (const moon of scene.moons) {
       const label = props.labels?.[moon.key];
-      if (label) placed[moon.key] = placeMoonLabel(moon, label, scene.width, labelFontSize);
+      if (label) placed[moon.key] = placeOrbitMoonLabel(moon, label, scene, labelFontSize);
     }
     return placed;
-  }, [labelFontSize, props.labels, scene.moons, scene.width]);
+  }, [labelFontSize, props.labels, scene]);
   return (
     <View
       testID={props.testID}
@@ -431,33 +431,6 @@ function useTravelStyle(
     },
     [order, phase, reducedMotion, scene.px, scene.py, travelId],
   );
-}
-
-/** Inter's average advance at the meta size, as a share of the font size: enough to keep a label inside the map. */
-const LABEL_ADVANCE_EM = 0.56;
-const LABEL_GAP_PX = 6;
-
-/**
- * A moon's name sits on the side with room: after the moon, or before it when the map's edge is
- * closer than the name; a name longer than either side's room ends in an ellipsis instead of being cut.
- */
-function placeMoonLabel(
-  moon: Readonly<{ x: number; r: number }>,
-  label: string,
-  width: number,
-  fontSize: number,
-): Readonly<{ x: number; textAnchor: 'start' | 'end'; text: string }> {
-  const advance = fontSize * LABEL_ADVANCE_EM;
-  const after = width - (moon.x + moon.r + LABEL_GAP_PX);
-  const before = moon.x - moon.r - LABEL_GAP_PX;
-  const needed = label.length * advance;
-  const useAfter = needed <= after || after >= before;
-  const room = useAfter ? after : before;
-  const fits = Math.max(1, Math.floor(room / advance));
-  const text = label.length <= fits ? label : `${label.slice(0, Math.max(1, fits - 1))}…`;
-  return useAfter
-    ? { x: Math.round((moon.x + moon.r + LABEL_GAP_PX) * 10) / 10, textAnchor: 'start', text }
-    : { x: Math.round((moon.x - moon.r - LABEL_GAP_PX) * 10) / 10, textAnchor: 'end', text };
 }
 
 const styles = StyleSheet.create(() => ({

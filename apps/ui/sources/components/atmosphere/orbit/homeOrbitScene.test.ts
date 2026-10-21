@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { layoutHomeOrbitRing, layoutHomeOrbitScene, type HomeOrbitBody } from './homeOrbitScene';
+import { layoutHomeOrbitRing, layoutHomeOrbitScene, placeOrbitMoonLabel, type HomeOrbitBody } from './homeOrbitScene';
 
 const body = (
   key: string,
@@ -107,5 +107,22 @@ describe('Home orbit ring (lab hm-A tetherMap)', () => {
     }
     expect(scene.moons).toEqual([]);
     expect(scene.orbits).toEqual([{ r: ring.r, off: false }]);
+  });
+
+});
+
+describe('Home orbit moon labels', () => {
+  it("keeps a moon's name off the planet and keeps a same-name suffix whole when the name must shorten", () => {
+    // A phone map: planet at the centre, a moon just right of it on the planet's row.
+    const planet = { width: 358, px: 179, py: 100, pr: 34 };
+    const moon = { x: 223, y: 92, r: 5 };
+    const placed = placeOrbitMoonLabel(moon, 'NLDW6-3-11-20 · 0371', planet, 12);
+    // The left side would run across the planet, so the name stays after the moon and shortens.
+    expect(placed.textAnchor).toBe('start');
+    expect(placed.text.endsWith(' · 0371')).toBe(true);
+    expect(placed.text).toContain('…');
+    // A moon well above the planet may still take the roomier side before it.
+    const high = placeOrbitMoonLabel({ x: 330, y: 10, r: 5 }, 'NLDW6-3-11-20 · 0371', planet, 12);
+    expect(high).toEqual({ x: 319, textAnchor: 'end', text: 'NLDW6-3-11-20 · 0371' });
   });
 });
