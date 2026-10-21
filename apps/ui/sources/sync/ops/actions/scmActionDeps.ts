@@ -1,4 +1,4 @@
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { ScmDiffSummaryResultClearInputSchema, ScmDiffSummaryResultClearResponseSchema, ScmDiffSummaryResultResponseSchema, type ScmDiffSummaryResultClearResponse } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
 import { ScmComparisonCaptureOutputSchema, ScmReviewedMarkInputSchema, buildScmReviewedMarksKey, createScmReviewedMarksRecordPort, buildScmComparisonSourceKey, buildScmReviewScopeId, buildReviewUnits, ScmStatusSnapshotResponseSchema, ScmDiffFileResponseSchema, type ScmReviewedMarksSource } from '@happier-dev/protocol/scm';
@@ -94,8 +94,7 @@ export function createUiScmAction(
             account.assertResultCurrent(getActionSpec(actionId).sideEffectClass);
             return result;
         }
-        const machineInventory = actionId === 'scm.diffSummary.result.list' || actionId === 'scm.diffSummary.result.clear'
-            || actionId === 'scm.hostingRepository.resolveAddress';
+        const machineInventory = requiresExplicitScmMachineTarget(actionId);
         if (machineInventory && target?.kind !== 'machine') return { ok: false, errorCode: 'machine_not_selected', error: 'machine_not_selected' };
         if (target?.kind === 'machine') {
             const cwd = actionId === 'scm.repository.clone' ? request.destinationParentPath : request.cwd;

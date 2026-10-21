@@ -18,7 +18,7 @@ const reads = [
   'scm.backend.describe', 'scm.status.snapshot', 'scm.worktrees.enrichment',
   'scm.file.read', 'scm.diff.file', 'scm.diff.commit', 'scm.log.list', 'scm.history.entries', 'scm.branch.list',
   'scm.stash.list', 'scm.stash.show', 'scm.pullRequest.list', 'scm.pullRequest.get',
-  'scm.pullRequest.openCompose', 'scm.hostingRepository.describePublishTargets',
+  'scm.pullRequest.openCompose', 'scm.hostingRepository.describePublishTargets', 'scm.hostingRepository.get',
 ] as const;
 const mutations = [
   'scm.change.include', 'scm.change.exclude', 'scm.change.discard',
@@ -118,6 +118,20 @@ describe('SCM Action parity', () => {
     for (const kind of ['unknown', 'unsupported', 'invalid']) {
       expect(spec.outputSchema?.safeParse({ success: true, kind }).success).toBe(true);
     }
+  });
+  it('closes authoritative repository metadata and rejects unsafe public links', () => {
+    const spec = getActionSpec(ActionIdSchema.parse('scm.hostingRepository.get'));
+    const selector = { provider: { id: 'plugin/forge', kind: 'custom', displayName: 'Forge', baseUrl: 'https://forge.test' },
+      repository: { nameWithOwner: 'team/repo' }, protocol: 'https' };
+    expect(spec.inputSchema.safeParse({ selector }).success).toBe(true);
+    expect(spec.inputSchema.safeParse({ selector, visibility: 'public' }).success).toBe(false);
+    const repository = { label: 'team/repo', url: 'https://forge.test/team/repo' };
+    expect(spec.outputSchema?.safeParse({ success: true, kind: 'public', repository }).success).toBe(true);
+    for (const url of ['http://forge.test/team/repo', 'https://user:secret@forge.test/team/repo', 'https://forge.test/team/repo?token=secret']) {
+      expect(spec.outputSchema?.safeParse({ success: true, kind: 'public', repository: { ...repository, url } }).success).toBe(false);
+    }
+    expect(spec.outputSchema?.safeParse({ success: true, kind: 'private', repository }).success).toBe(false);
+    expect(spec.outputSchema?.safeParse({ success: false, kind: 'failed', code: 'repository_unavailable', error: 'private diagnostic' }).success).toBe(false);
   });
   it('declares every Git read and mutation in the canonical Action ID schema', () => {
     for (const id of [...reads, ...mutations]) {

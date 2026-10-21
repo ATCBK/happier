@@ -1,9 +1,3 @@
-/** Machine-wide operations cannot acquire a target from an implicit Session. */
-export function requiresExplicitScmMachineTarget(actionId: string): boolean {
-    return actionId === 'scm.diffSummary.result.list' || actionId === 'scm.diffSummary.result.clear'
-        || actionId === 'scm.hostingRepository.resolveAddress';
-}
-
 /** Retained evidence/revisions keep their existing local access/currentness owner. */
 export function isRetainedScmReviewAction(actionId: string, input: Readonly<Record<string, unknown>>): boolean {
     return actionId.startsWith('scm.diffSummary.result.')

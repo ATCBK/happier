@@ -32,7 +32,8 @@ import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply
 import { prepareDocDiscussionMutationV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipantIdsV1 } from '@happier-dev/protocol/discussions/content';
 import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
-import { bindScmActionToSessionWorkspace, requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
+import { bindScmActionToSessionWorkspace } from '@/scm/actions/placement';
+import { requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { readContributedActionExecutionPlacement } from '@/session/actions/readContributedActionExecutionPlacement';
 import { readServerIdentityIdFromFeaturesSnapshot, type CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 

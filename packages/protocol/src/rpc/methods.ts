@@ -525,6 +525,7 @@ export const RPC_METHODS = {
   SCM_REPOSITORY_INIT: 'scm.repository.init',
   SCM_REPOSITORY_REMOVE_INDEX_LOCK: 'scm.repository.removeIndexLock',
   SCM_HOSTING_REPOSITORY_RESOLVE_ADDRESS: 'scm.hostingRepository.resolveAddress',
+  SCM_HOSTING_REPOSITORY_GET: 'scm.hostingRepository.get',
   SCM_HOSTING_REPOSITORY_DESCRIBE_PUBLISH_TARGETS: 'scm.hostingRepository.describePublishTargets',
   SCM_HOSTING_REPOSITORY_PUBLISH: 'scm.hostingRepository.publish',
   SCM_DIFF_SUMMARY_GENERATE: 'scm.diffSummary.generate',

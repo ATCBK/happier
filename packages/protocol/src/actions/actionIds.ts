@@ -786,6 +786,7 @@ export const ACTION_ID_FAMILIES_V1 = Object.freeze({
     'scm.repository.removeIndexLock',
     'scm.hostingRepository.describePublishTargets',
     'scm.hostingRepository.resolveAddress',
+    'scm.hostingRepository.get',
     'scm.hostingRepository.publish',
   ],
   scm_diff_summary: [

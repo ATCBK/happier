@@ -96,6 +96,7 @@ import { resolveFilesystemAccessPolicy, type FilesystemAccessPolicy } from '@/rp
 import type { ScmBackendRegistry } from '@/scm/registry';
 import type { ResolvedScmHostingProviderRegistry } from '@/scm/hostingProviders/registry';
 import type { ScmHostingRepositoryResolveAddressRequestV1, ScmHostingRepositoryResolveAddressResponseV1 } from '@happier-dev/protocol/scm/repositoryClone';
+import type { ScmHostingRepositoryGetRequestV1, ScmHostingRepositoryGetResponseV1 } from '@happier-dev/protocol/scm/repositoryClone';
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
 import { readStoredCredentials } from '@/persistence';
@@ -769,6 +770,13 @@ export function registerScmHandlers(
             rpcCompatibility: true,
             runMutation: runWithStatusSnapshotCacheInvalidation,
         }) as ScmRepositoryCloneOutput,
+    );
+
+    scmRpcHandlerManager.registerHandler<ScmHostingRepositoryGetRequestV1, ScmHostingRepositoryGetResponseV1>(
+        RPC_METHODS.SCM_HOSTING_REPOSITORY_GET,
+        async (request) => await executeScmActionOperation({
+            actionId: 'scm.hostingRepository.get', input: request, ...routeBase,
+        }) as ScmHostingRepositoryGetResponseV1,
     );
 
     scmRpcHandlerManager.registerHandler<ScmHostingRepositoryResolveAddressRequestV1, ScmHostingRepositoryResolveAddressResponseV1>(

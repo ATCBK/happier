@@ -78,7 +78,7 @@ import type {
 } from '@happier-dev/protocol/scm';
 import { SCM_OPERATION_ERROR_CODES, ScmLogListResponseSchema, ScmHistoryEntriesResponseSchema } from '@happier-dev/protocol/scm';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { getActionSpec, requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { RPC_METHODS, type SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
 import { getScmRpcSideEffectClass } from '@happier-dev/protocol/actions/scmGitActionSpecs';
 import { scmFallbackError, type ScmRpcFailure } from './scmRpcFailure';
@@ -154,7 +154,7 @@ export async function runMachineScmRpc<
     request: R,
     options?: MachineScmCallOptions,
 ): Promise<ScmRpcTransportResult<T>> {
-    const payload = method.startsWith('scm.diffSummary.') || method === 'scm.hostingRepository.resolveAddress' ? request : withScmBackendPreference({
+    const payload = method.startsWith('scm.diffSummary.') || requiresExplicitScmMachineTarget(method) ? request : withScmBackendPreference({
         ...request,
         outcomeVersion: 1 as const,
         ...(method === RPC_METHODS.SCM_STATUS_SNAPSHOT ? { operationStateVersion: 1 as const } : {}),

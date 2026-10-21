@@ -21,6 +21,7 @@ import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContrac
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { ScmHostingRepositoryGetRequestV1Schema } from '@happier-dev/protocol/scm/repositoryClone';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -245,6 +246,22 @@ describe('exact-machine SCM Action targeting', () => {
       defaultSessionId: 'session', externalActionTarget: { kind: 'session', sessionId: 'session' },
     })).toMatchObject({ ok: false, errorCode: 'machine_not_selected' });
     expect(calls).toHaveLength(1);
+  });
+  it('reads public repository metadata through a closed machine request without Git fields', async () => {
+    const input = { selector: { provider: { id: 'example/forge', kind: 'custom', displayName: 'Forge', baseUrl: 'https://forge.test' },
+      repository: { nameWithOwner: 'group/repo' }, protocol: 'https' } };
+    const executor = createActionExecutor(createCliActionDeps({
+      token: 'already-admitted-daemon-token', sessionId: '', mode: 'plain', ctx: null,
+      machineActionDirectTargetTransport: { machineId: 'machine', invoke: async (method, request) => {
+        // The authenticated Machine transport reaches the same strict consumer as the daemon.
+        expect(method).toBe('scm.hostingRepository.get');
+        expect(ScmHostingRepositoryGetRequestV1Schema.parse(request)).toEqual(input);
+        return { success: true, kind: 'private' };
+      } },
+    }));
+    expect(await executor.execute('scm.hostingRepository.get', input, { surface: 'rpc', authority: 'account_automation',
+      externalActionTarget: { kind: 'machine', machineId: 'machine' },
+    })).toEqual({ ok: true, result: { success: true, kind: 'private' } });
   });
   it('uses the admitted machine transport and exact directory without requiring a Session', async () => {
     const calls: Array<Readonly<{ method: string; request: unknown; signal?: AbortSignal }>> = [];

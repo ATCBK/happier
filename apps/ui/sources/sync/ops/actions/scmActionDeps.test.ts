@@ -97,6 +97,20 @@ describe('SCM Action target binding', () => {
         expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine', serverId: 'home',
             method: 'scm.hostingRepository.resolveAddress', payload: { address: 'forge.test/team/repo' } }));
     });
+    it('reads repository visibility on the selected Machine without a checkout and refuses an implicit Session', async () => {
+        const input = { selector: { provider: { id: 'plugin/forge', kind: 'custom', displayName: 'Forge', baseUrl: 'https://forge.test' },
+            repository: { nameWithOwner: 'team/repo' }, protocol: 'https' } };
+        const result = { success: true, kind: 'private' };
+        rpc.mockResolvedValue(result);
+        const invoke = createUiScmAction();
+        expect(await invoke({ actionId: 'scm.hostingRepository.get', input,
+            context: { serverId: 'home', runtimeAccountId: 'account', externalActionTarget: { kind: 'machine', machineId: 'machine' } },
+            executeCanonicalAction })).toEqual(result);
+        expect(rpc).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'machine', serverId: 'home',
+            method: 'scm.hostingRepository.get', payload: input }));
+        expect(await invoke({ actionId: 'scm.hostingRepository.get', input,
+            context: { defaultSessionId: 'session' }, executeCanonicalAction })).toMatchObject({ ok: false, errorCode: 'machine_not_selected' });
+    });
     it('routes machine inventory without inventing a repository and rejects a Session inventory request', async () => {
         const inventory = { success: true, results: [], count: 0, bytes: 0,
             sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: 1 } };

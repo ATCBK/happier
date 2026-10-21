@@ -15403,3 +15403,4 @@ export function resolveVoiceClientToolNameAlias(value: string): string | null {
 
   return null;
 }
+export { requiresExplicitScmMachineTarget } from './scmGitActionSpecs.js';

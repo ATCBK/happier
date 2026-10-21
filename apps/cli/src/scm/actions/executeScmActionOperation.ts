@@ -32,8 +32,10 @@ import { readRepositoryCheckpointBranchEvidence, readRepositoryCheckpointPullReq
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { configuration } from '@/configuration';
 import { resolveScmHostingRepositoryAddress } from '@/scm/hostingProviders/resolveAddress';
+import { readScmHostingRepository } from '@/scm/hostingProviders/readRepository';
 import type { ResolvedScmHostingProviderRegistry } from '@/scm/hostingProviders/registry';
 import type { ScmHostingRepositoryResolveAddressRequestV1 } from '@happier-dev/protocol/scm/repositoryClone';
+import type { ScmHostingRepositoryGetRequestV1 } from '@happier-dev/protocol/scm/repositoryClone';
 import {
     runScmHostingRepositoryDescribePublishTargetsRoute,
     runScmHostingRepositoryPublishRoute,
@@ -114,6 +116,11 @@ async function runLocalScmAction(params: ExecuteScmActionOperationParams & Reado
     }
 
     switch (params.actionId) {
+        case 'scm.hostingRepository.get':
+            return readScmHostingRepository({
+                selector: (params.input as ScmHostingRepositoryGetRequestV1).selector,
+                registry: params.hostingProviderRegistry, signal: params.signal,
+            });
         case 'scm.hostingRepository.resolveAddress':
             return resolveScmHostingRepositoryAddress({
                 address: (params.input as ScmHostingRepositoryResolveAddressRequestV1).address,

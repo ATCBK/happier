@@ -14,7 +14,7 @@ import { dispatchCurrentAgentRuntimeDaemonServiceRequest,
 import { projectAgentRuntimeDaemonServiceTurnWitnessV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceTurnWitness';
 import { NATIVE_AGENT_SESSION_EFFECT_OUTCOME_UNKNOWN_CODE } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionBoundaryError';
 import { WorkflowProjectTargetV1Schema } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
-import { requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
+import { requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { readContributedActionExecutionPlacement } from '@/session/actions/readContributedActionExecutionPlacement';
 
 type ActionExecutor = Readonly<{

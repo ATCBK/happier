@@ -72,6 +72,25 @@ export const ScmCredentialFreeRepositorySelectorV1Schema = lazyZodSchema(() => z
   })),
   protocol: SourceControlCloneProtocolSchema,
 }));
+export type ScmCredentialFreeRepositorySelectorV1 = z.infer<typeof ScmCredentialFreeRepositorySelectorV1Schema>;
+
+export const ScmHostingRepositoryGetRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  selector: ScmCredentialFreeRepositorySelectorV1Schema,
+}));
+export type ScmHostingRepositoryGetRequestV1 = z.infer<typeof ScmHostingRepositoryGetRequestV1Schema>;
+
+/** Only an authoritative public observation can produce disclosure metadata. */
+export const ScmHostingRepositoryGetResponseV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ success: z.literal(true), kind: z.literal('public'), repository: z.strictObject({
+    label: z.string().check(z.trim(), z.minLength(1)),
+    url: z.string().check(z.url(), z.refine(value => isCredentialFreeRepositoryLocator(value) && new URL(value).protocol === 'https:')),
+  }) }),
+  z.strictObject({ success: z.literal(true), kind: z.literal('private') }),
+  z.strictObject({ success: z.literal(true), kind: z.literal('unknown') }),
+  z.strictObject({ success: z.literal(true), kind: z.literal('unsupported') }),
+  z.strictObject({ success: z.literal(false), kind: z.literal('failed'), code: z.literal('repository_unavailable') }),
+]));
+export type ScmHostingRepositoryGetResponseV1 = z.infer<typeof ScmHostingRepositoryGetResponseV1Schema>;
 
 /** Machine placement uses the incumbent Action target selector, outside this RPC payload. */
 export const ScmHostingRepositoryResolveAddressRequestV1Schema = lazyZodSchema(() => z.strictObject({

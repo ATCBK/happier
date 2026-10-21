@@ -39,6 +39,8 @@ import {
   ScmRepositoryCloneOutputSchema,
   ScmHostingRepositoryResolveAddressRequestV1Schema,
   ScmHostingRepositoryResolveAddressResponseV1Schema,
+  ScmHostingRepositoryGetRequestV1Schema,
+  ScmHostingRepositoryGetResponseV1Schema,
   SourceControlCloneProtocolSchema,
   type SourceControlCloneProtocol,
 } from '../scm/repositoryClone.js';
@@ -74,6 +76,12 @@ import {
   describeScmWorktreePruneApprovalSummary,
   describeScmWorktreeRemoveApprovalSummary,
 } from './specs/scmApprovalPresentation.js';
+
+/** Machine-wide SCM reads have no repository scope and cannot inherit a Session target. */
+export function requiresExplicitScmMachineTarget(actionId: string): boolean {
+  return actionId === 'scm.diffSummary.result.list' || actionId === 'scm.diffSummary.result.clear'
+    || actionId === 'scm.hostingRepository.resolveAddress' || actionId === 'scm.hostingRepository.get';
+}
 
 /** Named metadata keeps declaration emission bounded without widening the wire schemas. */
 export type ScmActionSpecDefinition<
@@ -1451,6 +1459,18 @@ const SCM_GIT_ACTION_SPECS_REPOSITORY = [
     inputSchema: ScmHostingRepositoryResolveAddressRequestV1Schema,
     outputSchema: ScmHostingRepositoryResolveAddressResponseV1Schema,
     inputHints: { title: 'Resolve repository address', fields: [{ path: 'address', title: 'Repository address', widget: 'text', required: true }] },
+  }),
+  defineScmActionSpec({
+    id: 'scm.hostingRepository.get', approval: {result: 'required'},
+    title: 'Read hosting repository',
+    description: 'Read authoritative public repository metadata through the selected Machine’s SCM hosting provider.',
+    safety: 'safe', placements: [], sideEffectClass: 'read',
+    bindings: { rpcMethod: RPC_METHODS.SCM_HOSTING_REPOSITORY_GET, sdkMethod: 'scm.hostingRepository.get' },
+    surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: true, rpc: true },
+    cli: { commands: [{ path: ['scm', 'hosting-repository', 'get'], visibility: 'canonical' }] },
+    inputSchema: ScmHostingRepositoryGetRequestV1Schema,
+    outputSchema: ScmHostingRepositoryGetResponseV1Schema,
+    inputHints: { title: 'Read hosting repository', fields: [{ path: 'selector', title: 'Repository selector', widget: 'json', required: true }] },
   }),
   defineScmActionSpec({
     id: 'scm.hostingRepository.describePublishTargets', approval: {result: 'required'},

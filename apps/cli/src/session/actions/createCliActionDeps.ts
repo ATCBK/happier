@@ -126,7 +126,8 @@ import type { RpcHandlerContext, RpcLocalActionContext } from '@/api/rpc/types';
 import { resolveFilesystemAccessPolicy, type FilesystemAccessPolicy } from '@/rpc/handlers/fileSystem/accessPolicy/filesystemAccessPolicy';
 import { resolveCwd } from '@/scm/runtime';
 import { tryAcquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
-import { bindScmActionToSessionWorkspace, isRetainedScmReviewAction, requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
+import { bindScmActionToSessionWorkspace, isRetainedScmReviewAction } from '@/scm/actions/placement';
+import { requiresExplicitScmMachineTarget } from '@happier-dev/protocol/actions/actionSpecs';
 import { resolveSocketRpcSessionAuthorization, type SessionActionRpcOriginV1 } from '@happier-dev/protocol/socketRpc';
 import { hasReceivedWorkflowSessionRoleAuthority, resolveSessionRoleRpcOrigin } from './sessionRoleRpcOrigin';
 import { isWorkflowRunExecutorStorageOperationV1 } from '@happier-dev/protocol/workflows/workflowRunStorageV1';
@@ -3351,7 +3352,7 @@ export function createCliActionDeps(params: Readonly<{
       }
       const machineInput = {
         ...inputRecord,
-        ...(actionId.startsWith('scm.diffSummary.') || actionId === 'scm.hostingRepository.resolveAddress'
+        ...(actionId.startsWith('scm.diffSummary.') || machineInventory
           ? {}
           : { outcomeVersion: 1 }),
         ...(actionId === 'scm.status.snapshot' ? { operationStateVersion: 1 } : {}),
