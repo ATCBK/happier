@@ -84,7 +84,7 @@ describe('Account-scoped Session System Record repository', () => {
         remounted();
     });
 
-    it('marks hidden data stale without ambient work and refreshes it in place on remount', async () => {
+    it('marks hidden data stale on a content-free wake without ambient work and refreshes it in place on remount', async () => {
         let requests = 0;
         let settle: ((response: Response) => void) | undefined;
         const repository = createSessionSystemRecordRepository({ scope, request: async () => {
@@ -96,7 +96,7 @@ describe('Account-scoped Session System Record repository', () => {
         await repository.refresh(session, query);
         const data = repository.getSnapshot(session, query).data;
         stop();
-        repository.invalidate(session);
+        repository.invalidateAll();
         repository.refreshObserved({ force: true });
         expect(requests).toBe(1);
         expect(repository.getSnapshot(session, query)).toMatchObject({ data, freshness: 'stale', loading: 'idle' });

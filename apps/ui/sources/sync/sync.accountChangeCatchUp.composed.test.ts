@@ -9,7 +9,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { RenderScreenResult } from '@/dev/testkit/render/renderScreen';
@@ -31,6 +31,7 @@ import {
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import type { ChangesCursorScope } from '@/sync/domains/state/persistence';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { FeedResponseSchema } from '@/sync/domains/social/feedTypes';
 import type { InvalidateSync } from '@/utils/sessions/sync';
@@ -163,7 +164,7 @@ async function restoreTestAccount(options: {
         serverUrl: 'http://localhost:53288',
         accountId: ACCOUNT_ID,
         credentials: options.credentials ?? { token: ACCOUNT_TOKEN },
-        request: (url, init) => waitForNetworkResponseForTests((async () => {
+        request: createSessionReadBatchFetchBoundary((url, init) => waitForNetworkResponseForTests((async () => {
             const path = new URL(String(url)).pathname;
             options.onRequest?.(path);
             if (!bootstrapping) {
@@ -210,7 +211,7 @@ async function restoreTestAccount(options: {
                 return jsonResponse({ changes: page?.changes ?? [], nextCursor: Number(page?.nextCursor ?? 0) });
             }
             return domainHttp({ url: String(url), init });
-        })(), init?.signal),
+        })(), init?.signal)),
     });
     const { storage } = await import('./domains/state/storage');
     await waitForHomeGovernance(() => {
@@ -370,6 +371,54 @@ describe('sync AccountChange catch-up projection', () => {
         webLocks = null;
         vi.clearAllMocks();
         vi.unstubAllGlobals();
+    });
+
+    it('refreshes observed Session records from a Home wake before detailed catch-up can publish', async () => {
+        const sessionId = 'mounted-board-session';
+        let revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
+        let recordReads = 0;
+        await restoreTestAccount({ runtimeRequest: path => {
+            if (path === `/v2/sessions/${sessionId}`) return jsonResponse({
+                session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId }),
+            });
+            if (path === `/v2/sessions/${sessionId}/system-records`) {
+                recordReads++;
+                return jsonResponse({ records: [{ id: 'sysrec_1', revision,
+                    address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' },
+                    content: { t: 'plain', v: { v: 1, tabs: [] } },
+                    createdAt: '2026-09-05T00:00:00.000Z', updatedAt: '2026-09-05T00:00:00.000Z',
+                }], nextCursor: null, hasNext: false });
+            }
+            return undefined;
+        } });
+        const { sync } = await import('./syncEngine');
+        const { getActiveServerAccountScope } = await import('./domains/scope/activeServerAccountScope');
+        const { publishHomeAccountChange } = await import('./runtime/orchestration/homeAccountChange');
+        const scope = getActiveServerAccountScope();
+        if (!scope) throw new Error('Expected restored Account scope');
+        const address = { serverId: scope.serverId, sessionId };
+        const acquired = await sync.withSessionSystemRecordRuntime(address, async runtime => runtime.repository);
+        expect(acquired.status).toBe('ok');
+        if (acquired.status !== 'ok') throw new Error('Expected Session record authority');
+        const repository = acquired.value;
+        const query = { type: 'list', namespace: 'surface' } as const;
+        const stop = repository.subscribe(address, query, () => {});
+        try {
+            await waitForHomeGovernance(() => expect(repository.getSnapshot(address, query).data?.records[0]?.revision).toBe(revision));
+            const initialReads = recordReads;
+            publishHomeAccountChange('another-home', undefined, { source: 'catch-up-pending' });
+            publishHomeAccountChange(scope.serverId, ['self'], { changeKinds: ['account'] });
+            expect(recordReads).toBe(initialReads);
+            revision = 'ssr1.AAAACHN5c3JlY18xAAAAAg';
+            publishHomeAccountChange(scope.serverId, undefined, { source: 'catch-up-pending' });
+            expect(repository.getSnapshot(address, query).freshness).toBe('stale');
+            await waitForHomeGovernance(() => expect(repository.getSnapshot(address, query).data?.records[0]?.revision).toBe(revision));
+            expect(repository.getSnapshot(address, query)).toMatchObject({ freshness: 'fresh', loading: 'idle' });
+            revision = 'ssr1.AAAACHN5c3JlY18xAAAAAw';
+            publishHomeAccountChange(scope.serverId);
+            expect(repository.getSnapshot(address, query).freshness).toBe('stale');
+            await waitForHomeGovernance(() => expect(repository.getSnapshot(address, query).data?.records[0]?.revision).toBe(revision));
+        } finally { stop(); }
     });
 
     it.each(['blocked', 'held'] as const)('revalidates mounted skill reach while the focused catch-up is %s', async phase => {

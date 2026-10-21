@@ -1518,6 +1518,16 @@ class Sync {
         installSyncPerformanceTelemetryGlobal(syncPerformanceTelemetry);
         installSyncReliabilityTelemetryGlobal(syncReliabilityTelemetry);
         if (!isEmbedWindowContext()) subscribeHomeAccountChange(event => {
+            // Detailed focused pages already invalidate their exact Session/share
+            // ids. Concurrent Home wakes and blocked catch-up have no such page:
+            // revalidate observed records now, and leave hidden records stale for
+            // their next subscriber, through the same repository refresh owner.
+            if (event.entityIds !== undefined) return;
+            for (const repository of this.sessionSystemRecordRepositories.values()) {
+                if (areServerProfileIdentifiersEquivalent(repository.scope.serverId, event.serverId)) repository.invalidateAll();
+            }
+        }, { includeCatchUpPending: true });
+        if (!isEmbedWindowContext()) subscribeHomeAccountChange(event => {
             if (event.changeKinds && !event.changeKinds.includes('machine')) return;
             const state = storage.getState();
             for (const session of Object.values(state.sessions)) {

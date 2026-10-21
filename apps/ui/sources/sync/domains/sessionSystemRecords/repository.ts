@@ -204,6 +204,14 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         });
         return entry.pending;
     }
+    function invalidate(session: SessionAddress) {
+        if (retired || !isScopeHome(session)) return;
+        for (const entry of sessions.get(session.sessionId)?.queries.values() ?? []) {
+            entry.invalidatedWhileLoading = Boolean(entry.pending);
+            publish(entry, { ...entry.snapshot, freshness: 'stale' });
+            if (entry.listeners.size > 0 && !entry.pending) void refresh(session, entry.query);
+        }
+    }
     return {
         scope: options.scope,
         openSurfaceItem(record: SessionSystemRecordStored, context: SessionStoredContentContext | null) {
@@ -263,13 +271,10 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
                 if (entry.listeners.size === 0) clearRetry(entry);
             };
         },
-        invalidate(session: SessionAddress) {
-            if (retired || !isScopeHome(session)) return;
-            for (const entry of sessions.get(session.sessionId)?.queries.values() ?? []) {
-                entry.invalidatedWhileLoading = Boolean(entry.pending);
-                publish(entry, { ...entry.snapshot, freshness: 'stale' });
-                if (entry.listeners.size > 0 && !entry.pending) void refresh(session, entry.query);
-            }
+        invalidate,
+        /** A content-free Home wake withdraws freshness, not retained bytes or access authority. */
+        invalidateAll() {
+            for (const sessionId of sessions.keys()) invalidate({ serverId: options.scope.serverId, sessionId });
         },
         refreshObserved(options?: Readonly<{ force?: boolean }>) {
             if (retired) return;
