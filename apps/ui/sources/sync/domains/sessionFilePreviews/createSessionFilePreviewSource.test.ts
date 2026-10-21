@@ -208,7 +208,7 @@ describe('createSessionFilePreviewSource', () => {
         const source = await createSessionFilePreviewSource({
             scope: harness.scope, filePath: 'archive.zip', mimeType: 'application/zip', maxBytes: 16,
         });
-        expect(source).toEqual({ ok: false, error: 'Unsupported preview type' });
+        expect(source).toEqual({ ok: false, error: 'Unsupported preview type', errorCode: 'unsupported' });
         expect(harness.rpcRequests).toEqual([]);
     });
 
@@ -216,7 +216,7 @@ describe('createSessionFilePreviewSource', () => {
         vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:bytes');
         const bytes = new Uint8Array([1, 2, 3]);
         expect(await createBytesPreviewSource({ bytes, fileName: 'icon.svg', mimeType: 'image/svg+xml', maxBytes: 2 }))
-            .toEqual({ ok: false, error: 'File exceeds the preview size limit' });
+            .toEqual({ ok: false, error: 'File exceeds the preview size limit', errorCode: 'too_large' });
         expect(await createBytesPreviewSource({ bytes, fileName: 'icon.svg', mimeType: 'image/svg+xml', maxBytes: 3 }))
             .toMatchObject({ ok: true, source: { uri: 'blob:bytes', byteLength: 3, mimeType: 'image/svg+xml' } });
     });

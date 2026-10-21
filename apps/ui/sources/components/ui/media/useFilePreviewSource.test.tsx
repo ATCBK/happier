@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { act } from 'react-test-renderer';
 import type { ComposerContentHandleV1 } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import type { FilesystemDownloadOutput } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 
 import { renderHook } from '@/dev/testkit';
@@ -9,7 +10,9 @@ import { createSessionFileNativeTransferBoundary } from '@/components/sessions/f
 import { createSessionFilesViewFixture, prepareSessionFilesViewTestkit } from '@/components/sessions/files/views/sessionFilesViewTestkit';
 import { transferMachine } from '@/components/sessions/files/sessionFileTransferTestkit';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { useFilePreviewSource } from './useFilePreviewSource';
+import { buildImageCompareModel, projectImageComparePreview } from '@/components/workspaces/scm/review/imageCompare/imageCompareModel';
 
 const files = vi.hoisted(() => new Map<string, { exists: boolean; chunks: Uint8Array[]; closed: number; deletes: number }>());
 vi.mock('react-native', async () => {
@@ -48,9 +51,11 @@ vi.mock('expo-file-system', () => ({
 describe('useFilePreviewSource', () => {
     let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
     let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
+    let downloadFailure: Extract<FilesystemDownloadOutput, { success: false }> | null;
     beforeAll(prepareSessionFilesViewTestkit);
     beforeEach(async () => {
         files.clear();
+        downloadFailure = null;
         transfer = createSessionFileNativeTransferBoundary();
         const serverIdentityId = 'srv_file_preview_source';
         const boundary = await createExternalActionAccountHttpBoundary({
@@ -58,8 +63,9 @@ describe('useFilePreviewSource', () => {
             accountId: 'alice', machineId: 'm1', actionId: 'daemon.filesystem.download', tokenEpoch: 0,
             execute: (input, { target }) => {
                 if (target.kind !== 'machine') throw new Error('Expected a preview Machine');
+                if (downloadFailure) return downloadFailure;
                 return transfer.rpc({ targetId: target.machineId,
-                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: { input } });
+                    method: getActionSpec('daemon.filesystem.download').bindings!.rpcMethod!, payload: input });
             },
         });
         const machine = transferMachine({ id: 'm1', storageMode: 'plain', installationId: boundary.machine.installationId,
@@ -72,6 +78,8 @@ describe('useFilePreviewSource', () => {
             machineCarrierOrigin: transfer.origin, rpc: transfer.rpc, request: async (url, init) => {
                 const parsed = new URL(String(url));
                 if (parsed.pathname === '/v1/machines') return Response.json([row]);
+                if (parsed.pathname === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === row.id ? row : null);
                 if (parsed.pathname === '/v1/machines/m1') return Response.json({ machine: row });
                 if (parsed.pathname.startsWith('/v1/actions/')) {
                     const response = await boundary.handle(parsed, init);
@@ -84,6 +92,50 @@ describe('useFilePreviewSource', () => {
         });
     });
     afterEach(async () => { await fixture.dispose(); });
+
+    it.each([true, false])('retains the size-limit reason when size is known before transfer: %s', async (knownSize) => {
+        const hook = await renderHook(() => useFilePreviewSource({ enabled: true,
+            source: { kind: 'workspace', scope: fixture.scope, filePath: 'too-large.png' },
+            maxBytes: 2, ...(knownSize ? { sizeBytes: 3 } : {}),
+        }));
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'error', errorCode: 'too_large' }));
+            expect(buildImageCompareModel({ changeKind: 'added', before: { status: 'disabled' },
+                after: projectImageComparePreview(hook.getCurrent()) }).after).toEqual({ kind: 'noPreview', reason: 'too_large' });
+        } finally { await hook.unmount(); }
+    });
+
+    it('reports the unsupported owner verdict without reading bytes', async () => {
+        const bytes = new Uint8Array([1]);
+        const hook = await renderHook(() => useFilePreviewSource({ enabled: true,
+            source: { kind: 'bytes', name: 'archive.zip', bytes },
+            maxBytes: 0,
+        }));
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'error', errorCode: 'unsupported' }));
+            expect(transfer.prepares).toEqual([]);
+            expect(files.size).toBe(0);
+        } finally { await hook.unmount(); }
+    });
+
+    it.each([
+        { code: 'not_found', side: 'unreadable' },
+        { code: 'machine_carrier_transport_failed', side: 'loadFailed' },
+        { code: undefined, side: 'loadFailed' },
+    ])('preserves the owner failure $code through the preview and comparison projection', async ({ code, side }) => {
+        // The Machine Action response is a genuine external boundary. Identical messages must not classify the cause.
+        downloadFailure = { success: false, status: 'failed', error: 'File does not exist', ...(code ? { errorCode: code } : {}) };
+        const hook = await renderHook(({ enabled }: { enabled: boolean }) => useFilePreviewSource({ enabled,
+            source: { kind: 'workspace', scope: fixture.scope, filePath: 'failed.png' }, cacheKey: 'failed-revision',
+        }), { initialProps: { enabled: true } });
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'error', errorCode: code ?? null }));
+            expect(buildImageCompareModel({ changeKind: 'added', before: { status: 'disabled' },
+                after: projectImageComparePreview(hook.getCurrent()) }).after.kind).toBe(side);
+            await hook.rerender({ enabled: false });
+            expect(hook.getCurrent()).toEqual({ status: 'disabled', uri: null, error: null });
+        } finally { await hook.unmount(); }
+    });
 
     it('loads a workspace preview without a session', async () => {
         const hook = await renderHook(() => useFilePreviewSource({
@@ -194,8 +246,8 @@ describe('useFilePreviewSource', () => {
         expect(transfer.prepares[0]).toMatchObject({
             targetId: fixture.scope.machineId,
             method: getActionSpec('daemon.filesystem.download').bindings?.rpcMethod,
-            payload: { input: { rootPath: '/repo',
-                path: '/repo/.happier/uploads/messages/m1/file.png', asZip: false } },
+            payload: { rootPath: '/repo',
+                path: '/repo/.happier/uploads/messages/m1/file.png', asZip: false },
         });
         expect(hook.getCurrent().uri?.startsWith('data:')).toBe(false);
         const file = files.get(hook.getCurrent().uri!);

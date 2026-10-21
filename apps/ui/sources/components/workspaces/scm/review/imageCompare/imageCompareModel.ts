@@ -24,7 +24,10 @@ export function projectImageComparePreview(preview: Readonly<{
 export type ImageCompareSide =
     | Readonly<{ kind: 'present'; uri: string; sizeBytes: number | null }>
     | Readonly<{ kind: 'added' | 'deleted' }>
+    /** The revision is gone or its bytes did not verify: reading it again cannot help. */
     | Readonly<{ kind: 'unreadable'; reason: string }>
+    /** The read or its transfer did not finish (an interrupted connection, a busy Machine): it can be tried again. */
+    | Readonly<{ kind: 'loadFailed'; error: string }>
     | Readonly<{ kind: 'noPreview'; reason: 'disabled' | 'loading' | 'empty' | 'too_large' | 'unsupported' }>;
 
 export type ImageCompareModel<StageItem> = Readonly<{
@@ -36,9 +39,9 @@ export type ImageCompareModel<StageItem> = Readonly<{
 function previewSide(preview: ImageComparePreview): ImageCompareSide {
     if (preview.status === 'empty') return { kind: 'noPreview', reason: 'empty' };
     if (preview.status === 'error') {
-        return preview.errorCode === 'too_large' || preview.errorCode === 'unsupported'
-            ? { kind: 'noPreview', reason: preview.errorCode }
-            : { kind: 'unreadable', reason: preview.error };
+        if (preview.errorCode === 'too_large' || preview.errorCode === 'unsupported') return { kind: 'noPreview', reason: preview.errorCode };
+        if (preview.errorCode === 'blob_unavailable' || preview.errorCode === 'not_found') return { kind: 'unreadable', reason: preview.error };
+        return { kind: 'loadFailed', error: preview.error };
     }
     if (preview.status !== 'loaded') return { kind: 'noPreview', reason: preview.status };
     if (preview.sizeBytes === 0 || !preview.uri) return { kind: 'noPreview', reason: 'empty' };

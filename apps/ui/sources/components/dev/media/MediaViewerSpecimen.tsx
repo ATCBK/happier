@@ -9,6 +9,8 @@ import { useMediaStage } from '@/components/ui/media/stage/useMediaStage';
 import type { UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
 import { Text } from '@/components/ui/text/Text';
 import { FileViewerBody } from '@/components/workspaces/files/file/FileViewerBody';
+import { ImageCompare } from '@/components/workspaces/scm/review/imageCompare/ImageCompare';
+import type { ImageCompareSide } from '@/components/workspaces/scm/review/imageCompare/imageCompareModel';
 import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 
 /* eslint-disable @typescript-eslint/no-require-imports -- dev specimen: bundled sample media */
@@ -120,6 +122,13 @@ export function MediaViewerSpecimen() {
     [pdfBytes, refs],
   );
   const textStyle = { color: theme.colors.text.secondary };
+  // RV1 wells when a side's read did not finish (Retry reads it again) beside one that cannot be read.
+  const [afterRead, setAfterRead] = React.useState<ImageCompareSide>({
+    kind: 'loadFailed',
+    error: 'The direct machine connection was interrupted. Retry the transfer.',
+  });
+  const planetDark = uriSource(assetUri(SAMPLES.planetDark));
+  const planetLight = uriSource(assetUri(SAMPLES.planetLight));
   return (
     <View style={styles.root} testID="dev-media-specimen">
       <Text variant="heading" style={{ color: theme.colors.text.primary }}>Media stage</Text>
@@ -185,6 +194,37 @@ export function MediaViewerSpecimen() {
         />
       </View>
 
+      <Text variant="heading" style={{ color: theme.colors.text.primary }}>Image compare · a read that did not finish</Text>
+      <View style={[styles.compare, { borderColor: theme.colors.border.default }]}>
+        <ImageCompare
+          testID="dev-media-compare-failed"
+          filePath="assets/planet.jpg"
+          kind="image"
+          alphaCapable={false}
+          before={{ kind: 'present', uri: assetUri(SAMPLES.planetDark), sizeBytes: null }}
+          after={afterRead}
+          beforePreviewInput={planetDark}
+          afterPreviewInput={planetLight}
+          beforeLabel="HEAD"
+          afterLabel="working tree"
+          onRetry={() => setAfterRead({ kind: 'present', uri: assetUri(SAMPLES.planetLight), sizeBytes: null })}
+        />
+      </View>
+      <View style={[styles.compare, { borderColor: theme.colors.border.default }]}>
+        <ImageCompare
+          testID="dev-media-compare-unreadable"
+          filePath="assets/planet.jpg"
+          kind="image"
+          alphaCapable={false}
+          before={{ kind: 'unreadable', reason: 'The revision bytes do not match their content hash.' }}
+          after={{ kind: 'present', uri: assetUri(SAMPLES.planetLight), sizeBytes: null }}
+          beforePreviewInput={planetDark}
+          afterPreviewInput={planetLight}
+          beforeLabel="turn 4"
+          afterLabel="working tree"
+        />
+      </View>
+
       <Text variant="heading" style={{ color: theme.colors.text.primary }}>PDF</Text>
       <View style={[styles.tall, { borderColor: theme.colors.border.default }]}>
         <FileViewerBody
@@ -235,6 +275,11 @@ const styles = StyleSheet.create((theme) => ({
   },
   page: {
     height: 420,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: theme.space.s12,
+    overflow: 'hidden',
+  },
+  compare: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: theme.space.s12,
     overflow: 'hidden',

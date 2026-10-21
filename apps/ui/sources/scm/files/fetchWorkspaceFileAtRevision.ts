@@ -52,7 +52,8 @@ export async function fetchWorkspaceFileAtRevision(input: Readonly<{
             },
             destination: buffered.destination,
         });
-        if (!downloaded.ok) return { success: false, errorCode: 'blob_unavailable', error: downloaded.error };
+        // An unfinished transfer says nothing about the revision; the caller may read it again.
+        if (!downloaded.ok) throw new Error(downloaded.error);
         bytes = buffered.toBytes();
         buffered.reset();
     }

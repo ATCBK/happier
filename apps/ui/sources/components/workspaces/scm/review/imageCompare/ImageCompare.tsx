@@ -38,6 +38,8 @@ export type ImageCompareProps = Readonly<{
   /** Where each side comes from ("HEAD", "turn 4", "working tree"). */
   beforeLabel?: string;
   afterLabel?: string;
+  /** Reads a side again after its read or transfer did not finish. */
+  onRetry?: (side: 'before' | 'after') => void;
   /** Opens the Media stage gallery `[before, after]` at the pressed side. */
   onOpenStage?: (side: 'before' | 'after') => void;
   testID?: string;
@@ -110,6 +112,21 @@ export function ImageCompare(props: ImageCompareProps) {
 
   const well = (side: 'before' | 'after') => {
     const state = side === 'before' ? props.before : props.after;
+    if (state.kind === 'loadFailed') {
+      // The same failure the image body shows: what failed, the cause behind Details, and Retry.
+      return (
+        <SurfaceStateCard
+          testID={`image-compare-${side}-state`}
+          kind="error"
+          size="details"
+          title={t('files.viewer.loadFailed', { name: props.filePath.split('/').pop() || props.filePath })}
+          diagnosticCode={state.error}
+          {...(props.onRetry
+            ? { action: { label: t('common.retry'), onPress: () => props.onRetry?.(side), testID: `image-compare-${side}-retry` } }
+            : {})}
+        />
+      );
+    }
     const reason = sideReason(state);
     if (reason) {
       return (
@@ -232,7 +249,7 @@ export function ImageCompare(props: ImageCompareProps) {
       {mode === 'sideBySide' || !both ? (
         <View style={[styles.sides, phone ? styles.sidesStacked : null]}>
           {(['before', 'after'] as const).map((side) => (
-            <View key={side} style={styles.side}>
+            <View key={side} style={[styles.side, phone ? null : styles.sideInRow]}>
               {label(side)}
               <View
                 style={[
@@ -444,9 +461,12 @@ const styles = StyleSheet.create((theme) => ({
     flexDirection: 'column',
   },
   side: {
-    flex: 1,
     minWidth: 0,
     gap: theme.space.s6,
+  },
+  // Stacked on a phone, each side keeps its own height; only a row shares the width.
+  sideInRow: {
+    flex: 1,
   },
   wellFrame: {
     borderRadius: theme.borderRadius.md,

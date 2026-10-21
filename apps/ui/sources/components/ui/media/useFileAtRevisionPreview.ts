@@ -17,14 +17,18 @@ export function useFileAtRevisionPreview(input: Readonly<{
     mimeType?: string | null;
     /** Current comparison/status signature for callers sharing a live-before read. */
     signature?: string | null;
+    /** A retry after a failed read: each new value reads the revision again. */
+    attempt?: number;
 }>) {
     const previewBudget = useSetting('filesImagePreviewMaxBytes');
     const maxBytes = Platform.OS === 'web' ? Math.min(previewBudget, resolveWebFileBufferMaxBytes()) : previewBudget;
-    const [settled, setSettled] = React.useState<Readonly<{ key: string; result: WorkspaceFileAtRevisionResult }> | null>(null);
+    // A read that threw (the RPC or its transfer did not finish) has no SCM verdict about the revision.
+    const [settled, setSettled] = React.useState<Readonly<{ key: string;
+        result: WorkspaceFileAtRevisionResult | Readonly<{ success: false; errorCode: null; error: string }> }> | null>(null);
     const blobId = 'blobId' in input.selector ? input.selector.blobId : undefined;
     const area = 'area' in input.selector ? input.selector.area : undefined;
     const { serverId, machineId, rootPath } = input.scope;
-    const requestKey = JSON.stringify([serverId, machineId, rootPath, input.path, blobId, area, maxBytes, input.signature]);
+    const requestKey = JSON.stringify([serverId, machineId, rootPath, input.path, blobId, area, maxBytes, input.signature, input.attempt ?? 0]);
     const read = settled?.key === requestKey ? settled.result : null;
     React.useEffect(() => {
         if (!input.enabled) return;
@@ -34,7 +38,7 @@ export function useFileAtRevisionPreview(input: Readonly<{
         }).then(result => {
             if (!abort.signal.aborted) setSettled({ key: requestKey, result });
         }, error => {
-            if (!abort.signal.aborted) setSettled({ key: requestKey, result: { success: false, errorCode: 'blob_unavailable',
+            if (!abort.signal.aborted) setSettled({ key: requestKey, result: { success: false, errorCode: null,
                 error: error instanceof Error ? error.message : 'The file revision is unavailable.' } });
         });
         return () => abort.abort();
@@ -53,7 +57,8 @@ export function useFileAtRevisionPreview(input: Readonly<{
     const errorCode: ScmOperationErrorCode | null = read && !read.success ? read.errorCode : null;
     if (!input.enabled) return { status: 'disabled' as const, uri: null, error: null, errorCode: null, previewInput };
     if (read && !read.success) return { status: 'error' as const, uri: null,
-        error: read.error ?? read.errorCode, errorCode, previewInput };
+        error: read.error ?? read.errorCode ?? 'blob_unavailable', errorCode, previewInput };
     if (!read) return { status: 'loading' as const, uri: null, error: null, errorCode: null, previewInput };
-    return { ...preview, errorCode, previewInput, sizeBytes: read.sizeBytes, sha256: read.sha256 };
+    return { ...preview, errorCode: preview.status === 'error' ? preview.errorCode : errorCode,
+        previewInput, sizeBytes: read.sizeBytes, sha256: read.sha256 };
 }

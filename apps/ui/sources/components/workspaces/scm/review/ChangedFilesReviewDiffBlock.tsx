@@ -473,6 +473,7 @@ function ReviewBlockImageCompare(props: Readonly<{
             after={compare.after}
             beforePreviewInput={compare.beforePreviewInput}
             afterPreviewInput={compare.afterPreviewInput}
+            onRetry={compare.retry}
             {...(compare.gallery.length > 0 ? { onOpenStage: openStage } : {})}
         />
     );

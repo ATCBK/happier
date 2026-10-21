@@ -3,12 +3,12 @@ import { buildImageCompareModel, projectImageComparePreview } from './imageCompa
 import type { MediaStageItem } from '@/components/ui/media/stage/mediaStageItems';
 
 describe('image comparison evidence', () => {
-    it('keeps preview errors unreadable even when a successful revision read reported zero bytes', () => {
+    it('keeps preview errors failed even when a successful revision read reported zero bytes', () => {
         const model = buildImageCompareModel({ changeKind: 'modified',
             before: projectImageComparePreview({ status: 'error', uri: null, error: 'Preview cache unavailable', sizeBytes: 0 }),
             after: projectImageComparePreview({ status: 'loaded', uri: 'after', error: null, byteLength: 0 }),
         });
-        expect(model.before).toEqual({ kind: 'unreadable', reason: 'Preview cache unavailable' });
+        expect(model.before).toEqual({ kind: 'loadFailed', error: 'Preview cache unavailable' });
         expect(model.after).toEqual({ kind: 'noPreview', reason: 'empty' });
     });
     it.each(['disabled', 'loading'] as const)('does not treat %s preview metadata as loaded empty bytes', (status) => {
@@ -45,5 +45,19 @@ describe('image comparison evidence', () => {
         expect(model.before).toEqual({ kind: 'unreadable', reason: 'missing pinned blob' });
         expect(model.after).toEqual({ kind: 'noPreview', reason: 'too_large' });
         expect(model.gallery).toEqual([]);
+    });
+    it('keeps an interrupted transfer retryable and a missing or unverified revision unreadable', () => {
+        const interrupted = 'The direct machine connection was interrupted. Retry the transfer.';
+        const model = buildImageCompareModel({ changeKind: 'modified',
+            before: projectImageComparePreview({ status: 'error', uri: null, error: 'The revision bytes do not match their content hash.', errorCode: 'blob_unavailable' }),
+            after: projectImageComparePreview({ status: 'error', uri: null, error: interrupted }),
+        });
+        expect(model.before).toEqual({ kind: 'unreadable', reason: 'The revision bytes do not match their content hash.' });
+        expect(model.after).toEqual({ kind: 'loadFailed', error: interrupted });
+        const busy = buildImageCompareModel({ changeKind: 'modified',
+            before: { status: 'error', error: 'Machine did not answer', errorCode: 'COMMAND_TIMEOUT' },
+            after: { status: 'error', error: 'gone', errorCode: 'not_found' } });
+        expect(busy.before).toEqual({ kind: 'loadFailed', error: 'Machine did not answer' });
+        expect(busy.after).toEqual({ kind: 'unreadable', reason: 'gone' });
     });
 });

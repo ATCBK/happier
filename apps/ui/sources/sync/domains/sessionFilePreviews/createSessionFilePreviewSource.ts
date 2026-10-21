@@ -5,6 +5,7 @@ import type { ComposerContentHandleV1, SessionAttachmentHandleV1 } from '@happie
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { NativeCacheFileSink } from '@/sync/runtime/files/nativeCacheFileSink';
 import { resolveWebFileBufferMaxBytes } from '@/sync/runtime/files/webFileBufferBudget';
+import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
 
 const PREVIEW_CACHE_DIRECTORY_NAME = 'happier-session-file-previews';
 export const PREVIEW_TOO_LARGE_ERROR = 'File exceeds the preview size limit';
@@ -27,7 +28,13 @@ export type SessionFilePreviewSource =
 
 export type CreateSessionFilePreviewSourceResult =
     | Readonly<{ ok: true; source: SessionFilePreviewSource }>
-    | Readonly<{ ok: false; error: string }>;
+    | Readonly<{ ok: false; error: string; errorCode?: string }>;
+
+function previewFailure(error: string, errorCode?: string): Extract<CreateSessionFilePreviewSourceResult, { ok: false }> {
+    // This owner emits the size-limit sentinel, including from the destination and transfer admission.
+    const code = errorCode ?? (error === PREVIEW_TOO_LARGE_ERROR ? 'too_large' : undefined);
+    return { ok: false, error, ...(code ? { errorCode: code } : {}) };
+}
 
 type PreviewDestination = Readonly<{
     writeBytes: (bytes: Uint8Array) => Promise<void>;
@@ -44,7 +51,7 @@ type PreviewByteLoader = (input: Readonly<{
     destination: PreviewDestination;
     signal: AbortSignal | null;
     onProgress: PreviewLoadProgressListener | null;
-}>) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; error: string }>>;
+}>) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; error: string; errorCode?: string }>>;
 
 async function createPreviewSource(input: Readonly<{
     filePath: string;
@@ -58,7 +65,7 @@ async function createPreviewSource(input: Readonly<{
     const viewer = resolveFileViewerKind({ path: input.filePath, mimeType: input.mimeType });
     const mimeType = viewer.mimeType;
     if (!viewer.previewable) {
-        return { ok: false, error: 'Unsupported preview type' };
+        return previewFailure('Unsupported preview type', 'unsupported');
     }
 
     const requestedMaxBytes = input.maxBytes === null ? null : Number.isFinite(input.maxBytes) ? Math.max(0, Math.floor(input.maxBytes)) : 0;
@@ -66,7 +73,7 @@ async function createPreviewSource(input: Readonly<{
         ? Math.min(requestedMaxBytes ?? Infinity, resolveWebFileBufferMaxBytes())
         : requestedMaxBytes;
     if (maxBytes !== null && maxBytes <= 0) {
-        return { ok: false, error: PREVIEW_TOO_LARGE_ERROR };
+        return previewFailure(PREVIEW_TOO_LARGE_ERROR);
     }
 
     const expectedSizeBytes =
@@ -74,7 +81,7 @@ async function createPreviewSource(input: Readonly<{
             ? Math.max(0, Math.floor(input.expectedSizeBytes))
             : null;
     if (maxBytes !== null && expectedSizeBytes != null && expectedSizeBytes > maxBytes) {
-        return { ok: false, error: PREVIEW_TOO_LARGE_ERROR };
+        return previewFailure(PREVIEW_TOO_LARGE_ERROR);
     }
 
     let byteLength = 0;
@@ -137,7 +144,7 @@ async function createPreviewSource(input: Readonly<{
         });
         if (!load.ok) {
             await destination.cleanup();
-            return { ok: false, error: load.error };
+            return previewFailure(load.error, load.errorCode);
         }
         if (input.signal?.aborted) {
             await destination.cleanup();
@@ -184,7 +191,9 @@ async function createPreviewSource(input: Readonly<{
         };
     } catch (error) {
         await destination.cleanup();
-        return { ok: false, error: error instanceof Error ? error.message : 'Failed to create file preview' };
+        const code = error && typeof error === 'object' && 'errorCode' in error && typeof error.errorCode === 'string'
+            ? error.errorCode : readRpcErrorCode(error);
+        return previewFailure(error instanceof Error ? error.message : 'Failed to create file preview', code);
     }
 }
 
@@ -218,7 +227,7 @@ export async function createSessionFilePreviewSource(input: Readonly<{
                     ? ({ downloadedBytes, totalBytes }) => onProgress({ receivedBytes: downloadedBytes, totalBytes })
                     : null,
             });
-            return download.ok ? { ok: true } : { ok: false, error: download.error };
+            return download.ok ? { ok: true } : download;
         },
     });
 }
@@ -256,7 +265,7 @@ export async function createSessionAttachmentPreviewSource(input: Readonly<{
                     ? ({ downloadedBytes, totalBytes }) => onProgress({ receivedBytes: downloadedBytes, totalBytes })
                     : null,
             });
-            return download.ok ? { ok: true } : { ok: false, error: download.error };
+            return download.ok ? { ok: true } : download;
         },
     });
 }
@@ -293,7 +302,8 @@ export async function createComposerStagedMediaPreviewSource(input: Readonly<{
                 },
                 { signal },
             );
-            if (!inspection.success) return { ok: false, error: inspection.error };
+            if (!inspection.success) return previewFailure(inspection.error,
+                'errorCode' in inspection && typeof inspection.errorCode === 'string' ? inspection.errorCode : undefined);
             if (inspection.result.offset !== 0 || !inspection.result.eof) {
                 return { ok: false, error: 'Composer media inspection returned an incomplete preview' };
             }

@@ -6,7 +6,7 @@ export type ImagePreviewCacheKey = Readonly<{
 
 export type ImagePreviewCacheValue =
     | Readonly<{ status: 'loaded'; uri: string; cleanup?: (() => void | Promise<void>) | null; byteLength?: number | null; mimeType?: string }>
-    | Readonly<{ status: 'error'; error: string }>;
+    | Readonly<{ status: 'error'; error: string; errorCode?: string }>;
 
 /** A shared fill's bytes so far; every consumer of the key sees the one transfer's progress. */
 export type ImagePreviewCacheProgress = Readonly<{ receivedBytes: number; totalBytes: number }>;

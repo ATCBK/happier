@@ -292,6 +292,7 @@ function FileChangesImageCompare(props: Readonly<{ review: FileChangesReview; sc
             after={compare.after}
             beforePreviewInput={compare.beforePreviewInput}
             afterPreviewInput={compare.afterPreviewInput}
+            onRetry={compare.retry}
             onOpenStage={compare.gallery.length > 0 ? openStage : undefined}
             beforeLabel={review.live ? 'HEAD' : review.scopeKind === 'turn' && turn ? turn : undefined}
                     />

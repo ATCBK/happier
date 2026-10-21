@@ -44,6 +44,27 @@ describe('ImageCompare dimension reporting', () => {
         } finally { await screen.unmount(); }
     });
 
+    it('says an interrupted read failed and retries that side, while an unreadable revision offers no retry', async () => {
+        const onRetry = vi.fn();
+        const interrupted = 'The direct machine connection was interrupted. Retry the transfer.';
+        const preview = { enabled: false, source: { kind: 'uri' as const, uri: '' } };
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+            <ImageCompare filePath="assets/logo.svg" kind="svg" alphaCapable
+                before={{ kind: 'unreadable', reason: 'The revision bytes do not match their content hash.' }}
+                after={{ kind: 'loadFailed', error: interrupted }}
+                beforePreviewInput={preview} afterPreviewInput={preview} onRetry={onRetry} />
+        </InjectedAuthProvider>);
+        try {
+            const text = screen.getTextContent();
+            expect(text).toContain("Couldn't load logo.svg");
+            expect(text).toContain('This image could not be read');
+            expect(screen.findByTestId('image-compare-before-retry')).toBeNull();
+            await act(async () => screen.pressByTestId('image-compare-after-retry'));
+            expect(onRetry).toHaveBeenCalledWith('after');
+            expect(onRetry).toHaveBeenCalledOnce();
+        } finally { await screen.unmount(); }
+    });
+
     it('lifts a loaded well into the stage when a two-touch pinch starts', async () => {
         const onOpenStage = vi.fn();
         const screen = await renderScreen(<InjectedAuthProvider credentials={null}>

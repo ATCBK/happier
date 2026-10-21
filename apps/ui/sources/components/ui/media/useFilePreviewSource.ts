@@ -11,7 +11,6 @@ import {
     createComposerStagedMediaPreviewSource,
     createSessionFilePreviewSource,
     createSessionAttachmentPreviewSource,
-    PREVIEW_TOO_LARGE_ERROR,
     type SessionFilePreviewSource,
 } from '@/sync/domains/sessionFilePreviews/createSessionFilePreviewSource';
 import { ImagePreviewCache, type ImagePreviewCacheProgress, type ImagePreviewCacheValue } from './imagePreviewCache';
@@ -43,7 +42,7 @@ export type FilePreviewSourceState =
     | Readonly<{ status: 'disabled'; uri: null; error: null }>
     | Readonly<{ status: 'loading'; uri: null; error: null; progress?: FilePreviewProgress }>
     | Readonly<{ status: 'loaded'; uri: string; error: null; byteLength?: number; mimeType?: string }>
-    | Readonly<{ status: 'error'; uri: null; error: string }>;
+    | Readonly<{ status: 'error'; uri: null; error: string; errorCode: string | null }>;
 
 const imagePreviewCache = new ImagePreviewCache({
     maxEntries: 32,
@@ -64,7 +63,7 @@ function cleanupPreviewSource(source: SessionFilePreviewSource): () => void | Pr
 }
 
 function previewState(value: ImagePreviewCacheValue): FilePreviewSourceState {
-    if (value.status === 'error') return { status: 'error', uri: null, error: value.error };
+    if (value.status === 'error') return { status: 'error', uri: null, error: value.error, errorCode: value.errorCode ?? null };
     return { status: 'loaded', uri: value.uri, error: null,
         ...(typeof value.byteLength === 'number' ? { byteLength: value.byteLength } : {}),
         ...(value.mimeType ? { mimeType: value.mimeType } : {}) };
@@ -118,7 +117,7 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
     }, [cacheMaxEntries, cacheMaxTotalBytes]);
 
     React.useEffect(() => {
-        if (!enabled || kind === 'uri' || !viewer.previewable || ((kind === 'workspace' || kind === 'session') && !scope)) {
+        if (!enabled || kind === 'uri' || ((kind === 'workspace' || kind === 'session') && !scope)) {
             setResource(null);
             return;
         }
@@ -153,7 +152,8 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
                     : current.kind === 'bytes'
                     ? await createBytesPreviewSource({ bytes: current.bytes, fileName: filePath, mimeType, maxBytes: normalizedMaxBytes, signal })
                     : await createSessionFilePreviewSource({ scope: scope!, filePath, mimeType, maxBytes: normalizedMaxBytes, expectedSizeBytes: sizeBytes, signal, onProgress });
-                if (!result.ok) return { status: 'error', error: result.error === PREVIEW_TOO_LARGE_ERROR ? t('files.imagePreviewTooLarge') : result.error || t('files.fileReadFailed') };
+                if (!result.ok) return { status: 'error', error: result.errorCode === 'too_large' ? t('files.imagePreviewTooLarge') : result.error || t('files.fileReadFailed'),
+                    ...(result.errorCode ? { errorCode: result.errorCode } : {}) };
                 return { status: 'loaded', uri: result.source.uri, byteLength: result.source.byteLength, mimeType: result.source.mimeType, cleanup: cleanupPreviewSource(result.source) };
             } catch (error) {
                 return { status: 'error', error: error instanceof Error ? error.message : t('files.fileReadFailed') };
@@ -161,8 +161,8 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
         };
         if (key) imagePreviewCache.retain(key);
         const stopObserving = key ? imagePreviewCache.observeProgress(key, report) : null;
-        const tooLarge = normalizedMaxBytes !== null && sizeBytes !== null && sizeBytes > normalizedMaxBytes;
-        const pending = tooLarge ? Promise.resolve<ImagePreviewCacheValue>({ status: 'error', error: t('files.imagePreviewTooLarge') }) : key ? imagePreviewCache.load(key, load) : load(controller.signal, report).then(value => {
+        const tooLarge = viewer.previewable && normalizedMaxBytes !== null && sizeBytes !== null && sizeBytes > normalizedMaxBytes;
+        const pending = tooLarge ? Promise.resolve<ImagePreviewCacheValue>({ status: 'error', error: t('files.imagePreviewTooLarge'), errorCode: 'too_large' }) : key ? imagePreviewCache.load(key, load) : load(controller.signal, report).then(value => {
             uncached = value;
             if (!active && value.status === 'loaded') void Promise.resolve(value.cleanup?.()).catch(() => undefined);
             return value;
@@ -179,7 +179,6 @@ export function useFilePreviewSource(input: UseFilePreviewSourceInput): FilePrev
 
     if (!enabled) return { status: 'disabled', uri: null, error: null };
     if (directUri !== null) return { status: 'loaded', uri: directUri, error: null };
-    if (!viewer.previewable) return { status: 'disabled', uri: null, error: null };
     if (resource?.identity === identity && resource.bytes === bytes) return resource.state;
     if (cacheOnly) return { status: 'disabled', uri: null, error: null };
     return progress?.identity === identity
