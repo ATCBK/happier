@@ -291,17 +291,24 @@ describe('ApiMachineClient connect ordering', () => {
           peerMediation: { loopback: { flows: { machine_rpc: { active: true } } } },
         });
       }
+      const realNow = Date.now.bind(Date);
+      const laterClock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 60_000);
       firstSocket.disconnect();
       await vi.waitFor(() => expect(secondSocket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTER,
         { method: 'machine-1:neutral.reconnect' }));
       expect(callOrder).not.toContain('state:machine-socket-2');
       acknowledgeRegistrations(secondSocket);
-      await vi.waitFor(() => expect(callOrder).toContain('state:machine-socket-2'));
+      // A reconnect of the same daemon process is not a daemon restart: its running state is already
+      // current, so nothing is republished. A fresh startedAt would make every reader treat it as a
+      // replaced daemon and re-read its contribution projection.
+      await vi.waitFor(() => expect(Reflect.get(client, 'machineControlRunningGeneration')).toBe(Reflect.get(client, 'activeTransportGeneration')));
+      expect(callOrder).not.toContain('state:machine-socket-2');
+      laterClock.mockRestore();
 
       for (const id of ['machine-socket-1', 'machine-socket-2']) {
         expect(callOrder.indexOf(`attach:${id}`)).toBeLessThan(callOrder.indexOf(`register:${id}`));
-        expect(callOrder.indexOf(`register:${id}`)).toBeLessThan(callOrder.indexOf(`state:${id}`));
       }
+      expect(callOrder.indexOf('register:machine-socket-1')).toBeLessThan(callOrder.indexOf('state:machine-socket-1'));
       expect(firstSocket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTER, {
         method: 'machine-1:neutral.reconnect',
       });

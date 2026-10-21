@@ -1033,7 +1033,8 @@ export class ApiMachineClient {
                 pid: process.pid,
                 contributionRegistryProjectionRevision: state?.contributionRegistryProjectionRevision ?? 0,
                 httpPort: this.lifecycleDependencies.controlPort ?? state?.httpPort,
-                startedAt: Date.now(),
+                // A socket reconnect of this process is not a restart; readers treat a new startedAt as a replaced daemon.
+                startedAt: state?.pid === process.pid && typeof state.startedAt === 'number' ? state.startedAt : Date.now(),
             }));
             if (
                 this.socket === socket
