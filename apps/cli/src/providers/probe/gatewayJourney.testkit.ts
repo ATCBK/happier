@@ -412,7 +412,9 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
     finally { brokerRelease(); }
     const refused = await pendingRefusal;
     expect(refused.status).toBe(403);
-    expect(await refused.json()).toMatchObject({ error: { code: 'resource_forbidden' } });
+    // Revocation now refuses the application request's initial source opening,
+    // before it has a retained projection to forward through.
+    expect(await refused.json()).toMatchObject({ error: { code: 'resource_unavailable' } });
     expect(upstream.effects).toHaveLength(before);
     beforeBrokerAdmission = async () => {};
     await input.setEnabled(true);

@@ -586,7 +586,15 @@ Gateway or copy the hub's runtime catalog into its own cache.
 
 Session startup uses the authenticated native broker carrier rather than the
 probe's Machine RPC path. Opening its peer-local listener does not prove that
-the subsequent stream reached the hub application. In development source,
+the subsequent stream reached the hub application. In 0.3 development, signed
+Account-connection stream admission binds the Home, Account and exact peer/target
+identities. Private catalog/purpose reads and shared Gateway acquisition run in
+the subsequent HTTP application request, outside native's stream-control deadline,
+matching Team source acquisition. The hub revalidates the source before returning
+endpoint metadata or forwarding inference; a source refusal returns typed HTTP
+failure. Closing the stream cancels acquisition and releases its joined access;
+explicit retirement still ends only the exact signed consumer claim.
+In development source,
 `providerBrokerEndpointDiscovery.ts` owns endpoint acquisition and failure
 classification for both Account connections and Team credentials. Its file-only
 `[ProviderBroker] Endpoint discovery refused` record retains a closed

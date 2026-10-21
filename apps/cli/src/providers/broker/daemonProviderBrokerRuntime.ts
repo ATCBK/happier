@@ -840,29 +840,48 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
           return await application.createStreamTarget({
             kind: 'account_connection', authority, releaseOnly: true,
             authenticatedRemoteEndpointId: request.authenticatedRemoteEndpointId,
-            access: { endpointUrl: () => null, request: async () => { throw new Error('expired broker source unavailable'); } },
-            revalidate: async () => false,
+            acquireSource: async () => null,
             streamLifetime: { close: async () => {}, retire: async () => await owner.retire({ authority }) },
           }, request.signal);
         }
-        // The canonical target owner rechecks Home admission and opens its own
-        // current private catalog before this endpoint can be published.
-        const opened = await owner.open({ authority, signal: request.signal });
-        if (!opened) return null;
+        // Native's control deadline covers signed carrier admission. Private
+        // Home/catalog reads and gateway startup belong to the application
+        // request, as for Team sources. No endpoint or inference is exposed
+        // until the same canonical source owner has admitted and revalidated it.
+        const lifetime = new AbortController();
+        let opening: Promise<ProviderBrokerAccountConnectionAccess | null> | undefined;
+        let closed = false;
+        let closing: Promise<void> | undefined;
+        const close = (): Promise<void> => {
+          closed = true;
+          lifetime.abort();
+          closing ??= (async () => {
+            const opened = await opening?.catch(() => null);
+            await opened?.cleanup();
+          })().catch(error => { closing = undefined; throw error; });
+          return closing;
+        };
         try {
-          if (!await opened.revalidate(request.signal)) {
-            await opened.cleanup();
-            return null;
-          }
           request.signal.throwIfAborted();
           return await application.createStreamTarget({
             kind: 'account_connection', authority,
             authenticatedRemoteEndpointId: request.authenticatedRemoteEndpointId,
-            access: opened.access, revalidate: opened.revalidate,
-            streamLifetime: { close: opened.cleanup, retire: opened.retire },
+            async acquireSource(signal) {
+              signal?.throwIfAborted();
+              if (closed) return null;
+              opening ??= owner.open({ authority, signal: lifetime.signal });
+              const opened = await opening;
+              if (closed || !opened || !await opened.revalidate(signal ?? lifetime.signal)) return null;
+              signal?.throwIfAborted();
+              return closed ? null : opened.access;
+            },
+            streamLifetime: {
+              close,
+              retire: async () => { await close(); await owner.retire({ authority }); },
+            },
           }, request.signal);
         } catch (error) {
-          await opened.cleanup().catch(() => undefined);
+          await close().catch(() => undefined);
           throw error;
         }
       }

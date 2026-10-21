@@ -161,8 +161,7 @@ export type ProviderBrokerAccountAuthenticatedStreamContext = Readonly<{
     authority: SignedProviderBrokerRouteGrantV2;
     authenticatedRemoteEndpointId: string;
     releaseOnly?: boolean;
-    access: ManagedProviderEndpointHttpAccess;
-    revalidate(signal?: AbortSignal): Promise<boolean>;
+    acquireSource(signal?: AbortSignal): Promise<ManagedProviderEndpointHttpAccess | null>;
     streamLifetime: Pick<ProviderBrokerApplicationStreamLifetime, 'close' | 'retire'>;
 }>;
 
@@ -382,14 +381,15 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
             }
             if (context.releaseOnly) return { ok: false, reasonCode: 'grant_expired' };
             try {
-                if (!await context.revalidate(request.signal)) return { ok: false, reasonCode: 'resource_unavailable' };
+                const access = await context.acquireSource(request.signal);
+                if (!access) return { ok: false, reasonCode: 'resource_unavailable' };
                 request.signal?.throwIfAborted();
                 if (request.method === 'GET' && request.pathAndQuery === PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH) {
                     const response = projectProviderBrokerEndpointMetadata(
-                        context.access.endpointUrl(context.authority.payload.application.endpointTemplateId));
+                        access.endpointUrl(context.authority.payload.application.endpointTemplateId));
                     return response ? { ok: true, response } : { ok: false, reasonCode: 'resource_unavailable' };
                 }
-                return { ok: true, response: await requestProviderAccess(context.access, request) };
+                return { ok: true, response: await requestProviderAccess(access, request) };
             } catch {
                 return { ok: false, reasonCode: 'broker_unavailable' };
             }

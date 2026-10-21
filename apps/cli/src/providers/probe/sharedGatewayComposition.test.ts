@@ -5,6 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { ProviderConnectionIdSchema, ProviderSettingsV1Schema, splitProviderSettingsV1 } from '@happier-dev/protocol';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { logger } from '@/ui/logger';
+import { MACHINE_CONTROL_TIMEOUT_MS } from '@happier-dev/iroh-native';
 
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/bootstrapMachineSyncRuntime';
@@ -48,12 +49,25 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
     const entered = new Promise<void>(resolve => { enterTarget = resolve; });
     const released = new Promise<void>(resolve => { releaseTarget = resolve; });
     let targetSignal: AbortSignal | undefined;
+    let carrierAdmissionPending = false;
+    let sourceReadDuringCarrierAdmission = false;
+    let delayNextPeerSourceRead = false;
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'),
       happyHomeDir: homeDir,
       controller: pluginReloadController, physicalGateway: true, probeCatalog: true,
       signedOutAgentCli: true,
       // Only the Home target transport stalls; purpose admission remains real.
       resolveAccountTarget: async (target, signal) => {
+        sourceReadDuringCarrierAdmission ||= carrierAdmissionPending;
+        if (delayNextPeerSourceRead) {
+          delayNextPeerSourceRead = false;
+          // The real native control clock must expire while a valid private
+          // Home read is still pending, without retiring the admitted stream.
+          expect(MACHINE_CONTROL_TIMEOUT_MS).toBeGreaterThan(0);
+          const startedAt = performance.now();
+          await new Promise(resolve => setTimeout(resolve, MACHINE_CONTROL_TIMEOUT_MS + 1));
+          expect(performance.now() - startedAt).toBeGreaterThanOrEqual(MACHINE_CONTROL_TIMEOUT_MS);
+        }
         if (pauseTarget) { targetSignal = signal; enterTarget(); await released; }
         signal.throwIfAborted();
         return target.kind === 'account' ? { account: target.account, displayName: 'Upstream' } : null;
@@ -241,8 +255,11 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   trustRoots, endpointExpiresAt: Date.now() + DIRECT_ROUTE_GRANT_TTL_MS.directTcpTunnel,
                   irohMachineAdmission: { localEndpointId: hub.endpoint.endpointId, role: 'acceptor', allowedFlows: [],
                     resolveApplicationTarget: async () => null,
-                    resolveProviderBrokerApplicationTarget: async request => forwarding
-                      ? await broker.resolveProviderBrokerApplicationTarget(request) : null },
+                    resolveProviderBrokerApplicationTarget: async request => {
+                      carrierAdmissionPending = true;
+                      try { return forwarding ? await broker.resolveProviderBrokerApplicationTarget(request) : null; }
+                      finally { carrierAdmissionPending = false; }
+                    } },
                 });
                 consumerScope.register(admission.stop);
                 await hub.startAttemptAcceptor({ admissionPort: Number(new URL(admission.url).port) });
@@ -295,8 +312,12 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
                   forwarding = true;
                   refreshAllowed = true;
                 }
+                delayNextPeerSourceRead = true;
                 const remote = await openPeer();
                 consumerScope.register(remote.cleanup);
+                // Real private Home reads and gateway acquisition belong to
+                // HTTP endpoint discovery, beyond native's control deadline.
+                expect(sourceReadDuringCarrierAdmission).toBe(false);
                 const remoteBinding = await remote.readHttpBinding();
                 expect(new URL(remoteBinding.endpointUrl).port).not.toBe(new URL(consumer.endpointUrl).port);
                 const peerApplication = await startManagedProviderConsumerApplication({ signal, endpointUrl: remoteBinding.endpointUrl,

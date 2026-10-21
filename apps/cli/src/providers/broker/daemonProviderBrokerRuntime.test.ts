@@ -16,7 +16,7 @@ import {
 } from '@happier-dev/protocol';
 import { createPeerMediationLoopbackApp } from '@/daemon/peer/mediation/loopback/server';
 import { createProviderBrokerRouteGrantSigningInputV2, type SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
-import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import { AccountSettingsSchema, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH,
   PROVIDER_BROKER_MODEL_ID_HEADER, PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from './providerBrokerPrivateProtocol';
 import { createBrokerProviderRegistry } from './providerBroker.testkit';
@@ -1075,6 +1075,7 @@ async function rawRequestThroughApplicationTarget(input: Readonly<{
   path: string;
   body?: string;
   headers?: Readonly<Record<string, string>>;
+  signal?: AbortSignal;
 }>): Promise<string> {
   const request = [
     `${input.method} ${input.path} HTTP/1.1`,
@@ -1089,6 +1090,9 @@ async function rawRequestThroughApplicationTarget(input: Readonly<{
   ].join('\r\n');
   return await new Promise<string>((resolve, reject) => {
     const socket = connect({ host: '127.0.0.1', port: input.port });
+    const abort = () => socket.destroy();
+    input.signal?.addEventListener('abort', abort, { once: true });
+    if (input.signal?.aborted) abort();
     const chunks: Buffer[] = [];
     socket.once('connect', () => {
       socket.write(input.localCapability, 'ascii');
@@ -1096,7 +1100,10 @@ async function rawRequestThroughApplicationTarget(input: Readonly<{
     });
     socket.on('data', (chunk: Buffer) => chunks.push(chunk));
     socket.once('error', reject);
-    socket.once('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    socket.once('close', () => {
+      input.signal?.removeEventListener('abort', abort);
+      resolve(Buffer.concat(chunks).toString('utf8'));
+    });
   });
 }
 
@@ -1231,6 +1238,78 @@ function startBrokerAdmission(
 }
 
 describe('Provider-broker release after grant expiry (machine/1 admission + broker runtime)', () => {
+  it.each(['unavailable', 'cancelled'] as const)('admits the personal carrier before private source acquisition (%s Home read)', async outcome => {
+    const payload: SignedProviderBrokerRouteGrantV2['payload'] = {
+      v: 2, grantId: 'personal-request', aud: 'happier-provider-broker-route-v2', issuedAt: 100, expiresAt: 200,
+      homeId: 'home-1', accountId: 'custodian-account', initiatorTokenEpoch: 0,
+      source: { kind: 'account_connection', connectionId: ProviderConnectionIdSchema.parse('personal-gateway'),
+        expectedConnectionSecurityFingerprint: 'connection-security:v1:test',
+        expectedManagedRuntimeBindingFingerprint: 'managed-runtime-binding:v1:test' },
+      initiator: { ...authority.payload.initiator, accountId: 'custodian-account' },
+      target: authority.payload.target, consumer: authority.payload.consumer, application: authority.payload.application,
+    };
+    const signed: SignedProviderBrokerRouteGrantV2 = { payload, signature: { alg: 'Ed25519', keyId: 'home',
+      valueBase64Url: Buffer.from(tweetnacl.sign.detached(Buffer.from(createProviderBrokerRouteGrantSigningInputV2(payload)), homeKey.secretKey)).toString('base64url') } };
+    let catalogReads = 0;
+    let homeReadStarted!: (signal: AbortSignal) => void;
+    const homeRead = new Promise<AbortSignal>(resolve => { homeReadStarted = resolve; });
+    const open = createAccountConnectionBrokerSourceOpen({
+      homeId: 'home-1', accountId: 'custodian-account', machineId: 'broker-machine',
+      expectedAccountSettingsScopeKey: 'unavailable-source',
+      custody: createManagedProviderExplicitStartCustody({ machineId: 'broker-machine', happyHomeDir: '/unreached-source' }),
+      withRegistry: async read => await read(createBrokerProviderRegistry()),
+      // Private Account storage and Home HTTP are system boundaries. An
+      // unavailable catalog must refuse HTTP metadata without closing QUIC.
+      getAccountSettingsSnapshot: () => {
+        catalogReads++;
+        return outcome === 'unavailable' ? null : { source: 'cache', scopeKey: 'unavailable-source',
+          settings: AccountSettingsSchema.parse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [] };
+      },
+      resolveBindingIntent: async () => { throw new Error('unavailable source resolved credentials'); },
+      projectModels: async () => { throw new Error('unavailable source projected models'); },
+      admitConsumer: async (_authority, signal) => {
+        if (outcome === 'unavailable') return true;
+        if (!signal) throw new Error('Home read lacks its stream lifetime');
+        homeReadStarted(signal);
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          signal.throwIfAborted();
+        });
+        return true;
+      },
+    });
+    const runtime = await startDaemonProviderBrokerRuntime({ machineId: 'broker-machine', resolveTrustRoots: () => homeTrustRoots,
+      nowMs: () => 150, createRequestId: () => 'request-1', resolveRequestPolicy: async () => null,
+      admitRequest: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
+      authorizeModelCatalog: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
+      sourceOwner: createTeamCredentialBrokerSourceOwner({ machineId: 'broker-machine', custody: { retire: async () => false },
+        selectConnectedServicesSourceMember: async () => null, openConnectedServicesSource: async () => null, openProviderConnectionSource: async () => null }),
+      accountConnection: { homeId: 'home-1', accountId: 'custodian-account', open, retire: async () => {} },
+    });
+    closeTasks.push(runtime.close);
+    const admit = startBrokerAdmission(runtime, 150, { v: 2, kind: 'provider_broker', authority: signed });
+    expect((await admit('c'.repeat(64))).statusCode).toBe(403);
+    expect(catalogReads).toBe(0);
+    const stream = await admit();
+    expect(stream.statusCode).toBe(204);
+    expect(catalogReads).toBe(0);
+    const caller = new AbortController();
+    const pending = rawRequestThroughApplicationTarget({ ...stream, method: 'GET', path: PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, signal: caller.signal });
+    if (outcome === 'cancelled') {
+      const homeSignal = await homeRead;
+      expect(homeSignal.aborted).toBe(false);
+      caller.abort();
+      await vi.waitFor(() => expect(homeSignal.aborted).toBe(true));
+      expect(await pending).toBe('');
+    } else {
+      const metadata = await pending;
+      expect(metadata).toContain('HTTP/1.1 403');
+      expect(metadata).toContain('resource_unavailable');
+      expect(metadata).not.toContain(PROVIDER_BROKER_ENDPOINT_PATH_HEADER);
+    }
+    expect(catalogReads).toBe(1);
+  });
+
   it.each([{ label: 'expired', nowMs: 60_000 }, { label: 'current release-only', nowMs: 150 }])('admits $label personal authority only to release its own connection consumer', async ({ nowMs }) => {
     const payload: SignedProviderBrokerRouteGrantV2['payload'] = {
       v: 2, grantId: 'personal-release', aud: 'happier-provider-broker-route-v2', issuedAt: 100, expiresAt: 200,

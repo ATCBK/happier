@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { request as requestHttp } from 'node:http';
+import { connect } from 'node:net';
 import tweetnacl from 'tweetnacl';
 import {
   IROH_MACHINE_ADMISSION_PATH,
   IROH_MACHINE_REMOTE_ENDPOINT_HEADER,
+  IROH_MACHINE_APPLICATION_PORT_HEADER,
+  IROH_MACHINE_APPLICATION_CAPABILITY_HEADER,
 } from '@happier-dev/iroh-native/node';
 import {
   createProviderBrokerRouteGrantSigningInputV1,
@@ -20,6 +23,7 @@ import { createAccountConnectionBrokerSourceOpen } from '@/providers/broker/acco
 import { createTeamCredentialBrokerSourceOwner } from '@/providers/broker/teamCredentialBrokerSourceOwner';
 import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import { createBrokerProviderRegistry } from '@/providers/broker/providerBroker.testkit';
+import { PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH, PROVIDER_BROKER_ENDPOINT_PATH_HEADER } from '@/providers/broker/providerBrokerPrivateProtocol';
 
 const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(11));
 const sourceEndpoint = 'a'.repeat(64);
@@ -73,7 +77,7 @@ function createApp(
 
 describe('provider-broker machine/1 admission', () => {
   it.each(['target_unavailable', 'target_failed', 'request_aborted', 'grant_invalid', 'binding_invalid'] as const)(
-    'keeps a private bounded %s refusal while returning the same empty 403', async reason => {
+    'keeps %s at its carrier or private-source boundary without disclosing private errors', async reason => {
       const warning = vi.spyOn(logger, 'warnLocalFile');
       const custody = createManagedProviderExplicitStartCustody({ machineId: 'machine-b', happyHomeDir: '/unreached-broker-source' });
       const open = createAccountConnectionBrokerSourceOpen({ homeId: 'home', accountId: 'account-b', machineId: 'machine-b',
@@ -118,10 +122,28 @@ describe('provider-broker machine/1 admission', () => {
         const response = await app.inject({ method: 'POST', url: IROH_MACHINE_ADMISSION_PATH,
           headers: { [IROH_MACHINE_REMOTE_ENDPOINT_HEADER]: reason === 'binding_invalid' ? 'c'.repeat(64) : sourceEndpoint },
           payload: { v: 2, kind: 'provider_broker', authority } });
-        expect(response.statusCode).toBe(403);
-        expect(response.body).toBe('');
         const records = warning.mock.calls.filter(([label]) => label === '[ProviderBroker] Machine stream admission refused');
-        expect(records).toEqual([['[ProviderBroker] Machine stream admission refused', { reason }]]);
+        if (reason === 'grant_invalid' || reason === 'binding_invalid') {
+          expect(response.statusCode).toBe(403);
+          expect(response.body).toBe('');
+          expect(records).toEqual([['[ProviderBroker] Machine stream admission refused', { reason }]]);
+        } else {
+          expect(response.statusCode).toBe(204);
+          expect(records).toEqual([]);
+          const capability = String(response.headers[IROH_MACHINE_APPLICATION_CAPABILITY_HEADER.toLowerCase()]);
+          const result = await new Promise<string>((resolve, reject) => {
+            const socket = connect({ host: '127.0.0.1', port: Number(response.headers[IROH_MACHINE_APPLICATION_PORT_HEADER.toLowerCase()]) });
+            const chunks: Buffer[] = [];
+            socket.once('connect', () => socket.write(`${capability}GET ${PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`));
+            socket.on('data', chunk => chunks.push(Buffer.from(chunk)));
+            socket.on('error', reject);
+            socket.on('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+          });
+          expect(result).toContain('HTTP/1.1 403');
+          expect(result).not.toContain(PROVIDER_BROKER_ENDPOINT_PATH_HEADER);
+          expect(JSON.parse(result.slice(result.indexOf('\r\n\r\n') + 4))).toMatchObject({ error: { code: reason === 'target_unavailable' ? 'resource_unavailable' : 'broker_unavailable' } });
+          expect(result).not.toContain('do-not-log');
+        }
       } finally { await app.close(); await runtime.close(); warning.mockRestore(); }
     },
   );
