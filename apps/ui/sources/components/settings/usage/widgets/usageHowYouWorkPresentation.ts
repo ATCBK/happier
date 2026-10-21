@@ -3,6 +3,8 @@ import { isUsageNightHour } from '@happier-dev/protocol/usage/usageWorkIntervals
 import { withUsageAccentAlpha } from '../usageAccent';
 import type { UsageHowYouWork } from '@happier-dev/protocol/usage/resolveUsageHowYouWork';
 import { getPreferredLanguage, t } from '@/text';
+import { formatUsageDuration as formatSharedUsageDuration, formatUsageDurationCompact as formatSharedUsageDurationCompact,
+  type UsageDurationLabels } from '@happier-dev/protocol/usage/usageFormatting';
 
 /**
  * Presentation-only shaping of the How-you-work projection (Protocol `resolveUsageHowYouWork` owns
@@ -19,19 +21,14 @@ export function formatUsageClockMinutes(minutes: number): string {
 }
 
 /** "3 h 12 min", "18 min", "40 s": a measured duration. A measured nothing reads "0 min", never blank. */
+const durationLabels: UsageDurationLabels = {
+  seconds: seconds => t('usage.board.howYouWork.durationSeconds', { seconds }),
+  minutes: minutes => t('usage.board.howYouWork.durationMinutes', { minutes }),
+  hours: (hours, minutes) => t('usage.board.howYouWork.durationHours', { hours, minutes }),
+};
+
 export function formatUsageDuration(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  if (seconds < 60)
-    return seconds === 0
-      ? t('usage.board.howYouWork.durationMinutes', { minutes: 0 })
-      : t('usage.board.howYouWork.durationSeconds', { seconds });
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60)
-    return t('usage.board.howYouWork.durationMinutes', { minutes });
-  return t('usage.board.howYouWork.durationHours', {
-    hours: Math.floor(minutes / 60),
-    minutes: minutes % 60,
-  });
+  return formatSharedUsageDuration(ms, durationLabels);
 }
 
 const HOUR_MS = 60 * MINUTE_MS;
@@ -53,13 +50,7 @@ export function formatUsageLookbackPeriod(ms: number): string {
  * the platform's own narrow unit names for the reader's language. A measured nothing reads "0m", never blank.
  */
 export function formatUsageDurationCompact(ms: number): string {
-  const seconds = Math.max(0, Math.round(ms / 1000));
-  const unit = (value: number, name: 'hour' | 'minute' | 'second') =>
-    new Intl.NumberFormat(getPreferredLanguage(), { style: 'unit', unit: name, unitDisplay: 'narrow' }).format(value);
-  if (seconds > 0 && seconds < 60) return unit(seconds, 'second');
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return unit(minutes, 'minute');
-  return minutes % 60 === 0 ? unit(minutes / 60, 'hour') : `${unit(Math.floor(minutes / 60), 'hour')} ${unit(minutes % 60, 'minute')}`;
+  return formatSharedUsageDurationCompact(ms, getPreferredLanguage());
 }
 
 /** Work ids are the canonical `[sessionId, turnId]` key; anything else names no Session. */

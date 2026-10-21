@@ -925,6 +925,11 @@
       "types": "./dist/serverConfig/homeSettingsOwnership.d.ts",
       "default": "./dist/serverConfig/homeSettingsOwnership.js"
     },
+    "./usage/usageFormatting": {
+      "happier-source": "./src/usage/usageFormatting.ts",
+      "types": "./dist/usage/usageFormatting.d.ts",
+      "default": "./dist/usage/usageFormatting.js"
+    },
     "./usage/usageSourceSummary": {
       "happier-source": "./src/usage/usageSourceSummary.ts",
       "types": "./dist/usage/usageSourceSummary.d.ts",

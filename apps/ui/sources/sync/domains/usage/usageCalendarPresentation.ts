@@ -4,6 +4,8 @@ import { resolveUsageQueryPeriod, type UsageQuery, type UsageRelativePeriod } fr
 import { getUsagePeriodDefinition } from '@/sync/api/account/usagePeriods';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { getPreferredLanguage, t } from '@/text';
+import { formatUsageCalendarDate as formatSharedUsageCalendarDate, formatUsageCalendarRange }
+    from '@happier-dev/protocol/usage/usageFormatting';
 
 /** Shared presentation semantics from the admitted query: fixed offsets and exclusive ends. */
 export type UsageCalendarRange = Readonly<{
@@ -57,7 +59,7 @@ export function usageMissingBucketValue(startMs: number, range: UsageCalendarRan
 export function formatUsageCalendarDate(timestampMs: number, timeZoneOffsetMinutes: number,
     options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' },
     locales?: Intl.LocalesArgument): string {
-    return formatWithCachedDateTimeFormatter(timestampMs + timeZoneOffsetMinutes * 60_000, locales ?? getPreferredLanguage(), { ...options, timeZone: 'UTC' });
+    return formatSharedUsageCalendarDate(timestampMs, timeZoneOffsetMinutes, options, locales ?? getPreferredLanguage(), formatWithCachedDateTimeFormatter);
 }
 
 /** Observation clocks use the viewer's local calendar, not the queried accounting bucket offset. */
@@ -76,8 +78,6 @@ export function formatUsageCalendarPeriod(period: Readonly<{ relative?: UsageRel
     const offset = period.timeZoneOffsetMinutes ?? 0;
     if (period.startMs === undefined) return period.endMs === undefined ? t('usage.allTime')
         : `${t('usage.allTime')} – ${formatUsageCalendarDate(period.endMs - 1, offset, undefined, locales)}`;
-    const start = formatUsageCalendarDate(period.startMs, offset, undefined, locales);
-    if (period.endMs === undefined) return `${start} – ${t('usage.today')}`;
-    const end = formatUsageCalendarDate(Math.max(period.startMs, period.endMs - 1), offset, undefined, locales);
-    return start === end ? start : `${start} – ${end}`;
+    if (period.endMs === undefined) return `${formatUsageCalendarDate(period.startMs, offset, undefined, locales)} – ${t('usage.today')}`;
+    return formatUsageCalendarRange(period.startMs, period.endMs, offset, locales ?? getPreferredLanguage(), formatWithCachedDateTimeFormatter);
 }
