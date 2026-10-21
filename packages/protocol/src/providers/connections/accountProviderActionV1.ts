@@ -126,7 +126,7 @@ export function describeAccountProviderConnectionsV1(catalog: ProviderConnection
   return { status: 'success', connections: settings.connections.filter(connection => !connectionId || connection.id === connectionId)
     .map(connection => describeAccountProviderConnectionV1(settings, connection, definitions)),
     available: projectAvailableProviderContributionsV1({ connections: settings.connections, definitions }),
-    discoveryCandidates: [], localInstallations: [], diagnosticsTruncated: false, diagnostics: [], availableTruncated: false };
+    discoveryCandidates: [], discoveryCandidatesTruncated: false, localInstallations: [], diagnosticsTruncated: false, diagnostics: [], availableTruncated: false };
 }
 
 /** Account semantics, shared by UI, CLI and daemon compatibility dispatch. Transport owns CAS, mode admission and SavedSecret atomics. */

@@ -55,6 +55,17 @@ function fixture(input?: Readonly<{ malformedSource?: boolean; cleanupFails?: bo
 }
 
 describe('captured Remote host first-read projection', () => {
+  it('keeps retained source intact when asynchronous publication admission refuses the opened catalog', async () => {
+    const state = fixture();
+    // The caller's authority transport can refuse after private opening. Handle
+    // this boundary rejection independently so ignored promises do not supply RED.
+    const refused = Promise.reject(new Error('authority-refused'));
+    void refused.catch(() => {});
+    const result = await projectionLoader()({ ...state.ports, onReady: () => refused });
+    expect(result).toMatchObject({ status: 'unavailable' });
+    expect(state.readRaw()).toHaveProperty('remoteHostsV1');
+  });
+
   it('moves a complete retained source through one exact-source CAS and composite SavedSecret batch', async () => {
     const state = fixture();
     const published: Parameters<NonNullable<RemoteHostCatalogProjectionPortsV1['onReady']>>[0][] = [];
