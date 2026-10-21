@@ -159,6 +159,8 @@ describe('email core with an external contributed raw transport', () => {
     // Store with LF; reconstruct its original RFC5322 CRLF bytes at the boundary.
     const raw = Buffer.from((await readFile(new URL('./email/fixtures/seed1-forwarded-attachments.eml', import.meta.url), 'utf8')).replace(/\r?\n/g, '\r\n'));
     const native = await simpleParser(raw, { skipImageLinks: true, skipHtmlToText: true, skipTextToHtml: true });
+    const messageId = native.messageId;
+    if (!messageId) throw new Error('Retained fixture has no Message-ID');
     // Exact pre-change derivation: dd247000f8^:channel-email/src/email/parse.ts.
     // mailparser flattens this 8bit inline message/rfc822; only its PDF is
     // returned as a file, under the native third MIME part.
@@ -176,11 +178,33 @@ describe('email core with an external contributed raw transport', () => {
           trustStrategy: { kind: 'authenticationResults', authservId: 'mx.seed1.test.local' } },
         checkpoint: null, limit: 10, waitMs: 0,
       }));
-      expect(polled).toMatchObject({ kind: 'batch', observations: [{ observation: { kind: 'fullText', observation: {
-        message: { id: native.messageId, attachments: retained.map(file => ({
-          ...file, attachmentId: getConversationAttachmentIdRepresentationsV1(file.attachmentId)[0],
-        })) },
-      } } }] });
+      if (polled.kind !== 'batch' || polled.observations[0]?.observation.kind !== 'fullText') throw new Error('Expected retained email');
+      const message = polled.observations[0].observation.observation.message;
+      expect(message.id).toBe(native.messageId);
+      // Keep FIX-LIVE42's historical PDF evidence check when a missing EML is restored.
+      expect(message.attachments).toEqual(expect.arrayContaining(retained.map(file => ({
+        ...file, attachmentId: getConversationAttachmentIdRepresentationsV1(file.attachmentId)[0],
+      }))));
+      const eml = Buffer.from(['From: client@example.invalid', 'To: sales1@test.local',
+        'Subject: QA LIVE13 lead', 'Message-ID: <qa-live13-inner@example.invalid>',
+        'Content-Type: text/plain; charset=utf-8', '',
+        'Atelier Delta souhaite six chaises ergonomiques.', ''].join('\r\n'));
+      expect(message.attachments).toEqual([
+        { attachmentId: getConversationAttachmentIdRepresentationsV1('mime:2')[0],
+          name: 'qa-live13-lead.eml', mediaType: 'message/rfc822', byteLength: eml.byteLength },
+        ...retained.map(file => ({ ...file, attachmentId: getConversationAttachmentIdRepresentationsV1(file.attachmentId)[0] })),
+      ]);
+      expect(message.text).toContain('Forwarded email (untrusted)');
+      expect(message.text).toContain('Atelier Delta souhaite six chaises ergonomiques.');
+      f.addMessage(messageId, raw);
+      const fetched = ConversationAttachmentFetchResultV1Schema.parse(await f.invoke(ids.attachmentFetch, {
+        ...connection, providerConnectionKey: 'email:wilson@test.local',
+        providerConfig: { ...config, mailbox: 'wilson@test.local', allowedDomains: ['test.local'],
+          trustStrategy: { kind: 'authenticationResults', authservId: 'mx.seed1.test.local' } },
+        messageId, attachmentIds: message.attachments!.map(file => file.attachmentId),
+      }));
+      if (fetched.kind !== 'fetched') throw new Error('Expected both retained attachments');
+      expect(fetched.attachments.map(file => Buffer.from(file.base64, 'base64'))).toEqual([eml, native.attachments[0]!.content]);
     } finally { await f.dispose(); }
   });
 

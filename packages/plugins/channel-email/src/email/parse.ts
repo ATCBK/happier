@@ -37,12 +37,15 @@ export async function parseEmail(raw: Uint8Array, options: EmailContentOptions =
   return parseEmailParts(raw, options, []);
 }
 
-async function parseEmailParts(raw: Uint8Array, options: EmailContentOptions, parentParts: readonly string[]): Promise<ParsedEmail> {
+async function parseEmailParts(raw: Uint8Array, options: EmailContentOptions, parentParts: readonly string[], inlinePartPrefix = ''): Promise<ParsedEmail> {
   const [{ simpleParser }, { shapeEmailBody }] = await Promise.all([
     import('mailparser'),
     import('./shape.js'),
   ]);
-  const mail = await simpleParser(Buffer.from(raw), { skipImageLinks: true, skipHtmlToText: true, skipTextToHtml: true });
+  // Mailparser forwards ignoreEmbedded to its MIME splitter. Keep original
+  // message bytes here; this owner already shapes forwarded content recursively.
+  const parserOptions = { skipImageLinks: true, skipHtmlToText: true, skipTextToHtml: true, ignoreEmbedded: true };
+  const mail = await simpleParser(Buffer.from(raw), parserOptions);
   const headers = new Map<string, string[]>();
   for (const { key, line } of mail.headerLines) {
     const values = headers.get(key) ?? [];
@@ -65,13 +68,22 @@ async function parseEmailParts(raw: Uint8Array, options: EmailContentOptions, pa
   for (const [index, attachment] of mail.attachments.entries()) {
     if (attachment.contentType.startsWith('image/') && attachment.contentDisposition !== 'attachment' &&
       attachment.cid && shaped.signatureOnlyCids.has(attachment.cid)) continue;
-    const parts = [...parentParts, `mime:${attachment.partId ?? index + 1}`];
+    const partId = `${inlinePartPrefix}${attachment.partId ?? index + 1}`;
+    const parts = [...parentParts, `mime:${partId}`];
     const attachmentId = createConversationAttachmentIdV1('email', parts);
-    const name = attachment.filename ?? (attachment.contentType === 'text/calendar' ? 'invite.ics' : `attachment-${index + 1}`);
+    const isMessage = attachment.contentType === 'message/rfc822';
+    const encoding = attachment.headers.get('content-transfer-encoding');
+    // These inline messages were formerly expanded by Mailparser. Preserve
+    // their descendants' native dotted part IDs rather than renaming files.
+    const wasInlineMessage = isMessage && attachment.contentDisposition === 'inline' &&
+      (encoding === undefined || (typeof encoding === 'string' && ['', '7bit', '8bit', 'binary'].includes(encoding.trim().toLowerCase())));
+    const name = attachment.filename ?? (isMessage ? `attachment-${index + 1}.eml`
+      : attachment.contentType === 'text/calendar' ? 'invite.ics' : `attachment-${index + 1}`);
     const bytes = new Uint8Array(attachment.content);
-    attachments.push({ attachmentId, name, mediaType: attachment.contentType, bytes });
-    if (attachment.contentType === 'message/rfc822' || /\.eml$/i.test(name)) {
-      const nested = await parseEmailParts(bytes, { ...options, quotedHistory: 'never', stripSignatures: false, knownThread: false }, parts);
+    if (!wasInlineMessage || attachment.filename) attachments.push({ attachmentId, name, mediaType: attachment.contentType, bytes });
+    if (isMessage || /\.eml$/i.test(name)) {
+      const nested = await parseEmailParts(bytes, { ...options, quotedHistory: 'never', stripSignatures: false, knownThread: false },
+        wasInlineMessage ? parentParts : parts, wasInlineMessage ? `${partId}.` : '');
       forwarded = true;
       text = [text, `--- Forwarded email (untrusted): ${name} ---\nFrom: ${nested.from ?? 'unknown'}\nSubject: ${nested.subject}\n\n${nested.text}\n--- End forwarded email ---`].filter(Boolean).join('\n\n');
       attachments.push(...nested.attachments);

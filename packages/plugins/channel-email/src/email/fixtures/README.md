@@ -5,10 +5,14 @@ harness message `3-wilson.eml`, captured read-only from nl3 on 2026-10-21.
 Its addresses and lead content were authored for the QA harness. The fixture
 uses LF in the repository; the transport regression restores its original CRLF
 and was checked byte-for-byte against all 2,125 retained bytes. The native
-`message/rfc822` part is inline 8bit, which Mailparser flattens; the PDF remains
-attachment `mime:3` under the derivation preceding commit `dd247000f8`.
-This vector protects retained occurrence evidence across attachment-ID codec
-changes; it is not a captured mail-client sample.
+`message/rfc822` part is named but inline 8bit, which default Mailparser
+flattens; the PDF remains attachment `mime:3` under the derivation preceding
+commit `dd247000f8`. The unreleased Email parser preserves that original
+218-byte EML as `mime:2` and the 619-byte PDF as `mime:3`, using their portable
+encodings through the shared attachment codec. The registered external-transport
+regression checks both descriptors and byte-for-byte fetch results, as well as
+the PDF's historical identity. This vector protects retained occurrence
+evidence and forwarded-message preservation; it is not a captured mail-client sample.
 
 The four `.eml` files in this directory come from Mailgun Talon's client-reply
 corpus, pinned to commit `e288a5809675e2b47041c22ed5fb5d077ba91221`:

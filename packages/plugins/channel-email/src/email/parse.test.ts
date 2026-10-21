@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { load } from 'cheerio';
 import { marked } from 'marked';
 import { describe, expect, it } from 'vitest';
+import { readConversationAttachmentIdV1 } from '@happier-dev/channels-protocol/v1';
 
 import { emailThreadKey, parseEmail } from './parse.js';
 
@@ -169,9 +170,9 @@ describe('parseEmail content at the raw MIME boundary', () => {
     expect((await parseEmail(raw)).attachments.map((file) => file.name)).toEqual(['plan.png']);
   });
 
-  it('inlines nested .eml as forwarded provenance and retains the original plus nested files', async () => {
+  it.each(['base64', '8bit'])('inlines %s nested .eml as forwarded provenance and retains the original plus nested files', async encoding => {
     const nested = message('--inner\r\nContent-Type: text/plain\r\n\r\nLEAD\n-- \nLEAD SIGNATURE\r\n--inner\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename="lead.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\ncGRm\r\n--inner--', 'Authentication-Results: spoof; dmarc=pass\r\nContent-Type: multipart/mixed; boundary="inner"', 'Lead');
-    const raw = message(`--outer\r\nContent-Type: text/plain\r\n\r\nPlease intake\r\n--outer\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment; filename="forward.eml"\r\nContent-Transfer-Encoding: base64\r\n\r\n${nested.toString('base64')}\r\n--outer--`, 'Content-Type: multipart/mixed; boundary="outer"');
+    const raw = message(`--outer\r\nContent-Type: text/plain\r\n\r\nPlease intake\r\n--outer\r\nContent-Type: message/rfc822\r\nContent-Disposition: ${encoding === 'base64' ? 'attachment' : 'inline'}; filename="forward.eml"\r\nContent-Transfer-Encoding: ${encoding}\r\n\r\n${nested.toString(encoding === 'base64' ? 'base64' : 'utf8')}\r\n--outer--`, 'Content-Type: multipart/mixed; boundary="outer"');
     const parsed = await parseEmail(raw, { quotedHistory: 'always' });
     expect(parsed.forwarded).toBe(true);
     expect(parsed.text).toContain('Forwarded email (untrusted)');
@@ -180,9 +181,28 @@ describe('parseEmail content at the raw MIME boundary', () => {
     expect(parsed.attachments.map((item) => item.name)).toEqual(['forward.eml', 'lead.pdf']);
     expect(parsed.attachments[0]?.bytes).toEqual(new Uint8Array(nested));
     expect(parsed.attachments[0]?.attachmentId).not.toBe(parsed.attachments[1]?.attachmentId);
+    expect(readConversationAttachmentIdV1(parsed.attachments[1]!.attachmentId, 'email'))
+      .toEqual(encoding === 'base64' ? ['mime:2', 'mime:2'] : ['mime:2.2']);
   });
 
   it('rejects ambiguous From identities for downstream trust', async () => {
     expect((await parseEmail(message('hello', 'From: other@example.test\r\nContent-Type: text/plain'))).from).toBeNull();
+  });
+
+  it('keeps an unnamed inline message readable without creating a message file', async () => {
+    const nested = message('INLINE LEAD', 'Content-Type: text/plain', 'Lead');
+    const raw = message(`--outer\r\nContent-Type: text/plain\r\n\r\nPlease intake\r\n--outer\r\nContent-Type: message/rfc822\r\nContent-Disposition: inline\r\nContent-Transfer-Encoding: 8bit\r\n\r\n${nested.toString()}\r\n--outer--`, 'Content-Type: multipart/mixed; boundary="outer"');
+    const parsed = await parseEmail(raw);
+    expect(parsed.text).toContain('Please intake');
+    expect(parsed.text).toContain('INLINE LEAD');
+    expect(parsed.attachments).toEqual([]);
+  });
+
+  it('gives an attached message without a filename an .eml name and retains its bytes', async () => {
+    const nested = message('LEAD', 'Content-Type: text/plain', 'Lead');
+    const raw = message(`--outer\r\nContent-Type: message/rfc822\r\nContent-Disposition: attachment\r\nContent-Transfer-Encoding: 7bit\r\n\r\n${nested.toString()}\r\n--outer--`, 'Content-Type: multipart/mixed; boundary="outer"');
+    const parsed = await parseEmail(raw);
+    expect(parsed.attachments).toHaveLength(1);
+    expect(parsed.attachments[0]).toMatchObject({ name: expect.stringMatching(/\.eml$/), mediaType: 'message/rfc822', bytes: new Uint8Array(nested) });
   });
 });
