@@ -400,7 +400,8 @@ describe('useConnectTerminal unauthenticated flow', () => {
         expect(await hook.process(unboundLink(pairing(), 'https://unknown.example.test'))).toBe(false);
         expect(posts()).toHaveLength(0);
         expect(await authority()).toEqual(before);
-        expect(boundary.requests.filter(request => request.token !== null)).toHaveLength(0);
+        // The focused signed-in Home keeps syncing as itself; nothing may reach the unknown destination.
+        expect(boundary.requests.filter(request => request.token !== null && request.serverUrl !== focused.url)).toHaveLength(0);
         expect(routerReplaceSpy).not.toHaveBeenCalled();
         expect(pending.getPendingTerminalConnect()).toBeNull();
     });
@@ -488,8 +489,9 @@ describe('useConnectTerminal unauthenticated flow', () => {
         expect(body.responseKind).toBe('tokenOnly');
         expect(open(body.response, p)).toEqual({ type: 'tokenOnly' });
         const reads = boundary.requestsFor('/v1/account/encryption/currentness');
-        expect(reads).toHaveLength(1);
-        expect(reads[0]?.token === home.credentials?.token).toBe(true);
+        // The signed-in Home's own sync also reads currentness; every read is as that Account.
+        expect(reads.length).toBeGreaterThan(0);
+        expect(reads.every(read => read.token === home.credentials?.token)).toBe(true);
         expect(boundary.requestsFor('/v1/features').length).toBeGreaterThan(0);
     });
 
@@ -522,7 +524,9 @@ describe('useConnectTerminal unauthenticated flow', () => {
         expect(open(body.response, p))
             .toEqual({ type: 'dataKey', key: new Uint8Array(32).fill(11) });
         expect(await authority()).toEqual(before);
-        expect(boundary.requests.every(request => request.serverUrl === target.url)).toBe(true);
+        // The focused Home keeps its own sync traffic; what carries the target's credential stays on the target.
+        expect(boundary.requests.filter(request => request.token === target.credentials?.token)
+            .every(request => request.serverUrl === target.url)).toBe(true);
     });
 
     it('does not disclose focused credentials when the same URL names another Home identity', async () => {
@@ -533,7 +537,8 @@ describe('useConnectTerminal unauthenticated flow', () => {
         const before = await authority();
         expect(await hook.process(identityLink(pairing(), home.url, 'srv_expected_other'))).toBe(false);
         expect(posts()).toHaveLength(0);
-        expect(boundary.requests.filter(request => request.token !== null)).toHaveLength(0);
+        // The focused Home keeps its own sync traffic; none of it may be an auth approval request.
+        expect(boundary.requests.filter(request => request.token !== null && request.path.startsWith('/v1/auth'))).toHaveLength(0);
         expect(await authority()).toEqual(before);
     });
 

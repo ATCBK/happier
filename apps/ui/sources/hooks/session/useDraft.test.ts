@@ -741,8 +741,8 @@ describe('useDraft', () => {
             mode: 'append',
             createdAtMs: 1,
             source: {
-              kind: 'session_discussion',
-              sessionId: 's_target',
+              kind: 'discussion',
+              serverId: 'server-test',
               discussionId: 'discussion-a',
               messageIds: ['message-2'],
             },
@@ -758,8 +758,8 @@ describe('useDraft', () => {
       patch: {
         text: 'existing destination draft\n\nselected messages',
         sessionDiscussionSelectionSourceV1: {
-          kind: 'session_discussion',
-          sessionId: 's_target',
+          kind: 'discussion',
+          serverId: 'server-test',
           discussionId: 'discussion-a',
           messageIds: ['message-2'],
         },

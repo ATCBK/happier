@@ -218,8 +218,8 @@ describe('useConnectedServiceQuotaSnapshot', () => {
 
     it('targets the online machine that owns the connected-service profile when consuming recovery credit', async () => {
         storage.getState().applyMachines([
-            createMachineFixture({ id: 'machine-arbitrary', activeAt: Date.now() }),
-            createMachineFixture({ id: 'machine-owner', activeAt: Date.now() }),
+            createMachineFixture({ id: 'machine-arbitrary', activeAt: Date.now(), isShared: false }),
+            createMachineFixture({ id: 'machine-owner', activeAt: Date.now(), isShared: false }),
         ], true, { sourceServerId: getActiveServerSnapshot().serverId });
         seedSession('machine-owner');
         recovery.mockImplementation(async payload => {

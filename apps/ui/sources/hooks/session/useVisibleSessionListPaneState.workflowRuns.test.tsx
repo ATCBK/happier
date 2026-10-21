@@ -53,12 +53,20 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ pathname: '/' }).module;
 });
 
-// The composed destination renders through the canonical platform boundary factories.
+// The composed destination renders through the canonical platform boundary factories; the
+// third-party Legend recycler (every virtualized list's only backend) is the replaced boundary.
+const { legendListMock } = await vi.hoisted(async () => {
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    return { legendListMock: createCapturingLegendListMock({ renderItems: true }) };
+});
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    const { createCapturingFlatListMock } = await import('@/dev/testkit/mocks/virtualizedList');
-    return createReactNativeWebMock(createCapturingFlatListMock().module);
+    return createReactNativeWebMock();
 });
+vi.mock('@legendapp/list/react-native', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@legendapp/list/react-native')>(),
+    ...legendListMock.module,
+}));
 vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock();
