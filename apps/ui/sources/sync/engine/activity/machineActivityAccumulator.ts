@@ -22,14 +22,20 @@ export class MachineActivityAccumulator {
     ) {}
 
     addUpdate(update: MachineActivityUpdate, options?: MachineActivityAccumulatorOptions): void {
+        const sourceServerId = typeof options?.sourceServerId === 'string' && options.sourceServerId.trim()
+            ? options.sourceServerId.trim()
+            : null;
+        const pending = this.pendingUpdates.get(update.id);
+        // Handler completion order need not match heartbeat time. Keep the
+        // freshest pending fact until the store can apply its presence guard.
+        if (pending && pending.sourceServerId === sourceServerId && pending.shouldContinue()
+            && pending.update.activeAt > update.activeAt) return;
         const lastState = this.lastEmittedStates.get(update.id);
         const isSignificantChange = !lastState || lastState.active !== update.active;
         this.pendingUpdates.set(update.id, {
             update,
             shouldContinue: options?.shouldContinue ?? (() => true),
-            sourceServerId: typeof options?.sourceServerId === 'string' && options.sourceServerId.trim()
-                ? options.sourceServerId.trim()
-                : null,
+            sourceServerId,
         });
 
         if (isSignificantChange) {
