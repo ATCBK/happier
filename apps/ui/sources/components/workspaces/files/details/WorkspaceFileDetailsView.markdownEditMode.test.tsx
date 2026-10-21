@@ -43,7 +43,9 @@ vi.mock('react-native-unistyles', async () => {
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons', Octicons: 'Octicons' }));
 
 const fileActionToolbarProps = vi.hoisted(() => ({ current: null as any }));
-vi.mock('@/components/workspaces/files/file/FilePageHeader', () => ({
+vi.mock('@/components/workspaces/files/file/FilePageHeader', async (importOriginal) => ({
+    // The real menu builder and toolbar stay; only the header's render is captured.
+    ...(await importOriginal<typeof import('@/components/workspaces/files/file/FilePageHeader')>()),
     FilePageHeader: (props: any) => {
         fileActionToolbarProps.current = props;
         return React.createElement('FilePageHeader', props, props.rightElement ?? null);

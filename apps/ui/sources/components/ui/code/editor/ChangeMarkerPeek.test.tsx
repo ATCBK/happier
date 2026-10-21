@@ -58,6 +58,28 @@ function actionsWith(
 }
 
 
+describe('ChangeMarkerPeek removed lines', () => {
+  it('numbers each removed row with its line in the old file (ED3 E1)', async () => {
+    const replaced = buildEditorChangeMarkers(
+      'a.ts',
+      null,
+      '@@ -20,2 +20 @@\n-const key = route.path;\n-\tconst width = 0;\n+const key = useKey(route);\n',
+    )[0]!;
+    const screen = await renderScreen(
+      <ChangeMarkerPeek marker={replaced} controller={{ ...controller, selected: replaced }} dirty={false} />,
+    );
+    type Node = { children: ReadonlyArray<Node | string> };
+    const textOf = (node: Node): string => node.children.map((child) => (typeof child === 'string' ? child : textOf(child))).join(' ');
+    const rows = screen.findAllHostsByTestId('change-marker-peek-removed-row');
+    expect(rows.map((row) => textOf(row as unknown as Node).replace(/\s+/g, ' ').trim())).toEqual([
+      expect.stringMatching(/^20\s*−\s*const key = route\.path;$/),
+      expect.stringMatching(/^21\s*−\s*const width = 0;$/),
+    ]);
+    // The old line keeps its indentation, so it sits where the code did (a single-line row must not collapse it).
+    expect(textOf(rows[1] as unknown as Node)).toContain('\u00a0\u00a0const width = 0;');
+  });
+});
+
 describe('ChangeMarkerPeek review actions', () => {
   it('draws the change verbs and refuses a draft Discard over lines the person edited, in place', async () => {
     const keep = vi.fn();

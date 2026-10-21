@@ -338,6 +338,73 @@ describe('MonacoEditorSurface (web)', () => {
         expect(trigger).toHaveBeenLastCalledWith('happier.command', 'editor.action.indentLines', null);
         unsubscribe();
     });
+    it('opens room for the change peek under its line, reads the line from its start and reports where the room is', async () => {
+        setupMonacoGlobals();
+        // Monaco's public view-zone boundary: zones push the lines after them down by their height.
+        const zones = new Map<string, { afterLineNumber: number; heightInPx: number }>();
+        let nextZone = 0;
+        let scrollTop = 0;
+        const setScrollLeft = vi.fn();
+        const setScrollTop = vi.fn((top: number) => { scrollTop = top; });
+        const layoutZone = vi.fn();
+        const zonesBefore = (line: number) => [...zones.values()].filter((zone) => zone.afterLineNumber < line).reduce((sum, zone) => sum + zone.heightInPx, 0);
+        const lineTop = (line: number) => 16 + (line - 1) * 22 + zonesBefore(line);
+        const model = { ...createModelSpy.getMockImplementation()!(), getLineCount: () => 40 };
+        createModelSpy.mockReturnValueOnce(model);
+        createEditorSpy.mockReturnValueOnce({
+            ...createEditorSpy.getMockImplementation()!(),
+            changeViewZones: (callback: (accessor: unknown) => void) => callback({
+                addZone: (zone: { afterLineNumber: number; heightInPx: number }) => { const id = `zone-${nextZone++}`; zones.set(id, zone); return id; },
+                removeZone: (id: string) => { zones.delete(id); },
+                layoutZone,
+            }),
+            getTopForLineNumber: (line: number, includeViewZones = false) => includeViewZones ? 16 + (line - 1) * 22 + zonesBefore(line - 1) : lineTop(line),
+            getBottomForLineNumber: (line: number) => 16 + line * 22 + zonesBefore(line),
+            getScrollTop: () => scrollTop,
+            setScrollTop,
+            setScrollLeft,
+            getLayoutInfo: () => ({ contentLeft: 69, contentWidth: 500, height: 300 }),
+            getDomNode: () => ({ getBoundingClientRect: () => ({ left: 100, top: 200 }), style: { setProperty: () => {} } }),
+        });
+        const ref = React.createRef<CodeEditorHandle>();
+        await renderScreen(<MonacoEditorSurface ref={ref} resetKey="peek-zone" value="one" language="text" onChange={vi.fn()} />);
+        const moved = vi.fn();
+        ref.current!.subscribeSelection!(moved);
+
+        ref.current!.setPeekZone!({ afterLine: 2, height: 60 });
+        expect([...zones.values()]).toEqual([expect.objectContaining({ afterLineNumber: 2, heightInPx: 60 })]);
+        // Line 3 now starts below the room; an editor scrolled sideways shows the change from its first column.
+        expect(lineTop(3)).toBe(16 + 2 * 22 + 60);
+        expect(setScrollLeft).toHaveBeenCalledWith(0);
+        expect(setScrollTop).not.toHaveBeenCalled();
+        expect(ref.current!.getPeekZoneRect!()).toEqual({ x: 169, y: 200 + 16 + 2 * 22, width: 500, height: 60 });
+        expect(moved).toHaveBeenCalled();
+
+        // The peek grew: the same room is resized in place, and the reading position is not reset again.
+        setScrollLeft.mockClear();
+        ref.current!.setPeekZone!({ afterLine: 2, height: 90 });
+        expect(zones.size).toBe(1);
+        expect([...zones.values()][0]).toMatchObject({ heightInPx: 90 });
+        expect(layoutZone).toHaveBeenCalled();
+        expect(setScrollLeft).not.toHaveBeenCalled();
+
+        // A change near the foot scrolls just enough for the whole room to show.
+        ref.current!.setPeekZone!({ afterLine: 14, height: 60 });
+        expect(zones.size).toBe(1);
+        expect(setScrollTop).toHaveBeenCalledWith(16 + 14 * 22 + 60 - 300);
+        expect(ref.current!.getPeekZoneRect!()).toMatchObject({ y: 200 + 16 + 14 * 22 - scrollTop });
+
+        // A change taller than the editor peeks under the last of its lines in view, not 30 lines further down.
+        setScrollTop.mockClear();
+        scrollTop = 0;
+        ref.current!.setPeekZone!({ afterLine: 40, firstLine: 1, height: 60 });
+        expect([...zones.values()]).toEqual([expect.objectContaining({ afterLineNumber: 10 })]);
+        expect(setScrollTop).not.toHaveBeenCalled();
+
+        ref.current!.setPeekZone!(null);
+        expect(zones.size).toBe(0);
+        expect(ref.current!.getPeekZoneRect!()).toBeNull();
+    });
     it('exposes the canonical decoration channel before the editor finishes booting', async () => {
         setupMonacoGlobals();
         const ref = React.createRef<CodeEditorHandle>();
@@ -545,6 +612,12 @@ describe('MonacoEditorSurface (web)', () => {
 
         expect(onChange).toHaveBeenCalledTimes(1);
         expect(onChange).toHaveBeenLastCalledWith('abc');
+        currentValue = 'ab';
+        triggerChange({ isUndoing: true });
+        expect(onChange).toHaveBeenLastCalledWith('ab', { history: 'undo' });
+        currentValue = 'abc';
+        triggerChange({ isRedoing: true });
+        expect(onChange).toHaveBeenLastCalledWith('abc', { history: 'redo' });
     });
 
     it('flushes pending debounced change on blur', async () => {

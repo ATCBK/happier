@@ -28,6 +28,7 @@ vi.mock('@/components/ui/code/editor/CodeEditor', () => ({
             runCommand: () => {},
             subscribeHistory: () => () => {},
             setDecorations: () => {},
+            removeDecoration: () => {},
             onDecorationPress: () => () => {},
         }), []);
         return React.createElement('EmbeddedEditor', props);

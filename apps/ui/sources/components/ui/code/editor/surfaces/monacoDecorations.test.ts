@@ -52,6 +52,17 @@ describe('Monaco tracked decoration ranges', () => {
             expect(presses.at(-1)).toMatchObject({ item: { id: 'after', startLine: 2, endLine: 2 } });
             runtime.navigate(-1);
             expect(presses.at(-1)).toMatchObject({ item: { id: 'bof', startLine: 1, endLine: 1 } });
+            runtime.remove('change', 'bof');
+            runtime.remove('change', 'missing');
+            position = { lineNumber: 2, column: 1 };
+            runtime.navigate(-1);
+            expect(presses.at(-1)).toMatchObject({ item: { id: 'after', startLine: 2, endLine: 2 } });
+            expect(model.getAllDecorations()).toHaveLength(2); // remaining change and independent blame
+            runtime.remove('change', 'after');
+            expect(model.getAllDecorations()).toHaveLength(1);
+            const count = presses.length;
+            runtime.navigate(1);
+            expect(presses).toHaveLength(count);
         } finally { runtime.dispose(); model.dispose(); }
     });
 });

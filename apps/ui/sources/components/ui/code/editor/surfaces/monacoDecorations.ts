@@ -38,6 +38,11 @@ export function createMonacoDecorations(editor: DecorationEditor, monaco: Pick<t
             return;
         }
     });
+    function decoration(layer: EditorDecorationLayer, item: EditorDecoration, range: IRange) {
+        const marker = 'happier-editor-layer-' + layer + ' happier-editor-' + layer + '-' + ('kind' in item ? item.kind : 'severity' in item ? item.severity : item.tone ?? 'run');
+        return { range, options: { stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+            linesDecorationsClassName: marker, ...('severity' in item ? { inlineClassName: 'happier-editor-diagnostic-' + item.severity, hoverMessage: { value: item.message } } : {}) } };
+    }
     function set(layer: EditorDecorationLayer, items: readonly EditorDecoration[]) {
         const model = editor.getModel();
         if (!model) return;
@@ -51,10 +56,18 @@ export function createMonacoDecorations(editor: DecorationEditor, monaco: Pick<t
             const anchorColumn = deleted ? (item.anchor === 'before' ? 1 : model.getLineMaxColumn(firstLine)) : 1;
             const range: IRange = model.validateRange({ startLineNumber: item.startLine, startColumn: 'startCharacter' in item ? item.startCharacter + 1 : anchorColumn,
                 endLineNumber: endLine, endColumn: deleted ? anchorColumn : 'endCharacter' in item ? item.endCharacter + 1 : model.getLineMaxColumn(Math.max(1, Math.min(model.getLineCount(), endLine))) });
-            const marker = 'happier-editor-layer-' + layer + ' happier-editor-' + layer + '-' + ('kind' in item ? item.kind : 'severity' in item ? item.severity : item.tone ?? 'run');
-            return { range, options: { stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
-                linesDecorationsClassName: marker, ...('severity' in item ? { inlineClassName: 'happier-editor-diagnostic-' + item.severity, hoverMessage: { value: item.message } } : {}) } };
+            return decoration(layer, item, range);
         }));
+    }
+    function remove(layer: EditorDecorationLayer, id: string) {
+        const owned = layers.get(layer);
+        if (!owned?.items.some(item => item.id === id)) return;
+        const remaining = owned.items.flatMap((item, index) => {
+            const range = owned.collection.getRange(index);
+            return item.id !== id && range ? [{ item, range }] : [];
+        });
+        owned.items = remaining.map(({ item }) => item);
+        owned.collection.set(remaining.map(({ item, range }) => decoration(layer, item, range)));
     }
     function navigate(direction: 1 | -1) {
         const changes = tracked('change').sort((a, b) => a.startLine - b.startLine);
@@ -73,5 +86,5 @@ export function createMonacoDecorations(editor: DecorationEditor, monaco: Pick<t
         event.preventDefault(); event.stopPropagation();
         navigate(event.shiftKey ? -1 : 1);
     });
-    return { set, navigate, dispose: () => { keyboard?.dispose(); mouse.dispose(); for (const layer of layers.values()) layer.collection.clear(); layers.clear(); } };
+    return { set, remove, navigate, dispose: () => { keyboard?.dispose(); mouse.dispose(); for (const layer of layers.values()) layer.collection.clear(); layers.clear(); } };
 }

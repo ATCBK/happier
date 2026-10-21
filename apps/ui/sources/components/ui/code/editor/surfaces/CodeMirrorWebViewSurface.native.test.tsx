@@ -202,6 +202,21 @@ describe('CodeMirrorWebViewSurface (native)', () => {
         emitEnvelope({ v: 1, type: 'decorations.press', payload: { layer: 'change', item: marker } });
         expect(pressed).not.toHaveBeenCalled();
     });
+    it('removes a queued marker before readiness and forwards a live single-marker removal', async () => {
+        postMessageSpy.mockClear();
+        const ref = React.createRef<CodeEditorHandle>();
+        await renderScreen(<CodeMirrorWebViewSurface ref={ref} resetKey="remove-markers" value="one\ntwo" language="text" onChange={vi.fn()} />);
+        const first = { id: 'first', key: 'first', kind: 'modified' as const, startLine: 1, endLine: 1 };
+        const second = { ...first, id: 'second', key: 'second', startLine: 2, endLine: 2 };
+        ref.current!.setDecorations('change', [first, second]);
+        ref.current!.removeDecoration('change', first.id);
+        emitEnvelope({ v: 1, type: 'ready', payload: { ok: true } });
+        expect(postMessageSpy.mock.calls.map(([raw]) => JSON.parse(String(raw))))
+            .toContainEqual({ v: 1, type: 'decorations.set', payload: { layer: 'change', items: [second] } });
+        ref.current!.removeDecoration('change', second.id);
+        expect(JSON.parse(String(postMessageSpy.mock.calls.at(-1)![0])))
+            .toEqual({ v: 1, type: 'decorations.remove', payload: { layer: 'change', id: second.id } });
+    });
     it('queues a travelling query until ready and publishes engine status through the existing handle', async () => {
         postMessageSpy.mockClear();
         const ref = React.createRef<CodeEditorHandle>();
@@ -336,6 +351,10 @@ describe('CodeMirrorWebViewSurface (native)', () => {
 
         emitEnvelope({ v: 1, type: 'docChanged', payload: { doc: 'hello world' } });
         expect(onChange).toHaveBeenCalledWith('hello world');
+        emitEnvelope({ v: 1, type: 'docChanged', payload: { doc: 'hello', history: 'undo' } });
+        expect(onChange).toHaveBeenLastCalledWith('hello', { history: 'undo' });
+        emitEnvelope({ v: 1, type: 'docChanged', payload: { doc: 'hello world', history: 'redo' } });
+        expect(onChange).toHaveBeenLastCalledWith('hello world', { history: 'redo' });
 
         await act(async () => {
             await screen.update(

@@ -6,11 +6,12 @@ import type { CodeEditorProps } from '../codeEditorTypes';
 import { resolveMonacoLanguageId } from '../codeEditorTypes';
 import type { CodeEditorFindHandle, CodeEditorFindSnapshot, CodeEditorHandle, CodeEditorHistory } from '../codeEditorTypes';
 import { createMonacoCommands } from './monacoCommands';
+import { createMonacoPeekZone } from './monacoPeekZone';
 import type { CodeEditorFindSet } from '../bridge/codeEditorFindBridge';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { TextInput } from '@/components/ui/text/Text';
 import { useLocalSetting } from '@/sync/store/settingsReadHooks';
-import { CODE_GUTTER_METRICS, resolveCodeEditorFontMetrics, resolveCodeEditorGutterMetrics } from '../codeEditorFontMetrics';
+import { CODE_EDITOR_TAB_SIZE, CODE_GUTTER_METRICS, resolveCodeEditorFontMetrics, resolveCodeEditorGutterMetrics } from '../codeEditorFontMetrics';
 import { resolveCodeMonoFontFamily } from '../../codeTypography';
 import { buildMonacoEditorThemeData, formatCodeEditorBlameMarkCss, formatCodeEditorChangeMarkCss, formatCodeEditorDiagnosticCss, resolveCodeEditorTheme } from '../editorTheme';
 
@@ -297,7 +298,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
         insetLeft: props.contentPaddingHorizontal ?? 0 };
     const contentPaddingVertical = props.contentPaddingVertical ?? 0;
     const latestEditorThemeRef = React.useRef(editorTheme);
-    const pendingChangeRef = React.useRef<string | null>(null);
+    const pendingChangeRef = React.useRef<Readonly<{ text: string; history?: 'undo' | 'redo' }> | null>(null);
     const changeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const disposablesRef = React.useRef<Array<{ dispose?: () => void }> | null>(null);
     const pendingFindRef = React.useRef<CodeEditorFindSet | 'open' | null>(null);
@@ -312,6 +313,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
     const activationListenersRef = React.useRef(new Set<Parameters<NonNullable<CodeEditorHandle['onActivatePosition']>>[0]>());
     const composingRef = React.useRef(false);
     const commandsRef = React.useRef<ReturnType<typeof createMonacoCommands> | null>(null);
+    const peekZoneRef = React.useRef<ReturnType<typeof createMonacoPeekZone> | null>(null);
     const historyListenersRef = React.useRef(new Set<(state: CodeEditorHistory) => void>());
     const publishHistory = React.useCallback(() => {
         const state = commandsRef.current?.getHistory() ?? { canUndo: false, canRedo: false };
@@ -487,7 +489,8 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
         if (pendingChangeRef.current == null) return;
         const next = pendingChangeRef.current;
         pendingChangeRef.current = null;
-        onChangeRef.current(next);
+        if (next.history) onChangeRef.current(next.text, { history: next.history });
+        else onChangeRef.current(next.text);
     }, []);
 
     const cancelPendingChange = React.useCallback(() => {
@@ -498,10 +501,10 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
         pendingChangeRef.current = null;
     }, []);
 
-    const scheduleChange = React.useCallback((next: string) => {
-        pendingChangeRef.current = next;
+    const scheduleChange = React.useCallback((next: string, history?: 'undo' | 'redo') => {
+        pendingChangeRef.current = { text: next, ...(history ? { history } : {}) };
         const debounceMs = changeDebounceMsRef.current;
-        if (debounceMs <= 0) {
+        if (history || debounceMs <= 0) {
             flushPendingChange();
             return;
         }
@@ -546,6 +549,8 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 selectionListenersRef.current.add(listener);
                 return () => { selectionListenersRef.current.delete(listener); };
             },
+            setPeekZone: (zone) => peekZoneRef.current?.setPeekZone(zone),
+            getPeekZoneRect: () => peekZoneRef.current?.getPeekZoneRect() ?? null,
             revealLine,
             runCommand: (command) => commandsRef.current?.runCommand(command),
             subscribeHistory: (listener) => {
@@ -556,6 +561,11 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
             setDecorations: (layer, items) => {
                 decorationsRef.current.set(layer, items);
                 decorationControllerRef.current?.set(layer, items);
+            },
+            removeDecoration: (layer, id) => {
+                const items = decorationsRef.current.get(layer);
+                if (items) decorationsRef.current.set(layer, items.filter(item => item.id !== id));
+                decorationControllerRef.current?.remove(layer, id);
             },
             onDecorationPress: (listener) => {
                 decorationListenersRef.current.add(listener);
@@ -624,7 +634,7 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     fontSize: initialFontMetrics.fontSize,
                     lineHeight: initialFontMetrics.lineHeight,
                     fontFamily: resolveCodeMonoFontFamily(),
-                    tabSize: 2,
+                    tabSize: CODE_EDITOR_TAB_SIZE,
                     insertSpaces: true,
                     automaticLayout: true,
                     renderWhitespace: 'selection',
@@ -632,10 +642,12 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                 editorRef.current = editor;
                 // Capture before Monaco's keybinding and modifier-click contributions see the event.
                 const captureGotoKey = (event: KeyboardEvent) => {
-                    if (event.key !== 'F12' || event.isComposing || composingRef.current || event.ctrlKey || event.metaKey) return;
+                    if ((event.key !== 'F12' && event.key !== 'F2') || event.isComposing || composingRef.current || event.ctrlKey || event.metaKey) return;
+                    // F2 is Happier's semantic rename (P7 U7), never Monaco's single-model rename.
+                    if (event.key === 'F2' && (event.shiftKey || event.altKey)) return;
                     event.preventDefault();
                     event.stopImmediatePropagation();
-                    executeKeyboardCommandRef.current(event.shiftKey ? 'code.findReferences' : 'code.goToDefinition');
+                    executeKeyboardCommandRef.current(event.key === 'F2' ? 'code.rename' : event.shiftKey ? 'code.findReferences' : 'code.goToDefinition');
                 };
                 const captureGotoClick = (event: MouseEvent) => {
                     if ((!event.metaKey && !event.ctrlKey) || event.button > 0 || composingRef.current) return;
@@ -664,6 +676,9 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     onHistory: publishHistory,
                 });
                 if (pendingRevealRef.current) revealLine(pendingRevealRef.current.line, pendingRevealRef.current.options);
+                peekZoneRef.current = createMonacoPeekZone(editor, () => {
+                    for (const listener of selectionListenersRef.current) listener();
+                });
                 if (editor.createDecorationsCollection && editor.onMouseDown) {
                     const controller = createMonacoDecorations(editor, monaco, (layer, item) => {
                         for (const listener of decorationListenersRef.current) listener(layer, item);
@@ -691,14 +706,14 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
                     editor.onDidScrollChange?.(() => {
                         for (const listener of selectionListenersRef.current) listener();
                     }),
-                    editor.onDidChangeModelContent(() => {
+                    editor.onDidChangeModelContent((event: MonacoEditorApi.IModelContentChangedEvent) => {
                         const lineDigits = String(model.getLineCount()).length;
                         if (lineDigits !== lineDigitsRef.current) { lineDigitsRef.current = lineDigits; alignGutter(); }
                         publishHistory();
                         for (const listener of selectionListenersRef.current) listener();
                         if (ignoreChangeRef.current) return;
                         const next = model.getValue();
-                        scheduleChange(next);
+                        scheduleChange(next, event.isUndoing ? 'undo' : event.isRedoing ? 'redo' : undefined);
                     }),
                     editor.onDidBlurEditorText(() => {
                         flushPendingChange();
@@ -730,6 +745,8 @@ export const MonacoEditorSurface = React.forwardRef<CodeEditorHandle, CodeEditor
             try {
                 decorationControllerRef.current?.dispose();
                 decorationControllerRef.current = null;
+                peekZoneRef.current?.dispose();
+                peekZoneRef.current = null;
                 editorRef.current?.dispose?.();
             } catch {}
             try {

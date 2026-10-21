@@ -38,10 +38,11 @@ function CodeEditorWithFindImpl(props: CodeEditorWithFindProps) {
     const find = handle?.find;
     const eligible = usePluginSurfaceFocusEligibility() && props.active !== false;
     const changeMarkers = useEditorChangeMarkers({ editor: handle, active: eligible,
-        seedKey: props.changeMarkers?.key ?? props.resetKey, markers: props.changeMarkers?.items ?? NO_CHANGE_MARKERS });
-    const onChange = React.useCallback((text: string) => {
-        changeMarkers.onDocumentChange(text);
-        props.onChange(text);
+        seedKey: props.changeMarkers?.key ?? props.resetKey, markers: props.changeMarkers?.items ?? NO_CHANGE_MARKERS, seedText: props.changeMarkers?.text });
+    const onChange = React.useCallback<CodeEditorProps['onChange']>((text, change) => {
+        changeMarkers.onDocumentChange(text, change);
+        if (change) props.onChange(text, change);
+        else props.onChange(text);
     }, [changeMarkers.onDocumentChange, props.onChange]);
     React.useEffect(() => {
         props.onChangeMarkersChange?.(changeMarkers);

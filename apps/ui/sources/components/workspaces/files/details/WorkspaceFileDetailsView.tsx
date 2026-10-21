@@ -1272,8 +1272,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     changeMarkerUnitsRef.current = changesReview.reviewUnits;
     // Seeded per saved version: a refreshed diff for the same version does not move marks under the caret.
     const changeMarkers = React.useMemo(() => changeMarkerDiffRef.current
-        ? { key: changeMarkerSeedKey, items: buildEditorChangeMarkers(filePath, null, changeMarkerDiffRef.current, changeMarkerUnitsRef.current) } : undefined,
-    [changeMarkerSeedKey, changeMarkerDiff !== null, filePath]);
+        ? { key: changeMarkerSeedKey, text: fileContent?.isBinary === false ? fileContent.content : '', items: buildEditorChangeMarkers(filePath, null, changeMarkerDiffRef.current, changeMarkerUnitsRef.current) } : undefined,
+    [changeMarkerSeedKey, changeMarkerDiff !== null, filePath, fileContent?.content]);
     const changesFocusHunk = changesReview.controller.currentHunk;
     changesEditLineRef.current = changesFocusHunk ? (changesFocusHunk.rangeSide === 'new' ? changesFocusHunk.rangeStart : changesFocusHunk.newStart) : null;
     const menuContext: FileMenuContext = {

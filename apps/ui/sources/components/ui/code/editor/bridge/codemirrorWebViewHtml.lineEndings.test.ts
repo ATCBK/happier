@@ -8,6 +8,7 @@ import * as search from '@codemirror/search';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildCodeMirrorWebViewHtml } from './codemirrorWebViewHtml';
+import { createCodeMirrorDecorations } from './codeMirrorDecorations';
 
 // Load the installed CodeMirror modules through the WebView's embedded-bundle ABI.
 vi.mock('./codemirrorWebViewBundle.generated', () => ({ CODEMIRROR_WEBVIEW_BUNDLE_JS: '/* installed modules supplied by test */' }));
@@ -17,7 +18,7 @@ type Envelope = { v: number; type: string; payload: { doc?: string; requestId?: 
 function bootBridge() {
     const messages: Envelope[] = [];
     document.body.innerHTML = '<div id="root"></div>';
-    vi.stubGlobal('__CM6__', { ...state, ...view, ...commands, ...language, ...autocomplete, ...search });
+    vi.stubGlobal('__CM6__', { ...state, ...view, ...commands, ...language, ...autocomplete, ...search, createCodeMirrorDecorations });
     Object.defineProperty(window, 'ReactNativeWebView', {
         configurable: true,
         value: { postMessage: (raw: string) => messages.push(JSON.parse(raw)) },
@@ -92,6 +93,42 @@ describe('native CodeMirror WebView line endings', () => {
         Reflect.deleteProperty(window, 'ReactNativeWebView');
         restoreRangeGeometry?.();
         restoreRangeGeometry = undefined;
+    });
+
+    it('removes one tracked decoration through the bridge without reseeding the shifted remainder', () => {
+        const bridge = bootBridge();
+        cleanup = bridge.cleanup;
+        bridge.send('init', { doc: 'first\nsecond\nthird\nlast' });
+        bridge.send('decorations.set', { layer: 'change', items: [
+            { id: 'first', key: 'first', kind: 'modified', startLine: 1, endLine: 1 },
+            { id: 'last', key: 'last', kind: 'modified', startLine: 4, endLine: 4 },
+        ] });
+        const editor = bridge.getView();
+        editor.dispatch({ changes: { from: 0, insert: 'before\n' } });
+        bridge.send('decorations.remove', { layer: 'change', id: 'first' });
+        bridge.send('command', { command: 'nextChange' });
+        expect(bridge.messages.filter(message => message.type === 'decorations.press').at(-1)?.payload)
+            .toMatchObject({ layer: 'change', item: { id: 'last', startLine: 5 } });
+        bridge.send('decorations.remove', { layer: 'change', id: 'last' });
+        const presses = bridge.messages.filter(message => message.type === 'decorations.press').length;
+        bridge.send('command', { command: 'nextChange' });
+        expect(bridge.messages.filter(message => message.type === 'decorations.press')).toHaveLength(presses);
+    });
+
+    it('reads a pressed change from its first column when the editor was scrolled sideways', () => {
+        const bridge = bootBridge();
+        cleanup = bridge.cleanup;
+        bridge.send('init', { doc: `const label = '${'x'.repeat(400)}';\nlast` });
+        bridge.send('decorations.set', { layer: 'change', items: [{ id: 'long', key: 'long', kind: 'modified', startLine: 1, endLine: 1 }] });
+        const editor = bridge.getView();
+        editor.scrollDOM.scrollLeft = 240;
+        expect(editor.scrollDOM.scrollLeft).toBe(240);
+        const mark = editor.dom.querySelector('.happier-editor-gutter-change .cm-gutterElement:not(:first-child)')
+            ?? editor.dom.querySelector('.happier-editor-gutter-change .cm-gutterElement');
+        if (!mark) throw new Error('change gutter missing');
+        mark.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 1, clientY: 1 }));
+        expect(bridge.messages.filter(message => message.type === 'decorations.press').at(-1)?.payload).toMatchObject({ layer: 'change', item: { id: 'long' } });
+        expect(editor.scrollDOM.scrollLeft).toBe(0);
     });
 
     it('publishes the current line at a caret and exact CRLF selection text with whole-line anchor bounds', () => {
@@ -171,9 +208,13 @@ describe('native CodeMirror WebView line endings', () => {
         expect(editor.state.doc.toString()).toBe('one\nSECOND\nthree');
         bridge.send('command', { command: 'undo' });
         expect(editor.state.doc.toString()).toBe('one\nTWO\nthree');
+        expect(bridge.messages.filter(message => message.type === 'docChanged').at(-1)?.payload)
+            .toEqual({ doc: 'one\nTWO\nthree', history: 'undo' });
         expect(bridge.messages).toContainEqual({ v: 1, type: 'history.state', payload: { canUndo: true, canRedo: true } });
         bridge.send('command', { command: 'redo' });
         expect(editor.state.doc.line(2).text).toBe('SECOND');
+        expect(bridge.messages.filter(message => message.type === 'docChanged').at(-1)?.payload)
+            .toEqual({ doc: 'one\nSECOND\nthree', history: 'redo' });
         Object.defineProperty(editor, 'composing', { configurable: true, value: true });
         bridge.send('command', { command: { insert: 'ignored' } });
         bridge.send('command', { command: 'undo' });

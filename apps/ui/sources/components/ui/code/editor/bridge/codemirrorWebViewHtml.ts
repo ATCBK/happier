@@ -353,6 +353,8 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
           if (bundle.createCodeMirrorDecorations) {
             decorationRuntime = bundle.createCodeMirrorDecorations(bundle, (layer, item) => {
               flushPendingDocChange();
+              // A pressed change opens its peek: the change reads from its first column, as Monaco's peek zone does.
+              if (layer === 'change' && view) view.scrollDOM.scrollLeft = 0;
               sendEnvelope({ v: 1, type: 'decorations.press', payload: { layer, item } });
             });
           }
@@ -618,6 +620,13 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
                 publishHistory();
                 if (applyingRemote) return;
                 if (changeTimer) clearTimeout(changeTimer);
+                const history = update.transactions.some(transaction => transaction.isUserEvent('undo')) ? 'undo'
+                  : update.transactions.some(transaction => transaction.isUserEvent('redo')) ? 'redo' : null;
+                if (history) {
+                  changeTimer = null;
+                  sendEnvelope({ v: 1, type: 'docChanged', payload: { doc: serializeDoc(update.state.doc), history } });
+                  return;
+                }
                 changeTimer = setTimeout(() => {
                   changeTimer = null;
                   try {
@@ -788,6 +797,15 @@ export function buildCodeMirrorWebViewHtml(params: Readonly<{
             if ((payload.layer === 'change' || payload.layer === 'diagnostic' || payload.layer === 'blame') && Array.isArray(payload.items)) {
               decorationLayers.set(payload.layer, payload.items);
               if (view && decorationRuntime) view.dispatch({ effects: decorationRuntime.set.of(payload) });
+            }
+            return;
+          }
+          if (envelope.type === 'decorations.remove') {
+            const payload = envelope.payload || {};
+            if ((payload.layer === 'change' || payload.layer === 'diagnostic' || payload.layer === 'blame') && typeof payload.id === 'string') {
+              const items = decorationLayers.get(payload.layer);
+              if (items) decorationLayers.set(payload.layer, items.filter(item => item.id !== payload.id));
+              if (view && decorationRuntime) view.dispatch({ effects: decorationRuntime.remove.of(payload) });
             }
             return;
           }

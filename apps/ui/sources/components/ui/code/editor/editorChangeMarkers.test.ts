@@ -1,10 +1,37 @@
 import { describe, expect, it } from 'vitest';
-import { buildEditorChangeMarkers, revertEditorChangeInDraft } from './editorChangeMarkers';
+import { buildEditorChangeMarkers, rederiveEditorChangeMarkers, revertEditorChangeInDraft } from './editorChangeMarkers';
 import { buildReviewUnits } from '@happier-dev/protocol/scm/comparisonOccurrences';
 
 const diff = '@@ -1,5 +1,5 @@\n first\n-old\n+new\n middle\n-gone\n last\n+added\n';
 
 describe('editor change markers from canonical review units', () => {
+    it.each([
+        { patch: '@@ -1 +1,2 @@\n-old\n+new\n+extra\n', seed: 'new\nextra\ntail\n', reverted: 'old\ntail\n' },
+        { patch: '@@ -0,0 +1 @@\n+added\n', seed: 'added\ntail\n', reverted: 'tail\n' },
+        { patch: '@@ -1 +0,0 @@\n-deleted\n', seed: 'tail\n', reverted: 'deleted\ntail\n' },
+        { patch: '@@ -1 +1 @@\n-old\r\n+new\r\n', seed: 'new\r\ntail\r\n', reverted: 'old\r\ntail\r\n' },
+        { patch: '@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n', seed: 'new', reverted: 'old' },
+    ])('re-derives scope identity and ranges across restored/reverted buffers: $patch', ({ patch, seed, reverted }) => {
+        const markers = buildEditorChangeMarkers('file.ts', 'staged', patch);
+        expect(rederiveEditorChangeMarkers(seed, reverted, markers)).toEqual([]);
+        const prefix = 'unrelated\n';
+        if (markers[0]!.hunk.oldLines > 0 && markers[0]!.hunk.newLines > 0) {
+            expect(rederiveEditorChangeMarkers(seed, `${prefix}${reverted}`, markers)).toEqual([]);
+        }
+        const shifted = markers[0]!.hunk.oldLines > 0 && markers[0]!.hunk.newLines > 0 ? prefix : '';
+        const restored = rederiveEditorChangeMarkers(seed, `${shifted}${seed}`, markers)!;
+        expect(restored).toHaveLength(1);
+        expect(restored[0]!.key).toBe(markers[0]!.key);
+        expect(revertEditorChangeInDraft(`${shifted}${seed}`, restored[0]!)).toEqual({ ok: true, text: `${shifted}${reverted}` });
+        expect(rederiveEditorChangeMarkers(seed, seed, markers)).toMatchObject(markers);
+    });
+    it('keeps repeated-text changes associated with their original scope keys', () => {
+        const markers = buildEditorChangeMarkers('file.ts', null, '@@ -2 +2 @@\n-old A\n+new\n@@ -4 +4 @@\n-old B\n+new\n');
+        const seed = 'repeat\nnew\nrepeat\nnew\ntail\n';
+        expect(rederiveEditorChangeMarkers(seed, 'repeat\nnew\nrepeat\nold B\ntail\n', markers))
+            .toMatchObject([{ key: markers[0]!.key, startLine: 2, endLine: 2 }]);
+        expect(rederiveEditorChangeMarkers(seed, seed, markers)).toMatchObject(markers);
+    });
     it('retains the selected review owner layer keys rather than rebuilding combined keys', () => {
         const units = buildReviewUnits('file.ts', 'staged', diff);
         const markers = buildEditorChangeMarkers('file.ts', null, diff, units);
@@ -31,6 +58,8 @@ describe('editor change markers from canonical review units', () => {
     it('restores deletions at the start of a file and preserves the last-line terminator', () => {
         const marker = buildEditorChangeMarkers('file.ts', null, '@@ -1,2 +1 @@\n-removed\n kept\n')[0]!;
         expect(revertEditorChangeInDraft('kept\n', marker)).toEqual({ ok: true, text: 'removed\nkept\n' });
+        const edited = rederiveEditorChangeMarkers('kept\n', 'my edit\nkept\n', [marker])!;
+        expect(revertEditorChangeInDraft('my edit\nkept\n', edited[0]!)).toEqual({ ok: false, reason: 'moved_on' });
     });
     it('adapts first-line BOM bytes to the editor text representation without changing the review key', () => {
         const diff = '@@ -1 +1 @@\n-\uFEFFold\n+\uFEFFnew\n';

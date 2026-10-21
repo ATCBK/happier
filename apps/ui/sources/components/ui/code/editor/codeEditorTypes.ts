@@ -31,12 +31,13 @@ export type EditorDecoration =
     /** `tone`: the run's recency, as the View column's edge bar (newer half `recent`); the engines draw it as the run's bar. */
     | Readonly<{ layer?: 'blame'; id: string; startLine: number; lineCount: number; runId: string; tone?: EditorBlameTone }>;
 export type EditorBlameTone = 'recent' | 'older';
+export type CodeEditorDocumentChange = Readonly<{ history: 'undo' | 'redo' }>;
 
 export type CodeEditorProps = Readonly<{
     resetKey: string;
     value: string;
     language: string | null;
-    onChange: (value: string) => void;
+    onChange: (value: string, change?: CodeEditorDocumentChange) => void;
     testID?: string;
     readOnly?: boolean;
     wrapLines?: boolean;
@@ -68,11 +69,21 @@ export type CodeEditorHandle = Readonly<{
     runCommand: (command: CodeEditorCommand) => void;
     subscribeHistory: (listener: (state: CodeEditorHistory) => void) => () => void;
     setDecorations: (layer: EditorDecorationLayer, items: readonly EditorDecoration[]) => void;
+    /** Retire one tracked item without reseeding the other engine-mapped ranges. */
+    removeDecoration: (layer: EditorDecorationLayer, id: string) => void;
     onDecorationPress: (cb: (layer: EditorDecorationLayer, item: EditorDecoration) => void) => () => void;
     /** `collapsed` is a caret: Ask still asks about its line, but no selection toolbar is raised. */
     getSelection?: () => { startLine: number; endLine: number; text: string; rect: Rect | null; collapsed?: boolean } | null;
     subscribeSelection?: (listener: () => void) => () => void;
     getLineRect?: (line: number) => Rect | null;
+    /**
+     * Room in the text for the host's change peek (ade-shell ED3 E1): the lines after `afterLine` (0 = above the
+     * first line) move down by `height`, and a newly opened room scrolls just enough to show whole, from the line's
+     * first column. When the change from `firstLine` is taller than the editor, the room opens under the last of its
+     * lines in view instead. `null` closes it. `getPeekZoneRect` is where the room is, in window coordinates.
+     */
+    setPeekZone?: (zone: Readonly<{ afterLine: number; firstLine?: number; height: number }> | null) => void;
+    getPeekZoneRect?: () => Rect | null;
     onPointerPosition?: (cb: (position: { line: number; character: number; rect: Rect } | null) => void) => () => void;
     onActivatePosition?: (cb: (position: { line: number; character: number }) => void) => () => void;
     getCursorPosition?: () => { line: number; character: number } | null;

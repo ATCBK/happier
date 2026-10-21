@@ -47,6 +47,7 @@ vi.mock('@/components/ui/code/editor/CodeEditor', () => ({
             runCommand: () => undefined,
             subscribeHistory: () => () => undefined,
             setDecorations: () => undefined,
+            removeDecoration: () => undefined,
             onDecorationPress: () => () => undefined,
         }), [props.value, testID]);
         return React.createElement('MockCodeEditor', props);

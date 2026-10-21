@@ -10,6 +10,7 @@ type LayerItems = Readonly<{ layer: EditorDecorationLayer; items: readonly Edito
 export function createCodeMirrorDecorations(api: DecorationApi, press?: (layer: EditorDecorationLayer, item: EditorDecoration) => void) {
     const layers = ['change', 'diagnostic', 'blame'] as const;
     const set = api.StateEffect.define<LayerItems>();
+    const remove = api.StateEffect.define<Readonly<{ layer: EditorDecorationLayer; id: string }>>();
     class Tracked extends api.RangeValue {
         override startSide = 1;
         override endSide = 1;
@@ -22,6 +23,11 @@ export function createCodeMirrorDecorations(api: DecorationApi, press?: (layer: 
             let next = value;
             if (transaction.docChanged) next = { change: value.change.map(transaction.changes), diagnostic: value.diagnostic.map(transaction.changes), blame: value.blame.map(transaction.changes) };
             for (const effect of transaction.effects) {
+                if (effect.is(remove)) {
+                    const { layer, id } = effect.value;
+                    next = { ...next, [layer]: next[layer].update({ filter: (_from, _to, value) => value.item.id !== id }) };
+                    continue;
+                }
                 if (!effect.is(set)) continue;
                 const ranges = effect.value.items.map((item) => {
                     const doc = transaction.state.doc;
@@ -106,5 +112,5 @@ export function createCodeMirrorDecorations(api: DecorationApi, press?: (layer: 
         press?.('change', item);
         return true;
     }
-    return { set, field, items, navigate, extensions: [field, ...gutters, diagnostics] };
+    return { set, remove, field, items, navigate, extensions: [field, ...gutters, diagnostics] };
 }

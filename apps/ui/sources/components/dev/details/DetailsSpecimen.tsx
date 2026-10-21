@@ -190,7 +190,7 @@ function SpecimenCompare() {
 const SPECIMEN_UPDATED_AT = Date.now() - 2 * 60_000;
 
 const HOOK_BEFORE = HOOK_TEXT.replace("return 'root';", "return route.path;").replace(' * never when the window resizes, so the modal keeps its draft and scroll.\n', '');
-const HOOK_CHANGE_MARKERS = { key: 'specimen', items: buildEditorChangeMarkers('useSettingsRouteKey.ts', null,
+const HOOK_CHANGE_MARKERS = { key: 'specimen', text: HOOK_TEXT, items: buildEditorChangeMarkers('useSettingsRouteKey.ts', null,
     createTwoFilesPatch('useSettingsRouteKey.ts', 'useSettingsRouteKey.ts', HOOK_BEFORE + '\n', HOOK_TEXT + '\n', '', '', { context: 3 })) };
 
 /** The real editor region (engine, gutter marks, peek, phone key row) over fixture text. */

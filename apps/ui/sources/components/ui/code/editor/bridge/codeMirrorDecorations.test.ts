@@ -33,6 +33,10 @@ describe('CodeMirror tracked decoration ranges', () => {
         expect(runtime.items(doc, 'diagnostic')[0]).toMatchObject({ startLine: 3, startCharacter: 6, endLine: 3, endCharacter: 8 });
         doc = doc.update({ changes: { from: doc.doc.line(3).from, to: doc.doc.line(4).from } }).state;
         expect(runtime.items(doc, 'change')[0]).toMatchObject({ startLine: 3, endLine: 3 });
+        doc = doc.update({ effects: runtime.set.of({ layer: 'blame', items: [{ id: 'c', startLine: 1, lineCount: 1, runId: 'run' }] }) }).state;
+        doc = doc.update({ effects: runtime.remove.of({ layer: 'change', id: 'c' }) }).state;
+        expect(runtime.items(doc, 'change')).toEqual([]);
+        expect(runtime.items(doc, 'blame')).toEqual([{ id: 'c', startLine: 1, lineCount: 1, runId: 'run' }]);
     });
     it('distinguishes deletion before the first line from deletion after that line when the anchor line splits', () => {
         const runtime = createCodeMirrorDecorations({ ...state, ...view });

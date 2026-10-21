@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 
 import {
   CodeEditorWithFind,
@@ -104,19 +105,24 @@ function FileEditorPeekRegion(
   }>,
 ) {
   const { markers, peek } = props;
+  const { theme } = useUnistyles();
   const regionRef = React.useRef<View>(null);
-  const placement = useChangeMarkerPeekPlacement(regionRef, props.handle, markers?.selected ?? null);
+  const [peekHeight, setPeekHeight] = React.useState<number | null>(null);
+  const selected = markers?.selected ?? null;
+  const { placement, zoned } = useChangeMarkerPeekPlacement(regionRef, props.handle, selected, peekHeight, theme.space.s6);
   return (
-    <View ref={regionRef} style={{ flex: 1, minHeight: 0 }}>
+    // The peek sits in the editor's own room for it, so it scrolls out of the region with the text.
+    <View ref={regionRef} style={{ flex: 1, minHeight: 0, overflow: zoned && selected ? 'hidden' : undefined }}>
       {props.children}
-      {markers?.selected ? (
+      {selected && markers ? (
         <ChangeMarkerPeek
-          marker={markers.selected}
+          marker={selected}
           controller={markers}
           placement={placement}
           dirty={peek?.dirty ?? false}
           attribution={peek?.attribution}
           resolveChangeActions={peek?.resolveChangeActions}
+          onHeightChange={setPeekHeight}
         />
       ) : null}
     </View>
@@ -126,31 +132,54 @@ function FileEditorPeekRegion(
 /** Gap between the peek and the code column's left edge, so its first words sit just before the text. */
 const PEEK_LEADING_OFFSET = 4;
 
+/** The line a change's room opens after: its last line, or the line a deletion sits after (0 = above line 1). */
+function peekZoneAfterLine(marker: EditorChangeMarker): number {
+  if (marker.kind !== 'deleted') return marker.endLine;
+  return marker.anchor === 'before' ? 0 : marker.startLine;
+}
+
 /**
- * Hangs the peek from the marked line (ade-shell ED3 E1): under its last row, or over it when the line is
- * near the region's foot. Follows the editor's scroll through the handle's selection/viewport signal. An
- * engine without line geometry (`getLineRect` absent) keeps the docked peek.
+ * Hangs the peek from the marked line (ade-shell ED3 E1). An engine with peek zones opens room of the peek's
+ * height under the line, so the following lines move down and the peek sits in that room; without zones the peek
+ * floats under the line (over it near the region's foot), and an engine without line geometry keeps it docked.
+ * Follows the editor's scroll through the handle's selection/viewport signal.
  */
 function useChangeMarkerPeekPlacement(
   regionRef: React.RefObject<View | null>,
   handle: TextEditorHandle | null,
   marker: EditorChangeMarker | null,
-): ChangeMarkerPeekPlacement | null {
+  peekHeight: number | null,
+  zoneGap: number,
+): Readonly<{ placement: ChangeMarkerPeekPlacement | null; zoned: boolean }> {
   const [placement, setPlacement] = React.useState<ChangeMarkerPeekPlacement | null>(null);
+  const setPeekZone = handle?.setPeekZone;
+  const getPeekZoneRect = handle?.getPeekZoneRect;
+  const zoned = Boolean(setPeekZone && getPeekZoneRect);
+  React.useEffect(() => {
+    if (!marker || !setPeekZone || !getPeekZoneRect) return;
+    return () => setPeekZone(null);
+  }, [marker, setPeekZone, getPeekZoneRect]);
+  React.useEffect(() => {
+    if (!marker || !setPeekZone || !getPeekZoneRect || peekHeight === null) return;
+    setPeekZone({ afterLine: peekZoneAfterLine(marker), firstLine: marker.startLine, height: peekHeight + 2 * zoneGap });
+  }, [marker, peekHeight, setPeekZone, getPeekZoneRect, zoneGap]);
   React.useEffect(() => {
     const getLineRect = handle?.getLineRect;
-    if (!marker || !getLineRect) { setPlacement(null); return; }
+    if (!marker || (!getLineRect && !getPeekZoneRect)) { setPlacement(null); return; }
     const line = marker.kind === 'deleted' ? marker.startLine : marker.endLine;
     const update = () => {
-      const rect = getLineRect(line);
+      const zone = getPeekZoneRect?.() ?? null;
+      const rect = zone ?? getLineRect?.(line) ?? null;
       const region = regionRef.current;
       if (!rect || !region?.measureInWindow) { setPlacement(null); return; }
       region.measureInWindow((x, y, _width, height) => {
         const left = Math.max(0, rect.x - x - PEEK_LEADING_OFFSET);
         const below = rect.y - y + rect.height;
-        const next: ChangeMarkerPeekPlacement = below + CHANGE_MARKER_PEEK_MAX_HEIGHT <= height
-          ? { left, top: Math.max(0, below) }
-          : { left, bottom: Math.max(0, height - (rect.y - y)) };
+        const next: ChangeMarkerPeekPlacement = zone
+          ? { left, top: zone.y - y + zoneGap }
+          : below + CHANGE_MARKER_PEEK_MAX_HEIGHT <= height
+            ? { left, top: Math.max(0, below) }
+            : { left, bottom: Math.max(0, height - (rect.y - y)) };
         setPlacement((current) => current && current.left === next.left
           && ('top' in current ? 'top' in next && current.top === next.top : 'bottom' in next && current.bottom === next.bottom)
           ? current : next);
@@ -158,6 +187,6 @@ function useChangeMarkerPeekPlacement(
     };
     update();
     return handle?.subscribeSelection?.(update);
-  }, [handle, marker, regionRef]);
-  return placement;
+  }, [handle, marker, regionRef, getPeekZoneRect, zoneGap]);
+  return { placement, zoned };
 }

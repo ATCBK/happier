@@ -14,6 +14,8 @@ import { t } from '@/text';
 import {
   CODE_EDITOR_BASE_FONT_SIZE,
   CODE_EDITOR_BASE_LINE_HEIGHT,
+  CODE_EDITOR_TAB_SIZE,
+  CODE_GUTTER_METRICS,
 } from './codeEditorFontMetrics';
 import type { EditorChangeMarker, EditorChangeRevertResult } from './editorChangeMarkers';
 import type { EditorChangeMarkersController } from './useEditorChangeMarkers';
@@ -41,10 +43,28 @@ export type ChangeMarkerPeekProps = Readonly<{
   controller: EditorChangeMarkersController;
   /** The review owner's keyed actions for this change (Keep · Discard · Ask · Copy, P5); the peek draws them. */
   resolveChangeActions?: (marker: EditorChangeMarker, context: ChangeMarkerActionContext) => HunkReviewChangeActions<EditorChangeRevertResult> | null;
+  /** The peek's laid-out height, so the editor can open room of that height under the line (view zone). */
+  onHeightChange?: (height: number) => void;
 }>;
 
 /** Below this frame width the actions leave the header for a row of their own under the removed lines. */
 const ONE_ROW_MIN_WIDTH = 440;
+
+/** Each removed line with its number in the old file (ED3 E1: the row reads "20 − const key = …"). */
+function removedRowsOf(marker: EditorChangeMarker): ReadonlyArray<Readonly<{ number: number; text: string }>> {
+  const rows: Array<Readonly<{ number: number; text: string }>> = [];
+  let oldLine = marker.hunk.oldStart;
+  for (const line of marker.hunk.lines) {
+    if (line.kind === 'remove') rows.push({ number: oldLine, text: line.text });
+    if (line.kind !== 'add') oldLine += 1;
+  }
+  return rows;
+}
+
+/** Keeps a line's indentation in a one-line row (which collapses leading white space), so it sits as it did. */
+function withVisibleIndent(text: string): string {
+  return text.replace(/^[ \t]+/, (indent) => indent.replace(/\t/g, ' '.repeat(CODE_EDITOR_TAB_SIZE)).replace(/ /g, '\u00a0'));
+}
 
 function markerSummary(marker: EditorChangeMarker): string {
   const removed = marker.removedLines?.length ?? 0;
@@ -67,14 +87,16 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
 ) {
   const { theme } = useUnistyles();
   const { marker, controller } = props;
-  const removed = marker.removedLines ?? [];
+  const removed = React.useMemo(() => removedRowsOf(marker), [marker]);
   const context = { dirty: props.dirty, revertInDraft: controller.revertInDraft };
   const actions = props.resolveChangeActions?.(marker, context) ?? null;
   const [oneRow, setOneRow] = React.useState(true);
-  const onFrameLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+  const onHeightChange = props.onHeightChange;
+  const onFrameLayout = React.useCallback((event: { nativeEvent: { layout: { width: number; height: number } } }) => {
     const next = event.nativeEvent.layout.width >= ONE_ROW_MIN_WIDTH;
     setOneRow((previous) => (previous === next ? previous : next));
-  }, []);
+    onHeightChange?.(event.nativeEvent.layout.height);
+  }, [onHeightChange]);
   const actionRow = actions ? <ChangeMarkerPeekActions marker={marker} actions={actions} /> : null;
   const header = (
     <View style={stylesheet.header}>
@@ -134,11 +156,20 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
             {removed.map((line, index) => (
               <View
                 key={index}
+                testID="change-marker-peek-removed-row"
                 style={[
                   stylesheet.removedRow,
                   { backgroundColor: theme.colors.diff.removed.background },
                 ]}
               >
+                <Text
+                  style={[
+                    stylesheet.oldNumber,
+                    { color: theme.colors.diff.removed.border },
+                  ]}
+                >
+                  {line.number}
+                </Text>
                 <Text
                   style={[
                     stylesheet.code,
@@ -155,7 +186,7 @@ export const ChangeMarkerPeek = React.memo(function ChangeMarkerPeek(
                   ]}
                   numberOfLines={1}
                 >
-                  {line}
+                  {withVisibleIndent(line.text)}
                 </Text>
               </View>
             ))}
@@ -334,6 +365,14 @@ const stylesheet = StyleSheet.create((theme) => ({
   },
   prefix: {
     width: 10,
+  },
+  oldNumber: {
+    ...Typography.mono(),
+    fontSize: CODE_GUTTER_METRICS.numberFontSize,
+    lineHeight: CODE_EDITOR_BASE_LINE_HEIGHT,
+    fontVariant: ['tabular-nums'],
+    minWidth: CODE_GUTTER_METRICS.numberMinWidth,
+    textAlign: 'right',
   },
   code: {
     ...Typography.mono(),

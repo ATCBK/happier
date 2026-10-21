@@ -233,6 +233,11 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                 decorationsRef.current.set(layer, items);
                 if (readyRef.current) postEnvelope({ v: 1, type: 'decorations.set', payload: { layer, items } });
             },
+            removeDecoration: (layer, id) => {
+                const items = decorationsRef.current.get(layer);
+                if (items) decorationsRef.current.set(layer, items.filter(item => item.id !== id));
+                if (readyRef.current) postEnvelope({ v: 1, type: 'decorations.remove', payload: { layer, id } });
+            },
             onDecorationPress: (listener) => {
                 decorationListenersRef.current.add(listener);
                 return () => { decorationListenersRef.current.delete(listener); };
@@ -430,10 +435,12 @@ export const CodeMirrorWebViewSurface = React.forwardRef<CodeEditorHandle, CodeE
                     }
 
                     if (decoded.type === 'docChanged') {
-                        const payload: any = decoded.payload;
-                        if (payload && typeof payload.doc === 'string') {
+                        const payload = decoded.payload;
+                        if (payload && typeof payload === 'object' && 'doc' in payload && typeof payload.doc === 'string') {
                             lastDocRef.current = payload.doc;
-                            props.onChange(payload.doc);
+                            const history = 'history' in payload ? payload.history : undefined;
+                            if (history === 'undo' || history === 'redo') props.onChange(payload.doc, { history });
+                            else props.onChange(payload.doc);
                         }
                         return;
                     }
