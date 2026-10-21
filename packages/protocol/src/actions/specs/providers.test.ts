@@ -2,8 +2,26 @@ import { describe, expect, it } from 'vitest';
 import { PROVIDER_ACTION_SPECS_V1 } from './providers.js';
 import { isProviderActionMachineRequiredV1 } from '../../providers/providerActionsV1.js';
 import { createProviderErrorV1, ProviderErrorV1Schema } from '../../providers/errors.js';
+import { describeApprovalActionFields } from '../actionApprovalPresentation.js';
 
 describe('Provider Action placement declarations', () => {
+  it('identifies the experimental model and Agent through the approval field contract', () => {
+    const spec = PROVIDER_ACTION_SPECS_V1.find(spec => spec.id === 'providers.models.experimental.confirm')!;
+    const input = spec.inputSchema.parse({ action: 'confirmExperimental', connectionId: 'connected-source:recipient',
+      catalogSourceKey: 's'.repeat(43), expectedConnectionRevision: 0,
+      agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.6-luna',
+      compatibilityFingerprint: 'compatibility:v1:experimental' });
+    const { rows } = describeApprovalActionFields({ actionId: spec.id, actionArgs: input });
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'modelId', value: input.modelId,
+        reference: { kind: 'providerModel', id: input.modelId, connectionId: input.connectionId,
+          agentTargetKey: input.agentTargetKey, catalogSourceKey: input.catalogSourceKey } }),
+      expect.objectContaining({ path: 'agentTargetKey', reference: { kind: 'agent', id: 'codex' } }),
+      expect.objectContaining({ path: 'connectionId', reference: { kind: 'providerConnection', id: input.connectionId,
+        catalogSourceKey: input.catalogSourceKey } }),
+    ]));
+    expect(rows[0]).toMatchObject({ path: 'modelId' });
+  });
   it('retains strict typed refusals in observations without disclosing private Provider payloads', () => {
     const spec = PROVIDER_ACTION_SPECS_V1.find(spec => spec.id === 'providers.probe')!;
     const error = createProviderErrorV1('provider_endpoint_rate_limited', {

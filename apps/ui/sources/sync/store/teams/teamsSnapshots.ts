@@ -269,6 +269,12 @@ export function getTeamCredentialResourceCatalogSnapshot(
     return credentialCatalogs.get(serverAccountScopedTeamKey(scope, address)) ?? null;
 }
 
+/** Recipient-safe cached names for an exact Account; display reads confer no resource authority. */
+export function readTeamCredentialResourceCatalogs(scope: ServerAccountScope): readonly TeamCredentialResourceCatalogEntryV1[] {
+    return [...credentialCatalogs.values()].flatMap(snapshot => snapshot.scope.serverId === scope.serverId
+        && snapshot.scope.accountId === scope.accountId ? snapshot.data ?? [] : []);
+}
+
 export function getTeamCredentialResourceSnapshot(
     scope: ServerAccountScope | null | undefined,
     address: TeamAddress | null | undefined,

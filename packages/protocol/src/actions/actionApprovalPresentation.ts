@@ -23,6 +23,7 @@ import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations
 import { ReachPlaceV1Schema } from '../reach/reachPlaceV1.js';
 import { ReachRuleDraftV1Schema } from '../reach/reachRuleV1.js';
 import { ReachRulesChangeV1Schema } from '../reach/reachRulesChangeV1.js';
+import { parseBackendTargetKeyV2, readBackendTargetRefV2 } from '../backends/targets/backendTargetRefV2.js';
 import {
   PluginChangePendingReviewResultSchema,
   type PluginChangePendingReviewResult,
@@ -157,7 +158,8 @@ export type ApprovalActionReference =
   | Readonly<{ kind: 'home'; id: string }>
   | Readonly<{ kind: 'account'; id: string }>
   | Readonly<{ kind: 'setting'; id: string }>
-  | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string }>
+  | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string; catalogSourceKey?: string }>
+  | Readonly<{ kind: 'providerModel'; id: string; connectionId: string; agentTargetKey: string; catalogSourceKey?: string }>
   | Readonly<{ kind: 'providerContribution'; id: string }>
   | Readonly<{ kind: 'managedMachine'; id: string; homeId: string }>
   | Readonly<{ kind: 'artifact' | 'skill' | 'mcpServer' | 'project' | 'agent' | 'registrySource'; id: string }>
@@ -236,11 +238,30 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
     return { kind: 'setting', id: value };
   }
   if (actionId.startsWith('providers.')) {
+    const catalogSourceKey = isRecord(input) && typeof input.catalogSourceKey === 'string'
+      ? { catalogSourceKey: input.catalogSourceKey } : {};
     if (field.path === 'connectionId') {
       const name = isRecord(input) && typeof input.displayName === 'string' ? input.displayName.trim() : '';
-      return { kind: 'providerConnection', id: value.trim(), ...(name ? { displayName: name } : {}) };
+      return { kind: 'providerConnection', id: value.trim(), ...catalogSourceKey, ...(name ? { displayName: name } : {}) };
     }
     if (field.path === 'contributionKey') return { kind: 'providerContribution', id: value.trim() };
+    if (field.path === 'modelId' && isRecord(input) && typeof input.connectionId === 'string'
+        && typeof input.agentTargetKey === 'string') {
+      return { kind: 'providerModel', id: value, connectionId: input.connectionId,
+        agentTargetKey: input.agentTargetKey, ...catalogSourceKey };
+    }
+    if (field.path === 'agentTargetKey') {
+      try {
+        return { kind: 'agent', id: readBackendTargetRefV2(value).backendId };
+      } catch {
+        // Non-bundled identities are resolved by the host's Agent catalog, not by a protocol registry.
+        try {
+          const target = parseBackendTargetKeyV2(value);
+          if (target.kind === 'agent') return { kind: 'agent', id: target.definitionId
+            ?? `${target.identity.pluginId}/${target.identity.localId}` };
+        } catch { /* Malformed references remain literal approval context. */ }
+      }
+    }
   }
   const key = field.path.split('.').at(-1);
   const reference = field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'session'

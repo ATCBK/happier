@@ -1,7 +1,7 @@
 import { t } from '@/text';
 import { storage, useArtifact, useMachineDisplayNamesById, useProjectAccountRows, useServerScopedMachine, useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
-import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
+import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
@@ -31,6 +31,10 @@ import { formatWorkspaceSyncRelationshipTitle } from '@/sync/domains/sessionHand
 import { useManagedMachineInventory } from '@/components/settings/machines/managed/useManagedMachineInventory';
 import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import type { TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol/teams';
+import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
+import { readTeamCredentialResourceCatalogs } from '@/sync/store/teams/teamsSnapshots';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 type ApprovalReference = ApprovalActionReference;
 
 export type ApprovalReferenceReading = Readonly<{ text: string; named: boolean; resolving?: boolean; subject?: 'managedMachine' }>;
@@ -58,6 +62,8 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
         registries: getPromptLibraryCatalogValue(scope, 'registry-sources'),
         projects: readCurrentProjectAccountRows(state),
         providerCatalog: getProviderCatalogSnapshot(scope),
+        teamResources: readTeamCredentialResourceCatalogs({ ...scope,
+            serverId: resolveServerProfileScopeIdForIdentifier(scope.serverId) }),
     };
     if (reference.kind === 'artifact' || reference.kind === 'skill') {
         sources.artifact = await account.fetchArtifact(reference.id, { signal });
@@ -98,7 +104,11 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const projects = useProjectAccountRows();
     const agents = useAgentCatalogIdentities({ agentIds: reference?.kind === 'agent' ? [reference.id] : [], machineId: null,
         serverId: reference?.kind === 'agent' ? approvalServerId : null });
-    const providerCatalog = useProviderCatalogForServer(reference?.kind === 'providerConnection' ? approvalServerId : null);
+    const providerConnectionId = reference?.kind === 'providerConnection' ? reference.id
+        : reference?.kind === 'providerModel' ? reference.connectionId : null;
+    const providerCatalog = useProviderCatalogForServer(providerConnectionId ? approvalServerId : null);
+    const teamCatalog = useHomeTeamCredentialModelCatalog({ serverId: approvalServerId,
+        enabled: Boolean(providerConnectionId && !providerCatalog?.data?.connections.some(row => row.id === providerConnectionId)) });
     const declarations = readAccountProviderDeclarations();
     const syncLink = useWorkspaceSyncRelationshipSummary(reference?.kind === 'workspaceSyncRelationship' ? reference.id : null, approvalServerId ?? undefined);
     const workspaceRefs = useWorkspaceRefs();
@@ -109,7 +119,7 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const { managedMachine, managedEnrolledMachine, managedMachineLoading } = useManagedReferenceSources(reference, approvalServerId);
     return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine,
         managedMachine, managedEnrolledMachine, managedMachineLoading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
-        syncLink, workspace });
+        syncLink, workspace, teamResources: teamCatalog.resources });
 }
 
 /** The managed row and its enrolled Machine behind a managed reference, read in the reference's own Home. */
@@ -155,6 +165,7 @@ type ApprovalReferenceSources = {
     projects?: ReturnType<typeof useProjectAccountRows>;
     agents?: ReturnType<typeof useAgentCatalogIdentities>;
     providerCatalog?: ReturnType<typeof useProviderCatalogForServer>;
+    teamResources?: readonly TeamCredentialResourceCatalogEntryV1[];
     declarations: ReturnType<typeof readAccountProviderDeclarations>;
     syncLink?: WorkspaceSyncRelationshipSummary | null;
     workspace?: WorkspaceSyncRelationshipEndpoint | null;
@@ -214,6 +225,15 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
         const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, reference.id));
         return { text: declaration?.definition.name ?? t('common.unavailable'), named: true };
     }
+    if (reference?.kind === 'providerModel') {
+        const resource = findApprovalProviderSource(reference, sources.teamResources);
+        const model = resource?.providerModels.find(row => row.selection.agentTargetKey === reference.agentTargetKey
+            && row.selection.modelId === reference.id);
+        const connectionId = ProviderConnectionIdSchema.safeParse(reference.connectionId);
+        const manual = connectionId.success
+            ? providerCatalog?.data?.manualModelsByConnectionId[connectionId.data]?.find(row => row.id === reference.id) : undefined;
+        return { text: model?.descriptor.name || manual?.name || reference.id, named: true };
+    }
     if (reference?.kind === 'providerConnection') {
         const connection = providerCatalog?.data?.connections.find(row => row.id === reference.id);
         if (connection) {
@@ -223,7 +243,8 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
             return { text: presentProviderConnectionIdentity({ ...connection,
                 providerName: sourceName ?? t('common.unavailable') }).title, named: true };
         }
-        return { text: reference.displayName ?? t('common.unavailable'), named: true };
+        const resource = findApprovalProviderSource(reference, sources.teamResources);
+        return { text: reference.displayName ?? resource?.displayName ?? t('common.unavailable'), named: true };
     }
     if (reference?.kind === 'session') {
         if (sessionReading.status === 'resolving') return { text: t('common.loading'), named: false, resolving: true };
@@ -246,6 +267,13 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
         return own ? { text: t('accountDisplay.yours'), named: true } : { text: literal, named: false };
     }
     return { text: literal, named: false };
+}
+
+function findApprovalProviderSource(reference: Extract<ApprovalReference, { kind: 'providerConnection' | 'providerModel' }>,
+    resources: readonly TeamCredentialResourceCatalogEntryV1[] = []) {
+    const connectionId = reference.kind === 'providerConnection' ? reference.id : reference.connectionId;
+    return resources.find(resource => resource.providerModels.some(row => row.confirmationSource?.connectionId === connectionId
+        && (!reference.catalogSourceKey || row.confirmationSource.catalogSourceKey === reference.catalogSourceKey)));
 }
 
 function describeApprovalWorkspaceEndpoint(endpoint: WorkspaceSyncRelationshipEndpoint): string {

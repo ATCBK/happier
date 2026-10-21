@@ -4,6 +4,7 @@ import type { ActionInputFieldHint, PreNormalizedActionSpec } from '../actionSpe
 import { readRecord } from '../../inputs/inputRecords.js';
 import { ProviderEndpointUrlSyntaxSchema } from '../../providers/endpointUrlSchema.js';
 import { ProviderErrorV1Schema } from '../../providers/errors.js';
+import { ProviderModelConfirmationSourceKeyV1Schema } from '../../providers/compatibility/sourceFacts.js';
 import { CustomProviderTemplateV1Schema } from '../../providers/connections/customTemplateV1.js';
 import { ProviderClaudeHelperModelsV1Schema, ProviderConnectionPurposeBindingDefaultsV1Schema,
   ProviderGatewayPlacementV1Schema } from '../../providers/connections/v1.js';
@@ -22,6 +23,8 @@ function projectProviderObservation(input: unknown): unknown {
 function projectProviderInputObservation(input: unknown): unknown {
   const value = readRecord(input);
   const projected: Record<string, unknown> = { ...readRecord(projectProviderObservation(value)) };
+  const catalogSourceKey = ProviderModelConfirmationSourceKeyV1Schema.safeParse(value.catalogSourceKey);
+  if (catalogSourceKey.success) projected.catalogSourceKey = catalogSourceKey.data;
   for (const key of ['contributionKey', 'displayName', 'displayNameMode', 'newConnectionId', 'draftConnectionId', 'mode', 'scope',
     'endpointTemplateId', 'credentialSlotId', 'modelId', 'purpose', 'candidateId']) {
     if (typeof value[key] === 'string' || value[key] === null) projected[key] = value[key];
@@ -79,6 +82,11 @@ function providerFields(id: ProviderActionIdV1): readonly ActionInputFieldHint[]
     { path: 'connectionId', title: 'Provider connection', widget: 'text' },
     { path: 'machineId', title: 'Computer', widget: 'text' },
   ] satisfies readonly ActionInputFieldHint[];
+  if (id === 'providers.models.experimental.confirm') return [
+    { path: 'modelId', title: 'Model', widget: 'text' },
+    { path: 'agentTargetKey', title: 'Agent', widget: 'text', required: true },
+    ...target,
+  ];
   const fields: Partial<Record<ProviderActionIdV1, readonly ActionInputFieldHint[]>> = {
     'providers.connections.create_custom': [...templateFields('template'), { path: 'enable', title: 'Enable connection', widget: 'boolean' }],
     'providers.connections.create_contribution': [
