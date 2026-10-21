@@ -31,6 +31,7 @@ import {
 let machineContextOwner: Encryption;
 const machineContextAuthority = {
     captureMachineEncryptionContext: (...args: Parameters<Encryption['captureMachineEncryptionContext']>) => machineContextOwner.captureMachineEncryptionContext(...args),
+    captureMachineEncryptionContextForRead: (...args: Parameters<Encryption['captureMachineEncryptionContextForRead']>) => machineContextOwner.captureMachineEncryptionContextForRead(...args),
     getMachineEncryptionContext: (...args: Parameters<Encryption['getMachineEncryptionContext']>) => machineContextOwner.getMachineEncryptionContext(...args),
     removeMachineEncryption: (id: string) => machineContextOwner.removeMachineEncryption(id),
 };

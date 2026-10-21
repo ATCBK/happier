@@ -17,7 +17,7 @@ import type { CapturedServerReadTransport } from './capturedServerReadTransport'
 import { readExplicitMachineTransportRow, readMachineRows, resetMachineRowReadsForTests } from '@/sync/api/machines/machineRowsApi';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
 
-type MachineContextAuthority = Pick<Encryption, 'captureMachineEncryptionContext' | 'getMachineEncryptionContext'>;
+type MachineContextAuthority = Pick<Encryption, 'captureMachineEncryptionContext' | 'captureMachineEncryptionContextForRead' | 'getMachineEncryptionContext'>;
 
 function machineRowTimeoutError() {
     return createRpcCallError({ error: 'Machine row request timed out', errorCode: 'MACHINE_RPC_TIMEOUT' });
@@ -121,8 +121,7 @@ async function fetchMachineTransport(params: Readonly<{
             };
         };
         const machine = body?.machine;
-        if (params.encryption && params.encryption.getMachineEncryptionContext(params.machineId) !== incumbentContext) return null;
-        if (normalizeId(machine?.id) !== params.machineId) {
+        if (!machine || normalizeId(machine.id) !== params.machineId) {
             return null;
         }
         const published = machine?.dataEncryptionKey;
@@ -135,10 +134,12 @@ async function fetchMachineTransport(params: Readonly<{
             || (daemonStateVersion !== undefined && cached?.daemonStateVersion !== undefined && daemonStateVersion < cached.daemonStateVersion)) return null;
         const unchanged = cached && areMachineEncryptionContextInputsEqual(cached.identity, input);
         const identity = unchanged ? cached.identity : input;
-        const context = params.encryption?.captureMachineEncryptionContext(
+        const context = params.encryption?.captureMachineEncryptionContextForRead(
             params.machineId,
             input,
+            { incumbent: incumbentContext, observation: machine },
         );
+        if (params.encryption && !context) return null;
         const selected: MachineTransportEvidence = {
             machine: {
                 id: params.machineId, kind: machine?.kind, installationId: machine?.installationId,
@@ -147,7 +148,7 @@ async function fetchMachineTransport(params: Readonly<{
                 access: machine?.access,
             },
             identity, metadataVersion, daemonStateVersion,
-            selectedContext: context,
+            selectedContext: context ?? undefined,
             openedDataEncryptionKey: unchanged ? cached.openedDataEncryptionKey : null,
         };
         // Publish selection before opening yields so a changed key/access
@@ -165,7 +166,7 @@ async function fetchMachineTransport(params: Readonly<{
         // while this caller retains its own crypto context for currentness.
         const opened = { ...current, openedDataEncryptionKey: dataKey };
         setMachineTransportCache(params.cacheKey, opened);
-        return { ...opened, selectedContext: context };
+        return { ...opened, selectedContext: context ?? undefined };
     } catch (error) {
         // An unavailable transport is not evidence that the Machine has no key.
         if (isTerminalAuthError(error)) throw error;

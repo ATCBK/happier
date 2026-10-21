@@ -25,6 +25,7 @@ import { readAccountSettingsBaseline } from '@/sync/engine/settings/accountSetti
 import { syncSettings, requireOneShotAccountSettingsMutationApplied, type AccountSettingsMutationCapture } from '@/sync/engine/settings/syncSettings';
 import { settingsParse, type Settings } from '@/sync/domains/settings/settings';
 import { createServerFetchAtEndpoint, type ServerFetch } from '@/sync/http/client';
+import { bindAccountEncryptionObservation, captureAccountEncryptionObservationForHome } from '@/sync/http/accountEncryptionObservationBinding';
 import { resolveServerScopedTransport } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerScopedTransport';
 import { createCapturedServerReadTransport } from '@/sync/runtime/orchestration/serverScopedRpc/capturedServerReadTransport';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/connectionManager';
@@ -203,10 +204,6 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
             throw new AccountStorageCurrentnessUnavailableError(undefined, 'unauthorized', 'action_home_signed_out');
         }
         const credentialAuthorityKind = readCredentialAuthorityKind(credentials.token);
-        // Restricted reads retain their invocation's Action authorization; a
-        // neutral Account transport cannot borrow mutation/claim admission.
-        const readTransport = credentialAuthorityKind === 'api_token' ? undefined
-            : createCapturedServerReadTransport({ serverId, profile, credentials });
         const accountId = parseToken(credentials.token);
         const scope = { serverId, accountId };
         const accountLifetime = {
@@ -235,6 +232,15 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 return { dispose: () => controller.signal.removeEventListener('abort', cancel) };
             },
         };
+        const accountEncryptionObservation = credentialAuthorityKind === 'api_token' ? undefined
+            : captureAccountEncryptionObservationForHome({
+                serverId, endpointUrl: profile.canonicalServerUrl ?? profile.serverUrl, credentials,
+                isCurrent: accountLifetime.isCurrent, signals: [controller.signal, signal],
+            });
+        // Restricted reads retain their invocation's Action authorization; a
+        // neutral Account transport cannot borrow mutation/claim admission.
+        const readTransport = credentialAuthorityKind === 'api_token' ? undefined
+            : createCapturedServerReadTransport({ serverId, profile, credentials, accountEncryptionObservation });
         // Every Action owns an explicit Home target. Resolve it through the
         // canonical scoped carrier so a staged focus change cannot retarget an
         // Action through the ambient focused request path.
@@ -255,6 +261,7 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                         runtimeOrigin: transport.runtimeOrigin,
                         serverId,
                         credentials,
+                        accountEncryptionObservation,
                         signal: cancellation.signal,
                         ...(transport.homeCarrier ? { homeCarrier: transport.homeCarrier } : {}),
                     })(path, requestInit, options);
@@ -268,8 +275,9 @@ export async function captureLazyActionAccountContext(serverIdRaw: string, signa
                 cancellation.dispose();
             }
         };
+        bindAccountEncryptionObservation(request, accountEncryptionObservation);
         const loadAccountMode = async () => {
-            const mode = (await fetchAccountEncryptionMode(credentials, { request })).mode;
+            const mode = (await fetchAccountEncryptionMode(credentials, { request, usage: 'identity' })).mode;
             assertCurrent();
             return mode;
         };

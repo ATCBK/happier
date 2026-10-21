@@ -78,6 +78,11 @@ export type MachineEncryptionContext = MachineEncryptionContextInput & Readonly<
     isCurrent: () => boolean;
 }>;
 
+const machineContextReadObservation = Symbol('machineContextReadObservation');
+type MachineEncryptionContextEntry = MachineEncryptionContext & Readonly<{
+    [machineContextReadObservation]?: object;
+}>;
+
 export type EncryptionGenerationScope = Readonly<{
     accountId: string;
     serverId: string | null;
@@ -205,7 +210,7 @@ export class Encryption {
     private sessionKeyFingerprints = new Map<string, string>();
     private machineEncryptions = new Map<string, MachineEncryption>();
     private machineKeyFingerprints = new Map<string, string>();
-    private machineEncryptionContexts = new Map<string, MachineEncryptionContext>();
+    private machineEncryptionContexts = new Map<string, MachineEncryptionContextEntry>();
     private machineEncryptionOpenings = new Map<string, object>();
     // The Account encryption owner retains successful pure envelope work in the
     // same scope as in-flight work. This never grants access to a row; callers
@@ -559,6 +564,22 @@ export class Encryption {
             isCurrent: () => this.machineEncryptionContexts.get(machineId) === context,
         };
         this.machineEncryptionContexts.set(machineId, context);
+        return context;
+    }
+
+    /** Atomically admit siblings of one physical observation without reviving a retired read. */
+    captureMachineEncryptionContextForRead(machineId: string, input: MachineEncryptionContextInput, read: Readonly<{
+        incumbent: MachineEncryptionContext | undefined;
+        observation: object;
+    }>): MachineEncryptionContext | null {
+        const current = this.machineEncryptionContexts.get(machineId);
+        if (current !== read.incumbent && current?.[machineContextReadObservation] !== read.observation) return null;
+        const context = this.captureMachineEncryptionContext(machineId, input);
+        if (context !== current) {
+            // Non-enumerable so ordinary context/input copies cannot carry admission proof.
+            // Unchanged observations never overwrite the first admitted read's provenance.
+            Object.defineProperty(context, machineContextReadObservation, { value: read.observation });
+        }
         return context;
     }
 

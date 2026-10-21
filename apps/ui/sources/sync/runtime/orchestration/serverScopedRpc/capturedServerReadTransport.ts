@@ -7,11 +7,14 @@ import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanoni
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { readHomeAccountReadRevision } from '@/sync/runtime/orchestration/homeAccountChange';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
+import type { AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 
 import { resolveServerScopedTransport } from './resolveServerScopedTransport';
 
 /** Physical read binding only. Every borrower still admits its own authority and result. */
 export type CapturedServerReadTransport = Readonly<{
+    /** Existing prepared configuration lifetime; not a borrower or an authorization verdict. */
+    scope?: object;
     /** Snapshot once per acquisition; a Home wake separates later demand from incumbent reads. */
     key: string;
     read<T>(path: string, init: RequestInit | undefined, options: ServerFetchOptions | undefined,
@@ -32,11 +35,13 @@ type PreparedReadTransport = Readonly<{
     homeCarrier?: HomeCarrier | null;
     generation: number;
     request: ServerResponseRequest;
+    scope?: object;
 }>;
 
 export function createCapturedServerReadTransport(params: Readonly<{
     serverId: string;
     credentials: AuthCredentials;
+    accountEncryptionObservation?: AccountEncryptionObservationBinding;
 } & ({ profile: CapturedProfile; prepared?: never } | { prepared: PreparedReadTransport; profile?: CapturedProfile })>): CapturedServerReadTransport {
     if (params.prepared) {
         const prepared = params.prepared;
@@ -49,6 +54,7 @@ export function createCapturedServerReadTransport(params: Readonly<{
             prepared.generation, resolveAuthCredentialsScopeKey(params.credentials),
         ]);
         return {
+            ...(prepared.scope ? { scope: prepared.scope } : {}),
             get key() { return JSON.stringify([bindingKey, readHomeAccountReadRevision(params.serverId)]); },
             async read(path, init, options, consumeResponse) {
                 throwIfAborted(init?.signal ?? undefined);
@@ -81,6 +87,7 @@ export function createCapturedServerReadTransport(params: Readonly<{
                     runtimeOrigin: transport.runtimeOrigin,
                     serverId: params.serverId,
                     credentials: params.credentials,
+                    accountEncryptionObservation: params.accountEncryptionObservation,
                     ...(transport.homeCarrier ? { homeCarrier: transport.homeCarrier } : {}),
                 })(path, init, options, consumeResponse);
             } finally {

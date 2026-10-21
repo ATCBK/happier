@@ -714,7 +714,8 @@ async function refreshServerSnapshot(
     intent: ConcurrentRefreshIntent,
 ): Promise<void> {
     const startedAt = Date.now();
-    const capturedReadTransport = createCapturedServerReadTransport({ serverId: entry.id, profile: entry, credentials: entry.credentials });
+    const capturedReadTransport = createCapturedServerReadTransport({ serverId: entry.id, profile: entry, credentials: entry.credentials,
+        accountEncryptionObservation: entry.accountEncryptionObservation?.binding });
     let responseBytes = 0;
     const encryption = await getOrCreateEncryption(entry);
     const observeResponse = (response: Response) => {

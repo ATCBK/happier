@@ -33,6 +33,7 @@ import {
     resolveUiClientEncryptionRequirementForScope,
 } from '@/sync/domains/settings/clientEncryptionRequirement';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { CapturedServerReadTransport } from './capturedServerReadTransport';
 
 type AppliedSession = Omit<Session, 'presence'> & { presence?: 'online' | number };
 
@@ -318,6 +319,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
     sessionDataKeys: Map<string, Uint8Array>;
     sessionDataKeyEnvelopes?: Map<string, string>;
     activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions) => Promise<Response>;
+    activeReadTransport?: CapturedServerReadTransport;
     applySessions: (sessions: AppliedSession[]) => void;
     getExistingSession?: (sessionId: string) => Session | null | undefined;
     getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
@@ -397,7 +399,7 @@ export async function fetchSessionByIdWithServerScope(params: Readonly<{
             sessionDataKeys: params.sessionDataKeys,
             sessionDataKeyEnvelopes: params.sessionDataKeyEnvelopes,
             request: params.activeRequest,
-            readTransport: params.authority?.readTransport,
+            readTransport: params.authority?.readTransport ?? params.activeReadTransport,
             signal: params.signal,
             applySessions: params.applySessions,
             getExistingSession: params.getExistingSession,

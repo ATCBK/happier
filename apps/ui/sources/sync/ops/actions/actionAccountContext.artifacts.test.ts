@@ -1091,7 +1091,10 @@ describe('scoped Account workflow Artifact operations', () => {
             if (init?.method !== 'POST') return json(stored);
             const write = JSON.parse(String(init.body)) as ArtifactUpdateRequest;
             if (write.expectedHeaderVersion !== stored.headerVersion || write.expectedBodyVersion !== stored.bodyVersion) return json({ success: false, error: 'version-mismatch' });
-            stored = { ...stored, ...write, header: write.header!, body: write.body!, headerVersion: 2, bodyVersion: 2 };
+            stored = { ...stored, header: write.header!, body: write.body!, kind: write.kind ?? stored.kind,
+                provenance: write.provenance === undefined ? stored.provenance : write.provenance,
+                provenanceDataEncryptionKey: write.provenanceDataEncryptionKey === undefined ? stored.provenanceDataEncryptionKey : write.provenanceDataEncryptionKey,
+                headerVersion: 2, bodyVersion: 2 };
             return json({ success: true, headerVersion: 2, bodyVersion: 2 });
         });
         const context = await captureLazyActionAccountContext(home.id);

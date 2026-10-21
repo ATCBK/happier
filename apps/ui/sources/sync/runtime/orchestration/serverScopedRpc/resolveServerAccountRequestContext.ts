@@ -33,6 +33,7 @@ import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { createCapturedServerReadTransport, type CapturedServerReadTransport } from './capturedServerReadTransport';
+import { captureAccountEncryptionObservationForHome, type AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 
 function normalizeId(raw: unknown): string {
   return String(raw ?? '').trim();
@@ -55,6 +56,7 @@ export type ResolvedServerAccountRequestContext =
       /** Semantic carrier for a Home with no reachable URL origin (browser Iroh). */
       homeCarrier?: HomeCarrier;
       readTransport?: CapturedServerReadTransport;
+      accountEncryptionObservation?: AccountEncryptionObservationBinding;
       release?: () => Promise<void>;
     }>;
 
@@ -82,6 +84,9 @@ async function buildScopedContext(params: Readonly<{
     profile: params.profile ?? { serverUrl: params.serverUrl },
     credentials,
   });
+  const accountEncryptionObservation = readCredentialAuthorityKind(credentials.token) === 'api_token' ? undefined
+    : captureAccountEncryptionObservationForHome({ serverId: params.serverId,
+      endpointUrl: transport.canonicalServerUrl, credentials });
   return {
     scope: 'scoped',
     timeoutMs: params.timeoutMs,
@@ -91,9 +96,10 @@ async function buildScopedContext(params: Readonly<{
     token: credentials.token,
     credentials,
     encryption,
+    accountEncryptionObservation,
     ...(readCredentialAuthorityKind(credentials.token) === 'api_token' ? {} : {
       readTransport: createCapturedServerReadTransport({ serverId: params.serverId,
-        profile: params.profile ?? { serverUrl: params.serverUrl }, credentials }),
+        profile: params.profile ?? { serverUrl: params.serverUrl }, credentials, accountEncryptionObservation }),
     }),
     runtimeOrigin: transport.runtimeOrigin,
     carrier: transport.carrier,

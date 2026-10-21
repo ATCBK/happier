@@ -42,9 +42,10 @@ export async function readSessionParts(params: SessionPartsReadOptions): Promise
     const includeTurns = demand.includeSnapshot && demand.includeTurns !== false;
     const emptyBody = { ...demand, includeTurns };
     const transport = params.readTransport;
-    const scope = transport?.key;
+    const transportKey = transport?.key;
+    const scope = transport?.scope ?? transportKey;
     try {
-        return await sessionParts.run(JSON.stringify([params.includeSnapshot, includeTurns, params.includeMessages,
+        return await sessionParts.run(JSON.stringify([transportKey ?? null, params.includeSnapshot, includeTurns, params.includeMessages,
             params.accessProjectionVersion ?? null, params.retry ?? null]), params.sessionIds, async (ids, signal) => {
             const result = new Map<string, SessionReadPart>();
             let budget = createServerHttpRequestBodyItemBudgetV1(emptyBody);

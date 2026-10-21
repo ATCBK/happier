@@ -7,6 +7,8 @@ import {
 import { createServerFetchAtEndpoint, type ServerFetchOptions, type ServerResponseRequest } from '@/sync/http/client';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { bindAccountEncryptionObservation, readAccountEncryptionObservationBinding, type AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 
 import { resolveServerAccountRequestContext } from './resolveServerAccountRequestContext';
 import { onceAsync } from './resolveServerScopedTransport';
@@ -31,6 +33,9 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
     homeIdentityId?: string;
     runtimeOrigin?: string;
     token: string;
+    serverId?: string;
+    credentials?: AuthCredentials;
+    accountEncryptionObservation?: AccountEncryptionObservationBinding;
     timeoutMs?: number;
     /**
      * A Home that owns its own bytes and has no origin a URL fetch can reach
@@ -40,6 +45,15 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
      */
     homeCarrier?: HomeCarrier;
 }>): ServerAccountResponseRequest {
+    const credentials = params.credentials ?? { token: params.token };
+    const endpointRequest = createServerFetchAtEndpoint({
+        endpointUrl: params.serverUrl,
+        ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
+        ...(params.homeCarrier ? { homeCarrier: params.homeCarrier } : {}),
+        serverId: params.serverId,
+        credentials,
+        accountEncryptionObservation: params.accountEncryptionObservation,
+    });
     function request(path: string, init?: RequestInit, options?: ServerAccountRequestOptions): Promise<Response>;
     function request<T>(path: string, init: RequestInit | undefined, options: ServerAccountRequestOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
     async function request<T>(path: string, init?: RequestInit, options?: ServerAccountRequestOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
@@ -49,12 +63,6 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
             // The canonical HTTP owner composes semantic carriers and explicit
             // no-retry requests. Supply its scoped credential and request policy
             // here instead of parking user Retry on passive reachability.
-            const endpointRequest = createServerFetchAtEndpoint({
-                endpointUrl: params.serverUrl,
-                ...(params.runtimeOrigin ? { runtimeOrigin: params.runtimeOrigin } : {}),
-                ...(params.homeCarrier ? { homeCarrier: params.homeCarrier } : {}),
-                credentials: { token: params.token },
-            });
             const requestInit = { ...init, method: init?.method ?? 'GET', headers };
             const requestOptions = { retry: 'none' as const, ...(options?.onIssued ? { onIssued: options.onIssued } : {}) };
             return consumeResponse ? await endpointRequest(path, requestInit, requestOptions, consumeResponse)
@@ -77,7 +85,7 @@ export function createServerRequestForExplicitServerScope(params: Readonly<{
         return consumeResponse ? await runtimeFetchWithServerReachability(requestParams, consumeResponse)
             : await runtimeFetchWithServerReachability(requestParams);
     }
-    return request;
+    return bindAccountEncryptionObservation(request, readAccountEncryptionObservationBinding(endpointRequest, credentials) ?? undefined);
 }
 
 export type ServerAccountRequestAuthority = Readonly<{
@@ -101,31 +109,22 @@ export function createServerRequestForResolvedServerScope(params: Readonly<{
     context: ResolvedServerAccountRequestContext;
     activeRequest: ServerAccountResponseRequest | RawServerAccountRequest;
 }>): ServerAccountResponseRequest | RawServerAccountRequest {
-    function request(path: string, init?: RequestInit, options?: ServerAccountRequestOptions): Promise<Response>;
-    function request<T>(path: string, init: RequestInit | undefined, options: ServerAccountRequestOptions | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
-    async function request<T>(path: string, init?: RequestInit, options?: ServerAccountRequestOptions, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
-        if (params.context.scope === 'active') {
-            // The public overload pairs consumer callers with a consumer-capable
-            // request; legacy raw callers continue to use its three-argument path.
-            const activeRequest: (path: string, init?: RequestInit, options?: ServerAccountRequestOptions, consumeResponse?: (response: Response) => Promise<T>) => Promise<Response | T> = params.activeRequest;
-            return await activeRequest(path, init, options, consumeResponse);
-        }
-
-        const homeIdentityId = resolvePortableServerIdentityForRoutingId(params.context.targetServerId);
-        const scopedRequest = createServerRequestForExplicitServerScope({
+    if (params.context.scope === 'active') return params.activeRequest;
+    const homeIdentityId = resolvePortableServerIdentityForRoutingId(params.context.targetServerId);
+    return createServerRequestForExplicitServerScope({
             serverUrl: params.context.targetServerUrl,
             ...(homeIdentityId ? { homeIdentityId } : {}),
             ...(params.context.runtimeOrigin ? { runtimeOrigin: params.context.runtimeOrigin } : {}),
             token: params.context.token,
+            serverId: params.context.targetServerId,
+            credentials: params.context.credentials,
+            accountEncryptionObservation: params.context.accountEncryptionObservation,
             timeoutMs: params.context.timeoutMs,
             // The resolved transport already decided how this Home is reached;
             // dropping its carrier here would send every account-scoped request
             // to an origin an ingress-less Home does not have.
             ...(params.context.homeCarrier ? { homeCarrier: params.context.homeCarrier } : {}),
-        });
-        return consumeResponse ? await scopedRequest(path, init, options, consumeResponse) : await scopedRequest(path, init, options);
-    }
-    return request;
+    });
 }
 
 export function createServerRequestWithServerScope(params: Readonly<{

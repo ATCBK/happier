@@ -15,6 +15,8 @@ import {
 import { parseToken } from '@/utils/auth/parseToken';
 import { resolveServerScopedTransport } from './resolveServerScopedTransport';
 import { createCapturedServerReadTransport } from './capturedServerReadTransport';
+import { captureAccountEncryptionObservationForHome } from '@/sync/http/accountEncryptionObservationBinding';
+import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
 
 import {
     DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS,
@@ -89,6 +91,9 @@ export async function resolveServerScopedContext(params: Readonly<{
         profile: targetProfile,
         credentials,
     });
+    const accountEncryptionObservation = readCredentialAuthorityKind(credentials.token) === 'api_token' ? undefined
+        : captureAccountEncryptionObservationForHome({ serverId: resolvedTargetServerId,
+            endpointUrl: transport.canonicalServerUrl, credentials });
     return {
         scope: 'scoped',
         machineId,
@@ -102,7 +107,8 @@ export async function resolveServerScopedContext(params: Readonly<{
         release: transport.release,
         token: credentials.token,
         credentials,
-        readTransport: createCapturedServerReadTransport({ serverId: resolvedTargetServerId, profile: targetProfile, credentials }),
+        accountEncryptionObservation,
+        readTransport: createCapturedServerReadTransport({ serverId: resolvedTargetServerId, profile: targetProfile, credentials, accountEncryptionObservation }),
         encryption,
     };
 }

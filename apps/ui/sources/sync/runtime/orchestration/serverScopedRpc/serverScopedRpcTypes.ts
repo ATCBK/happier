@@ -5,6 +5,7 @@ import type { Encryption, EncryptionGenerationScopeAuthority, EncryptionScopeInp
 import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { CapturedServerReadTransport } from './capturedServerReadTransport';
+import type { AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 
 /**
  * Default connection/setup budget for server-scoped RPC.
@@ -66,6 +67,7 @@ export type ScopedServerRpcContext = Readonly<{
     credentials?: AuthCredentials;
     /** Borrow-safe HTTP reads from this captured Home/credential selection. */
     readTransport?: CapturedServerReadTransport;
+    accountEncryptionObservation?: AccountEncryptionObservationBinding;
     encryption: ScopedRpcEncryptionContext | null;
 }>;
 
