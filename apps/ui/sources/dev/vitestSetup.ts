@@ -551,7 +551,9 @@ vi.mock('react-native-unistyles', async () => {
 // Static, not `importOriginal` — pulling the real module back in here re-enters a module that is
 // mid-require and trips vitest's ERR_INTERNAL_ASSERTION. `ICON_SIZE` is a plain value object, so
 // restating it costs nothing; `IconName` is a type and erases.
-vi.mock('@/components/ui/icons/Icon', () => ({
+vi.mock('@/components/ui/icons/Icon', async () => ({
     Icon: 'Icon',
     ICON_SIZE: { xs: 14, sm: 16, md: 20, lg: 24, xl: 29 },
+    // SVG consumers need the real family decision without importing the rendered Icon graph mid-require.
+    resolveHugeIconGlyph: (await import('@/components/ui/icons/resolveHugeIconGlyph')).resolveHugeIconGlyph,
 }));
