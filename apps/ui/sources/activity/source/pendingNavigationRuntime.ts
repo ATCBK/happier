@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { areSessionAddressesEqual, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import type { SessionPendingNextOutput } from '@happier-dev/protocol/actions/actionSpecs';
 
-export type PendingNavigationResult = Readonly<{ status: 'opened' | 'none' | 'unavailable' }>;
+export type PendingNavigationResult = SessionPendingNextOutput;
+export type PendingNavigationUnavailableReason = NonNullable<Extract<PendingNavigationResult, { status: 'unavailable' }>['reason']>;
 export type PendingNavigationInvocation = Readonly<{
     excluding?: SessionAddress | null;
     expectedServerId?: string | null;
@@ -39,7 +41,8 @@ export function registerPendingNavigationRuntime(next: NonNullable<typeof handle
 }
 
 export async function invokeNextPendingRequest(options: PendingNavigationInvocation = {}): Promise<PendingNavigationResult> {
-    if (!handler || options.signal?.aborted) return { status: 'unavailable' };
+    if (options.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+    if (!handler) return { status: 'unavailable', reason: 'no_navigation_host' };
     return handler(options);
 }
 

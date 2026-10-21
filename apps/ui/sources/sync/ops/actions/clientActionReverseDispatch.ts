@@ -35,7 +35,9 @@ export function createUiClientActionReverseHandler(binding: Readonly<{
             let safeExecution = execution;
             if (!binding.isCurrent()) {
                 const receipt = projectKnownAccountAuthorityRetirementReceipt(spec, execution);
-                if (!receipt) return failure(readOnly ? 'action_account_scope_changed' : 'outcome_uncertain');
+                if (!receipt) return readOnly ? failure('action_account_scope_changed')
+                    : { v: 1 as const, execution: { ...failure('outcome_uncertain').execution,
+                        details: { reason: 'client_account_scope_changed' } } };
                 safeExecution = receipt;
             }
             const result = parseClientActionDispatchResult(actionId, { v: 1, execution: safeExecution });

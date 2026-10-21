@@ -492,6 +492,38 @@ describe('ApprovalRequestV1Schema', () => {
       .toMatchObject({ details: uncertain.details });
   });
 
+  it('retains only content-free client delivery causes through durable approval and public reads', () => {
+    const actionId = 'ui.find';
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent', sessionId: 'source' }, requestedSurface: 'agent', actionId,
+      actionArgs: { op: 'set', query: 'private query' }, summary: 'Find',
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'agent',
+        caller: { kind: 'session', sessionId: 'source', starterDepth: 0, turnDepth: 0 },
+        serverId: 'home', accountId: 'account', machineId: 'machine', actionId, requestId: 'request' } });
+    for (const details of [
+      { reason: 'client_rpc_transport_failure', errorCode: 'RPC_OUTCOME_UNKNOWN' },
+      { reason: 'client_rpc_transport_failure', errorCode: 'MACHINE_RPC_TIMEOUT' },
+      { reason: 'client_rpc_invalid_response', errorCode: null },
+      { reason: 'client_execution_exception', errorClass: 'TypeError', errorCode: 'EIO', httpStatus: 503 },
+      { reason: 'client_account_scope_changed' },
+    ]) {
+      const failure = { ok: false as const, errorCode: 'outcome_uncertain', error: 'outcome_uncertain', details };
+      const execution = projectApprovalExecutionFailureV2({ request, failure, executedAtMs: 3 });
+      expect(execution).toMatchObject({ details });
+      const stored = StoredApprovalRequestSchema.parse({ ...request, status: 'failed', updatedAtMs: 3,
+        decision: { kind: 'approve', decidedAtMs: 2 }, execution });
+      expect(readApprovalExecutionFailure(stored)).toMatchObject({ details });
+      expect(projectApprovalRequestForPublicRead(stored)).toMatchObject({ execution: { details } });
+      for (const unsafe of [{ ...details, query: 'private query' }, { ...details, reason: 'private text' },
+        { ...details, errorCode: 'private text' }, { ...details, errorClass: 'private text' }]) {
+        expect(projectApprovalExecutionFailureV2({ request, failure: { ...failure, details: unsafe }, executedAtMs: 3 }))
+          .not.toHaveProperty('details');
+      }
+      expect(projectApprovalExecutionFailureV2({ request: { ...request, actionId: 'memory.clear_index', actionArgs: { machineId: 'machine' } },
+        failure, executedAtMs: 3 })).not.toHaveProperty('details');
+    }
+  });
+
   it('retains only a typed content-free approval staleness fact', () => {
     const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
       createdBy: { surface: 'system' }, actionId: 'session.open', actionArgs: { sessionId: 's1' }, summary: 'Open',

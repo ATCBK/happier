@@ -4,6 +4,7 @@ import { SessionGoalControlFailureV1Schema } from '../sessions/work/state/sessio
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
 import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES } from '../rpc/errors.js';
 
 /** Historical, content-free admission facts. Not credential authority or a live readiness claim. */
 export const ActionOperationCredentialUseV1Schema = lazyZodSchema(() => z.strictObject({
@@ -50,6 +51,27 @@ export const AccountActionHttpFailureDetailsV1Schema = lazyZodSchema(() => z.str
   category: z.enum(['transport_timeout', 'transport_error', 'acknowledgement_schema']),
 }));
 export type AccountActionHttpFailureDetailsV1 = z.infer<typeof AccountActionHttpFailureDetailsV1Schema>;
+
+/** Closed transport vocabulary shared by reverse delivery and durable approval history. */
+export const ClientActionRpcFailureCodeV1Schema = lazyZodSchema(() => z.enum([
+  ...Object.values(RPC_ERROR_CODES), MACHINE_RPC_TIMEOUT_ERROR_CODE,
+  'machine_socket_unavailable', 'machine_rpc_result_decrypt_failed', 'cancelled',
+]));
+const clientErrorClass = z.string().check(z.refine(value =>
+  readUnexpectedActionErrorDiagnosticV1({ name: value }).errorClass === value));
+const clientHttpStatus = z.nullable(z.number().check(z.int(), z.minimum(100), z.maximum(599)));
+const clientErrorCode = z.string().check(z.refine(value =>
+  readUnexpectedActionErrorDiagnosticV1({ name: 'Error', code: value }).errorCode === value
+  || readUnexpectedActionErrorDiagnosticV1({ name: 'JsonRpcApplicationError', code: Number(value) }).errorCode === value));
+/** No prose, stack, query, identity or arbitrary receiver data may enter saved client failures. */
+export const ClientActionFailureDetailsV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ reason: z.enum(['client_rpc_transport_failure', 'client_rpc_invalid_response']),
+    errorCode: z.nullable(ClientActionRpcFailureCodeV1Schema),
+    errorClass: z.optional(clientErrorClass), httpStatus: z.optional(clientHttpStatus) }),
+  z.strictObject({ reason: z.literal('client_execution_exception'), errorClass: clientErrorClass,
+    errorCode: z.nullable(clientErrorCode), httpStatus: clientHttpStatus }),
+  z.strictObject({ reason: z.literal('client_account_scope_changed') }),
+]));
 
 /**
  * The canonical outcome shape shared by Action execution projections.

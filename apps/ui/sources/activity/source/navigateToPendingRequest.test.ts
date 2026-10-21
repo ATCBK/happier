@@ -21,7 +21,7 @@ describe('pending navigation landing revalidation', () => {
         for (const requests of [[dialog], []]) {
             expect(planPendingNavigationRoute({ target: { ...target, requestSource: source }, nowMs: 20,
                 details: { kind: 'available', session: { ...session, active: false }, messages: [], requests } }))
-                .toEqual({ kind: 'unavailable' });
+                .toEqual({ kind: 'unavailable', reason: 'target_unavailable' });
         }
     });
     it('retains the confirmation approval requirement when the selected request settles before routing', () => {
@@ -38,7 +38,7 @@ describe('pending navigation landing revalidation', () => {
         });
         expect(planPendingNavigationRoute({ target: confirmationTarget, nowMs: 20,
             details: { kind: 'available', session: inputOnly, messages: [], requests: [] } }))
-            .toEqual({ kind: 'unavailable' });
+            .toEqual({ kind: 'unavailable', reason: 'target_unavailable' });
     });
     it('revalidates an Action confirmation with its approval grant, not the native-question grant', () => {
         const confirmation = { ...request, source: 'happier_action' };
@@ -73,6 +73,6 @@ describe('pending navigation landing revalidation', () => {
             } } }, messages: [tool], requests: [request] },
             { kind: 'unavailable' as const, reason: 'offline' },
         ]) expect(planPendingNavigationRoute({ target, nowMs: 20, details }))
-            .toEqual({ kind: 'unavailable' });
+            .toEqual({ kind: 'unavailable', reason: details.kind === 'unavailable' ? 'details_unavailable' : 'target_unavailable' });
     });
 });

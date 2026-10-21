@@ -1,5 +1,5 @@
 import type { ActionExecuteFailure } from '../actions/actionExecutionResult.js';
-import { AccountActionHttpFailureDetailsV1Schema } from '../actions/actionExecutionResult.js';
+import { AccountActionHttpFailureDetailsV1Schema, ClientActionFailureDetailsV1Schema, ClientActionRpcFailureCodeV1Schema } from '../actions/actionExecutionResult.js';
 import * as z from 'zod/mini';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '../actions/actionSpecs.js';
 import { ActionIdSchema, isPluginDevLoopActionIdV1 } from '../actions/actionIds.js';
@@ -45,6 +45,20 @@ function parseStrictApprovalFailure(input: Readonly<{
   request: ApprovalRequestV2;
   failure: ActionExecuteFailure;
 }>, storedRead = false): ActionExecuteFailure | null {
+  const clientDetails = (storedRead ? createStoredReadSchema(ClientActionFailureDetailsV1Schema)
+    : ClientActionFailureDetailsV1Schema).safeParse(input.failure.details);
+  if (clientDetails.success) {
+    const spec = getActionSpec(input.request.actionId);
+    const args = (storedRead ? createStoredReadSchema(spec.inputSchema) : spec.inputSchema).safeParse(input.request.actionArgs);
+    if (!args.success || resolveActionExecutionPlacementForInput(spec, args.data) !== 'client') return null;
+    const mayHaveEffect = spec.sideEffectClass !== 'read' && spec.sideEffectClass !== 'none';
+    const code = input.failure.errorCode;
+    const expected = mayHaveEffect ? code === 'outcome_uncertain'
+      : clientDetails.data.reason === 'client_execution_exception' ? code === 'action_failed'
+      : clientDetails.data.reason === 'client_account_scope_changed' ? code === 'action_account_scope_changed'
+      : code === 'invalid_action_output' || ClientActionRpcFailureCodeV1Schema.safeParse(code).success;
+    return expected ? { ...input.failure, details: clientDetails.data } : null;
+  }
   if (isProviderActionIdV1(input.request.actionId)) {
     const details = (storedRead ? createStoredReadSchema(ProviderErrorV1Schema) : ProviderErrorV1Schema)
       .safeParse(input.failure.details);

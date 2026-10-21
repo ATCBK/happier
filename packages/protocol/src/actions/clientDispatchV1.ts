@@ -124,7 +124,7 @@ export function clientActionUnavailable(actionId: ActionId): ActionExecuteResult
   if (actionId === 'ui.find' || actionId === 'ui.prompts.picker.open') {
     return { ok: true, result: { status: 'unavailable', reason: 'noClient' } };
   }
-  if (actionId === 'session.pending.next') return { ok: true, result: { status: 'unavailable' } };
+  if (actionId === 'session.pending.next') return { ok: true, result: { status: 'unavailable', reason: 'noClient' } };
   if (isSettingsDeclarationActionIdV1(actionId)) return { ok: false, errorCode: 'unavailable', error: 'noClient',
     details: { reason: 'client_unavailable', recovery: { kind: 'connect_client', rpcMethod: RPC_METHODS.UI_ACTION_EXECUTE,
       instruction: 'Open a signed-in Happier client connected to the target Machine, then retry this setting Action.' } } };

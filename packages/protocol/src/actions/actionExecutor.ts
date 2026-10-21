@@ -5931,7 +5931,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       if (actionId === 'session.pending.next') {
         return completeActionResult(deps.nextPendingSession
           ? await deps.nextPendingSession(ctx)
-          : { status: 'unavailable' });
+          : { status: 'unavailable', reason: 'no_navigation_host' });
       }
       if (actionId === 'session.pending.action.set') {
         if (!deps.sessionPendingActionSet) return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };

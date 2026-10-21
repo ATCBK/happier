@@ -890,6 +890,19 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       .toEqual({ v: 1, execution: { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' } });
   });
 
+  it('keeps a content-free cause when an issued client effect loses its Account before its receipt', async () => {
+    let current = true;
+    releases.push(registerPendingNavigationRuntime(async () => {
+      current = false;
+      return { status: 'none' };
+    }));
+    const receive = createUiClientActionReverseHandler({ serverId, accountId: 'relay-account', isCurrent: () => current });
+    expect(await receive({ v: 1, actionId: 'session.pending.next', input: {},
+      context: { surface: 'agent', authority: 'account_automation' } }, { signal: new AbortController().signal }))
+      .toEqual({ v: 1, execution: { ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain',
+        details: { reason: 'client_account_scope_changed' } } });
+  });
+
   it('keeps a mounted Machine continuation current when another Machine appears, and retires it on unmount', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const machine = createMachineFixture({ id: 'machine-one', activeAt: Date.now() });

@@ -456,9 +456,9 @@ describe('createActionExecutor (session control)', () => {
     }
     expect(sessionOpen).not.toHaveBeenCalled();
     await expect(createExecutor().execute(ActionIdSchema.parse('session.pending.next'), {}, { surface: 'agent' }))
-      .resolves.toEqual({ ok: true, result: { status: 'unavailable' } });
+      .resolves.toEqual({ ok: true, result: { status: 'unavailable', reason: 'no_navigation_host' } });
     for (const status of ['none', 'unavailable'] as const) {
-      await expect(createExecutor({ nextPendingSession: async () => ({ status }) })
+      await expect(createExecutor({ nextPendingSession: async () => status === 'none' ? { status: 'none' } : { status: 'unavailable' } })
         .execute(ActionIdSchema.parse('session.pending.next'), {}, { surface: 'mcp' }))
         .resolves.toEqual({ ok: true, result: { status } });
     }

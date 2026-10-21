@@ -3,9 +3,14 @@ import { z } from 'zod/mini';
 import type { PreNormalizedActionSpec } from '../actionSpecs.js';
 
 export const SessionPendingNextInputSchema = lazyZodSchema(() => z.strictObject({}));
-export const SessionPendingNextOutputSchema = lazyZodSchema(() => z.strictObject({
-  status: z.enum(['opened', 'none', 'unavailable']),
-}));
+export const SessionPendingNextOutputSchema = lazyZodSchema(() => z.union([
+  z.strictObject({ status: z.enum(['opened', 'none']) }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.optional(z.enum([
+    'noClient', 'no_navigation_host', 'not_ready', 'cancelled', 'scope_changed',
+    'details_unavailable', 'target_unavailable', 'navigation_failed',
+  ])) }),
+]));
+export type SessionPendingNextOutput = z.infer<typeof SessionPendingNextOutputSchema>;
 
 /** Navigation belongs to the current mounted client, never Session resume. */
 export const SESSION_PENDING_NEXT_ACTION_SPECS = [{

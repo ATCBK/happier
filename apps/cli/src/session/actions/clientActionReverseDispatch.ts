@@ -12,7 +12,7 @@ import {
 } from '@happier-dev/protocol/actions/clientDispatchV1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { projectApprovalExecutionOriginCaller } from '@happier-dev/protocol/actions/actionExecutor';
-import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ClientActionRpcFailureCodeV1Schema, readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { isWorkflowAuthoringActionId, workflowDraftClientRpcMethod, WorkflowDraftGetInputV1Schema } from '@happier-dev/protocol/actions/workflowAuthoringAction';
 import { PluginExecutionOriginActionIdSchema, PluginExecutionOriginActionInputSchemas } from '@happier-dev/protocol/actions/pluginExecutionOriginActionFamily';
 import type { SocketRpcAnsweringClientV1 } from '@happier-dev/protocol/socketRpc';
@@ -87,8 +87,8 @@ export function createClientActionReverseDispatcher(
     const sideEffectClass = getActionSpec(actionId).sideEffectClass;
     const mayHaveEffect = sideEffectClass !== 'read' && sideEffectClass !== 'none';
     const failureWithCause = (reason: 'client_rpc_transport_failure' | 'client_rpc_invalid_response', code?: string, error?: unknown) => {
-      const errorCode = code && ([...Object.values(RPC_ERROR_CODES), 'machine_socket_unavailable',
-        'machine_rpc_result_decrypt_failed', 'cancelled'] as readonly string[]).includes(code) ? code : null;
+      const parsedCode = ClientActionRpcFailureCodeV1Schema.safeParse(code);
+      const errorCode = parsedCode.success ? parsedCode.data : null;
       const diagnostic = error === undefined ? undefined : readUnexpectedActionErrorDiagnosticV1(error);
       return {
         ...(mayHaveEffect ? { ok: false as const, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' }

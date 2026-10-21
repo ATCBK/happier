@@ -3,6 +3,12 @@ import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.
 import { mountedWorkReadClientRpcMethod, isMountedWorkReadClientRpcMethod, clientActionUnavailable, UiActionDispatchRequestV1Schema, parseClientActionDispatchResult } from './clientDispatchV1.js';
 
 describe('client placement delivery after canonical admission', () => {
+  it('distinguishes a missing answering view from an unavailable navigation host', async () => {
+    expect(clientActionUnavailable('session.pending.next'))
+      .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
+    expect(await createActionExecutor({} as ActionExecutorDeps).execute('session.pending.next', {}, { surface: 'ui' }))
+      .toEqual({ ok: true, result: { status: 'unavailable', reason: 'no_navigation_host' } });
+  });
   it.each([
     { actionId: 'workspace.tabs.list', input: {}, result: { ok: true, tabs: [], groups: [], splits: [], rootNodeId: 'main', focusedGroupId: 'main', maximizedGroupId: null } },
     { actionId: 'updates.get', input: {}, result: { groups: [], batch: null } },

@@ -8,6 +8,7 @@ import {
     registerPendingNavigationRuntime,
     type PendingNavigationInvocation,
     type PendingNavigationResult,
+    type PendingNavigationUnavailableReason,
 } from '@/activity/source/pendingNavigationRuntime';
 import { useActivityAttentionSummarySource } from '@/activity/source/useActivityAttentionSource';
 import { useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
@@ -45,7 +46,7 @@ export function NextPendingNavigationHost() {
         const ownerScope = getActiveServerAccountScope();
         if (options.signal?.aborted || (options.expectedServerId && (!ownerScope
             || !areServerProfileIdentifiersEquivalent(options.expectedServerId, ownerScope.serverId)))) {
-            return { status: 'unavailable' };
+            return { status: 'unavailable', reason: options.signal?.aborted ? 'cancelled' : 'scope_changed' };
         }
         const frame = frameRef.current;
         const lifetime = captureActiveServerAccountScopeCurrentness();
@@ -57,23 +58,23 @@ export function NextPendingNavigationHost() {
         options.signal?.addEventListener('abort', abort, { once: true });
         let targetRetirement: Readonly<{ dispose(): void }> | undefined;
         const isCurrent = () => mountedRef.current && !controller.signal.aborted && lifetime.isCurrent();
-        const unavailable = (): PendingNavigationResult => {
+        const unavailable = (reason: PendingNavigationUnavailableReason): PendingNavigationResult => {
             if (isCurrent()) publishPresentationNotice({ key: NOTICE_KEY, severity: 'warning', message: t('pendingNavigation.unavailableBody') });
-            return { status: 'unavailable' };
+            return { status: 'unavailable', reason };
         };
         try {
-            if (!isCurrent()) return { status: 'unavailable' };
+            if (!isCurrent()) return unavailable('scope_changed');
             const selected = await nextPendingRequest({
                 source: frame.source,
                 nowMs: Date.now(),
                 excluding: options.excluding === undefined ? getFocusedSessionAddress() : options.excluding,
                 signal: controller.signal,
             });
-            if (!isCurrent()) return { status: 'unavailable' };
+            if (!isCurrent()) return unavailable(options.signal?.aborted ? 'cancelled' : 'scope_changed');
             if (selected.kind === 'none') return { status: 'none' };
-            if (selected.kind === 'unavailable') return unavailable();
+            if (selected.kind === 'unavailable') return unavailable(selected.reason);
             const binding = frame.bindings.get(selected.address.serverId);
-            if (!binding?.isCurrent()) return unavailable();
+            if (!binding?.isCurrent()) return unavailable('scope_changed');
             targetRetirement = binding.onRetire(abort);
             const result = await navigateToPendingRequest({
                 target: selected,
@@ -96,9 +97,10 @@ export function NextPendingNavigationHost() {
                 });
                 return result;
             }
-            return isCurrent() ? unavailable() : { status: 'unavailable' };
+            return isCurrent() ? unavailable(result.status === 'unavailable' ? result.reason ?? 'target_unavailable' : 'target_unavailable')
+                : unavailable('scope_changed');
         } catch {
-            return unavailable();
+            return unavailable(isCurrent() ? 'navigation_failed' : options.signal?.aborted ? 'cancelled' : 'scope_changed');
         } finally {
             targetRetirement?.dispose();
             retirement.dispose();

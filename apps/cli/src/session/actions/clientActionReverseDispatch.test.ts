@@ -3,6 +3,8 @@ import { createActionExecutor, type ActionExecutorDeps, RPC_METHODS, RPC_ERROR_C
 import { createClientActionReverseDispatcher, type ClientActionMachineRpc } from './clientActionReverseDispatch';
 import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
 import { mountedWorkReadClientRpcMethod } from '@happier-dev/protocol/actions/clientDispatchV1';
+import { ApprovalRequestV2Schema, StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { projectApprovalExecutionFailureV2, readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 
 function executor(client: ClientActionMachineRpc | null) {
   return createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => client),
@@ -15,19 +17,32 @@ const disconnectedClient: ClientActionMachineRpc = {
 };
 
 describe('client Action reverse delivery', () => {
-  it('preserves the transport cause of an issued Find without claiming a known effect', async () => {
+  it.each([RPC_ERROR_CODES.OUTCOME_UNKNOWN, 'MACHINE_RPC_TIMEOUT'])('preserves the transport cause %s of an issued Find without claiming a known effect', async errorCode => {
     const dispatch = createClientActionReverseDispatcher(() => ({
       hasConnectedClientRpcHandler: () => true,
       callConnectedClientRpc: async (_method, _request, options) => {
         options.onIssued();
-        return { ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN };
+        return { ok: false, errorCode };
       },
     }));
-    expect(await dispatch({ actionId: 'ui.find', input: { op: 'set', query: 'needle' },
-      context: { surface: 'agent', defaultSessionId: 'invoking-session' } }))
+    const failure = await dispatch({ actionId: 'ui.find', input: { op: 'set', query: 'needle' },
+      context: { surface: 'agent', defaultSessionId: 'invoking-session' } });
+    expect(failure)
       .toMatchObject({ ok: false, errorCode: 'outcome_uncertain', details: {
-        reason: 'client_rpc_transport_failure', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN,
+        reason: 'client_rpc_transport_failure', errorCode,
       } });
+    if (failure.ok) throw new Error('Expected the issued transport failure');
+    const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'agent', sessionId: 'invoking-session' }, requestedSurface: 'agent', actionId: 'ui.find',
+      actionArgs: { op: 'set', query: 'needle' }, summary: 'Find', executionOriginV1: {
+        v: 1, authority: 'account_automation', surface: 'agent',
+        caller: { kind: 'session', sessionId: 'invoking-session', starterDepth: 0, turnDepth: 0 },
+        serverId: 'home', accountId: 'account', machineId: 'machine', actionId: 'ui.find', requestId: 'request',
+      } });
+    const stored = StoredApprovalRequestSchema.parse({ ...request, status: 'failed', updatedAtMs: 3,
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: projectApprovalExecutionFailureV2({ request, failure, executedAtMs: 3 }) });
+    expect(readApprovalExecutionFailure(stored)).toEqual(failure);
   });
   it('reports a failed conversation-search read without claiming an uncertain effect', async () => {
     const dispatch = createClientActionReverseDispatcher(() => ({
@@ -53,7 +68,7 @@ describe('client Action reverse delivery', () => {
     }));
     expect(await dispatch({ actionId: 'session.pending.next', input: {},
       context: { surface: 'agent', defaultSessionId: 'previous-session' } }))
-      .toEqual({ ok: true, result: { status: 'unavailable' } });
+      .toEqual({ ok: true, result: { status: 'unavailable', reason: 'noClient' } });
   });
 
   it.each([
@@ -561,7 +576,7 @@ describe('client Action reverse delivery', () => {
   });
   it.each([
     ['ui.find', { op: 'read' }, { ok: true, result: { status: 'unavailable', reason: 'noClient' } }],
-    ['session.pending.next', {}, { ok: true, result: { status: 'unavailable' } }],
+    ['session.pending.next', {}, { ok: true, result: { status: 'unavailable', reason: 'noClient' } }],
     ['workspace.tabs.list', {}, { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:workspace.tabs.list' }],
   ] as const)('returns typed absence for %s with an older or disconnected app', async (actionId, input, result) => {
     await expect(executor({ hasConnectedClientRpcHandler: () => false,

@@ -191,6 +191,7 @@ import { FIND_ACTION_SPECS } from './findActionSpecs.js';
 import { PROMPT_PICKER_ACTION_SPECS } from './promptPickerActionSpecs.js';
 import { PROMPT_INVOCATION_CREATE_ACTION_SPECS } from './promptInvocationCreateActionSpecs.js';
 import { SESSION_PENDING_NEXT_ACTION_SPECS } from './specs/sessionPendingNext.js';
+export type { SessionPendingNextOutput } from './specs/sessionPendingNext.js';
 import { AcpBackendApprovalInputSchema, projectAcpBackendApprovalInput } from './specs/acpBackendApproval.js';
 import { PROJECT_WORKER_ACTION_SPECS, ProjectWorkerActionInputSchemasV1, ProjectWorkerActionOutputSchemasV1,
   type ProjectWorkerActionIdV1 } from './specs/projectWorkers.js';

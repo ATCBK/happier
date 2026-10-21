@@ -1,4 +1,5 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { SessionPendingNextOutput } from '../specs/sessionPendingNext.js';
 import type { DaemonLocalServiceLauncherStartRequestV1, LocalServiceStartApprovalReviewV1 } from '../../local/services/launcher/v1.js';
 import type { DaemonLspApplyRequest, DaemonLspApplyResponse, DaemonLspQueryRequest, DaemonLspQueryResponse, DaemonLspRestartRequest, DaemonLspRestartResponse } from '../../machines/languageIntelligence.js';
 import type { WorkspaceFilesReplacePreviewActionInput, WorkspaceFilesReplaceActionInput, WorkspaceFilesReplaceActionOutput } from '../actionSpecs.js';
@@ -1381,7 +1382,7 @@ export type ActionExecutorDeps = Readonly<{
     context: ActionExecutorContext;
   }>) => Promise<ActionExecuteResult>;
   /** The mounted client's pending-navigation owner; absent on headless hosts. */
-  nextPendingSession?: (context: ActionExecutorContext) => Promise<Readonly<{ status: 'opened' | 'none' | 'unavailable' }>>;
+  nextPendingSession?: (context: ActionExecutorContext) => Promise<SessionPendingNextOutput>;
   launchProfilePublish?: (input: Readonly<{ profileId: string }>, options?: Readonly<{ signal?: AbortSignal; context?: ActionExecutorContext }>) => Promise<Readonly<{ artifactId: string }>>;
   profileActionExecute?: (request: ProfileActionRequestV1, context: ActionExecutorContext) => Promise<ActionExecuteResult>;
   mcpServerAction?: (request: McpServerActionRequestV1) => Promise<ActionExecuteResult>;

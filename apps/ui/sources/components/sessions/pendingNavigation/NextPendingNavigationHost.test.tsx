@@ -77,6 +77,9 @@ describe('mounted app-shell Next navigation', () => {
             }),
         });
         homes.answer(serverId, '/v2/sessions/needs-answer', { body: { session: wireSession } });
+        homes.answer(serverId, 'POST /v2/sessions/read-batch', { body: { results: [{ sessionId: session.id,
+            detail: { status: 200, body: { session: wireSession } }, turns: { status: 404, body: { error: 'not_found' } },
+        }] } });
         homes.answer(serverId, '/v2/sessions/active', { body: { sessions: [wireSession], hasNext: false, nextCursor: null } });
         session.viewer = wireSession.viewer;
         session.pendingUserActionRequestCount = 1;
@@ -125,14 +128,18 @@ describe('mounted app-shell Next navigation', () => {
             expect(invokeCommand('session.pending.next')).toBe(true);
         });
         await waitForHomeGovernance(() => expect(navigation.routes).toHaveLength(2));
-        await expect(invokeNextPendingRequest({ expectedServerId: 'another-home' })).resolves.toEqual({ status: 'unavailable' });
+        homes.answer(serverId, 'POST /v2/sessions/read-batch', { status: 503, body: { error: 'unavailable' } });
+        await expect(executor.execute('session.pending.next', {}, context)).resolves.toEqual({ ok: true,
+            result: { status: 'unavailable', reason: 'details_unavailable' } });
+        expect(navigation.routes).toHaveLength(2);
+        await expect(invokeNextPendingRequest({ expectedServerId: 'another-home' })).resolves.toEqual({ status: 'unavailable', reason: 'scope_changed' });
         const cancel = new AbortController();
         cancel.abort();
-        await expect(invokeNextPendingRequest({ signal: cancel.signal })).resolves.toEqual({ status: 'unavailable' });
+        await expect(invokeNextPendingRequest({ signal: cancel.signal })).resolves.toEqual({ status: 'unavailable', reason: 'cancelled' });
         await screen.update(<KeyboardShortcutProvider handlers={{}}><KeyboardProbe /><AnswerProbe address={null} /></KeyboardShortcutProvider>);
         // Removing the production host binding must make the public Action unavailable.
         await expect(executor.execute('session.pending.next', {}, context))
-            .resolves.toEqual({ ok: true, result: { status: 'unavailable' } });
+            .resolves.toEqual({ ok: true, result: { status: 'unavailable', reason: 'no_navigation_host' } });
         expect(navigation.routes).toHaveLength(2);
         let otherHome = '';
         await act(async () => {
@@ -148,7 +155,7 @@ describe('mounted app-shell Next navigation', () => {
         await act(async () => { await homes.switchAccount(serverId, 'replacement-owner'); });
         expect(answerToken).toBe(retainedAnswerToken);
         await act(async () => { screen.tree.unmount(); });
-        await expect(invokeNextPendingRequest()).resolves.toEqual({ status: 'unavailable' });
+        await expect(invokeNextPendingRequest()).resolves.toEqual({ status: 'unavailable', reason: 'no_navigation_host' });
     });
 
     it('distinguishes a mounted empty source from an unavailable client', async () => {
