@@ -82,23 +82,23 @@ export function createAccountEncryptionCurrentnessObservation(options: Readonly<
         disconnected() { connected = false; invalidate(); },
         update(raw: unknown): boolean {
             if (!connected || disposed) return false;
+            // Route before validating the shared Account feed. The strict
+            // container remains the boundary for every matching publication.
+            const body = raw && typeof raw === 'object' && 'body' in raw ? raw.body : null;
+            if (!body || typeof body !== 'object' || !('t' in body) || body.t !== 'update-account'
+                || !('id' in body) || body.id !== options.accountId || !('encryptionCurrentness' in body)) return false;
             const parsed = UpdateContainerSchema.safeParse(raw);
             if (!parsed.success) {
-                const body = raw && typeof raw === 'object' && 'body' in raw ? raw.body : null;
-                if (body && typeof body === 'object' && 't' in body && body.t === 'update-account'
-                    && 'id' in body && body.id === options.accountId && 'encryptionCurrentness' in body) {
-                    invalidate();
-                    return true;
-                }
-                return false;
+                invalidate();
+                return true;
             }
             if (parsed.data.body.t !== 'update-account' || parsed.data.body.id !== options.accountId
                 || !('encryptionCurrentness' in parsed.data.body)) return false;
-            const next = AccountEncryptionCurrentnessResponseSchema.safeParse(parsed.data.body.encryptionCurrentness);
-            if (next.success && fact && next.data.version < fact.witness.version) return false;
+            const next = parsed.data.body.encryptionCurrentness;
+            if (next && fact && next.version < fact.witness.version) return false;
             // A push retires the old HTTP lifetime before publishing its fact.
             invalidate();
-            fact = next.success ? { witness: next.data, identity: projectAccountEncryptionIdentity(next.data) } : null;
+            fact = next ? { witness: next, identity: projectAccountEncryptionIdentity(next) } : null;
             return true;
         },
         isCurrent: (expected: AccountEncryptionIdentity) => !disposed && connected && fact !== null

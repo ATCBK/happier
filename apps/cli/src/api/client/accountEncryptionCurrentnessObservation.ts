@@ -257,16 +257,16 @@ function createObservation(scope: Scope): SharedObservation {
                 && activeToken === token && references.has(token);
             socket.on('update', (raw: unknown) => {
                 if (!isActive() || !connected || !transport.isConnected()) return;
-                const parsed = UpdateContainerSchema.safeParse(raw);
-                if (parsed.success && parsed.data.body.t === 'account-change') syncFollowChanges();
                 // The authenticated user channel owns Account routing. Preserve malformed
                 // Settings publications for the Settings owner to withdraw admission.
                 const body = raw && typeof raw === 'object' && 'body' in raw ? raw.body : null;
                 if (body && typeof body === 'object' && 't' in body) {
-                    if (body.t === 'update-account' && 'id' in body && body.id === scope.accountId && 'settingsV2' in body) {
-                        publishSettings({ kind: 'settings', update: parsed.success ? body.settingsV2 : undefined });
+                    if (body.t === 'account-change') {
+                        if (UpdateContainerSchema.safeParse(raw).success) syncFollowChanges();
+                    } else if (body.t === 'update-account' && 'id' in body && body.id === scope.accountId && 'settingsV2' in body) {
+                        publishSettings({ kind: 'settings', update: UpdateContainerSchema.safeParse(raw).success ? body.settingsV2 : undefined });
                     } else if (body.t === 'account-settings-changed') {
-                        publishSettings({ kind: 'hint', version: parsed.success && 'settingsVersion' in body ? body.settingsVersion : undefined });
+                        publishSettings({ kind: 'hint', version: UpdateContainerSchema.safeParse(raw).success && 'settingsVersion' in body ? body.settingsVersion : undefined });
                     }
                 }
                 if (currentness.update(raw)) {
