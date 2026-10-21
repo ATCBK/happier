@@ -4,11 +4,12 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionListQueryV1 } from '@happier-dev/protocol';
+import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 
 import { createSessionListQuerySourceHarness, waitForSessionListQueryState, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { storage } from '@/sync/domains/state/storageStore';
-import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { publishHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { useSessionListQuerySourceState, type SessionListQueryHomeInput, type SessionListQuerySourceState } from './useSessionListQuerySourceState';
 
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -113,6 +114,56 @@ async function mountConsumers(selectedHomes: SessionListQueryHomeInput[], initia
 }
 
 describe('useSessionListQuerySourceState committed controller lifecycle', () => {
+    it('keeps paged Session membership through Artifact socket receipts but re-reads for an unknown Account change', async () => {
+        const [homeA, homeB] = boundary.serverIds as [string, string, string];
+        const screen = await mount(homes(homeA, homeB));
+        const artifactReceipts: string[] = [];
+        const unsubscribe = subscribeHomeAccountChange(event => {
+            if (event.serverId === homeA && event.changeKinds?.includes('artifact')) {
+                artifactReceipts.push(...event.deletedArtifactIds ?? []);
+            }
+        });
+        try {
+            await screen.ready(homeA, homeB);
+            await act(async () => { await screen.state.current?.loadNext(); });
+            const retainedA = screen.state.current!.statesByServerId[homeA]!;
+            const retainedB = screen.state.current!.statesByServerId[homeB]!;
+            const requestsBefore = boundary.queryRequests.length;
+            const trustReads = () => boundary.http.requests.filter(request =>
+                request.path === '/v1/account/encryption/currentness').length;
+            const trustBefore = trustReads();
+            await act(async () => {
+                for (let index = 0; index < 4; index += 1) {
+                    const update = UpdateContainerSchema.parse({
+                        id: `artifact-receipt-${index}`, seq: index + 1, createdAt: Date.now(),
+                        body: { t: 'delete-artifact', artifactId: `unrelated-artifact-${index}` },
+                    });
+                    const socket = boundary.socket(homeA);
+                    // The SDK transport forwards through onAny; deliver the external
+                    // packet to both public listener families as Socket.IO does.
+                    for (const listener of socket.listenersAny()) listener('update', update);
+                    for (const listener of socket.listeners('update')) listener(update);
+                }
+            });
+            await waitForSessionListQueryState(() => expect(artifactReceipts).toHaveLength(4));
+            expect(boundary.queryRequests).toHaveLength(requestsBefore);
+            expect(trustReads()).toBe(trustBefore);
+            expect(screen.state.current!.statesByServerId[homeA]).toBe(retainedA);
+            expect(screen.state.current!.statesByServerId[homeB]).toBe(retainedB);
+
+            boundary.setRows(homeA, ['newly-accessible-session']);
+            await act(async () => publishHomeAccountChange(homeA));
+            await waitForSessionListQueryState(() => expect(screen.state.current?.statesByServerId[homeA]?.addresses)
+                .toEqual([{ serverId: homeA, sessionId: 'newly-accessible-session' }]));
+            expect(boundary.queryRequests.slice(requestsBefore).map(request => request.serverId)).toEqual([homeA]);
+            expect(trustReads()).toBeGreaterThan(trustBefore);
+            expect(screen.state.current!.statesByServerId[homeB]).toBe(retainedB);
+        } finally {
+            unsubscribe();
+            await screen.unmount();
+        }
+    });
+
     it('does not dispose committed Home state from an abandoned StrictMode transition', async () => {
         const [homeA, homeB, homeC] = boundary.serverIds as [string, string, string];
         const screen = await mount(homes(homeA, homeB), { strict: true });

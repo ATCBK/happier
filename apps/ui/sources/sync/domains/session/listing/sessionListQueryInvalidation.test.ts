@@ -4,10 +4,26 @@ import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccou
 
 import {
     invalidateSessionListQueryHome,
+    resolveSessionListQueryInvalidationForAccountChange,
     subscribeSessionListQueryHomeInvalidation,
 } from './sessionListQueryInvalidation';
 
 describe('filtered-list Account-change invalidation', () => {
+    it('does not invalidate Session membership for a qualified Artifact-only receipt', () => {
+        expect(resolveSessionListQueryInvalidationForAccountChange({
+            serverId: 'home-a', entityIds: ['artifact-a'], changeKinds: ['artifact'],
+        })).toBe('none');
+    });
+
+    it('keeps mixed and explicitly membership-changing Artifact wakes conservative', () => {
+        expect(resolveSessionListQueryInvalidationForAccountChange({
+            serverId: 'home-a', entityIds: ['artifact-a', 'session-a'], changeKinds: ['artifact', 'session'],
+        })).toBe('all');
+        expect(resolveSessionListQueryInvalidationForAccountChange({
+            serverId: 'home-a', entityIds: ['artifact-a'], changeKinds: ['artifact'], sessionListQueryAffects: true,
+        })).toBe('all');
+    });
+
     it('invalidates only the mounted controller for an exact local deadline Home', () => {
         const invalidateA = vi.fn();
         const invalidateB = vi.fn();

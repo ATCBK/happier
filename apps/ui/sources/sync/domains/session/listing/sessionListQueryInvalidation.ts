@@ -1,5 +1,5 @@
 import type { HomeAccountChangeEvent } from '@/sync/runtime/orchestration/homeAccountChange';
-import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { isArtifactOnlyHomeAccountChange, subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 type SessionListQueryInvalidationTarget = Readonly<{
@@ -73,6 +73,9 @@ export function resolveSessionListQueryInvalidationForAccountChange(
         if (event.sessionListQueryAffects === 'structural') return 'structural';
         return event.sessionListQueryAffects ? 'all' : 'none';
     }
+    // Committed Artifact receipts also wake Account readers, but cannot move
+    // a Session corpus. Mixed or unqualified wakes keep the conservative path.
+    if (isArtifactOnlyHomeAccountChange(event)) return 'none';
     return event.entityIds === undefined
         || event.entityIds.some((entityId) => entityId !== 'self')
         ? 'all'
