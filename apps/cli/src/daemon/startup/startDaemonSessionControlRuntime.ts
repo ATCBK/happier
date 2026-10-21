@@ -172,9 +172,9 @@ import { assessProviderEndpoint } from '@happier-dev/protocol/providers/safety/u
 import { ProviderErrorV1Schema, ProviderErrorCodeV1Schema } from '@happier-dev/protocol/providers/errors';
 import { projectProviderRuntimeBindingBasis } from '@/providers/spawn/runtimeBindingBasis';
 import { createAccountScopedProviderModelProjectionReader } from '@/providers/modelManagement/remoteProjection';
-import type { ExecutionRunProviderLaunchRequest } from '@/agent/runtime/bridges/executionRun/runtime/providerLaunch';
 import { bindInactiveSessionControlLaunchScope } from '../spawn/inactiveSessionControlLaunchScope';
 import { prepareInactiveSessionControlLaunchScope } from '../spawn/prepareInactiveSessionControlLaunchScope';
+import type { ExecutionRunProviderLaunchRequest } from '@/agent/runtime/bridges/executionRun/runtime/providerLaunch';
 import type { RunnerExecutionRunProviderPreparation } from '@/daemon/agentRuntime/runnerExecutionRunProviderLaunch';
 import type {
   AccountSettings,
@@ -2974,9 +2974,6 @@ export async function startDaemonSessionControlRuntime(
     context
       ? runWithServerHttpBaseUrl(context.bootstrap.serverHttpBaseUrl, operation)
       : operation();
-  const probeAlreadyRunningExistingSessionServiceability = async (
-    input: Parameters<typeof probeSessionServiceabilityWithCredentials>[0],
-  ): ReturnType<typeof probeSessionServiceabilityWithCredentials> => {
   const releaseInactiveSessionControlLaunchScope = bindInactiveSessionControlLaunchScope(async input => {
     const sessionId = input.adapterParams.sessionId;
     const context = await resolveSessionAccountContext(sessionId, undefined, input.signal);
@@ -3037,6 +3034,9 @@ export async function startDaemonSessionControlRuntime(
       throw error;
     }
   });
+  const probeAlreadyRunningExistingSessionServiceability = async (
+    input: Parameters<typeof probeSessionServiceabilityWithCredentials>[0],
+  ): ReturnType<typeof probeSessionServiceabilityWithCredentials> => {
     try {
       return await withSessionAccountContext(input.sessionId, async (context) =>
         await withSessionAccountHome(context, () =>
@@ -12980,10 +12980,10 @@ export async function startDaemonSessionControlRuntime(
   const disposeControlRuntimeResources = async (): Promise<void> => {
     if (controlRuntimeResourcesDisposed) return;
     controlRuntimeResourcesDisposed = true;
+    releaseInactiveSessionControlLaunchScope();
     runtimeActionRouteProviderTarget.setComputerRoutesProvider?.(null);
     const retiringComputerRoutes = computerRoutes;
     computerRoutes = null;
-    releaseInactiveSessionControlLaunchScope();
     await retiringComputerRoutes?.dispose();
     await managedServiceEndpointReadOwner?.dispose();
     managedServiceEndpointReadOwner = null;
