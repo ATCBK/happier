@@ -77,6 +77,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
     const edit = React.useCallback((change: WidgetEdit) => dispatch({ ...change, boardId, ref: placement.ref }), [boardId, dispatch, placement.ref]);
     const setInputs = React.useCallback(async (bindings: WidgetInputBindingsV1) => {
         const outcome = await edit({ kind: 'widget_inputs', bindings });
+        if (outcome.status === 'pending') return { ok: true as const, approvalPending: true as const };
         return outcome.status === 'applied' ? { ok: true as const } : { ok: false as const, message: t('widgetAdd.saveFailed') };
     }, [edit]);
     const inputs = useWidgetInputsEditor({
@@ -91,7 +92,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
         onRename: async (next) => {
             if (next === (instance.displayName ?? '')) return;
             const outcome = await edit({ kind: 'widget_rename', displayName: next || null });
-            if (outcome.status !== 'applied') throw new Error('widget_rename_refused');
+            if (outcome.status !== 'applied' && outcome.status !== 'pending') throw new Error('widget_rename_refused');
         },
         testID: props.testID,
     });

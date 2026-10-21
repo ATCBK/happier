@@ -42,6 +42,9 @@ export function useWorkBoardEntityBinding(context: Omit<WorkBoardEntityContext, 
                 if (!parsed.success) return { status: 'refused', reason: { code: 'invalid_parameters', message: t('entityDragDrop.reasons.generic') } };
                 const result = await dispatch(parsed.data.intent);
                 if (result.status === 'applied') return { status: 'applied' };
+                if (result.status === 'pending') return { status: 'unknown', reason: {
+                    code: result.code, message: t('widgetAdd.areaApprovalPending'),
+                } };
                 if (result.status === 'unknown') return { status: 'unknown', reason: {
                     code: 'board_write_unknown', message: t('entityDragDrop.preview.unknownDetail'),
                 } };
