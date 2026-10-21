@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020.js';
+import Ajv from 'ajv';
 import { z } from 'zod/mini';
 import * as m from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AutomationDefinitionCreateRequestSchema } from '../automations/automationApiV3.js';
-import { getActionSpec, listActionSpecs } from './actionSpecs.js';
+import { getActionSpec, listActionSpecs, PUBLIC_ACTION_OUTPUT_SCHEMAS } from './actionSpecs.js';
 import { actionSpecToActionDefinitionV1 } from './actionCatalog.js';
+import { createActionExecutor } from './actionExecutor.js';
 import { RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
 import { compileActionInputJsonSchema, supportsSessionMessageInputJsonSchema } from './actionInputJsonSchemaValidation.js';
 import { compilePluginJsonSchema, createPluginJsonSchemaZodObjectAdapter } from '../plugins/actions/jsonSchemaValidation.js';
@@ -13,10 +15,71 @@ import { compilePluginJsonSchema, createPluginJsonSchemaZodObjectAdapter } from 
 import {
   ActionJsonSchemaProjectionError,
   forEachJsonSchemaChild,
+  type JsonSchemaObject,
   zodSchemaToJsonSchemaObject,
 } from './actionInputJsonSchema.js';
 
 describe('actionInputJsonSchema', () => {
+  it.each(['agent', 'ui', 'cli'] as const)('publishes the Session configuration accepted by the start owner on %s', async surface => {
+    const executor = createActionExecutor({});
+    const input = {
+      executionTarget: { serverId: 'home', machineId: 'machine' },
+      directory: { kind: 'managed' },
+      agentTarget: { kind: 'agent', identity: { pluginId: 'external.agent', localId: 'agent' } },
+      permissionMode: 'read-only',
+      configuration: {
+        mode: { value: null, updatedAtMs: 1 },
+        model: { value: 'model', updatedAtMs: 2 },
+        permissionIntent: { value: 'read-only', updatedAtMs: 3 },
+        options: { reasoning_effort: { value: 'low', updatedAtMs: 4 } },
+      },
+    };
+    const invalidConfigurations = [
+      {},
+      { reasoning_effort: 'low' },
+      { ...input.configuration, model: { value: { value: 'model', label: 'Model' }, updatedAtMs: 2 } },
+      { ...input.configuration, permissionIntent: { value: 'read_only', updatedAtMs: 3 } },
+      { ...input.configuration, options: { v: 1, updatedAt: 4, overrides: {} } },
+    ];
+    const read = async (schemaPath?: string) => {
+      const result = await executor.execute('action.spec.get', { id: 'session.spawn_new',
+        ...(schemaPath ? { schemaPath } : {}) }, { surface });
+      if (!result.ok) throw new Error(result.errorCode);
+      return PUBLIC_ACTION_OUTPUT_SCHEMAS['action.spec.get'].parse(result.result);
+    };
+    const root = (await read()).actionSpec.inputSchema;
+    const configurationSchema = (root.properties as Record<string, JsonSchemaObject>).configuration!;
+    // Read the configuration's actual referenced sections, without pulling unrelated
+    // trigger/workflow grammars into this configuration contract test.
+    const definitions: Record<string, unknown> = { ...(root.definitions as Record<string, unknown> ?? {}) };
+    const pending: unknown[] = [configurationSchema];
+    while (pending.length) {
+      const node = pending.pop();
+      if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+      const schema = node as JsonSchemaObject;
+      if (typeof schema.$ref === 'string' && schema.$ref.startsWith('#/definitions/')) {
+        const name = schema.$ref.slice('#/definitions/'.length);
+        if (!(name in definitions)) {
+          const section = (await read(`/inputSchema/definitions/${name}`)).schemaSection;
+          if (!section) throw new Error('Missing configuration section');
+          definitions[name] = section.schema;
+          pending.push(section.schema);
+        }
+      }
+      forEachJsonSchemaChild(schema, child => pending.push(child));
+    }
+    const validate = new Ajv({ strict: false, validateFormats: false }).compile({
+      ...configurationSchema, definitions,
+    });
+    expect(validate(input.configuration), surface).toBe(true);
+    expect(getActionSpec('session.spawn_new').inputSchema.safeParse(input).success).toBe(true);
+    for (const configuration of invalidConfigurations) {
+      const invalid = { ...input, configuration };
+      expect(getActionSpec('session.spawn_new').inputSchema.safeParse(invalid).success).toBe(false);
+      expect(validate(configuration), `${surface}: ${JSON.stringify(configuration)}`).toBe(false);
+    }
+  });
+
   it('requires declared remote support for each supplied nonnullable structured Session member', () => {
     const fields = {
       reviewComments: { sessionId: 'source', comments: [] },

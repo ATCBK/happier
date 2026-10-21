@@ -533,6 +533,7 @@ import {
 } from '../sessions/creation/sessionSpawnNewInputV2.js';
 import { refineSessionDirectoryIntentCheckoutV1 } from '../sessions/creation/sessionDirectoryIntentV1.js';
 import { SessionSpawnNewResultV1Schema } from '../sessions/creation/sessionSpawnNewResultV1.js';
+import { AGENT_PERMISSION_INTENTS_V1 } from '../runtime/permissionIntentV1.js';
 import { SessionCreationKeyV1Schema } from '../sessions/creation/sessionCreationIdentityV1.js';
 import {
   PluginSessionInputIdempotencyKeyV1Schema,
@@ -2144,17 +2145,17 @@ const SessionSpawnNewInputHints = {
     { path: 'executionTarget.machineId', title: 'Machine id', widget: 'text', required: true, optionsSourceId: 'sessions.spawn.machines.available' },
     { path: 'directory', title: 'Directory intent', widget: 'json', required: true, optionsSourceId: 'sessions.spawn.paths.recent' },
     { path: 'organizationPlacement', title: 'Organization placement', widget: 'json' },
-    { path: 'agentTarget', title: 'Agent target', widget: 'json', required: true, optionsSourceId: 'agents.backends.enabled' },
-    { path: 'modelSelection', title: 'Model selection', widget: 'json', optionsSourceId: 'agents.models.available' },
+    { path: 'agentTarget', title: 'Agent target', description: 'Backend options carry target keys. For agent:<pluginId>/<localId>, use {kind:"agent",identity:{pluginId,localId}}; retain definitionId for a configured Agent.', widget: 'json', required: true, optionsSourceId: 'agents.backends.enabled' },
+    { path: 'modelSelection', title: 'Model selection', description: 'Native model options carry a model id in option.value. Use {v:1,ref:{agentTargetKey,providerConnectionId:null,modelId:option.value},updatedAt:<milliseconds>}, with the selected Agent target key. Provider catalog choices retain their structured ref. A Connected Account profile is not a providerConnectionId.', widget: 'json', optionsSourceId: 'agents.models.available' },
     { path: 'title', title: 'Title', widget: 'text' },
-    { path: 'permissionMode', title: 'Permission mode', widget: 'text' },
+    { path: 'permissionMode', title: 'Permission mode', description: `Canonical intent: ${AGENT_PERMISSION_INTENTS_V1.join(', ')}. Use "read-only" for read-only access.`, widget: 'text' },
     { path: 'allowedTools', title: 'Allowed tool rules', widget: 'json' },
     { path: 'unlistedTools', title: 'Unlisted tools', widget: 'select',
       options: [{ value: 'ask', label: 'Ask for approval' }, { value: 'deny', label: 'Deny without asking' }] },
     { path: 'agentModeId', title: 'Agent mode', widget: 'text', optionsSourceId: 'agents.session_modes.available' },
-    { path: 'configuration', title: 'Configuration', widget: 'json', optionsSourceId: 'agents.config_options.available' },
+    { path: 'configuration', title: 'Configuration', description: 'Optional full snapshot: {mode:{value:null,updatedAtMs:0},model:{value:null,updatedAtMs:0},permissionIntent:{value:null,updatedAtMs:0},options:{}}. Set model.value to a model-id string or null, permissionIntent.value to a canonical intent or null, and options[option.value] to {value:<scalar>,updatedAtMs:<milliseconds>}. Config-option choices name option ids, not snapshots or selected values; read agents.config_options.list for their value choices. Omit configuration when no override is needed.', widget: 'json', optionsSourceId: 'agents.config_options.available' },
     { path: 'profileId', title: 'Profile id', widget: 'text', optionsSourceId: 'sessions.spawn.profiles.available' },
-    { path: 'connectedServices', title: 'Connected services', widget: 'json', optionsSourceId: 'sessions.spawn.connected_services.available' },
+    { path: 'connectedServices', title: 'Connected services', description: 'Pass the selected option.value through the connected-services input schema; do not put a Connected Account profile id in modelSelection.ref.providerConnectionId.', widget: 'json', optionsSourceId: 'sessions.spawn.connected_services.available' },
     { path: 'capabilitySelection', title: 'Capability selection', widget: 'json', optionsSourceId: 'sessions.spawn.capabilities.preview' },
     { path: 'transcriptStorage', title: 'Transcript storage', widget: 'text' },
     { path: 'terminal', title: 'Terminal', widget: 'json' },
@@ -4940,7 +4941,7 @@ const WORKFLOW_TRIGGER_VOICE_ARGS_EXAMPLES: Readonly<Partial<Record<WorkflowActi
 };
 
 const WORKFLOW_ACTION_DESCRIPTIONS: Readonly<Partial<Record<WorkflowActionIdV1, string>>> = {
-  'workflow.run.start': 'Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.',
+  'workflow.run.start': 'Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. For an inline definition, put model and effort on defaults.engine or a step execution.engine, for example {agentTarget,modelSelection,effort:"low"}; do not place reasoning_effort in sessionConfigOptionOverrides. Validate the definition with workflow.definition.validate before starting. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.',
   'workflow.trigger.remove': 'Remove one trigger by automationId and triggerId; the last child removal leaves a Manual set. Omit triggerId to delete the whole Account trigger set, including an empty Manual set. Past Runs are kept.',
   'workflow.definition.list': 'List saved workflows in this Home Account and available plugin workflows. Returns definitions with metadata, content availability and trigger summaries, plus pluginWorkflows when available. Follow nextCursor to read later pages; use workflow.definition.get to read a saved definition.',
   'workflow.definition.get': 'Read one saved workflow definition, its metadata, revision and destinations using a definitionId from workflow.definition.list.',
@@ -6128,7 +6129,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_OPENING = Object.freeze(defineActionS
         { path: 'fieldPath', title: 'Field path', description: 'Required with actionId or consumer. Use the Action input dot-path, or the declared workflow input name without an inputs prefix. A known workflow with an unknown name returns availableFields in its refusal details.', widget: 'text' },
         { path: 'optionsSourceId', title: 'Options source id', description: 'Direct options source lookup when known.', widget: 'text' },
         { path: 'sessionId', title: 'Session id', prompt: 'Which session?', description: 'Omit to use the current invoking Session. Set only for an intentional authorized cross-Session target.', widget: 'text' },
-        { path: 'draftInput', title: 'Partial action input', description: 'Partial input for dependent options, for example {"backendTargetKeys":["agent:pi"]} when resolving a model, configuration, or connected service.', widget: 'json' },
+        { path: 'draftInput', title: 'Partial action input', description: 'Dependent inventory context: for execution.run.start use {"backendTargetKey":"<backend option.value>"} for model, config, or connected-service choices; backendTarget alone does not select an inventory. Ergonomic multi-backend starts use backendTargetKeys. Session spawn uses its agentTarget and executionTarget objects.', widget: 'json' },
         { path: 'query', title: 'Query filter', description: 'Optional search text to filter the returned options.', widget: 'text' },
         { path: 'limit', title: 'Limit', description: 'Maximum number of options to return.', widget: 'text' },
         { path: 'values', title: 'Values', description: 'Return only the options for these values, to check a picked value without reading the whole inventory. A source that can answer directly does; any other is read in full and narrowed.', widget: 'json' },
@@ -6737,7 +6738,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
   {
     id: 'execution.run.start', approval: {result: 'optional',flow: 'deferred'},
     title: 'Start execution run',
-    description: `Start a new execution run. Set waitForCompletion=true to wait for a terminal run result. waitTimeoutSeconds only bounds this observation; it never stops, retries, or starts the run. ${EXECUTION_RUN_SESSION_SCOPE_DESCRIPTION}`,
+    description: `Start a new execution run. Resolve dependent model, config, and connected-service options with draftInput.backendTargetKey set to the selected backend option.value; then supply the schema-defined backendTarget object to start. Set waitForCompletion=true to wait for a terminal run result. waitTimeoutSeconds only bounds this observation; it never stops, retries, or starts the run. ${EXECUTION_RUN_SESSION_SCOPE_DESCRIPTION}`,
     safety: 'safe',
     placements: [],
     bindings: {
@@ -6802,14 +6803,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_MIDDLE = Object.freeze(defineActionSp
         {
           path: 'modelId',
           title: 'Model id',
-          description: 'Optional explicit model for the run backend. Attached omission inherits the applied parent choice; independent starts use defaults.',
+          description: 'Optional explicit model for the run backend. Assign the model option.value string, not the {value,label} choice object or a stamped Session snapshot. Attached omission inherits the applied parent choice; independent starts use defaults.',
           widget: 'text',
           optionsSourceId: 'agents.models.available',
         },
         {
           path: 'configOptions',
           title: 'Config options (e.g. reasoning effort)',
-          description: 'Optional agent config-option overrides, e.g. {"reasoning_effort":"high"}. Merged into sessionConfigOptionOverrides at the boundary; a conflict fails with invalid_parameters.',
+          description: 'Optional scalar overrides keyed by config-option ids, e.g. {"reasoning_effort":"high"}. Config-option choices name ids; read agents.config_options.list for their value choices. These are not stamped Session configuration fields. Merged into sessionConfigOptionOverrides at the boundary; a conflict fails with invalid_parameters.',
           widget: 'json',
           optionsSourceId: 'agents.config_options.available',
         },
