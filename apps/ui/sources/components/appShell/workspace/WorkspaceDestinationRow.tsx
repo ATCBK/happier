@@ -12,6 +12,8 @@ import type { EntityDragItemV1 } from '@happier-dev/protocol/plugins/ui';
 import { resolveWorkspaceDestinationEntityItem } from './workspaceEntitySource';
 import { useEntityComposerMention } from '@/components/ui/treeDragDrop/useEntityComposerMention';
 import { t } from '@/text';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { useUnistyles } from 'react-native-unistyles';
 
 type WorkspaceDestinationRowProps = Readonly<{
     href: string | null;
@@ -41,6 +43,7 @@ export function WorkspaceDestinationRow(props: WorkspaceDestinationRowProps) {
 }
 
 function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps) {
+    const { theme } = useUnistyles();
     const actions = useWorkspaceOpenActions(props.href, props.onOpened);
     const workspace = useOptionalWorkspaceNavigation();
     const scope = useActiveServerAccountScope();
@@ -133,7 +136,8 @@ function WorkspaceDestinationRowDestination(props: WorkspaceDestinationRowProps)
             open={anchor !== null}
             onOpenChange={(open) => { if (!open) setAnchor(null); }}
             popoverAnchor={anchor ?? undefined}
-            items={[...actions.items, ...(getItem() ? [{ id: 'entity.mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer') }] : [])]}
+            items={[...actions.items, ...(getItem() ? [{ id: 'entity.mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer'),
+                icon: <Icon name="at" size={ICON_SIZE.sm} color={theme.colors.text.secondary} /> }] : [])]}
             onSelect={(id) => {
                 if (id === 'entity.mentionInComposer') {
                     const item = currentGetItem.current();

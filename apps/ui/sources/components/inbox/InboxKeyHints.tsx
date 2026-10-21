@@ -6,7 +6,6 @@ import { KeyHint } from '@/components/ui/keyboard/KeyHint';
 import { useHardwareKeyboard } from '@/components/ui/selectionList/useHardwareKeyboard';
 import { Text } from '@/components/ui/text/Text';
 import {
-  formatKeycapLabel,
   splitKeybindingLabel,
   KeyboardShortcutLabelsContext,
 } from '@/keyboard/shortcutLabels';
@@ -16,7 +15,7 @@ function Keys(props: Readonly<{ label: string }>) {
   return (
     <>
       {splitKeybindingLabel(props.label).map((key, index) => (
-        <KeyHint key={`${key}-${index}`} label={formatKeycapLabel(key)} />
+        <KeyHint key={`${key}-${index}`} label={key} />
       ))}
     </>
   );

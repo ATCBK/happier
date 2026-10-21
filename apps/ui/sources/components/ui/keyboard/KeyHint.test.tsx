@@ -21,6 +21,20 @@ describe('KeyHint', () => {
         expect(screen.getTextContent()).toContain('⌘N');
     });
 
+    it('draws arrows, Return and Escape as their keycap faces wherever a key is shown (shortcut sheet KB1)', async () => {
+        const { KeyHint } = await import('./KeyHint');
+
+        const screen = await renderScreen(<>
+            <KeyHint label="ArrowDown" testID="down" />
+            <KeyHint label="Enter" testID="enter" />
+            <KeyHint label="Escape" testID="escape" />
+        </>);
+
+        expect(screen.findByTestId('down:label')?.props.children).toBe('↓');
+        expect(screen.findByTestId('enter:label')?.props.children).toBe('↵');
+        expect(screen.findByTestId('escape:label')?.props.children).toBe('Esc');
+    });
+
     it('renders nothing when disabled', async () => {
         const { KeyHint } = await import('./KeyHint');
 

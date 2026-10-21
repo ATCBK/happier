@@ -6,7 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { parseThemeColor } from '@/theme/parseThemeColor';
-import { splitKeybindingLabel, useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
+import { formatKeycapLabel, splitKeybindingLabel, useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import type { KeyboardCommandId } from '@/keyboard/types';
 
 export type KeyHintProps = Readonly<{
@@ -89,7 +89,8 @@ export function KeyHint(props: KeyHintProps): React.ReactElement | null {
                 style={[styles.label, props.tone === 'attention' ? styles.attentionLabel : null,
                     props.tone === 'onFill' ? styles.onFillLabel : null]}
             >
-                {props.label}
+                {/* The keycap's face: arrows and Return as glyphs, one owner for every key shown. */}
+                {formatKeycapLabel(props.label)}
             </Text>
         </View>
     );
