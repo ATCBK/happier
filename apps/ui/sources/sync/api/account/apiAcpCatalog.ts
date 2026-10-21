@@ -34,10 +34,10 @@ export type AcpCatalogRowMutationResponseV1 = Exclude<AcpCatalogWireMutationResp
 export class AcpCatalogOperationError extends Error {
     constructor(readonly code: string, readonly cause?: unknown) { super(code); this.name = 'AcpCatalogOperationError'; }
 }
-async function admit<T>(context: AcpCatalogAccountContext,
+async function admit<T>(context: AcpCatalogAccountContext, usage: 'identity' | 'fresh-authority',
     operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     return operation(storage.mode, storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials));
 }
@@ -73,7 +73,7 @@ export function readAcpCatalogRowInContext(context: AcpCatalogAccountContext, si
 export async function readAcpCatalogInContext(context: AcpCatalogAccountContext, signal?: AbortSignal,
     publication?: AcpCatalogReadPublication): Promise<AcpCatalogProjection> {
     try {
-        return await admit(context, async (mode, material) => {
+        return await admit(context, 'identity', async (mode, material) => {
             const row = await readAcpCatalogRowInContext(context, signal);
             let catalog: AcpCatalogSnapshotV1;
             let capturedSource: AcpCatalogProjection['source'];
@@ -101,7 +101,7 @@ export async function readAcpCatalogInContext(context: AcpCatalogAccountContext,
             } else if (row.status === 'deleted') catalog = { status: 'ready', record: { v: 1, definitions: [] }, revision: row.revision };
             else catalog = { status: 'unavailable', reason: row.status };
             const { encryption } = await context.resolveAccountEncryption();
-            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
             context.assertCurrent();
             if (current.mode !== mode) return { catalog: { status: 'unavailable', reason: 'account-mode-mismatch' } };
             const projection = { catalog, ...(capturedSource ? { source: capturedSource } : {}) };
@@ -168,7 +168,7 @@ async function prepareAcpCatalogSourceForMutationInContext(context: AcpCatalogAc
 /** Pure preparation borrows the admitted Account and never activates or transfers a source. */
 export function prepareAcpCatalogMutationInContext(context: AcpCatalogAccountContext, input: AcpCatalogRecordWriteInput,
     signal?: AbortSignal): Promise<ReturnType<typeof AcpCatalogRowMutationV1Schema.parse>> {
-    return admit(context, async (mode, material) => {
+    return admit(context, 'fresh-authority', async (mode, material) => {
         const { catalog, source } = await readAcpCatalogInContext(context, signal);
         context.assertCurrent();
         if (catalog.status !== 'ready') throw new AcpCatalogOperationError(catalog.status === 'loading' ? 'loading' : catalog.reason);

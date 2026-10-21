@@ -26,9 +26,10 @@ export type ProviderCatalogMutationResponse = ReturnType<typeof ProviderConnecti
 export class ProviderCatalogOperationError extends Error {
     constructor(readonly code: string, readonly cause?: unknown) { super(code); this.name = 'ProviderCatalogOperationError'; }
 }
-async function admit<T>(context: LazyActionAccountContext, operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
+async function admit<T>(context: LazyActionAccountContext, usage: 'identity' | 'fresh-authority',
+    operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     return operation(storage.mode, storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials));
 }
@@ -47,7 +48,7 @@ async function projectCatalogForCurrentMode<TCatalog extends ProviderConnections
     context: LazyActionAccountContext, catalog: TCatalog, mode: 'plain' | 'e2ee',
 ) {
     const { encryption } = await context.resolveAccountEncryption();
-    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
     context.assertCurrent();
     return current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' } as const;
 }
@@ -71,7 +72,7 @@ export async function readProviderCatalogRowInContext(context: LazyActionAccount
 export async function readProviderCatalogForMutationInContext(context: LazyActionAccountContext,
     signal?: AbortSignal): Promise<ProviderConnectionsCatalogSnapshotV1> {
     try {
-        return await admit(context, async (mode, material) => projectCatalogForCurrentMode(context,
+        return await admit(context, 'identity', async (mode, material) => projectCatalogForCurrentMode(context,
             await loadProviderConnectionsCatalogV1({ mode, material, signal,
                 readRow: () => readProviderCatalogRowInContext(context, signal) }), mode));
     } catch (error) { return failure(error, signal); }
@@ -83,7 +84,7 @@ export function readProviderCatalogInContext(context: LazyActionAccountContext, 
 export async function readProviderCatalogInContext(context: LazyActionAccountContext, signal?: AbortSignal,
     publication?: ReadPublication | ProviderCatalogImportOptions): Promise<ProviderConnectionsCatalogSnapshotV1 | ProviderConnectionsCatalogImportResultV1> {
     try {
-        return await admit(context, async (mode, material) => {
+        return await admit(context, 'identity', async (mode, material) => {
             publication?.onCryptoAdmission?.(mode === 'e2ee' && material ? {
                 contentPublicKeyFingerprint: createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: mode, material }).contentPublicKeyFingerprint,
             } : null);
@@ -173,7 +174,7 @@ export type ProviderCatalogWriteInput = Readonly<{ catalog: ProviderConnectionsC
     savedSecretRevisions?: ProviderConnectionsRowMutationV1['savedSecretRevisions']; pendingResourceIds?: readonly string[] }>;
 export function prepareProviderCatalogMutationInContext(context: LazyActionAccountContext, input: ProviderCatalogWriteInput,
     signal?: AbortSignal): Promise<ProviderConnectionsRowMutationV1> {
-    return admit(context, async (mode, material) => {
+    return admit(context, 'fresh-authority', async (mode, material) => {
         const references = listProviderConnectionsCatalogSavedSecretRefsV1(input.catalog).map(reference => reference.secretId);
         const captures = await captureSavedSecretReferenceRevisionsInContext(context, { references, signal,
             savedSecretRevisions: input.savedSecretRevisions, pendingResourceIds: input.pendingResourceIds });

@@ -83,18 +83,23 @@ describe('Account storage currentness failure fidelity', () => {
             expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(1);
         }, 'plain');
     });
-    it('shares ambient reads only within the current scope revision and keeps captured transport separate', async () => {
+    it('keeps every exact cursor witness fresh across ambient and captured requests', async () => {
         const response = createDeferred<void>();
         const entered = createDeferred<void>();
+        const initialReadsEntered = createDeferred<void>();
+        let reads = 0;
         let version = 1;
         await withCurrentnessHome({ select: () => {
             entered.resolve();
+            reads += 1;
+            if (reads === 3) initialReadsEntered.resolve();
             return { body: { ...currentness('plain', null), version }, respondAfter: response.promise };
         } }, async request => {
             const first = fetchAccountEncryptionCurrentness({ token });
             await entered.promise;
             const second = fetchAccountEncryptionCurrentness({ token });
             const captured = fetchAccountEncryptionCurrentness({ token }, { request });
+            await initialReadsEntered.promise;
             version = 2;
             invalidateAccountEncryptionModeCache();
             const updated = fetchAccountEncryptionCurrentness({ token });
@@ -102,14 +107,14 @@ describe('Account storage currentness failure fidelity', () => {
             expect(await Promise.all([first, second, captured, updated])).toMatchObject([
                 { version: 1 }, { version: 1 }, { version: 1 }, { version: 2 },
             ]);
-            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(3);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(4);
             version = 3;
             expect(await fetchAccountEncryptionCurrentness({ token })).toMatchObject({ version: 3 });
-            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(4);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(5);
         }, 'plain');
     });
 
-    it('shares E2EE currentness while admitting each caller cipher independently', async () => {
+    it('freshly admits each E2EE caller cipher independently', async () => {
         const response = createDeferred<void>();
         const cipher = await Encryption.create(secret);
         await withCurrentnessHome({ body: currentness(), respondAfter: response.promise }, async request => {
@@ -121,31 +126,40 @@ describe('Account storage currentness failure fidelity', () => {
                 { status: 'fulfilled', value: { mode: 'e2ee', encryption: cipher } },
                 { status: 'rejected', reason: expect.objectContaining({ reason: 'encryption-material-unavailable' }) },
             ]);
-            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(1);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(2);
         });
     });
 
-    it('shares overlapping storage admission reads but rereads fresh currentness after settlement', async () => {
+    it('never joins a fresh storage authority point to another pending witness', async () => {
         const response = createDeferred<void>();
+        const entered = createDeferred<void>();
         let version = 1;
-        await withCurrentnessHome({ select: () => ({ body: { ...currentness('plain', null), version }, respondAfter: response.promise }) }, async request => {
+        let mode: 'plain' | 'e2ee' = 'plain';
+        await withCurrentnessHome({ select: () => {
+            entered.resolve();
+            return { body: { ...currentness(mode, mode === 'plain' ? null : fingerprint), version }, respondAfter: response.promise };
+        } }, async request => {
             const first = resolveAccountStorageContext({ token }, { encryption: null, request });
-            const second = resolveAccountStorageContext({ token }, { encryption: null, request });
+            await entered.promise;
+            // The first HTTP witness is deliberately held across a committed
+            // mode change. The later final authority point must not join it.
+            version = 2;
+            mode = 'e2ee';
+            const second = resolveAccountStorageContext({ token }, { encryption: null, request, usage: 'fresh-authority' });
+            const outcomes = Promise.allSettled([first, second]);
             const starts = home.requestsFor('/v1/account/encryption/currentness').length;
             response.resolve();
-            expect(await Promise.all([first, second])).toEqual([
-                { mode: 'plain', encryption: null }, { mode: 'plain', encryption: null },
+            expect(await outcomes).toEqual([
+                { status: 'fulfilled', value: { mode: 'plain', encryption: null } },
+                { status: 'rejected', reason: expect.objectContaining({ reason: 'encryption-material-unavailable' }) },
             ]);
-            expect(starts).toBe(1);
-            version = 2;
-            expect(await resolveAccountStorageContext({ token }, { encryption: null, request })).toEqual({ mode: 'plain', encryption: null });
-            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(2);
-            expect(await fetchAccountEncryptionCurrentness({ token }, { request })).toMatchObject({ version: 2 });
+            expect(starts).toBe(2);
+            expect(await fetchAccountEncryptionCurrentness({ token }, { request })).toMatchObject({ version: 2, mode: 'e2ee' });
             expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(3);
         }, 'plain');
     });
 
-    it('shares a live failed currentness read and allows a subsequent same-transport recovery', async () => {
+    it('preserves independent fresh refusals and a subsequent same-transport recovery', async () => {
         const response = createDeferred<void>();
         let refused = true;
         await withCurrentnessHome({ select: () => ({ status: refused ? 403 : 200,
@@ -159,10 +173,10 @@ describe('Account storage currentness failure fidelity', () => {
                 { status: 'rejected', reason: expect.objectContaining({ status: 403 }) },
                 { status: 'rejected', reason: expect.objectContaining({ status: 403 }) },
             ]);
-            expect(starts).toBe(1);
+            expect(starts).toBe(2);
             refused = false;
             expect(await fetchAccountEncryptionCurrentness({ token }, { request })).toMatchObject({ mode: 'plain' });
-            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(2);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(3);
         }, 'plain');
     });
 
@@ -183,7 +197,7 @@ describe('Account storage currentness failure fidelity', () => {
         }, 'plain');
     });
 
-    it('isolates caller cancellation while sharing readers with the same signal', async () => {
+    it('isolates fresh witness cancellation even when peers use the same signal', async () => {
         const response = createDeferred<void>();
         await withCurrentnessHome({ body: currentness('plain', null), respondAfter: response.promise }, async request => {
             // The HTTP boundary completes or rejects each request under its own AbortSignal.
@@ -206,10 +220,10 @@ describe('Account storage currentness failure fidelity', () => {
                 { status: 'fulfilled', value: { mode: 'plain' } },
                 { status: 'fulfilled', value: { mode: 'plain' } },
             ]);
-            expect(starts).toBe(2);
+            expect(starts).toBe(3);
             await expect(fetchAccountEncryptionCurrentness({ token }, { request: cancellableRequest, signal: cancelled.signal }))
                 .rejects.toMatchObject({ name: 'AbortError' });
-            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(2);
+            expect(home.requestsFor('/v1/account/encryption/currentness')).toHaveLength(3);
         }, 'plain');
     });
 

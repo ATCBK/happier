@@ -27,10 +27,10 @@ export { ConnectedAccountCatalogOperationError };
 export function requireUpdatedConnectedAccountCatalogMutation(result: ConnectedAccountCatalogMutationResponseV1): asserts result is Extract<ConnectedAccountCatalogMutationResponseV1, { status: 'updated' }> {
     if (result.status !== 'updated') throw new ConnectedAccountCatalogOperationError(result.status, result);
 }
-async function admit<T>(context: ConnectedAccountCatalogAccountContext,
+async function admit<T>(context: ConnectedAccountCatalogAccountContext, usage: 'identity' | 'fresh-authority',
     operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     const material = storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials);
     return operation(storage.mode, material);
@@ -67,12 +67,17 @@ async function readConnectedAccountCatalogWithAdmissionInContext(context: Connec
     publication: ConnectedAccountCatalogReadPublication | null,
     sourceAdmission?: ConnectedAccountCatalogSourceAdmission): Promise<ConnectedAccountCatalogSnapshotV1> {
     try {
-        return await admit(context, async (mode, material) => {
+        return await admit(context, 'identity', async (mode, material) => {
+            const project = async (catalog: ConnectedAccountCatalogSnapshotV1): Promise<ConnectedAccountCatalogSnapshotV1> => {
+                const { encryption } = await context.resolveAccountEncryption();
+                const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
+                context.assertCurrent();
+                return current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
+            };
             const catalog = await loadConnectedAccountCatalogV1({ key, mode, material, signal,
                 readRow: () => readConnectedAccountCatalogRowInContext(context, key, signal),
                 ...(publication?.onReady ? { onReadyBeforeCleanup: async catalog => {
-                    context.assertCurrent();
-                    publication.onReady!(catalog, context.accountLifetime.isCurrent);
+                    publication.onReady!(await project(catalog), context.accountLifetime.isCurrent);
                 } } : {}),
                 ...(publication === null ? {} : { transfer: {
                     readSourceSnapshot: async ({ purpose }) => {
@@ -130,10 +135,7 @@ async function readConnectedAccountCatalogWithAdmissionInContext(context: Connec
                     }),
                 } }),
             });
-            const { encryption } = await context.resolveAccountEncryption();
-            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
-            context.assertCurrent();
-            return current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
+            return project(catalog);
         });
     } catch (error) { return failure(error, signal); }
 }
@@ -174,7 +176,7 @@ export type ConnectedAccountCatalogRecordWriteInput = Readonly<{
 /** Capture actual resource use/revisions before publishing a configuration reference. */
 export function prepareConnectedAccountCatalogMutationInContext(context: ConnectedAccountCatalogAccountContext,
     input: ConnectedAccountCatalogRecordWriteInput, signal?: AbortSignal): Promise<ConnectedAccountCatalogRowMutationV1> {
-    return admit(context, async (mode, material) => {
+    return admit(context, 'fresh-authority', async (mode, material) => {
         if (input.expectedRevision === 'absent' && input.sourceSettingsVersion === undefined) throw new ConnectedAccountCatalogOperationError('source-currentness-unavailable');
         if (input.voiceCredentialMutation && !input.settingsMutation) {
             throw new ConnectedAccountCatalogOperationError('saved-secret-unavailable');

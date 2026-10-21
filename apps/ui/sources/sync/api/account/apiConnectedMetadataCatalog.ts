@@ -57,16 +57,16 @@ export async function apiReadConnectedPresentationRow(captured: CapturedRead, si
 export async function apiReadConnectedAcknowledgementsRow(captured: CapturedRead, signal?: AbortSignal) {
     return ConnectedAcknowledgementsRowReadResponseV1Schema.parse(await rawRead(captured, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1, signal));
 }
-async function admit<T>(context: ConnectedMetadataAccountContext,
+async function admit<T>(context: ConnectedMetadataAccountContext, usage: 'identity' | 'fresh-authority',
     operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     return operation(current.mode, current.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials));
 }
 async function assertModeCurrent(context: ConnectedMetadataAccountContext, mode: 'plain' | 'e2ee'): Promise<void> {
     const current = await resolveAccountStorageContext(context.credentials, {
-        encryption: (await context.resolveAccountEncryption()).encryption, request: context.request,
+        encryption: (await context.resolveAccountEncryption()).encryption, request: context.request, usage: 'fresh-authority',
     });
     context.assertCurrent();
     if (current.mode !== mode) throw new ConnectedMetadataRowOperationError('account-mode-mismatch');
@@ -120,7 +120,7 @@ async function writeRow(context: ConnectedMetadataAccountContext, route: string,
     return result.data;
 }
 function writePresentation(context: ConnectedMetadataAccountContext, input: Write<ConnectedPresentationRecordV1>, signal?: AbortSignal) {
-    return admit(context, (mode, material) => writeRow(context, CONNECTED_PRESENTATION_ROWS_ROUTE_V1,
+    return admit(context, 'fresh-authority', (mode, material) => writeRow(context, CONNECTED_PRESENTATION_ROWS_ROUTE_V1,
         ConnectedPresentationRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision,
             content: sealConnectedPresentationContentV1({ mode, material, record: input.record, randomBytes: getRandomBytes }),
             ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) }), signal)).then(result => {
@@ -133,7 +133,7 @@ function writePresentation(context: ConnectedMetadataAccountContext, input: Writ
     });
 }
 function writeAcknowledgements(context: ConnectedMetadataAccountContext, input: Write<ConnectedAcknowledgementsRecordV1>, signal?: AbortSignal) {
-    return admit(context, (mode, material) => writeRow(context, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1,
+    return admit(context, 'fresh-authority', (mode, material) => writeRow(context, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1,
         ConnectedAcknowledgementsRowMutationV1Schema.parse({ expectedRevision: input.expectedRevision,
             content: sealConnectedAcknowledgementsContentV1({ mode, material, record: input.record, randomBytes: getRandomBytes }),
             ...(input.sourceSettingsVersion === undefined ? {} : { sourceSettingsVersion: input.sourceSettingsVersion }) }), signal)).then(result => {
@@ -186,7 +186,7 @@ export async function readConnectedMetadataCatalogInContext(context: ConnectedMe
 }
 async function readConnectedMetadataCatalog(context: ConnectedMetadataAccountContext, signal?: AbortSignal,
     publication?: Publication, maintenance = true): Promise<ConnectedMetadataCatalogV1> {
-    return admit(context, async (mode, material) => {
+    return admit(context, 'identity', async (mode, material) => {
         const result = await loadConnectedMetadataCatalogV1({ mode, material, signal,
         readPresentationRow: () => apiReadConnectedPresentationRow({ request: context.request, isCurrent: context.accountLifetime.isCurrent }, signal),
         readAcknowledgementsRow: () => apiReadConnectedAcknowledgementsRow({ request: context.request, isCurrent: context.accountLifetime.isCurrent }, signal),
@@ -316,7 +316,7 @@ export async function prepareConnectedMetadataCleanupInContext(context: Connecte
         const catalog = await readConnectedMetadataCatalogInContext(context, signal);
         const failure = catalog.cleanup?.status === 'cleanup-pending'
             ? new ConnectedMetadataRowOperationError(catalog.cleanup.reason) : undefined;
-        return await admit(context, async mode => {
+        return await admit(context, 'fresh-authority', async mode => {
             const source = await context.readRawSettingsSnapshot();
             context.assertCurrent();
             const next = removeLegacyConnectedMetadataSubjectV1({ raw: source.raw, inventory, subject });

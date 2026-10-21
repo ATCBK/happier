@@ -133,7 +133,7 @@ async function readSavedSecretReferencesInContext(
         const needsAccountEncryption = resources.some(resource => resource.encryptionMode === 'e2ee');
         const encryption = needsAccountEncryption ? (await context.resolveAccountEncryption()).encryption : null;
         if (needsAccountEncryption) {
-            const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+            const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'identity' });
             if (storage.mode !== accountMode) return { ok: false, reason: 'unavailable' };
         }
         context.assertCurrent();
@@ -144,9 +144,11 @@ async function readSavedSecretReferencesInContext(
                 ? encryption.decryptEncryptionKey(encryptedDataKey, { serverId: context.serverId, accountId: context.accountId })
                 : null,
         });
-        const currentMode = (await fetchAccountEncryptionMode(context.credentials, { request: context.request })).mode;
+        // Opening private material cannot authorize its later disclosure: the
+        // server may have committed revocation before the socket delivers it.
+        const currentMode = (await fetchAccountEncryptionMode(context.credentials, { request: context.request, usage: 'fresh-authority' })).mode;
         if (needsAccountEncryption) {
-            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
             if (current.mode !== accountMode) return { ok: false, reason: 'unavailable' };
         }
         signal?.throwIfAborted();

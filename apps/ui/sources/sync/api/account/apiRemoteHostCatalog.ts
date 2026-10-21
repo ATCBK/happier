@@ -60,10 +60,10 @@ export function readRemoteHostCatalogRowInContext(context: Pick<ProfileAccountCo
     return readRemoteHostCatalogRow({ request: context.request, isCurrent: context.accountLifetime.isCurrent }, signal);
 }
 
-async function admit<T>(context: RemoteHostAccountContext,
+async function admit<T>(context: RemoteHostAccountContext, usage: 'identity' | 'fresh-authority',
     operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     return operation(storage.mode, storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials));
 }
@@ -79,17 +79,17 @@ async function readAdmittedRemoteHostCatalog(context: RemoteHostAccountContext, 
             try { context.assertCurrent(); return true; } catch { return false; }
         } }, signal) });
     const { encryption } = await context.resolveAccountEncryption();
-    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
     context.assertCurrent();
     return current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
 }
 export async function readRemoteHostCatalogInContext(context: RemoteHostAccountContext,
     signal?: AbortSignal): Promise<RemoteHostCatalogSnapshotV1> {
-    try { return await admit(context, (mode, material) => readAdmittedRemoteHostCatalog(context, mode, material, signal)); }
+    try { return await admit(context, 'identity', (mode, material) => readAdmittedRemoteHostCatalog(context, mode, material, signal)); }
     catch (error) { return failure(error, signal); }
 }
 export async function readRemoteHostCatalog(scope: ServerAccountScope, signal?: AbortSignal): Promise<RemoteHostCatalogSnapshotV1> {
-    try { return await withProfileAccount(scope, signal, context => readRemoteHostCatalogInContext(context, signal)); }
+    try { return await withProfileAccount(scope, signal, context => readRemoteHostCatalogInContext(context, signal), 'identity'); }
     catch (error) { return failure(error, signal); }
 }
 
@@ -102,7 +102,7 @@ async function readCapturedRemoteHostCatalogForOperation(context: RemoteHostAcco
 }
 export async function readRemoteHostCatalogForOperationInContext(context: RemoteHostAccountContext,
     signal?: AbortSignal): Promise<RemoteHostCatalogSnapshotV1> {
-    try { return await admit(context, (mode, material) => readCapturedRemoteHostCatalogForOperation(context, mode, material, signal)); }
+    try { return await admit(context, 'fresh-authority', (mode, material) => readCapturedRemoteHostCatalogForOperation(context, mode, material, signal)); }
     catch (error) { return failure(error, signal); }
 }
 
@@ -115,7 +115,7 @@ export async function readRemoteHostCatalogProjection(scope: ServerAccountScope,
 }
 export async function readRemoteHostCatalogProjectionInContext(context: RemoteHostAccountContext, signal?: AbortSignal,
     publication?: Readonly<{ onReady?(catalog: RemoteHostCatalogSnapshotV1, current: () => boolean): void; hasPendingCleanup?(): boolean }>): Promise<RemoteHostCatalogSnapshotV1> {
-    try { return await admit(context, (mode, material) => readCapturedRemoteHostCatalogProjection(context, mode, material, signal, publication)); }
+    try { return await admit(context, 'fresh-authority', (mode, material) => readCapturedRemoteHostCatalogProjection(context, mode, material, signal, publication)); }
     catch (error) { return failure(error, signal); }
 }
 async function readCapturedRemoteHostCatalogProjection(context: RemoteHostAccountContext, mode: 'plain' | 'e2ee',
@@ -215,7 +215,7 @@ async function readCapturedRemoteHostCatalogProjection(context: RemoteHostAccoun
     });
     context.assertCurrent();
     const { encryption } = await context.resolveAccountEncryption();
-    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
     return current.mode === mode ? result : { status: 'unavailable', reason: 'account-mode-mismatch' };
 }
 
@@ -247,7 +247,7 @@ export async function prepareRemoteHostSaveInContext(context: ProfileAccountCont
     host: RemoteHostRecordV1; expectedRevision: number | 'absent'; credentialChanges?: RemoteHostCredentialChanges;
     referenceCensus?: SavedSecretCatalogReferenceCensusV1;
 }>, signal?: AbortSignal): Promise<Readonly<{ input: RemoteHostActionInputByIdV1['remote_hosts.save']; dispose(): void }>> {
-    return admit(context, async mode => {
+    return admit(context, 'fresh-authority', async mode => {
         signal?.throwIfAborted(); context.assertCurrent();
         const host = { ...input.host, ssh: { ...input.host.ssh } };
         const resources: NonNullable<RemoteHostActionInputByIdV1['remote_hosts.save']['savedSecretResources']> = [];
@@ -322,7 +322,7 @@ export async function prepareRemoteHostCatalogMutationInContext(context: RemoteH
     savedSecretRevisions?: readonly SavedSecretReferenceRevisionProof[];
     pendingResourceIds?: readonly string[];
 }>, signal?: AbortSignal): Promise<RemoteHostCatalogRowMutationV1> {
-    return admit(context, async (mode, material) => {
+    return admit(context, 'fresh-authority', async (mode, material) => {
         signal?.throwIfAborted();
         if (input.expectedMode !== undefined && input.expectedMode !== mode) {
             throw new RemoteHostCatalogOperationError('account-mode-mismatch');
@@ -354,7 +354,7 @@ export async function saveRemoteHostInContext(context: RemoteHostAccountContext,
     input: RemoteHostActionInputByIdV1['remote_hosts.save'], signal?: AbortSignal): Promise<RemoteHostMutationResult> {
     try {
         const prepared = RemoteHostSaveActionInputV1Schema.parse(input);
-        return await admit(context, async (mode, material) => {
+        return await admit(context, 'fresh-authority', async (mode, material) => {
             const catalog = await readCapturedRemoteHostCatalogForOperation(context, mode, material, signal);
             if (catalog.status !== 'ready') return { ok: false, reason: 'unavailable' };
             if (catalog.revision !== prepared.expectedRevision) return { ok: false, reason: 'changed' };
@@ -422,7 +422,7 @@ export async function removeRemoteHost(scope: ServerAccountScope, input: Readonl
 export async function removeRemoteHostInContext(context: RemoteHostAccountContext,
     input: Readonly<{ hostId: string; expectedRevision: number | 'absent' }>, signal?: AbortSignal): Promise<RemoteHostMutationResult> {
     try {
-        return await admit(context, async (mode, material) => {
+        return await admit(context, 'fresh-authority', async (mode, material) => {
             const catalog = await readCapturedRemoteHostCatalogForOperation(context, mode, material, signal);
             if (catalog.status !== 'ready') return { ok: false, reason: 'unavailable' };
             if (catalog.revision !== input.expectedRevision || !catalog.hosts.some(host => host.id === input.hostId))

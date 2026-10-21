@@ -9,6 +9,7 @@ import {
 } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { prepareSessionListAccountScope } from '@/sync/runtime/orchestration/concurrentSessionCache';
+import { preparePluginUiProjectionWarmCacheEntries } from '@/sync/domains/state/warmCachePersistence';
 import {
     type ServerAccountScope,
     type ServerAccountScopeLifetime,
@@ -204,6 +205,7 @@ function useCredentialScopeEntries(
                     });
                 },
             });
+            preparePluginUiProjectionWarmCacheEntries(scope.serverId, scope.accountId);
             projectionLifecycleRef.current?.beforeBinding?.(binding);
             setEntries((current) => {
                 if (!binding.isCurrent()) return current;
@@ -349,10 +351,11 @@ export type ServerCredentialAccountScopeBindingState = Readonly<{
 /** One exact Home's identity state together with its current credential lifetime, from one resolution. */
 export function useServerCredentialAccountScopeBinding(
     serverId: string | null | undefined,
+    projectionLifecycle?: ServerCredentialAccountScopeProjectionLifecycle,
 ): ServerCredentialAccountScopeBindingState {
     const normalized = normalizeCredentialScopeServerId(serverId);
     const requested = React.useMemo(() => (normalized ? [normalized] : []), [normalized]);
-    const entries = useCredentialScopeEntries(requested);
+    const entries = useCredentialScopeEntries(requested, projectionLifecycle);
     const entry = normalized ? entries.get(normalized) : undefined;
     return React.useMemo(() => {
         if (!normalized) return Object.freeze({ resolution: UNKNOWN_HOME, binding: null });

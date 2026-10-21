@@ -518,6 +518,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                 fetchMachineRows({
                                                     credentials,
                                                     request: homeRequest,
+                                                    fresh: true,
                                                 }),
                                                 fetchAccountEncryptionMigrationKvInventory({ namespace: 'todo', credentials, request: homeRequest, scope: capturedRequest }),
                                                 fetchAccountEncryptionMigrationKvInventory({ namespace: 'workspace', credentials, request: homeRequest, scope: capturedRequest }),

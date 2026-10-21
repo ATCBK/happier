@@ -60,10 +60,10 @@ export function readMcpServerCatalogRowInContext(context: McpServerCatalogAccoun
         request: (path, init) => context.request(path, init, { retry: 'none' }) });
 }
 
-async function admit<T>(context: McpServerCatalogAccountContext,
+async function admit<T>(context: McpServerCatalogAccountContext, usage: 'identity' | 'fresh-authority',
     operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     return operation(storage.mode, storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials));
 }
@@ -88,7 +88,7 @@ export function classifyMcpServerCatalogReadFailure(error: unknown, signal?: Abo
 async function checkMcpServerCatalogAccountMode(context: McpServerCatalogAccountContext, mode: 'plain' | 'e2ee',
     snapshot: McpServerCatalogSnapshotV1): Promise<McpServerCatalogSnapshotV1> {
     const { encryption } = await context.resolveAccountEncryption();
-    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
     context.assertCurrent();
     return current.mode === mode ? snapshot : { status: 'unavailable', reason: 'account-mode-mismatch' };
 }
@@ -103,7 +103,7 @@ async function readMcpServerCatalogWithMaintenanceInContext(context: McpServerCa
     signal: AbortSignal | undefined, publication: ReadPublication | undefined,
     finishReady: (snapshot: McpServerCatalogSnapshotV1) => void): Promise<McpServerCatalogSnapshotV1> {
     try {
-        return await admit(context, async (mode, material) => {
+        return await admit(context, 'identity', async (mode, material) => {
             const readSourceSnapshot = async () => {
                 const { encryption } = await context.resolveAccountEncryption();
                 const source = await readAccountSettingsBaseline({ credentials: context.credentials, encryption, accountMode: mode,
@@ -193,7 +193,7 @@ export type McpServerCatalogWriteInput = Readonly<{
 /** Composite resource transactions use this same crypto/reference producer, without a separate write. */
 export function prepareMcpServerCatalogMutationInContext(context: McpServerCatalogAccountContext,
     input: McpServerCatalogWriteInput, signal?: AbortSignal): Promise<McpServerCatalogRowMutationV1> {
-    return admit(context, async (mode, material) => {
+    return admit(context, 'fresh-authority', async (mode, material) => {
         if (input.expectedMode !== undefined && input.expectedMode !== mode) throw new McpServerCatalogOperationError('account-mode-mismatch');
         const catalog = McpServerCatalogV1Schema.parse(input.catalog);
         const proofs = await captureSavedSecretReferenceRevisionsInContext(context, {
@@ -253,7 +253,7 @@ export async function mutateMcpServerCatalogInContext(context: McpServerCatalogA
     signal?: AbortSignal): Promise<McpServerCatalogMutationResponseV1> {
     let snapshot: McpServerCatalogSnapshotV1;
     try {
-        snapshot = await admit(context, async (mode, material) => checkMcpServerCatalogAccountMode(context, mode,
+        snapshot = await admit(context, 'identity', async (mode, material) => checkMcpServerCatalogAccountMode(context, mode,
             await loadMcpServerCatalogV1({ mode, material, signal,
                 readRow: () => readMcpServerCatalogRowInContext(context, signal) })));
     } catch (error) {

@@ -1,6 +1,7 @@
 import * as React from 'react';
 
 import { useOptionalAuth } from '@/auth/context/AuthContext';
+import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import {
     fetchAccountEncryptionMode,
     getAccountEncryptionModeCacheRevision,
@@ -21,25 +22,31 @@ export function useAccountEncryptionMode(options: Readonly<{ enabled?: boolean }
         getAccountEncryptionModeCacheRevision,
         getAccountEncryptionModeCacheRevision,
     );
-    const [mode, setMode] = React.useState<'e2ee' | 'plain' | null>(
-        () => (credentials && enabled ? getCachedAccountEncryptionMode(credentials) : null),
-    );
+    const [projection, setProjection] = React.useState<Readonly<{
+        credentials: AuthCredentials;
+        revision: number;
+        mode: 'e2ee' | 'plain';
+    }> | null>(null);
 
     React.useEffect(() => {
         if (!credentials || !enabled) {
-            setMode(null);
+            setProjection(null);
             return undefined;
         }
         let current = true;
         void fetchAccountEncryptionMode(credentials).then(
-            (result) => { if (current) setMode(result.mode); },
+            (result) => { if (current) setProjection({ credentials, revision, mode: result.mode }); },
             // Not answered (offline, unreachable Home): the mode stays unknown; nothing waits on it.
-            () => undefined,
+            () => { if (current) setProjection(null); },
         );
         return () => {
             current = false;
         };
     }, [credentials, enabled, revision]);
 
-    return mode === 'e2ee' || mode === 'plain' ? mode : null;
+    if (!credentials || !enabled) return null;
+    // A retired Account or owner revision cannot disclose the previous projection
+    // while its replacement read is pending or refused.
+    return getCachedAccountEncryptionMode(credentials)
+        ?? (projection?.credentials === credentials && projection.revision === revision ? projection.mode : null);
 }

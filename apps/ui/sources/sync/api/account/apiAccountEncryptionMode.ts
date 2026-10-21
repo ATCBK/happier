@@ -6,7 +6,11 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import { backoff, backoffForever } from '@/utils/timing/time';
 import type { ApiChangeEntry } from '@/sync/api/types/apiTypes';
-import { createServerFetchForActiveServer, serverFetch } from '@/sync/http/client';
+import { createServerFetchForActiveServer, serverFetch, type ServerFetch, type ServerFetchOptions } from '@/sync/http/client';
+import { sync } from '@/sync/sync';
+import { readAccountEncryptionObservationBinding, type AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
+import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import { createAccountEncryptionCurrentnessObservation, projectAccountEncryptionIdentity, type AccountEncryptionIdentity } from '@happier-dev/sync-client';
 import {
     getActiveServerSnapshot,
     getActiveServerHomeCarrier,
@@ -26,7 +30,7 @@ import {
 type AccountEncryptionMode = AccountEncryptionModeResponse['mode'];
 type AccountEncryptionModeResult = Readonly<{ mode: AccountEncryptionMode; updatedAt: number }>;
 
-const ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS = 5_000;
+export type AccountEncryptionReadUsage = 'identity' | 'fresh-authority';
 
 /** Readiness on a rejected currentness read is not authority to migrate Account data. */
 export class AccountEncryptionCurrentnessReadinessError extends HappyError {
@@ -43,17 +47,12 @@ export class AccountEncryptionCurrentnessReadinessError extends HappyError {
     }
 }
 
-type AccountEncryptionModeCacheEntry = Readonly<{
-    expiresAt?: number;
-    promise?: Promise<AccountEncryptionModeResult>;
-    value?: AccountEncryptionModeResult;
-}>;
-
-const accountEncryptionModeCache = new Map<string, AccountEncryptionModeCacheEntry>();
+const accountEncryptionModeReads = createScopedResolutionSingleFlight<AccountEncryptionModeResult>();
 type AccountEncryptionInvalidation = Readonly<{ reason?: 'scope-reset'; serverId?: string | null }>;
 type AccountEncryptionHomeBinding = Readonly<{ profileId: string; portableIdentity: string | null }>;
 type AccountEncryptionInvalidationEvent = AccountEncryptionInvalidation & Readonly<{
     home: AccountEncryptionHomeBinding | null;
+    source?: object;
 }>;
 const accountEncryptionModeCacheInvalidationListeners = new Set<(invalidation: AccountEncryptionInvalidationEvent) => void>();
 let accountEncryptionModeCacheRevision = 0;
@@ -92,18 +91,14 @@ export function getAccountEncryptionModeScopeKey(
     ].join('\u0000');
 }
 
-function pruneAccountEncryptionModeCache(now: number): void {
-    for (const [key, entry] of accountEncryptionModeCache) {
-        if (entry.promise) continue;
-        if ((entry.expiresAt ?? 0) > now) continue;
-        accountEncryptionModeCache.delete(key);
-    }
+export function invalidateAccountEncryptionModeCache(options: AccountEncryptionInvalidation = {}): void {
+    publishAccountEncryptionInvalidation(options);
 }
 
-export function invalidateAccountEncryptionModeCache(options: AccountEncryptionInvalidation = {}): void {
-    accountEncryptionModeCache.clear();
+function publishAccountEncryptionInvalidation(options: AccountEncryptionInvalidation, source?: object): void {
+    accountEncryptionModeReads.reset();
     accountEncryptionModeCacheRevision += 1;
-    const event: AccountEncryptionInvalidationEvent = { ...options, home: readAccountEncryptionHomeBinding(options.serverId) };
+    const event: AccountEncryptionInvalidationEvent = { ...options, home: readAccountEncryptionHomeBinding(options.serverId), source };
     for (const listener of [...accountEncryptionModeCacheInvalidationListeners]) {
         try {
             listener(event);
@@ -112,6 +107,64 @@ export function invalidateAccountEncryptionModeCache(options: AccountEncryptionI
             // withdrawing a stale Account disclosure for every other mount.
         }
     }
+}
+
+/** Thin transport adapter; the shared observation is the sole settled identity owner. */
+export function createSocketAccountEncryptionObservation(options: Readonly<{
+    credentials: AuthCredentials;
+    serverId?: string | null;
+    endpointUrl: string;
+    runtimeOrigin: string;
+    homeCarrierEndpointId: string | null;
+    request: ServerFetch;
+    isCurrent: () => boolean;
+}>) {
+    const unavailable = () => new HappyError('Account encryption observation unavailable', false, {
+        kind: 'config', code: 'account-encryption-currentness-unavailable',
+    });
+    const observation = createAccountEncryptionCurrentnessObservation({
+        accountId: parseToken(options.credentials.token),
+        readFresh: signal => readAccountEncryptionCurrentness(options.credentials, { request: options.request, signal }),
+        unavailable,
+    });
+    const home = readAccountEncryptionHomeBinding(options.serverId);
+    const invalidate = (event: AccountEncryptionInvalidationEvent) => {
+        if (event.source === observation || event.reason === 'scope-reset') return;
+        if (home && event.home && home.profileId !== event.home.profileId
+            && (!home.portableIdentity || !event.home.portableIdentity || home.portableIdentity !== event.home.portableIdentity)) return;
+        observation.invalidate();
+    };
+    accountEncryptionModeCacheInvalidationListeners.add(invalidate);
+    const notify = () => publishAccountEncryptionInvalidation({ serverId: options.serverId }, observation);
+    const binding: AccountEncryptionObservationBinding = {
+        credentials: options.credentials,
+        credentialScopeKey: resolveAuthCredentialsScopeKey(options.credentials),
+        serverId: options.serverId ?? '',
+        endpointUrl: options.endpointUrl,
+        runtimeOrigin: options.runtimeOrigin,
+        homeCarrierEndpointId: options.homeCarrierEndpointId,
+        isCurrent: options.isCurrent,
+        read: async signal => {
+            if (!options.isCurrent()) throw unavailable();
+            const identity = await observation.read(signal);
+            if (!options.isCurrent()) throw unavailable();
+            return identity;
+        },
+        peek: () => options.isCurrent() ? observation.peek() : null,
+    };
+    return {
+        binding,
+        connected: () => { if (options.isCurrent()) { observation.connected(); notify(); } },
+        disconnected: () => { observation.disconnected(); notify(); },
+        update: (raw: unknown) => {
+            if (options.isCurrent() && observation.update(raw)) notify();
+        },
+        dispose: () => {
+            accountEncryptionModeCacheInvalidationListeners.delete(invalidate);
+            observation.dispose();
+            notify();
+        },
+    };
 }
 
 /** Account settings and Connected Service notifications do not change persisted Account mode. */
@@ -174,9 +227,8 @@ export function captureAccountEncryptionCurrentness(serverId?: string | null): R
 }
 
 /**
- * Observe only cache invalidation. The cache remains the single reader and
- * value owner; callers re-read through it instead of receiving a second value
- * channel.
+ * Observe disclosure withdrawal. Callers re-read through the canonical identity
+ * owner instead of retaining another settled value channel.
  */
 export function subscribeAccountEncryptionModeCacheInvalidation(
     listener: () => void,
@@ -188,45 +240,37 @@ export function subscribeAccountEncryptionModeCacheInvalidation(
 }
 
 type AccountEncryptionCurrentnessReadOptions = Readonly<{
-    request?: (path: string, init: RequestInit) => Promise<Response>;
+    request?: (path: string, init: RequestInit, options?: ServerFetchOptions) => Promise<Response>;
     signal?: AbortSignal;
 }>;
-
-// Only live reads share authority. Captured request identity includes its Home
-// and hidden cancellation lifetime; an ambient read uses the selected scope.
-type PendingAccountEncryptionRead = Readonly<{
-    scopeKey: string;
-    request: AccountEncryptionCurrentnessReadOptions['request'];
-    signal: AbortSignal | undefined;
-}> & (Readonly<{ kind: 'currentness'; result: Promise<AccountEncryptionCurrentnessResponse> }>
-    | Readonly<{ kind: 'mode'; result: Promise<AccountEncryptionModeResult> }>);
-const pendingAccountEncryptionReads = new Set<PendingAccountEncryptionRead>();
 
 export async function fetchAccountEncryptionCurrentness(
     credentials: AuthCredentials,
     options: AccountEncryptionCurrentnessReadOptions = {},
 ): Promise<AccountEncryptionCurrentnessResponse> {
     throwIfAborted(options.signal);
-    const scopeKey = options.request ? resolveAuthCredentialsScopeKey(credentials)
-        : `${getAccountEncryptionModeScopeKey(credentials)}\u0000${accountEncryptionModeCacheRevision}`;
-    const incumbent = [...pendingAccountEncryptionReads].find(entry => entry.kind === 'currentness' && entry.scopeKey === scopeKey
-        && entry.request === options.request && entry.signal === options.signal);
-    if (incumbent?.kind === 'currentness') return await incumbent.result;
-    const result = readAccountEncryptionCurrentness(credentials, options);
-    const entry = { kind: 'currentness' as const, scopeKey, request: options.request, signal: options.signal, result };
-    pendingAccountEncryptionReads.add(entry);
-    try {
-        return await result;
-    } finally {
-        pendingAccountEncryptionReads.delete(entry);
-    }
+    // Exact witnesses have a fresh server observation point per invocation.
+    // They cannot join an identity bootstrap begun before a committed change.
+    return await readAccountEncryptionCurrentness(credentials, options);
+}
+
+export async function fetchAccountEncryptionIdentity(
+    credentials: AuthCredentials,
+    options: AccountEncryptionCurrentnessReadOptions & Readonly<{ usage: AccountEncryptionReadUsage }>,
+): Promise<AccountEncryptionIdentity> {
+    throwIfAborted(options.signal);
+    const binding = options.usage === 'identity' ? options.request
+        ? readAccountEncryptionObservationBinding(options.request, credentials)
+        : sync?.getAccountEncryptionObservationBinding(credentials) ?? null : null;
+    if (binding) return await binding.read(options.signal);
+    return projectAccountEncryptionIdentity(await fetchAccountEncryptionCurrentness(credentials, options));
 }
 
 async function readAccountEncryptionCurrentness(
     credentials: AuthCredentials,
     options: AccountEncryptionCurrentnessReadOptions,
 ): Promise<AccountEncryptionCurrentnessResponse> {
-    const request = options.request ?? ((path: string, init: RequestInit) =>
+    const request: NonNullable<AccountEncryptionCurrentnessReadOptions['request']> = options.request ?? ((path: string, init?: RequestInit) =>
         serverFetch(path, init, { includeAuth: false }));
     const readCurrentness = async () => await request('/v1/account/encryption/currentness', {
         method: 'GET',
@@ -235,7 +279,7 @@ async function readAccountEncryptionCurrentness(
             'Content-Type': 'application/json',
         },
         signal: options.signal,
-    });
+    }, { includeAuth: false, retry: 'none' });
     let response = await readCurrentness();
     if (!response.ok) {
         if (response.status === 408 || response.status === 429 || response.status >= 500) {
@@ -345,13 +389,28 @@ export async function fetchAccountEncryptionMode(
     opts: Readonly<{
         retry?: 'default' | 'none';
         /**
-         * Explicit Home-targeted request transport. When supplied, the mode read
-         * is one direct attempt against that request and never consults the
-         * active-server mode cache; the caller's endpoint owns the target.
+         * Explicit Home-targeted request transport. Reads never consult ambient
+         * focus; identity usage may borrow only this request's admitted socket
+         * observation, while authority usage makes one direct fresh attempt.
          */
         request?: (path: string, init?: RequestInit) => Promise<Response>;
+        /** Final disclosure/sealing checks retain a fresh HTTP authority point. */
+        usage?: AccountEncryptionReadUsage;
     }> = {},
 ): Promise<AccountEncryptionModeResult> {
+    const binding = opts.usage !== 'fresh-authority' && (opts.usage === 'identity' || (!opts.request && opts.retry !== 'none'))
+        ? opts.request ? readAccountEncryptionObservationBinding(opts.request, credentials)
+            : sync?.getAccountEncryptionObservationBinding(credentials) ?? null
+        : null;
+    if (binding) {
+        const read = async () => {
+            const identity = await binding.read();
+            return { mode: identity.mode, updatedAt: identity.updatedAt };
+        };
+        return !opts.request && opts.retry !== 'none'
+            ? await readSharedAccountEncryptionMode(credentials, read)
+            : await read();
+    }
     const request = opts.request ?? (() => {
         const focusedRequest = createServerFetchForActiveServer();
         return (path: string, init?: RequestInit) => focusedRequest(path, init, { includeAuth: false });
@@ -401,30 +460,25 @@ export async function fetchAccountEncryptionMode(
         };
     };
 
-    if (opts.request) {
+    if (opts.request && opts.usage === 'identity') {
         const scopeKey = `${resolveAuthCredentialsScopeKey(credentials)}\u0000${accountEncryptionModeCacheRevision}`;
-        const incumbent = [...pendingAccountEncryptionReads].find(entry => entry.kind === 'mode'
-            && entry.scopeKey === scopeKey && entry.request === opts.request);
-        if (incumbent?.kind === 'mode') return await incumbent.result;
-        // Share only this captured operation's live transport. A later read,
-        // including a post-open validation, must still consult its Home afresh.
-        const result = run();
-        const entry = { kind: 'mode' as const, scopeKey, request: opts.request, signal: undefined, result };
-        pendingAccountEncryptionReads.add(entry);
-        try {
-            return await result;
-        } finally {
-            pendingAccountEncryptionReads.delete(entry);
-        }
+        // Unbranded ordinary reads retain their exact callable lifetime at S2's
+        // pending owner. Final authority and cursor witnesses never join them.
+        return await accountEncryptionModeReads.run(scopeKey, run, { scope: opts.request });
     }
-    if (opts.retry === 'none') {
+    if (opts.retry === 'none' || opts.request || opts.usage === 'fresh-authority') {
         return await run();
     }
 
-    const cacheKey = getAccountEncryptionModeScopeKey(credentials);
-    const now = Date.now();
-    pruneAccountEncryptionModeCache(now);
+    return await readSharedAccountEncryptionMode(credentials, run);
+}
 
+/** Preserve the incumbent mounted-readiness retry owner for fresh and observed reads alike. */
+async function readSharedAccountEncryptionMode(
+    credentials: AuthCredentials,
+    run: () => Promise<AccountEncryptionModeResult>,
+): Promise<AccountEncryptionModeResult> {
+    const cacheKey = getAccountEncryptionModeScopeKey(credentials);
     const revision = accountEncryptionModeCacheRevision;
     // A shared mode read is readiness, not a finite user operation. Transient
     // outages must recover without another mount/event; retirement stops retry
@@ -438,50 +492,21 @@ export async function fetchAccountEncryptionMode(
         }
     };
 
-    const cached = accountEncryptionModeCache.get(cacheKey);
-    if (cached?.promise) {
-        const value = await cached.promise;
+    return await accountEncryptionModeReads.run(cacheKey, async () => {
+        const value = await backoffForever(async () => {
+            assertCurrent();
+            return await run();
+        });
         assertCurrent();
         return value;
-    }
-    if (cached?.value && (cached.expiresAt ?? 0) > now) {
-        return cached.value;
-    }
-
-    const promise = backoffForever(async () => {
-        assertCurrent();
-        return await run();
     });
-    accountEncryptionModeCache.set(cacheKey, { promise });
-    try {
-        const value = await promise;
-        // Invalidation can arrive while HTTP/body decoding is pending. Cache
-        // custody alone is not enough: stale mode must not reach the caller.
-        assertCurrent();
-        if (accountEncryptionModeCache.get(cacheKey)?.promise === promise) {
-            accountEncryptionModeCache.set(cacheKey, {
-                value,
-                expiresAt: Date.now() + ACCOUNT_ENCRYPTION_MODE_CACHE_TTL_MS,
-            });
-        }
-        return value;
-    } catch (error) {
-        if (accountEncryptionModeCache.get(cacheKey)?.promise === promise) {
-            accountEncryptionModeCache.delete(cacheKey);
-        }
-        throw error;
-    }
 }
 
 /**
- * The Account mode this device last read for these credentials, without asking the server; `null`
- * when it has not been read (or the read expired). For summaries that must not issue a request.
+ * The live admitted Account socket's identity, without issuing a request.
  */
 export function getCachedAccountEncryptionMode(credentials: AuthCredentials): AccountEncryptionMode | null {
-    const now = Date.now();
-    pruneAccountEncryptionModeCache(now);
-    const cached = accountEncryptionModeCache.get(getAccountEncryptionModeScopeKey(credentials));
-    return cached?.value && (cached.expiresAt ?? 0) > now ? cached.value.mode : null;
+    return sync?.getAccountEncryptionObservationBinding(credentials)?.peek()?.mode ?? null;
 }
 
 export async function updateAccountEncryptionMode(

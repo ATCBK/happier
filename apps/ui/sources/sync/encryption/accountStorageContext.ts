@@ -5,7 +5,7 @@ import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCreden
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { decodeBase64 } from '@/encryption/base64';
-import { AccountEncryptionCurrentnessReadinessError, fetchAccountEncryptionCurrentness } from '@/sync/api/account/apiAccountEncryptionMode';
+import { AccountEncryptionCurrentnessReadinessError, fetchAccountEncryptionIdentity, type AccountEncryptionReadUsage } from '@/sync/api/account/apiAccountEncryptionMode';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import type { ServerFetch } from '@/sync/http/client';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
@@ -80,35 +80,22 @@ export function isRawAccountStorageEncryption(
     return value !== null && 'encryptRaw' in value;
 }
 
-// Preserve the captured transport's identity through this request-options
-// adapter so overlapping admission reads reach the API's live sharing owner.
-// Weak keys retain neither retired transports nor completed currentness values.
-const currentnessRequestAdapters = new WeakMap<ServerFetch, (path: string, init: RequestInit) => Promise<Response>>();
-function currentnessRequest(request: ServerFetch) {
-    let adapter = currentnessRequestAdapters.get(request);
-    if (!adapter) {
-        adapter = (path, init) => request(path, init, { includeAuth: false, retry: 'none' });
-        currentnessRequestAdapters.set(request, adapter);
-    }
-    return adapter;
-}
-
 /** Capture the cipher before awaiting the authoritative Account-mode/fingerprint read. */
 export async function resolveAccountStorageContext(
     credentials: AuthCredentials,
     options: Readonly<{
         encryption?: AccountStorageContext['encryption'];
         request?: ServerFetch;
+        usage?: AccountEncryptionReadUsage;
     }> = {},
 ): Promise<AccountStorageContext> {
     const sync = options.encryption === undefined ? getSyncSingleton() : null;
     const encryption = sync ? sync.encryption : options.encryption;
     const mountedCredentials = sync && encryption ? sync.getCredentials() : null;
     try {
-        const currentness = await fetchAccountEncryptionCurrentness(credentials, {
-            ...(options.request ? {
-                request: currentnessRequest(options.request),
-            } : {}),
+        const currentness = await fetchAccountEncryptionIdentity(credentials, {
+            ...(options.request ? { request: options.request } : {}),
+            usage: options.usage ?? 'fresh-authority',
         });
         if (currentness.mode === 'plain') return { mode: 'plain', encryption: null };
         if (!encryption || !currentness.contentKeyFingerprint) {

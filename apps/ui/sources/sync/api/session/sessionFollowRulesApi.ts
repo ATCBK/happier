@@ -44,7 +44,7 @@ export async function readSessionFollowRules(serverId: string, signal?: AbortSig
         const context = await captureLazyActionAccountContext(serverId, signal);
         try {
             const { encryption } = await context.resolveAccountEncryption();
-            const account = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+            const account = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'identity' });
             context.assertCurrent();
             const [rules, defaultsResponse] = await Promise.all([readSessionFollowRuleCensus({
                 mode: account.mode,
@@ -56,7 +56,7 @@ export async function readSessionFollowRules(serverId: string, signal?: AbortSig
                 : defaultsResponse.status === 403 ? 'forbidden' : defaultsResponse.status === 404 ? 'unsupported' : 'unreachable');
             const defaultPreferences = SessionAutoFollowPreferencesResponseSchema.parse(await defaultsResponse.json());
             context.assertCurrent();
-            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
             context.assertCurrent();
             if (current.mode !== account.mode) return { status: 'unavailable', reason: 'account-mode-mismatch' };
             return { status: 'ready', accountId: context.accountId, rules, defaultPreferences };

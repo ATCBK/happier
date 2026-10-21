@@ -28,9 +28,10 @@ export class PromptLibraryRowOperationError extends Error {
 export function requireUpdatedPromptLibraryMutation(result: PromptLibraryRowMutationResponseV1): asserts result is Extract<PromptLibraryRowMutationResponseV1, { status: 'updated' }> {
     if (result.status !== 'updated') throw new PromptLibraryRowOperationError(result.status, result);
 }
-async function admit<T>(context: PromptLibraryAccountContext, operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
+async function admit<T>(context: PromptLibraryAccountContext, usage: 'identity' | 'fresh-authority',
+    operation: (mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     const material = storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials);
     return operation(storage.mode, material);
@@ -72,11 +73,11 @@ async function readPromptLibraryCatalogWithMaintenanceInContext(context: PromptL
     publication?: PromptLibraryReadPublication): Promise<PromptLibraryCatalogProjection> {
     const artifactStore = createRoleArtifactStoreV1({ ...context.workflowArtifacts, read: context.readArtifactContent });
     try {
-        return await admit(context, async (mode, material) => {
+        return await admit(context, 'identity', async (mode, material) => {
             const source: { value: Awaited<ReturnType<typeof readAccountSettingsBaseline>> | null } = { value: null };
             const project = async (catalog: PromptLibraryCatalogSnapshotV1): Promise<PromptLibraryCatalogProjection> => {
                 const { encryption } = await context.resolveAccountEncryption();
-                const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+                const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
                 context.assertCurrent();
                 return { catalog: current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' },
                     rawSettings: source.value?.raw ?? {}, sourceSettingsVersion: source.value?.version ?? 0 };
@@ -165,7 +166,7 @@ export async function readPromptLibraryCatalogRowsProjection(scope: ServerAccoun
     projection: PromptLibraryCatalogProjection; isAccountCurrent: () => boolean;
 }> | null> {
     try {
-        return await withAccount(scope, undefined, context => admit(context, async (mode, material) => {
+        return await withAccount(scope, undefined, context => admit(context, 'identity', async (mode, material) => {
             let absent = false;
             const catalog = await loadPromptLibraryCatalogV1({ mode, material, readRows: async () => {
                 const reads = await Promise.all(keys.map(async key => ({ key, row: await readPromptLibraryRowInContext(context, key) })));
@@ -178,7 +179,7 @@ export async function readPromptLibraryCatalogRowsProjection(scope: ServerAccoun
                 return { status: 'listed', rows };
             } });
             const { encryption } = await context.resolveAccountEncryption();
-            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+            const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
             context.assertCurrent();
             const projection: PromptLibraryCatalogProjection = { catalog: current.mode === mode ? catalog
                 : { status: 'unavailable', reason: 'account-mode-mismatch' }, rawSettings: {}, sourceSettingsVersion: 0 };
@@ -190,7 +191,7 @@ export async function readPromptLibraryCatalogRowsProjection(scope: ServerAccoun
 
 /** Preparation is shared by the sole row writer and atomic credential promotion. */
 export function preparePromptLibraryRecordMutationInContext(context: PromptLibraryAccountContext, input: PromptLibraryRecordWriteInput, signal?:AbortSignal) {
-    return admit(context, async (mode, material) => {
+    return admit(context, 'fresh-authority', async (mode, material) => {
         if (input.expectedRevision === 'absent' && input.sourceSettingsVersion === undefined) throw new PromptLibraryRowOperationError('source-currentness-unavailable');
         const references=input.record.key==='registry-sources'?listSavedSecretReferenceCatalogRefsV1({profileRecords:[],registrySources:input.record.value}).map(ref=>ref.secretId):[];
         const proofs=references.length?await captureSavedSecretReferenceRevisionsInContext(context,{references:references.filter(ref=>parseSavedSecretRefV1(ref).kind==='shared_resource'),

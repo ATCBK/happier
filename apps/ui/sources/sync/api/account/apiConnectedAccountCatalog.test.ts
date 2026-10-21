@@ -11,7 +11,7 @@ import { executeConnectedServiceConfigurationActionV1 } from '@happier-dev/proto
 installConnectedServicesCommonModuleMocks();
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-const { withConnectedAccountCatalogAccount, createUiConnectedServiceConfigurationCatalogHost } = await import('./apiConnectedAccountCatalog');
+const { withConnectedAccountCatalogAccount, createUiConnectedServiceConfigurationCatalogHost, readConnectedAccountCatalogInContext } = await import('./apiConnectedAccountCatalog');
 beforeEach(async () => {
     await home.reset();
     installHomeGovernanceBoundaries(home);
@@ -20,6 +20,34 @@ beforeEach(async () => {
 afterEach(async () => { await home.reset(); resetRuntimeFetch(); });
 
 describe('Connected configuration Account transport', () => {
+    it('re-admits an opened catalog before its early publication when revocation precedes the socket event', async () => {
+        const accountId = 'held-configuration-owner';
+        const serverId = await home.addHome({ name: 'Held configuration', serverUrl: 'https://held-account-config.test',
+            accountId, currentAccount: true, accountEncryptionMode: 'plain', active: false });
+        let revoked = false;
+        home.answer(serverId, 'GET /v1/account/encryption/currentness', { select: () => revoked
+            ? { status: 401, body: { error: 'unauthorized' } } : { body: createPlainAccountEncryptionCurrentnessFixture() } });
+        home.answer(serverId, 'GET /v1/account/entity-rows/connected-accounts/configurations', { select: () => {
+            // The private HTTP body was admitted before this committed epoch
+            // change. Its corresponding Account publication remains held.
+            revoked = true;
+            return { body: ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                content: { t: 'plain', v: { key: 'configurations', value: { v: 1, entries: [{
+                    service: { pluginId: 'custom.private', localId: 'service' }, modeId: 'manual', revision: 'private',
+                    values: { endpoint: 'https://private.example.test' }, secretRefs: {},
+                }] } } } }) };
+        } });
+        let disclosed = false;
+        await withConnectedAccountCatalogAccount({ serverId, accountId }, undefined, async context => {
+            const result = await readConnectedAccountCatalogInContext(context, 'configurations', undefined, {
+                onReady: catalog => { if (catalog.status === 'ready' || catalog.status === 'partial') disclosed = true; },
+                hasPendingCleanup: () => true,
+            });
+            expect(result.status).toBe('unavailable');
+        });
+        expect(disclosed).toBe(false);
+    });
+
     it.each(['absent', 'absent_lost_receipt', 'deleted'] as const)('prepares a direct no-machine configuration Action through captured %s Account authority', async initial => {
         const service = { pluginId: 'custom.account-config', localId: 'service' };
         const mode = PluginConnectedAccountAuthenticationModeV2Schema.parse({ id: 'manual', kind: 'manual', outcomeReconciliation: 'none', fields: [],

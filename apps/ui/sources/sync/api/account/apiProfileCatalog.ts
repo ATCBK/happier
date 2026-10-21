@@ -48,9 +48,12 @@ export class ProfileRowOperationError extends Error {
 export type ProfileAccountContext = Awaited<ReturnType<typeof import('@/sync/ops/actions/actionAccountContext').captureLazyActionAccountContext>>;
 
 export async function admitProfileAccount<T>(context: ProfileAccountContext,
-    operation: (context: ProfileAccountContext, mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
+    operation: (context: ProfileAccountContext, mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>,
+    usage: 'identity' | 'fresh-authority' = 'fresh-authority'): Promise<T> {
     const { encryption } = await context.resolveAccountEncryption();
-    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    // This admission also serves transfer/skill-migration writers. Those paths
+    // must not replace their sealing authority with an observed socket identity.
+    const storage = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage });
     context.assertCurrent();
     const material = storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials);
     return operation(context, storage.mode, material);
@@ -58,12 +61,13 @@ export async function admitProfileAccount<T>(context: ProfileAccountContext,
 
 /** The incumbent Action context captures Home, Account, credential and key lifetime once. */
 export async function withProfileAccount<T>(scope: ServerAccountScope, signal: AbortSignal | undefined,
-    operation: (context: ProfileAccountContext, mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>): Promise<T> {
+    operation: (context: ProfileAccountContext, mode: 'plain' | 'e2ee', material: AccountScopedCryptoMaterial | null) => Promise<T>,
+    usage: 'identity' | 'fresh-authority' = 'fresh-authority'): Promise<T> {
     const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
     const context = await captureLazyActionAccountContext(scope.serverId, signal);
     try {
         if (context.accountId !== scope.accountId) throw new ProfileRowOperationError('scope-retired');
-        return await admitProfileAccount(context, operation);
+        return await admitProfileAccount(context, operation, usage);
     } finally {
         context.dispose();
     }
@@ -115,7 +119,7 @@ async function readCapturedProfileCatalog(context: ProfileAccountContext, mode: 
             PROFILE_TRANSFER_ROUTE_V1, signal)),
     });
     const { encryption } = await context.resolveAccountEncryption();
-    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+    const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
     context.assertCurrent();
     return current.mode === mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
 }
@@ -139,7 +143,7 @@ export async function readProfileCatalog(scope: ServerAccountScope, signal?: Abo
             const catalog = await readCapturedProfileCatalog(context, mode, material, signal);
             context.assertCurrent();
             return catalog;
-        });
+        }, 'identity');
     } catch (error) {
         return catalogFailure(error, signal);
     }
@@ -231,7 +235,7 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
     }
     const project = async (): Promise<ProfileCatalogProjection> => {
         const { encryption } = await context.resolveAccountEncryption();
-        const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request });
+        const current = await resolveAccountStorageContext(context.credentials, { encryption, request: context.request, usage: 'fresh-authority' });
         context.assertCurrent();
         if (current.mode !== mode) return { catalog: { status: 'unavailable', reason: 'account-mode-mismatch' }, artifactsById: new Map(), source: null };
         if (catalog.status !== 'ready' && catalog.status !== 'partial') return { catalog, artifactsById: new Map(), source: null };
@@ -343,7 +347,7 @@ export async function mutateProfileRow(scope: ServerAccountScope, mutation: Prof
 export async function readProfileCatalogInContext(context: ProfileAccountContext, signal?: AbortSignal,
     options?: Readonly<{ readSourceBaseline?: true; onPage?: (page: ProfileRowsListResponseV1) => void }>): Promise<ProfileCatalogSnapshotV1> {
     try { return await admitProfileAccount(context, (captured, mode, material) => readCapturedProfileCatalog(captured, mode, material, signal,
-        options?.readSourceBaseline ? async () => (await readProfileTransferSourceInContext(captured)).source.raw : undefined, options?.onPage)); }
+        options?.readSourceBaseline ? async () => (await readProfileTransferSourceInContext(captured)).source.raw : undefined, options?.onPage), 'identity'); }
     catch (error) { return catalogFailure(error, signal); }
 }
 export async function readProfileCatalogProjectionInContext(context: ProfileAccountContext, signal?: AbortSignal,

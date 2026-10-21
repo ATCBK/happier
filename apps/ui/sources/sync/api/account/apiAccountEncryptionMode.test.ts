@@ -151,14 +151,14 @@ describe('apiAccountEncryptionMode', () => {
     });
   });
 
-  it('answers the last read mode synchronously, and nothing before a read', async () => {
+  it('does not present a standalone HTTP answer as a live socket observation', async () => {
     const fetchMock = installNetworkBoundary(async () => new Response(JSON.stringify({ mode: 'plain', updatedAt: 42 }), { status: 200 }));
 
     const { fetchAccountEncryptionMode, getCachedAccountEncryptionMode } = await import('./apiAccountEncryptionMode');
 
     expect(getCachedAccountEncryptionMode(credentials)).toBeNull();
     await fetchAccountEncryptionMode(credentials);
-    expect(getCachedAccountEncryptionMode(credentials)).toBe('plain');
+    expect(getCachedAccountEncryptionMode(credentials)).toBeNull();
     // A synchronous read never asks the server.
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -195,8 +195,8 @@ describe('apiAccountEncryptionMode', () => {
       await pending;
       return Response.json({ mode, updatedAt: 42 });
     });
-    const first = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request });
-    const second = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request });
+    const first = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request, usage: 'identity' });
+    const second = accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request, usage: 'identity' });
     await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
     release();
     await expect(Promise.all([first, second])).resolves.toEqual([
@@ -263,8 +263,8 @@ describe('apiAccountEncryptionMode', () => {
         : Response.json({ mode: 'plain', updatedAt: 43 });
     });
     const outcomes = Promise.allSettled([
-      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request }),
-      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request }),
+      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request, usage: 'identity' }),
+      accountEncryptionMode.fetchAccountEncryptionMode(credentials, { request, usage: 'identity' }),
     ]);
     await vi.waitFor(() => expect(fetchMock.mock.calls.length).toBeGreaterThan(0));
     release();
