@@ -8,7 +8,7 @@ import { act } from 'react-test-renderer';
 import { renderScreen as renderScreenWithProviders } from '@/dev/testkit';
 import { installMachineDetailsCommonModuleMocks } from './machineDetailsTestHelpers';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -116,7 +116,7 @@ installMachineDetailsCommonModuleMocks({
 vi.doUnmock('@/sync/domains/state/storage');
 vi.doUnmock('@/constants/Typography');
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: unknown) => {
         if (event === 'machine-update-metadata') {
@@ -139,6 +139,10 @@ installDisconnectedServerSocketBoundary((socket) => {
         throw new Error(`Unexpected machine fixture Socket event: ${String(event)}`);
     });
 });
+
+// Load after the SDK/framework boundaries are installed, as the managed-Machine
+// harness does; per-test cache resets must not own the cold runtime import.
+await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 
 type RenderedScreen = Awaited<ReturnType<typeof renderScreen>>;
 let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
@@ -215,7 +219,7 @@ async function serveMachineHome(input: string | URL | Request, init?: RequestIni
         // These page fixtures vary presentation fields, but the Home emits complete published metadata.
         metadata: encodePlainMachineStoredContent(machine.metadata === null ? null : MachinePublishedMetadataV1Schema.parse({
             ...Object.assign({}, createMachineFixture().metadata, { host: '' }, machine.metadata),
-        })), daemonState: null })));
+        })), daemonState: null }));
     if (path === '/v1/machines') return Response.json(publishedMachines);
     if (path === '/v1/machines/read-batch' && method === 'POST') return createMachineReadBatchResponseFixture(body,
         id => publishedMachines.find(machine => machine.id === id) ?? null);
@@ -560,7 +564,10 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
             && typeof node.props?.onPress === 'function')[0];
         await act(async () => {
             override().props.onPress();
-            await vi.waitFor(() => expect(machineState.settings.sessionTmuxByMachineId).toMatchObject({ 'machine-1': { useTmux: true } }));
+            await vi.waitFor(() => expect(machineState.settings.sessionTmuxByMachineId, JSON.stringify({
+                alerts: alertSpy.mock.calls,
+                requests: machineState.requests.map(({ path, method }) => ({ path, method })),
+            })).toMatchObject({ 'machine-1': { useTmux: true } }));
         });
         expect(machineState.settings.sessionTmuxByMachineId).toMatchObject({ 'machine-1': { useTmux: true } });
         expect(machineState.settings.sessionTmuxByMachineId).toMatchObject({ 'machine-2': neighbor });

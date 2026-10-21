@@ -1903,6 +1903,7 @@ describe('sync.ensureSessionVisibleForMessageRoute', () => {
                         id: sessionId,
                         seq: 2,
                         encryptionMode: 'plain',
+                        dataEncryptionKey: null,
                         metadata: JSON.stringify({ path: '/tmp/exact-socket-row', host: 'local' }),
                         metadataVersion: 1,
                         agentState: null,

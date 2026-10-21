@@ -5,6 +5,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import {
     AccountSettingsV2GetResponseSchema, ApprovalRequestV2Schema, CurrentCursorResponseSchema,
     FeaturesResponseSchema, SavedSecretResourceMaterialsResponseV1Schema, buildApprovalRequestArtifactHeaderV1,
+    createAccountScopedCryptoMaterialSnapshotV1, convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
 } from '@happier-dev/protocol';
 import {
     SHARED_SAVED_SECRET_ACTION_PATHS_V1,
@@ -24,9 +25,12 @@ import { SessionTranscriptSourceProvider } from '@/components/sessions/transcrip
 import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import type { InboxModel } from '@/hooks/inbox/useInboxModel';
 import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storage';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -39,6 +43,9 @@ import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/sett
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
 import { buildInboxItems } from '@/components/inbox/inboxItems';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -70,6 +77,7 @@ let holdPrivateReply: Promise<void> | null = null;
 let rememberedResource: SharedSavedSecretCreateInputV1 | null = null;
 let savedResourceForChoice = false;
 const savedResourceRef = formatSharedSavedSecretRefV1('secret-1');
+let sessionInventory: ReturnType<typeof createPlainSessionCurrentProjectionRecordFixture>[] = [];
 
 async function enterOnceValue(screen: Awaited<ReturnType<typeof renderScreen>>) {
     await vi.waitFor(() => expect(screen.findByTestId('approvals.secret-value')?.props.editable).toBe(true), { timeout: 5_000 });
@@ -84,12 +92,7 @@ async function continueChoice(screen: Awaited<ReturnType<typeof renderScreen>>) 
 }
 
 installDisconnectedServerSocketBoundary(socket => {
-    socket.connected = true;
-    vi.mocked(socket.connect).mockImplementation(() => {
-        socket.connected = true;
-        for (const listener of socket.listeners('connect')) listener();
-        return socket;
-    });
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
         if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
@@ -110,11 +113,20 @@ describe('confidential approval human continuation', () => {
     beforeAll(loadSyncSingletonForTests);
     beforeEach(async () => {
         savedResourceForChoice = false;
+        sessionInventory = [];
         deliveries = []; writes = []; uncertain = false; submitUnknown = false; refusal = null; rememberSucceeds = false; rememberOutcomeUnknown = false; rememberedResource = null; holdPrivateReply = null;
         connection = await restoreServerAccountForTest({ serverUrl: 'https://confidential-approval.example.test',
-            serverIdentityId: 'srv_confidential-home', accountId: 'account-a', request: async (url, init) => {
+            serverIdentityId: 'srv_confidential-home', accountId: 'account-a', request: createSessionReadBatchFetchBoundary(async (url, init) => {
                 const path = new URL(String(url)).pathname;
-                if (path === '/v1/plugins/availability/materializations/read' || path === '/v1/plugins/availability/intents/list' || path === '/v1/account/project-rows/list') return new Response('{}', { status: 503 });
+                if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === 'machine-1' ? createPlainMachineRowFixture({ id, accountId: 'account-a' }) : null);
+                if (sessionInventory.length > 0 && (init?.method ?? 'GET') === 'GET' && (path === '/v2/sessions' || path === '/v2/sessions/active')) {
+                    return Response.json(V2SessionListResponseSchema.parse({
+                        sessions: path === '/v2/sessions/active' ? sessionInventory.filter(session => session.active) : sessionInventory, nextCursor: null,
+                        hasNext: false, attentionNextCursor: null, attentionHasNext: false }));
+                }
+                const bootstrap = createEmptyAccountBootstrapHttpResponse(path, init);
+                if (bootstrap) return bootstrap;
                 if (init?.method && init.method !== 'GET') {
                     writes.push(path);
                     if (rememberSucceeds && path === SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create']) {
@@ -157,7 +169,9 @@ describe('confidential approval human continuation', () => {
                     storedContent: { t: 'plain', v: { v: 1, name: personal[0].name, kind: personal[0].kind, value: personal[0].encryptedValue.value } },
                 }] : [] }));
                 return new Response('{}', { status: 404 });
-            } });
+            }) });
+        const { sync } = await import('@/sync/sync');
+        await sync.refreshProfile();
         const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
         await vi.waitFor(() => {
             expect(storage.getState().profile.id).toBe('account-a');
@@ -213,6 +227,8 @@ describe('confidential approval human continuation', () => {
         const approval = ApprovalRequestV2Schema.parse(JSON.parse(artifact.body));
         const metadata = { path: '/project', host: 'tester.local', ...(kind === 'bot' ? { bot: { kind: 'bot' as const } } : {}) };
         const session = createSessionListRenderableSessionFixture({ id: 'session-1', metadata });
+        sessionInventory = [createPlainSessionCurrentProjectionRecordFixture({ id: session.id, metadata,
+            active: session.active, activeAt: session.activeAt })];
         storage.getState().applyServerScopedSessionListRows(connection!.home.id, [session], { source: 'ordinary', mode: 'replace' });
         const destinations: string[] = [];
         function SessionApprovalHost() {
@@ -348,6 +364,11 @@ describe('confidential approval human continuation', () => {
         } finally {
             release();
             await pending;
+            // Retire the fixture's real Sync owner and settle its scheduled
+            // callbacks before restoring the boundary clock.
+            await connection?.dispose();
+            connection = undefined;
+            await vi.runOnlyPendingTimersAsync();
             vi.useRealTimers();
         }
     });
@@ -426,19 +447,31 @@ describe('confidential approval human continuation', () => {
         connection = undefined;
         const access = AccessibleMachineAccessV1Schema.parse({ custodian: { accountId: 'plain-custodian', displayName: 'Custodian' },
             role: 'use', resourceMode: 'plain', accessState: 'ready' });
+        const machine = createMachineFixture({ storageMode: 'plain' });
+        const publishedMachine = MachinePublishedRowV1Schema.parse({ ...machine, access,
+            metadata: encodePlainMachineStoredContent(machine.metadata), daemonState: null });
+        const secret = new Uint8Array(32).fill(9);
+        const material = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret } });
         connection = await restoreServerAccountForTest({ serverUrl: 'https://confidential-approval.example.test',
             serverIdentityId: 'srv_confidential-home', accountId: 'account-a',
-            credentials: { token, secret: Buffer.alloc(32, 9).toString('base64') }, request: async (url, init) => {
+            credentials: { token, secret: Buffer.from(secret).toString('base64') }, request: createSessionReadBatchFetchBoundary(async (url, init) => {
                 const path = new URL(String(url)).pathname;
-                if (path === '/v1/plugins/availability/materializations/read' || path === '/v1/plugins/availability/intents/list' || path === '/v1/account/project-rows/list') return new Response('{}', { status: 503 });
+                if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body,
+                    id => id === publishedMachine.id ? publishedMachine : null);
+                const bootstrap = createEmptyAccountBootstrapHttpResponse(path, init);
+                if (bootstrap) return bootstrap;
                 if (init?.method && init.method !== 'GET') { writes.push(path); return new Response('{}', { status: 503 }); }
                 if (path === '/health') return Response.json({ status: 'ok' });
                 if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
                 if (path === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
                 if (path === '/v1/account/encryption') return Response.json({ mode: 'e2ee', updatedAt: 1 });
-                if (path === '/v1/machines/machine-1') return Response.json({ machine: { ...createMachineFixture({ storageMode: 'plain' }), access } });
+                if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'e2ee', version: 1,
+                    signingKeyFingerprint: null,
+                    contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint),
+                    updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } });
+                if (path === '/v1/machines/machine-1') return Response.json({ machine: publishedMachine });
                 return new Response('{}', { status: 404 });
-            } });
+            }) });
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         const account = await captureLazyActionAccountContext(connection.home.id);
         const serverId = account.serverId;

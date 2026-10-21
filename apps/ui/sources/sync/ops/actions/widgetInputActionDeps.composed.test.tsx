@@ -13,7 +13,9 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { widgetProjectionEntry, widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createDeferred } from '@/dev/testkit';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import type { ConnectedAccountPurposeDefaultsIntent } from '@/hooks/server/connectedServices/useConnectedAccountPurposeDefaults';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -273,9 +275,13 @@ it('repairs a shared mounted viewer purpose through the Account catalog without 
     let revision = 1;
     let reject = false;
     const writes: ConnectedPurposeCatalogV1[] = [];
-    const connection = await restoreServerAccountForTest({ serverUrl: 'http://viewer-purpose-recovery.test', accountId: 'viewer', request: async (input, init) => {
-        if (new URL(String(input)).pathname === '/v2/sessions/named-session')
+    const missingSession = createDeferred<void>();
+    const sessionRequests: Array<{ method: string; path: string }> = [];
+    const request = createSessionReadBatchFetchBoundary(async (input, init) => {
+        if (new URL(String(input)).pathname === '/v2/sessions/named-session') {
+            await missingSession.promise;
             return Response.json({ error: 'Session not found' }, { status: 404 });
+        }
         const path = new URL(String(input)).pathname;
         if (path === '/v2/account/settings') {
             if (init?.method === 'POST') throw new Error('viewer_purpose_must_not_write_settings');
@@ -290,6 +296,11 @@ it('repairs a shared mounted viewer purpose through the Account catalog without 
         if (body.content?.t !== 'plain' || body.content.v.key !== 'purposes') throw new Error('Expected explicit purpose Account envelope');
         purposeBindings = body.content.v.value; writes.push(purposeBindings); revision += 1;
         return Response.json({ status: 'updated', revision, cursor: revision });
+    });
+    const connection = await restoreServerAccountForTest({ serverUrl: 'http://viewer-purpose-recovery.test', accountId: 'viewer', request: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path.startsWith('/v2/sessions/')) sessionRequests.push({ method: init?.method ?? 'GET', path });
+        return request(input, init);
     } });
     const previous = storage.getState();
     const restoreExecutorLoader = await installRealActionExecutorModuleLoader();
@@ -401,9 +412,13 @@ it('repairs a shared mounted viewer purpose through the Account catalog without 
             repair: { kind: 'session_denied', field: { selectedLabel: 'Build release' } } });
         await act(async () => { storage.setState({ sessions: {} }); });
         // A removed render-cache row is not terminal absence; retain the repair
-        // assertion after the exact Session's real HTTP hydration returns 404.
+        // until the exact Session's admitted batch part actually returns 404.
+        await vi.waitFor(() => expect(named.getCurrent()).toMatchObject({ status: 'loading', reasonCode: 'widget_session_hydrating' }));
+        await vi.waitFor(() => expect(sessionRequests).toContainEqual({ method: 'POST', path: '/v2/sessions/read-batch' }));
+        missingSession.resolve();
         await vi.waitFor(() => expect(named.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'widget_session_unavailable',
             repair: { kind: 'session_unavailable', field: { path: 'session', label: 'Session' } } }));
+        expect(sessionRequests).not.toContainEqual({ method: 'GET', path: '/v2/sessions/named-session' });
         const unavailable = named.getCurrent();
         if (unavailable.status !== 'unavailable') throw new Error('Expected the unavailable Session repair');
         // A missing reference is not a display label; the canonical repair owner
@@ -432,7 +447,7 @@ it('repairs a shared mounted viewer purpose through the Account catalog without 
             expect(writes).toHaveLength(1);
             expect(successorWrites).toEqual([]);
         } finally { await successor.dispose(); }
-    } finally { restoreExecutorLoader(); daemon.projections.delete('machine'); clearDaemonMergedProjectionCacheForTests();
+    } finally { missingSession.resolve(); restoreExecutorLoader(); daemon.projections.delete('machine'); clearDaemonMergedProjectionCacheForTests();
         storage.setState(previous, true); await connection.dispose(); syncBridge.dispose(); }
 });
 

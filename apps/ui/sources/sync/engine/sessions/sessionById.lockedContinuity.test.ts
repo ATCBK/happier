@@ -397,7 +397,9 @@ describe('fetchAndApplySessionById locked continuity', () => {
             name: 'Account-owned locked title', path: '', host: '', systemSessionV1: { v: 1, key, hidden },
         });
         expect(result.session?.metadata).toBeNull();
-        expect(result.session?.encryptedContentAvailability).toBe('encrypted_access_pending');
+        // Owner fallback installs a reader; the deliberately invalid metadata fails authentication.
+        expect(result.sessionDataKeyHydration?.states.get('s_locked')).toBe('legacy_fallback_ready');
+        expect(result.session?.encryptedContentAvailability).toBe('encrypted_content_unavailable');
         expect(result.session && sessionDisplayTitle({ ...result.session, id: 's_locked' })).toBe('Account-owned locked title');
         expect(isUserFacingSession(applied[0] as Parameters<typeof isUserFacingSession>[0]))
             .toBe(visible);

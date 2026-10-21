@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 let cleanup: (() => Promise<void>) | null = null;
@@ -44,6 +45,7 @@ async function installHarness(options: Readonly<{ includeMachineInventory?: bool
         if (path === '/v1/machines' && !options.includeMachineInventory) return Response.json([]);
         return null;
     });
+    const bridge = await loadSyncSingletonForTests();
     const pool = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
     pool.setServerReachabilityNetworkAllowed(true);
     const cache = await import('./concurrentSessionCache');
@@ -61,6 +63,7 @@ async function installHarness(options: Readonly<{ includeMachineInventory?: bool
             const profile = profiles.getServerProfileById(home.id);
             if (profile) await profiles.removeServerProfile(profile.id);
         }
+        bridge.dispose();
     };
     cache.startConcurrentSessionCacheSync();
     if (!options.realClock) await vi.advanceTimersByTimeAsync(1);
@@ -68,19 +71,31 @@ async function installHarness(options: Readonly<{ includeMachineInventory?: bool
     return { ...cache, network, homeB, profiles, pool, pendingPings, io };
 }
 
-beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-});
-afterEach(async () => {
+async function resetHarness(): Promise<void> {
     await cleanup?.();
     cleanup = null;
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.resetModules();
     delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
+}
+
+// Compile the real Sync/cache graph after installing its transport ports, before
+// the held-probe cases. Cold graph loading is not part of the lease race.
+vi.useFakeTimers();
+process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
+try {
+    await installHarness();
+} finally {
+    await resetHarness();
+}
+
+beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
 });
+afterEach(resetHarness);
 
 describe('concurrent session cache reachability lease fencing', () => {
     it('persists a secondary Home inventory only under its captured credential Account', async () => {
@@ -95,7 +110,19 @@ describe('concurrent session cache reachability lease fencing', () => {
             profileScope: { serverId: h.profiles.getActiveServerId(), accountId: 'account-a' } });
         h.pendingPings[0].respond();
         await vi.waitFor(() => expect(h.pool.peekServerReachabilityState(h.homeB.serverUrl, h.homeB.token)?.phase).toBe('online'));
-        await h.refreshConcurrentOrdinarySessionList(secondaryHomeId);
+        const refresh = h.refreshConcurrentOrdinarySessionList(secondaryHomeId);
+        let settled = false;
+        void refresh.then(() => { settled = true; }, () => { settled = true; });
+        try {
+            await vi.waitFor(() => expect(settled, JSON.stringify({
+                paths: h.network.httpRequests.map(request => new URL(request.url).pathname),
+                probes: h.pendingPings.length,
+            })).toBe(true));
+        } finally {
+            // Retire every held external probe even when the refresh assertion fails.
+            for (const ping of h.pendingPings) ping.respond();
+            await refresh;
+        }
         expect(storage.getState().machineListByServerId[secondaryHomeId], JSON.stringify({
             paths: h.network.httpRequests.map(request => new URL(request.url).pathname),
             status: storage.getState().machineListStatusByServerId[secondaryHomeId],

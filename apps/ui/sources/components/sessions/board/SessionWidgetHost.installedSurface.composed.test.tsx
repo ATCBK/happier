@@ -22,6 +22,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { publishMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjection';
@@ -79,7 +80,7 @@ const state = vi.hoisted(() => ({
     projectionsByMachine: {} as Record<string, PluginProjectionV2>,
     deferredProjection: null as Promise<unknown> | null,
     sessionResponse: null as Promise<Response> | null,
-    sessionRequests: [] as string[],
+    sessionRequests: [] as Array<{ method: string; path: string; parts?: unknown }>,
     approvalWriteMode: 'none' as 'none' | 'refused' | 'created',
     approvalWriteBody: null as unknown,
     requiredApprovalPolicy: null as ReturnType<typeof normalizeActionsSettingsV1> | null,
@@ -254,6 +255,10 @@ async function awaitAuthorMount(screen: Awaited<ReturnType<typeof renderScreen>>
     state.mounts = [...physicalMounts.values()];
 }
 const SURFACE = { pluginId: 'acme.review', localId: 'review-status-widget' } as const;
+const SESSION_CONTEXT_REQUEST = {
+    method: 'POST', path: '/v2/sessions/read-batch',
+    parts: expect.objectContaining({ sessionIds: ['session-1'], includeSnapshot: true, includeTurns: false, includeMessages: false }),
+};
 
 function publicAuthoringProjection() {
     const manifest = readCanonicalPluginManifest(publicAuthoringManifest);
@@ -510,42 +515,47 @@ describe('SessionWidgetHost installed surface placements', () => {
             if (!tryWriteServerEnabledBitInPlace(features, feature, true)) throw new Error(`Expected the canonical ${feature} feature`);
         }
         const { SessionListQueryResponseV1Schema } = await import('@happier-dev/protocol');
+        const request = createSessionReadBatchFetchBoundary(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/account/settings' && state.requiredApprovalPolicy) return Response.json({
+                content: { t: 'plain', v: { actionsSettingsV1: state.requiredApprovalPolicy } }, version: 2,
+            });
+            if (path === '/v1/artifacts' && init?.method === 'POST' && state.approvalWriteMode !== 'none') {
+                const payload: unknown = typeof init.body === 'string' ? JSON.parse(init.body) : null;
+                state.approvalWriteBody = payload;
+                if (state.approvalWriteMode === 'refused') return Response.json({ error: 'forbidden' }, { status: 403 });
+                if (!payload || typeof payload !== 'object') throw new Error('Expected Artifact creation payload');
+                return Response.json({ ...payload, ownerAccountId: 'viewer', access: 'owner', encryptionMode: 'plain',
+                    headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+            }
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+            // Dynamic Widget options discover their consuming descriptor
+            // through the real Board port; this Home has an empty Board.
+            if (path === '/v2/sessions/session-1/system-records/record') return Response.json({ record: null });
+            if (path === '/v2/sessions/session-1/system-records') return Response.json({ records: [], nextCursor: null, hasNext: false });
+            if (path === '/v2/sessions/query') {
+                const session = state.session;
+                if (!session) throw new Error('Widget option discovery requires the readable Session fixture');
+                return Response.json(SessionListQueryResponseV1Schema.parse({
+                    sessions: [sessionHttpRecord(session)], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+                }));
+            }
+            const isBoundSessionProjection = path === '/v2/sessions/session-1';
+            if (isBoundSessionProjection && state.sessionResponse) return (await state.sessionResponse).clone();
+            if (isBoundSessionProjection && state.session) return Response.json({ session: sessionHttpRecord(state.session) });
+            // Account Availability must settle before the real Artifact
+            // owner admits even daemon-selected development widget bytes.
+            return createEmptyAccountBootstrapHttpResponse(path, init) ?? http.request(input, init);
+        });
         accountConnection = await restoreServerAccountForTest({ serverUrl: 'http://installed-session-widget.test', accountId: 'viewer',
             serverIdentityId: state.serverIdentityId,
             request: async (input, init) => {
                 const path = new URL(String(input)).pathname;
-                if (path === '/v2/account/settings' && state.requiredApprovalPolicy) return Response.json({
-                    content: { t: 'plain', v: { actionsSettingsV1: state.requiredApprovalPolicy } }, version: 2,
-                });
-                if (path === '/v1/artifacts' && init?.method === 'POST' && state.approvalWriteMode !== 'none') {
-                    const payload: unknown = typeof init.body === 'string' ? JSON.parse(init.body) : null;
-                    state.approvalWriteBody = payload;
-                    if (state.approvalWriteMode === 'refused') return Response.json({ error: 'forbidden' }, { status: 403 });
-                    if (!payload || typeof payload !== 'object') throw new Error('Expected Artifact creation payload');
-                    return Response.json({ ...payload, ownerAccountId: 'viewer', access: 'owner', encryptionMode: 'plain',
-                        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+                if (path === '/v2/sessions/read-batch' || path === '/v2/sessions/session-1' || path.startsWith('/v1/sessions/session-1/')) {
+                    state.sessionRequests.push({ method: init?.method ?? 'GET', path,
+                        ...(path === '/v2/sessions/read-batch' ? { parts: JSON.parse(String(init?.body)) as unknown } : {}) });
                 }
-                if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
-                // Dynamic Widget options discover their consuming descriptor
-                // through the real Board port; this Home has an empty Board.
-                if (path === '/v2/sessions/session-1/system-records/record') return Response.json({ record: null });
-                if (path === '/v2/sessions/session-1/system-records') return Response.json({ records: [], nextCursor: null, hasNext: false });
-                if (path === '/v2/sessions/query') {
-                    const session = state.session;
-                    if (!session) throw new Error('Widget option discovery requires the readable Session fixture');
-                    return Response.json(SessionListQueryResponseV1Schema.parse({
-                        sessions: [sessionHttpRecord(session)], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
-                    }));
-                }
-                const isBoundSessionProjection = path === '/v2/sessions/session-1';
-                if (isBoundSessionProjection || path.startsWith('/v1/sessions/session-1/')) {
-                    state.sessionRequests.push(path);
-                }
-                if (isBoundSessionProjection && state.sessionResponse) return (await state.sessionResponse).clone();
-                if (isBoundSessionProjection && state.session) return Response.json({ session: sessionHttpRecord(state.session) });
-                // Account Availability must settle before the real Artifact
-                // owner admits even daemon-selected development widget bytes.
-                return createEmptyAccountBootstrapHttpResponse(path, init) ?? http.request(input, init);
+                return request(input, init);
             } });
         state.serverId = resolveServerProfileScopeId(accountConnection.home);
         storage.setState({ profile: AccountProfileSchema.parse({ id: 'viewer' }),
@@ -1105,13 +1115,13 @@ describe('SessionWidgetHost installed surface placements', () => {
         expect(codes).toContain('widget_session_hydrating');
         expect(codes).not.toContain('session_board_renderer_missing');
         expect(codes).not.toContain('widget_session_unavailable');
-        await vi.waitFor(() => expect(state.sessionRequests).toEqual(['/v2/sessions/session-1']));
-                await act(async () => {
+        await vi.waitFor(() => expect(state.sessionRequests).toEqual([SESSION_CONTEXT_REQUEST]));
+        await act(async () => {
             settleSession?.(Response.json({ session: sessionHttpRecord(session) }));
         });
         await vi.waitFor(async () => { await flushHookEffects(); expect(state.activeMountKeys.size).toBe(1); });
         expect(storage.getState().sessions['session-1']?.serverId).toBe(state.serverId);
-        expect(state.sessionRequests).toEqual(['/v2/sessions/session-1']);
+        expect(state.sessionRequests).toEqual([SESSION_CONTEXT_REQUEST]);
     });
 
     it.each([
@@ -1124,7 +1134,7 @@ describe('SessionWidgetHost installed surface placements', () => {
         const screen = await renderPlacement({ host: 'details', primaryHost: 'details', density: 'full' });
         await vi.waitFor(async () => {
             await flushHookEffects();
-            expect(state.sessionRequests).toEqual(['/v2/sessions/session-1']);
+            expect(state.sessionRequests).toEqual([SESSION_CONTEXT_REQUEST]);
             expect(screen.findByTestId(`widget-state-diagnostic-${reasonCode}`)).not.toBeNull();
         });
         expect(state.activeMountKeys.size).toBe(0);

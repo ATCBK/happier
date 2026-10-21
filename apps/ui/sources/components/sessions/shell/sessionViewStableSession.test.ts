@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 
 import { createSessionFixture, createSessionListRenderableSessionFixture, renderHook } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { NormalizedMessage } from '@/sync/typesRaw';
+import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getSessionName, getSessionStatus, shouldShowAbortButtonForSessionState, useSessionStatus } from '@/utils/sessions/sessionUtils';
 import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
