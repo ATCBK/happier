@@ -435,13 +435,18 @@ describe('Plugin Account Availability reader', () => {
         const store = createPluginAccountAvailabilityReaderStore();
         const response = intentRead();
         const base = snapshot({ intentReads: [{ pluginId: 'com.acme.fixture', response }] });
-        const second = { ...base.materializations[0]!, machineId: 'machine-2', materializationId: 'install-2' };
-        const initial = { ...base, materializations: [...base.materializations, second], snapshots: [
-            ...base.snapshots, { ...base.snapshots[0]!, machineId: second.machineId, materializations: [second] },
+        const materialization = { ...base.materializations[0]!,
+            declaredManifest: response.release!.normalizedManifest, declaredUiEntries: {} };
+        const second = { ...materialization, machineId: 'machine-2', materializationId: 'install-2' };
+        const initial = { ...base, materializations: [materialization, second], snapshots: [
+            { ...base.snapshots[0]!, materializations: [materialization] },
+            { ...base.snapshots[0]!, machineId: second.machineId, materializations: [second] },
         ] };
         store.replace({ scope, snapshot: initial });
         const before = store.bind(scope).readInstalledPlugins();
         if (before.kind !== 'available') throw new Error('Fixture installation must be available');
+        const normalizations = vi.spyOn(uiProjection, 'normalizePluginInstalledUiDeclarations');
+        onTestFinished(() => normalizations.mockRestore());
         store.replace({ scope, snapshot: { ...initial, availabilityCursor: 43, intentReads: [{
             pluginId: 'com.acme.fixture', response: { ...response, availabilityCursor: 43,
                 intent: { ...response.intent!, revision: 'intent-2' } },
@@ -454,8 +459,16 @@ describe('Plugin Account Availability reader', () => {
             .toMatchObject({ kind: 'available', availabilityCursor: 43, intent: { revision: 'intent-2' } });
         expect(after.plugins[0]!.installations[0]!.uiModel).toBe(before.plugins[0]!.installations[0]!.uiModel);
         expect(after.plugins[0]).toBe(before.plugins[0]);
+        expect(normalizations).not.toHaveBeenCalled();
+        const observed = { ...materialization, observedAt: materialization.observedAt + 1 };
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 44, materializations: [observed, second] } });
+        const observation = reader.readInstalledPlugins();
+        if (observation.kind !== 'available') throw new Error('Observed installation must remain available');
+        expect(observation.plugins[0]!.installations[0]!.materialization.observedAt).toBe(observed.observedAt);
+        expect(normalizations).not.toHaveBeenCalled();
+        expect(observation.plugins[0]!.installations[0]!.uiModel).toBe(after.plugins[0]!.installations[0]!.uiModel);
         const changed = { ...initial.materializations[0]!, enabled: true };
-        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 44, materializations: [changed, second], snapshots: [{
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 45, materializations: [changed, second], snapshots: [{
             ...initial.snapshots[0]!, materializations: [changed],
         }, initial.snapshots[1]!] } });
         const updated = store.bind(scope).readInstalledPlugins();
@@ -463,6 +476,7 @@ describe('Plugin Account Availability reader', () => {
         expect(updated.plugins[0]!.installations[0]!.uiModel).not.toBe(after.plugins[0]!.installations[0]!.uiModel);
         expect(updated.plugins[0]!.installations[0]!.uiModel.installedPackagesById['com.acme.fixture']?.enabled).toBe(true);
         expect(updated.plugins[0]!.installations[1]!.uiModel).toBe(after.plugins[0]!.installations[1]!.uiModel);
+        expect(normalizations).toHaveBeenCalledTimes(1);
     });
     it('projects cold portable app and settings destinations from the exact release without reported descriptors or execution authority', () => {
         const release = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
@@ -1357,6 +1371,7 @@ describe('Plugin Account Availability reader', () => {
             }),
         });
         const reader = store.bind(scope);
+        const failedPluginObservation = reader.getObservationSnapshot(failedPluginId);
 
         store.replace({
             scope,
@@ -1387,6 +1402,9 @@ describe('Plugin Account Availability reader', () => {
             stalePluginIds: [failedPluginId],
             snapshot: { intentReads: [{ pluginId: failedPluginId }, { pluginId: 'com.acme.fixture' }] },
         });
+        // Refresh diagnostics do not change the failed plugin's last-confirmed
+        // descriptive facts or the current admission read through this owner.
+        expect(reader.getObservationSnapshot(failedPluginId)).toBe(failedPluginObservation);
 
         store.replace({
             scope,
@@ -1396,6 +1414,7 @@ describe('Plugin Account Availability reader', () => {
         expect(reader.readCurrentSettingsDeclaration({ pluginId: failedPluginId }))
             .toMatchObject({ kind: 'available' });
         expect(store.getSnapshot()).toMatchObject({ stalePluginIds: [] });
+        expect(reader.getObservationSnapshot(failedPluginId)).toBe(failedPluginObservation);
     });
 
     it('snapshots caller-owned nested release, intent, and materialization facts at reader ingestion', () => {
