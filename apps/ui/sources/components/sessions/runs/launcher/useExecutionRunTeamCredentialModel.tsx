@@ -175,6 +175,7 @@ export function useExecutionRunTeamCredentialModel(params: Readonly<{
             currentTeamCredentialResourceKeys={catalog.currentResourceKeys}
             selectedTeamCredentialModel={selected}
             providerProjectionAuthoritative
+            experimentalConfirmation={confirmation}
             selected={null}
             effectiveLabel=""
             showTitle={false}

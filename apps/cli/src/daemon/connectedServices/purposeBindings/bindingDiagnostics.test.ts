@@ -1,9 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { logger } from '@/ui/logger';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { bindProcessLogger, Logger, logger } from '@/ui/logger';
+import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 import { runConnectedAccountBindingStage, withConnectedAccountBindingDiagnostic } from './bindingDiagnostics';
 
 describe('Connected Account binding diagnostics', () => {
   afterEach(() => vi.restoreAllMocks());
+
+  it('retains the admitted Happier Session identity through the actual file redactor', async () => {
+    const directory = createTempDirSync('happier-binding-diagnostics-');
+    const sink = new Logger({ logFilePath: join(directory, 'binding.log'), pruneCurrentProcessLogs: false,
+      allowDangerousRemoteLogging: false });
+    const restore = bindProcessLogger(sink);
+    try {
+      await withConnectedAccountBindingDiagnostic({ sessionId: 'happier-session-1', requestId: 'request-1' }, () =>
+        runConnectedAccountBindingStage('binding_read', () => null));
+      sink.warnLocalFile('credential redaction remains enabled', { sessionId: 'private-session-cookie', token: 'private-token' });
+      sink.flushSync();
+      const content = readFileSync(sink.getLogPath(), 'utf8');
+      expect(content).toContain('"agentSessionId":"happier-session-1"');
+      expect(content).toContain('"requestId":"request-1"');
+      expect(content).not.toMatch(/private-session-cookie|private-token/);
+    } finally { restore(); removeTempDirSync(directory); }
+  });
 
   it('omits arbitrary plugin error codes and values while retaining the exact failure', async () => {
     const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
@@ -13,7 +33,7 @@ describe('Connected Account binding diagnostics', () => {
     await expect(withConnectedAccountBindingDiagnostic({ requestId: 'request-1', sessionId: 'session-1' }, () =>
       runConnectedAccountBindingStage('target_resolution', () => { throw failure; }))).rejects.toBe(failure);
     expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', {
-      requestId: 'request-1', sessionId: 'session-1', stage: 'target_resolution', event: 'failure',
+      requestId: 'request-1', agentSessionId: 'session-1', stage: 'target_resolution', event: 'failure',
       durationMs: expect.any(Number), errorCode: 'binding_read_failed',
     }]);
     expect(JSON.stringify(log.mock.calls)).not.toMatch(/private[_-]/);

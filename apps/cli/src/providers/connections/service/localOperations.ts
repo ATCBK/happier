@@ -414,18 +414,12 @@ export function createProviderLocalOperations(context: ProviderConnectionService
           authorizationCurrent = false;
           return false;
         }
-        let currentPurposeBindingResolution: Awaited<ReturnType<typeof resolvePurposeBindings>>;
-        try {
-          currentPurposeBindingResolution = await resolvePurposeBindings(
-            current,
-            currentResolved,
-            currentResolved.contribution,
-            currentRuntime,
-          );
-        } catch {
-          authorizationCurrent = false;
-          return false;
-        }
+        const currentPurposeBindingResolution = await resolvePurposeBindings(
+          current,
+          currentResolved,
+          currentResolved.contribution,
+          currentRuntime,
+        );
         authorizationCurrent = currentPurposeBindingResolution.status
           === purposeBindingResolution.status
           && currentPurposeBindingResolution.basis === purposeBindingResolution.basis;

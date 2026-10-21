@@ -47,6 +47,7 @@ export const AGENT_STARTUP_FAILURE_PREVIEWS = {
   agent_startup_failed: 'Agent startup failed',
   AGENT_RESUME_PROVIDER_STATE_MISSING: 'The native Agent state needed to resume is missing',
   codex_refresh_free_auth_unsupported: 'Agent startup authentication is unavailable',
+  plugin_services_managed_provider_authority_unavailable: 'Access to the shared Provider is unavailable. Check the Gateway and its Machine connection, then retry the Session.',
 } as const;
 export type AgentStartupFailureCode = keyof typeof AGENT_STARTUP_FAILURE_PREVIEWS;
 

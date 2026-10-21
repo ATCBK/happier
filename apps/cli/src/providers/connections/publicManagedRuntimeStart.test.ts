@@ -1,6 +1,7 @@
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { describe, expect, it, vi } from 'vitest';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 import type {
   ConnectedAccountsService } from '@happier-dev/plugin-sdk/connected-accounts';
@@ -46,6 +47,57 @@ import { createRuntimeProviderModelManagementServices } from '@/providers/modelM
 import { composeProviderSettingsV1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+
+it.each([2, 3])('preserves a transient Home failure at explicit Start purpose read %s and recovers the same connection', async failedRead => {
+  await withConfiguredDaemonTestHome({ prefix: 'gateway-start-home-outage-' }, async ({ homeDir }) => {
+    let reads = 0;
+    let unavailable = true;
+    let changePurpose = () => {};
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller: createPluginReloadController(), physicalGateway: true,
+      resolveAccountTarget: async target => {
+        reads += 1;
+        if (unavailable && reads === failedRead) throw new PluginError({
+          code: 'project_requester_home_unavailable', retryable: true, message: 'Requester Home unavailable',
+        });
+        changePurpose();
+        return target.kind === 'account' ? { account: target.account, displayName: 'Upstream' } : null;
+      },
+    });
+    const gateway = fixture.gateway!;
+    let settings = fixture.providerSettings;
+    const unavailableOperation = async (): Promise<never> => { throw new Error('Unexpected configuration mutation or inspection'); };
+    const service = createProviderConnectionService({ machineId: fixture.machineId, featureGate: { isEnabled: () => true },
+      loadSnapshot: async () => ({ accountSettings: fixture.snapshot.settings, rawAccountSettings: {}, providerSettings: settings, registry: fixture.contributes }),
+      updateProviderSettings: unavailableOperation, collectDnsEvidence: unavailableOperation, runtimeSummary: unavailableOperation, now: () => 1,
+      resolveConnection: input => resolveProviderConnectionForMachine({ ...input, dnsEvidenceByEndpointUrl: input.dnsEvidence }),
+      resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+      startManagedProviderRuntime: createPublicManagedProviderRuntimeStartOperation({ machineId: fixture.machineId, happyHomeDir: homeDir,
+        controller: gateway.controller, resolveSharedGateway: createMachineSharedProviderGatewayResolver({ machineId: fixture.machineId,
+          readAccountId: () => 'account', readOrigin: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }) }) }),
+    });
+    const start = () => service.startLocal({ action: 'startLocal', machineId: fixture.machineId,
+      contributionKey: `${gateway.identity.pluginId}/${gateway.identity.localId}`, connectionId: fixture.record.connectionId });
+    try {
+      expect(await start()).toMatchObject({ status: 'error', error: {
+        code: 'provider_catalog_unavailable', retryable: true, action: 'retry',
+      } });
+      expect(reads).toBe(failedRead);
+      await expect(readFile(join(gateway.directory, 'gateway-started'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      unavailable = false;
+      expect(await start()).toMatchObject({ status: 'success', phase: 'running' });
+      changePurpose = () => {
+        changePurpose = () => {};
+        settings = ProviderSettingsV1Schema.parse({ ...settings, connections: settings.connections.map(connection => ({
+          ...connection, purposeBindingDefaults: { upstream: { kind: 'account', account: {
+            service: { pluginId: gateway.pluginId, localId: 'accounts' }, accountId: 'other-account',
+          } } },
+        })) });
+      };
+      expect(await start()).toMatchObject({ status: 'error', error: { code: 'provider_authorization_changed' } });
+    } finally { await fixture.cleanup(); }
+  });
+});
 
 it('G1 releases only the deleted connection explicit Start claim through retained custody', async () => {
   await withConfiguredDaemonTestHome({ prefix: 'gateway-delete-retention-' }, async ({ homeDir }) => {

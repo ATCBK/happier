@@ -661,13 +661,13 @@ export function createStablePluginConnectedAccountsHost(
             const exactPurposeBindingSubjectId =
                 bindOptions?.exactPurposeBindingSubjectId?.trim() || null;
             return Object.freeze<ConnectedAccountsService>({
-                getBinding(purpose, options = {}) {
+                async getBinding(purpose, options = {}) {
+                    assertCurrent(seed);
+                    const scope = resolveScope(scopes, purpose, 'use');
                     return withConnectedAccountBindingDiagnostic({
                         correlationId: seed.correlationId, ...(seed.session ? { sessionId: seed.session.id } : {}),
-                        pluginId: seed.plugin.id, localId: seed.contribution.id, purpose,
+                        pluginId: seed.plugin.id, localId: seed.contribution.id, purpose: scope.purpose,
                     }, () => runConnectedAccountBindingStage('binding_read', async () => {
-                        assertCurrent(seed);
-                        const scope = resolveScope(scopes, purpose, 'use');
                         const signals = combineSignals(seed.signal, options.signal);
                         assertCurrent(seed);
                         try {

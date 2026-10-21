@@ -32,6 +32,7 @@ const modalSpies = vi.hoisted(() => ({
 const localizationSpies = vi.hoisted(() => ({ resolve: vi.fn((_pluginId: string, value: string | { key: string; fallback: string }) => (
   typeof value === 'string' ? value : `localized:${value.key}`
 )) }));
+const descriptorReload = vi.hoisted(() => vi.fn());
 const connectedServiceRegistryState = vi.hoisted(() => ({
   entries: [{
     serviceId: 'acme-gateway-account',
@@ -97,6 +98,7 @@ vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
     scopeKey: 'server-a', status: 'ready', errorReason: null, entries: connectedServiceRegistryState.entries,
   }),
   useProjectedPluginLocalizedTextResolver: () => localizationSpies.resolve,
+  useAppShellPluginUiProjection: () => ({ reloadConnectedAccountProjection: descriptorReload }),
 }));
 vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
   useServerFeaturesRuntimeSnapshot: () => ({
@@ -137,6 +139,7 @@ afterEach(() => {
   modalSpies.hide.mockClear();
   modalSpies.update.mockClear();
   localizationSpies.resolve.mockClear();
+  descriptorReload.mockClear();
 });
 
 type CapturedPurposeTargetModalConfig = Readonly<{
@@ -493,6 +496,43 @@ describe('ConnectedAccountPurposeTargetChooser', () => {
       finishReload();
     });
     expect(latestUpdate()?.refresh?.refreshing).toBe(false);
+  });
+
+  it('re-reads the connected-account descriptors together with the owner reload from the same open sheet', async () => {
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
+    const onReload = vi.fn(async () => undefined);
+    const testID = 'agent-connected-account-purpose:primary';
+    const screen = await renderScreen(<ConnectedAccountPurposeTargetChooser
+      testID={testID}
+      localizedTextPluginId="acme.provider.author"
+      declaration={{ purpose: 'primary', service: { pluginId: 'acme.managed.provider', localId: 'gateway' }, required: false }}
+      value={null}
+      onChange={vi.fn()}
+      onReload={onReload}
+    />);
+    await act(async () => { findItemByTestId(screen, testID)?.props.onPress(); });
+    const shown = (modalSpies.show.mock.calls.at(-1)?.[0] as { props: { refresh: { onRefresh: () => void } } }).props.refresh;
+    await act(async () => { shown.onRefresh(); });
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(descriptorReload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reload another registry scope when the surface supplies its own registry', async () => {
+    const { ConnectedAccountPurposeTargetChooser } = await import('./ConnectedAccountPurposeTargetChooser');
+    const testID = 'agent-connected-account-purpose:scoped';
+    const screen = await renderScreen(<ConnectedAccountPurposeTargetChooser
+      testID={testID}
+      localizedTextPluginId="acme.provider.author"
+      declaration={{ purpose: 'primary', service: { pluginId: 'acme.managed.provider', localId: 'gateway' }, required: false }}
+      value={null}
+      onChange={vi.fn()}
+      onReload={vi.fn(async () => undefined)}
+      registry={{ scopeKey: 'other', status: 'ready', errorReason: null, entries: [] }}
+    />);
+    await act(async () => { findItemByTestId(screen, testID)?.props.onPress(); });
+    const shown = (modalSpies.show.mock.calls.at(-1)?.[0] as { props: { refresh: { onRefresh: () => void } } }).props.refresh;
+    await act(async () => { shown.onRefresh(); });
+    expect(descriptorReload).not.toHaveBeenCalled();
   });
 
   it('draws a page row as the shared field select, saying the pool summary or what repairs it', async () => {

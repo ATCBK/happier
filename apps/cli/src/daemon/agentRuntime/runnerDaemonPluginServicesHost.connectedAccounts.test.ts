@@ -74,7 +74,7 @@ async function fixture(authorizedPurposes: readonly string[] = purposes) {
             exec: unavailable.exec, interactions: unavailable.interactions, targetedContributions: unavailable.targetedContributions,
             composerContent: unavailable.composerContent },
     });
-    return { accounts: runnerServices.connectedAccounts, requests, async dispose() { controller.abort(); await host.dispose(); } };
+    return { accounts: runnerServices.connectedAccounts, directAccounts: connectedAccounts, requests, async dispose() { controller.abort(); await host.dispose(); } };
 }
 
 function home(readCurrentness: () => Promise<void> = async () => {}) {
@@ -98,6 +98,21 @@ function home(readCurrentness: () => Promise<void> = async () => {}) {
 describe('runner qualified-purpose cold preparation through the real binding owner', () => {
     afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
+    it.each(['sdk', 'runner'] as const)('omits undeclared purpose content from %s diagnostics without changing the refusal', async surface => {
+        home();
+        const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+        const f = await fixture();
+        // Public SDK arguments are not wire-bounded. Neither surface may log an
+        // undeclared value before the existing purpose authorization owner checks it.
+        const privatePurpose = `synthetic-private-purpose-${'x'.repeat(surface === 'sdk' ? 2_048 : 128)}`;
+        try {
+            const accounts = surface === 'sdk' ? f.directAccounts : f.accounts;
+            await expect(accounts.getBinding(privatePurpose)).rejects.toMatchObject({ code: 'plugin_connected_account_purpose_undeclared' });
+            expect(axios.get).not.toHaveBeenCalled();
+            expect(JSON.stringify(log.mock.calls)).not.toContain(privatePurpose);
+        } finally { await f.dispose(); }
+    });
+
     it.each(['slow', 'failed'] as const)('settles four watches and concurrent reads after a %s Home currentness read', async variant => {
         const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
         const entered = deferred();
@@ -120,7 +135,7 @@ describe('runner qualified-purpose cold preparation through the real binding own
                 const requests = f.requests.filter(request => request.kind === 'plugin_connected_accounts.get_binding_v1');
                 expect(requests).toHaveLength(4);
                 for (const request of requests) expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]',
-                    expect.objectContaining({ sessionId: 'binding-session', requestId: request.requestId, purpose: request.purpose,
+                    expect.objectContaining({ agentSessionId: 'binding-session', requestId: request.requestId, purpose: request.purpose,
                         stage: 'consumer_lock', event: 'begin' })]);
             });
             release.resolve();
@@ -135,7 +150,7 @@ describe('runner qualified-purpose cold preparation through the real binding own
             expect(await Promise.all(purposes.map(purpose => f.accounts.getBinding(purpose)))).toEqual([null, null, null, null]);
             for (const request of f.requests.filter(request => request.kind === 'plugin_connected_accounts.get_binding_v1').slice(-4)) {
                 expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({
-                    requestId: request.requestId, purpose: request.purpose, stage: 'dispatch', event: 'end', durationMs: expect.any(Number),
+                    requestId: request.requestId, operation: 'get_binding', stage: 'dispatch', event: 'end', durationMs: expect.any(Number),
                 })]);
             }
         } finally { release.resolve(); subscriptions.forEach(subscription => subscription.dispose()); await f.dispose(); }
@@ -152,14 +167,15 @@ describe('runner qualified-purpose cold preparation through the real binding own
         try {
             await entered.promise;
             const request = f.requests.find(request => request.kind === 'plugin_connected_accounts.get_binding_v1')!;
-            const identity = { sessionId: 'binding-session', invocationId: 'binding-invocation', requestId: request.requestId, purpose: purposes[0] };
-            expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, stage: 'account_currentness', event: 'begin' })]);
+            const identity = { agentSessionId: 'binding-session', invocationId: 'binding-invocation', requestId: request.requestId };
+            expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, purpose: purposes[0], stage: 'account_currentness', event: 'begin' })]);
             release.resolve();
             expect(await pending).toMatchObject({ code: 'plugin_connected_account_settings_unavailable' });
             for (const stage of ['authorization', 'consumer_lock', 'retained_binding', 'account_purpose_read']) {
-                expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, stage, event: 'begin' })]);
+                expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity,
+                    ...(stage === 'authorization' ? {} : { purpose: purposes[0] }), stage, event: 'begin' })]);
             }
-            expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, stage: 'account_currentness', event: 'failure', errorCode: 'account_encryption_currentness_unavailable', durationMs: expect.any(Number) })]);
+            expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, purpose: purposes[0], stage: 'account_currentness', event: 'failure', errorCode: 'account_encryption_currentness_unavailable', durationMs: expect.any(Number) })]);
             expect(JSON.stringify(log.mock.calls)).not.toMatch(/private Home body|private-credential|binding-fixture/);
         } finally { release.resolve(); await pending; await f.dispose(); }
     });

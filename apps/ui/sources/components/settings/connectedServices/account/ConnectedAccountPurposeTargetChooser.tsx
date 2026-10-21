@@ -26,6 +26,7 @@ import { Typography } from '@/constants/Typography';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { Modal } from '@/modal';
 import {
+  useAppShellPluginUiProjection,
   useProjectedConnectedServicesRegistry,
   useProjectedPluginLocalizedTextResolver,
 } from '@/components/appShell/plugins/AppShellPluginUiProjection';
@@ -180,6 +181,10 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
   const pathname = usePathname();
   const focusedRegistry = useProjectedConnectedServicesRegistry();
   const registry = props.registry ?? focusedRegistry;
+  // Refresh also re-reads the descriptors of the registry this chooser follows; an explicit
+  // registry is another scope's snapshot and is never reloaded as a substitute.
+  const { reloadConnectedAccountProjection } = useAppShellPluginUiProjection();
+  const reloadDescriptors = props.registry ? undefined : reloadConnectedAccountProjection;
   const localizePluginText = useProjectedPluginLocalizedTextResolver();
   const serverFeatures = useServerFeaturesRuntimeSnapshot({ enabled: true });
   const accountTransport = resolveConnectedAccountUiNegotiation(serverFeatures);
@@ -310,12 +315,13 @@ export function ConnectedAccountPurposeTargetChooser(props: Readonly<{
     reloadingRef.current = true;
     setReloading(true);
     try {
+      reloadDescriptors?.();
       await onReload();
     } finally {
       reloadingRef.current = false;
       setReloading(false);
     }
-  }, [onReload]);
+  }, [onReload, reloadDescriptors]);
   // Consumers pass inline handlers; the open sheet updates only when what it shows changes.
   const onChangeRef = React.useRef(props.onChange);
   onChangeRef.current = props.onChange;

@@ -35,7 +35,7 @@ type TargetEligibilityInput = Readonly<{
 }>;
 
 export type ConnectedAccountPurposeTargetEligibilityReason =
-  | 'serviceUnavailable' | 'targetMissing' | 'accountReconnect' | 'accountUnavailable'
+  | 'serviceUnavailable' | 'serviceLookupFailed' | 'targetMissing' | 'accountReconnect' | 'accountUnavailable'
   | 'poolEmpty' | 'poolNeedsActiveAccount';
 type TargetEligibilityDescription =
   | Readonly<{ eligibility: 'usable'; reason: null }>
@@ -60,7 +60,7 @@ export function describeConnectedAccountPurposeTargetEligibility(input: TargetEl
         ? 'accountReconnect' : 'accountUnavailable' };
     }
     const authentication = input.resolveAuthentication(account.ref.service);
-    if (!authentication) return { eligibility: 'unknown', reason: 'serviceUnavailable' };
+    if (!authentication) return { eligibility: 'unknown', reason: 'serviceLookupFailed' };
     return isQualifiedConnectedAccountProfileUsableV4({
       profile: account,
       authentication,
@@ -88,7 +88,7 @@ export function describeConnectedAccountPurposeTargetEligibility(input: TargetEl
   ));
   if (!group) return { eligibility: 'unusable', reason: 'targetMissing' };
   const authentication = input.resolveAuthentication(service);
-  if (!authentication) return { eligibility: 'unknown', reason: 'serviceUnavailable' };
+  if (!authentication) return { eligibility: 'unknown', reason: 'serviceLookupFailed' };
   // The Protocol resolver stays the sole owner of member, active, expiry, and
   // descriptor configuration policy for a group.
   const activeAccount = resolveQualifiedConnectedAccountGroupActiveAccountV4({

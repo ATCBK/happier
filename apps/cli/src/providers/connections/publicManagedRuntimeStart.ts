@@ -1,4 +1,4 @@
-import { ProviderErrorV1Schema, createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { ProviderErrorV1Schema, createProviderErrorV1, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { parseProviderContributionIdentityV1 } from '@happier-dev/protocol/providers/contribution-identity';
 
 import type {
@@ -19,6 +19,7 @@ import type {
   ResolvedExecutablePluginRuntimeRegistry,
 } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
+import { providerManagedPurposeBindingError } from '@/providers/managed/resolvePurposeBindingSnapshot';
 
 import type { ProviderConnectionServiceDeps } from './service/types';
 
@@ -58,12 +59,13 @@ export type ManagedProviderExplicitStartCustody = Readonly<{
 function failForCoordinatorCode(
   code: PublicManagedProviderRuntimeStartFailureCode,
   machineId: string,
+  authorizationFailure?: ProviderErrorV1,
 ): never {
   if (code === 'managed_provider_request_invalid') {
     throw createProviderErrorV1('provider_connection_invalid', { machineId });
   }
   if (code === 'managed_provider_authorization_changed') {
-    throw createProviderErrorV1('provider_authorization_changed', { machineId });
+    throw authorizationFailure ?? createProviderErrorV1('provider_authorization_changed', { machineId });
   }
   if (code === 'managed_provider_runtime_unavailable') {
     throw createProviderErrorV1('provider_contribution_unavailable', { machineId });
@@ -99,12 +101,17 @@ function createManagedProviderExplicitStartOperation(input: Readonly<{
       });
     }
 
-    const requestAuthorizationIsCurrent = async (): Promise<boolean> => {
+    let authorizationFailure: ProviderErrorV1 | undefined;
+    const requestAuthorizationIsCurrent = async (signal = input.signal): Promise<boolean> => {
       try {
         return request.isAuthorizationCurrent() === true
-          && await request.revalidateAuthorization(input.signal) === true
+          && await request.revalidateAuthorization(signal) === true
           && request.isAuthorizationCurrent() === true;
-      } catch {
+      } catch (error) {
+        authorizationFailure = providerManagedPurposeBindingError(error, {
+          ...(request.connectionId ? { connectionId: request.connectionId } : {}),
+          machineId: input.machineId,
+        });
         return false;
       }
     };
@@ -139,7 +146,7 @@ function createManagedProviderExplicitStartOperation(input: Readonly<{
       }
 
       if (!await requestAuthorizationIsCurrent()) {
-        throw createProviderErrorV1('provider_authorization_changed', {
+        throw authorizationFailure ?? createProviderErrorV1('provider_authorization_changed', {
           machineId: input.machineId,
         });
       }
@@ -201,12 +208,12 @@ function createManagedProviderExplicitStartOperation(input: Readonly<{
               connectedAccounts: invocationServices.connectedAccounts,
               custody: invocationServices,
               isAuthorizationCurrent: request.isAuthorizationCurrent,
-              revalidateAuthorization: () => request.revalidateAuthorization(signal),
+              revalidateAuthorization: () => requestAuthorizationIsCurrent(signal),
               signal,
               launchResourceScope,
             });
             if (!started.ok) {
-              return failForCoordinatorCode(started.code, input.machineId);
+              return failForCoordinatorCode(started.code, input.machineId, authorizationFailure);
             }
 
             const cleanup = launchResourceScope.transfer();

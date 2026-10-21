@@ -58,7 +58,11 @@ export async function runConnectedAccountBindingStage<T>(stage: BindingDiagnosti
   const started = performance.now();
   const record = (event: 'begin' | 'end' | 'failure', error?: unknown) => {
     try {
-      logger.warnLocalFile('[connected-account-binding-stage]', { ...identity, stage, event,
+      // The file sink treats bare sessionId as a possible credential. This is
+      // the host-admitted Happier Session identity, not a native session secret.
+      const { sessionId, ...correlation } = identity;
+      logger.warnLocalFile('[connected-account-binding-stage]', { ...correlation,
+        ...(sessionId ? { agentSessionId: sessionId } : {}), stage, event,
         durationMs: performance.now() - started,
         ...(event === 'failure' ? { errorCode: failureCode(error),
           ...(bindingUnavailableReason(error) ? { reasonCode: bindingUnavailableReason(error) } : {}) } : {}) });

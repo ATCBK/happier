@@ -59,6 +59,7 @@ import * as connectedAccounts from './connectedAccounts.js';
 import * as envConstants from './envConstants.js';
 import type {
     ConnectedAccountRequestAuthClientSourceParams as PublicConnectedAccountRequestAuthClientSourceParams,
+    ConnectedAccountRuntime as PublicConnectedAccountRuntime,
 } from './connected-accounts/index.js';
 import type {
     ConnectedAccountHttpHeadersRequest as SdkConnectedAccountHttpHeadersRequest,
@@ -178,6 +179,7 @@ function exportedValueDeclarations(source: ts.SourceFile): readonly string[] {
 }
 
 const EXPECTED_EXPORTS = [
+    'ANTIGRAVITY_OAUTH_PROFILE',
     'AuthCallbackCreateInput',
     'AuthCallbackCreateResult',
     'AuthCallbackMode',
@@ -204,9 +206,12 @@ const EXPECTED_EXPORTS = [
     'CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1',
     'CLAUDE_SUBSCRIPTION_OAUTH_PROFILE',
     'CLAUDE_SUBSCRIPTION_SETUP_TOKEN_ENVIRONMENT_REQUEST_V1',
+    'CODEX_CONNECTED_SERVICE_HOME_DIRECTORY_NAME',
+    'CODEX_NATIVE_HOME',
     'CONNECTED_ACCOUNT_DIRECT_EXPORT_CONTRACT_V1',
     'ClaudeSubscriptionMaterializationContractV1',
     'ClaudeSubscriptionSetupTokenEnvironmentRequestV1',
+    'ConnectedAccountAuthFailureRequestV1',
     'ConnectedAccountAuthFailureRequestV1Schema',
     'ConnectedAccountAuthenticationContext',
     'ConnectedAccountAuthenticationModeRuntime',
@@ -227,6 +232,7 @@ const EXPECTED_EXPORTS = [
     'ConnectedAccountPurposeDeclaration',
     'ConnectedAccountPurposeDeclarationsV1Schema',
     'ConnectedAccountPurposeId',
+    'ConnectedAccountQuotaFailureRequestV1',
     'ConnectedAccountQuotaFailureRequestV1Schema',
     'ConnectedAccountRef',
     'ConnectedAccountRequestAuthMaterialization',
@@ -271,6 +277,7 @@ const EXPECTED_EXPORTS = [
     'CredentialRequirementOptions',
     'HAPPIER_CONNECTED_SERVICE_MATERIALIZED_ENV_KEYS_JSON_ENV',
     'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON_ENV',
+    'OAuthBearerLeaseV1',
     'OPENAI_CODEX_OAUTH_PROFILE',
     'OauthAuthEntry',
     'OauthCredentialRecord',
@@ -283,12 +290,15 @@ const EXPECTED_EXPORTS = [
     'PluginConnectedAccountDescriptorContributionV2',
     'PluginConnectedAccountMaterializationKind',
     'PluginConnectedAccountRegistrationApi',
+    'ProviderAccountSubscriptionV1',
     'ProviderAccountUsageQuotaScopeV1',
     'ProviderLimitCategory',
     'ProviderLimitEvidenceClassification',
     'ProviderLimitEvidenceConfidence',
     'ProviderLimitEvidenceContext',
     'ProviderLimitEvidenceProvenance',
+    'ProviderResetTextEvidenceParser',
+    'ProviderResetTiming',
     'QualifiedConnectedAccountGroupV4Schema',
     'QualifiedConnectedAccountListResponseV4Schema',
     'QualifiedConnectedAccountRef',
@@ -299,20 +309,29 @@ const EXPECTED_EXPORTS = [
     'QualifiedConnectedAccountPurposeBindingTarget',
     'QualifiedConnectedAccountPurposeBindingV1Schema',
     'QualifiedConnectedAccountPurposeBindingsV1',
+    'QualifiedConnectedAccountPurposeV1',
     'QualifiedConnectedAccountServiceRef',
     'QuotaFetchError',
     'QuotaFetchErrorCode',
+    'RequestAuthFailureOutcomeV1',
     'TokenCredentialRecord',
     'UnsupportedAccountUsage',
+    'addSafeEpochMilliseconds',
     'buildConnectedServiceCredentialRecord',
     'buildOauthAuthEntry',
     'classifyProviderLimitEvidence',
     'defineAuthMaterialization',
     'isAuthenticateResult',
     'normalizeConnectedServiceLimitCategoryV1',
+    'normalizeNonNegativeSafeMilliseconds',
+    'parseCompactDurationMs',
     'parseCredentialRecord',
+    'parseProviderResetAt',
+    'parseProviderTimestampMs',
+    'parseRetryAfterHeader',
     'requireOauthCredentialRecordWithExpiry',
     'requireTokenCredentialRecord',
+    'resolveConnectedServiceQuotaMeterLabel',
     'resolveConnectedServicesProviderStateSharingPolicyV1',
     'unsupportedAccountUsage',
 ] as const;
@@ -321,7 +340,6 @@ const FORBIDDEN_PRIVATE_EXPORTS = [
     'AgentConnectedServicesAdapter',
     'ConnectedAccountRequestAuthCapabilityDocumentV2',
     'RequestAuthCapabilityDocumentV1',
-    'OAuthBearerLeaseV1',
     'RequestAuthCredentialContextV1',
     'SessionConnectedServiceAuthApplyGenerationRequestV1',
     'SessionConnectedServiceAuthApplyGenerationResponseV1',
@@ -379,7 +397,9 @@ describe('Connected Accounts final package-local projection', () => {
     it('owns the exact final-name census without private request-auth custody', () => {
         const exports = exportedNames();
         expect(exports).toEqual([...EXPECTED_EXPORTS].sort());
-        expect(exports).not.toEqual(expect.arrayContaining([...FORBIDDEN_PRIVATE_EXPORTS]));
+        for (const privateName of FORBIDDEN_PRIVATE_EXPORTS) {
+            expect(exports).not.toContain(privateName);
+        }
     });
 
     it('re-exports canonical runtime values by identity', () => {
@@ -578,7 +598,7 @@ describe('Connected Accounts final package-local projection', () => {
         ]));
         expect(namedExportBindings(
             source,
-            '@happier-dev/protocol/sessions/work-state',
+            '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc',
             false,
         )).toEqual(expect.arrayContaining([
             'ConnectedServiceQuotaRecoveryCreditConsumeReceiptStatusV1Schema',
@@ -782,6 +802,21 @@ describe('Connected Accounts final package-local projection', () => {
     });
 
     it('keeps quota and recovery types as exact canonical Protocol symbols', () => {
+        // Plugins implement the public leaf outcome; the host adds settlement
+        // identity and unknown-after-timeout evidence to its private receipt.
+        type PublicRecoveryCredits = NonNullable<PublicConnectedAccountRuntime['recoveryCredits']>;
+        expectTypeOf<PublicRecoveryCredits>()
+            .toEqualTypeOf<NonNullable<connectedAccounts.ConnectedAccountRuntime['recoveryCredits']>>();
+        expectTypeOf<Parameters<PublicRecoveryCredits['consume']>[0]>()
+            .toEqualTypeOf<Readonly<{
+                idempotencyKey: string;
+                providerCreditId?: string;
+                providerLimitIds?: readonly string[];
+            }>>();
+        expectTypeOf<Awaited<ReturnType<PublicRecoveryCredits['consume']>>>()
+            .toEqualTypeOf<Readonly<{
+                status: Exclude<ProtocolConnectedServiceQuotaRecoveryCreditConsumeReceiptStatusV1, 'unknown_after_timeout'>;
+            }>>();
         expectTypeOf<SdkConnectedAccountHttpHeadersRequest>()
             .toEqualTypeOf<ProtocolConnectedAccountHttpHeadersRequest>();
         expectTypeOf<SdkConnectedAccountMaterializationRequest>()

@@ -2800,7 +2800,8 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                 pluginId: input.retainedAgent.pluginId, localId: input.retainedAgent.localAgentId,
                 operation: operation.kind === 'plugin_connected_accounts.get_binding_v1' ? 'get_binding'
                     : operation.kind === 'plugin_connected_accounts.watch.open_v1' ? 'watch_open' : 'watch_next',
-                ...('purpose' in operation ? { purpose: operation.purpose } : {}),
+                // The SDK scope owner adds the declared purpose after authorization;
+                // this raw wire argument may contain arbitrary plugin input.
                 ...('subscriptionId' in operation ? { subscriptionId: operation.subscriptionId } : {}),
             }, () => runConnectedAccountBindingStage('dispatch', () => dispatchOperation(input)));
         },

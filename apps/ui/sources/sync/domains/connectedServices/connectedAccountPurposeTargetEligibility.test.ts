@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/protocol';
 
 import {
+  describeConnectedAccountPurposeTargetEligibility,
   resolveConnectedAccountPurposeTargetEligibility,
 } from './connectedAccountPurposeTargetEligibility';
 
@@ -170,5 +171,23 @@ describe('resolveConnectedAccountPurposeTargetEligibility', () => {
       groups: [groupWith('work')],
       authentication: authenticationWith(accountScopedConfigurationMode),
     })).toBe('usable');
+  });
+});
+
+describe('describeConnectedAccountPurposeTargetEligibility service reasons', () => {
+  const target = { kind: 'account', account: { service, accountId: 'work' } } as const;
+
+  it('says a service whose descriptor could not be read is a lookup to retry, not an unsupported service', () => {
+    expect(describeConnectedAccountPurposeTargetEligibility({
+      target, declaredServices: [service], accounts: [connectedAccount], groups: [],
+      resolveAuthentication: () => null,
+    })).toEqual({ eligibility: 'unknown', reason: 'serviceLookupFailed' });
+  });
+
+  it('keeps a service the purpose does not declare unavailable', () => {
+    expect(describeConnectedAccountPurposeTargetEligibility({
+      target, declaredServices: [], accounts: [connectedAccount], groups: [],
+      resolveAuthentication: () => authenticationWith(),
+    })).toEqual({ eligibility: 'unusable', reason: 'serviceUnavailable' });
   });
 });
