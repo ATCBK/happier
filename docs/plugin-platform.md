@@ -1184,7 +1184,12 @@ diagnostics and disposal in `lsp/languageServerHost.ts`.
 
 Each declaration supplies `title`, a `languageIds` map from UI/highlighter ids
 to LSP ids, `executable` and `args`. Optional `filePatterns` provide matching
-fallbacks. Omitted or empty `rootMarkers` select the workspace root; markers
+fallbacks. For a language unknown to the app, declare its own language key and
+file patterns, with one distinct LSP id in `languageIds`; the host uses that id
+when the pattern matches. Multiple keys may map to that same id. A pattern-only
+match with several distinct LSP ids is unavailable rather than guessing.
+Mapping the generic `text` key would also select unrelated plain-text files.
+Omitted or empty `rootMarkers` select the workspace root; markers
 are for servers that require a narrower root. `initializationOptions` are
 opaque JSON sent at initialization, while optional `settings` answer the
 server's dotted-section configuration requests. These configuration bags carry
@@ -1689,6 +1694,14 @@ The app shell supplies plugin-column physical focus eligibility through the exis
 `definePlugin` declares `dragSources` and `dropTargets` through the existing contribution catalog. Each source has a declared JSON reference schema and a client execution reference; each target declares accepted built-in or qualified `plugin:<pluginId>/<localId>` kinds and an explicit host/contributed Action allowlist. `activate(api)` registers only admitted local ids through `api.dragSources.register` and `api.dropTargets.register`. These families have client occurrence rights, not daemon or Session runtime rights.
 
 A source may select its own declared `composerAttachment` local id and register `toComposerAttachment(reference)`, returning the incumbent `ComposerAttachmentAuthorValueV1` or `null`. Composer admission validates the reference and current source registration, then matches the attachment declaration in the same occurrence of the mounted composer's composition. `composer.transaction.apply` accepts an optional exact `attachmentContributor` selection; the mounted owner derives authority and mints attachment identity through the existing revision-bound transaction core. The selection carries no generation, provenance or staged-media custody. Triage maps its actual entry/source-instance reference through its existing attachment builder; its resolver still reads the current entry at dispatch.
+
+The development `reviewComment.add` composer operation adds host-owned anchored
+review context using the canonical review-comment draft schema. It applies only
+to a Session composer with a known current Account and workspace, derived by the
+host rather than selected by the plugin. It shares the editor/diff Ask workspace
+draft writer and submitted `review_comments.v1` shape. This operation grants no
+plugin attachment identity: `attachment.add`, update and removal retain their
+existing contributor admission and custody checks.
 
 Protocol owns the [portable entity contracts](../packages/protocol/src/plugins/ui/entityDragDrop.ts) and [declaration admission](../packages/protocol/src/plugins/contributions/entityDragDrop.ts). The mounted UI's [treeDragDrop runtime](../apps/ui/sources/components/ui/treeDragDrop/entityDragDropRuntime.ts) owns carry, current geometry, target selection, release revalidation and cancellation. The plugin binding validates custom references and Action allowlists against the current occurrence; it supplies host-built identity for built-in references. A reference selects an item and grants neither access nor execution authority.
 
