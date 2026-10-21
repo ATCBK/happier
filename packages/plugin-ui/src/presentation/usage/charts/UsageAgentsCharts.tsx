@@ -124,8 +124,14 @@ export function UsageOrbit(props: AgentsProps & Readonly<{ model: readonly Usage
               const x = cx + rx * Math.cos(t), y = cy + ry * Math.sin(t), radius = 3 + Math.sqrt(entry.share) * 13, right = Math.cos(t) >= 0;
               return <G key={entry.agentId}>
                 <Circle cx={r1(x)} cy={r1(y)} r={r1(radius)} fill={agentOf(props.agents, entry.agentId)?.color ?? ink.neutral} />
-                {svgText.draw({ x: x + (right ? radius + 6 : -radius - 6), y: y + 4, anchor: right ? 'start' : 'end', tone: 'secondary', size: 'body', halo: props.paint.paper,
-                  text: `${shortName(props.agents, entry.agentId)} ${props.labels.percent(entry.share)}` })}
+                {(() => {
+                  // A label beside its planet, kept inside the body on a narrow width (it moves to the edge, never off it).
+                  const text = `${shortName(props.agents, entry.agentId)} ${props.labels.percent(entry.share)}`;
+                  const span = text.length * (svgText.styles.body.fontSize ?? 13) * 0.7;
+                  const at = x + (right ? radius + 6 : -radius - 6);
+                  return right ? svgText.draw({ x: Math.min(at, width - span), y: y + 4, anchor: 'start', tone: 'secondary', size: 'body', halo: props.paint.paper, text })
+                    : svgText.draw({ x: Math.max(at, span), y: y + 4, anchor: 'end', tone: 'secondary', size: 'body', halo: props.paint.paper, text });
+                })()}
               </G>;
             })}
             {unknown.length ? svgText.draw({ x: width, y: height - 4, anchor: 'end', text: props.labels.unknown(unknown.map((entry) => shortName(props.agents, entry.agentId)).join(', ')) }) : null}
@@ -218,11 +224,13 @@ export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRive
               const band = bands.find((entry) => entry.id === id);
               if (!band) return null;
               let index = -1;
-              for (let at = 0; at < weeks.length; at++) if (!used.has(at) && (index < 0 || band.high[at]! - band.low[at]! > band.high[index]! - band.low[index]!)) index = at;
+              // Interior weeks are preferred: a label at either end of the river sits against the plot's edge.
+              const room = (at: number) => (band.high[at]! - band.low[at]!) * (weeks.length > 2 && (at === 0 || at === weeks.length - 1) ? 0.6 : 1);
+              for (let at = 0; at < weeks.length; at++) if (!used.has(at) && (index < 0 || room(at) > room(index))) index = at;
               if (index < 0 || band.high[index]! - band.low[index]! < 16) return null;
               used.add(index);
               const text = props.labels.inline(shortName(props.agents, id), weeks[index]!.shares[id] ?? 0);
-              const half = (text.length * (svgText.styles.strong.fontSize ?? 13) * 0.6) / 2;
+              const half = (text.length * (svgText.styles.strong.fontSize ?? 13) * 0.7) / 2;
               const y = mid - (band.low[index]! + band.high[index]!) / 2;
               return <G key={`l${id}`}>{svgText.draw({ x: Math.min(width - half - 4, Math.max(half + 4, x(index))), y: y + 4, anchor: 'middle', tone: 'onMark', size: 'body', text })}</G>;
             });

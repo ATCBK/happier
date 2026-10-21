@@ -127,7 +127,7 @@ export function UsageDaylight(props: UsageChartBaseProps & Readonly<{ model: Usa
             spans.forEach(([from, to], index) => out.push(<Rect key={`n${index}`} x={r1(from! * column)} y={top - 6} width={r1((to! - from!) * column)} height={r1(band - top + 8)} rx={6} fill={wash} />));
             // The window's label sits over its wash, kept wholly inside the plot (it is wider than an early-morning wash).
             const text = props.labels.night(night.fromHour, night.toHour, night.share);
-            const half = (text.length * (svgText.styles.body.fontSize ?? 13) * 0.6) / 2;
+            const half = (text.length * (svgText.styles.body.fontSize ?? 13) * 0.7) / 2;
             const labelAt = night.fromHour > night.toHour ? (night.toHour / 2) * column : ((night.fromHour + night.toHour) / 2) * column;
             out.push(svgText.draw({ x: Math.min(width - half, Math.max(half, labelAt)), y: top - 10, anchor: 'middle', tone: 'secondary', size: 'body', text }, 'night'));
           }
