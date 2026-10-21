@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Socket } from 'socket.io-client';
 import tweetnacl from 'tweetnacl';
-import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { createAccountScopedCryptoMaterialSnapshotV1, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { ProfileRecordV1Schema, sealProfileRecordContentV1, PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { computeAccountEncryptionMigrateKeyFingerprintV1, convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
@@ -24,6 +26,8 @@ import { resetServerReachabilitySupervisors } from '@/sync/runtime/connectivity/
 import { fetchAccountEncryptionMode } from './apiAccountEncryptionMode';
 import { readSavedSecretReferenceInContext } from './apiSavedSecretCatalog';
 import { readRemoteHostCatalog, readRemoteHostCatalogProjection, readRemoteHostCatalogProjectionInContext } from './apiRemoteHostCatalog';
+import { readProfileCatalogProjection } from './apiProfileCatalog';
+import { importLegacySavedSecretsInContext } from '@/sync/ops/settings/savedSecretResourceOperations';
 
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -38,6 +42,99 @@ afterEach(async () => {
     await resetServerReachabilitySupervisors();
     await home.reset();
     resetRuntimeFetch();
+});
+
+it.each([
+    { kind: 'profile', authority: 'matching', pinned: false },
+    { kind: 'profile', authority: 'revoked', pinned: false },
+    { kind: 'profile', authority: 'fingerprint-changed', pinned: false },
+    { kind: 'importer', authority: 'revoked', pinned: false },
+    { kind: 'importer', authority: 'revoked', pinned: true },
+] as const)('borrows only initial Settings discovery ($kind, $authority, pinned=$pinned)', async ({ kind, authority, pinned }) => {
+    const accountId = `source-discovery-${kind}-${authority}-${pinned}`;
+    const serverUrl = `https://${accountId}.test`;
+    const credentials = { token: createAccountTokenForTests(accountId, { currentAccount: true }),
+        secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') };
+    const material = resolveAccountScopedCryptoMaterialFromCredentials(credentials);
+    if (!material) throw new Error('Expected real E2EE discovery material');
+    const fingerprint = convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
+        createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material }).contentPublicKeyFingerprint);
+    const changedFingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(
+        tweetnacl.box.keyPair.fromSecretKey(new Uint8Array(32).fill(25)).publicKey);
+    const serverId = await home.addHome({ name: 'Initial source discovery', serverUrl, accountId, credentials,
+        accountEncryptionMode: 'e2ee', currentAccount: true });
+    const requested = createDeferred<void>();
+    const bodyReady = createDeferred<void>();
+    let committed = false;
+    let authorityReads = 0;
+    let authorityAtFirstSettings: number | undefined;
+    let settingsReads = 0;
+    const finalAuthority: string[] = [];
+    const record = ProfileRecordV1Schema.parse({ v: 1, id: 'private-profile', enabled: true, promptStack: [], secretBindings: {},
+        definition: { kind: 'inline', profile: { v: 2, id: 'private-profile', name: 'Privately opened', createdAt: 1, updatedAt: 1 } } });
+    setRuntimeFetch(async (rawUrl, init) => {
+        const path = new URL(String(rawUrl)).pathname;
+        if (path === '/v1/account/encryption' || path === '/v1/account/encryption/currentness') {
+            authorityReads++;
+            if (committed) finalAuthority.push(path);
+            if (committed && authority === 'revoked') return Response.json({}, { status: 401 });
+            return Response.json(path.endsWith('/currentness') ? { mode: 'e2ee', version: 1, settingsVersion: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: committed && authority === 'fingerprint-changed'
+                    ? changedFingerprint : fingerprint, updatedAt: 1, recipientEnvelopeReadiness: { status: 'available' } }
+                : { mode: 'e2ee', updatedAt: 1 });
+        }
+        if (path === '/v2/account/settings') {
+            settingsReads++;
+            authorityAtFirstSettings ??= authorityReads;
+            const payload = { version: 1, content: { t: 'encrypted', c: sealAccountScopedBlobCiphertext({
+                kind: 'account_settings', material, payload: {}, randomBytes: tweetnacl.randomBytes }) } };
+            return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+                requested.resolve(undefined);
+                void bodyReady.promise.then(() => { controller.enqueue(new TextEncoder().encode(JSON.stringify(payload))); controller.close(); });
+            } }), { headers: { 'Content-Type': 'application/json' } });
+        }
+        if (path === PROFILE_ROWS_ROUTE_V1) return Response.json({ status: 'listed', rows: [{ id: record.id, revision: 1,
+            content: sealProfileRecordContentV1({ mode: 'e2ee', material, record }) }], complete: true, nextCursor: null,
+            diagnostics: [], referenceGuardRevision: 1, transferControl: { status: 'absent' } });
+        if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: 1 });
+        if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
+        return home.request(rawUrl, init);
+    });
+    let socket: Socket | undefined;
+    installDisconnectedServerSocketBoundary(current => { socket = current; configureConnectedServerSocketBoundary(current); });
+    apiSocket.initialize({ endpoint: serverUrl, token: credentials.token, credentials, serverId,
+        generation: getActiveServerSnapshot().generation,
+        request: createServerFetchAtEndpoint({ endpointUrl: serverUrl, serverId, credentials }), isCurrent: () => true }, null);
+    await waitForHomeGovernance(() => expect(socket?.connected).toBe(true));
+    const captured = await captureLazyActionAccountContext(serverId);
+    try {
+        expect(await captured.resolveAccountMode()).toBe('e2ee');
+        expect(authorityReads).toBe(1);
+        authorityReads = 0;
+        const scope = { serverId, accountId };
+        const read = kind === 'profile' ? readProfileCatalogProjection(scope, undefined, { deferCleanup: true, migrateSkills: false })
+            : importLegacySavedSecretsInContext(captured, 'e2ee', scope, undefined,
+                pinned ? { mode: 'e2ee', raw: {}, version: 1 } : undefined);
+        await Promise.race([requested.promise, read.then(() => { throw new Error('Source completed before its private Settings body was held'); })]);
+        committed = true;
+        bodyReady.resolve(undefined);
+        const result = await read;
+        if (kind === 'profile') {
+            expect(result).toMatchObject(authority === 'matching' ? { catalog: { status: 'ready', records: [{ record }] } }
+                : { catalog: { status: 'unavailable' }, artifactsById: new Map(), source: null });
+            expect(finalAuthority).toEqual(Array(authority === 'matching' ? 2 : 1).fill('/v1/account/encryption/currentness'));
+        } else {
+            expect(result).toEqual({ status: 'pending', reason: 'source-unavailable' });
+            expect(settingsReads).toBe(1);
+            expect(finalAuthority).toEqual(['/v1/account/encryption/currentness']);
+        }
+        // The projection keeps its write-bearing outer admission. Only its
+        // nested discovery borrows; a pinned import must still admit afresh.
+        expect(authorityAtFirstSettings).toBe(kind === 'profile' || pinned ? 1 : 0);
+    } finally {
+        bodyReady.resolve(undefined);
+        captured.dispose();
+    }
 });
 
 it.each((['plain', 'e2ee'] as const).flatMap(mode => (['cold', 'warm'] as const).map(warmth => ({ mode, warmth }))))(

@@ -4,14 +4,17 @@ import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-
 import { projectPluginAccountCollectionDeclaration } from '@happier-dev/plugin-sdk/host/registration';
 import { normalizePluginAccountCollectionContractV1, normalizePluginAccountCollectionContractsV1, PluginCollectionContractReadRequestV1Schema,
     PluginCollectionMutationRequestV1Schema, PluginCollectionForgetRequestV1Schema, PluginCollectionGetRequestV1Schema,
-    PluginCollectionRowV1Schema } from '@happier-dev/protocol/plugins/data/collectionsV1';
+    PluginCollectionRowV1Schema, assertPluginCollectionContentEnvelopeForModeV1 } from '@happier-dev/protocol/plugins/data/collectionsV1';
 import { PluginAccountCollectionContributionV1Schema } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import { PluginManifestV2Schema } from '@happier-dev/protocol/plugins/manifest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityCollectionWritersClaimActionInputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { serveAccountHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createDeferred, createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit';
+import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, createPlainProjectAccountRowListFixture } from '@/dev/testkit';
 import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 import { readPluginAccountAvailability } from '@/sync/domains/plugins/availability/projection';
 import { sync } from '@/sync/sync';
@@ -21,6 +24,13 @@ import { publishActivePluginCollectionChanges, resetActivePluginCollectionChange
 import { recordAccountStoredContentServerRequirements } from '@/sync/http/accountStoredContentCompatibility';
 import { createActivePluginCollectionClientForContractRef, prepareCollectionOperation, requestCollectionOperation,
     type ActivePluginCollectionClientV1 } from './activePluginCollectionClient';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { apiSocket } from '@/sync/api/session/apiSocket';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
 
 // The canonical host harness has no packaged native assets. Seed only that
 // Package/Expo boundary; declaration admission, Sync and Data stay real.
@@ -78,8 +88,10 @@ const rowReadContract = normalizePluginAccountCollectionContractV1({ pluginId,
 async function withRowReadClient(
     route: (request: ServedHomeRequest) => Response | Promise<Response | undefined> | undefined,
     run: (client: ActivePluginCollectionClientV1, home: Awaited<ReturnType<typeof serveAccountHomes>>) => Promise<void>,
+    encryptionCurrentness?: () => AccountEncryptionCurrentnessResponse,
 ) {
-    const home = await serveAccountHomes({ homes: [{ key: 'home', serverUrl: 'https://collection-row-reads.test', accountId: 'alice' }],
+    const home = await serveAccountHomes({ homes: [{ key: 'home', serverUrl: 'https://collection-row-reads.test', accountId: 'alice',
+        ...(encryptionCurrentness ? { encryptionCurrentness } : {}) }],
         route: request => {
             if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({ features: {},
                 capabilities: { accountStoredContentCompatibility: { v: 1, minimumProtocolVersion: 2,
@@ -94,6 +106,10 @@ async function withRowReadClient(
             requirements: { v: 1, minimumProtocolVersion: 2, currentProtocolVersion: 3,
                 declarationTransport: 'http-header-and-socket-auth-v1' },
         });
+        if (encryptionCurrentness) {
+            const { storage } = await import('@/sync/domains/state/storage');
+            await expect.poll(() => storage.getState().isDataReady).toBe(true);
+        }
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) throw new Error('Home must establish its real Account lifetime');
         const admitted = await createActivePluginCollectionClientForContractRef({ accountLifetime: lifetime,
@@ -104,6 +120,104 @@ async function withRowReadClient(
 }
 
 describe('Collection raw read acquisition after caller admission', () => {
+    it('borrows warm identity for ordinary get/query but freshens a writer before a mode change has a socket publication', async () => {
+        let currentness: AccountEncryptionCurrentnessResponse = createPlainAccountEncryptionCurrentnessFixture();
+        installDisconnectedServerSocketBoundary(configureConnectedServerSocketBoundary);
+        try {
+            await withRowReadClient(request => {
+                if (request.path === '/v1/artifacts' || request.path === '/v1/machines') return Response.json([]);
+                if (request.path === '/v1/friends') return Response.json({ friends: [] });
+                if (request.path === '/v2/sessions' || request.path === '/v2/sessions/active' || request.path === '/v2/sessions/query') {
+                    return Response.json({ sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false });
+                }
+                if (request.path === '/v2/session-organization') return Response.json({ error: 'Not found' }, { status: 404 });
+                if (request.path === AUTHORING_MEMORY_ROUTE_V1) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
+                if (request.path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(createPlainProjectAccountRowListFixture());
+                const row = PluginCollectionRowV1Schema.parse({ rowId: 'same', revision: 1,
+                    content: { t: 'plain', v: {} }, projection: { id: 'same' } });
+                if (request.path === '/v1/plugins/data/get' || request.path === '/v1/plugins/data/query') {
+                    // The external Data server uses this same Protocol guard
+                    // against persisted mode before returning any row content.
+                    try { assertPluginCollectionContentEnvelopeForModeV1(row.content, currentness.mode); }
+                    catch { return Response.json({ error: 'collection_content_mode_mismatch' }, { status: 409 }); }
+                }
+                if (request.path === '/v1/plugins/data/get') {
+                    const input = PluginCollectionGetRequestV1Schema.parse(request.body);
+                    return Response.json({ row: input.rowId === 'new' ? null : row, absenceEpoch: 2 });
+                }
+                if (request.path === '/v1/plugins/data/query') return Response.json({ rows: [row], changeCursor: 9 });
+                if (request.path === '/v1/plugins/data/mutate') {
+                    const mutation = PluginCollectionMutationRequestV1Schema.parse(request.body);
+                    expect(mutation.operations[0]).toMatchObject({ kind: 'put', content: { t: 'plain' } });
+                    if (mutation.operations[0]?.rowId === 'new') expect(mutation.operations[0]).toMatchObject({ expectedAbsenceEpoch: 2 });
+                    return Response.json({ status: 'updated', changeCursor: 10,
+                        results: [{ rowId: mutation.operations[0]!.rowId, revision: 2, deleted: false }] });
+                }
+                return undefined;
+            }, async (client, home) => {
+                const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
+                if (!credentials) throw new Error('Expected the restored Home credentials');
+                const binding = apiSocket.getAccountEncryptionObservationBinding(credentials);
+                if (!binding) throw new Error('Expected the admitted Account socket observation');
+                await binding.read();
+                const currentnessCount = () => home.httpRequests.filter(request => request.path === '/v1/account/encryption/currentness').length;
+                const warmReads = currentnessCount();
+                const requestedRef = { ...ref, contractDigest: rowReadContract.contractDigest };
+                await expect(createActivePluginCollectionClientForContractRef({ ref: requestedRef, fresh: false }))
+                    .resolves.toMatchObject({ status: 'ready' });
+                for (let index = 0; index < 3; index++) {
+                    await expect(client.get('same')).resolves.toEqual({ status: 'ready',
+                        row: { rowId: 'same', revision: 1, value: { id: 'same' } }, absenceEpoch: 2 });
+                    await expect(client.query({ indexId: 'by-id', order: 'asc' })).resolves.toMatchObject({ status: 'ready',
+                        rows: [{ value: { id: 'same' } }], changeCursor: 9 });
+                }
+                const ordinaryReads = currentnessCount() - warmReads;
+                expect(home.requests.filter(request => request.path === '/v1/plugins/data/get')).toHaveLength(3);
+                expect(home.requests.filter(request => request.path === '/v1/plugins/data/query')).toHaveLength(3);
+                const beforeWriterResolution = currentnessCount();
+                await expect(createActivePluginCollectionClientForContractRef({ ref: requestedRef }))
+                    .resolves.toMatchObject({ status: 'ready' });
+                expect(currentnessCount() - beforeWriterResolution).toBe(1);
+                const beforeWrite = currentnessCount();
+                await expect(client.mutate([{ kind: 'put', value: { id: 'same' }, expectedRevision: 1 }]))
+                    .resolves.toMatchObject({ status: 'updated' });
+                expect(currentnessCount() - beforeWrite).toBe(1);
+                const beforeAbsentWrite = currentnessCount();
+                await expect(client.mutate([{ kind: 'put', value: { id: 'new' }, expectedRevision: 'absent' }]))
+                    .resolves.toMatchObject({ status: 'updated' });
+                // The absence observation and the later sealing authority are
+                // independent fresh phases, even with a warm identity holder.
+                expect(currentnessCount() - beforeAbsentWrite).toBe(2);
+                currentness = { ...createPlainAccountEncryptionCurrentnessFixture({ version: 2, updatedAt: 2 }), mode: 'e2ee',
+                    signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content',
+                    recipientEnvelopeReadiness: { status: 'available' } };
+                expect(binding.peek()?.mode).toBe('plain');
+                // Unlike get/query, a local identity tag has no later Data
+                // request to admit its mode. Never publish a Plain digest
+                // after E2EE has committed while the socket fact is stale.
+                const beforeRefusedTag = currentnessCount();
+                await expect(client.identityTag({ field: 'id', components: ['same'] }))
+                    .resolves.toEqual({ status: 'unavailable', reason: 'account-encryption-material-unavailable' });
+                expect(currentnessCount() - beforeRefusedTag).toBe(1);
+                const beforeRefusedWrite = currentnessCount();
+                await expect(client.mutate([{ kind: 'put', value: { id: 'same' }, expectedRevision: 2 }]))
+                    .resolves.toEqual({ status: 'unavailable', reason: 'account-encryption-material-unavailable' });
+                expect(currentnessCount() - beforeRefusedWrite).toBe(1);
+                expect(home.requests.filter(request => request.path === '/v1/plugins/data/mutate')).toHaveLength(2);
+                const beforeRefusedRead = currentnessCount();
+                await expect(client.get('same')).resolves.toEqual({ status: 'unavailable', reason: 'account-content-mismatch' });
+                expect(currentnessCount()).toBe(beforeRefusedRead);
+                retireActiveServerAccountScopeLifetime();
+                const beforeRetired = home.httpRequests.length;
+                await expect(client.get('same')).resolves.toEqual({ status: 'unavailable', reason: 'account-scope-changed' });
+                await expect(client.query({ indexId: 'by-id', order: 'asc' }))
+                    .resolves.toEqual({ status: 'unavailable', reason: 'account-scope-changed' });
+                expect(home.httpRequests).toHaveLength(beforeRetired);
+                expect(ordinaryReads).toBe(0);
+            }, () => currentness);
+        } finally { installDisconnectedServerSocketBoundary(); }
+    });
+
     it('coalesces identical get and query payloads while retaining distinct demands and no settled values', async () => {
         const release = createDeferred<void>();
         try {

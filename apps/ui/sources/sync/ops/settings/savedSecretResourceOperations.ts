@@ -1441,7 +1441,7 @@ export async function importLegacySavedSecretsInContext(context: ProfileAccountC
     let capturedControlRevision: number | 'absent' | undefined;
     let historyStarted = false;
     try {
-        const initial = await readProfileTransferSourceInContext(context);
+        const initial = await readProfileTransferSourceInContext(context, sourceExpectation ? 'fresh-authority' : 'identity');
         if (initial.mode !== mode) return { status: 'pending', reason: 'source-unavailable' };
         if (!matchesSourceFrontier(initial)) return { status: 'pending', reason: 'changed' };
         const source = readSavedSecretTransferSourceV1(initial.source.raw);

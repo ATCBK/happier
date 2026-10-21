@@ -177,7 +177,7 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
     const migrateSkills = publication?.migrateSkills !== false;
     const capturedSource: { baseline: Awaited<ReturnType<typeof readProfileTransferSourceInContext>> | null } = { baseline: null };
     let catalog = await readCapturedProfileCatalog(context, mode, material, signal, async () => {
-        capturedSource.baseline = await readProfileTransferSourceInContext(context);
+        capturedSource.baseline = await readProfileTransferSourceInContext(context, 'identity');
         return capturedSource.baseline.source.raw;
     }, undefined, migrateSkills);
     if (catalog.status !== 'ready' && catalog.status !== 'partial') return { catalog, artifactsById: new Map(), source: null };
@@ -324,8 +324,9 @@ export function mutateProfileTransferInContext(context: ProfileAccountContext, m
     });
 }
 
-/** Genuine predecessor read and mode/key admission share the caller's existing Account capture. */
-export function readProfileTransferSourceInContext(context: ProfileAccountContext): Promise<Readonly<{
+/** Settings/version remain a genuine HTTP read; initial discovery may borrow identity before its later authority admission. */
+export function readProfileTransferSourceInContext(context: ProfileAccountContext,
+    usage: 'identity' | 'fresh-authority' = 'fresh-authority'): Promise<Readonly<{
     source: Readonly<{ raw: Readonly<Record<string, unknown>>; version: number }>;
     mode: 'plain' | 'e2ee'; material: AccountScopedCryptoMaterial | null;
 }>> {
@@ -335,7 +336,7 @@ export function readProfileTransferSourceInContext(context: ProfileAccountContex
             request: (path, init) => captured.request(path, init, { retry: 'none' }) });
         captured.assertCurrent();
         return { source: { raw: baseline.raw ?? {}, version: baseline.version }, mode, material };
-    });
+    }, usage);
 }
 
 /** For composite resource operations whose canonical owner already sealed its row change. */

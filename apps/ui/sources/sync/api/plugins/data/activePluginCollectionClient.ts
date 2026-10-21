@@ -21,7 +21,7 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { isDataKeyAuthCredentials } from '@/auth/storage/tokenStorage';
 import { decodeBase64 } from '@/encryption/base64';
 import { getRandomBytes } from '@/platform/cryptoRandom';
-import { fetchAccountEncryptionCurrentness } from '@/sync/api/account/apiAccountEncryptionMode';
+import { fetchAccountEncryptionIdentity, type AccountEncryptionReadUsage } from '@/sync/api/account/apiAccountEncryptionMode';
 import { getCachedServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
@@ -378,6 +378,7 @@ export async function prepareCollectionOperation(
     options: ActivePluginCollectionOperationOptionsV1 | undefined,
     accountLifetime?: ActiveServerAccountScopeLifetime,
     invocationSignal?: AbortSignal,
+    usage: AccountEncryptionReadUsage = 'fresh-authority',
 ): Promise<PreparedCollectionOperationOutcome> {
     if (options?.signal?.aborted || invocationSignal?.aborted) return unavailable('operation-cancelled');
     const lifetime = accountLifetime ?? captureActiveServerAccountScopeLifetime();
@@ -428,11 +429,13 @@ export async function prepareCollectionOperation(
         }
 
         const credentials = capturedAuthority.context.credentials ?? { token: capturedAuthority.context.token };
-        const currentness = await fetchAccountEncryptionCurrentness(credentials, {
-            request: (path, init) => capturedAuthority.request(path, {
-                ...init,
-                signal: controller.signal,
-            }),
+        const currentness = await fetchAccountEncryptionIdentity(credentials, {
+            // The captured request retains its exact Home/credential observation;
+            // wrapping it would erase that binding. Writers and exact witnesses
+            // retain fresh authority unless a read explicitly selects identity.
+            request: capturedAuthority.request,
+            signal: controller.signal,
+            usage,
         });
         const currentnessAfterRead = isScopeAndServerCurrent(lifetime, serverSnapshot);
         if (currentnessAfterRead) {
@@ -723,7 +726,8 @@ export async function createActivePluginCollectionClientForContractRef<
 }>): Promise<ActivePluginCollectionClientForContractRefOutcomeV1<TValue>> {
     const request = PluginCollectionContractReadRequestV1Schema.safeParse({ ref: input.ref });
     if (!request.success) return rejected('collection_query_invalid');
-    const prepared = await prepareCollectionOperation(input.options, input.accountLifetime, input.signal);
+    const prepared = await prepareCollectionOperation(input.options, input.accountLifetime, input.signal,
+        input.fresh === false ? 'identity' : 'fresh-authority');
     if (prepared.status === 'unavailable') return prepared;
     try {
         input.assertAdmitted?.();
@@ -777,9 +781,9 @@ export function createActivePluginCollectionClient<
 }>): ActivePluginCollectionClientV1<TValue> {
     const validate = compilePluginJsonSchema(params.contract.schema);
     const storedReadSchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(params.contract.schema));
-    const prepare = async (options?: ActivePluginCollectionOperationOptionsV1) => {
+    const prepare = async (options?: ActivePluginCollectionOperationOptionsV1, usage: AccountEncryptionReadUsage = 'fresh-authority') => {
         params.assertAdmitted?.();
-        const prepared = await prepareCollectionOperation(options, params.accountLifetime, params.signal);
+        const prepared = await prepareCollectionOperation(options, params.accountLifetime, params.signal, usage);
         if (prepared.status === 'ready') {
             try {
                 params.assertAdmitted?.();
@@ -808,7 +812,7 @@ export function createActivePluginCollectionClient<
             rowId,
         });
         if (!request.success) return rejected('collection_query_invalid');
-        const prepared = await prepare(options);
+        const prepared = await prepare(options, fresh ? 'fresh-authority' : 'identity');
         if (prepared.status === 'unavailable') return prepared;
         try {
             const response = await requestCollectionOperation({
@@ -861,7 +865,7 @@ export function createActivePluginCollectionClient<
             ...input,
         });
         if (!request.success) return rejected('collection_query_invalid');
-        const prepared = await prepare(options);
+        const prepared = await prepare(options, 'identity');
         if (prepared.status === 'unavailable') return prepared;
         try {
             const response = await requestCollectionOperation({
@@ -1054,6 +1058,7 @@ export function createActivePluginCollectionClient<
         request: Readonly<{ field: string; components: readonly string[] }>,
         options?: ActivePluginCollectionOperationOptionsV1,
     ): Promise<ActivePluginCollectionIdentityTagOutcomeV1> => {
+        // This local mode-dependent output has no later Data request to admit it.
         const prepared = await prepare(options);
         if (prepared.status === 'unavailable') return prepared;
         try {
