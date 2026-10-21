@@ -6,18 +6,36 @@ import { FollowEventV1Schema, isMessageBackedFollowEventV1 } from './sessionFoll
 import { SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from './sessionFollowSourceOccurrenceV1.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { encodeBase64 } from '../../crypto/base64.js';
+import { ExecutionRunPermissionRequestIdentitySchema } from '../../execution/runs/runPrimitives.js';
 
 const publicFields = { v: z.literal(1), delivery: z.enum(['wake', 'next_turn']) };
-export const ExecutionRunFollowOriginalV1Schema = lazyZodSchema(() => z.strictObject({
-  source: z.strictObject({ kind: z.literal('execution_run'), sessionId: asProtocolZod(SessionIdSchema),
-    runId: z.string().check(z.minLength(1)) }),
-  terminalEventId: z.string().check(z.minLength(1)),
+export const ExecutionRunFollowSourceV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('execution_run'),
+  sessionId: asProtocolZod(SessionIdSchema), runId: z.string().check(z.minLength(1)) }));
+const ExecutionRunFollowTerminalOriginalV1Schema = lazyZodSchema(() => z.strictObject({
+  source: ExecutionRunFollowSourceV1Schema, terminalEventId: z.string().check(z.minLength(1)),
 }));
+const ExecutionRunFollowPermissionOriginalV1Schema = lazyZodSchema(() => z.strictObject({
+  source: ExecutionRunFollowSourceV1Schema,
+  permissionRequests: z.array(ExecutionRunPermissionRequestIdentitySchema).check(z.minLength(1), z.refine(requests =>
+    requests.every((request, index) => index === 0 || requests[index - 1]!.requestId < request.requestId),
+    { message: 'Permission identities must be sorted and unique' })),
+}));
+export const ExecutionRunFollowOriginalV1Schema = lazyZodSchema(() => z.union([
+  ExecutionRunFollowTerminalOriginalV1Schema, ExecutionRunFollowPermissionOriginalV1Schema,
+]));
 export const WorkflowRunFollowOriginalV1Schema = lazyZodSchema(() => z.strictObject({
   source: z.strictObject({ kind: z.literal('workflow_run'), runId: z.string().check(z.minLength(1)) }),
   revision: z.number().check(z.int(), z.positive(), z.maximum(Number.MAX_SAFE_INTEGER)),
 }));
-export const ExecutionRunFollowEventV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }));
+const ExecutionRunFollowTerminalEventV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped']) }));
+const ExecutionRunFollowPermissionEventV1Schema = lazyZodSchema(() => z.strictObject({ kind: z.literal('needs_you'), type: z.literal('approval') }));
+export const ExecutionRunFollowEventV1Schema = lazyZodSchema(() => z.union([
+  ExecutionRunFollowTerminalEventV1Schema, ExecutionRunFollowPermissionEventV1Schema,
+]));
+export const ExecutionRunFollowOccurrenceV1Schema = lazyZodSchema(() => z.union([
+  z.strictObject({ original: ExecutionRunFollowTerminalOriginalV1Schema, event: ExecutionRunFollowTerminalEventV1Schema }),
+  z.strictObject({ original: ExecutionRunFollowPermissionOriginalV1Schema, event: ExecutionRunFollowPermissionEventV1Schema }),
+]));
 /** Workflow revisions retain live attention and committed progress as well as terminal outcomes. */
 export const WorkflowRunFollowEventV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.enum(['finished', 'failed_or_stopped', 'update_posted']) }),
@@ -26,7 +44,7 @@ export const WorkflowRunFollowEventV1Schema = lazyZodSchema(() => z.union([
 export type WorkflowRunFollowEventV1 = z.infer<typeof WorkflowRunFollowEventV1Schema>;
 /** Shared source hint/notice shape. Neither transport can widen the original's source contract. */
 export const RunFollowOccurrenceV1Schema = lazyZodSchema(() => z.union([
-  z.strictObject({ original: ExecutionRunFollowOriginalV1Schema, event: ExecutionRunFollowEventV1Schema }),
+  ExecutionRunFollowOccurrenceV1Schema,
   z.strictObject({ original: WorkflowRunFollowOriginalV1Schema, event: WorkflowRunFollowEventV1Schema }),
 ]));
 /** Public notice-only intent. Private rule identity and match proof stay in server admission custody. */
@@ -51,8 +69,12 @@ export const SessionFollowInputV1Schema = lazyZodSchema(() => z.union([
     if (ids.size) context.addIssue({ code: 'custom', path: ['requestEvents'], message: 'Every selected original request must be represented' });
   })),
   z.strictObject({ ...publicFields,
-    original: ExecutionRunFollowOriginalV1Schema,
-    event: ExecutionRunFollowEventV1Schema,
+    original: ExecutionRunFollowTerminalOriginalV1Schema,
+    event: ExecutionRunFollowTerminalEventV1Schema,
+  }),
+  z.strictObject({ ...publicFields,
+    original: ExecutionRunFollowPermissionOriginalV1Schema,
+    event: ExecutionRunFollowPermissionEventV1Schema,
   }),
   z.strictObject({ ...publicFields,
     original: WorkflowRunFollowOriginalV1Schema,
@@ -65,12 +87,33 @@ export function isRunFollowOriginalV1(original: SessionFollowInputV1['original']
   return 'source' in original;
 }
 
+/** Current permission-store identities are originals; clearing never fabricates a terminal occurrence. */
+export function resolveExecutionRunFollowOccurrenceV1(frontier: Readonly<{
+  sessionId: string; runId: string; status: string; terminalEventId: string | null;
+  attention?: Readonly<{ kind: 'permission_required'; requestIds: readonly string[];
+    requests?: readonly Readonly<{ requestId: string; createdAt: number }>[] }>;
+}>): z.infer<typeof ExecutionRunFollowOccurrenceV1Schema> | null {
+  const source = { kind: 'execution_run' as const, sessionId: frontier.sessionId, runId: frontier.runId };
+  if (frontier.status === 'running') {
+    const permissionRequests = [...frontier.attention?.requests ?? []].sort((left, right) =>
+      left.requestId < right.requestId ? -1 : left.requestId > right.requestId ? 1 : 0);
+    return permissionRequests.length ? { original: { source, permissionRequests }, event: { kind: 'needs_you', type: 'approval' } } : null;
+  }
+  if (!frontier.terminalEventId) return null;
+  const original = { source, terminalEventId: frontier.terminalEventId };
+  return frontier.status === 'succeeded' ? { original, event: { kind: 'finished' } }
+    : frontier.status === 'failed' || frontier.status === 'cancelled' ? { original, event: { kind: 'failed_or_stopped' } } : null;
+}
+
 /** Indexed projection of an existing original identity, independent of routes, batches and publisher fences. */
 export function deriveSessionFollowOriginalOccurrenceKeyV1(original: SessionFollowInputV1['original']): string | null {
   const identity = isRunFollowOriginalV1(original)
     ? 'terminalEventId' in original
       ? ['execution_run', original.source.sessionId, original.source.runId, original.terminalEventId]
-      : ['workflow_run', original.source.runId, original.revision]
+      : 'permissionRequests' in original
+        ? ['execution_run_permission', original.source.sessionId, original.source.runId,
+          original.permissionRequests.map(request => [request.requestId, request.createdAt])]
+        : ['workflow_run', original.source.runId, original.revision]
     : 'sourceMessage' in original
     ? ['message', original.sourceSessionId, original.sourceMessage.localId, original.sourceMessage.seq]
     : original.sourceRequests.requests.length === 1

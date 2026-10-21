@@ -110,7 +110,14 @@ it.each([
       destinationSessionId: sessionId, addressing, policy, event }, signal: new AbortController().signal })).toBe(accepted);
     expect(admission.mock.calls.length).toBe(accepted ? 1 : 0);
     expect(spawnSession.mock.calls.length).toBe(wakes ? 1 : 0);
-    if (accepted) expect(admission.mock.calls[0]?.[0].reply).toMatchObject({ mode: 'return', discussion: addressing });
+    if (accepted) {
+      expect(admission.mock.calls[0]?.[0].reply).toMatchObject({ mode: 'return', discussion: addressing });
+      const stored = admission.mock.calls[0]?.[0].content;
+      expect(stored).toMatchObject({ t: 'plain', v: { content: { type: 'text',
+        text: expect.stringContaining('discussion_sender_kind="person"') } } });
+      expect(stored).toMatchObject({ t: 'plain', v: { content: {
+        text: expect.stringContaining('discussion_sender_account_id="owner"') } } });
+    }
   });
 
 it.each(['busy', 'person_stopped', 'muted'] as const)('keeps default-Quiet direct asks under the existing %s receiver admission', async state => {
@@ -362,12 +369,15 @@ it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'cr
   expect(text).not.toContain('PRIVATE_REPLACEMENT');
   expect(text).not.toContain('PRIVATE_PREFIX');
   expect(text).not.toContain('PRIVATE_SUFFIX');
-  const card = JSON.parse(text.slice(text.indexOf('\n') + 1));
-  expect(card.doc).toEqual({ docRef: admittedRef, title, revision: kind === 'proposal' ? proposalRevision : revision,
+  const background = text.split('\n').find(line => line.startsWith('{"author":'));
+  if (!background) throw new Error('Expected the shared Discussion background block');
+  const item = JSON.parse(background.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'));
+  expect(JSON.parse(item.text).doc).toEqual({ docRef: admittedRef, title, revision: kind === 'proposal' ? proposalRevision : revision,
     openCommentCount: variant === 'restricted-count' ? null : 1,
     threadRef: { kind: 'discussion', discussion: { serverId: binding.serverId, discussionId: addressing.discussionId },
       messageId: kind === 'comment' ? 'question' : 'root' } });
-  expect(text.slice(0, text.indexOf('\n'))).toContain('doc.read');
+  expect(text.match(/<\/happier_discussion_context>/g)).toHaveLength(1);
+  expect(text).toContain('context_read_action="doc.read"');
   expect(text).toContain(kind === 'proposal' ? reason : 'What changed?');
   expect(pending).not.toHaveProperty('reply.sourceSession');
   expect(http.get.mock.calls.some(([url]) => new URL(String(url)).pathname === '/v1/artifacts/doc')).toBe(false);

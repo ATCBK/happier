@@ -1,9 +1,9 @@
 import { OpenedSessionFollowRuleV1Schema, type OpenedSessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/actions';
-import { excludeProjectFromSessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
+import { excludeProjectFromSessionFollowRuleV1, includeExcludedProjectInSessionFollowRuleV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
 import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { executeSessionFollowAction } from './sessionFollowApi';
 
-export type FollowRuleProjectExclusionUndo = Readonly<{
+export type FollowRuleProjectEditUndo = Readonly<{
     serverId: string;
     previous: OpenedSessionFollowRuleV1;
     expectedVersion: number;
@@ -40,10 +40,26 @@ export async function leaveProjectToFollowRule(input: Readonly<{
     if (result.kind === 'failed') return result;
     return { kind: 'ok' as const, value: { rule: result.value, undo: {
         serverId: input.serverId, previous, expectedVersion: result.value.version,
-    } satisfies FollowRuleProjectExclusionUndo } };
+    } satisfies FollowRuleProjectEditUndo } };
+}
+
+/** A left-out Project's way back: the rule follows it again, with the same version-bound Undo. */
+export async function includeProjectInFollowRule(input: Readonly<{
+    serverId: string;
+    rule: OpenedSessionFollowRuleV1;
+    project: QualifiedProjectKeyV1;
+    signal?: AbortSignal;
+}>) {
+    const previous = OpenedSessionFollowRuleV1Schema.parse(input.rule);
+    const edited = { ...previous, definition: includeExcludedProjectInSessionFollowRuleV1(previous.definition, input.project) };
+    const result = await writeSessionFollowRuleDefinition(input.serverId, edited, previous.version, input.signal);
+    if (result.kind === 'failed') return result;
+    return { kind: 'ok' as const, value: { rule: result.value, undo: {
+        serverId: input.serverId, previous, expectedVersion: result.value.version,
+    } satisfies FollowRuleProjectEditUndo } };
 }
 
 /** A later edit causes a conflict; Undo never overwrites it or re-resolves another rule. */
-export function undoFollowRuleProjectExclusion(undo: FollowRuleProjectExclusionUndo, signal?: AbortSignal) {
+export function undoFollowRuleProjectEdit(undo: FollowRuleProjectEditUndo, signal?: AbortSignal) {
     return writeSessionFollowRuleDefinition(undo.serverId, undo.previous, undo.expectedVersion, signal);
 }

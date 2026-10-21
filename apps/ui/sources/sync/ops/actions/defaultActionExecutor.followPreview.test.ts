@@ -18,6 +18,7 @@ import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/pr
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { act, flushHookEffects, renderHook } from '@/dev/testkit';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -26,6 +27,8 @@ const { buildSessionListRenderableFromSession } = await import('@/sync/domains/s
 const { getStorage } = await import('@/sync/domains/state/storage');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { useFollowRuleMatchCounts } = await import('@/components/sessions/follow/followRuleMatchCounts');
+const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const initial = getStorage().getState();
 let restoredAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 function queryRow(session: ReturnType<typeof createSessionFixture>) {
@@ -44,6 +47,55 @@ async function addAppliedHome(name: string, serverUrl: string) {
 beforeEach(async () => { await homes.reset(); });
 afterEach(async () => { await restoredAccount?.dispose(); restoredAccount = undefined;
     getStorage().setState(initial, true); standardCleanup(); });
+
+it('keeps mounted rule counts current after source changes without restarting useful reads for unrelated traffic', async () => {
+    const serverId = await addAppliedHome('Rule counts', 'https://rule-counts.test');
+    homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
+    const member = (id: string) => queryRow(createSessionFixture({ id, serverId,
+        metadata: { path: '/payments', host: 'test', projectId: 'payments' } }));
+    const page = (ids: string[]) => SessionListQueryResponseV1Schema.parse({ sessions: ids.map(member),
+        hasNext: false, nextCursor: null, attentionHasNext: false, attentionNextCursor: null });
+    homes.answer(serverId, '/v2/sessions/query', { body: page(['first']) });
+    const filter = normalizeSessionListFilterV1({ show: 'sessions', homeServerIds: [serverId], scope: 'all_accessible',
+        startedBy: ['you', 'agents', 'triggers'], projects: { include: [{ serverId, projectKey: 'payments' }], exclude: [] } });
+    const rules = [{ key: 'payments', filter }];
+    const hook = await renderHook(({ enabled }: { enabled: boolean }) => useFollowRuleMatchCounts(enabled ? serverId : null, 'receiver', rules),
+        { initialProps: { enabled: true } });
+    const counts = (count: number) => expect(hook.getCurrent().payments).toMatchObject({ status: 'ready',
+        preview: { coverage: 'complete', matchCount: count } });
+    await vi.waitFor(() => counts(1));
+    const reads = () => homes.requests.filter(request => request.path === '/v2/sessions/query').length;
+    const before = reads();
+    await act(async () => {
+        publishHomeAccountChange(serverId, ['unrelated-artifact'], { changeKinds: ['artifact'] });
+        publishHomeAccountChange('another-home', ['new-member'], { changeKinds: ['session'] });
+    });
+    await flushHookEffects();
+    expect(reads()).toBe(before);
+
+    let release: (() => void) | undefined;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    homes.answer(serverId, '/v2/sessions/query', { body: page(['first', 'second']), respondAfter: held });
+    try {
+        await act(async () => publishHomeAccountChange(serverId, ['second'], { changeKinds: ['session'] }));
+        await vi.waitFor(() => expect(reads()).toBe(before + 1));
+        counts(1); // Useful last-known data survives refresh.
+        await act(async () => {
+            for (let index = 0; index < 8; index++) publishHomeAccountChange(serverId, ['third'], { changeKinds: ['session'] });
+        });
+        await flushHookEffects();
+        expect(reads()).toBe(before + 1);
+        homes.answer(serverId, '/v2/sessions/query', { body: page(['first', 'second', 'third']) });
+    } finally { await act(async () => release?.()); }
+    await vi.waitFor(() => counts(3));
+    expect(reads()).toBe(before + 2);
+    await hook.rerender({ enabled: false });
+    expect(hook.getCurrent()).toEqual({});
+    await act(async () => publishHomeAccountChange(serverId, ['fourth'], { changeKinds: ['session'] }));
+    await flushHookEffects();
+    expect(reads()).toBe(before + 2);
+    await hook.unmount();
+});
 
 it.each(['cold', 'newer-row'] as const)('settles Matching from %s encrypted query summaries without opening each Session', async state => {
     const serverUrl = 'https://cold-encrypted-preview.test';

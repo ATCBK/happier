@@ -142,7 +142,11 @@ export const en = {
         "followsThis": ({ title }: { title: string }) => `${title} follows this`,
         "ruleMatching": ({ facts }: { facts: string }) => `Sessions matching ${facts}`,
         "ruleEvery": "Every session it can see",
-        "managerOnly": "It hears about this session as its manager. Change that in its coordinator setup."
+        "managerOnly": "It hears about this session as its manager. Change that in its coordinator setup.",
+        "ruleWhich": "Which sessions",
+        "ruleLeftOut": ({ name }: { name: string }) => `Skips project ${name}`,
+        "ruleIncludeAgain": "Include again",
+        "ruleIncludedAgain": ({ name }: { name: string }) => `Follows project ${name} again`
     },
     "preferences": {
         "title": "Automatically follow",

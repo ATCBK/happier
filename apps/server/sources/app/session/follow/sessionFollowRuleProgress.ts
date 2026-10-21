@@ -301,6 +301,9 @@ export async function settleSessionFollowInputReasonsInTx(tx: Tx, input: Readonl
 }>): Promise<boolean> {
     const original = input.delivery.original;
     if (isRunFollowOriginalV1(original)) {
+        // Permission originals settle in the existing accepted-input key and
+        // provider ACK. They must never advance the Run's terminal cursor.
+        if ('permissionRequests' in original) return true;
         for (const edge of input.relations) {
             if (!edge.sourceKey) return false;
             if ('revision' in original && (edge.deliveredWorkflowRunRevision ?? 0) >= original.revision) continue;

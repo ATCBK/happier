@@ -10116,7 +10116,11 @@ const sessionFollowTranslations: Pick<Record<
             "followsThis": ({ title }) => `${title} 關注此工作階段`,
             "ruleMatching": ({ facts }: { facts: string }) => `符合的工作階段：${facts}`,
             "ruleEvery": "它能看到的所有工作階段",
-            "managerOnly": "它以此工作階段管理者的身分接收動態。可在其協調者設定中變更。"
+            "managerOnly": "它以此工作階段管理者的身分接收動態。可在其協調者設定中變更。",
+            "ruleWhich": "哪些工作階段",
+            "ruleLeftOut": ({ name }: { name: string }) => `略過專案 ${name}`,
+            "ruleIncludeAgain": "重新納入",
+            "ruleIncludedAgain": ({ name }: { name: string }) => `重新關注專案 ${name}`
         },
         "preferences": {
             "title": "自動關注",

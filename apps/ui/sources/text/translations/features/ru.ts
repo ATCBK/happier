@@ -10157,7 +10157,11 @@ const sessionFollowTranslations: Pick<Record<
             "followsThis": ({ title }) => `${title} следит за этой сессией`,
             "ruleMatching": ({ facts }: { facts: string }) => `Сессии по условию ${facts}`,
             "ruleEvery": "Все доступные ей сессии",
-            "managerOnly": "Она узнаёт об этом как менеджер этой сессии. Измените это в её настройке координатора."
+            "managerOnly": "Она узнаёт об этом как менеджер этой сессии. Измените это в её настройке координатора.",
+            "ruleWhich": "Какие сессии",
+            "ruleLeftOut": ({ name }: { name: string }) => `Пропускает проект ${name}`,
+            "ruleIncludeAgain": "Включить снова",
+            "ruleIncludedAgain": ({ name }: { name: string }) => `Снова следит за проектом ${name}`
         },
         "preferences": {
             "title": "Подписываться автоматически",

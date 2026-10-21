@@ -3,7 +3,7 @@ import { SessionInputRequestV1Schema, assertSessionInputAdmissionReceiptForReque
 import { isAuthoritativeHumanSessionFollowMessageV1 } from './sessionFollowUpdateEnvelopeV1.js';
 import { SessionFollowObservePendingRequestV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowPendingObservationV1Schema } from './sessionFollowTransportV1.js';
 import { SessionFollowSourceProjectionRequestV1Schema } from './sessionFollowSourceProjectionV1.js';
-import { deriveSessionFollowOriginalOccurrenceKeyV1, SessionFollowInputV1Schema } from './sessionFollowInputV1.js';
+import { deriveSessionFollowOriginalOccurrenceKeyV1, resolveExecutionRunFollowOccurrenceV1, SessionFollowInputV1Schema } from './sessionFollowInputV1.js';
 import { FOLLOW_EVENT_KINDS_V1 } from './sessionFollowPolicyV1.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { SessionFollowRelationWitnessesV1Schema } from './sessionFollowSourceOccurrenceV1.js';
@@ -17,6 +17,34 @@ const request = { v: 1, producer: 'sessionAction', permission: {},
   sourceSession: { sourceSessionId: 'source', sourceTurnId: 'turn', via: 'action' }, followDeliveryV1: delivery };
 
 describe('protected source-selected Follow input', () => {
+  it('uses current Run permission identities for attention and withdraws them without a terminal cursor', () => {
+    expect(SessionFollowInputV1Schema.safeParse({ v: 1, delivery: 'wake', original: {
+      source: { kind: 'execution_run', sessionId: 'source', runId: 'run-a' }, permissionRequests: [{ requestId: 'request-a', createdAt: 1 }] },
+      event: { kind: 'needs_you', type: 'approval' } }).success).toBe(true);
+    const frontier = { sessionId: 'source', runId: 'run-a', status: 'running', terminalEventId: null,
+      attention: { kind: 'permission_required', requestIds: ['request-b', 'request-a'],
+        requests: [{ requestId: 'request-b', createdAt: 2 }, { requestId: 'request-a', createdAt: 1 }] } } as const;
+    const occurrence = resolveExecutionRunFollowOccurrenceV1(frontier);
+    expect(occurrence).toEqual({ original: { source: { kind: 'execution_run', sessionId: 'source', runId: 'run-a' },
+      permissionRequests: [{ requestId: 'request-a', createdAt: 1 }, { requestId: 'request-b', createdAt: 2 }] }, event: { kind: 'needs_you', type: 'approval' } });
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1, ...occurrence, delivery: 'wake' });
+    if (!('permissionRequests' in delivery.original)) throw new Error('Missing exact permission original');
+    expect(deriveSessionFollowOriginalOccurrenceKeyV1(delivery.original)).toBe(deriveSessionFollowOriginalOccurrenceKeyV1({
+      ...delivery.original, permissionRequests: delivery.original.permissionRequests.map(request => ({ createdAt: request.createdAt, requestId: request.requestId })),
+    }));
+    expect(deriveSessionFollowOriginalOccurrenceKeyV1(delivery.original)).toBe(
+      deriveSessionFollowOriginalOccurrenceKeyV1(resolveExecutionRunFollowOccurrenceV1({ ...frontier,
+        attention: { ...frontier.attention, requests: [...frontier.attention.requests].reverse() } })!.original));
+    expect(deriveSessionFollowOriginalOccurrenceKeyV1(delivery.original)).not.toBe(
+      deriveSessionFollowOriginalOccurrenceKeyV1(resolveExecutionRunFollowOccurrenceV1({ ...frontier,
+        attention: { ...frontier.attention, requests: [{ requestId: 'request-a', createdAt: 3 }, { requestId: 'request-b', createdAt: 2 }] } })!.original));
+    expect(resolveExecutionRunFollowOccurrenceV1({ ...frontier, attention: undefined })).toBeNull();
+    expect(resolveExecutionRunFollowOccurrenceV1({ ...frontier, attention: { kind: 'permission_required', requestIds: [] } })).toBeNull();
+    expect(SessionFollowInputV1Schema.safeParse({ ...delivery, original: { ...delivery.original, terminalEventId: 'fake' } }).success).toBe(false);
+    expect(SessionFollowInputV1Schema.safeParse({ ...delivery, event: { kind: 'finished' } }).success).toBe(false);
+    expect(SessionFollowInputV1Schema.safeParse({ ...delivery, original: { source: { kind: 'execution_run', sessionId: 'source', runId: 'run-a' },
+      terminalEventId: 'terminal' } }).success).toBe(false);
+  });
   it('retains exact Run relation custody on stored reads and never downgrades a malformed Run to a Session follower', () => {
     const relations = SessionFollowRelationWitnessesV1Schema.parse([
       { relation: 'follower', source: { kind: 'workflow_run', runId: 'workflow' }, attachedAt: 1, expectedRevision: 2 },

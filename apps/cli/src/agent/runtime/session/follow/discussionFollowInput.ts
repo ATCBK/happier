@@ -7,6 +7,9 @@ import { SessionInputRequestV1Schema, assertSessionInputAdmissionReceiptForAutho
   readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveDiscussionFollowInputLocalIdV1, type SessionFollowDiscussionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { renderSessionInputContextPromptV1, type DiscussionPromptAuthorV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
+import { readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
+import { resolveAccountDisplayLabelV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 import { readAgentStartCallerWorkDepthV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { deriveSessionInputActionRequestAttributionV1, materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
@@ -99,9 +102,20 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
           openCommentCount, threadRef: root.messageRef };
       }
       const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
-      const questionText = `Answer this original Discussion question. History reads are bounded through sequence ${addressing.throughSeq}.${doc ? ' Read document text explicitly with doc.read using the card docRef.' : ''}\n${JSON.stringify({
-        discussionId: addressing.discussionId, messageId: addressing.messageId, content, ...(doc ? { doc } : {}),
-      })}`;
+      const displayName = question.accountActor?.profile ? resolveAccountDisplayLabelV1(question.accountActor.profile) : null;
+      const sender: DiscussionPromptAuthorV1 = {
+        kind: question.producerV1 ? 'agent_session' : 'person',
+        ...(question.authorAccountId ? { accountId: question.authorAccountId } : {}),
+        ...(question.producerV1 ? { sessionId: question.producerV1.sessionId } : {}),
+        ...(displayName ? { displayName } : {}),
+      };
+      const questionText = renderSessionInputContextPromptV1({
+        discussionRequest: { discussionId: addressing.discussionId, messageId: addressing.messageId,
+          throughSeq: addressing.throughSeq, sender, ...(doc ? { readActions: ['doc.read'] } : {}) },
+        transformedUserText: readDiscussionMessagePartsV1(content).map(part => part.t === 'text' ? part.text
+          : part.participant.kind === 'account' ? `@account:${part.participant.accountId}` : `@session:${part.participant.sessionId}`).join(''),
+        ...(doc ? { discussionContext: [{ author: sender, text: JSON.stringify({ doc }) }] } : {}),
+      });
       let actionRequestAttributionV1 = materializeActionRequestAttributionV1({
         requestRef: localId, requester: { serverId: binding.serverId, accountId: question.authorAccountId },
         persona: { serverId: binding.serverId, sessionId: input.session.sessionId },

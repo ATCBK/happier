@@ -9,7 +9,7 @@ import { DiscussionMessageRefV1Schema } from '../../discussions/messageRefs.js';
 import { SessionInputMachineTargetV1Schema } from '../messages/sessionInputAdmission.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
 import { PendingLocalIdSchema } from '../pending/pendingLocalId.js';
-import { ExecutionRunFollowOriginalV1Schema, ExecutionRunFollowEventV1Schema, SessionFollowInputV1Schema, WorkflowRunFollowOriginalV1Schema, WorkflowRunFollowEventV1Schema } from './sessionFollowInputV1.js';
+import { ExecutionRunFollowOriginalV1Schema, ExecutionRunFollowSourceV1Schema, ExecutionRunFollowOccurrenceV1Schema, ExecutionRunFollowEventV1Schema, SessionFollowInputV1Schema, WorkflowRunFollowOriginalV1Schema, WorkflowRunFollowEventV1Schema } from './sessionFollowInputV1.js';
 import { FollowEventV1Schema, FollowPolicyV1Schema, serializeFollowPolicyV1 } from './sessionFollowPolicyV1.js';
 import { SessionFollowPublisherGenerationV1Schema, SessionFollowSourceMessageV1Schema, SessionFollowSourceRequestsV1Schema } from './sessionFollowSourceOccurrenceV1.js';
 import { SessionMetadataPublisherPreconditionV1Schema } from '../metadata/sessionMetadataSchemasV1.js';
@@ -145,7 +145,7 @@ export type SessionFollowSessionPendingObservationV1 = z.infer<typeof SessionFol
 export const SessionFollowRunOccurrenceRoutesRequestV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ v: z.literal(1), original: ExecutionRunFollowOriginalV1Schema }),
   z.strictObject({ v: z.literal(1), original: WorkflowRunFollowOriginalV1Schema }),
-  z.strictObject({ v: z.literal(1), source: ExecutionRunFollowOriginalV1Schema.shape.source }),
+  z.strictObject({ v: z.literal(1), source: ExecutionRunFollowSourceV1Schema }),
   z.strictObject({ v: z.literal(1), source: WorkflowRunFollowOriginalV1Schema.shape.source }),
 ]));
 export type SessionFollowRunOccurrenceRoutesRequestV1 = z.infer<typeof SessionFollowRunOccurrenceRoutesRequestV1Schema>;
@@ -156,7 +156,8 @@ export const SessionFollowRunOccurrenceRoutesResponseV1Schema = lazyZodSchema(()
     event: ExecutionRunFollowEventV1Schema,
     personal: z.optional(z.strictObject({ policy: FollowPolicyV1Schema, alreadyRepresented: z.boolean() })),
     routes: z.array(z.strictObject({ ...runRouteFields,
-      expectedTerminalEventId: z.nullable(z.string().check(z.minLength(1))) })) }),
+      expectedTerminalEventId: z.nullable(z.string().check(z.minLength(1))) })) }).check(z.refine(value =>
+        ExecutionRunFollowOccurrenceV1Schema.safeParse({ original: value.original, event: value.event }).success)),
   z.strictObject({ ok: z.literal(true), v: z.literal(1), original: WorkflowRunFollowOriginalV1Schema,
     event: WorkflowRunFollowEventV1Schema,
     personal: z.optional(z.strictObject({ policy: FollowPolicyV1Schema, alreadyRepresented: z.boolean() })),
@@ -253,10 +254,13 @@ export const SessionFollowAdmittedInputObservationV1Schema = lazyZodSchema(() =>
 export type SessionFollowAdmittedInputObservationV1 = z.infer<typeof SessionFollowAdmittedInputObservationV1Schema>;
 export const SessionFollowAdmittedRunInputObservationV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('admitted_run_input'), localInputId: PendingLocalIdSchema,
+  /** Positive current-source evidence retires obsolete unstarted permission custody. Absence is still retryable. */
+  disposition: z.optional(z.literal('withdrawn')),
   destinationSessionId: SessionIdZodSchema,
   delivery: SessionFollowInputV1Schema,
 }).check(z.refine(value => 'source' in value.delivery.original
-  && (value.delivery.original.source.kind === 'execution_run' || value.delivery.original.source.kind === 'workflow_run'))));
+  && (value.delivery.original.source.kind === 'execution_run' || value.delivery.original.source.kind === 'workflow_run')
+  && (value.disposition !== 'withdrawn' || 'permissionRequests' in value.delivery.original))));
 export type SessionFollowAdmittedRunInputObservationV1 = z.infer<typeof SessionFollowAdmittedRunInputObservationV1Schema>;
 export const SessionFollowPendingObservationV1Schema = lazyZodSchema(() => z.union([
   SessionFollowSessionPendingObservationV1Schema, SessionFollowDiscussionPendingObservationV1Schema, SessionFollowAdmittedInputObservationV1Schema,

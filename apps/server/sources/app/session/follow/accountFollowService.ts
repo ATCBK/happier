@@ -190,6 +190,9 @@ export async function readAccountRunFollowDeliveryInTx(tx: Tx, input: Readonly<{
     accountId: string; authentication: SessionAccessAuthentication; original: RunFollowOriginalV1;
     event: Extract<SessionFollowInputV1, { original: RunFollowOriginalV1 }>['event'];
 }>) {
+    // Personal Run progress currently retains terminal identity only. Do not
+    // claim an attention ACK or replay push effects through that cursor.
+    if ('permissionRequests' in input.original) return null;
     const source = input.original.source;
     const row = await readAccountOtherFollowInTx(tx, { ...input, source });
     if (!row || !resolveFollowDeliveryV1({ policies: [row.policy], event: input.event }).selected

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACCOUNT_SESSION_FOLLOW_CHANGE_ENTITY_ID } from '@happier-dev/protocol/sessions/follow/changes';
+import { PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 
 import { isSessionFollowAccountChangeRelevant } from './sessionFollowAccountChange';
 
@@ -24,5 +25,16 @@ describe('Follow census invalidation', () => {
         expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['source'] }, sourceIds)).toBe(true);
         expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', changeKinds: ['session'] }, sourceIds)).toBe(true);
         expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', changeKinds: [] }, sourceIds)).toBe(false);
+    });
+
+    it('invalidates a rule corpus for future sources and Project facts while leaving unrelated domains quiet', () => {
+        expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['new-source'], changeKinds: ['session'] })).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['new-source'], changeKinds: ['share'] })).toBe(true);
+        const project = { serverId: 'home', entityIds: [`${PROJECT_ACCOUNT_ROWS_KV_PREFIX_V1}payments`], changeKinds: ['kv'] };
+        expect(isSessionFollowAccountChangeRelevant(project)).toBe(true);
+        expect(isSessionFollowAccountChangeRelevant(project, sourceIds)).toBe(false);
+        expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['other-key'], changeKinds: ['kv'] })).toBe(false);
+        expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['new-source'], changeKinds: ['artifact'] })).toBe(false);
+        expect(isSessionFollowAccountChangeRelevant({ serverId: 'home', entityIds: ['new-source'], changeKinds: ['machine'] })).toBe(false);
     });
 });

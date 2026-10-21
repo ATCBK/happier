@@ -6,11 +6,14 @@ import type { SessionAccessAuthentication } from '@/app/session/access/sessionAc
 import { readCurrentCommittedSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
 import { inReadSnapshot, type Tx } from '@/storage/inTx';
 import { canReadFollowSourceInTx } from './followSourceAdmission';
+import { resolveExecutionRunFollowOccurrenceV1, deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { SessionFollowPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 
 export type ExecutionRunFollowFrontierWitness = Readonly<{
     source: Readonly<{ kind: 'execution_run'; sessionId: string; runId: string }>;
     status: ExecutionRunFollowFrontierResponse['status'];
     terminalEventId: string | null;
+    attention?: ExecutionRunFollowFrontierResponse['attention'];
     target: SessionInputMachineTargetV1;
     publisherGeneration: string;
 }>;
@@ -66,8 +69,37 @@ export async function readCurrentExecutionRunFollowSource(input: Readonly<{
         return { ok: false, error: 'session_follow_source_unavailable' };
     const witness: ExecutionRunFollowFrontierWitness = { source, status: parsed.data.status,
         terminalEventId: parsed.data.terminalEventId,
+        ...(parsed.data.attention ? { attention: parsed.data.attention } : {}),
         target: captured.target, publisherGeneration: captured.publisherGeneration };
     if (!await inReadSnapshot(tx => isExecutionRunFollowFrontierWitnessCurrentInTx(tx, witness)))
         return { ok: false, error: 'session_follow_source_unavailable' };
     return { ok: true, value: witness };
+}
+
+/** Mutable permission originals are re-read outside the storage transaction before native dispatch. */
+export async function retainCurrentExecutionRunFollowObservations(input: Readonly<{
+    app: Pick<Fastify, 'forwardRpcForUser'>; accountId: string; authentication: SessionAccessAuthentication;
+    observations: readonly SessionFollowPendingObservationV1[];
+}>): Promise<SessionFollowPendingObservationV1[]> {
+    const reads = new Map<string, ReturnType<typeof readCurrentExecutionRunFollowSource>>();
+    const retained = await Promise.all(input.observations.map(async observation => {
+        if (!('kind' in observation) || observation.kind !== 'admitted_run_input'
+            || !('permissionRequests' in observation.delivery.original)) return observation;
+        const original = observation.delivery.original;
+        const source = original.source;
+        const key = JSON.stringify(source);
+        let read = reads.get(key);
+        if (!read) {
+            read = readCurrentExecutionRunFollowSource({ ...input, sessionId: source.sessionId, runId: source.runId });
+            reads.set(key, read);
+        }
+        const frontier = await read;
+        if (!frontier.ok || frontier.value.status === 'running' && frontier.value.attention
+            && !frontier.value.attention.requests) return null;
+        const current = resolveExecutionRunFollowOccurrenceV1({ ...frontier.value,
+            sessionId: source.sessionId, runId: source.runId });
+        return current && deriveSessionFollowOriginalOccurrenceKeyV1(current.original)
+            === deriveSessionFollowOriginalOccurrenceKeyV1(original) ? observation : { ...observation, disposition: 'withdrawn' as const };
+    }));
+    return retained.filter((observation): observation is SessionFollowPendingObservationV1 => observation !== null);
 }

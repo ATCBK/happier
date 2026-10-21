@@ -10121,7 +10121,11 @@ const sessionFollowTranslations: Pick<Record<
             "followsThis": ({ title }) => `${title} がこのセッションをフォロー中`,
             "ruleMatching": ({ facts }: { facts: string }) => `一致するセッション:${facts}`,
             "ruleEvery": "見えるすべてのセッション",
-            "managerOnly": "このセッションのマネージャーとして通知を受けます。コーディネーター設定で変更できます。"
+            "managerOnly": "このセッションのマネージャーとして通知を受けます。コーディネーター設定で変更できます。",
+            "ruleWhich": "対象のセッション",
+            "ruleLeftOut": ({ name }: { name: string }) => `プロジェクト ${name} を除外中`,
+            "ruleIncludeAgain": "再び含める",
+            "ruleIncludedAgain": ({ name }: { name: string }) => `プロジェクト ${name} を再びフォロー`
         },
         "preferences": {
             "title": "自動でフォロー",

@@ -67,6 +67,7 @@ export async function acceptAccountFollowPersonalProgress(input: Readonly<{
             return { ok: true, value: { accepted: true, alreadyRepresented: false } };
         }
         if ('original' in occurrence) {
+            if ('permissionRequests' in occurrence.original) return unrepresented;
             const current = await readRunFollowOccurrenceInTx(tx, { source: occurrence.original.source, original: occurrence.original,
                 executionRunFrontier: input.executionRunFrontier });
             if (!current) return unrepresented;

@@ -4,6 +4,8 @@ import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessi
 import type { SessionFollowSourceKeyPreparationWaitingReasonV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import type { FollowSourceRelationV1, SessionFollowSourceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import type { SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { IconButton } from '@/components/ui/buttons/IconButton';
@@ -27,7 +29,13 @@ import {
     removeSessionFollowSource,
     setSessionFollowSource,
 } from '@/sync/api/session/sessionFollowSourcesApi';
-import { writeSessionFollowRuleDefinition } from '@/sync/api/session/sessionFollowRuleEdits';
+import {
+    includeProjectInFollowRule,
+    undoFollowRuleProjectEdit,
+    writeSessionFollowRuleDefinition,
+    type FollowRuleProjectEditUndo,
+} from '@/sync/api/session/sessionFollowRuleEdits';
+import { SessionListStoredFilterEditor } from '@/components/sessions/shell/search/SessionListStoredFilterEditor';
 import { describeSessionListFilterFacts } from '@/components/sessions/shell/search/sessionListFilterSummary';
 import { useSessionListFilterProjectOptions } from '@/components/sessions/shell/search/useSessionListFilterProjectOptions';
 import { readSessionListRowsForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
@@ -118,7 +126,14 @@ function isSessionSource(source: FollowSourceRelationV1): source is SessionFollo
  */
 type SessionFollowSourceIntent =
     | Readonly<{ kind: 'remove'; source: FollowSourceRefV1 }>
-    | Readonly<{ kind: 'policy'; source: FollowSourceRefV1; policy: FollowPolicyV1 }>;
+    | Readonly<{ kind: 'policy'; source: FollowSourceRefV1; policy: FollowPolicyV1 }>
+    | Readonly<{ kind: 'rule'; ruleId: string; write: FollowRuleWrite }>;
+
+/** One edit to a rule's filter, each written whole through the rule writer at a read version. */
+type FollowRuleWrite =
+    | Readonly<{ kind: 'filter'; filter: SessionListFilterV1 }>
+    | Readonly<{ kind: 'include'; project: QualifiedProjectKeyV1; name: string }>
+    | Readonly<{ kind: 'undo'; undo: FollowRuleProjectEditUndo }>;
 
 function reduceSourceMutation(
     state: SessionFollowMutationIntentState<SessionFollowSourceIntent>,
@@ -207,6 +222,11 @@ export function SessionFollowSourcesEditor(props: Readonly<{
     const { loading, refresh } = following;
     const [savingId, setSavingId] = React.useState<string | null>(null);
     const [openSourceId, setOpenSourceId] = React.useState<string | null>(null);
+    // A rule panel's "Which sessions" step holds its draft until Save; the receipt keeps the last way back (Undo).
+    const [ruleFilterDraft, setRuleFilterDraft] = React.useState<Readonly<{ ruleId: string; filter: SessionListFilterV1 }> | null>(null);
+    const [ruleReceipt, setRuleReceipt] = React.useState<Readonly<{ ruleId: string; label: string; undo: FollowRuleProjectEditUndo }> | null>(null);
+    const draftCountInputs = React.useMemo(() => (ruleFilterDraft ? [{ key: 'draft', filter: ruleFilterDraft.filter }] : []), [ruleFilterDraft]);
+    const draftCount = useFollowRuleMatchCounts(enabled ? props.serverId : null, props.destination.id, draftCountInputs).draft;
     const failed = following.error !== null;
     const [mutation, dispatchMutation] = React.useReducer(
         reduceSourceMutation,
@@ -366,6 +386,47 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         activeMutationRequestRef.current = null;
         setSavingId(null);
     }, [online, preparationTargetKey, props.destination.id, props.serverId, refresh, rules, savingId]);
+
+    const writeRule = React.useCallback(async (ruleId: string, write: FollowRuleWrite) => {
+        const rule = rules.find((candidate) => candidate.ruleId === ruleId);
+        if (!online || !props.serverId || savingId || !rule) return;
+        const request: SessionFollowSourceMutationRequest = {
+            targetKey: preparationTargetKey,
+            sourceKey: ruleKey(rule),
+        };
+        activeMutationRequestRef.current = request;
+        setSavingId(request.sourceKey);
+        dispatchMutation({ kind: 'started', intent: { kind: 'rule', ruleId, write } });
+        let receipt: Readonly<{ ruleId: string; label: string; undo: FollowRuleProjectEditUndo }> | null = null;
+        let ok: boolean;
+        if (write.kind === 'filter') {
+            const result = await writeSessionFollowRuleDefinition(props.serverId, { ...rule, definition: { ...rule.definition, filter: write.filter } }, rule.version);
+            ok = result.kind === 'ok';
+        } else if (write.kind === 'include') {
+            const result = await includeProjectInFollowRule({ serverId: props.serverId, rule, project: write.project });
+            ok = result.kind === 'ok';
+            if (result.kind === 'ok') receipt = { ruleId, label: t('session.follow.sources.ruleIncludedAgain', { name: write.name }), undo: result.value.undo };
+        } else {
+            ok = (await undoFollowRuleProjectEdit(write.undo)).kind === 'ok';
+        }
+        if (
+            preparationTargetKeyRef.current !== request.targetKey
+            || activeMutationRequestRef.current !== request
+        ) return;
+        if (ok) {
+            dispatchMutation({ kind: 'succeeded' });
+            if (write.kind === 'filter') setRuleFilterDraft(null);
+            setRuleReceipt(receipt);
+            await refresh();
+            if (
+                preparationTargetKeyRef.current !== request.targetKey
+                || activeMutationRequestRef.current !== request
+            ) return;
+        }
+        else dispatchMutation({ kind: 'failed', error: true });
+        activeMutationRequestRef.current = null;
+        setSavingId(null);
+    }, [online, preparationTargetKey, props.serverId, refresh, rules, savingId]);
 
     const serverId = props.serverId;
     const homeSessions = Object.values(readSessionListRowsForServerId(rowsByServerId, serverId ?? '') ?? {});
@@ -557,6 +618,8 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         || rules.some((rule) => ruleKey(rule) === openSourceId));
     const closePanel = () => {
         setOpenSourceId(null);
+        setRuleFilterDraft(null);
+        setRuleReceipt(null);
         props.page?.onClose();
     };
     // Retry re-executes the exact operation that failed; only a failed list load retries by loading the list again.
@@ -564,6 +627,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         const intent = mutation.failed;
         if (!intent) { void refresh(); return; }
         if (intent.kind === 'remove') { void remove(intent.source); return; }
+        if (intent.kind === 'rule') { void writeRule(intent.ruleId, intent.write); return; }
         void updatePolicy(intent.source, intent.policy);
     };
     const errorRow = (look: typeof rowLook | Record<string, never>) => <Item
@@ -580,14 +644,110 @@ export function SessionFollowSourcesEditor(props: Readonly<{
         const { key, ref, sourceTitle, mark } = sourceIdentity(source);
         return panelParts({ key, ref, sourceTitle, mark, title: t('session.follow.sources.row', { title: sourceTitle }), policy: source.policy });
     };
-    // A rule's panel is the same one: what it matches, how much it hears, Stop updates · Done.
+    // A rule's panel is the same one: which sessions it follows (and the projects it leaves to others, each with its
+    // way back), how much it hears, Stop updates · Done. "Which sessions" opens the Sessions list's own filter editor
+    // in place, as a step of this panel (lab P3-R); Save writes the rule whole at the version this list read.
     const rulePanelParts = (rule: FollowingRule): FollowSourcePanelParts => {
+        const key = ruleKey(rule);
         const title = ruleTitle(rule);
-        return panelParts({ key: ruleKey(rule), ref: { kind: 'rule', ruleId: rule.ruleId }, sourceTitle: title, title,
-            mark: <Icon name="funnel-simple" size={18} color={theme.colors.text.secondary} />, policy: rule.definition.policy });
+        const mark = <Icon name="funnel-simple" size={18} color={theme.colors.text.secondary} />;
+        const level = t(`session.follow.policy.${rule.definition.policy.preset}`);
+        const errorGroup = mutation.error !== null ? <ItemGroup>{errorRow({})}</ItemGroup> : null;
+        const draft = ruleFilterDraft?.ruleId === rule.ruleId ? ruleFilterDraft.filter : null;
+        if (draft) {
+            return {
+                title,
+                subtitle: t('session.follow.sources.ruleWhich'),
+                mark,
+                body: <>
+                    {errorGroup}
+                    <Item
+                        testID={`session-follow-source-${key}-filter-back`}
+                        showChevron={false}
+                        showDivider={false}
+                        icon={<Icon name="caret-left" size={18} color={theme.colors.text.secondary} />}
+                        title={t('common.back')}
+                        onPress={() => setRuleFilterDraft(null)}
+                    />
+                    <SessionListStoredFilterEditor
+                        serverId={serverId}
+                        filter={draft}
+                        onFilterChange={(filter) => setRuleFilterDraft({ ruleId: rule.ruleId, filter })}
+                        onReset={() => setRuleFilterDraft({ ruleId: rule.ruleId, filter: rule.definition.filter })}
+                        summary={describeFollowRuleMatchCount(draftCount, level)}
+                        doneLabel={t('common.save')}
+                        canDone={!policyDisabled}
+                        onDone={() => { void writeRule(rule.ruleId, { kind: 'filter', filter: draft }); }}
+                    />
+                </>,
+                // The editor's own foot carries the live count, Reset and Save.
+                footer: null,
+            };
+        }
+        const parts = panelParts({ key, ref: { kind: 'rule', ruleId: rule.ruleId }, sourceTitle: title, title, mark,
+            policy: rule.definition.policy, showError: false });
+        const leftOut = rule.definition.filter.projects?.exclude ?? [];
+        const receipt = ruleReceipt?.ruleId === rule.ruleId ? ruleReceipt : null;
+        const projectName = (project: QualifiedProjectKeyV1) => projects.find((candidate) => (
+            candidate.serverId === project.serverId && candidate.projectKey === project.projectKey
+        ))?.label ?? project.projectKey;
+        return {
+            ...parts,
+            body: <>
+                {errorGroup}
+                {/* Its own block above the level, with the rhythm the level editor's sections keep between them. */}
+                <ItemGroup style={styles.ruleScope}>
+                    <Item
+                        testID={`session-follow-source-${key}-filter`}
+                        title={t('session.follow.sources.ruleWhich')}
+                        subtitle={describeFollowRuleMatchCount(ruleCounts[key], level)}
+                        disabled={policyDisabled}
+                        onPress={() => { setRuleReceipt(null); setRuleFilterDraft({ ruleId: rule.ruleId, filter: rule.definition.filter }); }}
+                    />
+                    {leftOut.map((project) => {
+                        const name = projectName(project);
+                        return <Item
+                            key={`${project.serverId}\u0000${project.projectKey}`}
+                            testID={`session-follow-source-${key}-left-out-${project.projectKey}`}
+                            icon={<Icon name="minus-circle" size={18} color={theme.colors.text.secondary} />}
+                            title={t('session.follow.sources.ruleLeftOut', { name })}
+                            titleLines={0}
+                            showChevron={false}
+                            rightElement={<RoundButton
+                                testID={`session-follow-source-${key}-left-out-${project.projectKey}-include`}
+                                title={t('session.follow.sources.ruleIncludeAgain')}
+                                size="small"
+                                display="secondary"
+                                disabled={policyDisabled}
+                                onPress={() => { void writeRule(rule.ruleId, { kind: 'include', project, name }); }}
+                            />}
+                        />;
+                    })}
+                    {receipt ? <Item
+                        testID={`session-follow-source-${key}-left-out-receipt`}
+                        icon={<Icon name="check" size={18} color={theme.colors.text.secondary} />}
+                        title={receipt.label}
+                        titleLines={0}
+                        showChevron={false}
+                        accessibilityLiveRegion="polite"
+                        rightElement={<RoundButton
+                            testID={`session-follow-source-${key}-left-out-undo`}
+                            title={t('common.undo')}
+                            size="small"
+                            display="secondary"
+                            disabled={policyDisabled}
+                            onPress={() => { void writeRule(rule.ruleId, { kind: 'undo', undo: receipt.undo }); }}
+                        />}
+                    /> : null}
+                </ItemGroup>
+                {parts.body}
+            </>,
+        };
     };
     function panelParts(input: Readonly<{
         key: string; ref: FollowSourceRefV1; sourceTitle: string; title: string; mark: React.ReactNode; policy: FollowPolicyV1;
+        /** A host that leads with its own sections places the error row above them instead. */
+        showError?: boolean;
     }>): FollowSourcePanelParts {
         const { key, ref, sourceTitle, mark } = input;
         const draft = mutation.pending ?? mutation.failed;
@@ -598,7 +758,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             subtitle: t('session.follow.sources.panelSubtitle'),
             mark,
             body: <>
-                {mutation.error !== null ? <ItemGroup>{errorRow({})}</ItemGroup> : null}
+                {input.showError !== false && mutation.error !== null ? <ItemGroup>{errorRow({})}</ItemGroup> : null}
                 <FollowPolicySection>
                     <FollowPolicyEditorBinding
                         testID={`session-follow-source-${key}-policy`}
@@ -827,4 +987,5 @@ const styles = StyleSheet.create((theme) => ({
     paneSection: { paddingTop: theme.space.s12 },
     // The line starts where the section heading's text does.
     paneEmpty: { paddingLeft: theme.space.s8 },
+    ruleScope: { marginBottom: theme.space.s12 },
 }));

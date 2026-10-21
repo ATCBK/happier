@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { ExecutionRunFollowEventV1Schema, RunFollowOccurrenceV1Schema, SessionFollowInputV1Schema } from './sessionFollowInputV1.js';
+import { ExecutionRunFollowEventV1Schema, RunFollowOccurrenceV1Schema, SessionFollowInputV1Schema, resolveExecutionRunFollowOccurrenceV1 } from './sessionFollowInputV1.js';
+import { ExecutionRunFollowFrontierResponseSchema } from '../../execution/runs/responseSchemas.js';
 import { resolveWorkflowRunFollowEventV1 } from '../../workflows/composeWorkflowRunWorkerUpdateV1.js';
 import { classifyWorkerUpdateEventV1 } from '../relations/workerUpdateV1.js';
 import { RunFollowUpdateNotificationV1Schema } from '../../activity/webhookPayload.js';
@@ -26,6 +27,21 @@ const wakeObservations = [{ policy: { preset: 'everything' as const },
 }] as const;
 
 describe('Session Follow socket transport V1', () => {
+  it('carries an actual live Run attention frontier through strict routes, input and source notifications', () => {
+    const frontier = ExecutionRunFollowFrontierResponseSchema.parse({ sessionId: 'parent', runId: 'run-1', status: 'running',
+      terminalEventId: null, attention: { kind: 'permission_required', requestIds: ['permission-1'], requests: [{ requestId: 'permission-1', createdAt: 1 }] } });
+    const produced = resolveExecutionRunFollowOccurrenceV1(frontier)!;
+    const response = { ok: true, v: 1, ...produced, routes: [{ destinationSessionId: 'receiver', relation: 'follower',
+      attachedAt: 12, policy: { preset: 'important' }, expectedTerminalEventId: null }] };
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.parse(response)).toEqual(response);
+    expect(SessionFollowInputV1Schema.parse({ v: 1, ...produced, delivery: 'wake' })).toMatchObject(produced);
+    expect(RunFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow: produced })).toMatchObject({ follow: produced });
+    expect(SessionFollowRunOccurrenceRoutesResponseV1Schema.safeParse({ ...response, event: { kind: 'finished' } }).success).toBe(false);
+    expect(SessionFollowPendingObservationV1Schema.parse({ kind: 'admitted_run_input', localInputId: 'follow-input',
+      destinationSessionId: 'receiver', disposition: 'withdrawn', delivery: { v: 1, ...produced, delivery: 'wake' } }))
+      .toMatchObject({ disposition: 'withdrawn' });
+    expect(resolveExecutionRunFollowOccurrenceV1({ ...frontier, attention: undefined })).toBeNull();
+  });
   it('binds Run routes to one exact original and per-edge cursor without a parent Session alias', () => {
     const original = { source: { kind: 'execution_run', sessionId: 'parent', runId: 'run-1' }, terminalEventId: 'terminal-2' } as const;
     const request = { v: 1, original } as const;

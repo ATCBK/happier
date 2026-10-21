@@ -10133,7 +10133,11 @@ const sessionFollowTranslations: Pick<Record<
             "followsThis": ({ title }) => `${title} suit cette session`,
             "ruleMatching": ({ facts }: { facts: string }) => `Sessions correspondant à ${facts}`,
             "ruleEvery": "Toutes les sessions qu’elle peut voir",
-            "managerOnly": "Elle en est informée en tant que manager de cette session. Modifiez cela dans sa configuration de coordinatrice."
+            "managerOnly": "Elle en est informée en tant que manager de cette session. Modifiez cela dans sa configuration de coordinatrice.",
+            "ruleWhich": "Quelles sessions",
+            "ruleLeftOut": ({ name }: { name: string }) => `Ignore le projet ${name}`,
+            "ruleIncludeAgain": "Inclure à nouveau",
+            "ruleIncludedAgain": ({ name }: { name: string }) => `Suit de nouveau le projet ${name}`
         },
         "preferences": {
             "title": "Suivre automatiquement",

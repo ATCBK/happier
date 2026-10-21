@@ -80,6 +80,7 @@ export function shouldWakeForSessionFollowObservation(
 
 export type SessionFollowPreparedContext = Readonly<{
   representedFollowLocalInputIds?: readonly string[];
+  withdrawnFollowLocalInputIds?: readonly string[];
   updates: readonly SessionFollowUpdateEnvelopeV1[];
   workerUpdates?: readonly WorkerUpdateV1[];
   /** Per-worker cards share the incumbent frontier identity owner, independently of batch membership. */
@@ -776,23 +777,36 @@ export function createSessionFollowContextReconciler(input: Readonly<{
     };
     const observed = await observe(options.signal);
     if (!observed?.ok || options.signal.aborted) return sessions;
+    const withdrawnFollowLocalInputIds: string[] = [];
+    const readWithdrawn = (observations: typeof observed.observations) => {
+      for (const entry of queued) if (observations.some(observation => 'kind' in observation
+        && observation.kind === 'admitted_run_input' && observation.disposition === 'withdrawn'
+        && observation.destinationSessionId === input.session.sessionId && observation.localInputId === entry.localInputId
+        && sameStrictJsonValue(observation.delivery, entry.delivery))
+        && !withdrawnFollowLocalInputIds.includes(entry.localInputId)) withdrawnFollowLocalInputIds.push(entry.localInputId);
+    };
+    readWithdrawn(observed.observations);
     const admitted = queued.filter(entry => observed.observations.some(observation =>
       'kind' in observation && observation.kind === 'admitted_run_input'
+      && observation.disposition !== 'withdrawn'
       && observation.destinationSessionId === input.session.sessionId && observation.localInputId === entry.localInputId
       && sameStrictJsonValue(observation.delivery, entry.delivery)));
-    if (!admitted.length) return sessions;
+    if (!admitted.length && !withdrawnFollowLocalInputIds.length) return sessions;
     return {
       updates: sessions?.updates ?? [],
       ...(sessions?.workerUpdates ? { workerUpdates: sessions.workerUpdates } : {}),
       ...(sessions?.workerUpdateEvents ? { workerUpdateEvents: sessions.workerUpdateEvents } : {}),
       ...(sessions?.wakeEventLocalId ? { wakeEventLocalId: sessions.wakeEventLocalId } : {}),
       representedFollowLocalInputIds: [...(sessions?.representedFollowLocalInputIds ?? []), ...admitted.map(entry => entry.localInputId)],
+      withdrawnFollowLocalInputIds,
       recheckAdmission: async signal => {
         if (signal.aborted || options.signal.aborted || sessions && !await sessions.recheckAdmission(signal)) return false;
         const current = await observe(signal);
+        if (current?.ok) readWithdrawn(current.observations);
         return !signal.aborted && !options.signal.aborted && current?.ok === true && current.publisherGeneration === observed.publisherGeneration
           && admitted.every(entry => current.observations.some(observation => 'kind' in observation
             && observation.kind === 'admitted_run_input' && observation.destinationSessionId === input.session.sessionId
+            && observation.disposition !== 'withdrawn'
             && observation.localInputId === entry.localInputId && sameStrictJsonValue(observation.delivery, entry.delivery)));
       },
       acknowledgeAccepted: (acceptance, pendingSettlement) => {

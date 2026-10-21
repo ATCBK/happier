@@ -74,3 +74,17 @@ export function excludeProjectFromSessionFollowRuleV1(
         },
     }) });
 }
+
+/** Its way back: the rule follows that Project again; an emptied Project facet is removed, not left as `[]`. */
+export function includeExcludedProjectInSessionFollowRuleV1(
+    definition: SessionFollowRuleDefinitionV1,
+    project: QualifiedProjectKeyV1,
+): SessionFollowRuleDefinitionV1 {
+    const include = definition.filter.projects?.include ?? [];
+    const exclude = (definition.filter.projects?.exclude ?? [])
+        .filter((excluded) => excluded.serverId !== project.serverId || excluded.projectKey !== project.projectKey);
+    const { projects: _projects, ...filter } = definition.filter;
+    return SessionFollowRuleDefinitionV1Schema.parse({ ...definition, filter: normalizeSessionListFilterV1(
+        include.length + exclude.length > 0 ? { ...filter, projects: { include, exclude } } : filter,
+    ) });
+}

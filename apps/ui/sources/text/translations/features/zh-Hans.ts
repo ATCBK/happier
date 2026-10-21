@@ -10116,7 +10116,11 @@ const sessionFollowTranslations: Pick<Record<
             "followsThis": ({ title }) => `${title} 关注此会话`,
             "ruleMatching": ({ facts }: { facts: string }) => `匹配的会话：${facts}`,
             "ruleEvery": "它能看到的所有会话",
-            "managerOnly": "它作为此会话的管理者接收动态。可在其协调者设置中更改。"
+            "managerOnly": "它作为此会话的管理者接收动态。可在其协调者设置中更改。",
+            "ruleWhich": "哪些会话",
+            "ruleLeftOut": ({ name }: { name: string }) => `跳过项目 ${name}`,
+            "ruleIncludeAgain": "重新包含",
+            "ruleIncludedAgain": ({ name }: { name: string }) => `重新关注项目 ${name}`
         },
         "preferences": {
             "title": "自动关注",

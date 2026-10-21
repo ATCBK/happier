@@ -459,7 +459,7 @@ describe('Follow exact Home Action transport', () => {
         const env = await setup();
         const { normalizeSessionListFilterV1 } = await import('@happier-dev/protocol/sessions/listFilter/sessionListFilterV1');
         const { SessionFollowRuleDefinitionV1Schema } = await import('@happier-dev/protocol/sessions/follow/sessionFollowRuleV1');
-        const { leaveProjectToFollowRule, undoFollowRuleProjectExclusion } = await import('./sessionFollowRuleEdits');
+        const { leaveProjectToFollowRule, undoFollowRuleProjectEdit } = await import('./sessionFollowRuleEdits');
         const original = { ruleId: 'daily', receiver: { kind: 'session' as const, sessionId: 'daily-coordinator' }, version: 0,
             definition: { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: [env.target.id] }), policy: { preset: 'important' as const } } };
         let version = 0;
@@ -484,12 +484,12 @@ describe('Follow exact Home Action transport', () => {
         expect(original.definition.filter.projects).toBeUndefined();
         expect(definition.filter.projects?.exclude).toEqual([project]);
         if (edit.kind !== 'ok') throw new Error('Expected exclusion receipt');
-        expect((await undoFollowRuleProjectExclusion(edit.value.undo)).kind).toBe('ok');
+        expect((await undoFollowRuleProjectEdit(edit.value.undo)).kind).toBe('ok');
         expect(definition).toEqual(original.definition);
         const second = await leaveProjectToFollowRule({ serverId: env.target.id, rule: { ...original, version }, project });
         if (second.kind !== 'ok') throw new Error('Expected second exclusion receipt');
         version += 1; // A different device committed a newer edit before Undo.
-        expect(await undoFollowRuleProjectExclusion(second.value.undo)).toEqual({ kind: 'failed', error: 'version_conflict' });
+        expect(await undoFollowRuleProjectEdit(second.value.undo)).toEqual({ kind: 'failed', error: 'version_conflict' });
         expect(definition.filter.projects?.exclude).toEqual([project]);
     });
 

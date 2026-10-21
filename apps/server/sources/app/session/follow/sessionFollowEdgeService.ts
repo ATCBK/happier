@@ -18,7 +18,7 @@ import { type FollowSourceRelationV1, type SessionFollowSourceV1 } from '@happie
 import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import { type SessionFollowSourceProjectionRequestV1, type SessionFollowSourceProjectionResponseV1, SessionFollowSourceProjectionResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceProjectionV1';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
-import { deriveSessionFollowInputLocalIdV1, deriveSessionFollowOriginalOccurrenceKeyV1, isRunFollowOriginalV1, type SessionFollowInputV1, type RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import { deriveSessionFollowInputLocalIdV1, deriveSessionFollowOriginalOccurrenceKeyV1, isRunFollowOriginalV1, resolveExecutionRunFollowOccurrenceV1, type SessionFollowInputV1, type RunFollowOriginalV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 
 import {
@@ -1453,12 +1453,10 @@ export async function readRunFollowOccurrenceInTx(tx: Tx, input: Readonly<{
     const requested = input.original;
     if (source.kind === 'execution_run') {
         const frontier = input.executionRunFrontier;
-        if (!frontier || !isDeepStrictEqual(frontier.source, source) || !frontier.terminalEventId
-            || requested && (!('terminalEventId' in requested) || frontier.terminalEventId !== requested.terminalEventId)
+        if (!frontier || !isDeepStrictEqual(frontier.source, source)
             || !await isExecutionRunFollowFrontierWitnessCurrentInTx(tx, frontier)) return null;
-        const original = { source, terminalEventId: frontier.terminalEventId };
-        return frontier.status === 'succeeded' ? { original, event: { kind: 'finished' } }
-            : frontier.status === 'failed' || frontier.status === 'cancelled' ? { original, event: { kind: 'failed_or_stopped' } } : null;
+        const occurrence = resolveExecutionRunFollowOccurrenceV1({ ...frontier, sessionId: source.sessionId, runId: source.runId });
+        return occurrence && (!requested || isDeepStrictEqual(requested, occurrence.original)) ? occurrence : null;
     }
     const run = await tx.automationRun.findUnique({ where: { id: source.runId },
         select: { revision: true, state: true, workflowCustodyState: true } });
@@ -1517,7 +1515,16 @@ export async function observeRunFollowOccurrenceRoutes(input: Readonly<{
         for (const edge of edges) {
             if (!isDeepStrictEqual(sourceForSessionFollowEdgeV1(edge), source)) continue;
             if ('terminalEventId' in original ? edge.deliveredExecutionRunTerminalEventId === original.terminalEventId
-                : (edge.deliveredWorkflowRunRevision ?? 0) >= original.revision) continue;
+                : 'revision' in original && (edge.deliveredWorkflowRunRevision ?? 0) >= original.revision) continue;
+            if ('permissionRequests' in original) {
+                const acceptedFollowOriginalKey = deriveSessionFollowOriginalOccurrenceKeyV1(original);
+                const accepted = await tx.sessionMessage.findFirst({ where: { sessionId: edge.destinationSessionId,
+                    acceptedFollowOriginalKey }, select: { localId: true, seq: true } });
+                if (accepted?.localId && await hasCanonicalFollowProviderInputAcceptanceInTx(tx, {
+                    destinationSessionId: edge.destinationSessionId, localInputId: accepted.localId,
+                    userMessageSeq: accepted.seq, requireProviderAccepted: true,
+                })) continue;
+            }
             const policy = readStoredPolicy(edge.policyJson);
             if (!policy || !resolveFollowDeliveryV1({ policies: [policy], event }).selected) continue;
             const destination = await loadSession(tx, edge.destinationSessionId);
@@ -1528,8 +1535,8 @@ export async function observeRunFollowOccurrenceRoutes(input: Readonly<{
                     receiver: { kind: 'session', sessionId: destination.id }, candidate: { source,
                         ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) } }) !== false) continue;
             routes.push({ destinationSessionId: destination.id, relation: 'follower', attachedAt: edge.attachedAt.getTime(), policy,
-                ...('terminalEventId' in original ? { expectedTerminalEventId: edge.deliveredExecutionRunTerminalEventId }
-                    : { expectedRevision: edge.deliveredWorkflowRunRevision ?? 0 }) });
+                ...('revision' in original ? { expectedRevision: edge.deliveredWorkflowRunRevision ?? 0 }
+                    : { expectedTerminalEventId: edge.deliveredExecutionRunTerminalEventId }) });
         }
         const personal = await readAccountRunFollowDeliveryInTx(tx, { ...input, original, event });
         return SessionFollowRunOccurrenceRoutesResponseV1Schema.parse({ ok: true, v: 1, original, event, routes,

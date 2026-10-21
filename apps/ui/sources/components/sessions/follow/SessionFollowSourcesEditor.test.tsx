@@ -847,7 +847,7 @@ describe('SessionFollowSourcesEditor', () => {
         expect(screen.findAllByTestId('session-follow-sources-empty')).toHaveLength(0);
         expect(findSourceRow(screen, 'rule:rule-1')?.props.title).toBe('session.follow.sources.ruleMatching');
         expect(followAction.execute).toHaveBeenCalledWith('follow.preview',
-            { receiver: { kind: 'session', sessionId: 'destination-a' }, filter }, 'home-a', expect.anything());
+            { receiver: { kind: 'session', sessionId: 'destination-a' }, filter }, 'home-a', expect.anything(), 'follow-account');
 
         await openSource(screen, 'rule:rule-1');
         expect(screen.findByTestId('session-follow-source-rule:rule-1-panel')).not.toBeNull();
@@ -863,6 +863,81 @@ describe('SessionFollowSourcesEditor', () => {
             serverId: 'home-a', destinationSessionId: 'destination-a', source: { kind: 'rule', ruleId: 'rule-1' },
         }));
         await screen.unmount();
+    });
+
+    describe('a rule panel edits which sessions the rule follows', () => {
+        const baseFilter = { show: 'sessions', startedBy: ['you', 'triggers', 'agents'], scope: 'all_accessible', attention: 'any',
+            homeServerIds: ['home-a'], audiences: [], tagIds: [], source: 'all',
+            projects: { include: [], exclude: [{ serverId: 'home-a', projectKey: 'payments' }] } };
+        const rule = { ruleId: 'rule-1', receiver: { kind: 'session', sessionId: 'destination-a' }, version: 3,
+            sources: [], inception: { createdAt: 1 }, definition: { v: 1, enabled: true, filter: baseFilter, policy: { preset: 'important' } } };
+        let version = 3;
+        beforeEach(() => {
+            version = 3;
+            api.list.mockResolvedValue({ kind: 'ok', value: { sources: [], rules: [rule], coverage: 'complete' } });
+            api.remove.mockResolvedValue({ kind: 'ok', value: { changed: true } });
+            followAction.execute.mockImplementation(async (actionId: string, input: Record<string, unknown>) => {
+                if (actionId === 'follow.preview') return { kind: 'ok', value: { coverage: 'complete', matchCount: 2, matches: [], unavailable: [], overlaps: [] } };
+                if (actionId !== 'follow.set') return { kind: 'failed', error: 'unavailable' };
+                version += 1;
+                return { kind: 'ok', value: { rule: { ...rule, version, definition: { ...(input.ruleDefinition as object), policy: input.policy } } } };
+            });
+        });
+        const setCalls = () => followAction.execute.mock.calls.filter(([id]) => id === 'follow.set').map(([, input]) => input as Record<string, any>);
+        async function press(screen: Awaited<ReturnType<typeof renderSettingsView>>, testID: string) {
+            await vi.waitFor(() => expect(screen.findAllByTestId(testID).find((node) => typeof node.props.onPress === 'function')).toBeDefined());
+            await act(async () => { screen.findAllByTestId(testID).find((node) => typeof node.props.onPress === 'function')?.props.onPress?.(); await Promise.resolve(); });
+        }
+
+        it('on the anchored panel: the shared filter editor saves a new filter at the read version, and a left-out project comes back with Undo', async () => {
+            const screen = await renderSettingsView(<SessionFollowSourcesEditor
+                destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+            />);
+            await openSource(screen, 'rule:rule-1');
+            // The persisted "Leave them to this one" exclusion is visible, with its way back.
+            expect(screen.findByTestId('session-follow-source-rule:rule-1-left-out-payments')).not.toBeNull();
+
+            // Which sessions: the Sessions list's own editor, inline in the same panel; nothing is written until Save.
+            await press(screen, 'session-follow-source-rule:rule-1-filter');
+            await press(screen, 'session-list-filter:status:failed');
+            expect(setCalls()).toHaveLength(0);
+            await press(screen, 'session-list-filter-done');
+            await vi.waitFor(() => expect(setCalls()).toHaveLength(1));
+            expect(setCalls()[0]).toMatchObject({ source: { kind: 'rule', ruleId: 'rule-1' }, expectedVersion: 3,
+                policy: { preset: 'important' } });
+            expect(setCalls()[0].ruleDefinition.filter.statuses?.length).toBeGreaterThan(0);
+            expect(setCalls()[0].ruleDefinition.filter.projects).toEqual(baseFilter.projects);
+            // Saving returns to the rule's panel.
+            await vi.waitFor(() => expect(screen.findByTestId('session-follow-source-rule:rule-1-filter')).not.toBeNull());
+
+            // Include again writes the rule without the exclusion; Undo puts it back at the version that write produced.
+            await press(screen, 'session-follow-source-rule:rule-1-left-out-payments-include');
+            await vi.waitFor(() => expect(setCalls()).toHaveLength(2));
+            expect(setCalls()[1].ruleDefinition.filter.projects).toBeUndefined();
+            await press(screen, 'session-follow-source-rule:rule-1-left-out-undo');
+            await vi.waitFor(() => expect(setCalls()).toHaveLength(3));
+            // Writes so far: Save (→ 4), Include again (→ 5); Undo is bound to the version Include again produced.
+            expect(setCalls()[2]).toMatchObject({ expectedVersion: 5 });
+            expect(setCalls()[2].ruleDefinition.filter.projects).toEqual(baseFilter.projects);
+            await screen.unmount();
+        });
+
+        it('on the phone page: the same filter step and writer, and Stop updates leaves the page', async () => {
+            const onClose = vi.fn();
+            const screen = await renderPage(<SessionFollowSourcesEditor
+                destination={createSessionFixture({ id: 'destination-a' })} serverId="home-a" destinationMachineId={null}
+                page={{ sourceKey: 'rule:rule-1', onClose, frame: (parts) => <>{parts.body}{parts.footer}</> }}
+            />);
+            await press(screen, 'session-follow-source-rule:rule-1-filter');
+            await press(screen, 'session-list-filter:status:failed');
+            await press(screen, 'session-list-filter-done');
+            await vi.waitFor(() => expect(setCalls()).toHaveLength(1));
+            expect(setCalls()[0]).toMatchObject({ expectedVersion: 3 });
+            await press(screen, 'session-follow-source-rule:rule-1-remove');
+            await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+            expect(api.remove).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: 'rule', ruleId: 'rule-1' } }));
+            await screen.unmount();
+        });
     });
 
     it('places one source panel through a pushed page with the same policy writer, and leaves the page after Stop updates', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeSessionListFilterV1 } from '../listFilter/sessionListFilterV1.js';
-import { evaluateFollowRulePreviewV1, excludeProjectFromSessionFollowRuleV1, FollowRulePreviewResultV1Schema } from './sessionFollowRulePreviewV1.js';
+import { evaluateFollowRulePreviewV1, excludeProjectFromSessionFollowRuleV1, FollowRulePreviewResultV1Schema, includeExcludedProjectInSessionFollowRuleV1 } from './sessionFollowRulePreviewV1.js';
 
 describe('Follow rule preview', () => {
     it('does not enroll an attention Run that the rule starter facet excludes', () => {
@@ -31,5 +31,14 @@ describe('Follow rule preview', () => {
         expect(next.filter.projects).toEqual({ include: [], exclude: [project] });
         expect(definition.filter.projects).toBeUndefined();
         expect(excludeProjectFromSessionFollowRuleV1(next, project)).toEqual(next);
+    });
+
+    it('includes an excluded Project again, keeping the other exclusions and dropping an emptied facet', () => {
+        const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1(), policy: { preset: 'important' as const } };
+        const payments = { serverId: 'home', projectKey: 'payments' };
+        const mobile = { serverId: 'home', projectKey: 'mobile' };
+        const both = excludeProjectFromSessionFollowRuleV1(excludeProjectFromSessionFollowRuleV1(definition, payments), mobile);
+        expect(includeExcludedProjectInSessionFollowRuleV1(both, payments).filter.projects).toEqual({ include: [], exclude: [mobile] });
+        expect(includeExcludedProjectInSessionFollowRuleV1(excludeProjectFromSessionFollowRuleV1(definition, payments), payments)).toEqual(definition);
     });
 });
