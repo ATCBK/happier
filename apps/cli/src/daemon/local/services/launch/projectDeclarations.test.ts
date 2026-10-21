@@ -128,6 +128,54 @@ describe('accepted Project Service declaration starter', () => {
         expect(h.owner.listProjectServices()).toEqual([]);
     });
 
+    it('prepares worker approval using admitted requester custody for the SOURCE Machine read', async () => {
+        const h = await fixture(false, undefined, true, 'portable');
+        await cp(h.root, h.targetRoot, { recursive: true });
+        const channel = await createRequesterCurrentnessSocketHarness();
+        cleanups.push(() => channel.close());
+        const read = vi.mocked(axios.get).getMockImplementation()!;
+        vi.mocked(axios.get).mockImplementation(async (url, options) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/profile') return { status: 200, data: { id: 'owner' } };
+            if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+                mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+            // Home admits SOURCE content under the captured requester, not the
+            // signed native-effect root whose Machine is the destination worker.
+            if (path === `/v1/machines/${h.workspace.machineId}`
+                && options?.headers?.Authorization !== `Bearer ${h.runtime.credentials!.token}`) {
+                throw new Error('Worker-bound effect cannot read SOURCE Machine content');
+            }
+            return read(url, options);
+        });
+        const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'worker-start-root', binding: {
+            accountId: 'owner', custodianAccountId: 'owner', authentication: { kind: 'terminal', tokenEpoch: 1 },
+            accountEncryptionMode: 'plain', serverIdentityId: h.serverIdentityId, machineId: h.targetWorkspace.machineId,
+            installationId: 'installation', actionId: 'localServices.launcher.start', requestId: 'service-request',
+            requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: h.targetWorkspace.machineId },
+        } });
+        const admitted = await admitRequesterAccountActionContext({ authorization, credentials: h.runtime.credentials!,
+            serverId: 'home', serverIdentityId: h.serverIdentityId, serverHttpBaseUrl: 'https://home.example',
+            isCurrent: async () => true, isCustodyCurrent: async () => true });
+        if (!admitted) throw new Error('Worker requester custody was not admitted');
+        cleanups.push(() => admitted.dispose());
+        const carrier = await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
+            serverId: 'home', serverIdentityId: h.serverIdentityId, serverHttpBaseUrl: 'https://home.example',
+            target: authorization.binding.target, installationId: 'installation', privateKey: nacl.sign.keyPair().secretKey });
+        if (!carrier) throw new Error('Worker requester HTTP projection was not admitted');
+        const api = await ApiClient.create(h.runtime.credentials!);
+        Object.assign(h.runtime, { inspectSourceProjectManifest: createProjectFiniteSourceManifestInspector({
+            api: { getMachine: (machineId, options) => api.getMachine(machineId, { ...options, authorization: carrier }) },
+            credentials: h.runtime.credentials!, serverId: 'home', serverHttpBaseUrl: 'https://home.example',
+            accountId: 'owner', ingress: { ...h.ingress, callerInputAuthorization: carrier }, isCurrent: admitted.isCurrent,
+        }) });
+        const reviewed = await h.starter.prepareStartApproval(h.request, h.ingress, h.context);
+        expect(reviewed).toMatchObject({ request: h.request, target: { machineId: h.targetWorkspace.machineId,
+            rootPath: h.targetRoot }, reviewedEffectDigest: expect.any(String) });
+        expect(h.copies()).toBe(0);
+        expect(h.setupProcesses).toEqual([]);
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
+
     it.each([false, true])('binds Auto Service approval to the native worker before publication (withdrawn=%s)', async withdrawn => {
         const h = await fixture(false, undefined, false, 'portable');
         await cp(h.root, h.targetRoot, { recursive: true });

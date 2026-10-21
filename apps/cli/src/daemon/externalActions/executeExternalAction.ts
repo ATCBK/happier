@@ -305,7 +305,8 @@ export async function executeExternalAction(input: Readonly<{
     if (!requesterContext) {
       diagnoseSessionInput('requester_prepare', requesterHomeUnavailable ? 'home_unavailable' : 'refused');
       if (requesterHomeUnavailable) refuseExternalActionPhase('requester_prepare', input.currentMachineId, undefined, {
-        ...(envelope.data.requestId ? { requestId: envelope.data.requestId } : {}),
+        ...readSessionInputAdmissionDiagnostic({ actionId: actionId.data, requestId: envelope.data.requestId,
+          accountEncryptionMode: executionAuthorization.data.binding.accountEncryptionMode }),
         refusalBranch: 'requester_home_unavailable',
       });
       return { kind: 'invalid_request',

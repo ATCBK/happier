@@ -694,6 +694,7 @@ export async function projectExternalActionRequesterHttpAuthorization(input: Rea
     } : undefined) : undefined;
   const projectMachineReadCustody = authorization.binding.actionId === 'projects.script.run'
     || authorization.binding.actionId === 'projects.compute.exec'
+    || authorization.binding.actionId === 'localServices.launcher.start'
     || authorization.binding.actionId === 'projects.worker.status' ? requesterContext : undefined;
   const projectRowReadCustody = Object.hasOwn(PROJECT_FINITE_ACTION_RPC_METHODS_V1, authorization.binding.actionId)
     || authorization.binding.actionId === 'projects.inspect'
@@ -760,7 +761,7 @@ export async function projectExternalActionRequesterHttpAuthorization(input: Rea
         return await (projectRowReadCustody.isCustodyCurrent ?? projectRowReadCustody.isCurrent)() && await isCurrent(request.signal)
           ? { Authorization: `Bearer ${projectRowReadCustody.credentials.token}` } : null;
       }
-      // A worker-bound execution/status root cannot read SOURCE/controller Machine
+      // A worker-bound execution/service/status root cannot read SOURCE/controller Machine
       // content. Passive inspection and Sync topology use the same captured
       // requester read custody as Service Move; native effects keep their root.
       if (projectMachineReadCustody && request.effectActionId === authorization.binding.actionId

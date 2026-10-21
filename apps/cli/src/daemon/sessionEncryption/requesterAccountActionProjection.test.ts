@@ -267,7 +267,7 @@ describe('admitted requester Action projection', () => {
       .toEqual({ ok: false, errorCode: expected, error: expected });
     expect(failures).toEqual([expected]);
   });
-  it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'projects.inspect', 'projects.worker.status',
+  it.each(['projects.prepare', 'projects.script.run', 'projects.compute.exec', 'projects.inspect', 'projects.worker.status', 'localServices.launcher.start',
     'execution.run.start', 'execution.run.ensure', 'execution.run.send', 'execution.run.ensure_or_start'] as const)('uses retained requester custody only for private Project preparation reads on %s', async actionId => {
     const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {
       accountId: 'bob', custodianAccountId: 'alice', authentication: { kind: 'account', tokenEpoch: 1 },
@@ -297,7 +297,9 @@ describe('admitted requester Action projection', () => {
         expect(machineRead).toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
       } else expect(machineRead).toEqual({ Authorization: 'Bearer bob-preparation' });
       for (const path of ['/v1/account/project-rows/read', '/v1/account/project-rows/list']) {
-        expect(await headers('POST', path)).toEqual({ Authorization: 'Bearer bob-preparation' });
+        if (actionId === 'localServices.launcher.start') {
+          expect(await headers('POST', path)).toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
+        } else expect(await headers('POST', path)).toEqual({ Authorization: 'Bearer bob-preparation' });
         expect(await carrier.requesterHttpProjection.createRequestHeaders({ effectActionId: 'projects.open', method: 'POST', path }))
           .toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });
         expect(await headers('GET', path)).toMatchObject({ [EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]: root.token });

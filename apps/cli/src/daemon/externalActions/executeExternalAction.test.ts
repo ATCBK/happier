@@ -156,6 +156,11 @@ describe('executeExternalAction', () => {
           serverHttpBaseUrl: 'https://browser-home.test', ownCredentials: credentials, isCurrent: async () => true,
           createExecutor: () => executor }),
       });
+      const diagnostics = JSON.stringify(phaseLog.mock.calls);
+      expect(diagnostics).not.toContain('private-account-content');
+      expect(diagnostics).not.toContain(accountId);
+      expect(diagnostics).not.toContain(credentials.token);
+      expect(diagnostics).not.toContain(envelope.payload.c);
       if (rootUnavailable) {
         expect(result).toEqual({ kind: 'invalid_request', errorCode: 'storage_unavailable', requestId: binding.requestId });
         if (result.kind !== 'invalid_request') throw new Error('expected_pre_open_refusal');
@@ -173,11 +178,6 @@ describe('executeExternalAction', () => {
           machineId: target.machineId, phase: settingsFailure ? 'requester_settings' : 'signed_root_http_request',
           ...(rootFailure ? { errorClass: 'TypeError', message: 'Schema .nullable is not a function' } : {}),
         }));
-        const diagnostics = JSON.stringify(phaseLog.mock.calls);
-        expect(diagnostics).not.toContain('private-account-content');
-        expect(diagnostics).not.toContain(accountId);
-        expect(diagnostics).not.toContain(credentials.token);
-        expect(diagnostics).not.toContain(envelope.payload.c);
         return;
       }
       expect(result).toMatchObject({ kind: 'response', response: { v: 2 } });
