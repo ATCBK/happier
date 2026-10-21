@@ -22,7 +22,7 @@ import {
   type WidgetGroupBand,
   type WidgetGroupCell,
   type WidgetGroupCellInput,
-} from './widgetGroupLayout';
+} from '@happier-dev/plugin-ui/presentation';
 
 /** A grouped child draws plain; its text keeps the card's inset from the group's edge and dividers. */
 const CELL_INSET_PX =

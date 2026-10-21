@@ -446,6 +446,16 @@ export {
   type HappierWidgetFrameTextRole,
 } from './layout/WidgetFrame.js';
 export {
+  packWidgetGroupBands,
+  projectWidgetGroupCellContent,
+  resolveWidgetGroupCells,
+  resolveWidgetGroupColumns,
+  type WidgetGroupBand,
+  type WidgetGroupCell,
+  type WidgetGroupCellInput,
+  type WidgetGroupContentState,
+} from './layout/widgetGroupLayout.js';
+export {
   HappierPageChromeProvider,
   useHappierPageChrome,
   type HappierPageChrome,

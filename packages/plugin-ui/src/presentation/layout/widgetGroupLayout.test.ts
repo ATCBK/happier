@@ -4,7 +4,7 @@ import {
   packWidgetGroupBands,
   resolveWidgetGroupCells,
   resolveWidgetGroupColumns,
-} from './widgetGroupLayout';
+} from './widgetGroupLayout.js';
 
 const cells = (
   ...sizes: Array<

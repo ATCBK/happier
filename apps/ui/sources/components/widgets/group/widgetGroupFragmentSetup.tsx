@@ -36,7 +36,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { WidgetGroupFrame } from './WidgetGroupFrame';
 import { readWidgetGroupTitle } from './widgetGroupTitle';
-import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from './widgetGroupLayout';
+import { resolveWidgetGroupCells, resolveWidgetGroupColumns } from '@happier-dev/plugin-ui/presentation';
 import { resolveWidgetGroupWidthChoices, WIDGET_GROUP_ICON } from './widgetGroupMenu';
 import { buildWidgetGroupInputsCandidate } from './widgetGroupInputs';
 

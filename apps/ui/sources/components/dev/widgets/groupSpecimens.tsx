@@ -28,7 +28,7 @@ import {
 import {
   resolveWidgetGroupCells,
   resolveWidgetGroupColumns,
-} from '@/components/widgets/group/widgetGroupLayout';
+} from '@happier-dev/plugin-ui/presentation';
 import { selectLocalServiceRunningCount } from '@/sync/domains/local/services/serviceRow';
 import { t } from '@/text';
 
