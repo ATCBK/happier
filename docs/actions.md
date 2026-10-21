@@ -4358,6 +4358,33 @@ inventory, plus the exact Machine's existing Provider picker projection. Generic
 catalog. A missing or failed Provider projection is `null`, not a fabricated
 model list; native choices remain available.
 
+In 0.3 development source, launch option rows are choices, not complete start
+inputs. A native model row's `value` is a model-id string. Session creation uses
+it in `modelSelection.ref.modelId`, with the selected Agent target key,
+`providerConnectionId: null`, `v: 1` and `updatedAt` on the selection. Connected
+Account profile ids belong in `connectedServices`, not the Provider connection
+field. Execution Runs accept that native model string directly as `modelId`.
+
+A Session `configuration` is an optional full snapshot. Its `mode`, `model` and
+`permissionIntent` each carry `{ value, updatedAtMs }`; unset values are `null`.
+Its `options` map carries `{ value, updatedAtMs }` for each option id. Model values
+are strings, permission intents use the canonical `read-only` spelling, and
+option values are scalars. Configuration choices name option ids; the Agent's
+`agents.config_options.list` inventory owns their value choices. An empty
+inventory does not require an empty snapshot: omit `configuration` when no
+override is needed. The configuration schema sections expose this typed shape
+after the existing strict JSON normalization.
+
+For execution Run model/config/Connected option lookup, set
+`draftInput.backendTargetKey` to the selected backend choice's string `value`;
+the start input's `backendTarget` object alone does not select an inventory.
+Execution Run `configOptions` maps option ids directly to scalar values.
+Inline Workflow definitions put model selection and effort on `defaults.engine`
+or a step's `execution.engine`; use `effort`, rather than a
+`reasoning_effort` entry in `sessionConfigOptionOverrides`. Run
+`workflow.definition.validate` before starting an authored definition. These
+contracts share discovery and admission owners with UI, CLI and external plugins.
+
 The read uses the daemon's retained Provider services through its existing
 Machine transport, after the owning Action's ordinary credential admission.
 Provider rows retain structured references, compatibility, visibility and
