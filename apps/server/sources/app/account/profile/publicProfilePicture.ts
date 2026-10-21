@@ -8,6 +8,7 @@ import { inTx, type Tx } from '@/storage/inTx';
 import { readPrivateFile, writePrivateFile } from '@/storage/blob/files';
 import { tryProcessImage } from '@/storage/blob/processImage';
 import { normalizePrivateFileKey } from '@/storage/privateFiles/privateFileKeys';
+import { log } from '@/utils/logging/log';
 import { captureAccountPrivateFileUploadInTx, settleAccountPrivateFileUploadInTx, deleteAccountPrivateFileUpload,
     publicProfilePictureWritingReuseKey, publicProfilePictureRejectedReuseKey,
     publicProfilePictureAppliedReuseKey } from '@/storage/privateFiles/accountPrivateFileCustody';
@@ -86,6 +87,12 @@ export async function retirePublicProfilePictureInTx(tx: Tx, accountId: string, 
 export async function cleanupPublicProfilePictures(accountId: string): Promise<void> {
     const rows = await db.uploadedFile.findMany({ where: { accountId, reuseKey: publicProfilePictureRejectedReuseKey } });
     for (const row of rows) await deleteAccountPrivateFileUpload({ accountId, id: row.id, path: row.path, reuseKey: row.reuseKey });
+}
+
+/** A cleanup outage cannot undo an acknowledged publication; rejected custody remains retryable. */
+export async function cleanupPublicProfilePicturesAfterCommit(accountId: string): Promise<void> {
+    try { await cleanupPublicProfilePictures(accountId); }
+    catch { log({ module: 'api', level: 'warn', accountId }, 'Public-profile picture cleanup failed after the publication transaction'); }
 }
 
 /** Physical lookup only. Public route admission and exact current-ref binding remain with the publication owner. */

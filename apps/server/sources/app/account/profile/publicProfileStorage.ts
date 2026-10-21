@@ -1,5 +1,5 @@
 import { z } from 'zod/mini';
-import { PublicProfileOwnerRecordV1Schema, PublicProfilePublishBodyV1Schema, PublicProfileAppearanceV1Schema, type PublicProfileContextV1, type PublicProfileMutationResultV1, type PublicProfileOwnerRecordV1 } from '@happier-dev/protocol/account/publicProfilePublication';
+import { PublicProfileOwnerRecordV1Schema, PublicProfilePublishBodyV1Schema, PublicProfileAppearanceV1Schema, type PublicProfileAppearanceV1, type PublicProfileContextV1, type PublicProfileMutationResultV1, type PublicProfileOwnerRecordV1 } from '@happier-dev/protocol/account/publicProfilePublication';
 import { PublicProfilePolicyV1Schema, PublicProfileSnapshotV1Schema, PublicProfileMetadataV1Schema } from '@happier-dev/protocol/account/publicProfile';
 import { PublicProfileLayoutV1Schema } from '@happier-dev/protocol/widgets/widgetPublicSnapshotV1';
 import { UsageQuerySchema } from '@happier-dev/protocol/inputs/usageQuery';
@@ -20,13 +20,17 @@ function parseStored<T>(schema: z.core.$ZodType<T>, raw: string | null): T | nul
     try { return z.parse(createStoredReadSchema(schema), JSON.parse(raw)); } catch { return null; }
 }
 
+export function readStoredPublicProfileAppearance(raw: string | null): PublicProfileAppearanceV1 | null {
+    return parseStored(PublicProfileAppearanceV1Schema, raw);
+}
+
 /** A malformed known authority or payload never becomes a published record. */
 export function parsePublicProfileRecord(row: ProfileRow): PublicProfileOwnerRecordV1 | null {
     const metadata = parseStored(storedMetadataSchema, row.metadataJson);
     const record = { state: row.state, policy: parseStored(PublicProfilePolicyV1Schema, row.policyJson),
         metadata: metadata?.disclosure ?? null, projectSelections: metadata?.projectSelections ?? [],
         query: parseStored(UsageQuerySchema, row.queryJson), snapshot: parseStored(PublicProfileSnapshotV1Schema, row.snapshotJson),
-        layout: parseStored(PublicProfileLayoutV1Schema, row.layoutJson), appearance: parseStored(PublicProfileAppearanceV1Schema, row.appearanceJson),
+        layout: parseStored(PublicProfileLayoutV1Schema, row.layoutJson), appearance: readStoredPublicProfileAppearance(row.appearanceJson),
         updatedAtMs: row.updatedAt.getTime(), publishedAtMs: row.publishedAt?.getTime() ?? null,
         restriction: row.removedAt ? { removedAtMs: row.removedAt.getTime(), reason: row.removalReason ?? '' } : null };
     const payloads: readonly (readonly [string | null, unknown])[] = [[row.policyJson, record.policy], [row.metadataJson, metadata],

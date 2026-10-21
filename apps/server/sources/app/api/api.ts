@@ -111,6 +111,7 @@ export const API_CORS_ALLOWED_HEADERS = [
 export const API_CORS_EXPOSED_HEADERS = [
     'server-timing',
     'x-happier-retry-reason',
+    'etag',
 ];
 
 export function createApiCorsOptions(env: Record<string, string | undefined>): FastifyCorsOptions {

@@ -74,6 +74,7 @@ describe('createApiCorsOptions', () => {
     app.get('/probe', async (_request, reply) => {
       reply.header('Server-Timing', 'happier_v2_sessions_total;dur=1.000');
       reply.header('x-happier-retry-reason', 'server_unavailable');
+      reply.header('ETag', '"current-public-representation"');
       return { ok: true };
     });
 
@@ -119,6 +120,8 @@ describe('createApiCorsOptions', () => {
     expect(response.headers['access-control-expose-headers']).toContain('server-timing');
     expect(response.headers['x-happier-retry-reason']).toBe('server_unavailable');
     expect(response.headers['access-control-expose-headers']).toContain('x-happier-retry-reason');
+    expect(response.headers.etag).toBe('"current-public-representation"');
+    expect(response.headers['access-control-expose-headers']).toContain('etag');
   });
 });
 

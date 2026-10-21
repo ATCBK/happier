@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 import { buildPublicShareViewerBundle } from '../buildPublicShareViewer.mjs';
+import { buildPublicProfileRenderer, stagePublicProfileAssets } from '../buildPublicProfileRenderer.mjs';
 import {
   getServerRuntimeBundledInteropPackages,
   resolveServerRuntimeTransitiveExternalPackagePatterns,
@@ -54,6 +55,7 @@ export async function buildServerRuntime(params: BuildServerRuntimeParams): Prom
   await mkdir(outDir, { recursive: true });
 
   await buildPublicShareViewerBundle({ projectDir });
+  await buildPublicProfileRenderer({ projectDir, check: true });
 
   const external = await readRuntimeExternalPackages(projectDir);
   await build({
@@ -73,6 +75,7 @@ export async function buildServerRuntime(params: BuildServerRuntimeParams): Prom
     logLevel: 'silent',
     sourcemap: false,
   });
+  await stagePublicProfileAssets({ projectDir, outDir });
 
   return {
     outDir,

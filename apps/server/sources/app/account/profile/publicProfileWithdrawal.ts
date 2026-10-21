@@ -1,4 +1,6 @@
-import type { Tx } from '@/storage/inTx';
+import { afterTx, type Tx } from '@/storage/inTx';
+import { readStoredPublicProfileAppearance } from './publicProfileStorage';
+import { retirePublicProfilePictureInTx, cleanupPublicProfilePicturesAfterCommit } from './publicProfilePicture';
 
 export const EMPTY_PUBLIC_PROFILE_PAYLOAD = { state: 'draft', policyJson: null, metadataJson: null, queryJson: null, snapshotJson: null,
     layoutJson: null, appearanceJson: null, publishedAt: null } as const;
@@ -7,6 +9,11 @@ export const EMPTY_PUBLIC_PROFILE_PAYLOAD = { state: 'draft', policyJson: null, 
 export async function withdrawPublicProfileInTx(tx: Tx, accountId: string): Promise<void> {
     const row = await tx.accountPublicProfile.findUnique({ where: { accountId } });
     if (!row) return;
+    const appearance = readStoredPublicProfileAppearance(row.appearanceJson);
+    if (appearance?.atmosphere.source === 'picture') {
+        await retirePublicProfilePictureInTx(tx, accountId, appearance.atmosphere.picture.ref.id);
+        afterTx(tx, () => { void cleanupPublicProfilePicturesAfterCommit(accountId); });
+    }
     if (row.removedAt) await tx.accountPublicProfile.update({ where: { accountId }, data: EMPTY_PUBLIC_PROFILE_PAYLOAD });
     else await tx.accountPublicProfile.delete({ where: { accountId } });
 }

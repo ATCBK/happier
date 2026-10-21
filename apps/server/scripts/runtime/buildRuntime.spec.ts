@@ -29,6 +29,14 @@ describe('buildServerRuntime', () => {
 
     await expect(access(result.entrypoints.full, constants.R_OK)).resolves.toBeUndefined();
     await expect(access(result.entrypoints.light, constants.R_OK)).resolves.toBeUndefined();
+    for (const face of ['Inter-Regular.ttf', 'Inter-Medium.ttf', 'Inter-SemiBold.ttf',
+      'NotoSansCJKsc-Regular.otf', 'NotoSansArabic-Regular.ttf', 'NotoEmoji[wght].ttf']) {
+      const bytes = await readFile(join(outDir, 'assets/public-profile', face));
+      expect(bytes.byteLength).toBeGreaterThan(0);
+    }
+    for (const license of ['LICENSE-Inter.txt', 'LICENSE-NotoSansCJK.txt', 'LICENSE-NotoSansArabic.txt', 'LICENSE-NotoEmoji.txt']) {
+      expect(await readFile(join(outDir, 'assets/public-profile', license), 'utf8')).toContain('SIL OPEN FONT LICENSE');
+    }
 
     const full = await readFile(result.entrypoints.full, 'utf-8');
     const light = await readFile(result.entrypoints.light, 'utf-8');
