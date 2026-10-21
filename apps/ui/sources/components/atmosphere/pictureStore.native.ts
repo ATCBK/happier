@@ -4,7 +4,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import { createBuiltinPictureEnsurer, createBuiltinThumbnailEnsurer, readPictureSource } from './ensureBuiltinPicture';
 import { readPictureBase64 } from './pictureBytes.native';
-import type { PictureInfo, PictureInput, PictureRecord, PictureStore } from './pictureStore.types';
+import type { PictureInfo, PictureInput, PictureRecord, PictureStore, PicturePreparationOptions } from './pictureStore.types';
 
 type StoredInfo = PictureInfo & { hasThumb: boolean; source?: PictureRecord['source'] };
 const listeners = new Set<() => void>();
@@ -41,10 +41,10 @@ async function readInfo(directory: Directory): Promise<StoredInfo | undefined> {
         ...(source ? { source } : {}) };
 }
 
-async function prepare(data: Blob | string): Promise<string> {
+async function prepare(data: Blob | string, options?: PicturePreparationOptions): Promise<string> {
     const encoded = await readPictureBase64(data);
     const { prepareNativePicture } = await import('./preparePicture.native');
-    return prepareNativePicture(encoded);
+    return prepareNativePicture(encoded, options);
 }
 
 async function get(localId: string): Promise<PictureRecord | undefined> {

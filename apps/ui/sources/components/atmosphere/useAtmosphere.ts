@@ -7,16 +7,16 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 import { useDeviceType } from '@/utils/platform/responsive';
 import { pictureStore } from './pictureStore';
 import type { PictureRecord } from './pictureStore.types';
-import { atmospherePictureLocalId, resolveAtmosphere, selectAtmosphereSettings, type AtmosphereSurface, type ResolvedAtmosphere } from './resolveAtmosphere';
+import { atmospherePictureLocalId, resolveAtmosphere, selectAtmosphereSettings, type AtmosphereTarget, type ResolvedAtmosphere } from './resolveAtmosphere';
 
 export { resolveAtmosphere } from './resolveAtmosphere';
-export type { AtmosphereSurface, ResolvedAtmosphere } from './resolveAtmosphere';
+export type { AtmosphereSurface, AtmosphereTarget, ResolvedAtmosphere } from './resolveAtmosphere';
 
 /** Device availability never delays content or writes the user's synced selection. */
-export function useAtmosphere(surface: AtmosphereSurface) {
+export function useAtmosphere(surface: AtmosphereTarget) {
     const pictures = useAtmospherePictureCatalog();
     const home = useSetting('homeAtmosphere');
-    const projectOverride = useProjectAtmosphere(typeof surface === 'object' ? surface.project : undefined);
+    const projectOverride = useProjectAtmosphere(typeof surface === 'object' && 'project' in surface ? surface.project : undefined);
     const glassEnvironment = useGlassRuntimeEnvironment();
     const reduceTransparency = useReduceTransparency();
     const reducedMotion = useReducedMotionPreference();

@@ -13,6 +13,18 @@ const input = { surface: 'home' as const, home, pictures: [picture], pictureReco
     glassEnvironment: {}, isPhone: false, reduceTransparency: false, reducedMotion: false };
 
 describe('effective atmosphere owner', () => {
+    it('resolves a profile candidate independently of Home and never substitutes missing reviewed pixels', () => {
+        const { moments: _moments, behindSessions: _behind, ...presentation } = home;
+        const candidate = { ...presentation, planet: { ...presentation.planet, placement: 'rise' as const, style: 'rich' as const } };
+        const surface = { publicProfile: candidate };
+        const resolved = resolveAtmosphere({ ...input, home: { ...home, source: 'none' }, surface, isPhone: true });
+        expect(resolved).toMatchObject({ source: 'picture', behindSessions: false, planet: { placement: 'corner', style: 'rich' }, pictureRecord });
+        expect(resolved.moments).toEqual({});
+        const missing = resolveAtmosphere({ ...input, surface,
+            pictureRecord: undefined, shownPicture: resolved, readingPicture: true });
+        expect(missing).toMatchObject({ source: 'none', fallbackReason: 'picture-unavailable', pictureRecord: null });
+        expect(home).toMatchObject({ source: 'picture', moments: { send: false } });
+    });
     it('inherits Home on new session and absent/home project overrides, with explicit project precedence', () => {
         expect(resolveAtmosphere({ ...input, surface: 'new-session' }).source).toBe('picture');
         const surface = { project: { serverId: 'home', projectKey: 'project' } };

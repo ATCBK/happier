@@ -46,7 +46,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
             if (cancelled) return;
             const source = props.source;
             const drawn = { localId: 'localId' in source ? source.localId : null, w: request.width, h: request.height };
-            const settle = backdropSettle({ fact: atmosphereResettleFact.get(), settled: settled.current, shown: frame.current, next: drawn });
+            const settle = backdropSettle({ enabled: props.resettle, fact: atmosphereResettleFact.get(), settled: settled.current, shown: frame.current, next: drawn });
             if (settle) settled.current = settle.id;
             if (settle) setTarget({ key, uri: next, settle, drawn });
             else { frame.current = drawn; setTarget(null); setAnimated(null); setShown({ uri: next }); }
@@ -56,7 +56,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
         return () => { cancelled = true; };
         // The serialized key includes all configuration; source is its own identity.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [key, props.source, state.visible]);
+    }, [key, props.source, state.visible, props.resettle]);
     // The shown render's pixels give the atmosphere its tone, as the web canvas does.
     React.useEffect(() => {
         if (!fromImage || !rendered.current) return;
@@ -86,7 +86,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
         };
     }, [target, fromImage, toImage, dpr, red, green, blue, theme]);
     React.useEffect(() => {
-        if (target && reducedMotion && target.settle.kind === 'resettle') {
+        if (target && (props.resettle === false || (reducedMotion && target.settle.kind === 'resettle'))) {
             frame.current = target.drawn;
             setShown({ uri: target.uri });
             setAnimated(null);
@@ -118,7 +118,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
         };
         tick = requestAnimationFrame(time => { void step(time).catch(fail); });
         return () => { cancelled = true; cancelAnimationFrame(tick); };
-    }, [target, playback, paused, reducedMotion]);
+    }, [target, playback, paused, reducedMotion, props.resettle]);
     React.useEffect(() => () => animated?.dispose(), [animated]);
     return <View pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" testID={props.testID} style={[props.style, displaySize]}>
         {shown ? <Image source={{ uri: shown.uri }} contentFit="fill" transition={0} onLoad={() => { setAnimated(null); ready.current?.(); }} style={displaySize} /> : null}

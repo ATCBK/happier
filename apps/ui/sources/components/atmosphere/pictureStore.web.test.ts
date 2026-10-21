@@ -6,6 +6,23 @@ vi.mock('@/components/atmosphere/pictureStore', async () => import('./pictureSto
 
 describe('device-local picture bytes', () => {
     afterEach(() => vi.unstubAllGlobals());
+    it('prepares a lossless reviewed copy without writing or replacing the device library', async () => {
+        vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 1200, height: 800, close() {} })));
+        vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0,
+            getContext: () => ({ drawImage() {} }),
+            toBlob: (done: (blob: Blob) => void, mime: string) => done(new Blob(['reviewed pixels'], { type: mime })),
+        }) });
+        const source = new Blob(['device pixels'], { type: 'image/webp' });
+        await pictureStore.put({ localId: 'review-source', kind: 'user', data: source });
+        try {
+            const revision = pictureStore.getRevision();
+            const prepared = await pictureStore.prepare(source, { format: 'png' });
+            expect(prepared.type).toBe('image/png');
+            expect(await prepared.text()).toBe('reviewed pixels');
+            expect(await (await pictureStore.get('review-source'))?.data.text()).toBe('device pixels');
+            expect(pictureStore.getRevision()).toBe(revision);
+        } finally { await pictureStore.remove('review-source'); }
+    });
     it('prepares a large PNG exactly once at the shared user ingress before persisting WebP', async () => {
         const canvases: Array<{ width: number; height: number }> = [];
         const decode = vi.fn(async (data: Blob) => {

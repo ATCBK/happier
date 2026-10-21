@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { BackdropCanvas } from './BackdropCanvas';
+import type { BackdropCanvasProps } from './backdropCanvas.types';
 import { pictureBackdropProps } from './pictureBackdrop';
 import type { WallpaperHaze as WallpaperHazeComposition } from './wallpaperHaze';
 
@@ -13,7 +14,7 @@ export function WallpaperHaze(
   props: Readonly<{
     source: NonNullable<React.ComponentProps<typeof BackdropCanvas>['source']>;
     size: { width: number; height: number };
-    job: ReturnType<typeof pictureBackdropProps>;
+    job: ReturnType<typeof pictureBackdropProps> & Pick<BackdropCanvasProps, 'resettle'>;
     focus: { x: number; y: number };
     /** Its layers and veil (`resolveWallpaperHaze`). */
     haze: WallpaperHazeComposition;

@@ -21,7 +21,7 @@ export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvas
             const scale = props.mark ? props.width / (props.mark.size ?? 24) : 1;
             canvas.scale(scale, scale);
             if (fade) canvas.saveLayer();
-            paintNativePlanetScene(canvas, scene, regular, strong, props.mark?.ink);
+            paintNativePlanetScene(canvas, scene, regular, strong, props.mark?.ink ?? props.ink);
             if (fade) {
                 // The brand's ordered foot fade as an alpha mask, one lattice period wide and tiled across.
                 const mask = orderedFadeMask(box.height, fade.from, fade.to, dpr);
@@ -35,7 +35,7 @@ export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvas
                 canvas.restore(); maskPaint.dispose(); image.dispose();
             }
         }, { width: box.width, height: box.height });
-    }, [box.height, box.width, dpr, fadeFrom, fadeTo, props.mark?.ink, props.mark?.size, props.width, regular, scene, strong]);
+    }, [box.height, box.width, dpr, fadeFrom, fadeTo, props.mark?.ink, props.ink, props.mark?.size, props.width, regular, scene, strong]);
     React.useEffect(() => { if (picture) props.onReady?.(); }, [picture, props.onReady]);
     React.useEffect(() => () => { picture?.dispose(); }, [picture]);
     return <Canvas pointerEvents="none" accessible={false} accessibilityElementsHidden importantForAccessibility="no-hide-descendants" testID={props.testID} style={[props.style, { width: box.width, height: box.height }]}>

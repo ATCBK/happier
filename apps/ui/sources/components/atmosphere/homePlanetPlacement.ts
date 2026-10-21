@@ -47,7 +47,8 @@ export function homeHorizonBand(
 }
 
 /** The Horizon dissolve runs from 58 % of the band to its foot, thinning through the composer. */
-export const HOME_HORIZON_FADE_FROM = 0.58;
+import { ATMOSPHERE_HORIZON_FADE_FROM as HOME_HORIZON_FADE_FROM } from '@happier-dev/brand/atmosphere';
+export { HOME_HORIZON_FADE_FROM };
 
 /**
  * A Project's planet lives in its band (plan R-7): drawn only above the bottom of the Project tabs and

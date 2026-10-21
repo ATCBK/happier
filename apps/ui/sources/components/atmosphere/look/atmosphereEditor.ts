@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type {
   HomeAtmosphere,
-  ProjectAtmosphere,
+  AtmospherePresentation,
 } from '@happier-dev/protocol/account/settings/accountSettings';
 import { useSetting } from '@/sync/store/hooks';
 import { getStorage } from '@/sync/domains/state/storageStore';
@@ -15,8 +15,8 @@ const homeAtmosphereSetting = { anchor: 'appearance.homeAtmosphere' } as const;
  * atmosphere; a project screen passes its project override's editor instead (the project owner).
  */
 export type AtmosphereEditor = Readonly<{
-  value: ProjectAtmosphere;
-  update(edit: (current: ProjectAtmosphere) => ProjectAtmosphere): void;
+  value: AtmospherePresentation;
+  update(edit: (current: AtmospherePresentation) => AtmospherePresentation): void;
   sameAsHome?: boolean;
   resetToHome?: () => void;
 }>;

@@ -122,6 +122,7 @@ export const APPEARANCE_GLASS_SETTINGS = defineSettingsPage({
                 atmosphereLooks: { storage: homeAtmosphereStorageBinding('appearance.atmosphereLooks') },
                 atmosphereBehindSessions: { storage: atmosphereFieldStorageBinding('appearance.atmosphereBehindSessions') },
                 projectAtmosphere: {},
+                atmospherePictureLibrary: {},
                 atmospherePictureAdd: { operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: false,
                     invoke: context => invokeAtmospherePictureOperation('add', context) } },
                 atmospherePictureRemove: { operation: { kind: 'invoke', requiresHumanInteraction: false, requiresApproval: true,

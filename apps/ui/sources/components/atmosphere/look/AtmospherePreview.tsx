@@ -89,6 +89,7 @@ export const AtmospherePreview = React.memo(function AtmospherePreview() {
       });
       art = (
         <BackdropCanvas
+          resettle={false}
           source={source}
           size={band}
           {...backdrop}

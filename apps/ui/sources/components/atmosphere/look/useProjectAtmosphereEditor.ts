@@ -5,7 +5,7 @@ import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccoun
 import { createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
 import { Modal } from '@/modal';
 import { t } from '@/text';
-import type { ProjectAtmosphere } from '@happier-dev/protocol/account/settings/accountSettings';
+import type { ProjectAtmosphere, AtmospherePresentation } from '@happier-dev/protocol/account/settings/accountSettings';
 import type { AtmosphereEditor } from './atmosphereEditor';
 import { projectAtmosphereEdit } from './projectAtmosphereEdit';
 
@@ -41,7 +41,7 @@ export function useProjectAtmosphereEditor(project: Readonly<{ serverId: string;
     }, [project.projectKey, project.serverId]);
     return React.useMemo(() => ({
         value: projectAtmosphereEdit(home, override, value => value),
-        update: (edit: (value: ProjectAtmosphere) => ProjectAtmosphere) => write(edit),
+        update: (edit: (value: AtmospherePresentation) => AtmospherePresentation) => write(current => ({ ...current, ...edit(current) })),
         sameAsHome: override === undefined || override === 'home',
         resetToHome: () => write('home'),
     }), [home, override, write]);

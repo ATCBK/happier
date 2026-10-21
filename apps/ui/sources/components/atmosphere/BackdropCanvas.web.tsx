@@ -81,7 +81,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
             const canvas = ref.current;
             const { source, job } = requestRef.current;
             const next = { localId: 'localId' in source ? source.localId : null, w: pixels.w, h: pixels.h };
-            const settle = backdropSettle({ fact: atmosphereResettleFact.get(), settled: settled.current, shown: shown.current, next });
+            const settle = backdropSettle({ enabled: props.resettle, fact: atmosphereResettleFact.get(), settled: settled.current, shown: shown.current, next });
             shown.current = next;
             const context = canvas.getContext('2d');
             if (!context) throw new Error('Atmosphere canvas is unavailable');
@@ -105,11 +105,11 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
         return () => { cancelled = true; };
         // All configuration is in key; source changes select a new renderer/cache.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [renderer, key, state.visible]);
+    }, [renderer, key, state.visible, props.resettle]);
     React.useEffect(() => {
         if (!playback) return;
         const { context, target, frames, settle } = playback;
-        if (reducedMotion && settle.kind === 'resettle') {
+        if (props.resettle === false || (reducedMotion && settle.kind === 'resettle')) {
             context.putImageData(target, 0, 0);
             setPlayback(null);
             return;
@@ -131,7 +131,7 @@ export const BackdropCanvas = React.memo(function BackdropCanvas(props: Backdrop
             frame = requestAnimationFrame(step);
         });
         return () => cancelAnimationFrame(frame);
-    }, [playback, paused, reducedMotion]);
+    }, [playback, paused, reducedMotion, props.resettle]);
     const box = snapCanvasBox(state.size.width, state.size.height, dpr);
     return React.createElement('canvas', {
         ref, 'aria-hidden': true, 'data-testid': props.testID,

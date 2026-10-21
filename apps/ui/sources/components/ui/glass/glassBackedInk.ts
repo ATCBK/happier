@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform } from 'react-native';
 
 import { parseThemeColor } from '@/theme/parseThemeColor';
+import { picturePrefersPageInk } from '@happier-dev/brand/atmosphere-haze';
 
 /**
  * Faint ink (secondary and tertiary alike) on backed glass is primary ink at this share; the web
@@ -78,10 +79,6 @@ export function resolveGlassPictureInk(
     : { themeSecondary, secondary: ink, picture: { themeInks: [primary, ...themeQuietInks], ink } };
 }
 
-/** DESIGN.md contrast: body text 4.5:1; large text and secondary lines 3:1. */
-const GLASS_PICTURE_BODY_CONTRAST = 4.5;
-const GLASS_PICTURE_LARGE_CONTRAST = 3;
-
 /**
  * Without the default haze to stand on (a person's own picture or look), the theme's ink stays while it keeps
  * large-text contrast on the picture. It turns to the page colour only where it fails even that (a night sky
@@ -93,12 +90,7 @@ export function glassPictureInk(primary: string, page: string, pictureLuminance:
   const primaryColor = parseThemeColor(primary);
   const pageColor = parseThemeColor(page);
   if (primaryColor === null || pageColor === null) return primary;
-  const contrast = (luminance: number) => {
-    const [high, low] = [luminance, pictureLuminance].sort((a, b) => b - a);
-    return (high! + 0.05) / (low! + 0.05);
-  };
-  const primaryContrast = contrast(primaryColor.luminosity());
-  return primaryContrast < GLASS_PICTURE_LARGE_CONTRAST && contrast(pageColor.luminosity()) >= GLASS_PICTURE_BODY_CONTRAST ? page : primary;
+  return picturePrefersPageInk(primaryColor.luminosity(), pageColor.luminosity(), pictureLuminance) ? page : primary;
 }
 
 /**

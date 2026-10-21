@@ -1,4 +1,4 @@
-import { cropOf, renderBackdrop, type AtmosphereGrade, type AtmospherePixels } from '@happier-dev/brand/atmosphere';
+import { cropOf, backdropBandGrade, renderBackdrop, type AtmosphereGrade, type AtmospherePixels } from '@happier-dev/brand/atmosphere';
 import type { BackdropRenderRequest, BackdropWorkerRequest, BackdropWorkerResponse } from './backdropCanvas.types';
 
 // This file is bundled as a dedicated public worker; it is never imported by the UI.
@@ -10,9 +10,8 @@ const worker = self as unknown as {
 /** The grade's horizon row in the cropped band (lab `compute`). */
 function bandGrade(request: BackdropRenderRequest, source: { w: number; h: number }) {
     const grade = request.job.grade;
-    if (!grade || grade.hz !== undefined) return grade as AtmosphereGrade | null | undefined;
     const crop = cropOf(source, request.job.span?.W ?? request.width, request.job.span?.H ?? request.height, request.focus, request.horizon);
-    return { from: grade.from, to: grade.to, hz: crop.toBand(grade.horizon ?? request.horizon?.src ?? 0.55) };
+    return backdropBandGrade(grade, crop, request.horizon);
 }
 
 async function sourcePixels(request: BackdropRenderRequest): Promise<Readonly<{ pixels: AtmospherePixels; grade: AtmosphereGrade | null | undefined }>> {

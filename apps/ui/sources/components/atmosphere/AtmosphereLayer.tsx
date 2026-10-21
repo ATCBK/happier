@@ -18,7 +18,7 @@ import {
   type AtmosphereRect,
   type AtmosphereStage,
 } from './atmosphereStage';
-import { changedPictureLookControls, effectivePictureLook } from './look/atmosphereEdits';
+import { effectivePictureLook, pictureHazeIsAdaptive } from './look/atmosphereEdits';
 import { pictureBackdropProps } from './pictureBackdrop';
 import { useAtmosphere } from './useAtmosphere';
 import { useAtmospherePictureCatalog } from './useAtmospherePictureCatalog';
@@ -183,7 +183,7 @@ const AtmospherePicture = React.memo(function AtmospherePicture(
   // exactly as set.
   const hazeInput = React.useRef({ adaptive: false, page: '', primary: '' });
   hazeInput.current = {
-    adaptive: atmosphere.builtinPicture !== null && changedPictureLookControls(atmosphere).length === 0,
+    adaptive: pictureHazeIsAdaptive(atmosphere, atmosphere.builtinPicture),
     page: theme.colors.surface.base,
     primary: theme.colors.text.primary,
   };

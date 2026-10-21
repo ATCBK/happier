@@ -21,6 +21,8 @@ export type BackdropCanvasProps = Readonly<{
     dpr?: number;
     /** Projections of one Horizon scene share its source-scoped render cache and worker. */
     renderGroup?: object;
+    /** Decorative/private review paints never inherit the app's Home idle resettle. Default preserves Home. */
+    resettle?: boolean;
     /** Current Home idle/focus facts pause finite resettle playback without resetting its clock. */
     resettlePaused?: boolean;
     onReady?: () => void;

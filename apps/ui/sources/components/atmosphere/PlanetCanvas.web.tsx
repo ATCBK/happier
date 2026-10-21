@@ -37,7 +37,7 @@ export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvas
             context.setTransform(1, 0, 0, 1, 0, 0); context.clearRect(0, 0, box.pixelWidth, box.pixelHeight);
             const scale = props.mark ? props.width / (props.mark.size ?? 24) : 1;
             context.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
-            paintPlanetScene(context, scene, fonts, props.mark?.ink);
+            paintPlanetScene(context, scene, fonts, props.mark?.ink ?? props.ink);
             if (fadeFrom !== undefined && fadeTo !== undefined) {
                 // Only the rows the fade touches go through the canvas store (lab at-planet.js).
                 const top = Math.max(0, Math.floor(fadeFrom * dpr));
@@ -55,7 +55,7 @@ export const PlanetCanvas = React.memo(function PlanetCanvas(props: PlanetCanvas
         };
         void draw().catch(error => failed.current?.(error instanceof Error ? error : new Error(String(error))));
         return () => { cancelled = true; };
-    }, [box.pixelHeight, box.pixelWidth, dpr, fadeFrom, fadeTo, props.mark?.ink, props.mark?.size, props.width, scene]);
+    }, [box.pixelHeight, box.pixelWidth, dpr, fadeFrom, fadeTo, props.mark?.ink, props.ink, props.mark?.size, props.width, scene]);
     return React.createElement('canvas', {
         ref, width: box.pixelWidth, height: box.pixelHeight, 'data-testid': props.testID, 'aria-hidden': true,
         style: { ...StyleSheet.flatten(props.style), width: box.width, height: box.height, pointerEvents: 'none', display: 'block', fontFamily: getMonoFont() },

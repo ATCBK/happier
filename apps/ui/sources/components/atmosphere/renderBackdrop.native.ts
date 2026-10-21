@@ -194,10 +194,10 @@ export async function renderNativeBackdrop(request: BackdropRenderRequest): Prom
             let pixels;
             // The grade's horizon row in the cropped band (lab `compute`).
             const sourceGrade = input.job.grade;
-            let grade: { from: number; to: number; hz: number } | null = sourceGrade && sourceGrade.hz !== undefined
+            let grade: { from: number; to: number; hz: number } | null | undefined = sourceGrade && sourceGrade.hz !== undefined
                 ? { from: sourceGrade.from, to: sourceGrade.to, hz: sourceGrade.hz } : null;
-            const bandGrade = (crop: { toBand: (fraction: number) => number }) => {
-                if (sourceGrade && sourceGrade.hz === undefined) grade = { from: sourceGrade.from, to: sourceGrade.to, hz: crop.toBand(sourceGrade.horizon ?? input.horizon?.src ?? 0.55) };
+            const bandGrade = (crop: ReturnType<typeof core.cropOf>) => {
+                grade = core.backdropBandGrade(sourceGrade, crop, input.horizon);
             };
             if (bytes === null && 'rgba' in input.source && input.source.w === input.width && input.source.h === input.height) {
                 pixels = input.source;

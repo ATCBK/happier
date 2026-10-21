@@ -1,6 +1,6 @@
 import { releaseLook, type AtmosphereLookPicture } from '@happier-dev/brand/atmosphere';
-import { DEFAULT_HOME_ATMOSPHERE, HomeAtmosphereSchema,
-    type HomeAtmosphere, type ProjectAtmosphere } from '@happier-dev/protocol/account/settings/accountSettings';
+import { DEFAULT_HOME_ATMOSPHERE, HomeAtmosphereSchema, AtmospherePresentationSchema, atmospherePresentation,
+    type HomeAtmosphere, type ProjectAtmosphere, type AtmospherePresentation } from '@happier-dev/protocol/account/settings/accountSettings';
 import { buildBuiltInAccountSettingMutationV1, parseBuiltInAccountSettingValueV1,
     readBuiltInAccountSettingValueV1, readBuiltInSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import type { SettingStorageBinding, SettingOperationContext, SettingOperationResult } from '@/components/settings/catalog/settingDeclarations';
@@ -29,6 +29,27 @@ export function normalizeHomeAtmosphere(value: HomeAtmosphere): HomeAtmosphere {
 }
 export function normalizeProjectAtmosphere(value: ProjectAtmosphere): ProjectAtmosphere {
     return { ...value, looks: normalizeAtmosphereLooks(value.looks) };
+}
+
+/** Shared declaration parsing/editing with contextual storage owned by the captured controller. */
+export function readAtmospherePresentationSetting(value: AtmospherePresentation, anchor: string): unknown {
+    const declaration = readBuiltInSettingDeclarationV1(anchor);
+    return anchor === 'appearance.homeAtmosphere' ? atmospherePresentation(value) : anchor === 'appearance.atmosphereLooks' ? value.looks
+        : declaration ? readBuiltInAccountSettingValueV1(declaration, { homeAtmosphere: value }) : undefined;
+}
+
+export function editAtmospherePresentationSetting(current: AtmospherePresentation, anchor: string, value: unknown): AtmospherePresentation | null {
+    if (anchor === 'appearance.homeAtmosphere') {
+        const parsed = AtmospherePresentationSchema.safeParse(value);
+        return parsed.success ? { ...parsed.data, looks: normalizeAtmosphereLooks(parsed.data.looks) } : null;
+    }
+    const declaration = readBuiltInSettingDeclarationV1(anchor);
+    if (!declaration) return null;
+    const delta = buildBuiltInAccountSettingMutationV1(declaration, { homeAtmosphere: { ...DEFAULT_HOME_ATMOSPHERE, ...current } }, value);
+    const home = HomeAtmosphereSchema.safeParse(delta?.homeAtmosphere);
+    const parsed = anchor === 'appearance.atmosphereLooks' ? AtmospherePresentationSchema.safeParse({ ...current, looks: value })
+        : home.success ? AtmospherePresentationSchema.safeParse(atmospherePresentation(home.data)) : null;
+    return parsed?.success ? { ...parsed.data, looks: normalizeAtmosphereLooks(parsed.data.looks) } : null;
 }
 
 /** Nested intents are reapplied to the latest Account snapshot by the incumbent CAS owner. */
@@ -87,7 +108,13 @@ export async function invokeAtmospherePictureOperation(operation: 'add' | 'remov
     const { pictureStore } = await import('./pictureStore');
     if (input?.kind === 'atmosphere_picture_add') {
         let data: Blob | string;
-        if (input.source.kind === 'url') {
+        if (input.source.kind === 'picked') {
+            const pick = context.services?.pickAtmospherePicture;
+            if (!pick) return { status: 'unavailable', reason: 'picture_picker_unavailable' };
+            const picked = await pick(context.signal);
+            if (!context.isCurrent() || picked === null) return { status: 'cancelled' };
+            data = picked;
+        } else if (input.source.kind === 'url') {
             const response = await fetch(input.source.url, { signal: context.signal });
             if (!response.ok) return { status: 'unavailable', reason: 'picture_download_failed' };
             data = await response.blob();
@@ -102,8 +129,16 @@ export async function invokeAtmospherePictureOperation(operation: 'add' | 'remov
         if (!context.isCurrent()) return { status: 'cancelled' };
         const localId = await storeUserAtmospherePicture(data);
         if (!context.isCurrent()) return { status: 'cancelled' };
-        await context.mutateSettings(settings => ({ homeAtmosphere: { ...settings.homeAtmosphere, source: 'picture',
-            picture: { ...settings.homeAtmosphere.picture, ref: { kind: 'user', localId } } } }));
+        const select = <T extends AtmospherePresentation>(value: T): T => ({ ...value, source: 'picture',
+            picture: { ...value.picture, ref: { kind: 'user', localId } } });
+        if (context.target?.kind === 'public_profile_draft') {
+            const draft = context.services?.publicProfileAtmosphereDraft;
+            if (!draft?.isCurrent() || draft.serverId !== context.target.serverId) return { status: 'cancelled' };
+            await draft.update(value => context.isCurrent() && draft.isCurrent() ? select(value) : value);
+        } else {
+            await context.mutateSettings(settings => ({ homeAtmosphere: select(settings.homeAtmosphere) }));
+        }
+        if (!context.isCurrent()) return { status: 'cancelled' };
         return { status: 'completed', value: { localId } };
     }
     if (input?.kind === 'atmosphere_picture_remove') {

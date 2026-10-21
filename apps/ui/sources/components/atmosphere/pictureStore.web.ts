@@ -1,6 +1,7 @@
 import { openBrowserRecordDatabase } from '@/sync/domains/state/browserRecordStorage';
+import { ATMOSPHERE_PICTURE_MAX_EDGE } from '@happier-dev/brand/atmosphere';
 import { createBuiltinPictureEnsurer, createBuiltinThumbnailEnsurer, readPictureSource } from './ensureBuiltinPicture';
-import type { PictureInfo, PictureInput, PictureStore, BuiltinPicture } from './pictureStore.types';
+import type { PictureInfo, PictureInput, PictureStore, BuiltinPicture, PicturePreparationOptions } from './pictureStore.types';
 
 type WebPictureRecord = PictureInfo & Readonly<{ data: Blob; thumb?: Blob; source?: BuiltinPicture['src'] }>;
 const listeners = new Set<() => void>();
@@ -38,19 +39,20 @@ function fetchBuiltinPicture(source: string): Promise<Response> {
 }
 
 /** Browser decoding/canvas encoding owns image formats and orientation. */
-async function prepare(data: Blob | string): Promise<Blob> {
+async function prepare(data: Blob | string, options?: PicturePreparationOptions): Promise<Blob> {
     const bitmap = await createImageBitmap(await asBlob(data));
     try {
-        const scale = Math.min(1, 2560 / Math.max(bitmap.width, bitmap.height));
+        const scale = Math.min(1, ATMOSPHERE_PICTURE_MAX_EDGE / Math.max(bitmap.width, bitmap.height));
         const canvas = document.createElement('canvas');
         canvas.width = Math.round(bitmap.width * scale);
         canvas.height = Math.round(bitmap.height * scale);
         const context = canvas.getContext('2d');
         if (!context) throw new Error('Atmosphere image canvas is unavailable.');
         context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const mime = options?.format === 'png' ? 'image/png' : 'image/webp';
         return await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => {
-            if (blob?.type === 'image/webp') resolve(blob); else reject(new Error('Atmosphere WebP encoding failed.'));
-        }, 'image/webp', 0.86));
+            if (blob?.type === mime) resolve(blob); else reject(new Error('Atmosphere picture encoding failed.'));
+        }, mime, 0.86));
     } finally { bitmap.close(); }
 }
 

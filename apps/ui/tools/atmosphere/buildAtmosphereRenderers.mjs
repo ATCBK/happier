@@ -26,7 +26,7 @@ export async function buildAtmosphereRenderers({ outputDirectory, web = true, ui
         : resolve(uiDirectory, 'public/happier-atmosphere-worker.js');
     const built = await buildUiSourceAsset({ outputs: web ? [nativeFile, workerFile] : [nativeFile],
         retainLastGreen, build: async () => {
-        const native = await build({ stdin: { contents: `export { renderBackdrop, cropOf, atmosphereRipple, createAtmosphereTransition, orderedFade } from ${JSON.stringify(core)};`,
+        const native = await build({ stdin: { contents: `export { renderBackdrop, cropOf, backdropBandGrade, atmosphereRipple, createAtmosphereTransition, orderedFade } from ${JSON.stringify(core)};`,
             resolveDir: ui, sourcefile: 'atmosphere-worklet-entry.js' }, bundle: true, platform: 'neutral',
             format: 'iife', globalName: 'AtmosphereWorkletCore', target: 'es2020', write: false });
         // Worklets need this generated lexical closure on their secondary runtime.

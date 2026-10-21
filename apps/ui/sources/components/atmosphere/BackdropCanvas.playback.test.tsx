@@ -57,19 +57,28 @@ describe.each([['web', WebCanvas], ['native', NativeCanvas]] as const)('%s reset
         atmosphereResettleFact.clear(); vi.useRealTimers(); vi.unstubAllGlobals();
     });
 
-    async function start() {
+    async function start(staticPaint = false) {
         const painted: Uint8ClampedArray[] = [];
         const props = { source: record('old'), size: { width: 8, height: 4 }, look: 'original', page: [245, 245, 245], theme: 'light', dpr: 1 } satisfies BackdropCanvasProps;
-        const screen = await renderScreen(<Canvas {...props} />, { createNodeMock: element => element.type === 'canvas' ? {
+        const screen = await renderScreen(<Canvas {...props} {...(staticPaint ? { resettle: false } : {})} />, { createNodeMock: element => element.type === 'canvas' ? {
             getContext: () => ({ putImageData: (image: ImageData) => painted.push(image.data), getImageData: () => ({ data: pixels(10).rgba }) }),
         } : null });
         atmosphereResettleFact.announce('next', false);
-        const next = { ...props, source: record('next') };
+        const next = { ...props, source: record('next'), ...(staticPaint ? { resettle: false } : {}) };
         await screen.update(<Canvas {...next} />);
         await frames(96);
         return { screen, next, paints: () => _platform === 'web' ? painted.length : native.painted.length,
             last: () => _platform === 'web' ? painted.at(-1) : native.painted.at(-1) };
     }
+
+    it('paints a private static preview immediately without consuming a Home idle resettle', async () => {
+        const canvas = await start(true);
+        if (_platform === 'web') expect(canvas.last()).toEqual(pixels(210).rgba);
+        else {
+            expect(native.painted).toEqual([]);
+            expect(canvas.screen.findAll(node => node.props.source?.uri === 'next').length).toBeGreaterThan(0);
+        }
+    });
 
     it('holds the current frame after typing or Home focus pauses an admitted resettle, then resumes its elapsed clock', async () => {
         const canvas = await start();

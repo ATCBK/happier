@@ -11,6 +11,7 @@ type Frame = Readonly<{ localId: string | null; w: number; h: number }>;
  * reduced time. Anything else swaps as it always has.
  */
 export function backdropSettle(input: Readonly<{
+    enabled?: boolean;
     fact: Readonly<{ id: number; localId: string; reducedMotion: boolean }> | null;
     /** The last announcement this canvas played. */
     settled: number | null;
@@ -18,6 +19,7 @@ export function backdropSettle(input: Readonly<{
     next: Frame;
 }>): BackdropSettle | null {
     const { fact, shown, next } = input;
+    if (input.enabled === false) return null;
     if (!fact || fact.id === input.settled || next.localId !== fact.localId) return null;
     if (!shown || shown.localId === next.localId || shown.w !== next.w || shown.h !== next.h) return null;
     return fact.reducedMotion

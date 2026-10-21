@@ -68,7 +68,7 @@ vi.mock('react-native-worklets', () => ({
 
 vi.mock('@shopify/react-native-skia', async () => ({
     ...(await import('@/dev/testkit/mocks/reactNativeSkia')).createReactNativeSkiaMock(),
-    ImageFormat: { WEBP: 6 },
+    ImageFormat: { WEBP: 6, PNG: 4 },
     Skia: {
         Data: { fromBase64: (base64: string) => ({ bytes: new Uint8Array(Buffer.from(base64, 'base64')), dispose() {} }) },
         Image: { MakeImageFromEncoded: (data: { bytes: Uint8Array }) => boundary.decodeFails ? null : ({
@@ -117,6 +117,19 @@ beforeEach(() => {
 });
 
 describe('native picture store', () => {
+    it('prepares a PNG review copy on the native worker without changing device custody', async () => {
+        boundary.files.set('file:///picker/review.webp', new Uint8Array([1, 2, 3]));
+        const store = await openStore();
+        const revision = store.getRevision();
+        const result = await store.prepare('file:///picker/review.webp', { format: 'png' });
+        expect(result).toMatch(/^data:image\/png;base64,/);
+        expect(JSON.parse(Buffer.from(result.split(',')[1]!, 'base64').toString())).toEqual({
+            format: 4, quality: 86, width: 2560, height: 640,
+        });
+        expect(store.getRevision()).toBe(revision);
+        expect(await store.list()).toEqual([]);
+        expect([...boundary.files.keys()]).toEqual(['file:///picker/review.webp']);
+    });
     it('prepares picked JPEG bytes once through the real user ingress and persists the worker WebP', async () => {
         boundary.files.set('file:///picker/large.jpeg', new Uint8Array([1, 255, 4, 6]));
         const store = await openStore();

@@ -251,6 +251,7 @@ export const PictureLookPreview = React.memo(function PictureLookPreview(
           });
           return (
             <BackdropCanvas
+              resettle={false}
               source={props.source}
               size={size}
               {...backdrop}
