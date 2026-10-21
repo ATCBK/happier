@@ -11,6 +11,7 @@ import {
 } from '../../runtime/input/composerAttachmentV1.js';
 import { ComposerStagedMediaContentV1Schema } from '../../runtime/input/composerContentV1.js';
 import { MentionRefV1Schema } from '../../runtime/input/mentionRefV1.js';
+import { ReviewCommentDraftMessageV1Schema } from '../../messages/structured/reviewCommentsV1.js';
 import {
   PluginContributionIdentityV1Schema,
   PluginContributionLocalIdSchema,
@@ -159,6 +160,9 @@ export const ComposerOperationV1Schema = lazyZodSchema(() => z.discriminatedUnio
   z.strictObject({ kind: z.literal('text.clear') }),
   z.strictObject({ kind: z.literal('reference.insert'), reference: ComposerMentionRefV1Schema }),
   z.strictObject({ kind: z.literal('reference.remove'), reference: ComposerReferenceSelectorV1Schema }),
+  // Host review context uses its existing workspace draft owner, never a
+  // caller-qualified plugin attachment or a new submitted anchor shape.
+  z.strictObject({ kind: z.literal('reviewComment.add'), comment: ReviewCommentDraftMessageV1Schema }),
   z.strictObject({
     kind: z.literal('attachment.add'),
     // The host qualifies this local ID from the caller. Public authors never

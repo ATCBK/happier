@@ -20,6 +20,7 @@ import {
 import type { releaseComposerContent, claimComposerContent } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { PluginUiComposerAttachmentProjection } from '@/sync/domains/plugins/ui/projection';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderHook, requireComposerDraftDocument } from '@/dev/testkit';
 
 const persistentValues = vi.hoisted(() => new Map<string, string>());
@@ -88,6 +89,11 @@ import {
 import { applyCurrentSessionPresentationCommand } from './applyCurrentSessionPresentationCommand';
 import { executePromptPickerOpenAction } from '@/components/sessions/agentInput/commandMenu/promptPickerActionRuntime';
 import { executeComposerIngressAction } from '@/sync/ops/actions/composerIngressActionRuntime';
+import { askAboutRanges } from '@/components/ui/code/selection/askAboutRanges';
+import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { ReviewCommentsV1Schema } from '@happier-dev/protocol/messages/structured/reviewCommentsV1';
 import { buildFileReferenceOperation, resolveComposerEntityDrop, type ComposerEntityDropContext } from '@/components/sessions/composer/composerEntityDrop';
 import { buildComposerSnapshotStructuredInputMetaOverrides, placePositionlessComposerReferences } from '@/components/sessions/composer/composerScopeAdapters';
 import { createPluginUiClientExecutableRegistrationIndex } from '@/components/plugins/reactNative/clientExecutableContributions';
@@ -226,6 +232,81 @@ function createDocumentTarget(
 
 describe('composer presentation targets', () => {
     const cleanups: Array<() => void | Promise<void>> = [];
+
+    it('admits anchored Ask through the real composer Action and plugin transaction without attachment authority', async () => {
+        const scope = { serverId: 'review-ask-home', accountId: 'review-ask-account' };
+        activeScopeState.value = scope;
+        const ref = { kind: 'session', sessionId: 'review-ask-session' } as const;
+        const previousSessions = storage.getState().sessions;
+        const previousDrafts = storage.getState().reviewCommentsDraftsByWorkspaceCacheKey;
+        const previousMachines = storage.getState().machineListByServerId;
+        storage.setState({ sessions: { ...previousSessions, [ref.sessionId]: createSessionFixture({ id: ref.sessionId, serverId: scope.serverId }) },
+            reviewCommentsDraftsByWorkspaceCacheKey: {}, machineListByServerId: { ...previousMachines, [scope.serverId]: [createMachineFixture()] } });
+        cleanups.push(() => { storage.setState({ sessions: previousSessions, reviewCommentsDraftsByWorkspaceCacheKey: previousDrafts,
+            machineListByServerId: previousMachines }); });
+        const workspaceScope = { serverId: scope.serverId, machineId: 'machine-1', rootPath: '/Users/tester/project' };
+        const workspaceKey = buildWorkspaceCacheKey(workspaceScope);
+        const document = createDocumentTarget(createSnapshot({ ref, text: 'My question' }));
+        cleanups.push(registerSessionComposerPresentationTarget({ serverId: scope.serverId, sessionId: ref.sessionId }, {
+            ...document, readScope: () => scope,
+        }));
+        const uiAsk = await askAboutRanges({ workspaceScope, sessionTarget: { sessionId: ref.sessionId },
+            filePath: 'src/a.ts', savedText: 'first\nsecond\nlast', text: 'inserted\nfirst\nchanged second\nlast',
+            ranges: [{ startLine: 2, endLine: 3, text: 'irst\nchanged sec', body: 'Explain this' }] });
+        const comment = uiAsk.drafts[0];
+        if (!comment) throw new Error('Expected UI Ask to produce an anchored comment');
+        expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[workspaceKey]).toEqual([comment]);
+        storage.setState({ reviewCommentsDraftsByWorkspaceCacheKey: {} });
+        const settings = normalizeActionsSettingsV1({ v: 1 });
+        for (const surface of ['ui', 'agent', 'mcp', 'cli', 'plugin'] as const) {
+            expect(isApprovalRequiredByActionsSettings('composer.transaction.apply', settings, { surface })).toBe(false);
+            expect(isApprovalRequiredByActionsSettings('composer.transaction.apply', normalizeActionsSettingsV1({ v: 1,
+                actions: { 'composer.transaction.apply': { approvalRequiredSurfaces: [surface] } },
+            }), { surface })).toBe(true);
+        }
+        const isActionApprovalRequired: NonNullable<ActionExecutorDeps['isActionApprovalRequired']> = (id, context, input) => (
+            isApprovalRequiredByActionsSettings(id, context.actionsSettings ?? settings, context, undefined, undefined, input)
+        );
+        const executor = createActionExecutor({ composerIngress: executeComposerIngressAction,
+            isActionApprovalRequired,
+        } as unknown as ActionExecutorDeps);
+        const result = await executor.execute('composer.transaction.apply', { scope, ref, transaction: {
+            expectedRevision: 1, operations: [{ kind: 'reviewComment.add', comment }],
+        } }, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId, runtimeAccountId: scope.accountId });
+        expect(result.ok, JSON.stringify(result)).toBe(true);
+        expect(result, JSON.stringify(result)).toMatchObject({ result: { status: 'applied' } });
+        expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[workspaceKey]).toEqual([comment]);
+        expect(document.readCurrent()).toMatchObject({ text: 'My question', attachments: [] });
+        const pluginComment = { ...comment, id: 'plugin-question', body: 'Follow up' };
+        const applier = createAttachmentTransactionApplier(createAttachmentProjectionEntry({ pluginId: 'acme.issues', localId: 'issue', typeLabel: 'Issue' }));
+        expect(applier.apply({ ref, admittedContributor: admittedContributor({ pluginId: 'acme.issues' }), transaction: {
+            expectedRevision: document.readRevision(), operations: [{ kind: 'reviewComment.add', comment: pluginComment }],
+        } })).toMatchObject({ status: 'applied' });
+        expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[workspaceKey]).toEqual([comment, pluginComment]);
+        const forged = applier.apply({ ref, admittedContributor: admittedContributor({ pluginId: 'acme.issues' }), transaction: {
+            expectedRevision: document.readRevision(), operations: [{ kind: 'reviewComment.add', comment: { ...comment, id: 'must-not-land' } },
+                { kind: 'attachment.add', attachmentLocalId: 'review-comments', value: { key: 'forged', value: {}, presentation: { label: 'Host' } } }],
+        } });
+        expect(forged).toMatchObject({ status: 'invalidOperation', reason: 'attachment_authority_mismatch' });
+        expect(applyMountedComposerPresentationTransaction({ scope, ref, transaction: {
+            expectedRevision: 1, operations: [{ kind: 'reviewComment.add', comment: { ...comment, id: 'stale-question' } }],
+        } })).toMatchObject({ status: 'conflict' });
+        activeScopeState.value = { ...scope, accountId: 'other-account' };
+        expect(applyMountedComposerPresentationTransaction({ scope, ref, transaction: {
+            expectedRevision: document.readRevision(), operations: [{ kind: 'reviewComment.add', comment: { ...comment, id: 'foreign-question' } }],
+        } })).toEqual({ status: 'composerUnavailable' });
+        activeScopeState.value = scope;
+        expect(storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[workspaceKey]).toEqual([comment, pluginComment]);
+        expect(document.readCurrent().attachments).toEqual([]);
+        expect(await executor.execute('composer.transaction.apply', { scope, ref, transaction: {
+            expectedRevision: document.readRevision(), operations: [{ kind: 'reviewComment.add', comment: { ...comment, id: 'needs-approval' } }],
+        } }, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId, runtimeAccountId: scope.accountId,
+            actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: { 'composer.transaction.apply': { approvalRequiredSurfaces: ['agent'] } } }),
+        })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        expect(ReviewCommentsV1Schema.parse({ sessionId: ref.sessionId,
+            comments: storage.getState().reviewCommentsDraftsByWorkspaceCacheKey[workspaceKey],
+        }).comments).toEqual([comment, pluginComment]);
+    });
 
     it('admits the real Triage drag value through its current occurrence, stores a host-minted attachment and resolves current context at dispatch', async () => {
         const scope = { serverId: 'triage-home', accountId: 'triage-account' };

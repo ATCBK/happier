@@ -90,6 +90,22 @@ function assertComposerAttachmentPublicValuesAreReadonly(
 void assertComposerAttachmentPublicValuesAreReadonly;
 
 describe('Composer protocol surface', () => {
+  it('keeps review mutations closed and delegates snapshot normalization to the existing anchor schema', () => {
+    const comment = { id: 'ask-1', filePath: 'src/a.ts', source: 'file', anchor: { kind: 'fileLine', startLine: 1 },
+      snapshot: { selectedLines: ['const value = 1;'], beforeContext: [], afterContext: [] },
+      body: '', includeInPrompt: true, createdAt: 1 };
+    const operation = { kind: 'reviewComment.add', comment };
+    expect(ComposerOperationV1Schema.parse(operation)).toEqual(operation);
+    for (const invalid of [
+      { ...operation, workspace: { machineId: 'other-machine', rootPath: '/elsewhere' } },
+      { ...operation, comment: { ...comment, pluginId: 'forged-host' } },
+    ]) expect(ComposerOperationV1Schema.safeParse(invalid).success).toBe(false);
+    for (const normalized of [
+      { ...operation, comment: { ...comment, snapshot: { ...comment.snapshot, trusted: true } } },
+      { ...operation, comment: { ...comment, anchor: { ...comment.anchor, execute: true } } },
+    ]) expect(ComposerOperationV1Schema.parse(normalized)).toEqual(operation);
+  });
+
   it('owns exact Composer reference equality and presentation keys for every arm', () => {
     const refs = [
       { kind: 'session', sessionId: 'session-1' },

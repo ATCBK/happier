@@ -40,7 +40,7 @@ const addressHints = [
 export const COMPOSER_INGRESS_ACTION_SPECS = [{
   ...client, id: 'composer.transaction.apply', approval: {result: 'required'}, title: 'Apply composer transaction',
   cli: { commands: [{ path: ['composer', 'transaction', 'apply'], visibility: 'canonical' }] },
-  description: 'Apply a revision-bound transaction to the exact mounted editable composer. Attachment selection is validated against its current composition; never submits input or grants staged-media custody.',
+  description: 'Apply a revision-bound transaction to the exact mounted editable composer. reviewComment.add adds anchored review context to the Session workspace draft; attachment selection is validated against its current composition. Never submits input or grants staged-media custody.',
   safety: 'safe', sideEffectClass: 'external', bindings: { mcpToolName: 'composer_transaction_apply' },
   inputSchema: ComposerTransactionApplyInputV1Schema, outputSchema: ComposerTransactionResultV1Schema,
   inputHints: { title: 'Apply composer transaction', fields: [...addressHints,

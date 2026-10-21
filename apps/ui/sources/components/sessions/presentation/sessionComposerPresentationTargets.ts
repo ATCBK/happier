@@ -54,6 +54,10 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { storage } from '@/sync/domains/state/storage';
 import { isSessionRetiredForServer } from '@/sync/store/domains/sessions';
 import { subscribeSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
+import type { ReviewCommentDraft } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
+import { buildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { upsertWorkspaceReviewCommentDraft } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceReviewCommentDraftHandlers';
 import type { PluginUiComposerAttachmentProjection } from '@/sync/domains/plugins/ui/projection';
 import type { PluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { normalizeSessionAddress, sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -1131,7 +1135,17 @@ type PreparedComposerPresentationTransactionApply = Readonly<{
         claimant: Readonly<{ composer: ComposerRefV1; attachmentInstanceId: string }>;
     }>[];
     selection: ComposerSnapshotV1['selection'];
+    reviewComments: Readonly<{ workspaceScope: WorkspaceScopeBase; comments: readonly ReviewCommentDraft[] }> | null;
 }>;
+
+function readReviewCommentWorkspace(target: ComposerPresentationTarget, ref: ComposerRefV1): WorkspaceScopeBase | null {
+    // The mounted document names the Account and the Session owns placement.
+    // An author cannot redirect a review chip to an arbitrary workspace.
+    if (ref.kind !== 'session') return null;
+    const scope = target.readScope?.();
+    if (!scope || !areServerAccountScopesEqual(scope, getActiveServerAccountScope())) return null;
+    return resolveWorkspaceTargetForSession({ ...scope, sessionId: ref.sessionId });
+}
 
 /**
  * Validates one transaction against its target without committing. All target
@@ -1172,6 +1186,14 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
     }
     if (!snapshot.state.editable) return { ok: false, result: { status: 'notEditable' } };
 
+    const reviewOperations = transaction.data.operations.flatMap((operation, operationIndex) => (
+        operation.kind === 'reviewComment.add' ? [{ comment: operation.comment, operationIndex }] : []
+    ));
+    const reviewWorkspace = reviewOperations.length > 0 ? readReviewCommentWorkspace(target, request.ref) : null;
+    if (reviewOperations.length > 0 && !reviewWorkspace) {
+        return { ok: false, result: invalidOperation(reviewOperations[0]!.operationIndex, 'review_comment_workspace_unavailable') };
+    }
+
     const text = resolveTextMutation({ snapshot, operations: transaction.data.operations });
     if (!text.ok) return { ok: false, result: text.result };
     const references = resolveReferences({
@@ -1204,6 +1226,7 @@ function prepareComposerPresentationTransactionApply(input: Readonly<{
             attachmentInstanceIds: attachments.attachmentInstanceIds,
             stagedMediaClaims: attachments.stagedMediaClaims,
             selection: clampSelection(snapshot.selection, text.text.length),
+            reviewComments: reviewWorkspace ? { workspaceScope: reviewWorkspace, comments: reviewOperations.map(({ comment }) => comment) } : null,
         }),
     };
 }
@@ -1216,6 +1239,12 @@ function commitComposerPresentationTransactionApply(
         claimant: Readonly<{ composer: ComposerRefV1; attachmentInstanceId: string }>;
     }>[] = [],
 ): ComposerTransactionResultV1 {
+    if (prepared.reviewComments) {
+        const currentWorkspace = readReviewCommentWorkspace(prepared.target, ref);
+        if (!currentWorkspace || buildWorkspaceCacheKey(currentWorkspace) !== buildWorkspaceCacheKey(prepared.reviewComments.workspaceScope)) {
+            return { status: 'composerUnavailable' };
+        }
+    }
     const committed = prepared.target.commitDocument({
         expectedRevision: prepared.expectedRevision,
         mutation: {
@@ -1226,6 +1255,13 @@ function commitComposerPresentationTransactionApply(
         },
     });
     if (committed.status !== 'applied') return committed;
+    // Validation and document currentness must succeed before publishing host
+    // chips through the very same writer used by editor/diff/Problems Ask.
+    if (prepared.reviewComments) {
+        for (const comment of prepared.reviewComments.comments) {
+            upsertWorkspaceReviewCommentDraft(prepared.reviewComments.workspaceScope, comment);
+        }
+    }
     for (const released of readReleasedComposerStagedMediaHandles({
         composer: ref,
         previous: prepared.snapshot.attachments,
