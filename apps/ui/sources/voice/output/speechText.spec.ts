@@ -20,6 +20,9 @@ describe('toSpeechText', () => {
 
   it('keeps link text and drops link targets', () => {
     expect(toSpeechText('See [the docs](https://example.com/a/b) and ![diagram](x.png).')).toBe('See the docs and diagram.');
+    expect(toSpeechText('See [`parser`](https://example.test/docs), [**`value`**](u), [***`nested`***](u), and ![`diagram`](i). Literal `[x](url)`.'))
+      .toBe('See parser, value, nested, and diagram. Literal [x](url).');
+    expect(toSpeechText('Code `left [x` out](u) **done**.')).toBe('Code left [x out](u) done.');
   });
 
   it('reads bare URLs as their domain', () => {
