@@ -31,7 +31,7 @@ import type {
  */
 export type RpcLocalActionContext = Readonly<Partial<Pick<
     ActionExecutorContext,
-    'surface' | 'authority' | 'callerPermissionMode' | 'causalPermissionAuthority' | 'callerInputConstraints' | 'actionRequestId'
+    'surface' | 'authority' | 'callerPermissionMode' | 'causalPermissionAuthority' | 'callerInputConstraints' | 'actionRequestId' | 'actionCaller'
     | 'externalActionExecutionAuthorization'
     | 'agentStartContext' | 'agentStartWorkDepth' | 'agentStartWorkspaceWrites' | 'sessionAgentSpawnPolicyV1'
 >> & {
