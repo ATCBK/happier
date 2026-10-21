@@ -87,6 +87,10 @@ cannot reuse another application's model rows. Model controls come from the exac
 source descriptor through the shared picker, including Team rows. Catalog visibility
 and reasoning choices do not bypass native Team preflight refusal, worker compatibility
 checks, or experimental-model confirmation.
+The active Team model choice is scoped to that Agent and clears when the Agent
+changes. Editing its controls does not save its backing model id as a native
+Account remembered choice; an explicit native or Account model selection clears
+the Team source before applying the new selection.
 
 Team and Account broker consumers share the endpoint-discovery owner described
 in [Providers](providers.md). For a failed Team launch, read the recipient's

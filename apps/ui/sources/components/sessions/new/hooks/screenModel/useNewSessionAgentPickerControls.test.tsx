@@ -526,6 +526,60 @@ describe('useNewSessionAgentPickerControls', () => {
         );
     });
 
+    it.each(['model', 'control'] as const)('retires Team source before publishing an explicit favorite %s choice', async (choice) => {
+        const codex = createBuiltInBackendEntry('codex', 'Codex', null);
+        const claude = createBuiltInBackendEntry('claude', 'Claude', null);
+        const nativeSelection = SessionModelSelectionV1Schema.parse({ v: 1, updatedAt: 1,
+            ref: { agentTargetKey: codex.backendTargetKey, providerConnectionId: null, modelId: 'shared-id' } });
+        const teamSelection = { kind: 'team_credential_provider_model' as const, teamId: 'team-a', resourceId: 'resource-a',
+            expectedResourceRevision: 1, deliveryMode: 'brokered' as const, agentTargetKey: codex.backendTargetKey, modelId: 'shared-id' };
+        const hook = await renderHook(() => {
+            const [selectedTeam, setSelectedTeam] = React.useState<typeof teamSelection | null>(teamSelection);
+            const source = React.useRef(selectedTeam);
+            source.current = selectedTeam;
+            const [remembered, setRemembered] = React.useState<typeof nativeSelection | null>(null);
+            const [backendTarget, setBackendTarget] = React.useState<PersistedBackendTargetRefV2>(codex.backendTarget);
+            const authoring = useNewSessionAgentAuthoringOptionsState({ agentType: 'codex', backendTargetKey: codex.backendTargetKey,
+                hydratedTempAuthoringDraft: null, hydratedPersistedAuthoringDraft: null,
+                implicitProfileModelSelection: nativeSelection });
+            const picker = useNewSessionAgentPickerControls({
+                useProfiles: false, projectionCurrent: true, selectedProfileId: null, profileMap: new Map(),
+                resolvedBackendEntries: [codex, claude], getCompatibleProfileBackendEntries: () => [],
+                isBackendEntrySelectable: () => true, selectedBackendEntry: codex,
+                selectedBackendTargetKey: formatBackendTargetKeyV2(backendTarget), setBackendTarget,
+                modelMode: authoring.modelMode, modelSelection: authoring.modelSelection,
+                setModelMode: authoring.setModelMode, acpSessionModeId: authoring.acpSessionModeId,
+                setAcpSessionModeId: authoring.setAcpSessionModeId,
+                sessionConfigOptionOverrides: authoring.sessionConfigOptionOverrides,
+                setSessionConfigOptionOverrides: authoring.setSessionConfigOptionOverrides,
+                setEngineSelectionForBackendTarget: authoring.setEngineSelectionForBackendTarget,
+                canRetainModelSelection: () => source.current === null,
+                onRememberEngineSelection: (_target, selection) => setRemembered(selection.modelSelection),
+                selectedMachineId: 'machine-1', capabilityServerId: 'server-1', selectedPath: '/repo',
+                readSettings: () => settingsDefaults, favoriteModelSelections: [{ selection: nativeSelection }],
+                teamModels: { selectedTeamCredentialModel: selectedTeam, onSelectOtherModel: () => {
+                    source.current = null;
+                    setSelectedTeam(null);
+                } },
+            });
+            return { picker, authoring, selectedTeam, remembered };
+        });
+        try {
+            const detail = hook.getCurrent().picker.agentPickerOptions?.find(option => option.id === 'favorite-models')
+                ?.renderDetailContent?.({ onRequestClose: () => {} });
+            type FavoriteDetailProps = React.ComponentProps<typeof import('@/components/sessions/new/components/NewSessionFavoriteModelsDetail').NewSessionFavoriteModelsDetail>;
+            if (!React.isValidElement<FavoriteDetailProps>(detail)) throw new Error('Missing favorite detail');
+            await act(async () => {
+                if (choice === 'model') detail.props.onSelectFavoriteModel(codex, nativeSelection);
+                else detail.props.onSelectFavoriteModelOptionValue?.(codex, nativeSelection, 'reasoning_effort', 'low');
+            });
+            expect(hook.getCurrent().selectedTeam).toBeNull();
+            expect(hook.getCurrent().authoring.modelSelection?.ref).toEqual(nativeSelection.ref);
+            expect(hook.getCurrent().remembered?.ref).toEqual(nativeSelection.ref);
+            if (choice === 'control') expect(hook.getCurrent().authoring.sessionConfigOptionOverrides?.overrides.reasoning_effort?.value).toBe('low');
+        } finally { await hook.unmount(); }
+    });
+
     it('does not expose favorite model selections for backends incompatible with the selected profile', async () => {
         const claudeEntry = createBuiltInBackendEntry('claude', 'Claude', null);
         const codexEntry = createBuiltInBackendEntry('codex', 'Codex', null);

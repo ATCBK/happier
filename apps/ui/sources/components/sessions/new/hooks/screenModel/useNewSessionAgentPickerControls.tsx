@@ -167,6 +167,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         modelSelection: SessionModelSelectionV1,
         configOverrides?: Readonly<Record<string, string>>,
     ) => {
+        params.teamModels?.onSelectOtherModel();
         const nextSelection = {
             ...getEngineSelectionForTargetKey(entry.backendTargetKey),
             modelId: modelSelection.ref.modelId,
@@ -174,7 +175,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
             ...(configOverrides ? { configOverrides } : {}),
         };
         selectEngineSelection(entry, nextSelection);
-    }, [getEngineSelectionForTargetKey, selectEngineSelection]);
+    }, [getEngineSelectionForTargetKey, params.teamModels, selectEngineSelection]);
 
     const handleSelectFavoriteModelOptionValue = React.useCallback((
         entry: ResolvedBackendCatalogEntry,
@@ -182,6 +183,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
         configId: string,
         valueId: string,
     ) => {
+        params.teamModels?.onSelectOtherModel();
         const currentSelection = getEngineSelectionForTargetKey(entry.backendTargetKey);
         selectEngineSelection(entry, {
             ...currentSelection,
@@ -192,7 +194,7 @@ export function useNewSessionAgentPickerControls(params: Readonly<{
                 [configId]: valueId,
             },
         });
-    }, [getEngineSelectionForTargetKey, selectEngineSelection]);
+    }, [getEngineSelectionForTargetKey, params.teamModels, selectEngineSelection]);
 
     const handleRemoveFavoriteModelSelection = React.useCallback((favorite: FavoriteModelSelectionV1) => {
         if (!params.setFavoriteModelSelections) return;
