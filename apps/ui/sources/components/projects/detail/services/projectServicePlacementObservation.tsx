@@ -447,9 +447,12 @@ export function useProjectServicePlacementObservation(serviceName: string, manag
   }, [confirmedBinding, context?.acknowledgeBinding, serviceName, snapshot?.operationId]);
   // Native settlement and its binding read are distinct observations. Keep this
   // exact receipt attached until the binding arrives; success alone proves no URL
-  // or health, and a completeness refusal cannot contradict the accepted Start.
+  // or health. The cached declaration is still absent while settlement's fresh
+  // census is in flight; it cannot release this receipt and offer another Start.
+  // A real native terminal instance or failed census still ends Loading.
   const awaitingBinding = snapshot?.state === 'succeeded' && resultTarget.success
-    && !entry?.bindingObserved && native?.bindingPending === true;
+    && !entry?.bindingObserved && (native?.bindingPending === true
+      || native?.absent === true && !native.managedServiceId);
   const starting = snapshot?.actionId === 'localServices.launcher.start';
   const phase = snapshot?.progress?.kind === 'phase' ? snapshot.progress.phase : null;
   const unknown = operation?.observation !== 'available' || snapshot?.observation?.kind === 'outcome_uncertain'
