@@ -232,6 +232,7 @@ const LOCAL_SERVICE_INVENTORY_KEYS = {
  * `diagnosticCode` (see `noInternalCodesInPrimaryUi.test.ts`).
  */
 const LOCAL_SERVICE_ACTION_KEYS = {
+    action_outcome_unknown: 'localServices.actions.failure.outcomeUnknown',
     // Refused: a policy, a permission, or a confirmation the user can go and change.
     confirmation_nonce_invalid: 'localServices.actions.failure.refused',
     confirmation_required: 'localServices.actions.failure.refused',
@@ -640,6 +641,7 @@ type LocalServiceLauncherMessageKey =
     | 'localServices.launcher.unavailableReason.unavailable';
 
 type LocalServiceActionMessageKey =
+    | 'localServices.actions.failure.outcomeUnknown'
     | 'localServices.actions.failure.refused'
     | 'localServices.actions.failure.unavailable'
     | 'localServices.actions.failure.incomplete';

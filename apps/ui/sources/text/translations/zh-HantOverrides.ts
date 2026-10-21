@@ -8959,6 +8959,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
                 refused: '機器拒絕了此操作。請檢查此機器的本機服務權限後再試一次。',
                 unavailable: '此操作不適用於此機器上的該服務。',
                 incomplete: '操作沒有完成，你可以再試一次。',
+                outcomeUnknown: '操作結果未知。重試前，請在所選機器上檢查此服務。',
       portInUse: ({ port }: { port: number }) => `連接埠 ${port} 已被佔用。請停止現有服務或選擇其他連接埠。`,
       portInUseSameProject: ({ port }: { port: number }) => `此專案已在使用連接埠 ${port}。請使用正在執行的服務或選擇其他連接埠。`,
       processExit: ({ code }: { code: string }) => `服務已結束，代碼為 ${code}。重試前請查看詳細資料。`,
