@@ -355,6 +355,8 @@ function PhonePopoverSheet(props: PopoverProps) {
     >
         <ModalCardFrame
             presentation="sheet"
+            scrollHost="bounded"
+            bodyScroll="auto"
             header={props.sheetHeader}
             material={props.sheetMaterial}
             sheetBottomInset={insets.bottom}

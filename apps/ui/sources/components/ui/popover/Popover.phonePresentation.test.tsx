@@ -27,11 +27,32 @@ const { Popover } = await import('./Popover');
 const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
 const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
 const { View } = await import('react-native');
+const { Text } = await import('@/components/ui/text/Text');
 const { t } = await import('@/text');
 
 afterEach(() => { viewport.width = 390; viewport.height = 844; });
 
 describe('Popover phone presentation', () => {
+    it('keeps long plain sheet content reachable through the frame body scroller', async () => {
+        viewport.height = 360;
+        const recover = vi.fn();
+        const screen = await renderScreen(
+            <Popover open phonePresentation="sheet" sheetHeader="none" accessibilityLabel="Voice"
+                onRequestClose={() => {}}>
+                {() => <View testID="recovery-content">
+                    <Text>{'Check the selected speech provider and its account credentials before trying again.\n'.repeat(20)}</Text>
+                    <RoundButton testID="recovery-action" title="Try again" onPress={recover} />
+                </View>}
+            </Popover>,
+        );
+
+        const scroller = screen.findByTestId('modal-card-body-scroll');
+        expect(scroller?.props.scrollEnabled).toBe(true);
+        expect(scroller?.findAllByProps({ testID: 'recovery-action' }).length).toBeGreaterThan(0);
+        await screen.pressByTestIdAsync('recovery-action');
+        expect(recover).toHaveBeenCalledOnce();
+    });
+
     it('uses a form completion action as the single sheet header exit', async () => {
         const onComplete = vi.fn();
         const onClose = vi.fn();
@@ -69,6 +90,11 @@ describe('Popover phone presentation', () => {
         expect(dialog?.props.accessibilityViewIsModal).toBe(true);
         expect(renderedBounds?.maxWidth).toBe(390);
         expect(Boolean(screen.findByTestId('sheet-content'))).toBe(true);
+        expect(screen.findByTestId('modal-card-body-scroll')?.props.scrollEnabled).toBe(true);
+        expect(screen.findAllByType('Animated.ScrollView').some(node =>
+            node.props.scrollEnabled !== false
+            && node.findAllByProps({ testID: 'sheet-content' }).length > 0,
+        )).toBe(true);
         await screen.pressByTestIdAsync('popover-sheet.close');
         expect(onClose).toHaveBeenCalledTimes(1);
     });
