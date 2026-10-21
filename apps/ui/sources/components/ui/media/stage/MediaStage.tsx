@@ -171,14 +171,19 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
     const { theme } = useUnistyles();
     const item = props.items[props.index]!;
     const picture = isPicture(item);
+    // Retry asks for fresh bytes; the first attempt keeps the caller's identity so the page's held bytes are reused.
+    const [attempt, nextAttempt] = React.useReducer((value: number) => value + 1, 0);
     const preview = useFilePreviewSource({
       ...item.source,
       enabled: picture && item.source.enabled,
+      cacheKey: item.source.cacheKey != null && attempt > 0 ? `${item.source.cacheKey}:retry:${attempt}` : item.source.cacheKey,
     });
     const [size, setSize] = React.useState<MediaPictureSize | null>(null);
     const [failed, setFailed] = React.useState<string | null>(null);
     const [fullResolution, setFullResolution] = React.useState(false);
-    // The image body's reason and copy; the stage offers Open file instead of Retry.
+    const retry = React.useCallback(() => { setFailed(null); nextAttempt(); }, []);
+    // The image body's reason and copy (one owner): a load that did not finish offers Retry; a fact about the file
+    // (too large, unsupported, missing) stays a quiet line, with Open file where the caller can hand it off.
     const unavailable = preview.status === 'error' || failed
       ? previewUnavailableCard(preview.status === 'error'
         ? resolvePreviewUnavailable({ error: preview.error, errorCode: preview.errorCode, sizeBytes: item.sizeBytes ?? item.source.sizeBytes })
@@ -403,6 +408,7 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                           <ImageWellCheckerboard color={theme.colors.text.primary} testID="media-stage-image-checkerboard" />
                         ) : null}
                         <MediaPicture
+                          key={attempt}
                           kind={item.kind === 'svg' ? 'svg' : 'image'}
                           uri={preview.uri}
                           size={pictureSize}
@@ -421,14 +427,14 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                       {...(unavailable.reason ? { reason: unavailable.reason } : {})}
         {...(unavailable.iconName ? { iconName: unavailable.iconName } : {})}
                       {...(unavailable.diagnosticCode ? { diagnosticCode: unavailable.diagnosticCode } : {})}
-                      {...(item.openFile
+                      {...(unavailable.retryable
                         ? {
-                            action: {
-                              label: t('files.viewer.openFile'),
-                              onPress: item.openFile,
-                            },
+                            action: { label: t('common.retry'), onPress: retry, testID: 'media-stage-retry' },
+                            ...(item.openFile ? { secondaryAction: { label: t('files.viewer.openFile'), onPress: item.openFile } } : {}),
                           }
-                        : {})}
+                        : item.openFile
+                          ? { action: { label: t('files.viewer.openFile'), onPress: item.openFile } }
+                          : {})}
                     />
                   ) : (
                     <ActivitySpinner

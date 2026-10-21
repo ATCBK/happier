@@ -75,6 +75,28 @@ describe('canonical media stage opener', () => {
             } finally { await screen.unmount(); }
         }
     });
+    it('offers Retry for a picture whose load did not finish, and keeps a quiet fact plus Open file when reading again cannot help', async () => {
+        const { openMediaStage } = await import('./useMediaStage');
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            await act(async () => { openMediaStage([{ kind: 'image', title: 'hero.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:hero-interrupted' } } }]); });
+            // The decoder stops mid-read: an unfinished load, the one cause reading again can fix (previewUnavailable).
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onError({ error: 'decode interrupted' }));
+            expect(screen.findByTestId('media-stage-image')).toBeFalsy();
+            await act(async () => screen.findByTestId('media-stage-retry')!.props.onPress());
+            await act(async () => screen.findByTestId('media-stage-image')!.props.onLoad({ source: { width: 640, height: 480 } }));
+            expect(screen.findByTestId('media-stage-retry')).toBeFalsy();
+        } finally { await screen.unmount(); }
+        const openFile = vi.fn();
+        const large = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
+        try {
+            await act(async () => { openMediaStage([{ kind: 'image', title: 'poster.png', openFile, source: { enabled: true, mimeType: 'image/png',
+                sizeBytes: 4096, maxBytes: 1024, source: { kind: 'bytes', bytes: new Uint8Array(4096), name: 'poster.png' } } }]); });
+            await vi.waitFor(() => expect(large.getTextContent()).toContain('Too large to preview'));
+            expect(large.getTextContent()).toContain('Open file');
+            expect(large.findByTestId('media-stage-retry')).toBeFalsy();
+        } finally { await large.unmount(); }
+    });
     it('closes on an accessibility escape through the existing modal owner', async () => {
         const { openMediaStage } = await import('./useMediaStage');
         const screen = await renderScreen(<InjectedAuthProvider credentials={null}><ModalProvider><></></ModalProvider></InjectedAuthProvider>);
