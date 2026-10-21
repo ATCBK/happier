@@ -1,7 +1,7 @@
 import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { basename, delimiter, isAbsolute, join } from 'node:path';
+import { basename, isAbsolute } from 'node:path';
 
 import { PluginError, type PluginDiagnosticData } from '@happier-dev/plugin-sdk';
 
@@ -15,7 +15,6 @@ import {
     agentCliPathRequiresJavaScriptRuntime,
     resolveAgentCliJavaScriptRuntimeCommand,
 } from '@happier-dev/cli-common/agents/resolution';
-import { resolveWindowsCommandOnPath } from '@happier-dev/cli-common/process';
 
 import {
     isPluginExecSystemToolSupportedOnHost,
@@ -30,6 +29,7 @@ import {
     createUnidentifiedSystemToolDiagnostic,
 } from './diagnostics';
 import { resolveSystemToolReadiness } from './readiness';
+import { resolveSystemToolLookupCandidates } from './lookupCandidates';
 import { isDeniedPathOnlyRuntimeName, normalizePathOnlyRuntimeName } from './runtimeDeny';
 
 function projectSystemToolDiagnostics(
@@ -162,23 +162,7 @@ function normalizeLookupCandidates(
         }
     };
     const pushLookupName = (lookupName: string) => {
-        if (isAbsolute(lookupName)) {
-            pushCandidate(lookupName);
-            return;
-        }
-        // A manifest declares the bare executable name, but Windows installs the
-        // vendor CLI as a `PATHEXT` shim (`droid.cmd`, `fx.cmd`, …). Reuse the
-        // canonical Windows command resolver every other CLI call site already
-        // uses rather than re-deriving extension rules here.
-        if (platform === 'win32') {
-            const windowsPath = resolveWindowsCommandOnPath(lookupName, env);
-            if (windowsPath) pushCandidate(windowsPath);
-        }
-        const searchPath = env.PATH ?? '';
-        const searchRoots = searchPath.split(delimiter).filter((entry) => entry.length > 0);
-        for (const root of searchRoots) {
-            pushCandidate(join(root, lookupName));
-        }
+        for (const candidate of resolveSystemToolLookupCandidates(lookupName, env, platform)) pushCandidate(candidate);
     };
     if (typeof request.preferredPath === 'string' && request.preferredPath.trim().length > 0) {
         pushCandidate(request.preferredPath.trim());
@@ -452,19 +436,8 @@ export function createPluginExecSystemToolResolver(params: CreatePluginExecSyste
                 const runnableLegacy: string[] = [];
                 for (const name of readiness.legacyExecutableNames) {
                     assertNotAborted(request.signal);
-                    if (isAbsolute(name)) {
-                        if (await resolveRunnableLaunch(name)) runnableLegacy.push(name);
-                        continue;
-                    }
-                    if (lookupPlatform === 'win32') {
-                        const windowsPath = resolveWindowsCommandOnPath(name, env);
-                        if (windowsPath && await resolveRunnableLaunch(windowsPath)) {
-                            runnableLegacy.push(windowsPath);
-                        }
-                    }
-                    for (const root of env.PATH.split(delimiter).filter((entry) => entry.length > 0)) {
-                        const joined = join(root, name);
-                        if (await resolveRunnableLaunch(joined)) runnableLegacy.push(joined);
+                    for (const candidate of resolveSystemToolLookupCandidates(name, env, lookupPlatform)) {
+                        if (await resolveRunnableLaunch(candidate)) runnableLegacy.push(candidate);
                     }
                 }
                 assertNotAborted(request.signal);

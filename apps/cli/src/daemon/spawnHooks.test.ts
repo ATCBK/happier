@@ -1,7 +1,7 @@
 import { access, chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, delimiter, dirname, join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -18,6 +18,13 @@ function readSource(path: string): string {
 }
 
 describe('daemon spawn hook substrate', () => {
+  it('resolves a declared absolute system tool without PATH', async () => {
+    const context = daemonSpawnHooks.createDaemonSpawnToolResolutionContext({ processEnv: { PATH: '' } });
+    await expect(context.resolveSystemTool({
+      toolId: 'fixture/native', lookupNames: [process.execPath], reason: 'Declared native executable',
+    })).resolves.toMatchObject({ ok: true, command: process.execPath, source: 'system' });
+  });
+
   it('runs a JavaScript Agent override without system Node on PATH', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-preflight-js-'));
     try {
@@ -180,14 +187,17 @@ describe('daemon spawn hook substrate', () => {
       const binDir = join(root, 'bin');
       const command = process.platform === 'win32' ? 'sample-tool.cmd' : 'sample-tool';
       const binPath = join(binDir, command);
+      const laterBinDir = join(root, 'later-bin');
       await mkdir(binDir, { recursive: true });
+      await mkdir(laterBinDir, { recursive: true });
       await writeFile(binPath, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', 'utf8');
+      await writeFile(join(laterBinDir, command), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n', { mode: 0o755 });
       if (process.platform !== 'win32') {
         await chmod(binPath, 0o755);
       }
 
       const context = createContext({
-        processEnv: { PATH: binDir },
+        processEnv: { PATH: `${binDir}${delimiter}${laterBinDir}` },
         signal: new AbortController().signal,
         logInfo: () => {},
         logWarn: () => {},
@@ -207,6 +217,7 @@ describe('daemon spawn hook substrate', () => {
 
       expect(resolved).toMatchObject({
         ok: true,
+        command: binPath,
         source: 'system',
       });
       await expect(access(join(dirname(binPath), command))).resolves.toBeUndefined();

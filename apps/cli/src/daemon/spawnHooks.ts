@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
 import { constants as fsConstants } from 'node:fs';
 import { access } from 'node:fs/promises';
-import { delimiter as PATH_DELIMITER, join } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import { isBundledAgentId } from '@happier-dev/agents';
@@ -16,7 +15,6 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import {
   resolveWindowsCommandInvocation,
-  resolveWindowsCommandOnPath,
 } from '@happier-dev/cli-common/process';
 import { BUILT_IN_INSTALLABLES_REGISTRY } from '@happier-dev/protocol/installables';
 import { trimBugReportTextHeadToMaxBytes } from '@happier-dev/protocol/bugs/reports/redaction';
@@ -27,6 +25,7 @@ import { buildAgentCliLaunchSpecFromResolution } from '@/packagedRuntime/managed
 import { getRuntimeInstallableAdapter } from '@/packagedRuntime/installables/registry';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
+import { resolveSystemToolLookupCandidates } from '@/plugins/runtime/exec/system/tools/lookupCandidates';
 
 export type DaemonResolvedToolV1 = AgentDaemonResolvedToolV1;
 export type DaemonRunToolResultV1 = AgentDaemonRunToolResultV1;
@@ -42,14 +41,7 @@ async function resolveCommandOnPath(
 ): Promise<string | null> {
   const trimmedCommand = command.trim();
   if (!trimmedCommand) return null;
-  if (process.platform === 'win32') {
-    return await resolveWindowsCommandOnPath(trimmedCommand, env);
-  }
-
-  const pathRaw = typeof env.PATH === 'string' ? env.PATH.trim() : '';
-  if (!pathRaw) return null;
-  for (const dir of pathRaw.split(PATH_DELIMITER).map((entry) => entry.trim()).filter(Boolean)) {
-    const candidate = join(dir, trimmedCommand);
+  for (const candidate of resolveSystemToolLookupCandidates(trimmedCommand, env, process.platform)) {
     try {
       await access(candidate, fsConstants.X_OK);
       return candidate;
