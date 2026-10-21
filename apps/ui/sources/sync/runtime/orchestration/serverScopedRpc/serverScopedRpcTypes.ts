@@ -78,6 +78,7 @@ export type ScopedRpcEncryptionContext = Readonly<{
     initializeMachines: Encryption['initializeMachines'];
     getMachineEncryption: (machineId: string) => ScopedMachineEncryption | null | undefined;
     captureMachineEncryptionContext: Encryption['captureMachineEncryptionContext'];
+    captureMachineEncryptionContextForRead: Encryption['captureMachineEncryptionContextForRead'];
     getMachineEncryptionContext: Encryption['getMachineEncryptionContext'];
     removeMachineEncryption: Encryption['removeMachineEncryption'];
 }>;

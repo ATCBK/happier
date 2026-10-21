@@ -7,6 +7,7 @@ import {
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
 import { Encryption } from '@/sync/encryption/encryption';
+import { createFakeCryptoWorker } from '@/sync/encryption/nativeCryptoWorker/fakeCryptoWorker';
 import { createDeferred } from '@/dev/testkit';
 import {
     computeRunnerMachineContentKeyFingerprintV1,
@@ -587,6 +588,17 @@ describe('resolveScopedMachineTransport', () => {
     });
 
     it('refreshes each Machine row while reusing its unchanged opened key', async () => {
+        const encryption = await Encryption.create(new Uint8Array(32).fill(17));
+        const dataKey = new Uint8Array(32).fill(23);
+        const envelope = encodeBase64(await encryption.encryptEncryptionKey(dataKey), 'base64');
+        const worker = createFakeCryptoWorker();
+        const openedEnvelopes: string[] = [];
+        encryption.configureNativeCryptoWorker({ worker: { ...worker,
+            decryptDataKeyEnvelopeV1: async request => {
+                openedEnvelopes.push(...request.items.map(item => item.envelopeBase64));
+                return worker.decryptDataKeyEnvelopeV1(request);
+            },
+        }, routing: { mode: 'auto', minPayloadBytes: 0 } });
         const fetchSpy = vi.fn(async (url: string) => {
             if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
                 return { ok: true, status: 200, json: async () => ({}) };
@@ -595,33 +607,33 @@ describe('resolveScopedMachineTransport', () => {
                 ok: true,
                 status: 200,
                 json: async () => ({
-                    machine: { id: 'machine-1', dataEncryptionKey: 'encrypted-key' },
+                    machine: { id: 'machine-1', dataEncryptionKey: envelope },
                 }),
             };
         });
         vi.stubGlobal('fetch', fetchSpy);
-
-        const decryptSpy = vi.fn(async () => new Uint8Array([1, 2, 3]));
 
         const first = await resolveScopedMachineTransport({
             serverId: 'server-b',
             serverUrl: 'https://server-b.example.test',
             token: 'token-b',
             machineId: 'machine-1',
-            decryptEncryptionKey: decryptSpy,
+            encryption,
+            decryptEncryptionKey: value => encryption.decryptEncryptionKey(value),
         });
         const second = await resolveScopedMachineTransport({
             serverId: 'server-b',
             serverUrl: 'https://server-b.example.test',
             token: 'token-b',
             machineId: 'machine-1',
-            decryptEncryptionKey: decryptSpy,
+            encryption,
+            decryptEncryptionKey: value => encryption.decryptEncryptionKey(value),
         });
 
-        expect(first).toMatchObject({ mode: 'e2ee', dataKey: new Uint8Array([1, 2, 3]) });
-        expect(second).toMatchObject({ mode: 'e2ee', dataKey: new Uint8Array([1, 2, 3]) });
+        expect(first).toMatchObject({ mode: 'e2ee', dataKey });
+        expect(second).toMatchObject({ mode: 'e2ee', dataKey });
         expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/v1/machines')).length).toBe(2);
-        expect(decryptSpy).toHaveBeenCalledTimes(1);
+        expect(openedEnvelopes).toEqual([envelope]);
     });
 
     it('resolves and caches plaintext transport without requesting account key decryption', async () => {

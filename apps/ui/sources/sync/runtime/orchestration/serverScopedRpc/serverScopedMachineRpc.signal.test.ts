@@ -129,8 +129,13 @@ describe('machineRpcWithServerScope signal', () => {
                 query: 'old', replacement: 'new', matchCase: true, regex: false,
             }, files: [{ path: 'a.txt', expectedHash: 'a'.repeat(64) }, { path: 'b.txt', expectedHash: 'b'.repeat(64) }] },
         }, { serverId, signal: controller.signal });
-        await vi.waitFor(() => expect(boundary.socket.emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CALL,
-            expect.objectContaining({ waitForResultOnCancel: true })));
+        let resultBeforeAcknowledgement: Awaited<typeof pending> | undefined;
+        void pending.then(result => { resultBeforeAcknowledgement = result; });
+        await vi.waitFor(() => {
+            expect(resultBeforeAcknowledgement).toBeUndefined();
+            expect(boundary.socket.emitWithAck).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.CALL,
+                expect.objectContaining({ waitForResultOnCancel: true }));
+        });
         const request = boundary.socket.emitWithAck.mock.calls[0][1];
         if (!request || typeof request !== 'object' || !('requestId' in request)) throw new Error('Missing issued request');
         controller.abort();

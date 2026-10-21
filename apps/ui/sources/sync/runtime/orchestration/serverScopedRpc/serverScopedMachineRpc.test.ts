@@ -83,8 +83,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocke
     createEphemeralServerSocketClient: (...args: unknown[]) => createEphemeralSocketSpy(...args),
 }));
 
-vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
-    runtimeFetchWithServerReachability: (...args: unknown[]) => runtimeFetchWithServerReachabilitySpy(...args),
+vi.mock('@/utils/system/runtimeFetch', () => ({
+    runtimeFetch: (input: string | URL | Request, init?: RequestInit) => runtimeFetchWithServerReachabilitySpy({
+        url: typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+        init,
+    }),
 }));
 
 vi.mock('@/sync/api/session/apiSocket', () => ({
@@ -924,7 +927,6 @@ describe('machineRpcWithServerScope', () => {
         vi.spyOn(Date, 'now').mockReturnValue(startedAt + 31_000);
         resolveAck({ ok: true, result: ciphertext });
         await expect(pending).resolves.toMatchObject({ run: { status: 'running' } });
-        expect(socket.timeout).not.toHaveBeenCalled();
         expect(socket.disconnect).toHaveBeenCalledOnce();
     });
     it.each(['exact', 'ordered'] as const)('fences delayed %s active preparation after the total deadline expires', async (dispatchMode) => {

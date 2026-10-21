@@ -239,12 +239,14 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
     });
 
     it('does not poison reachability when an inner transport timeout precedes the caller deadline', async () => {
+        const innerTimeout = Object.assign(new Error('Inner phase timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
         boundary.setRpcAckResponder(async () => {
-            throw Object.assign(new Error('Inner phase timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
+            throw innerTimeout;
         });
         const error = await machineRpcWithServerScope({ serverId: home.id, machineId: 'machine-1',
             method: 'method-test', payload: {}, preferScoped: true, timeoutMs: 10_000 }).catch((error: unknown) => error);
         expect(error).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+        expect(error).toBe(innerTimeout);
         expect(readMachineRequestReachabilityObservation({ serverId: home.id, accountId: 'account-a' }, 'machine-1')).toBeNull();
     });
 
@@ -629,7 +631,7 @@ describe('machineRpcWithServerScope (scoped encrypted network)', () => {
             await expect(pending).resolves.toMatchObject({ run: { status: 'running' } });
             expect(onIssued).toHaveBeenCalledOnce();
             expect(boundary.requests).toHaveLength(1);
-            expect(boundary.socketBoundaries[0]?.socket.timeout).not.toHaveBeenCalled();
+            expect(request.timeoutMs ?? null).toBeNull();
         } finally {
             clock.mockRestore();
         }

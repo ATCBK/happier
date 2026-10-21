@@ -41,16 +41,19 @@ function toMachineTransportCacheKey(serverId: string, machineId: string, token: 
     return `${serverId}::${machineId}::${tokenKey}`;
 }
 
-type MachineTransportEvidence = Readonly<{
+type MachineTransportSelection = Readonly<{
     machine: Parameters<typeof resolvePublishedMachineDataEncryptionKeyV1>[0]['machine'] & MachineInstallationTransportIdentity;
-    openedDataEncryptionKey: Uint8Array | null;
     identity: MachineEncryptionContextInput;
     selectedContext?: MachineEncryptionContext;
     metadataVersion?: number;
     daemonStateVersion?: number;
 }>;
 
-const machineTransportCache = new Map<string, MachineTransportEvidence>();
+type MachineTransportEvidence = MachineTransportSelection & Readonly<{
+    openedDataEncryptionKey: Uint8Array | null;
+}>;
+
+const machineTransportCache = new Map<string, MachineTransportSelection>();
 
 function readMaxMachineKeyCacheEntriesFromEnv(): number {
     const raw = String(process.env.EXPO_PUBLIC_HAPPIER_SCOPED_RPC_MACHINE_KEY_CACHE_MAX ?? '').trim();
@@ -60,7 +63,7 @@ function readMaxMachineKeyCacheEntriesFromEnv(): number {
     return Math.max(1, Math.min(10_000, parsed));
 }
 
-function getMachineTransportFromCache(cacheKey: string): MachineTransportEvidence | undefined {
+function getMachineTransportFromCache(cacheKey: string): MachineTransportSelection | undefined {
     const existing = machineTransportCache.get(cacheKey);
     if (existing === undefined) return undefined;
     // Refresh LRU ordering.
@@ -69,7 +72,7 @@ function getMachineTransportFromCache(cacheKey: string): MachineTransportEvidenc
     return existing;
 }
 
-function setMachineTransportCache(cacheKey: string, value: MachineTransportEvidence): void {
+function setMachineTransportCache(cacheKey: string, value: MachineTransportSelection): void {
     machineTransportCache.set(cacheKey, value);
 
     const max = readMaxMachineKeyCacheEntriesFromEnv();
@@ -140,7 +143,7 @@ async function fetchMachineTransport(params: Readonly<{
             { incumbent: incumbentContext, observation: machine },
         );
         if (params.encryption && !context) return null;
-        const selected: MachineTransportEvidence = {
+        const selected: MachineTransportSelection = {
             machine: {
                 id: params.machineId, kind: machine?.kind, installationId: machine?.installationId,
                 installationPublicKey: machine?.installationPublicKey,
@@ -149,24 +152,22 @@ async function fetchMachineTransport(params: Readonly<{
             },
             identity, metadataVersion, daemonStateVersion,
             selectedContext: context ?? undefined,
-            openedDataEncryptionKey: unchanged ? cached.openedDataEncryptionKey : null,
         };
         // Publish selection before opening yields so a changed key/access
         // identity retires pending work, including same-key access withdrawal.
         setMachineTransportCache(params.cacheKey, selected);
-        const dataKey = selected.openedDataEncryptionKey ?? (typeof published === 'string'
+        // The caller's Encryption owner alone retains openings under its own material.
+        const dataKey = typeof published === 'string'
             && !isPlainMachineDataKeyMarker(published)
             && params.decryptEncryptionKey
             ? await params.decryptEncryptionKey(published)
-            : null);
+            : null;
         const current = machineTransportCache.get(params.cacheKey);
         if (context?.isCurrent() === false || current?.identity !== selected.identity) return null;
         // A fresh row with the same key/access identity does not retire an
         // in-flight opening. Keep its newer row/version facts in the cache,
         // while this caller retains its own crypto context for currentness.
-        const opened = { ...current, openedDataEncryptionKey: dataKey };
-        setMachineTransportCache(params.cacheKey, opened);
-        return { ...opened, selectedContext: context ?? undefined };
+        return { ...current, openedDataEncryptionKey: dataKey, selectedContext: context ?? undefined };
     } catch (error) {
         // An unavailable transport is not evidence that the Machine has no key.
         if (isTerminalAuthError(error)) throw error;
@@ -200,8 +201,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
     const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0 ? params.timeoutMs : DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS;
     const keyCacheKey = toMachineTransportCacheKey(serverId, machineId, token);
     const incumbentContext = params.encryption?.getMachineEncryptionContext(machineId);
-    // Refresh the Home row each call; cached openings are reusable only after
-    // that row confirms the exact envelope and authenticated access identity.
+    // Refresh the Home row each call to confirm the exact envelope and authenticated access identity.
     // Only physical row work is shared. Every caller still selects and fences
     // its own crypto context; settled observations never authorize another read.
     const evidence = await fetchMachineTransport({

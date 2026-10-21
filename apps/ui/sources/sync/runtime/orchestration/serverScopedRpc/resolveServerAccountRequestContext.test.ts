@@ -1,307 +1,92 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveServerAccountRequestContext } from './resolveServerAccountRequestContext';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { getActiveServerSnapshot, setActiveServer } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerRuntimeAvailability, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { resolveServerAccountRequestContext, type ResolvedServerAccountRequestContext } from './resolveServerAccountRequestContext';
 
-const getCredentialsSpy = vi.hoisted(() => vi.fn());
-const createEncryptionSpy = vi.hoisted(() => vi.fn());
-const listServerProfilesSpy = vi.hoisted(() => vi.fn());
-const getActiveServerSnapshotSpy = vi.hoisted(() => vi.fn());
-const getAppliedActiveServerSnapshotSpy = vi.hoisted(() => vi.fn());
-const isAppliedActiveServerRuntimeAvailableSpy = vi.hoisted(() => vi.fn());
+// The resolver statically reaches the real transport. Install its genuine SDK
+// boundary before that import and compile Sync outside a case-local IO budget.
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
-function tokenForSub(sub: string): string {
-  const payload = globalThis.btoa(JSON.stringify({ sub }))
-    .replaceAll('+', '-')
-    .replaceAll('/', '_')
-    .replaceAll('=', '');
-  return `e30.${payload}.signature`;
-}
+let homes: Awaited<ReturnType<typeof serveAccountHomes>>;
+const acquired: ResolvedServerAccountRequestContext[] = [];
+const encryptedCredentials = { token: createAccountTokenForTests('encrypted-account'),
+  secret: Buffer.from(new Uint8Array(32).fill(7)).toString('base64url') };
 
-vi.mock('@/auth/storage/tokenStorage', () => ({
-  TokenStorage: {
-    getCredentialsForServerUrl: (...args: unknown[]) => getCredentialsSpy(...args),
-  },
-  isTokenOnlyAuthCredentials: (credentials: unknown) => {
-    if (!credentials || typeof credentials !== 'object') return false;
-    const record = credentials as Record<string, unknown>;
-    return !('secret' in record) && !('encryption' in record);
-  },
-}));
-
-vi.mock('@/auth/encryption/createEncryptionFromAuthCredentials', () => ({
-  createEncryptionFromAuthCredentials: (...args: unknown[]) => createEncryptionSpy(...args),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async () => {
-  const { createServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-  return createServerProfilesModuleMock({
-    listServerProfiles: (...args: unknown[]) => listServerProfilesSpy(...args),
-  });
+beforeEach(async () => {
+  homes = await serveAccountHomes({ homes: [
+    { key: 'encrypted', serverUrl: 'https://context-encrypted.test', accountId: 'encrypted-account',
+      accountMode: 'e2ee', credentials: encryptedCredentials },
+    { key: 'plain', serverUrl: 'https://context-plain.test', accountId: 'plain-account' },
+    { key: 'focused', serverUrl: 'https://context-focused.test', accountId: 'focused-account',
+      serverIdentityId: 'srv_context_focused' },
+  ], route: () => undefined });
 });
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: (...args: unknown[]) => getActiveServerSnapshotSpy(...args),
-}));
+afterEach(async () => {
+  for (const context of acquired.splice(0)) if (context.scope === 'scoped') await context.release?.();
+  await homes?.dispose();
+});
 
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-  getAppliedActiveServerSnapshot: (...args: unknown[]) => getAppliedActiveServerSnapshotSpy(...args),
-  isAppliedActiveServerRuntimeAvailable: (...args: unknown[]) => isAppliedActiveServerRuntimeAvailableSpy(...args),
-}));
+async function resolve(params: Parameters<typeof resolveServerAccountRequestContext>[0]) {
+  const context = await resolveServerAccountRequestContext(params);
+  acquired.push(context);
+  return context;
+}
 
 describe('resolveServerAccountRequestContext', () => {
-  beforeEach(() => {
-    getAppliedActiveServerSnapshotSpy.mockImplementation(() => getActiveServerSnapshotSpy());
-    isAppliedActiveServerRuntimeAvailableSpy.mockReturnValue(true);
+  it('returns the applied active scope when the target is omitted or uses its saved-profile alias', async () => {
+    await expect(resolve({})).resolves.toEqual({ scope: 'active', timeoutMs: 30_000 });
+    await expect(resolve({ serverId: homes.homes.focused!.profileId })).resolves.toEqual({ scope: 'active', timeoutMs: 30_000 });
   });
 
-  afterEach(() => {
-    getCredentialsSpy.mockReset();
-    createEncryptionSpy.mockReset();
-    listServerProfilesSpy.mockReset();
-    getActiveServerSnapshotSpy.mockReset();
-    getAppliedActiveServerSnapshotSpy.mockReset();
-    isAppliedActiveServerRuntimeAvailableSpy.mockReset();
+  it('retains exact applied and staged Home credentials while the direct runtime is unavailable', async () => {
+    const applied = getActiveServerSnapshot();
+    publishAppliedActiveServerRuntimeAvailability(false);
+    await setActiveServer({ serverId: homes.homes.plain!.id });
+    publishAppliedActiveServerSnapshot(applied, false);
+    const contexts = await Promise.all([resolve({ serverId: homes.homes.focused!.id }), resolve({ serverId: homes.homes.plain!.id })]);
+    expect(contexts.map(context => context.scope === 'scoped' && [context.targetServerId, context.targetAccountId]))
+      .toEqual([[homes.homes.focused!.id, 'focused-account'], [homes.homes.plain!.id, 'plain-account']]);
   });
 
-  it('returns active scope when serverId is missing', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-a',
-      serverUrl: 'https://server-a.example.test',
-      generation: 1,
-    });
-
-    const context = await resolveServerAccountRequestContext({});
-
-    expect(context).toEqual({
-      scope: 'active',
-      timeoutMs: 30000,
-    });
+  it('resolves usable encryption from the exact stored credential of another Home', async () => {
+    const context = await resolve({ serverId: homes.homes.encrypted!.id, timeoutMs: 5_000 });
+    expect(context).toMatchObject({ scope: 'scoped', targetServerId: homes.homes.encrypted!.id,
+      targetServerUrl: homes.homes.encrypted!.serverUrl, targetAccountId: 'encrypted-account',
+      credentials: encryptedCredentials, timeoutMs: 5_000 });
+    if (context.scope !== 'scoped' || !context.encryption) throw new Error('Missing captured Account cipher');
+    const value = { private: 'exact Home', bytes: [0, 255] };
+    expect(await context.encryption.decryptRaw(await context.encryption.encryptRaw(value))).toEqual(value);
+    expect(context.readTransport).toBeDefined();
   });
 
-  it('returns active scope when the target profile id aliases the active durable server identity', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'srv_server_a',
-      serverUrl: 'https://server-a.example.test',
-      generation: 1,
-    });
-    listServerProfilesSpy.mockReturnValue([
-      {
-        id: 'localhost-52753',
-        serverIdentityId: 'srv_server_a',
-        serverUrl: 'https://server-a.example.test',
-        name: 'Server A',
-      },
-    ]);
-    getCredentialsSpy.mockResolvedValue({ token: tokenForSub('account-a'), secret: 'secret-a' });
-
-    const context = await resolveServerAccountRequestContext({ serverId: 'localhost-52753' });
-
-    expect(context).toEqual({
-      scope: 'active',
-      timeoutMs: 30000,
-    });
-    expect(getCredentialsSpy).not.toHaveBeenCalled();
+  it('keeps token-only Plain Accounts keyless without borrowing the focused credential', async () => {
+    const context = await resolve({ serverId: homes.homes.plain!.id, timeoutMs: 5_000 });
+    expect(context).toMatchObject({ scope: 'scoped', targetServerId: homes.homes.plain!.id,
+      targetAccountId: 'plain-account', encryption: null, timeoutMs: 5_000 });
+    if (context.scope !== 'scoped') throw new Error('Expected captured Home');
+    expect(context.credentials).toEqual({ token: context.token });
+    expect(context.runtimeOrigin).toBe(homes.homes.plain!.serverUrl);
   });
 
-  it('uses scoped credentials for the applied Home while its direct runtime is unavailable during a staged switch', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-b',
-      serverUrl: 'https://server-b.example.test',
-      generation: 2,
-    });
-    getAppliedActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-a',
-      serverUrl: 'https://server-a.example.test',
-      generation: 1,
-    });
-    isAppliedActiveServerRuntimeAvailableSpy.mockReturnValue(false);
-    listServerProfilesSpy.mockReturnValue([
-      { id: 'server-a', serverUrl: 'https://server-a.example.test', name: 'Server A' },
-      { id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' },
-    ]);
-    const tokenA = tokenForSub('account-sub-a');
-    const tokenB = tokenForSub('account-sub-b');
-    getCredentialsSpy.mockImplementation(async (_url: string, options: { serverId?: string }) => (
-      options.serverId === 'server-a'
-        ? { token: tokenA, secret: 'secret-a' }
-        : { token: tokenB, secret: 'secret-b' }
-    ));
-    const fakeEncryption = {
-      decryptEncryptionKey: vi.fn(async () => null),
-      initializeSessions: vi.fn(async () => {}),
-      getSessionEncryption: vi.fn(),
-    };
-    createEncryptionSpy.mockResolvedValue(fakeEncryption);
-
-    const [appliedContext, stagedContext] = await Promise.all([
-      resolveServerAccountRequestContext({ serverId: 'server-a' }),
-      resolveServerAccountRequestContext({ serverId: 'server-b' }),
-    ]);
-
-    expect(appliedContext).toEqual(expect.objectContaining({
-      scope: 'scoped',
-      targetServerId: 'server-a',
-      targetServerUrl: 'https://server-a.example.test',
-      targetAccountId: 'account-sub-a',
-      token: tokenA,
-    }));
-    expect(stagedContext).toEqual(expect.objectContaining({
-      scope: 'scoped',
-      targetServerId: 'server-b',
-      targetServerUrl: 'https://server-b.example.test',
-      targetAccountId: 'account-sub-b',
-      token: tokenB,
-    }));
-    expect(getCredentialsSpy).toHaveBeenCalledWith('https://server-b.example.test', { serverId: 'server-b' });
+  it('refuses a signed-out exact Home instead of substituting focused credentials', async () => {
+    expect(await TokenStorage.removeCredentialsForServerUrl(homes.homes.plain!.serverUrl,
+      { serverId: homes.homes.plain!.id })).toBe(true);
+    await expect(resolve({ serverId: homes.homes.plain!.id })).rejects.toThrow('No authentication credentials');
+    expect(await TokenStorage.getCredentialsForServerUrl(homes.homes.focused!.serverUrl,
+      { serverId: homes.homes.focused!.id })).not.toBeNull();
   });
 
-  it('returns scoped context with credentials and encryption when target differs from active server', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-a',
-      serverUrl: 'https://server-a.example.test',
-      generation: 1,
-    });
-    listServerProfilesSpy.mockReturnValue([
-      { id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' },
-    ]);
-    const token = tokenForSub('account-sub-b');
-    getCredentialsSpy.mockResolvedValue({ token, secret: 'secret-b' });
-
-    const fakeEncryption = {
-      decryptEncryptionKey: vi.fn(async () => null),
-      initializeSessions: vi.fn(async () => {}),
-      getSessionEncryption: vi.fn(),
-    };
-    createEncryptionSpy.mockResolvedValue(fakeEncryption);
-
-    const context = await resolveServerAccountRequestContext({ serverId: 'server-b', timeoutMs: 5000 });
-
-    expect(context).toEqual({
-      scope: 'scoped',
-      timeoutMs: 5000,
-      targetServerId: 'server-b',
-      targetServerUrl: 'https://server-b.example.test',
-      targetAccountId: 'account-sub-b',
-      token,
-      credentials: { token, secret: 'secret-b' },
-      encryption: fakeEncryption,
-      runtimeOrigin: 'https://server-b.example.test',
-      carrier: 'https',
-      release: expect.any(Function),
-    });
-  });
-
-  it('returns a keyless scoped context for token-only plaintext accounts', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-a',
-      serverUrl: 'https://server-a.example.test',
-      generation: 1,
-    });
-    listServerProfilesSpy.mockReturnValue([
-      { id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' },
-    ]);
-    const token = tokenForSub('account-sub-b');
-    getCredentialsSpy.mockResolvedValue({ token });
-
-    await expect(resolveServerAccountRequestContext({
-      serverId: 'server-b',
-      timeoutMs: 5000,
-    })).resolves.toEqual({
-      scope: 'scoped',
-      timeoutMs: 5000,
-      targetServerId: 'server-b',
-      targetServerUrl: 'https://server-b.example.test',
-      targetAccountId: 'account-sub-b',
-      token,
-      credentials: { token },
-      encryption: null,
-      runtimeOrigin: 'https://server-b.example.test',
-      carrier: 'https',
-      release: expect.any(Function),
-    });
-    expect(createEncryptionSpy).not.toHaveBeenCalled();
-  });
-
-  it('builds a scoped context for a same-URL alternate profile when that exact profile has credentials', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-a',
-      serverUrl: 'https://server-a.example.test/',
-      generation: 1,
-    });
-    listServerProfilesSpy.mockReturnValue([
-      { id: 'server-b', serverUrl: 'https://server-a.example.test', name: 'Server A (alt id)' },
-    ]);
-    const token = tokenForSub('account-sub-b');
-    getCredentialsSpy.mockResolvedValue({ token, secret: 'secret-b' });
-
-    const fakeEncryption = {
-      decryptEncryptionKey: vi.fn(async () => null),
-      initializeSessions: vi.fn(async () => {}),
-      getSessionEncryption: vi.fn(),
-    };
-    createEncryptionSpy.mockResolvedValue(fakeEncryption);
-
-    await expect(resolveServerAccountRequestContext({ serverId: 'server-b', timeoutMs: 5000 })).resolves.toEqual({
-      scope: 'scoped',
-      timeoutMs: 5000,
-      targetServerId: 'server-b',
-      targetServerUrl: 'https://server-a.example.test',
-      targetAccountId: 'account-sub-b',
-      token,
-      credentials: { token, secret: 'secret-b' },
-      encryption: fakeEncryption,
-      runtimeOrigin: 'https://server-a.example.test',
-      carrier: 'https',
-      release: expect.any(Function),
-    });
-    expect(getCredentialsSpy).toHaveBeenCalledWith('https://server-a.example.test', { serverId: 'server-b' });
-  });
-
-  it('fails closed when same-URL alternate profile credentials are unavailable', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-a',
-      serverUrl: 'https://server-a.example.test/',
-      generation: 1,
-    });
-    listServerProfilesSpy.mockReturnValue([
-      { id: 'server-b', serverUrl: 'https://server-a.example.test', name: 'Server A (alt id)' },
-    ]);
-    getCredentialsSpy.mockResolvedValue(null);
-
-    await expect(resolveServerAccountRequestContext({ serverId: 'server-b' })).rejects.toThrow(
-      'No authentication credentials for target server "server-b"',
-    );
-  });
-
-  it('can force a scoped context for the active server', async () => {
-    getActiveServerSnapshotSpy.mockReturnValue({
-      serverId: 'server-a',
-      serverUrl: 'https://server-a.example.test/',
-      generation: 1,
-    });
-    const token = tokenForSub('account-sub-a');
-    getCredentialsSpy.mockResolvedValue({ token, secret: 'secret-a' });
-
-    const fakeEncryption = {
-      decryptEncryptionKey: vi.fn(async () => null),
-      initializeSessions: vi.fn(async () => {}),
-      getSessionEncryption: vi.fn(),
-    };
-    createEncryptionSpy.mockResolvedValue(fakeEncryption);
-
-    const context = await resolveServerAccountRequestContext({ preferScoped: true, timeoutMs: 7000 });
-
-    expect(context).toEqual({
-      scope: 'scoped',
-      timeoutMs: 7000,
-      targetServerId: 'server-a',
-      targetServerUrl: 'https://server-a.example.test',
-      targetAccountId: 'account-sub-a',
-      token,
-      credentials: { token, secret: 'secret-a' },
-      encryption: fakeEncryption,
-      runtimeOrigin: 'https://server-a.example.test',
-      carrier: 'https',
-      release: expect.any(Function),
-    });
+  it('can capture the active Home explicitly for a finite caller', async () => {
+    const context = await resolve({ preferScoped: true, timeoutMs: 7_000 });
+    expect(context).toMatchObject({ scope: 'scoped', timeoutMs: 7_000,
+      targetServerId: homes.homes.focused!.id, targetAccountId: 'focused-account' });
   });
 });

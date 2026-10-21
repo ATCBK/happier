@@ -212,15 +212,29 @@ function createMachineRpcTimeoutBudget(params: Readonly<{
                     remainingTimeoutMs: 0,
                 });
             }
-            return await withMachineRpcTimeout(
-                operation(timeoutMs),
-                {
-                    scope,
-                    method: params.method,
-                    timeoutMs,
-                    totalTimeoutMs: params.timeoutMs,
-                },
-            );
+            try {
+                return await withMachineRpcTimeout(
+                    operation(timeoutMs),
+                    {
+                        scope,
+                        method: params.method,
+                        timeoutMs,
+                        totalTimeoutMs: params.timeoutMs,
+                    },
+                );
+            } catch (error) {
+                // A subordinate read uses this same deadline and can settle its
+                // timeout first. The containing RPC still owns its public budget.
+                if (isMachineRpcTimeoutError(error) && resolveRemainingTimeoutMs() <= 0) {
+                    throw createMachineRpcTimeoutError({
+                        scope,
+                        method: params.method,
+                        timeoutMs: params.timeoutMs,
+                        remainingTimeoutMs: timeoutMs,
+                    });
+                }
+                throw error;
+            }
         },
     };
 }
