@@ -18,6 +18,21 @@ import { DaemonProviderConnectionMutationResponseV1Schema } from '../rpc/provide
 const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
 
 describe('Provider Settings Actions', () => {
+  it.each([
+    ['MACHINE_RPC_TIMEOUT', 'agent_timeout'],
+    ['RPC_METHOD_NOT_AVAILABLE', 'agent_unavailable'],
+  ] as const)('preserves a returned daemon %s through Provider Action dispatch', async (errorCode, providerCode) => {
+    const executor = createActionExecutor({ providerActionExecute: createProviderActionExecuteV1({
+      assertCurrent() {}, setDefault: async () => ({ status: 'applied' }),
+      // The transport returns a daemon error inside a successful Home ACK.
+      rpc: async () => ({ error: 'Daemon request failed', errorCode }),
+    }) });
+    await expect(executor.execute('providers.models.projection', {
+      machineId: 'machine', agentTargetKey: 'agent:happier.agent.codex/codex',
+    }, context)).resolves.toMatchObject({ ok: false, errorCode: providerCode,
+      details: { code: providerCode, machineId: 'machine' } });
+  });
+
   it('preserves the typed probe refusal through real Provider dispatch and approval decision observation', async () => {
     let stored: ApprovalRequestV2 | null = null;
     const error = createProviderErrorV1('provider_endpoint_unavailable', { connectionId: 'gateway', machineId: 'hub' });

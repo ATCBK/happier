@@ -1,6 +1,7 @@
 import type { ActionExecuteResult } from '../actions/actionExecutionResult.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from '../actions/executor/types.js';
 import { RPC_METHODS } from '../rpc/methods.js';
+import { createRpcCallError } from '../rpc/errors.js';
 import { readRecord } from '../inputs/inputRecords.js';
 import { createProviderErrorV1, ProviderErrorV1Schema, providerErrorFromRpcFailure } from './errors.js';
 import { PROVIDER_ACTION_OUTPUT_SCHEMAS_V1, resolveProviderActionOwnerV1, type ProviderActionRequestV1 } from './providerActionsV1.js';
@@ -114,6 +115,12 @@ export function createProviderActionExecuteV1(host: Readonly<{
         // refusals. A shorter acknowledgement timer would discard those results.
         ...(method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION ? { operationTimeoutMs: null } : {}),
       });
+      // A successful Home ACK can carry the daemon manager's transport refusal.
+      // Decode it before validating this Action's Provider-domain response.
+      const reply = readRecord(result);
+      if (typeof reply.error === 'string' && typeof reply.errorCode === 'string') {
+        throw createRpcCallError({ error: reply.error, errorCode: reply.errorCode });
+      }
     } catch (caught) {
       // Admission/currentness refusals happen before transport and are not uncertain mutations.
       if (caught && typeof caught === 'object' && 'code' in caught &&
