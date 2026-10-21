@@ -13,6 +13,8 @@ import {
 } from '@legendapp/list/react-native';
 
 import { TranscriptLayoutCommitObserver } from './TranscriptLayoutCommitObserver';
+import { TranscriptNativeItemRevealProvider } from './TranscriptNativeItemReveal';
+import { useTranscriptFindClearance } from '@/components/sessions/transcript/find/TranscriptFindContext';
 import {
     createTranscriptRendererContentDemand,
     TranscriptRendererContentDemandProvider,
@@ -164,6 +166,9 @@ function LegendListTranscriptRendererInner<TItem>(
         !props.frame.rendererOptions.initialPlacement.atEnd,
     );
     const isWebFrame = props.frame.platform === 'web';
+    const findClearancePx = useTranscriptFindClearance();
+    const nativeItemRevealRef = React.useRef({ onReveal: props.onRevealNativeItem, clearancePx: findClearancePx });
+    useCommittedTranscriptRef(nativeItemRevealRef, { onReveal: props.onRevealNativeItem, clearancePx: findClearancePx });
 
     const data = React.useMemo(() => toLegendData(props.data, props.frame.dataOrder), [props.data, props.frame.dataOrder]);
     const dataLength = data.length;
@@ -1231,10 +1236,38 @@ function LegendListTranscriptRendererInner<TItem>(
         },
     }), [advanceMovementEpoch, armVisibleAnchorHold, beginExplicitJumpTakeover, dataLength, hasActiveEntryPlacement, hasLiveWebHold, holdIndexTarget, holdWebEntryAnchor, invalidateNativePhysicalViewportCapture, invalidateUserInertiaContinuation, notifyViewportInput, observeInitialPresentationSettlement, observeNativePhysicalViewport, projectChronologicalIndex, readVisibleSourceIndexRange, readWebScrollMetrics, requestHeldIntentSettle, revalidateViewportAfterReveal, scrollRendererToEnd]);
 
+    const revealNativeItem = React.useCallback((index: number, node: View) => {
+        if (isWebFrame || !nativeItemRevealRef.current.onReveal) return;
+        const identity = nativePhysicalViewportIdentityRef.current;
+        const item = identity.sourceData[index];
+        if (item === undefined) return;
+        const itemKey = identity.keyExtractor(item, index);
+        const legendIndex = toLegendIndex(index, identity.dataLength, identity.projectChronologicalIndex);
+        const rowHost = legendListRef.current?.getState().elementAtIndex?.(legendIndex) as View | null | undefined;
+        if (!rowHost) return;
+        let cancelled = false;
+        // Fabric accepts the native row ref, not a numeric scrollable handle. Measuring within
+        // that row keeps the result in the existing jump owner's item-offset coordinate space.
+        node.measureLayout(rowHost, (_x, top) => {
+            const current = nativePhysicalViewportIdentityRef.current;
+            const currentItem = current.sourceData[index];
+            if (cancelled || !Number.isFinite(top) || current.dataKey !== identity.dataKey
+                || currentItem === undefined || current.keyExtractor(currentItem, index) !== itemKey
+                || legendListRef.current?.getState().elementAtIndex?.(legendIndex) !== rowHost) return;
+            const { onReveal, clearancePx } = nativeItemRevealRef.current;
+            onReveal?.({ index, itemOffsetPx: clearancePx - top });
+        });
+        return () => { cancelled = true; };
+    }, [isWebFrame]);
+
     const renderItem: LegendListProps<TItem>['renderItem'] = (info) => (
         <TranscriptRendererRowContentDemandProvider itemKey={props.keyExtractor(
             info.item, toSourceIndex(info.index, dataLength, projectChronologicalIndex),
         )}>
+          <TranscriptNativeItemRevealProvider
+            index={toSourceIndex(info.index, dataLength, projectChronologicalIndex)}
+            reveal={revealNativeItem}
+          >
             {props.renderItem({
                 item: info.item,
                 index: toSourceIndex(info.index, dataLength, projectChronologicalIndex),
@@ -1244,6 +1277,7 @@ function LegendListTranscriptRendererInner<TItem>(
                     updateProps: () => undefined,
                 },
             })}
+          </TranscriptNativeItemRevealProvider>
         </TranscriptRendererRowContentDemandProvider>
     );
     const handleLegendViewableItemsChanged = React.useCallback<NonNullable<LegendListProps<TItem>['onViewableItemsChanged']>>((info) => {

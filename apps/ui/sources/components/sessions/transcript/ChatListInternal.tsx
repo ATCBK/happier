@@ -6,7 +6,7 @@ import {
 } from '@/sync/domains/state/storage';
 import { Dimensions, findNodeHandle, Platform, View } from 'react-native';
 import { useCallback } from 'react';
-import type { Message } from "@happier-dev/session-core/messages";
+import { buildMessageRouteId, type Message } from "@happier-dev/session-core/messages";
 import { sync, type SessionViewportAnchorSnapshot } from '@/sync/sync';
 import { useSessionCatchingUpNewer, useSessionTailContiguousBoundary } from '@/sync/store/hooks';
 import { useSessionScreenIsFocused } from '@/components/sessions/shell/useSessionScreenIsFocused';
@@ -1847,6 +1847,15 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         promotePendingJumpSeqViewportSnapshot,
         shouldSuppressGenericViewportStateForProtectedJumpSeq,
     } = jumpHost;
+    const handleRevealNativeItem = React.useCallback((placement: Readonly<{ index: number; itemOffsetPx: number }>) => {
+        const item = listDataRef.current[placement.index];
+        const messageId = item ? collectTranscriptNavigationMessageIdsForItem(item)[0] : undefined;
+        const message = messageId ? props.messagesById[messageId] : undefined;
+        if (!message) return;
+        fireAndForget(jumpToTranscriptTarget({ kind: 'route-message-id', routeMessageId: buildMessageRouteId(message),
+            seqHint: message.seq ?? null }, { align: { kind: 'top-with-item-offset', itemOffsetPx: placement.itemOffsetPx } }),
+        { tag: 'ChatList.revealNativeItem' });
+    }, [jumpToTranscriptTarget, props.messagesById]);
     const findLoadedMessages = React.useMemo(() => {
         const ids = new Set(props.items.flatMap(collectTranscriptNavigationMessageIdsForItem));
         return [...ids].flatMap((id) => props.messagesById[id] ? [props.messagesById[id]] : []);
@@ -2142,6 +2151,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
                 <TranscriptContentDemandProvider enabled={sessionScreenFocused}>
                 <TranscriptListShell<ChatTranscriptListItem>
                     ref={commitListRef}
+                    onRevealNativeItem={handleRevealNativeItem}
                     frame={mainTranscriptListShellFrame}
                     webDomObservation={webDomObservation}
                     onCommitLayoutEffect={observeTranscriptListCommittedLayout}

@@ -24,13 +24,32 @@ function TranscriptListShellInner<TItem>(
 ): React.ReactElement {
     const renderer = resolveTranscriptListRenderer();
     const Renderer = renderer.Component;
+    const rendererRef = React.useRef<TranscriptListShellRef<TItem> | null>(null);
+    const commitRendererRef = React.useCallback((node: TranscriptListShellRef<TItem> | null) => {
+        rendererRef.current = node;
+        if (typeof ref === 'function') ref(node);
+        else if (ref) ref.current = node;
+    }, [ref]);
+    // Bounded transcripts have no outer jump lifecycle; their existing renderer owns the
+    // mounted target. The main transcript supplies its full explicit-jump owner instead.
+    const revealNativeItem = React.useCallback((placement: Readonly<{ index: number; itemOffsetPx: number }>) => {
+        const target = rendererRef.current;
+        if (!target) return;
+        const release = target.beginExplicitJumpTakeover?.(Symbol('transcript-native-item-reveal'));
+        try {
+            void target.scrollToIndex({ index: placement.index, viewOffset: placement.itemOffsetPx, animated: false });
+        } finally {
+            release?.();
+        }
+    }, []);
 
     return (
         <MarkdownCodeBlockWrapStateProvider>
             <View style={TRANSCRIPT_LIST_SHELL_STYLE}>
                 <Renderer
-                    ref={ref}
+                    ref={commitRendererRef}
                     {...props}
+                    onRevealNativeItem={props.onRevealNativeItem ?? revealNativeItem}
                 />
                 {props.olderLoadOverlay ?? null}
                 {props.catchUpOverlay ?? null}

@@ -294,6 +294,8 @@ export type TranscriptListRendererProps<TItem> = Readonly<{
         context: Readonly<{ cause: TranscriptViewportMutationCause }>,
     ) => void;
     onEntryPlacementEvent?: (event: TranscriptRendererEntryPlacementEvent) => void;
+    /** A mounted native descendant's measured placement, consumed by the explicit jump owner. */
+    onRevealNativeItem?: (placement: Readonly<{ index: number; itemOffsetPx: number }>) => void;
     onScrollToIndexFailed?: FlatListProps<TItem>['onScrollToIndexFailed'];
     onStartReachedThreshold?: number;
     onStartReached?: () => void;

@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
+import { Platform, Pressable, View } from 'react-native';
 import { HappierStoredImage } from '@happier-dev/plugin-ui/presentation';
 import { STORED_IMAGE_HOST } from '@/components/ui/media/StoredImagePicture';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -15,6 +15,7 @@ import {
 } from '@/components/sessions/media/resolveSessionMediaInlineImageLayout';
 import { SessionMediaVideoPreview } from '@/components/sessions/media/SessionMediaVideoPreview';
 import { ImageNumberBadge } from '@/components/ui/referenceChip/ImageNumberBadge';
+import { useTranscriptNativeItemReveal } from '@/components/sessions/transcript/viewport/shell/renderer/TranscriptNativeItemReveal';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type {
     SessionMediaInlineImageAvailableSummary,
@@ -200,15 +201,20 @@ function SessionMediaInlineImageTile(props: Readonly<{
     const actionable = preview.status !== 'error' || props.fileOpenEnabled;
     const { onPreviewLoaded } = props;
     const loadedUri = preview.status === 'loaded' ? preview.uri : null;
+    const revealNativeItem = useTranscriptNativeItemReveal();
     React.useEffect(() => {
         if (loadedUri && onPreviewLoaded) onPreviewLoaded(props.media.path, loadedUri);
     }, [loadedUri, onPreviewLoaded, props.media.path]);
     // An "Image #N" chip asking for this picture brings it into view.
     React.useEffect(() => {
         if (!props.ringed) return;
+        if (Platform.OS !== 'web') {
+            const node = props.originRef.current;
+            return node ? revealNativeItem?.(node) : undefined;
+        }
         const node = props.originRef.current as unknown as { scrollIntoView?: (options: ScrollIntoViewOptions) => void } | null;
         node?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-    }, [props.originRef, props.ringed]);
+    }, [props.originRef, props.ringed, revealNativeItem]);
 
     return (
         <View ref={props.originRef} collapsable={false}>
