@@ -31,7 +31,7 @@ const ASYNC_SUBAGENT_LAUNCH_ACKNOWLEDGEMENT_STATUSES: ReadonlySet<string> = new 
     'remote_launched',
 ]);
 
-function readSubAgentToolResultRecord(value: unknown): Record<string, unknown> | null {
+export function readSubAgentToolResultRecord(value: unknown): Record<string, unknown> | null {
     if (typeof value === 'string') {
         const trimmed = value.trim();
         const first = trimmed[0];
@@ -45,6 +45,14 @@ function readSubAgentToolResultRecord(value: unknown): Record<string, unknown> |
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : null;
+}
+
+/** Structured identity shared by the roster and content-free Usage projection. */
+export function readSubAgentToolRunId(tool: Readonly<{ input?: unknown; result?: unknown }>): string | null {
+    const input = readSubAgentToolResultRecord(tool.input);
+    const result = readSubAgentToolResultRecord(tool.result);
+    return (typeof input?.runId === 'string' ? input.runId.trim() : '')
+        || (typeof result?.runId === 'string' ? result.runId.trim() : '') || null;
 }
 
 export function readSubAgentToolSidechainId(tool: Readonly<{ id?: unknown; input?: unknown; result?: unknown }>, toolName: string): string | null {

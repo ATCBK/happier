@@ -1,16 +1,10 @@
 import type { Message, ToolCall } from "@happier-dev/session-core/messages";
-import { isSubAgentTranscriptToolName } from '@happier-dev/protocol/tools/v2';
+import { isSubAgentTranscriptToolName, readSubAgentToolRunId } from '@happier-dev/protocol/tools/v2';
 
 const EXECUTION_RUN_ID_REGEX = /run_[0-9a-f-]{8,}/gi;
 
 export function readExecutionRunIdFromToolPayload(tool: ToolCall): string | null {
-    const input = tool.input as any;
-    const inputRunId = typeof input?.runId === 'string' ? String(input.runId).trim() : '';
-    if (inputRunId.length > 0) return inputRunId;
-
-    const result = tool.result as any;
-    const resultRunId = typeof result?.runId === 'string' ? String(result.runId).trim() : '';
-    return resultRunId.length > 0 ? resultRunId : null;
+    return readSubAgentToolRunId(tool);
 }
 
 export function extractExecutionRunIdsFromText(text: string): readonly string[] {

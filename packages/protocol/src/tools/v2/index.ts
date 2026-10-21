@@ -36,6 +36,7 @@ export {
   readSubAgentToolResultStatus,
   isGenericSubAgentToolName,
   isSubAgentTranscriptToolName,
+  readSubAgentToolRunId,
   readSubAgentToolSidechainId,
   type LegacySubAgentToolNameAlias,
   type GenericSubAgentToolNameAlias,
