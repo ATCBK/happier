@@ -162,6 +162,13 @@ describe('teamsSnapshots', () => {
             resources: [catalogEntry],
             observedAt: 80,
         });
+        const application = {
+            agentTargetKey: 'agent:happier.agent.codex/codex',
+            implementationIdentity: { pluginId: 'happier.provider.test', localId: 'test' },
+            endpointTemplateId: 'responses', protocol: 'openai-responses',
+        } as const;
+        applyTeamCredentialResourceCatalog({ scope: scopeA, address: groupAddressA, application,
+            resources: [{ ...catalogEntry, displayName: 'Application catalog' }], observedAt: 81 });
         applyTeamCredentialResource({
             scope: scopeA,
             address: groupAddressA,
@@ -174,8 +181,14 @@ describe('teamsSnapshots', () => {
         const catalogSnapshot = getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA);
         expect(snapshot?.data).toEqual([resource]);
         expect(catalogSnapshot?.data).toEqual([catalogEntry]);
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.data?.[0]?.displayName)
+            .toBe('Application catalog');
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA,
+            { ...application, endpointTemplateId: 'other-endpoint' })).toBeNull();
 
         invalidateTeamCredentialResources(scopeA, groupAddressA, resource.id);
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA)?.stale).toBe(true);
+        expect(getTeamCredentialResourceCatalogSnapshot(scopeA, groupAddressA, application)?.stale).toBe(true);
         expect(getTeamCredentialResourcesSnapshot(scopeA, groupAddressA)?.data).toBe(listData);
         expect(getTeamCredentialResourcesSnapshot(scopeA, groupAddressA)?.stale).toBe(true);
         expect(getTeamCredentialResourceSnapshot(scopeA, groupAddressA, resource.id)).toMatchObject({

@@ -6,6 +6,7 @@ import {
     type TeamGroupV1,
     type TeamSummaryV1,
 } from '@happier-dev/protocol/teams';
+import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import {
     serverAccountScopeKeySuffix,
@@ -124,7 +125,7 @@ export type TeamCredentialResourcesSnapshot = Readonly<{
 }>;
 
 /**
- * Recipient-safe credential choices for one exact Home Account and Team.
+ * Recipient-safe credential choices for one exact Home Account, Team and optional application.
  *
  * This is deliberately independent of administration list query identity:
  * changing a manager's search/filter must not reopen the same entitlement
@@ -133,6 +134,7 @@ export type TeamCredentialResourcesSnapshot = Readonly<{
 export type TeamCredentialResourceCatalogSnapshot = Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
+    application?: ProviderBrokerApplicationBindingV1;
     status: ScopedSnapshotStatus;
     data: readonly TeamCredentialResourceCatalogEntryV1[] | null;
     lastObservedAt: number | null;
@@ -264,9 +266,18 @@ export function getTeamCredentialResourcesSnapshot(
 export function getTeamCredentialResourceCatalogSnapshot(
     scope: ServerAccountScope | null | undefined,
     address: TeamAddress | null | undefined,
+    application?: ProviderBrokerApplicationBindingV1,
 ): TeamCredentialResourceCatalogSnapshot | null {
     if (!scope || !address) return null;
-    return credentialCatalogs.get(serverAccountScopedTeamKey(scope, address)) ?? null;
+    return credentialCatalogs.get(teamCredentialResourceCatalogKey(scope, address, application)) ?? null;
+}
+
+/** One identity shared by the retained snapshot and its in-flight loader. */
+export function teamCredentialResourceCatalogKey(scope: ServerAccountScope, address: TeamAddress,
+    application?: ProviderBrokerApplicationBindingV1): string {
+    return JSON.stringify([serverAccountScopedTeamKey(scope, address), application ? [application.agentTargetKey,
+        application.implementationIdentity.pluginId, application.implementationIdentity.localId,
+        application.endpointTemplateId, application.protocol] : null]);
 }
 
 /** Recipient-safe cached names for an exact Account; display reads confer no resource authority. */
@@ -770,13 +781,15 @@ export function applyTeamCredentialResourcesFailure(params: Readonly<{
 export function beginTeamCredentialResourceCatalogLoad(
     scope: ServerAccountScope,
     address: TeamAddress,
+    application?: ProviderBrokerApplicationBindingV1,
 ): void {
-    const current = getTeamCredentialResourceCatalogSnapshot(scope, address);
+    const current = getTeamCredentialResourceCatalogSnapshot(scope, address, application);
     const status: ScopedSnapshotStatus = current?.data ? 'refreshing' : 'loading';
     if (current && current.status === status && current.error === null) return;
-    credentialCatalogs.set(serverAccountScopedTeamKey(scope, address), Object.freeze({
+    credentialCatalogs.set(teamCredentialResourceCatalogKey(scope, address, application), Object.freeze({
         scope,
         address,
+        ...(application ? { application } : {}),
         status,
         data: current?.data ?? null,
         lastObservedAt: current?.lastObservedAt ?? null,
@@ -790,14 +803,16 @@ export function beginTeamCredentialResourceCatalogLoad(
 export function applyTeamCredentialResourceCatalog(params: Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
+    application?: ProviderBrokerApplicationBindingV1;
     resources: readonly TeamCredentialResourceCatalogEntryV1[];
     observedAt: number;
     current?: boolean;
 }>): void {
-    const current = getTeamCredentialResourceCatalogSnapshot(params.scope, params.address);
-    credentialCatalogs.set(serverAccountScopedTeamKey(params.scope, params.address), Object.freeze({
+    const current = getTeamCredentialResourceCatalogSnapshot(params.scope, params.address, params.application);
+    credentialCatalogs.set(teamCredentialResourceCatalogKey(params.scope, params.address, params.application), Object.freeze({
         scope: params.scope,
         address: params.address,
+        ...(params.application ? { application: params.application } : {}),
         status: 'ready',
         data: preserveUnchangedCredentialCatalog(current?.data ?? null, params.resources),
         lastObservedAt: params.observedAt,
@@ -811,13 +826,15 @@ export function applyTeamCredentialResourceCatalog(params: Readonly<{
 export function applyTeamCredentialResourceCatalogFailure(params: Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
+    application?: ProviderBrokerApplicationBindingV1;
     error: ScopedSnapshotError;
 }>): void {
-    const current = getTeamCredentialResourceCatalogSnapshot(params.scope, params.address);
+    const current = getTeamCredentialResourceCatalogSnapshot(params.scope, params.address, params.application);
     const withdrawn = isAuthoritativeScopedSnapshotRefusal(params.error);
-    credentialCatalogs.set(serverAccountScopedTeamKey(params.scope, params.address), Object.freeze({
+    credentialCatalogs.set(teamCredentialResourceCatalogKey(params.scope, params.address, params.application), Object.freeze({
         scope: params.scope,
         address: params.address,
+        ...(params.application ? { application: params.application } : {}),
         status: 'error',
         data: withdrawn ? null : current?.data ?? null,
         lastObservedAt: withdrawn ? null : current?.lastObservedAt ?? null,
@@ -831,8 +848,9 @@ export function applyTeamCredentialResourceCatalogFailure(params: Readonly<{
 export function invalidateTeamCredentialResourceCatalog(
     scope: ServerAccountScope,
     address: TeamAddress,
+    application?: ProviderBrokerApplicationBindingV1,
 ): boolean {
-    const changed = markTeamCredentialResourceCatalogStale(scope, address);
+    const changed = markTeamCredentialResourceCatalogStale(scope, address, application);
     if (!changed) return false;
     notify();
     return true;
@@ -841,8 +859,9 @@ export function invalidateTeamCredentialResourceCatalog(
 function markTeamCredentialResourceCatalogStale(
     scope: ServerAccountScope,
     address: TeamAddress,
+    application?: ProviderBrokerApplicationBindingV1,
 ): boolean {
-    const key = serverAccountScopedTeamKey(scope, address);
+    const key = teamCredentialResourceCatalogKey(scope, address, application);
     const current = credentialCatalogs.get(key);
     if (!current || current.stale) return false;
     credentialCatalogs.set(key, Object.freeze({ ...current, stale: true }));
@@ -899,9 +918,13 @@ export function invalidateTeamCredentialResources(
         credentialResources.set(key, Object.freeze({ ...current, stale: true }));
         changed = true;
     }
-    const catalogChanged = markTeamCredentialResourceCatalogStale(scope, address);
-    if (changed || catalogChanged) notify();
-    return changed || catalogChanged;
+    for (const [key, current] of credentialCatalogs) {
+        if (current.stale || !credentialSnapshotMatches(current, scope, address)) continue;
+        credentialCatalogs.set(key, Object.freeze({ ...current, stale: true }));
+        changed = true;
+    }
+    if (changed) notify();
+    return changed;
 }
 
 export function beginTeamGroupLoad(

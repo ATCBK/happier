@@ -7,6 +7,11 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
+    "./providers/catalog/brokerApplicationProjectionV1": {
+      "happier-source": "./src/providers/catalog/brokerApplicationProjectionV1.ts",
+      "types": "./dist/providers/catalog/brokerApplicationProjectionV1.d.ts",
+      "default": "./dist/providers/catalog/brokerApplicationProjectionV1.js"
+    },
     "./account/publicProfileSnapshot": {
       "happier-source": "./src/account/publicProfileSnapshot.ts",
       "types": "./dist/account/publicProfileSnapshot.d.ts",

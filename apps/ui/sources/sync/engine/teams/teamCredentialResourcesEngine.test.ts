@@ -82,15 +82,21 @@ describe('Team credential resource observations', () => {
             .mockResolvedValueOnce({ kind: 'succeeded', value: { resources: [first], nextCursor: 'catalog-page-2' } })
             .mockResolvedValueOnce({ kind: 'succeeded', value: { resources: [second], nextCursor: null } });
 
-        const release = observeTeamCredentialResourceCatalog(scope, address);
+        const application = {
+            agentTargetKey: 'agent:happier.agent.codex/codex',
+            implementationIdentity: { pluginId: 'happier.provider.test', localId: 'test' },
+            endpointTemplateId: 'responses', protocol: 'openai-responses',
+        } as const;
+        const release = observeTeamCredentialResourceCatalog(scope, address, application);
         await vi.waitFor(() => {
-            expect(getTeamCredentialResourceCatalogSnapshot(scope, address)).toMatchObject({
+            expect(getTeamCredentialResourceCatalogSnapshot(scope, address, application)).toMatchObject({
                 status: 'ready', data: [{ id: first.id }, { id: second.id }],
             });
         });
         expect(listEntitledTeamCredentialResourcesMock).toHaveBeenNthCalledWith(2, {
-            scope, address, cursor: 'catalog-page-2',
+            scope, address, application, cursor: 'catalog-page-2',
         });
+        expect(getTeamCredentialResourceCatalogSnapshot(scope, address)).toBeNull();
         release();
     });
 

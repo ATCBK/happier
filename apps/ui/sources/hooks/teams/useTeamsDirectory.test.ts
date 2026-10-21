@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, TeamsListInputV1Schema, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
+import { NO_TEAM_CAPABILITIES_V1, TeamCredentialResourceEntitledPageV1Schema, TeamCredentialResourceReadInputV1Schema, TeamsListInputV1Schema, type TeamSummaryV1 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { HomeGovernanceEligibilityV1Schema, HomeGovernanceProjectionV1Schema } from '@happier-dev/protocol/home/governance';
 
@@ -262,6 +262,96 @@ describe('useTeamsDirectory', () => {
             resetHomeGovernanceEligibilityEngineForTests();
             clearHomeGovernanceSnapshotsForServer('srv_team_alias');
             resetHomeGovernanceEligibilitySnapshotsForTests();
+            await home.reset();
+        }
+    });
+
+    it('loads and reloads the selected Agent application without sharing generic or other Agent catalog rows', async () => {
+        const home = createHomeGovernanceHarness();
+        const serverId = await home.addHome({ name: 'Catalog Home', serverUrl: 'https://team-models.example',
+            serverIdentityId: 'srv_team_models', accountId: 'account', currentAccount: true,
+            teamsEnabled: true, credentialResourcesEnabled: true });
+        home.answer(serverId, '/v1/teams/list', { body: { items: [team('team-1')], nextCursor: null } });
+        const path = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'team-1' }).path;
+        let revision = 1;
+        let applicationUnavailable = false;
+        const multiProtocolAgent = 'agent:happier.agent.opencode/opencode';
+        home.answer(serverId, path, { select: (input) => {
+            const { application } = TeamCredentialResourceReadInputV1Schema.parse(input);
+            if (application && applicationUnavailable) return { status: 503, body: { error: 'unavailable' } };
+            const modelId = application?.agentTargetKey === multiProtocolAgent ? 'shared-model'
+                : application ? `${application.protocol}-${revision}` : '';
+            const resource = {
+                id: 'shared', teamId: 'team-1', displayName: 'Shared gateway', resourceRevision: revision,
+                readiness: { kind: 'available' }, recoveryAction: null,
+                mayBroker: true, mayReceiveDirect: false, directMaterialState: 'never_delivered',
+                sessionUsePolicy: 'personal_allowed', providerModels: application ? [{
+                    selection: { kind: 'team_credential_provider_model', teamId: 'team-1', resourceId: 'shared',
+                        expectedResourceRevision: revision, agentTargetKey: application.agentTargetKey, modelId, deliveryMode: 'brokered' },
+                    descriptor: { id: modelId, name: modelId }, application, sourceRevision: `source-${revision}`, availability: 'available',
+                }] : [], connectedServiceSelections: [],
+                sourcePresentation: { kind: 'provider', provider: { identity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' }, definitionRevision: 1 } },
+            };
+            return { body: TeamCredentialResourceEntitledPageV1Schema.parse({ resources: application ? [resource]
+                : [resource, { ...resource, id: 'generic-only',
+                    sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.service.test', localId: 'chat' } },
+                    connectedServiceSelections: [{ source: 'team_resource', resourceId: 'generic-only', deliveryMode: 'brokered' }],
+                }], nextCursor: null }) };
+        } });
+        getCredentialsForServerUrlMock.mockImplementation(async (url) => {
+            const token = home.findByServerUrl(url)?.token;
+            return token ? { token } : null;
+        });
+        runtimeFetchMock.mockImplementation(async (request) => {
+            const headers = new Headers(request.init?.headers);
+            if (request.token) headers.set('Authorization', `Bearer ${request.token}`);
+            return home.request(request.url, { ...request.init, headers });
+        });
+        setRuntimeFetch((input, init) => home.request(input, init));
+        const codex = 'agent:happier.agent.codex/codex';
+        const claude = 'agent:happier.agent.claude/claude';
+        const rendered = await renderHook(({ agentTargetKey }: { agentTargetKey: string }) => ({
+            selected: useHomeTeamCredentialModelCatalog({ serverId, enabled: true, agentTargetKey }),
+            generic: useHomeTeamCredentialModelCatalog({ serverId, enabled: true }),
+        }), { initialProps: { agentTargetKey: codex } });
+        const models = () => rendered.getCurrent().selected.resources.flatMap(row => row.providerModels.map(model => model.descriptor.id));
+        try {
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            expect(models()).toEqual(['openai-responses-1']);
+            expect(rendered.getCurrent().selected.resources.map(row => row.id)).toEqual(['shared', 'generic-only']);
+            expect(rendered.getCurrent().selected.resources[1]?.connectedServiceSelections).toEqual([
+                { source: 'team_resource', resourceId: 'generic-only', deliveryMode: 'brokered' },
+            ]);
+            expect(rendered.getCurrent().generic.resources.flatMap(row => row.providerModels)).toEqual([]);
+            await rendered.rerender({ agentTargetKey: claude });
+            expect(models().some(id => id.startsWith('openai-responses'))).toBe(false);
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            expect(models()).toEqual(['anthropic-1']);
+            revision = 2;
+            await act(async () => { await rendered.getCurrent().selected.reload(); });
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            expect(models()).toEqual(['anthropic-2']);
+            expect(rendered.getCurrent().generic.resources.flatMap(row => row.providerModels)).toEqual([]);
+            await rendered.rerender({ agentTargetKey: codex });
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            expect(models()).toEqual(['openai-responses-2']);
+            const reads = home.requests.filter(request => request.path === path);
+            expect(reads.some(request => JSON.stringify(request.input).includes('cliproxyapi-openai-responses'))).toBe(true);
+            await rendered.rerender({ agentTargetKey: multiProtocolAgent });
+            await waitForHomeGovernance(() => expect(rendered.getCurrent().selected.current).toBe(true));
+            expect(models()).toEqual(['shared-model']);
+            const model = rendered.getCurrent().selected.resources[0]?.providerModels[0];
+            expect(model?.application.endpointTemplateId).toBe('cliproxyapi-openai-responses');
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:generic-only')).toBe(true);
+            applicationUnavailable = true;
+            await act(async () => { await rendered.getCurrent().selected.reload(); });
+            expect(rendered.getCurrent().selected.current).toBe(false);
+            expect(models()).toEqual(['shared-model']);
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:shared')).toBe(false);
+            expect(rendered.getCurrent().selected.currentResourceKeys.has('team-1:generic-only')).toBe(true);
+        } finally {
+            await rendered.unmount();
+            resetRuntimeFetch();
             await home.reset();
         }
     });

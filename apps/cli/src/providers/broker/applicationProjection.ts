@@ -1,4 +1,5 @@
-import type { ProviderBrokerApplicationBindingV1, ProviderWireProtocol, ProviderEndpointTemplateV1, ResolvedProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol';
+import type { ProviderBrokerApplicationBindingV1, ProviderWireProtocol, ResolvedProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol';
+import { projectApplicationEndpoint, projectAgentProviderBrokerApplications as projectDeclaredAgentProviderBrokerApplications } from '@happier-dev/protocol/providers/catalog/brokerApplicationProjectionV1';
 import { resolveProviderManagedRuntimeDeclarationV1 } from '@happier-dev/protocol/providers/contributions';
 
 import { getProviderContribution, type ProviderContributionRegistryView, type ResolvedProviderConnectionRecord } from '@/providers/registry';
@@ -23,27 +24,6 @@ export function createAccountConnectionModelProjectionRequest(input: Readonly<{
     ...(input.application ? { application: input.application } : {}),
     ...(input.refreshPolicy ? { refreshPolicy: input.refreshPolicy } : {}),
   });
-}
-
-function projectApplicationEndpoint(input: Readonly<{
-  implementationIdentity: ProviderBrokerApplicationBindingV1['implementationIdentity'];
-  agentTargetKey: string;
-  protocol: ProviderWireProtocol;
-  endpointTemplates: readonly ProviderEndpointTemplateV1[];
-  managedEndpointTemplateIds?: readonly string[];
-  endpointTemplateId?: string;
-}>): ProviderBrokerApplicationBindingV1 | null {
-  const endpoint = input.endpointTemplates.find((candidate) => (
-    candidate.protocol === input.protocol
-    && (input.endpointTemplateId === undefined || candidate.id === input.endpointTemplateId)
-    && (input.managedEndpointTemplateIds === undefined || input.managedEndpointTemplateIds.includes(candidate.id))
-  ));
-  return endpoint ? {
-    agentTargetKey: input.agentTargetKey,
-    implementationIdentity: input.implementationIdentity,
-    endpointTemplateId: endpoint.id,
-    protocol: endpoint.protocol,
-  } : null;
 }
 
 /** Exact managed implementation admission uses the current contribution, never
@@ -78,19 +58,11 @@ export function projectAgentProviderBrokerApplications(input: Readonly<{
   agentTargetKey: string;
   acceptedProtocols: readonly ProviderWireProtocol[];
 }>): readonly ProviderBrokerApplicationBindingV1[] {
-  return [...input.registry.providersByContributionKey.values()].flatMap(provider => (
-    provider.definition.managedRuntime
-      ? provider.definition.endpointTemplates.flatMap(endpoint => {
-          if (!input.acceptedProtocols.includes(endpoint.protocol)) return [];
-          const application = projectManagedProviderBrokerApplication({
-            registry: input.registry, implementationIdentity: provider.identity,
-            agentTargetKey: input.agentTargetKey, protocol: endpoint.protocol,
-            endpointTemplateId: endpoint.id,
-          });
-          return application ? [application] : [];
-        })
-      : []
-  ));
+  return projectDeclaredAgentProviderBrokerApplications({
+    providers: [...input.registry.providersByContributionKey.values()],
+    agentTargetKey: input.agentTargetKey,
+    acceptedProtocols: input.acceptedProtocols,
+  });
 }
 
 export function resolveManagedProviderBrokerPurpose(input: Readonly<{

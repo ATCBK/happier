@@ -51,6 +51,7 @@ import {
 } from '@happier-dev/protocol/teams';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
 import { invalidateTeamCredentialResources } from '@/sync/store/teams/teamsSnapshots';
 
@@ -169,13 +170,15 @@ export function getTeamCredentialResource(params: Readonly<{
 export function listEntitledTeamCredentialResources(params: Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
+    application?: ProviderBrokerApplicationBindingV1;
     signal?: AbortSignal;
     cursor?: string | null;
 }>): Promise<TeamCredentialOutcome<TeamCredentialResourceEntitledPageV1>> {
     return runTeamAction({
         scope: params.scope,
         actionId: 'teams.credentials.entitled.list',
-        input: { teamId: params.address.teamId, ...(params.cursor ? { cursor: params.cursor } : {}) },
+        input: { teamId: params.address.teamId, ...(params.application ? { application: params.application } : {}),
+            ...(params.cursor ? { cursor: params.cursor } : {}) },
         parse: (value) => TeamCredentialResourceEntitledPageV1Schema.parse(value),
         ...(params.signal ? { signal: params.signal } : {}),
     });

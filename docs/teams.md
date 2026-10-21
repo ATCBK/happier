@@ -80,6 +80,14 @@ the initiator Account need not equal the custodian Account. Home remains the
 resource, membership and consumer-currentness authority, and the source
 credential stays with its custodian.
 
+The development New Session catalog qualifies entitled model reads with the selected
+Agent's admitted Provider applications. Generic resource discovery and each application
+retain separate snapshots under the same Home/Account/Team loader; changing Agents
+cannot reuse another application's model rows. Model controls come from the exact
+source descriptor through the shared picker, including Team rows. Catalog visibility
+and reasoning choices do not bypass native Team preflight refusal, worker compatibility
+checks, or experimental-model confirmation.
+
 Team and Account broker consumers share the endpoint-discovery owner described
 in [Providers](providers.md). For a failed Team launch, read the recipient's
 `[ProviderBroker] Endpoint discovery refused` record for the closed cause,

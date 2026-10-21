@@ -11,6 +11,7 @@ import {
 } from '@happier-dev/protocol/teams';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes';
+import type { ProviderBrokerApplicationBindingV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import {
     requestHomeDomain,
@@ -47,6 +48,7 @@ import {
     beginTeamCredentialResourceLoad,
     beginTeamCredentialResourcesLoad,
     getTeamCredentialResourceCatalogSnapshot,
+    teamCredentialResourceCatalogKey,
     getTeamCredentialResourceSnapshot,
     getTeamCredentialResourcesSnapshot,
     applyTeamFailure,
@@ -658,6 +660,7 @@ const credentialResourceLoader = createScopedSnapshotLoader<TeamCredentialResour
 type TeamCredentialResourceCatalogTarget = ScopedLoadTarget & Readonly<{
     scope: ServerAccountScope;
     address: TeamAddress;
+    application?: ProviderBrokerApplicationBindingV1;
 }>;
 
 function readRecipientCatalogNextCursor(page: object): string | null {
@@ -668,26 +671,29 @@ function readRecipientCatalogNextCursor(page: object): string | null {
 function credentialResourceCatalogTargetFor(
     scope: ServerAccountScope,
     address: TeamAddress,
+    application?: ProviderBrokerApplicationBindingV1,
 ): TeamCredentialResourceCatalogTarget | null {
     if (scope.serverId !== address.serverId) return null;
     return {
-        key: `credential-catalog:${serverAccountScopedTeamKey(scope, address)}`,
+        key: `credential-catalog:${teamCredentialResourceCatalogKey(scope, address, application)}`,
         serverId: scope.serverId,
         scope,
         address,
+        ...(application ? { application } : {}),
     };
 }
 
 const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentialResourceCatalogTarget>({
-    load: async ({ scope, address }, loadContext) => {
-        beginTeamCredentialResourceCatalogLoad(scope, address);
+    load: async ({ scope, address, application }, loadContext) => {
+        beginTeamCredentialResourceCatalogLoad(scope, address, application);
         let outcome: Awaited<ReturnType<typeof listEntitledTeamCredentialResources>>;
         try {
-            outcome = await listEntitledTeamCredentialResources({ scope, address });
+            outcome = await listEntitledTeamCredentialResources({ scope, address, ...(application ? { application } : {}) });
         } catch {
             applyTeamCredentialResourceCatalogFailure({
                 scope,
                 address,
+                application,
                 error: { kind: 'unknown', retryable: true },
             });
             return;
@@ -697,10 +703,10 @@ const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentia
             const resources = [...outcome.value.resources];
             let cursor = readRecipientCatalogNextCursor(outcome.value);
             while (cursor && loadContext.isCurrent()) {
-                const continuation = await listEntitledTeamCredentialResources({ scope, address, cursor });
+                const continuation = await listEntitledTeamCredentialResources({ scope, address, cursor, ...(application ? { application } : {}) });
                 if (continuation.kind !== 'succeeded') {
                     applyTeamCredentialResourceCatalogFailure({
-                        scope, address, error: toSnapshotError(continuation.failure),
+                        scope, address, application, error: toSnapshotError(continuation.failure),
                     });
                     return;
                 }
@@ -711,6 +717,7 @@ const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentia
             applyTeamCredentialResourceCatalog({
                 scope,
                 address,
+                application,
                 resources,
                 observedAt: Date.now(),
                 current: loadContext.isCurrent(),
@@ -720,11 +727,12 @@ const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentia
         applyTeamCredentialResourceCatalogFailure({
             scope,
             address,
+            application,
             error: toSnapshotError(outcome.failure),
         });
     },
-    shouldLoadOnObserve: ({ scope, address }) => {
-        const current = getTeamCredentialResourceCatalogSnapshot(scope, address);
+    shouldLoadOnObserve: ({ scope, address, application }) => {
+        const current = getTeamCredentialResourceCatalogSnapshot(scope, address, application);
         if (!current) return true;
         if (current.stale) return true;
         return current.data === null && current.status !== 'loading';
@@ -732,8 +740,8 @@ const credentialResourceCatalogLoader = createScopedSnapshotLoader<TeamCredentia
     invalidateServer: (serverId) => {
         invalidateTeamsSnapshotsForServer(serverId);
     },
-    invalidateTarget: ({ scope, address }) => {
-        invalidateTeamCredentialResourceCatalog(scope, address);
+    invalidateTarget: ({ scope, address, application }) => {
+        invalidateTeamCredentialResourceCatalog(scope, address, application);
     },
     matchesWake: (event) => event.entityIds === undefined
         || event.entityIds.includes(TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1),
@@ -771,12 +779,13 @@ export async function refreshTeamCredentialResource(
     await credentialResourceLoader.refresh(target);
 }
 
-/** Observes the filter-independent recipient catalog once for an exact Team. */
+/** Observes a filter-independent recipient catalog for an exact Team/application. */
 export function observeTeamCredentialResourceCatalog(
     scope: ServerAccountScope,
     address: TeamAddress,
+    application?: ProviderBrokerApplicationBindingV1,
 ): () => void {
-    const target = credentialResourceCatalogTargetFor(scope, address);
+    const target = credentialResourceCatalogTargetFor(scope, address, application);
     return target ? credentialResourceCatalogLoader.observe(target) : () => {};
 }
 
@@ -784,8 +793,9 @@ export function observeTeamCredentialResourceCatalog(
 export async function refreshTeamCredentialResourceCatalog(
     scope: ServerAccountScope,
     address: TeamAddress,
+    application?: ProviderBrokerApplicationBindingV1,
 ): Promise<void> {
-    const target = credentialResourceCatalogTargetFor(scope, address);
+    const target = credentialResourceCatalogTargetFor(scope, address, application);
     if (!target) return;
     await credentialResourceCatalogLoader.refresh(target);
 }
