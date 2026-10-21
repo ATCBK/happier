@@ -20,9 +20,12 @@ export function installEntityDragCancellation(runtime: EntityDragDropRuntime, ev
         const snapshot = runtime.getSnapshot();
         return snapshot.phase === 'settled' && snapshot.outcome?.status === 'refused' && runtime.getPointer() !== null;
     };
+    // A pointer carry is held by a pointer already down, and the press that starts one lands before the carry
+    // exists. So a press while one is on screen means its release never arrived: it ends there too.
+    const pointerCarried = () => runtime.getSnapshot().phase === 'carrying' && runtime.getPointer() !== null;
     const pointerDown = () => {
         suppressPointerActivation = false;
-        if (returning()) runtime.cancel('pointerdown');
+        if (returning() || pointerCarried()) runtime.cancel('pointerdown');
     };
     const click = (event: Event) => {
         if (!suppressPointerActivation || !('detail' in event) || event.detail === 0) return;

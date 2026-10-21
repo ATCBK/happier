@@ -56,7 +56,10 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
     const node = React.useRef<View | ScrollView>(null);
     const nativeBounds = React.useRef<WindowBounds | null>(null);
     const latest = React.useRef(binding); latest.current = binding;
-    const dragDom = useEntityDragDomBinding({ runtime, sourceId, enabled: binding !== null && binding.getItem() !== null && isHoverCapablePrimaryPointer(),
+    // One gesture owner per pointer kind: a hover pointer carries through the host's browser drag, every other
+    // pointer through the grip's pan. Both live on one grip would begin twice and strand the replaced carry.
+    const domCarry = isHoverCapablePrimaryPointer();
+    const dragDom = useEntityDragDomBinding({ runtime, sourceId, enabled: binding !== null && binding.getItem() !== null && domCarry,
         describe: () => latest.current?.title ?? '',
         canStart: event => {
             const element = typeof Element !== 'undefined' && event.target instanceof Element ? event.target : null;
@@ -104,7 +107,7 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
         return () => { source(); target?.(); };
     }, [runtime, sourceId, targetId, binding?.scope.serverId, binding?.scope.accountId, binding !== null, binding?.target !== undefined, bounds]);
     const adapter = React.useRef<ReturnType<typeof createEntityDragGestureAdapter> | null>(null);
-    const gesture = React.useMemo(() => Gesture.Pan().minDistance(6).runOnJS(true)
+    const gesture = React.useMemo(() => Gesture.Pan().minDistance(6).runOnJS(true).enabled(!domCarry)
         .onStart(event => {
             const carry = runtime.begin(sourceId, 'pointer');
             adapter.current = carry ? createEntityDragGestureAdapter(carry) : null;
@@ -112,7 +115,7 @@ export function useSessionSurfaceEntityDrag(binding: SessionSurfaceEntityBinding
         })
         .onUpdate(event => { adapter.current?.update({ x: event.absoluteX, y: event.absoluteY }); runtime.autoscroll(); })
         .onEnd((event, success) => { void adapter.current?.end(success, { x: event.absoluteX, y: event.absoluteY }); })
-        .onFinalize(() => adapter.current?.finalize()), [runtime, sourceId]);
+        .onFinalize(() => adapter.current?.finalize()), [runtime, sourceId, domCarry]);
     React.useEffect(() => () => adapter.current?.cancel(), []);
     const refresh = React.useCallback(() => { measure(); runtime.refresh(); }, [measure, runtime]);
     const onLayout = React.useCallback((_event?: LayoutChangeEvent) => refresh(), [refresh]);

@@ -398,6 +398,26 @@ describe('mounted entity drag owner', () => {
         } finally { uninstall(); }
     });
 
+    it('a press while a pointer carry is on screen ends it, so a carry whose release never arrived cannot outlive the next click', async () => {
+        const f = fixture();
+        const events = new EventTarget();
+        const uninstall = installEntityDragCancellation(f.runtime, events);
+        try {
+            const carry = f.runtime.begin('source')!;
+            carry.move({ x: 25, y: 25 });
+            expect(f.runtime.getSnapshot().phase).toBe('carrying');
+            events.dispatchEvent(new Event('pointerdown'));
+            expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'idle', sourceId: null });
+            expect(f.runtime.getPointer()).toBeNull();
+            // The press that STARTS a carry comes before the carry exists, and a keyboard carry has no pointer to retire.
+            events.dispatchEvent(new Event('pointerdown'));
+            const staged = f.runtime.begin('source', 'keyboard')!;
+            staged.choose('target');
+            events.dispatchEvent(new Event('pointerdown'));
+            expect(f.runtime.getSnapshot()).toMatchObject({ phase: 'carrying', sourceId: 'source' });
+        } finally { uninstall(); f.runtime.cancel(); }
+    });
+
     it('a target that throws while read, or that unmounts under a carry, leaves neither card nor dimmed source behind', async () => {
         const f = fixture();
         let broken = false;

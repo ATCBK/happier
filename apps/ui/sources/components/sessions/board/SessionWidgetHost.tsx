@@ -320,13 +320,6 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
         focusNativeAccessibilityTarget(target as FocusReturnTarget);
         props.onHeadingFocusHandled?.(requestId);
     }, [props.focusHeadingRequestId, props.onHeadingFocusHandled]);
-    const entityDrag = useSessionSurfaceEntityDrag(props.entityDrag ?? null);
-    const [hostWidth, setHostWidth] = React.useState(0);
-    const narrow = hostWidth > 0 && hostWidth < NARROW_CARD_WIDTH_PX;
-    const onHostLayout = React.useCallback((event: LayoutChangeEvent) => {
-        setHostWidth(Math.round(event.nativeEvent.layout.width));
-        entityDrag.onLayout();
-    }, [entityDrag]);
     const state = props.item.state;
     const mountMode = resolveSessionBoardMountMode({
         host: props.host,
@@ -365,6 +358,14 @@ export function SessionWidgetHost(props: SessionWidgetHostProps): React.ReactEle
     // A widget card is named by the shared widget-name owner (its own name, else its definition's title) so an
     // installed surface never shows its local id; the stored title is the fallback for every other source.
     const title = (widgetInstance ? readWidgetInstanceName(widgetInstance, widgetDescriptor) : null) ?? resolveSessionBoardItemTitle(state);
+    // The carried card names the item as this card does, whatever the Board's stored title or id says.
+    const entityDrag = useSessionSurfaceEntityDrag(props.entityDrag ? { ...props.entityDrag, title } : null);
+    const [hostWidth, setHostWidth] = React.useState(0);
+    const narrow = hostWidth > 0 && hostWidth < NARROW_CARD_WIDTH_PX;
+    const onHostLayout = React.useCallback((event: LayoutChangeEvent) => {
+        setHostWidth(Math.round(event.nativeEvent.layout.width));
+        entityDrag.onLayout();
+    }, [entityDrag]);
     const sameHome = !!viewerScope && (!props.serverId || areServerProfileIdentifiersEquivalent(viewerScope.serverId, props.serverId));
     const poster = useUser(sameHome && state.kind === 'ready' ? state.item.snapshot?.postedByAccountId : undefined);
     const provenance = itemProvenance(props.item, props.pluginRuntime, sameHome ? viewerScope?.accountId : undefined,

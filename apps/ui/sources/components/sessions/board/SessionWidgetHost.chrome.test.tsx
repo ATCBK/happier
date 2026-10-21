@@ -232,6 +232,30 @@ describe('SessionWidgetHost chrome', () => {
         expect(label).toContain('Release plan');
     });
 
+    it('carries the name the card shows, never the stored title or the item id', async () => {
+        const runtime = (await renderHook(() => useEntityDragDropRuntime())).getCurrent();
+        const installed = unavailableInstalledItem();
+        if (installed.state.kind !== 'ready' || installed.state.item.source.kind !== 'widget') throw new Error('Expected a widget fixture');
+        const named: SessionBoardItemProjection = { ...installed, state: { kind: 'ready', item: { ...installed.state.item, title: 'counter',
+            source: { kind: 'widget', instance: { ...installed.state.item.source.instance, displayName: 'Directory count' } } } } };
+        const screen = await renderCard({ item: named, entityDrag: { ...entityDrag(), title: 'counter' } });
+        expect(String(screen.findHostByTestId('widget-title')?.props.children)).toBe('Directory count');
+        const pan = findGestureByKind(screen.tree.root.findByType('GestureDetector' as never).props.gesture, 'pan');
+        try {
+            await act(async () => { pan?.__handlers.onStart?.({ absoluteX: 50, absoluteY: 50 }); });
+            const sourceId = runtime.getSnapshot().sourceId!;
+            expect(runtime.describeSource(sourceId)?.title).toBe('Directory count');
+        } finally { await act(async () => { runtime.cancel(); }); }
+    });
+
+    it('starts a card carry from exactly one gesture owner: the card\'s browser drag on a hover pointer, the grip pan only where there is none', async () => {
+        const screen = await renderCard({ entityDrag: entityDrag() });
+        const pan = findGestureByKind(screen.tree.root.findByType('GestureDetector' as never).props.gesture, 'pan');
+        // The mock platform is a hover-capable web pointer: the card's draggable host already begins the carry on
+        // dragstart, so a second begin from the grip would replace it and strand its drag.
+        expect(pan?.__config.enabled).toBe(false);
+    });
+
     it('releases through current shared-runtime cross-view admission without a dwell lifecycle', async () => {
         const runtime = (await renderHook(() => useEntityDragDropRuntime())).getCurrent();
         const written: unknown[] = [];
