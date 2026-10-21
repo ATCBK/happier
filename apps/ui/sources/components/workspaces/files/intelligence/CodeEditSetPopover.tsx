@@ -25,6 +25,7 @@ import { machineWorkspaceFileReplaceApply } from '@/sync/ops/machineWorkspaceFil
 import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { ESCAPE_LAYER_PRIORITIES, useEscapeLayer } from '@/keyboard/escape';
 
 import { CODE_CARD_WIDTH } from './CodeIntelligenceCard';
 import { useFilePageBox } from './filePageBox';
@@ -42,6 +43,17 @@ export type CodeEditSetRequest = Readonly<{
   character: number;
   symbol: string;
 }>;
+
+/**
+ * A tree rename the language server would follow with importer edits (`code.file.rename.preview`): the
+ * reviewed move and edits arrive with the request, so the review opens on them.
+ */
+export type FileRenameEditSetRequest = Readonly<{
+  op: 'fileRename';
+  newPath: string;
+  files: readonly WorkspaceFileEditSetFile[];
+}>;
+type EditSetOp = CodeEditSetRequest['op'] | FileRenameEditSetRequest['op'];
 
 export type CodeEditSetPopoverProps = Readonly<{
   request: CodeEditSetRequest;
@@ -98,7 +110,152 @@ type Stage =
         | 'running'
         | Readonly<{ restored: number; changed: number; failed: boolean }>;
     }>
-  | Readonly<{ kind: 'note'; text: string }>;
+  /** `page`: said where the review was (an apply that failed), not at the name. */
+  | Readonly<{ kind: 'note'; text: string; page?: boolean }>;
+
+/** What the review and the apply need from their host: where, which file, and its editor if any. */
+type EditSetHost = Readonly<{
+  scope: WorkspaceScopeBase;
+  filePath: string;
+  languageId: string | null;
+  readText?: () => string;
+  isUnsaved?: () => boolean;
+  syncDocument?: () => Promise<unknown>;
+}>;
+type EditSetOptions = Readonly<{ serverId?: string | null; accountId?: string | null }>;
+
+/**
+ * The review's file texts: the host editor's clean text for its own file, every other file read from
+ * the Machine. One loader for the File page and the tree's review.
+ */
+function useEditSetTexts(latest: React.RefObject<EditSetHost>, alive: React.RefObject<boolean>) {
+  const [texts, setTexts] = React.useState<ReadonlyMap<string, string | null>>(new Map());
+  const loadTexts = React.useCallback(
+    (files: readonly WorkspaceFileEditSetFile[]) => {
+      const current = latest.current;
+      const initial = new Map<string, string | null>();
+      for (const file of files)
+        if (file.path === current.filePath && current.readText && !current.isUnsaved?.())
+          initial.set(file.path, current.readText());
+      setTexts(initial);
+      for (const file of files) {
+        if (initial.has(file.path)) continue;
+        void workspaceReadFile(current.scope, file.path).then(
+          (response) => {
+            if (!alive.current) return;
+            setTexts((previous) =>
+              new Map(previous).set(
+                file.path,
+                response.success ? decodeUtf8Base64(response.content) : null,
+              ),
+            );
+          },
+          () => {
+            if (alive.current)
+              setTexts((previous) => new Map(previous).set(file.path, null));
+          },
+        );
+      }
+    },
+    [alive, latest],
+  );
+  return { texts, loadTexts };
+}
+
+/**
+ * The one apply and Undo of a reviewed edit set: the guarded writer through the operation's Action,
+ * then the canonical restore in reverse receipt order. Shared by the File page and the tree's review.
+ */
+function useEditSetCommit(params: Readonly<{
+  op: EditSetOp;
+  stage: Stage;
+  setStage: (stage: Stage) => void;
+  latest: React.RefObject<EditSetHost>;
+  alive: React.RefObject<boolean>;
+  options: EditSetOptions;
+}>) {
+  const { op, stage, setStage, latest, alive, options } = params;
+  const apply = React.useCallback(async () => {
+    if (stage.kind !== 'review' || stage.applying) return;
+    setStage({ ...stage, applying: true });
+    const current = latest.current;
+    const operation =
+      stage.action && stage.fileHash
+        ? {
+            kind: 'codeAction' as const,
+            action: stage.action,
+            expectedHash: stage.fileHash,
+          }
+        : { kind: op === 'fileRename' ? ('fileRename' as const) : ('rename' as const), files: [...stage.files] };
+    let response: Awaited<
+      ReturnType<typeof machineLanguageIntelligenceApplyAction>
+    >;
+    try {
+      await current.syncDocument?.().catch(() => null);
+      response = await machineLanguageIntelligenceApplyAction(
+        current.scope.machineId,
+        {
+          rootPath: current.scope.rootPath,
+          path: current.filePath,
+          ...(current.languageId ? { languageId: current.languageId } : {}),
+          operation,
+        },
+        options,
+      );
+    } catch {
+      if (alive.current)
+        setStage({
+          kind: 'note',
+          text: t('files.pane.intelligence.outcomeUnknown'),
+          page: true,
+        });
+      return;
+    }
+    if (!alive.current) return;
+    if ('ok' in response && response.ok) {
+      setStage({ kind: 'result', receipts: response.results, undo: 'idle' });
+      return;
+    }
+    // A request that may have reached the Machine never claims nothing happened.
+    const unknown = 'errorCode' in response
+      && (response.errorCode === 'outcome_unknown' || response.errorCode === 'outcome_uncertain' || response.errorCode === 'transport_failed');
+    setStage({ kind: 'note', text: unknown ? t('files.pane.intelligence.outcomeUnknown') : t('files.pane.intelligence.editFailed'), page: true });
+  }, [alive, latest, op, options, setStage, stage]);
+
+  const undo = React.useCallback(async () => {
+    if (stage.kind !== 'result' || stage.undo !== 'idle') return;
+    const receipts = stage.receipts;
+    setStage({ kind: 'result', receipts, undo: 'running' });
+    const current = latest.current;
+    const operation = buildWorkspaceFileRestoreOperation(
+      receipts as Parameters<typeof buildWorkspaceFileRestoreOperation>[0],
+    );
+    const response = await machineWorkspaceFileReplaceApply(
+      current.scope.machineId,
+      { rootPath: current.scope.rootPath, operation },
+      options,
+    ).catch(() => null);
+    if (!alive.current) return;
+    if (!response || !response.ok) {
+      setStage({
+        kind: 'result',
+        receipts,
+        undo: { restored: 0, changed: 0, failed: true },
+      });
+      return;
+    }
+    let restored = 0,
+      changed = 0,
+      failed = false;
+    for (const result of response.results) {
+      if (result.status === 'restored') restored += 1;
+      else if (result.status === 'changed') changed += 1;
+      else failed = true;
+    }
+    setStage({ kind: 'result', receipts, undo: { restored, changed, failed } });
+  }, [alive, latest, options, setStage, stage]);
+  return { apply, undo };
+}
 
 /** The name stages are the intelligence card's width (LS1); the review takes the page body. */
 const POPOVER_WIDTH = CODE_CARD_WIDTH;
@@ -143,9 +300,6 @@ export function CodeEditSetPopover(
     props.isUnsaved()
       ? { kind: 'unsaved', saving: false }
       : { kind: 'loading' },
-  );
-  const [texts, setTexts] = React.useState<ReadonlyMap<string, string | null>>(
-    new Map(),
   );
   const alive = React.useRef(true);
   React.useEffect(
@@ -228,35 +382,7 @@ export function CodeEditSetPopover(
   }, []);
 
   // The review reads each file it shows; the page's own clean text needs no read.
-  const loadTexts = React.useCallback(
-    (files: readonly WorkspaceFileEditSetFile[]) => {
-      const current = latest.current;
-      const initial = new Map<string, string | null>();
-      for (const file of files)
-        if (file.path === current.filePath && !current.isUnsaved())
-          initial.set(file.path, current.readText());
-      setTexts(initial);
-      for (const file of files) {
-        if (initial.has(file.path)) continue;
-        void workspaceReadFile(current.scope, file.path).then(
-          (response) => {
-            if (!alive.current) return;
-            setTexts((previous) =>
-              new Map(previous).set(
-                file.path,
-                response.success ? decodeUtf8Base64(response.content) : null,
-              ),
-            );
-          },
-          () => {
-            if (alive.current)
-              setTexts((previous) => new Map(previous).set(file.path, null));
-          },
-        );
-      }
-    },
-    [],
-  );
+  const { texts, loadTexts } = useEditSetTexts(latest, alive);
 
   const preview = React.useCallback(
     async (value: string) => {
@@ -318,84 +444,7 @@ export function CodeEditSetPopover(
     [loadTexts],
   );
 
-  const apply = React.useCallback(async () => {
-    if (stage.kind !== 'review' || stage.applying) return;
-    setStage({ ...stage, applying: true });
-    const current = latest.current;
-    const operation =
-      stage.action && stage.fileHash
-        ? {
-            kind: 'codeAction' as const,
-            action: stage.action,
-            expectedHash: stage.fileHash,
-          }
-        : { kind: 'rename' as const, files: [...stage.files] };
-    let response: Awaited<
-      ReturnType<typeof machineLanguageIntelligenceApplyAction>
-    >;
-    try {
-      await current.syncDocument().catch(() => null);
-      response = await machineLanguageIntelligenceApplyAction(
-        current.scope.machineId,
-        {
-          rootPath: current.scope.rootPath,
-          path: current.filePath,
-          ...(current.languageId ? { languageId: current.languageId } : {}),
-          operation,
-        },
-        options,
-      );
-    } catch {
-      if (alive.current)
-        setStage({
-          kind: 'note',
-          text: t('files.pane.intelligence.outcomeUnknown'),
-        });
-      return;
-    }
-    if (!alive.current) return;
-    if ('ok' in response && response.ok) {
-      setStage({ kind: 'result', receipts: response.results, undo: 'idle' });
-      return;
-    }
-    // A request that may have reached the Machine never claims nothing happened.
-    const unknown = 'errorCode' in response
-      && (response.errorCode === 'outcome_unknown' || response.errorCode === 'outcome_uncertain' || response.errorCode === 'transport_failed');
-    setStage({ kind: 'note', text: unknown ? t('files.pane.intelligence.outcomeUnknown') : t('files.pane.intelligence.editFailed') });
-  }, [options, stage]);
-
-  const undo = React.useCallback(async () => {
-    if (stage.kind !== 'result' || stage.undo !== 'idle') return;
-    const receipts = stage.receipts;
-    setStage({ kind: 'result', receipts, undo: 'running' });
-    const current = latest.current;
-    const operation = buildWorkspaceFileRestoreOperation(
-      receipts as Parameters<typeof buildWorkspaceFileRestoreOperation>[0],
-    );
-    const response = await machineWorkspaceFileReplaceApply(
-      current.scope.machineId,
-      { rootPath: current.scope.rootPath, operation },
-      options,
-    ).catch(() => null);
-    if (!alive.current) return;
-    if (!response || !response.ok) {
-      setStage({
-        kind: 'result',
-        receipts,
-        undo: { restored: 0, changed: 0, failed: true },
-      });
-      return;
-    }
-    let restored = 0,
-      changed = 0,
-      failed = false;
-    for (const result of response.results) {
-      if (result.status === 'restored') restored += 1;
-      else if (result.status === 'changed') changed += 1;
-      else failed = true;
-    }
-    setStage({ kind: 'result', receipts, undo: { restored, changed, failed } });
-  }, [options, stage]);
+  const { apply, undo } = useEditSetCommit({ op: request.op, stage, setStage, latest, alive, options });
 
   const saveFirst = React.useCallback(async () => {
     setStage({ kind: 'unsaved', saving: true });
@@ -439,6 +488,7 @@ export function CodeEditSetPopover(
       request={request}
       stage={stage}
       texts={texts}
+      filePath={props.filePath}
       sourceLabel={props.sourceLabel}
       onChangeName={(value) =>
         setStage((previous) =>
@@ -454,7 +504,7 @@ export function CodeEditSetPopover(
       onClose={props.onRequestClose}
     />
   );
-  if (!phone && (stage.kind === 'review' || stage.kind === 'result'))
+  if (!phone && (stage.kind === 'review' || stage.kind === 'result' || (stage.kind === 'note' && stage.page)))
     return (
       <CodeEditSetPage
         request={request}
@@ -525,7 +575,55 @@ export function CodeEditSetPopover(
   );
 }
 
-type PageStage = Extract<Stage, { kind: 'review' | 'result' }>;
+/**
+ * The tree's rename review (it has no page body): the same review, apply, result and Undo as the File
+ * page, over the move and importer edits the language server proposed. It fills its host's box.
+ */
+export function FileRenameEditSet(
+  props: Readonly<{
+    request: FileRenameEditSetRequest;
+    scope: WorkspaceScopeBase;
+    accountId: string | null;
+    /** The file being renamed. */
+    filePath: string;
+    onRenameOnly: () => void;
+    onRequestClose: () => void;
+  }>,
+): React.ReactElement {
+  const host: EditSetHost = { scope: props.scope, filePath: props.filePath, languageId: null };
+  const latest = React.useRef(host);
+  latest.current = host;
+  const alive = React.useRef(true);
+  React.useEffect(() => () => { alive.current = false; }, []);
+  const options = React.useMemo(
+    () => ({ serverId: props.scope.serverId, accountId: props.accountId }),
+    [props.accountId, props.scope.serverId],
+  );
+  const [stage, setStage] = React.useState<Stage>({ kind: 'review', files: props.request.files, applying: false });
+  const { texts, loadTexts } = useEditSetTexts(latest, alive);
+  React.useEffect(() => {
+    loadTexts(props.request.files);
+    // The reviewed files are fixed for this review.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const { apply, undo } = useEditSetCommit({ op: 'fileRename', stage, setStage, latest, alive, options });
+  if (stage.kind !== 'review' && stage.kind !== 'result' && stage.kind !== 'note') return <></>;
+  return (
+    <CodeEditSetPage
+      request={props.request}
+      stage={stage}
+      texts={texts}
+      filePath={props.filePath}
+      onApply={apply}
+      onBack={props.onRequestClose}
+      onUndo={undo}
+      onClose={props.onRequestClose}
+      onRenameOnly={props.onRenameOnly}
+    />
+  );
+}
+
+type PageStage = Extract<Stage, { kind: 'review' | 'result' | 'note' }>;
 
 /** The page's own file leads; the others keep the server's order. */
 function orderPageFirst<T extends Readonly<{ path: string }>>(files: readonly T[], filePath: string): readonly T[] {
@@ -536,7 +634,7 @@ function orderPageFirst<T extends Readonly<{ path: string }>>(files: readonly T[
 /** Desktop review and result in the page body: one band (what, how much, the actions) over the files. */
 function CodeEditSetPage(
   props: Readonly<{
-    request: CodeEditSetRequest;
+    request: CodeEditSetRequest | FileRenameEditSetRequest;
     stage: PageStage;
     texts: ReadonlyMap<string, string | null>;
     filePath: string;
@@ -544,32 +642,60 @@ function CodeEditSetPage(
     onBack: () => void;
     onUndo: () => void;
     onClose: () => void;
+    /** The tree's review also offers the plain move, without the server's edits. */
+    onRenameOnly?: () => void;
   }>,
 ) {
   const { theme } = useUnistyles();
   const { stage, request } = props;
   const rename = request.op === 'rename';
+  const fileRename = request.op === 'fileRename' ? request : null;
+  // Only the tree's review reaches a phone here (the File page keeps its sheet there): the band keeps
+  // what changes and the way out; the commit moves to a footer.
+  const phone = useDeviceType() === 'phone';
   const latest = React.useRef(props);
   latest.current = props;
-  // Esc steps back to the name from the review and leaves from the result, as the card did.
-  React.useEffect(() => {
-    if (Platform.OS !== 'web' || typeof document === 'undefined') return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
+  // Esc steps back to the name from the review and leaves from the result, as the card did; it claims
+  // Escape above the page, so the File page stays open under its own review.
+  useEscapeLayer({
+    enabled: Platform.OS === 'web',
+    priority: ESCAPE_LAYER_PRIORITIES.overlay,
+    allowEditableTarget: true,
+    onEscape: () => {
       const current = latest.current;
-      if (current.stage.kind === 'review' && current.stage.applying) return;
-      event.preventDefault();
+      if (current.stage.kind === 'review' && current.stage.applying) return true;
       if (current.stage.kind === 'review' && current.stage.back) current.onBack();
       else current.onClose();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, []);
+      return true;
+    },
+  });
 
   if (stage.kind === 'review') {
     const counts = countEditSetChanges(stage.files);
     const commandOnly = Boolean(stage.action?.hasCommand) && stage.files.length === 0;
     const empty = stage.files.length === 0 && !commandOnly;
+    const leave = stage.back ? (
+      <RoundButton size="small" display="secondary" title={t('common.back')} disabled={stage.applying}
+        onPress={props.onBack} testID="code-edit-set-back" />
+    ) : fileRename ? (
+      <RoundButton size="small" display="secondary" title={t('common.cancel')} disabled={stage.applying}
+        onPress={props.onClose} testID="code-edit-set-cancel" />
+    ) : null;
+    const commit = (
+      <>
+        {fileRename && props.onRenameOnly ? (
+          <RoundButton size="small" display="secondary" title={t('files.pane.intelligence.renameOnly')} disabled={stage.applying}
+            onPress={props.onRenameOnly} testID="code-edit-set-rename-only" />
+        ) : null}
+        {empty ? null : (
+          <RoundButton size="small"
+            title={stage.action ? t('files.pane.intelligence.applyFix')
+              : fileRename ? t('files.pane.intelligence.renameAndUpdateImports')
+              : t('files.pane.intelligence.renameInFiles', { files: counts.files })}
+            loading={stage.applying} onPress={props.onApply} testID="code-edit-set-apply" />
+        )}
+      </>
+    );
     return (
       <View style={[styles.page, { backgroundColor: theme.colors.surface.base }]} testID="code-edit-set-page">
         <View style={styles.band}>
@@ -579,7 +705,9 @@ function CodeEditSetPage(
               style={[styles.primaryText, stage.action ? null : styles.mono]}>
               {stage.action
                 ? stage.action.title
-                : t('files.pane.intelligence.renameTo', { from: request.symbol, to: stage.newName ?? '' })}
+                : fileRename
+                  ? t('files.pane.intelligence.renameTo', { from: props.filePath, to: fileRename.newPath })
+                  : t('files.pane.intelligence.renameTo', { from: request.op === 'fileRename' ? '' : request.symbol, to: stage.newName ?? '' })}
             </Text>
             {commandOnly || empty ? null : (
               <Text variant="meta" numberOfLines={1} style={[styles.tertiaryText, styles.tabular]}>
@@ -587,15 +715,7 @@ function CodeEditSetPage(
               </Text>
             )}
           </View>
-          {stage.back ? (
-            <RoundButton size="small" display="secondary" title={t('common.back')} disabled={stage.applying}
-              onPress={props.onBack} testID="code-edit-set-back" />
-          ) : null}
-          {empty ? null : (
-            <RoundButton size="small"
-              title={stage.action ? t('files.pane.intelligence.applyFix') : t('files.pane.intelligence.renameInFiles', { files: counts.files })}
-              loading={stage.applying} onPress={props.onApply} testID="code-edit-set-apply" />
-          )}
+          {phone ? leave : <View style={styles.bandActions}>{leave}{commit}</View>}
         </View>
         <ScrollView style={styles.pageScroll} contentContainerStyle={styles.pageContent} testID="code-edit-set-review">
           {commandOnly || empty ? (
@@ -613,6 +733,21 @@ function CodeEditSetPage(
             </Text>
           ) : null}
         </ScrollView>
+        {/* Phones keep the commit within thumb reach, as the shared review sheet does. */}
+        {phone ? <Footer>{commit}</Footer> : null}
+      </View>
+    );
+  }
+
+  if (stage.kind === 'note') {
+    // An apply that failed says why where its review was, with the one way out.
+    return (
+      <View style={[styles.page, { backgroundColor: theme.colors.surface.base }]} testID="code-edit-set-page">
+        <View style={styles.band} testID="code-edit-set-note">
+          <Icon name="warning" size={ICON_SIZE.sm} color={theme.colors.state.warning.foreground} />
+          <Text variant="label" numberOfLines={2} style={[styles.primaryText, styles.bandText]}>{stage.text}</Text>
+          <RoundButton size="small" title={t('common.done')} onPress={props.onClose} testID="code-edit-set-done" />
+        </View>
       </View>
     );
   }
@@ -620,10 +755,13 @@ function CodeEditSetPage(
   const written = stage.receipts.filter((receipt) => receipt.status === 'replaced');
   const undo = stage.undo;
   const undone = typeof undo === 'object' ? undo : null;
+  const moved = fileRename ? written.find((receipt) => receipt.renameTo) : undefined;
   const title = undone && undone.restored > 0
     ? t('files.pane.intelligence.undone', { files: undone.restored })
     : written.length
-      ? rename ? t('files.pane.intelligence.renamed', { files: written.length }) : t('files.pane.intelligence.fixApplied')
+      ? moved?.renameTo
+        ? t('files.pane.intelligence.fileRenamed', { name: moved.renameTo.slice(moved.renameTo.lastIndexOf('/') + 1) })
+        : rename || fileRename ? t('files.pane.intelligence.renamed', { files: written.length }) : t('files.pane.intelligence.fixApplied')
       : t('files.pane.intelligence.nothingChanged');
   return (
     <View style={[styles.page, { backgroundColor: theme.colors.surface.base }]} testID="code-edit-set-page">
@@ -642,7 +780,7 @@ function CodeEditSetPage(
       <ScrollView style={styles.pageScroll} contentContainerStyle={styles.pageContent} testID="code-edit-set-results">
         {/* Every file says what happened; written files stay quiet (the band says it once). */}
         {orderPageFirst(stage.receipts, props.filePath).map((receipt) => (
-          <ResultRow key={`${receipt.path}:${receipt.status}`} receipt={receipt} />
+          <ResultRow key={`${receipt.path}:${receipt.status}`} receipt={receipt} undone={Boolean(undone && undone.restored > 0)} />
         ))}
         {undone && undone.changed > 0 ? (
           <Text variant="meta" style={[styles.tertiaryText, styles.pageNote]}>
@@ -659,13 +797,17 @@ function CodeEditSetPage(
   );
 }
 
-function ResultRow(props: Readonly<{ receipt: Receipt; inset?: 'page' | 'card' }>) {
+function ResultRow(props: Readonly<{ receipt: Receipt; inset?: 'page' | 'card'; undone?: boolean }>) {
   const { theme } = useUnistyles();
   const { receipt } = props;
-  const path = receipt.renameTo ?? receipt.path;
-  const slash = path.lastIndexOf('/');
-  const name = path.slice(slash + 1);
-  const directory = slash > 0 ? path.slice(0, slash) : '';
+  // A moved file reads "retry.ts → attempt.ts" until an Undo moves it back.
+  const moved = receipt.renameTo && !props.undone ? receipt.renameTo : null;
+  const slash = receipt.path.lastIndexOf('/');
+  const from = receipt.path.slice(slash + 1);
+  const to = moved ? moved.slice(moved.lastIndexOf('/') + 1) : from;
+  const name = to !== from ? t('files.pane.intelligence.renameTo', { from, to }) : from;
+  const path = moved ?? receipt.path;
+  const directory = path.lastIndexOf('/') > 0 ? path.slice(0, path.lastIndexOf('/')) : '';
   const written = receipt.status === 'replaced';
   const reason = written
     ? null
@@ -698,6 +840,7 @@ function CodeEditSetBody(
     request: CodeEditSetRequest;
     stage: Stage;
     texts: ReadonlyMap<string, string | null>;
+    filePath: string;
     sourceLabel: string | null;
     onChangeName: (value: string) => void;
     onPreview: (value: string) => void;
@@ -916,7 +1059,7 @@ function CodeEditSetBody(
               </Text>
             </View>
           ) : (
-            stage.files.map((file) => (
+            orderPageFirst(stage.files, props.filePath).map((file) => (
               <EditSetFile
                 key={file.path}
                 file={file}
@@ -1006,8 +1149,9 @@ function CodeEditSetBody(
       </View>
       {/* Every file says what happened, as in the page's result. */}
       <View style={styles.resultList}>
-        {stage.receipts.map((receipt) => (
-          <ResultRow key={`${receipt.path}:${receipt.status}`} receipt={receipt} inset="card" />
+        {orderPageFirst(stage.receipts, props.filePath).map((receipt) => (
+          <ResultRow key={`${receipt.path}:${receipt.status}`} receipt={receipt} inset="card"
+            undone={typeof undo === 'object' && undo.restored > 0} />
         ))}
         {typeof undo === 'object' && undo.changed > 0 ? (
           <Text variant="meta" style={[styles.tertiaryText, styles.block]}>
@@ -1055,14 +1199,18 @@ function EditSetFile(
   const slash = file.path.lastIndexOf('/');
   const name = file.path.slice(slash + 1);
   const directory = slash > 0 ? file.path.slice(0, slash) : '';
+  // A file that only moves has no text change to show; its header says where it goes.
+  const moveOnly = Boolean(file.renameTo) && file.edits.length === 0;
   const patch = React.useMemo(
     () =>
-      typeof props.text === 'string'
+      !moveOnly && typeof props.text === 'string'
         ? buildEditSetPreviewDiff(file, props.text)
         : null,
-    [file, props.text],
+    [file, moveOnly, props.text],
   );
   const count = file.edits.length + (file.renameTo ? 1 : 0);
+  const movedName = file.renameTo ? file.renameTo.slice(file.renameTo.lastIndexOf('/') + 1) : null;
+  const movedDirectory = file.renameTo ? file.renameTo.slice(0, Math.max(0, file.renameTo.lastIndexOf('/'))) : '';
   return (
     <View testID="code-edit-set-file" style={props.breakBefore ? styles.fileBreak : null}>
       <View style={[styles.fileHeader, props.inPage ? styles.pageInset : null]}>
@@ -1072,17 +1220,19 @@ function EditSetFile(
           style={[Typography.variant('label'), styles.fileName]}
         >
           <Text style={[Typography.default('medium'), styles.primaryText]}>
-            {name}
+            {movedName && movedName !== name ? t('files.pane.intelligence.renameTo', { from: name, to: movedName }) : name}
           </Text>
-          {directory ? (
-            <Text style={styles.tertiaryText}>{`  ${directory}`}</Text>
+          {directory || movedDirectory ? (
+            <Text style={styles.tertiaryText}>
+              {`  ${movedDirectory && movedDirectory !== directory ? t('files.pane.intelligence.renameTo', { from: directory, to: movedDirectory }) : directory}`}
+            </Text>
           ) : null}
         </Text>
         <Text variant="meta" style={[styles.tertiaryText, styles.tabular]}>
           {String(count)}
         </Text>
       </View>
-      {patch ? (
+      {moveOnly ? null : patch ? (
         <DiffViewer
           mode="unified"
           unifiedDiff={patch}
@@ -1131,6 +1281,11 @@ const styles = StyleSheet.create((theme) => ({
     flex: 1,
     minWidth: 0,
     gap: theme.space.s2,
+  },
+  bandActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s8,
   },
   /** Files after the first are set off by one ink hairline, like the Changes body's file breaks. */
   fileBreak: {

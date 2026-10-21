@@ -15,6 +15,7 @@ import type { RepositoryTreeRowActionMenuItemId } from '@/components/workspaces/
 import { deletePathConfirm } from '@/components/workspaces/files/repositoryTree/deletePathConfirm';
 import { renamePathPrompt } from '@/components/workspaces/files/repositoryTree/renamePathPrompt';
 import { showRenameConflictResolutionDialog } from '@/components/workspaces/files/repositoryTree/showRenameConflictResolutionDialog';
+import { previewFileRenameEdits, showFileRenameReview } from '@/components/workspaces/files/intelligence/showFileRenameReview';
 
 type RepositoryTreeNodeLike = Readonly<{
     path: string;
@@ -126,6 +127,22 @@ export function useWorkspaceRepositoryTreeRowActions(params: Readonly<{
             if (!target) {
                 Modal.alert(t('common.error'), t('files.repositoryTree.rename.failed'));
                 return;
+            }
+
+            // "Update imports": when a language server would follow the move with edits, the person reviews
+            // them first; its apply moves the file. Otherwise, or on "Rename only", the plain move below.
+            if (node.type === 'file') {
+                const accountId = lifetime?.scope.accountId ?? null;
+                const files = await previewFileRenameEdits({ scope: target, accountId, path: node.path, newPath: nextPath });
+                if (!current()) return;
+                if (files) {
+                    const outcome = await showFileRenameReview({ scope: target, accountId, path: node.path, newPath: nextPath, files });
+                    if (!current()) return;
+                    if (outcome === 'done') {
+                        onRequestRefresh?.();
+                        return;
+                    }
+                }
             }
 
             let result = await workspaceRenamePath(target, { from: node.path, to: nextPath, overwrite: undefined });

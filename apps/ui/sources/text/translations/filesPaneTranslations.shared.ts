@@ -148,6 +148,9 @@ export type FilesPaneTranslations = Readonly<{
         renameTo: (params: Readonly<{ from: string; to: string }>) => string;
         changesInFiles: (params: Readonly<{ changes: number; files: number }>) => string;
         renameInFiles: (params: Readonly<{ files: number }>) => string;
+        renameOnly: string;
+        renameAndUpdateImports: string;
+        fileRenamed: (params: Readonly<{ name: string }>) => string;
         applyFix: string;
         runsCommand: string;
         alsoRunsCommand: string;
@@ -317,6 +320,9 @@ export const filesPaneTranslationsEnglish = { en: {
             renameTo: ({ from, to }) => from + " → " + to,
             changesInFiles: ({ changes, files }) => String(changes) + " " + (changes === 1 ? "change" : "changes") + " in " + String(files) + " " + (files === 1 ? "file" : "files"),
             renameInFiles: ({ files }) => "Rename in " + String(files) + " " + (files === 1 ? "file" : "files"),
+            renameOnly: "Rename only",
+            renameAndUpdateImports: "Rename and update imports",
+            fileRenamed: ({ name }) => "Renamed to " + name,
             applyFix: "Apply fix",
             runsCommand: "The language server makes this change when it runs. Each file it writes is listed after.",
             alsoRunsCommand: "Then the language server runs a command, which may change more.",
