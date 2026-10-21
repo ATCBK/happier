@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 
 import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -61,6 +62,33 @@ const accountScopesByServerId = new Map(profiles.map(profile => [profile.serverI
 
 describe('resolveAllProfileMachineInventorySnapshots', () => {
     beforeEach(clearMachineRequestReachabilityForTest);
+    it('does not reacquire the profile resolver per Machine in an unchanged inventory', () => {
+        const rows = Array.from({ length: 100 }, (_, index) => machine({ id: `same-${index}`, active: true }));
+        const input = { profiles, activeServerId: 'local-a', activeMachines: rows,
+            machineListByServerId: { 'local-a': rows, 'local-b': rows },
+            machineListStatusByServerId: { 'local-a': 'idle' as const, 'local-b': 'idle' as const },
+            accountScopesByServerId, nowMs: 20, loadWarmEntries: () => ({}) };
+        const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+        try {
+            // Published Home-label reads are per Home, not per Machine. Compare
+            // identical Home coverage so this asserts zero row-dependent reads.
+            resolveAllProfileMachineInventorySnapshots({ ...input, activeMachines: [],
+                machineListByServerId: { 'local-a': [], 'local-b': [] } });
+            const homeReads = resolve.mock.calls.length;
+            resolve.mockClear();
+            for (let index = 0; index < 3; index++) {
+                const snapshots = resolveAllProfileMachineInventorySnapshots(input);
+                expect(snapshots).toHaveLength(2);
+                expect(snapshots.every(snapshot => snapshot.kind === 'resolved'
+                    && snapshot.executionEligibleMachineIds?.length === 100)).toBe(true);
+            }
+            expect(resolve).toHaveBeenCalledTimes(homeReads * 3);
+        } finally { resolve.mockRestore(); }
+        recordMachineRequestFailed({ serverId: 'srv_server_a', accountId: 'account-1', machineId: 'same-0', observedAtMs: 21 });
+        const changed = resolveAllProfileMachineInventorySnapshots(input);
+        expect(changed[0]).toMatchObject({ executionEligibleMachineIds: expect.not.arrayContaining(['same-0']) });
+        expect(changed[1]).toMatchObject({ executionEligibleMachineIds: expect.arrayContaining(['same-0']) });
+    });
     it('retains Account provenance and refuses execution without an exact Home credential scope', () => {
         const row = { ...machine({ id: 'scoped-row', active: true }), activeAt: Date.now() };
         const scope = { serverId: 'srv_server_a', accountId: 'account-1' };

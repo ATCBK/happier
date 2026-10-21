@@ -4,7 +4,7 @@ import {
 import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { isPersistentMachine } from '@happier-dev/protocol/machines/machineKind';
-import { areServerProfileIdentifiersEquivalent, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, captureServerProfileScopeResolver, type ProfileScopeResolver, type ServerProfile } from '@/sync/domains/server/serverProfiles';
 import { readLiveMachineInventoryRows, readMachineInventoryRowReadiness, resolveServerScopedMachineInventory } from './resolveServerScopedMachines';
 import { isMachineSelectableForFleet } from './administration/fleetUnion';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
@@ -122,7 +122,7 @@ function resolveRawMachineList(params: Readonly<{
     activeMachines: readonly Machine[];
     machineListByServerId: Readonly<Record<string, readonly Machine[] | null | undefined>>;
     machineListStatusByServerId: Readonly<Record<string, MachineListStatus | undefined>>;
-}>): Readonly<{ machines: readonly Machine[] | null; observation: 'live' | 'stale'; settled: boolean; inventoryStatus: MachineInventoryStatus }> {
+}>, resolveScopeId: ProfileScopeResolver): Readonly<{ machines: readonly Machine[] | null; observation: 'live' | 'stale'; settled: boolean; inventoryStatus: MachineInventoryStatus }> {
     const keys = uniqueNonEmpty([
         params.serverIdentityId,
         params.profile.id,
@@ -135,7 +135,7 @@ function resolveRawMachineList(params: Readonly<{
         activeMachines: params.activeMachines,
         machineListByServerId: params.machineListByServerId,
         machineListStatusByServerId: params.machineListStatusByServerId,
-    });
+    }, resolveScopeId);
     const inventoryStatus = status ?? 'loading';
     return {
         machines,
@@ -167,6 +167,9 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
         accountId: string,
     ) => Record<string, MachineDisplayCacheEntryV1>;
 }>): readonly ServerMachineInventorySnapshotV1[] {
+    // Profile correspondence is immutable during this synchronous projection;
+    // presence, content readiness and request failures below remain live facts.
+    const resolveScopeId = captureServerProfileScopeResolver();
     const claims = new Map<string, Set<string>>();
     for (const profile of params.profiles) {
         const identities = uniqueNonEmpty([
@@ -213,7 +216,7 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
             activeMachines: params.activeMachines,
             machineListByServerId: params.machineListByServerId,
             machineListStatusByServerId: params.machineListStatusByServerId,
-        });
+        }, resolveScopeId);
         const inventoryStatus = raw.inventoryStatus;
         const scopeCandidate = params.accountScopesByServerId.get(serverIdentityId);
         const accountScope = scopeCandidate?.serverId === serverIdentityId ? scopeCandidate : null;
@@ -226,7 +229,7 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
                 profile,
                 serverIdentityId,
                 retainOpenedContent: true,
-            });
+            }, resolveScopeId);
             snapshots.push(Object.freeze({
                 kind: 'resolved',
                 accountId: accountScope?.accountId ?? null,
@@ -237,11 +240,11 @@ export function resolveAllProfileMachineInventorySnapshots(params: Readonly<{
                 inventoryStatus: raw.inventoryStatus,
                 ...(raw.settled ? { settled: true as const } : {}),
                 executionEligibleMachineIds: Object.freeze(raw.machines.filter((machine) => (
-                    isMachineSelectableForFleet(accountScope, machine, params.nowMs)
+                    isMachineSelectableForFleet(accountScope, machine, params.nowMs, resolveScopeId)
                     && liveRows.has(machine)
                 )).map((machine) => machine.id)),
                 executionPendingMachineIds: Object.freeze(raw.observation === 'live' ? raw.machines.filter((machine) => (
-                    isMachineSelectableForFleet(accountScope, machine, params.nowMs)
+                    isMachineSelectableForFleet(accountScope, machine, params.nowMs, resolveScopeId)
                     && readMachineInventoryRowReadiness(machine) === 'pending'
                 )).map((machine) => machine.id) : []),
                 machines: Object.freeze(raw.machines

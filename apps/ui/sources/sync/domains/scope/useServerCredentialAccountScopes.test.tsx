@@ -1,9 +1,11 @@
 import { act } from 'react-test-renderer';
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
 
 const harness = vi.hoisted(() => ({
     tokenByServerId: new Map<string, string>(),
@@ -11,20 +13,15 @@ const harness = vi.hoisted(() => ({
     listeners: new Set<(event: { serverId: string; serverUrl: string; kind: 'credentials_set' | 'credentials_removed' }) => void>(),
 }));
 
-vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({ useServerProfilesGeneration: () => 1 }));
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
-    return {
-        ...actual,
-        listServerProfiles: () => [{ id: 'home-b', name: 'Home B', serverUrl: 'https://home-b.example.test', createdAt: 0, updatedAt: 0, lastUsedAt: 0 }],
-        areServerProfileIdentifiersEquivalent: (left: string, right: string) => (
-            left === right || [left, right].sort().join(':') === 'local-home-b:srv-home-b'
-        ),
-        getServerProfileById: (serverId: string) => serverId === 'srv-home-b' || serverId === 'local-home-b'
-            ? { id: 'local-home-b', serverIdentityId: 'srv-home-b', serverUrl: 'https://home-b.example.test' }
-            : { id: serverId, serverUrl: `https://${serverId}.example.test` },
-        resolveServerProfileScopeIdForIdentifier: (serverId: string) => serverId === 'local-home-b' ? 'srv-home-b' : serverId,
-    };
+beforeEach(async () => {
+    // Persisted profiles, not an alternate profile resolver: bulk and scalar
+    // consumers must see the same local/portable correspondence.
+    await seedPersistedHomeProfilesForTests({ activeServerId: 'home-a', profiles: [
+        ...['home-a', 'home-b'].map(id => ({ id, name: id, serverUrl: `https://${id}.example.test`,
+            createdAt: 1, updatedAt: 1, lastUsedAt: 1 })),
+        { id: 'local-home-b', serverIdentityId: 'srv_home_b', name: 'Portable Home B',
+            serverUrl: 'https://portable-home-b.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
+    ] });
 });
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
@@ -59,6 +56,19 @@ afterEach(() => {
 });
 
 describe('useServerCredentialAccountScopes', () => {
+    it('does not reacquire the profile resolver per entry on unchanged credential-scope renders', async () => {
+        harness.tokenByServerId.set('home-a', 'account-a');
+        harness.tokenByServerId.set('home-b', 'account-b');
+        const { useServerCredentialAccountScopes } = await import('./useServerCredentialAccountScopes');
+        const ids = Array.from({ length: 100 }, (_, index) => index % 2 ? 'home-a' : 'home-b');
+        const hook = await renderHook(() => useServerCredentialAccountScopes(ids));
+        await vi.waitFor(() => expect(hook.getCurrent().size).toBe(2));
+        const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+        try {
+            for (let index = 0; index < 3; index++) await hook.rerender();
+            expect(resolve).not.toHaveBeenCalled();
+        } finally { resolve.mockRestore(); await hook.unmount(); }
+    });
     it('keeps a destination Find seed after its Search source closes, then clears it on Home Account retirement', async () => {
         harness.tokenByServerId.set('home-b', 'account-b');
         const { useServerCredentialAccountScopes } = await import('./useServerCredentialAccountScopes');
@@ -180,12 +190,12 @@ describe('useServerCredentialAccountScopes', () => {
     });
 
     it('keys a local profile request and its credential lookup by portable server identity', async () => {
-        harness.tokenByServerId.set('srv-home-b', 'account-b');
+        harness.tokenByServerId.set('srv_home_b', 'account-b');
         const { useServerCredentialAccountScopes } = await import('./useServerCredentialAccountScopes');
         const hook = await renderHook(() => useServerCredentialAccountScopes(['local-home-b']));
 
-        await vi.waitFor(() => expect(hook.getCurrent().get('srv-home-b')?.accountId).toBe('account-b'));
+        await vi.waitFor(() => expect(hook.getCurrent().get('srv_home_b')?.accountId).toBe('account-b'));
         expect(hook.getCurrent().has('local-home-b')).toBe(false);
-        expect(harness.credentialLookups).toContain('srv-home-b');
+        expect(harness.credentialLookups).toContain('srv_home_b');
     });
 });

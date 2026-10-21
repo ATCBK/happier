@@ -1,6 +1,6 @@
 import type { SessionListRenderableSession } from './sessionListRenderable';
 import type { SessionListRowStateByServerId } from './sessionListRowStateLookup';
-import { resolveServerProfileScopeIdForIdentifier } from '../../server/serverProfiles';
+import { captureServerProfileScopeResolver, resolveServerProfileScopeIdForIdentifier, type ProfileScopeResolver } from '../../server/serverProfiles';
 import { normalizeSessionAddress, type SessionAddress } from '../sessionAddress';
 
 export type SessionArchiveOperation = Readonly<SessionAddress>;
@@ -26,25 +26,27 @@ export function isSessionArchiveOperationCurrent(
 export function readSessionArchivePending(
     state: Readonly<{ sessionArchiveOperations?: SessionArchiveOperations }>,
     address: SessionAddress,
+    resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier,
 ): boolean {
     const operations = state.sessionArchiveOperations;
     if (operations?.[address.serverId]?.[address.sessionId]) return true;
-    const serverId = resolveServerProfileScopeIdForIdentifier(address.serverId);
+    const serverId = resolveScopeId(address.serverId);
     // Discovery can promote a Home identity after admission. Keep the operation
     // and its captured key unchanged so only its own completion can settle it.
     return Object.entries(operations ?? {}).some(([capturedServerId, bucket]) => (
         bucket[address.sessionId] !== undefined
-        && resolveServerProfileScopeIdForIdentifier(capturedServerId) === serverId
+        && resolveScopeId(capturedServerId) === serverId
     ));
 }
 
 export function readSessionArchiveOperationsForServers(
     state: Readonly<{ sessionArchiveOperations?: SessionArchiveOperations }>,
     serverIds?: readonly string[] | null,
+    resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver(),
 ): SessionArchiveOperation[] {
-    const selected = serverIds ? new Set(serverIds.map(resolveServerProfileScopeIdForIdentifier)) : null;
+    const selected = serverIds ? new Set(serverIds.map(resolveScopeId)) : null;
     return Object.entries(state.sessionArchiveOperations ?? {}).flatMap(([serverId, bucket]) => (
-        !selected || selected.has(resolveServerProfileScopeIdForIdentifier(serverId)) ? Object.values(bucket) : []
+        !selected || selected.has(resolveScopeId(serverId)) ? Object.values(bucket) : []
     ));
 }
 
@@ -70,10 +72,11 @@ export function projectSessionArchiveRowsByServerId(
     operations: readonly SessionArchiveOperation[],
 ): SessionListRowStateByServerId {
     if (operations.length === 0) return source;
+    const resolveScopeId = captureServerProfileScopeResolver();
     let result: Record<string, Rows> | null = null;
     for (const [serverId, rows] of Object.entries(source)) {
-        const canonicalId = resolveServerProfileScopeIdForIdentifier(serverId);
-        const pending = operations.filter(operation => resolveServerProfileScopeIdForIdentifier(operation.serverId) === canonicalId
+        const canonicalId = resolveScopeId(serverId);
+        const pending = operations.filter(operation => resolveScopeId(operation.serverId) === canonicalId
             && rows[operation.sessionId] !== undefined);
         if (pending.length === 0) continue;
         const cached = pendingRowBuckets.get(rows);

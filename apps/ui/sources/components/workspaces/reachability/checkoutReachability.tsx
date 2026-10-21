@@ -69,7 +69,8 @@ export function useCheckoutReachability(
   const presence = useMachinePresenceSummary(scope?.serverId, scope?.machineId);
   const announcedScope = React.useContext(AnnouncedCheckoutMachine);
   const unreachable = scope != null && presence.reachability === 'unreachable';
-  const machineName = presence.name ?? scope?.machineId ?? '';
+  // Every use of this name is inside a sentence, so a Machine still loading reads "this machine", never "Loading…".
+  const machineName = presence.sentenceName ?? scope?.machineId ?? '';
   const lastSeenAt = unreachable ? (presence.lastSeenAt ?? null) : null;
   const announced =
     unreachable &&

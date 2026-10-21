@@ -1,12 +1,11 @@
 import * as React from 'react';
 
 import { getStorage } from '@/sync/domains/state/storage';
-import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
 import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, captureServerProfileScopeResolver, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import {
@@ -15,6 +14,7 @@ import {
     subscribeMachineRequestReachability,
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { getMachineDisplayName, isMachineOnline, readMachineStatusNextRefreshAtMs } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { sessionListRuntimeClock } from '@/hooks/session/sessionListRuntimeClock';
 
 import {
@@ -32,13 +32,13 @@ import {
  */
 export type MachinePresenceSummary = Readonly<{
     name: string | null;
+    /** The name as a sentence uses it ("Reading it from {machine}"): "this machine" while its details load or are locked. */
+    sentenceName: string | null;
     homeDir: string | null;
     reachability: SessionMachineReachability;
     /** The machine's last heartbeat while it is unreachable ("last seen 09:12"); null otherwise, so heartbeats re-render nothing. */
     lastSeenAt?: number | null;
 }>;
-
-type MachinePresenceStorageState = Parameters<typeof resolveServerScopedMachine>[0];
 
 export function useMachinePresenceSummary(
     serverId: string | null | undefined,
@@ -59,23 +59,39 @@ export function useMachinePresenceSummaries(
     const cached = React.useRef<readonly MachinePresenceSummary[]>([]);
     const idsKey = JSON.stringify(machineIds);
     const ids = React.useMemo(() => JSON.parse(idsKey) as string[], [idsKey]);
-    const readMachines = React.useCallback(() => ids.map(machineId => machineId
-        ? resolveServerScopedMachine(store.getState() as MachinePresenceStorageState, targetServerId, machineId) : null),
-    [store, targetServerId, ids]);
+    const readMachines = React.useCallback((resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver()) => {
+        const state = store.getState();
+        const activeServerId = getActiveServerSnapshot().serverId;
+        const serverId = targetServerId || activeServerId;
+        // Resolve Home inventory once, not once for each requested Machine.
+        const machines = serverId ? resolveServerScopedMachines({
+            serverId, activeServerId,
+            get activeMachines() { return Object.values(state.machines); },
+            machineListByServerId: state.machineListByServerId,
+            machineListStatusByServerId: state.machineListStatusByServerId,
+        }, resolveScopeId) : null;
+        return ids.map(machineId => {
+            const id = machineId.trim();
+            return !id ? null : serverId ? machines?.find(machine => machine.id === id) ?? null : state.machines[id] ?? null;
+        });
+    }, [store, targetServerId, ids]);
     const readSnapshot = React.useCallback((nowMs: number): readonly MachinePresenceSummary[] => {
-        const next = readMachines().map((machine, index): MachinePresenceSummary => {
+        const resolveScopeId = captureServerProfileScopeResolver();
+        const next = readMachines(resolveScopeId).map((machine, index): MachinePresenceSummary => {
             const name = machine ? getMachineDisplayName(machine).trim() || null : null;
+            const sentenceName = machine ? getMachineSentenceName(machine, name ?? undefined) : null;
             const homeDir = machine?.metadata?.homeDir?.trim() || null;
             const reachability = resolveSessionMachineReachabilityState({
                 // Missing credential identity is unknown, not a transport-offline verdict.
                 machineIsKnown: Boolean(machine && scope),
-                machineIsOnline: machine ? isMachineReachable(scope, machine, nowMs) : false,
+                machineIsOnline: machine ? isMachineReachable(scope, machine, nowMs, resolveScopeId) : false,
             });
             const lastSeenAt = reachability === 'unreachable' && typeof machine?.activeAt === 'number' && machine.activeAt > 0
                 ? machine.activeAt : null;
             const previous = cached.current[index];
-            return previous && previous.name === name && previous.homeDir === homeDir && previous.reachability === reachability
-                && previous.lastSeenAt === lastSeenAt ? previous : { name, homeDir, reachability, lastSeenAt };
+            return previous && previous.name === name && previous.sentenceName === sentenceName && previous.homeDir === homeDir
+                && previous.reachability === reachability && previous.lastSeenAt === lastSeenAt
+                ? previous : { name, sentenceName, homeDir, reachability, lastSeenAt };
         });
         if (next.length !== cached.current.length || next.some((value, index) => value !== cached.current[index])) cached.current = next;
         return cached.current;
@@ -110,7 +126,7 @@ export function useMachinePresenceMembership(
             && areServerProfileIdentifiersEquivalent(suppliedLifetime.scope.serverId, targetServerId)
             ? suppliedLifetime.scope : null;
     const cached = React.useRef<MachinePresenceMembership>({ onlineMachineIds: [], selectableMachineIds: [] });
-    const readMachines = React.useCallback(() => {
+    const readMachines = React.useCallback((resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver()) => {
         const state = store.getState();
         const activeMachines = Object.values(state.machines);
         const machines = targetServerId ? resolveServerScopedMachines({
@@ -119,14 +135,15 @@ export function useMachinePresenceMembership(
             activeMachines,
             machineListByServerId: state.machineListByServerId,
             machineListStatusByServerId: state.machineListStatusByServerId,
-        }) ?? [] : activeMachines;
+        }, resolveScopeId) ?? [] : activeMachines;
         return machines.filter(isMachineVisibleForSelection);
     }, [store, targetServerId]);
     const readSnapshot = React.useCallback((nowMs: number) => {
-        const machines = readMachines();
-        const onlineMachineIds = machines.filter(machine => isMachineReachable(scope, machine, nowMs))
+        const resolveScopeId = captureServerProfileScopeResolver();
+        const machines = readMachines(resolveScopeId);
+        const onlineMachineIds = machines.filter(machine => isMachineReachable(scope, machine, nowMs, resolveScopeId))
             .map(machine => machine.id).sort((left, right) => left.localeCompare(right));
-        const selectableMachineIds = machines.filter(machine => isMachineSelectableForFleet(scope, machine, nowMs))
+        const selectableMachineIds = machines.filter(machine => isMachineSelectableForFleet(scope, machine, nowMs, resolveScopeId))
             .map(machine => machine.id).sort((left, right) => left.localeCompare(right));
         const previous = cached.current;
         if (onlineMachineIds.length !== previous.onlineMachineIds.length

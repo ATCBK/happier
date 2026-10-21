@@ -3282,6 +3282,13 @@ describe('serverProfiles', () => {
         expect(nextCaptured).not.toBe(captured);
         expect(nextCaptured(second.id)).toBe('srv_scope_two');
         expect(captured(second.id)).toBe(second.id);
+        // Bulk consumers use the same equivalence policy as fresh scalar
+        // readers, including unknown and empty identifiers.
+        const identifiers = [created.id, 'srv_scope_one', second.id, 'srv_scope_two', 'unknown-home', ''];
+        for (const left of identifiers) for (const right of identifiers) {
+            expect(profiles.areServerProfileIdentifiersEquivalent(left, right, nextCaptured))
+                .toBe(profiles.areServerProfileIdentifiersEquivalent(left, right));
+        }
         const nextRefs = refs.map(ref => ({ ...ref, serverId: second.id }));
         expect(resolveWorkspaceRefById(nextRefs, 'workspace-99', 'srv_scope_two')).toMatchObject({
             kind: 'resolved', ref: nextRefs[99],

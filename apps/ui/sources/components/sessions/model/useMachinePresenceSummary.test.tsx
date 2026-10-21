@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 import {
     clearMachineRequestReachabilityForTest,
     recordMachineRequestFailed,
@@ -12,7 +13,7 @@ const home = createHomeGovernanceHarness();
 const serverId = 'srv_presence';
 installHomeGovernanceBoundaries(home);
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { useMachinePresenceSummary, useMachinePresenceMembership } = await import('@/sync/domains/machines/reachability/useMachinePresenceSummary');
+const { useMachinePresenceSummary, useMachinePresenceSummaries, useMachinePresenceMembership } = await import('@/sync/domains/machines/reachability/useMachinePresenceSummary');
 const { useServerCredentialAccountScopeBinding, useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 
 beforeEach(async () => {
@@ -29,6 +30,27 @@ afterEach(async () => {
 });
 
 describe('reactive Machine presence', () => {
+    it('does not reacquire the profile resolver per Machine in presence snapshots', async () => {
+        const rows = Array.from({ length: 100 }, (_, index) => createMachineFixture({ id: `perf-b3-${index}`, activeAt: Date.now() }));
+        storage.getState().applyMachines(rows, true, { sourceServerId: serverId });
+        const ids = rows.map(row => row.id);
+        const owner = await renderHook(() => useServerCredentialAccountScopeBinding(serverId));
+        await waitForHomeGovernance(() => expect(owner.getCurrent().binding).not.toBeNull());
+        const lifetime = owner.getCurrent().binding!;
+        const hook = await renderHook(() => ({
+            membership: useMachinePresenceMembership(serverId, lifetime),
+            summaries: useMachinePresenceSummaries(serverId, ids),
+        }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().summaries.every(row => row.reachability === 'reachable')).toBe(true));
+        const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+        try {
+            for (let index = 0; index < 3; index++) await act(async () => {
+                storage.setState(state => ({ machineListByServerId: { ...state.machineListByServerId } }));
+            });
+            expect(resolve).not.toHaveBeenCalled();
+            expect(hook.getCurrent().membership.onlineMachineIds).toHaveLength(100);
+        } finally { resolve.mockRestore(); await hook.unmount(); await owner.unmount(); }
+    });
     it('observes only the requested Machine name/home and remains inert without a retained target', async () => {
         const previous = storage.getState();
         const machine = createMachineFixture({ id: 'machine', activeAt: Date.now(), metadata: {

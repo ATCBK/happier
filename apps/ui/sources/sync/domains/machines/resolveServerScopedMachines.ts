@@ -2,8 +2,9 @@ import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol';
 
 import {
     areServerProfileIdentifiersEquivalent,
+    captureServerProfileScopeResolver,
     resolveServerProfileForPortableIdentity,
-    resolveServerProfileScopeIdForIdentifier,
+    type ProfileScopeResolver,
     type ServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 
@@ -74,14 +75,14 @@ export function readLiveMachineInventoryRows<T extends MachineWithId>(params: Re
     serverIdentityId: string;
     /** Presentation may retain opened content while a newer hint is pending; never grants fresh invocation authority. */
     retainOpenedContent?: boolean;
-}>): ReadonlySet<T> {
+}>, resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver()): ReadonlySet<T> {
     const inventory = resolveServerScopedMachineInventory({
         ...params,
         // Presentation's active fallback is not evidence of scoped membership.
         activeServerId: '',
         serverId: params.serverIdentityId,
         serverIdAliases: [params.profile.id, ...(params.profile.legacyServerIds ?? [])],
-    });
+    }, resolveScopeId);
     // A failed list read (`error`) never proves a retained row gone; only an unobserved or signed-out Home admits nothing.
     if (inventory.status !== 'idle' && inventory.status !== 'loading' && inventory.status !== 'error') return new Set();
     // A row's admitted content need not wait for unrelated fleet hydration.
@@ -100,17 +101,17 @@ export function resolveServerScopedMachineInventoryKeys(params: Readonly<{
     serverId: string;
     serverIdAliases?: readonly string[];
     machineListByServerId: Readonly<Record<string, unknown>>;
-}>): readonly string[] {
+}>, resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver()): readonly string[] {
     const requestedServerIds = [params.serverId, ...(params.serverIdAliases ?? [])]
         .map((serverId) => String(serverId ?? '').trim())
         .filter((serverId, index, ids) => serverId.length > 0 && ids.indexOf(serverId) === index);
     // Scoped inventories can be keyed by either the portable Home identity or
     // this device's profile id. Resolve that correspondence once for every reader.
-    const canonicalServerId = resolveServerProfileScopeIdForIdentifier(params.serverId);
+    const canonicalServerId = resolveScopeId(params.serverId);
     return [...new Set([
         canonicalServerId,
         ...[...requestedServerIds, ...Object.keys(params.machineListByServerId)].sort().filter((key) => requestedServerIds.some((serverId) => (
-            key === serverId || areServerProfileIdentifiersEquivalent(key, serverId)
+            key === serverId || areServerProfileIdentifiersEquivalent(key, serverId, resolveScopeId)
         ))),
     ])].filter(Boolean);
 }
@@ -122,12 +123,12 @@ export function resolveServerScopedMachineInventory<T extends MachineLike>(param
     activeMachines: ReadonlyArray<T>;
     machineListByServerId: Readonly<Record<string, ReadonlyArray<T> | null | undefined>>;
     machineListStatusByServerId?: Readonly<Record<string, 'idle' | 'loading' | 'signedOut' | 'error' | undefined>>;
-}>): Readonly<{
+}>, resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver()): Readonly<{
     machines: ReadonlyArray<T> | null;
     status: 'idle' | 'loading' | 'signedOut' | 'error' | undefined;
 }> {
     const activeServerId = String(params.activeServerId ?? '').trim();
-    const serverIds = resolveServerScopedMachineInventoryKeys(params);
+    const serverIds = resolveServerScopedMachineInventoryKeys(params, resolveScopeId);
     const statusServerId = serverIds.find((serverId) => params.machineListStatusByServerId?.[serverId] !== undefined);
     const status = statusServerId ? params.machineListStatusByServerId?.[statusServerId] : undefined;
     // A refresh does not surrender the canonical Home's retained answer to an
@@ -138,7 +139,7 @@ export function resolveServerScopedMachineInventory<T extends MachineLike>(param
         return { machines: scopedMachines ?? null, status };
     }
     const targetsActiveServer = activeServerId.length > 0
-        && serverIds.some((serverId) => areServerProfileIdentifiersEquivalent(serverId, activeServerId));
+        && serverIds.some((serverId) => areServerProfileIdentifiersEquivalent(serverId, activeServerId, resolveScopeId));
     if (targetsActiveServer && (params.activeMachines.length > 0 || status === 'idle')) {
         return { machines: params.activeMachines, status };
     }
@@ -146,8 +147,8 @@ export function resolveServerScopedMachineInventory<T extends MachineLike>(param
     return { machines: scopedMachines ?? null, status };
 }
 
-export function resolveServerScopedMachines<T extends MachineLike>(params: Parameters<typeof resolveServerScopedMachineInventory<T>>[0]): ReadonlyArray<T> | null {
-    return resolveServerScopedMachineInventory(params).machines;
+export function resolveServerScopedMachines<T extends MachineLike>(params: Parameters<typeof resolveServerScopedMachineInventory<T>>[0], resolveScopeId?: ProfileScopeResolver): ReadonlyArray<T> | null {
+    return resolveServerScopedMachineInventory(params, resolveScopeId).machines;
 }
 
 /**

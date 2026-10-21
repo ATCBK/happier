@@ -6,7 +6,7 @@ import { readSessionListRowForServerId } from '@/sync/domains/session/listing/se
 import { buildSessionContextFacts } from '@/sync/domains/session/presentation/sessionContextPresentation';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { getServerProfilesGeneration } from '@/sync/domains/server/serverProfiles';
+import { captureServerProfileScopeResolver, getServerProfilesGeneration } from '@/sync/domains/server/serverProfiles';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { observeTeam, observeTeamGroup } from '@/sync/engine/teams/teamsDirectoryEngine';
 import { subscribeTeamsSnapshots } from '@/sync/store/teams/teamsSnapshots';
@@ -37,9 +37,10 @@ export function useSessionAudienceContext(addresses: readonly SessionAddress[]) 
                 && previousProfilesGeneration === profilesGeneration) return key;
             previousInputs = { sessions: state.sessions, sessionListRowsByServerId: state.sessionListRowsByServerId };
             previousProfilesGeneration = profilesGeneration;
+            const resolveScopeId = captureServerProfileScopeResolver();
             key = JSON.stringify(stableAddresses.flatMap((address) => {
                 // Audience belongs to the row; the list's Home-name/index join is unused here.
-                const row = readSessionListRowForServerId(state.sessionListRowsByServerId, address.serverId, address.sessionId);
+                const row = readSessionListRowForServerId(state.sessionListRowsByServerId, address.serverId, address.sessionId, resolveScopeId);
                 const hydrated = state.sessions[address.sessionId];
                 const session = row ?? (hydrated?.serverId === address.serverId ? hydrated : null);
                 const audience = session?.access?.audienceContext;

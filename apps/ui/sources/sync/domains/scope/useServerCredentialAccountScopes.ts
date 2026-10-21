@@ -5,6 +5,7 @@ import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import {
     areServerProfileIdentifiersEquivalent,
+    captureServerProfileScopeResolver,
     resolveServerProfileScopeIdForIdentifier,
 } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -77,8 +78,11 @@ function useCredentialScopeEntries(
     // Sync lifetime without reading or subscribing to ambient Account custody.
     const embedded = isEmbedWindowContext();
     const embedScopeRevision = embedded ? getSyncSingleton().getEmbedSessionRequestContext()?.revision : undefined;
+    const resolveScopeId = embedded
+        ? (serverId: string | null | undefined) => serverId?.trim() ?? ''
+        : captureServerProfileScopeResolver();
     const normalizedServerIds = [...new Set(serverIds
-        .map((serverId) => normalizeCredentialScopeServerId(serverId))
+        .map(resolveScopeId)
         .filter(Boolean))].sort();
     const serverIdsKey = JSON.stringify(normalizedServerIds);
     const embedEntriesRef = React.useRef<ReadonlyMap<string, ScopeEntry>>(new Map());
@@ -242,8 +246,9 @@ function useCredentialScopeEntries(
         }
 
         const unsubscribe = subscribeHomeCredentialChange((event) => {
+            const resolveScopeId = captureServerProfileScopeResolver();
             for (const serverId of trackedServerIds) {
-                if (!areServerProfileIdentifiersEquivalent(event.serverId, serverId)) continue;
+                if (!areServerProfileIdentifiersEquivalent(event.serverId, serverId, resolveScopeId)) continue;
                 projectionLifecycleRef.current?.onCredentialMutation?.(serverId);
                 const revision = invalidate(serverId);
                 void resolveBinding(serverId, revision);

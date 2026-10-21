@@ -5,7 +5,7 @@ import { canSessionListFilterIncludeRunsV1, normalizeSessionListFilterV1, type S
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { useWorkflowRunWindow, type WorkflowRunWindow } from '@/components/workflows/library/workflowLibraryReads';
 import { useWorkflowsAvailability } from '@/components/workflows/gating/workflowsAvailability';
-import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, captureServerProfileScopeResolver, resolveServerProfileScopeIdForIdentifier, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkflowRunUnavailableHomes } from '@/sync/domains/session/listing/sessionListWorkFilter';
 
 import {
@@ -172,13 +172,14 @@ function resolveSessionRowFromState(
     sessionRowStateByServerId: ReturnType<typeof useSessionListRowsByServerId>,
     serverId: string | null | undefined,
     sessionId: string,
+    resolveScopeId?: ProfileScopeResolver,
 ) {
     const normalizedServerId = typeof serverId === 'string' ? serverId.trim() : '';
     const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : '';
     if (!normalizedServerId || !normalizedSessionId) {
         return null;
     }
-    return readSessionListRowForServerId(sessionRowStateByServerId, normalizedServerId, normalizedSessionId);
+    return readSessionListRowForServerId(sessionRowStateByServerId, normalizedServerId, normalizedSessionId, resolveScopeId);
 }
 
 /** Hold only the opened row; ordering survives while its status remains live. */
@@ -264,11 +265,12 @@ function areSessionListRowSourcesEqual(
     source: ReadonlyArray<SessionListIndexItem>,
 ): boolean {
     if (left === right) return true;
+    const resolveScopeId = captureServerProfileScopeResolver();
     for (const item of source) {
         if (item.type !== 'session') continue;
         if (
-            resolveSessionRowFromState(left, item.serverId, item.sessionId)
-            !== resolveSessionRowFromState(right, item.serverId, item.sessionId)
+            resolveSessionRowFromState(left, item.serverId, item.sessionId, resolveScopeId)
+            !== resolveSessionRowFromState(right, item.serverId, item.sessionId, resolveScopeId)
         ) {
             return false;
         }
@@ -457,6 +459,7 @@ function buildVisibleSessionListIndex(params: Readonly<{
     nowMs: number;
 }>): ReadonlyArray<SessionListIndexItem> | null {
     const folderAwareSource = buildFolderAwareSessionListIndex(params);
+    const resolveScopeId = captureServerProfileScopeResolver();
     const resolveSessionRow = (
         serverId: string | null | undefined,
         sessionId: string,
@@ -464,6 +467,7 @@ function buildVisibleSessionListIndex(params: Readonly<{
         params.sessionRowStateByServerId,
         serverId,
         sessionId,
+        resolveScopeId,
     );
     const visible = computeVisibleSessionListIndex({
         source: folderAwareSource.items,
@@ -814,10 +818,11 @@ export function useVisibleSessionListViewState(
 
     const nextRuntimeFreshnessAtMs = React.useMemo(() => {
         if (!surfaceDataActive || !visibleSessionListIndex) return null;
+        const resolveScopeId = captureServerProfileScopeResolver();
         let nextAtMs = resolveNextSessionAttentionReminderWakeAtMs(sessionAttentionStandingPolicy, runtimeNowMs);
         for (const item of visibleSessionListIndex) {
             if (item.type !== 'session') continue;
-            const row = readSessionListRowForServerId(sessionRowStateByServerId, item.serverId, item.sessionId);
+            const row = readSessionListRowForServerId(sessionRowStateByServerId, item.serverId, item.sessionId, resolveScopeId);
             if (!row) continue;
             for (const expiresAtMs of readSessionRuntimePresentationFreshnessExpirations(row, runtimeNowMs)) {
                 nextAtMs = nextAtMs === null ? expiresAtMs : Math.min(nextAtMs, expiresAtMs);

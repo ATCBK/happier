@@ -151,6 +151,7 @@ import {
 } from '../runtime/orchestration/connectionManager';
 import {
   areServerProfileIdentifiersEquivalent,
+  captureServerProfileScopeResolver,
   getServerProfileById,
   resolveServerProfileScopeIdForIdentifier,
 } from '../domains/server/serverProfiles';
@@ -744,6 +745,11 @@ export function useSessionListRenderableWithServerScope(
   serverId: string | null | undefined,
   sessionId: string,
 ): SessionListRenderableSession | null {
+  // Correspondence belongs to the existing profile publication lifecycle,
+  // not to unrelated row-store notifications. A real profile publication
+  // replaces these selectors with a fresh captured resolver.
+  useServerProfilesGeneration();
+  const resolveScopeId = captureServerProfileScopeResolver();
   const normalizedSessionId = normalizeSessionId(sessionId);
   const normalizedServerId = normalizeTrimmedString(serverId);
   const activeServerId = normalizeTrimmedString(useActiveServerSnapshot().serverId);
@@ -761,7 +767,7 @@ export function useSessionListRenderableWithServerScope(
     }
 
     if (normalizedServerId) {
-      const scoped = readSessionListRowsForServerId(state.sessionListRowsByServerId, normalizedServerId);
+      const scoped = readSessionListRowsForServerId(state.sessionListRowsByServerId, normalizedServerId, resolveScopeId);
       if (scoped && typeof scoped === 'object') {
         return projectSessionListRowRenderable(
           scoped[normalizedSessionId],
@@ -773,13 +779,13 @@ export function useSessionListRenderableWithServerScope(
     }
 
     return projectSessionListRowRenderable(
-      readSessionListRowForServerId(state.sessionListRowsByServerId, activeServerId, normalizedSessionId),
+      readSessionListRowForServerId(state.sessionListRowsByServerId, activeServerId, normalizedSessionId, resolveScopeId),
       projectionScopeKey,
     );
   }));
   const targetServerId = normalizedServerId ?? activeServerId;
   const pending = getStorage()(state => Boolean(targetServerId && normalizedSessionId
-    && readSessionArchivePending(state, { serverId: targetServerId, sessionId: normalizedSessionId })));
+    && readSessionArchivePending(state, { serverId: targetServerId, sessionId: normalizedSessionId }, resolveScopeId)));
   return projectSessionArchiveRow(row, pending);
 }
 
@@ -818,9 +824,10 @@ export function useSessionListRowsByServerId(
   const rows = getStorage()(useShallow((state) => {
     if (!selectedServerIds) return state.sessionListRowsByServerId;
     if (selectedServerIds.length === 0) return EMPTY_SESSION_LIST_ROWS_BY_SERVER_ID;
+    const resolveScopeId = captureServerProfileScopeResolver();
     const selected: Record<string, SessionsDomainSlice['sessionListRowsByServerId'][string]> = {};
     for (const serverId of selectedServerIds) {
-      const rows = readSessionListRowsForServerId(state.sessionListRowsByServerId, serverId);
+      const rows = readSessionListRowsForServerId(state.sessionListRowsByServerId, serverId, resolveScopeId);
       if (rows) selected[serverId] = rows;
     }
     return selected;
@@ -1002,6 +1009,7 @@ export function useSessionListReachabilityRenderablesForItems(
 
   return getStorage()(useShallow((state) => {
     if (itemKeys.length === 0) return emptySessionListReachabilityRenderablesByKey;
+    const resolveScopeId = captureServerProfileScopeResolver();
 
     const next = new Map<string, SessionListReachabilityRenderable>();
     for (const itemKey of itemKeys) {
@@ -1009,6 +1017,7 @@ export function useSessionListReachabilityRenderablesForItems(
         state.sessionListRowsByServerId,
         itemKey.serverId,
         itemKey.sessionId,
+        resolveScopeId,
       );
       if (!row) continue;
       next.set(itemKey.key, projectSessionListReachabilityRenderable(itemKey.key, row));
@@ -1042,6 +1051,7 @@ export function useSessionListRowRenderablesForItems(
 
   return getStorage()(useShallow((state) => {
     if (itemKeys.length === 0) return emptySessionListRowRenderablesByKey;
+    const resolveScopeId = captureServerProfileScopeResolver();
 
     const next = new Map<string, SessionListRenderableSession>();
     for (const itemKey of itemKeys) {
@@ -1049,9 +1059,10 @@ export function useSessionListRowRenderablesForItems(
         state.sessionListRowsByServerId,
         itemKey.serverId,
         itemKey.sessionId,
+        resolveScopeId,
       );
       const projected = projectSessionArchiveRow(projectSessionListRowRenderable(row, itemKey.key),
-        readSessionArchivePending(state, { serverId: itemKey.serverId, sessionId: itemKey.sessionId }));
+        readSessionArchivePending(state, { serverId: itemKey.serverId, sessionId: itemKey.sessionId }, resolveScopeId));
       if (!projected) continue;
       next.set(itemKey.key, projected);
     }
@@ -1089,39 +1100,50 @@ export function useSessionListIndexByServerId(
     const indexByServerId = state.sessionListIndexByServerId ?? EMPTY_SESSION_LIST_INDEX_BY_SERVER_ID;
     if (!hasExplicitServerSelection) return indexByServerId;
     if (selectedServerIds.length === 0) return EMPTY_SESSION_LIST_INDEX_BY_SERVER_ID;
+    const resolveScopeId = captureServerProfileScopeResolver();
     const selected: Record<string, ReadonlyArray<SessionListIndexItem> | null | undefined> = {};
     for (const serverId of selectedServerIds) {
-      const resolvedServerId = resolveSessionListHomeKey(indexByServerId, serverId);
+      const resolvedServerId = resolveSessionListHomeKey(indexByServerId, serverId, resolveScopeId);
       if (!resolvedServerId) continue;
       selected[resolvedServerId] = indexByServerId[resolvedServerId] ?? null;
     }
     return Object.keys(selected).length > 0 ? selected : EMPTY_SESSION_LIST_INDEX_BY_SERVER_ID;
   }));
-  const retained = getStorage()(useShallow(state => readSessionArchiveOperationsForServers(
-    state, hasExplicitServerSelection ? selectedServerIds : null,
-  ).filter(operation => {
-    const key = resolveSessionListHomeKey(source, operation.serverId);
-    return !key || !source[key]?.some(item => item.type === 'session' && item.sessionId === operation.sessionId);
-  })));
-  const retainedRows = getStorage()(useShallow(state => retained.map(operation =>
-    readSessionListRowForServerId(state.sessionListRowsByServerId, operation.serverId, operation.sessionId))));
-  const retainedMachines = getStorage()(useShallow(state => retained.map(operation => {
-    const key = resolveSessionListHomeKey(state.machineListByServerId, operation.serverId) ?? operation.serverId;
-    return state.machineListByServerId[key] ?? state.machineDisplayById;
-  })));
+  const retained = getStorage()(useShallow(state => {
+    const resolveScopeId = captureServerProfileScopeResolver();
+    return readSessionArchiveOperationsForServers(
+      state, hasExplicitServerSelection ? selectedServerIds : null, resolveScopeId,
+    ).filter(operation => {
+      const key = resolveSessionListHomeKey(source, operation.serverId, resolveScopeId);
+      return !key || !source[key]?.some(item => item.type === 'session' && item.sessionId === operation.sessionId);
+    });
+  }));
+  const retainedRows = getStorage()(useShallow(state => {
+    const resolveScopeId = captureServerProfileScopeResolver();
+    return retained.map(operation => readSessionListRowForServerId(
+      state.sessionListRowsByServerId, operation.serverId, operation.sessionId, resolveScopeId));
+  }));
+  const retainedMachines = getStorage()(useShallow(state => {
+    const resolveScopeId = captureServerProfileScopeResolver();
+    return retained.map(operation => {
+      const key = resolveSessionListHomeKey(state.machineListByServerId, operation.serverId, resolveScopeId) ?? operation.serverId;
+      return state.machineListByServerId[key] ?? state.machineDisplayById;
+    });
+  }));
   const activeGroupingV1 = useSetting('sessionListActiveGroupingV1');
   const inactiveGroupingV1 = useSetting('sessionListInactiveGroupingV1');
   const sectionModeV1 = useSetting('sessionListSectionModeV1');
   return React.useMemo(() => {
     if (retained.length === 0) return source;
+    const resolveScopeId = captureServerProfileScopeResolver();
     const state = getStorage().getState();
     const retainedByServerId = new Map<string, SessionListRenderableSession[]>();
     for (let index = 0; index < retained.length; index += 1) {
       const operation = retained[index];
       const retainedRow = retainedRows[index];
       if (!retainedRow) continue;
-      const serverId = resolveSessionListHomeKey(source, operation.serverId)
-        ?? resolveServerProfileScopeIdForIdentifier(operation.serverId);
+      const serverId = resolveSessionListHomeKey(source, operation.serverId, resolveScopeId)
+        ?? resolveScopeId(operation.serverId);
       const previousIndex = source[serverId] ?? [];
       if (previousIndex.some(item => item.type === 'session' && item.sessionId === operation.sessionId)) continue;
       const rows = retainedByServerId.get(serverId) ?? [];
@@ -1135,11 +1157,11 @@ export function useSessionListIndexByServerId(
       const candidates: Record<string, SessionListRenderableSession> = {};
       for (const item of previousIndex) {
         if (item.type !== 'session') continue;
-        const row = readSessionListRowForServerId(state.sessionListRowsByServerId, serverId, item.sessionId);
+        const row = readSessionListRowForServerId(state.sessionListRowsByServerId, serverId, item.sessionId, resolveScopeId);
         if (row) candidates[item.sessionId] = row;
       }
       for (const row of rows) candidates[row.id] = projectSessionArchiveRow(row, true)!;
-      const machineKey = resolveSessionListHomeKey(state.machineListByServerId, serverId) ?? serverId;
+      const machineKey = resolveSessionListHomeKey(state.machineListByServerId, serverId, resolveScopeId) ?? serverId;
       result[serverId] = buildSessionListIndexWithServerScope({
         sessions: candidates,
         machines: resolveSessionListMachineDisplaysForServer(state, machineKey),

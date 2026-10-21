@@ -1,6 +1,7 @@
 import { isMachineReachable, readMachineRequestReachabilityObservation, type MachineReachabilityScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 import { isMachineReplaced } from './machineIdentityTypes';
+import type { ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 
 /**
  * Shared machine presence fact for neutral selection presentations. It does
@@ -23,6 +24,7 @@ export function resolveMachinePickerPresence(
     }>,
     nowMs: number | undefined,
     scope: MachineReachabilityScope | null | undefined,
+    resolveScopeId?: ProfileScopeResolver,
 ): MachinePickerPresence {
     const revokedAt = typeof machine.revokedAt === 'number' ? machine.revokedAt : 0;
     if (Number.isFinite(revokedAt) && revokedAt > 0) {
@@ -33,10 +35,10 @@ export function resolveMachinePickerPresence(
         return { status: 'replaced', selectable: false };
     }
 
-    const online = isMachineReachable(scope, machine, nowMs);
+    const online = isMachineReachable(scope, machine, nowMs, resolveScopeId);
     if (!online) {
         return { status: 'offline', selectable: false,
-            reason: !scope || readMachineRequestReachabilityObservation(scope, machine.id)?.outcome === 'failed'
+            reason: !scope || readMachineRequestReachabilityObservation(scope, machine.id, undefined, resolveScopeId)?.outcome === 'failed'
                 ? 'home_unreachable' : 'offline' };
     }
 

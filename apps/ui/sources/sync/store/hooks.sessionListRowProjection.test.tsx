@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 import renderer, { act } from 'react-test-renderer';
 import * as linkedSessionMetadata from '@happier-dev/protocol/sessions/external/linked-metadata';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { buildSessionListRuntimePriorityRowKeys, resolveSessionListRuntimePriorityRowNextFreshnessAtMs } from '@/sync/domains/session/listing/sessionListRuntimePriorityRows';
@@ -14,6 +16,8 @@ import {
 import { storage } from '@/sync/domains/state/storageStore';
 import {
     useSessionListRenderableWithServerScope,
+    useSessionListRowRenderablesForItems,
+    useSessionListReachabilityRenderablesForItems,
     useSessionListRowsByServerId,
     useSessionListRuntimePriorityRowKeysForItems,
 } from './hooks';
@@ -47,6 +51,46 @@ afterEach(() => {
 });
 
 describe('useSessionListRenderableWithServerScope row projection', () => {
+    it('does not reacquire the profile resolver per row on unchanged multi-Home store notifications', async () => {
+        const previous = storage.getState();
+        const previousProfiles = serverProfiles.listServerProfiles();
+        const previousActive = serverProfiles.getActiveServerSnapshot().serverId;
+        await seedPersistedHomeProfilesForTests({ activeServerId: 'home-b', profiles: ['a', 'b'].map(id => ({
+            id: `home-${id}`, ...(id === 'b' ? { serverIdentityId: 'srv_home_b' } : {}), name: id,
+            serverUrl: `https://home-${id}.example.test`, createdAt: 1, updatedAt: 1, lastUsedAt: 1,
+        })) });
+        const rows = Array.from({ length: 50 }, (_, index) => buildActiveRenderable({ id: `same-${index}`, active: false, thinking: false }));
+        const byId = Object.fromEntries(rows.map(row => [row.id, row]));
+        storage.setState({ sessionListRowsByServerId: { 'home-a': byId, srv_home_b: byId },
+            sessionArchiveOperations: { 'home-a': { 'same-0': { serverId: 'home-a', sessionId: 'same-0' } } } });
+        const items: SessionListIndexItem[] = ['home-a', 'home-b'].flatMap(serverId => rows.map(row => ({ type: 'session', serverId, sessionId: row.id })));
+        const hook = await renderHook(() => ({ rows: useSessionListRowRenderablesForItems(items),
+            reachability: useSessionListReachabilityRenderablesForItems(items),
+            mounted: useSessionListRenderableWithServerScope('home-a', 'same-0') }));
+        try {
+            expect(hook.getCurrent().rows.size).toBe(100);
+            expect(hook.getCurrent().reachability.size).toBe(100);
+            expect(hook.getCurrent().mounted).toMatchObject({ id: 'same-0', archiving: true });
+            const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+            try {
+                for (let index = 0; index < 3; index++) await act(async () => {
+                    storage.setState(state => ({ isDataReady: !state.isDataReady }));
+                });
+                expect(resolve).not.toHaveBeenCalled();
+            } finally { resolve.mockRestore(); }
+            // A real profile publication is seen by the next operation, not
+            // hidden behind a resolver retained by a mounted selector.
+            await act(async () => { await serverProfiles.setServerProfileIdentityForUrl('https://home-a.example.test', 'srv_home_a'); });
+            await act(async () => { storage.setState(state => ({ isDataReady: !state.isDataReady,
+                sessionListRowsByServerId: { ...state.sessionListRowsByServerId, srv_home_a: {} } })); });
+            expect(hook.getCurrent().rows.size).toBe(50);
+            expect(hook.getCurrent().reachability.size).toBe(50);
+            expect(hook.getCurrent().mounted).toBeNull();
+        } finally {
+            await hook.unmount(); storage.setState(previous);
+            await seedPersistedHomeProfilesForTests({ profiles: previousProfiles, activeServerId: previousActive });
+        }
+    });
     it('does not encode an unchanged mounted row address on unrelated store publications', async () => {
         const previous = storage.getState();
         const sessionId = 'same:session';
@@ -65,17 +109,21 @@ describe('useSessionListRenderableWithServerScope row projection', () => {
         try {
             const first = hook.getCurrent();
             const encode = vi.spyOn(JSON, 'stringify');
+            const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+            const capture = vi.spyOn(serverProfiles, 'captureServerProfileScopeResolver');
             let encodes: number;
             try {
                 for (let index = 0; index < 20; index++) {
                     await act(async () => { storage.setState(state => ({ isDataReady: !state.isDataReady })); });
                     expect(hook.getCurrent()).toBe(first);
                 }
+                expect(resolve).not.toHaveBeenCalled();
+                expect(capture).not.toHaveBeenCalled();
                 await hook.rerender({ serverId: home });
                 expect(hook.getCurrent()).toBe(first);
                 encodes = encode.mock.calls.filter(([value]) => Array.isArray(value)
                     && value[0] === home && value[1] === sessionId).length;
-            } finally { encode.mockRestore(); }
+            } finally { encode.mockRestore(); resolve.mockRestore(); capture.mockRestore(); }
             expect(encodes).toBe(0);
             await hook.rerender({ serverId: otherHome });
             expect(hook.getCurrent()?.seq).toBe(otherRow.seq);

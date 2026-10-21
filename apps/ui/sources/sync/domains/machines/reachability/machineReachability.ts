@@ -1,7 +1,7 @@
 import { isMachineReachableV1, isMachineRequestReachabilityFailureV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
 import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
 import { createServerAccountScope, serverAccountScopedResourceKey, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { resolveServerProfileScopeIdForIdentifier, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 
 export type MachineReachabilityScope = ServerAccountScope;
 
@@ -22,8 +22,8 @@ const listeners = new Set<() => void>();
 const recoveryListeners = new Set<(scope: MachineReachabilityScope, machineId: string) => void>();
 let revision = 0;
 
-function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route']): string | null {
-    const normalizedScope = createServerAccountScope(resolveServerProfileScopeIdForIdentifier(scope?.serverId), scope?.accountId);
+function observationKey(scope: MachineReachabilityScope | null | undefined, machineId: string | null | undefined, route?: MachineRequestObservationInput['route'], resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier): string | null {
+    const normalizedScope = createServerAccountScope(resolveScopeId(scope?.serverId), scope?.accountId);
     const normalizedMachineId = String(machineId ?? '').trim();
     return normalizedScope && normalizedMachineId
         ? serverAccountScopedResourceKey(normalizedScope, normalizedMachineId, ...(route ? [route] : []))
@@ -59,8 +59,9 @@ export function readMachineRequestReachabilityObservation(
     scope: MachineReachabilityScope | null | undefined,
     machineId: string | null | undefined,
     route?: MachineRequestObservationInput['route'],
+    resolveScopeId?: ProfileScopeResolver,
 ): MachineRequestReachabilityObservation | null {
-    const key = observationKey(scope, machineId, route);
+    const key = observationKey(scope, machineId, route, resolveScopeId);
     return key ? observations.get(key) ?? null : null;
 }
 
@@ -88,10 +89,11 @@ export function isMachineReachable(
     scope: MachineReachabilityScope | null | undefined,
     machine: Readonly<{ id: string; active: boolean; activeAt?: number | null; revokedAt?: number | null }>,
     nowMs: number = Date.now(),
+    resolveScopeId?: ProfileScopeResolver,
 ): boolean {
     if (!createServerAccountScope(scope?.serverId, scope?.accountId)) return false;
     return isMachineReachableV1({ machine, nowMs, graceMs: readMachineOnlineGraceMsFromEnv(),
-        requestOutcome: readMachineRequestReachabilityObservation(scope, machine.id)?.outcome });
+        requestOutcome: readMachineRequestReachabilityObservation(scope, machine.id, undefined, resolveScopeId)?.outcome });
 }
 
 /** The protocol-owned verdict; a failed request overrides pushed presence until a later reply or reconnect. */

@@ -583,7 +583,7 @@ function findProfileByServerIdentifier(
 }
 
 type ProfileIdentifier = Readonly<{ profile: ServerProfile; scopeId: string }>;
-type ProfileScopeResolver = (idRaw: string | null | undefined) => string;
+export type ProfileScopeResolver = (idRaw: string | null | undefined) => string;
 
 let profileIdentifierProjectionCache: {
     servers: Record<string, ServerProfile>;
@@ -2364,7 +2364,9 @@ export function resolveServerProfileScopeIdForIdentifier(idRaw: string | null | 
 export function areServerProfileIdentifiersEquivalent(
     leftRaw: string | null | undefined,
     rightRaw: string | null | undefined,
+    resolveScopeId?: ProfileScopeResolver,
 ): boolean {
+    if (resolveScopeId) return areProfileIdentifiersEquivalent(leftRaw, rightRaw, resolveScopeId);
     let state: ReturnType<typeof readPersistedState> | undefined;
     return areProfileIdentifiersEquivalent(leftRaw, rightRaw, id => {
         state ??= readPersistedState();
