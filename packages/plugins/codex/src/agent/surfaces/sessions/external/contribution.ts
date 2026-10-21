@@ -201,6 +201,27 @@ function mapReadAfterPage(
   });
 }
 
+async function readByteBoundedTranscript<T>(
+  maxSerializedBytes: number,
+  read: (maxBytes: number) => Promise<CodexExternalSessionTranscriptSourcePage>,
+  map: (page: CodexExternalSessionTranscriptSourcePage) => AgentExternalSessionsResult<T>,
+): Promise<AgentExternalSessionsResult<T>> {
+  let maxBytes = maxSerializedBytes;
+  for (;;) {
+    const page = await read(maxBytes);
+    const result = map(page);
+    const bytes = serializedByteLength(result);
+    if (bytes <= maxSerializedBytes) return result;
+    // The native selector budgets items; the public boundary also carries
+    // opaque continuation/tail cursors. Re-page the same source frontier with
+    // its measured envelope cost reserved, preserving every unreturned item.
+    if (page.items.length <= 1) return failed('agent_error', 'external_sessions_transcript_page_byte_budget', false);
+    const itemBytes = page.items.reduce((total, item) => total + serializedByteLength(item), 0);
+    maxBytes = Math.min(maxBytes - 1, maxSerializedBytes - (bytes - itemBytes));
+    if (maxBytes <= 0) return failed('agent_error', 'external_sessions_transcript_page_byte_budget', false);
+  }
+}
+
 function readLinkSource(linkData: AgentExternalSessionLinkData | undefined): CodexExternalSessionSource | null {
   return projectAgentExternalSessionSourceToCodex(linkData?.source);
 }
@@ -413,23 +434,17 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         return failed('unsupported', 'Codex external-session newer paging is not supported.', false);
       }
       try {
-        const page = await pageCodexExternalSessionTranscript({
+        return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => pageCodexExternalSessionTranscript({
           source: validation.value.codexSource,
           env,
           remoteSessionId: request.remoteSessionId,
           direction: request.direction,
           cursor: request.cursor,
-          maxBytes: request.maxSerializedBytes,
+          maxBytes,
           maxItems: request.maxItems,
           signal: request.signal,
           deadlineAtMs: request.deadlineAtMs,
-        });
-        const after = getAgentExternalSessionsInvocationFailure(request);
-        if (after) return after;
-        const mapped = mapTranscriptPage(page);
-        return fitsResult(mapped, request.maxSerializedBytes)
-          ? mapped
-          : failed('agent_error', 'external_sessions_transcript_page_byte_budget', false);
+        }), mapTranscriptPage);
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
@@ -451,22 +466,16 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       const validation = validateSource({ source: request.source, env });
       if (!validation.ok) return validation;
       try {
-        const page = await readAfterCodexExternalSessionTranscript({
+        return await readByteBoundedTranscript(request.maxSerializedBytes, maxBytes => readAfterCodexExternalSessionTranscript({
           source: validation.value.codexSource,
           env,
           remoteSessionId: request.remoteSessionId,
           cursor: request.cursor,
-          maxBytes: request.maxSerializedBytes,
+          maxBytes,
           maxItems: request.maxItems,
           signal: request.signal,
           deadlineAtMs: request.deadlineAtMs,
-        });
-        const after = getAgentExternalSessionsInvocationFailure(request);
-        if (after) return after;
-        const mapped = mapReadAfterPage(page);
-        return fitsResult(mapped, request.maxSerializedBytes)
-          ? mapped
-          : failed('agent_error', 'external_sessions_transcript_page_byte_budget', false);
+        }), mapReadAfterPage);
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;

@@ -154,6 +154,61 @@ function invocation(overrides: Readonly<{
 }
 
 describe('Codex public Agent External Sessions contribution', () => {
+  it('pages a large rollout within the complete result byte boundary without losing valid messages', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-codex-byte-pages-'));
+    try {
+      const day = join(directory, 'sessions', '2026', '10', '21');
+      await mkdir(day, { recursive: true });
+      const id = '00000000-0000-4000-8000-000000000237';
+      const messages = Array.from({ length: 64 }, (_, index) => `message-${index} ${'quartz '.repeat(1400)}`);
+      await writeFile(join(day, `rollout-2026-10-21T00-00-00-${id}.jsonl`),
+        jsonl({ type: 'session_meta', payload: { id } }) + messages.map(text => jsonl({ type: 'response_item',
+          payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })).join(''));
+      const contribution = createCodexExternalSessionsContribution({ env: { CODEX_HOME: directory } });
+      const request = { ...invocation(), source: { kind: 'codexHome', home: 'user' }, remoteSessionId: id,
+        direction: 'older' as const, maxItems: 200 };
+      const twoItems = await contribution.pageTranscript({ ...request, maxItems: 2 });
+      if (!twoItems.ok) throw new Error(twoItems.message);
+      // The whole envelope (including both opaque cursors) owns the bound.
+      // A budget just below this page must select fewer items and continue.
+      request.maxSerializedBytes = Buffer.byteLength(JSON.stringify(twoItems)) - 1;
+      const actual: string[] = [];
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        const page = await contribution.pageTranscript({ ...request, ...(cursor ? { cursor } : {}) });
+        expect(page.ok, JSON.stringify(page)).toBe(true);
+        if (!page.ok) throw new Error(page.message);
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(request.maxSerializedBytes);
+        actual.unshift(...page.value.items.map(item => String(item.raw.content.text)));
+        cursor = page.value.nextCursor ?? undefined;
+        if (cursor) { expect(seen.has(cursor)).toBe(false); seen.add(cursor); }
+      } while (cursor);
+      expect(actual).toEqual(messages);
+      const appended = messages.map(text => `appended ${text}`);
+      await appendFile(join(day, `rollout-2026-10-21T00-00-00-${id}.jsonl`), appended.map(text => jsonl({ type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })).join(''));
+      if (!twoItems.value.tailCursor) throw new Error('Expected the captured tail cursor');
+      const forwardRequest = { ...request, cursor: twoItems.value.tailCursor, maxSerializedBytes: 64 * 1024 };
+      const forwardProbe = await contribution.readAfterTranscript({ ...forwardRequest, maxItems: 2 });
+      if (!forwardProbe.ok) throw new Error(forwardProbe.message);
+      forwardRequest.maxSerializedBytes = Buffer.byteLength(JSON.stringify(forwardProbe)) - 1;
+      const forward: string[] = [];
+      for (;;) {
+        const page = await contribution.readAfterTranscript(forwardRequest);
+        expect(page.ok, JSON.stringify(page)).toBe(true);
+        if (!page.ok) throw new Error(page.message);
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(forwardRequest.maxSerializedBytes);
+        expect(page.value.outcome).toBe('advanced');
+        if (page.value.outcome !== 'advanced') throw new Error('Expected forward progress');
+        forward.push(...page.value.items.map(item => String(item.raw.content.text)));
+        if (!page.value.hasMore) break;
+        expect(page.value.nextCursor).not.toBe(forwardRequest.cursor);
+        forwardRequest.cursor = page.value.nextCursor;
+      }
+      expect(forward).toEqual(appended);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
   it('applies native history-window admission before title work while preserving top-level thread exclusion', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-window-contribution-'));
     try {
