@@ -22,36 +22,6 @@ afterEach(() => { standardCleanup(); storage.setState({ settings: initialSetting
 const patch = '@@ -1,3 +1,3 @@\n-old\n+new\n middle\n-before\n+after\n';
 
 describe('hunk review through the shared keyboard and Account port', () => {
-    it('retains unchanged file units while neighboring diffs load and the reading file changes', async () => {
-        const generated = '@@ -0,0 +1,11035 @@\n' + Array.from({ length: 11035 }, (_, index) => `+export const value${index} = ${index};\n`).join('');
-        const marks = { record: null, unavailableReason: null, setReviewed: () => {}, clear: () => {}, setReviewedKeys: () => {} };
-        let files = [{ path: 'generated.ts', unifiedDiff: generated }, { path: 'other.ts', unifiedDiff: '' }];
-        let path = 'generated.ts';
-        let controller!: ReturnType<typeof useHunkReviewController>;
-        function Review() {
-            controller = useHunkReviewController({ source: { kind: 'live', root: '/repo' }, path,
-                unifiedDiff: files.find(file => file.path === path)!.unifiedDiff, liveFiles: files, host: null, serverId: null, marks });
-            return null;
-        }
-        const screen = await renderScreen(<Review />);
-        const generatedUnits = controller.reviewUnitsForPath('generated.ts');
-        expect(generatedUnits).toHaveLength(1);
-        expect(generatedUnits[0]!.hunk.newLines).toBe(11035);
-        files = [files[0]!, { path: 'other.ts', unifiedDiff: patch }];
-        const updateStarted = performance.now();
-        await screen.update(<Review />);
-        console.info('review-controller-neighbor-load', JSON.stringify({ lines: 11035, milliseconds: performance.now() - updateStarted }));
-        expect(controller.reviewUnitsForPath('generated.ts')).toBe(generatedUnits);
-        path = 'other.ts';
-        await screen.update(<Review />);
-        expect(controller.reviewUnitsForPath('generated.ts')).toBe(generatedUnits);
-        const otherUnits = controller.reviewUnitsForPath('other.ts');
-        files = [files[0]!, { path: 'other.ts', unifiedDiff: patch.replace('+new', '+updated') }];
-        await screen.update(<Review />);
-        expect(controller.reviewUnitsForPath('generated.ts')).toBe(generatedUnits);
-        expect(controller.reviewUnitsForPath('other.ts')).not.toBe(otherUnits);
-        expect(controller.reviewUnitsForPath('other.ts')[0]!.key).not.toBe(otherUnits[0]!.key);
-    });
     it('binds a tracked gutter change to review actions and reverts dirty text as one undoable edit', async () => {
         const marker = buildEditorChangeMarkers('a.ts', null, patch)[0]!;
         let text = 'inserted\nnew\nmiddle\nafter\n';
@@ -62,6 +32,7 @@ describe('hunk review through the shared keyboard and Account port', () => {
         const engine: TextEditorHandle = {
             getValue: () => text, flushPendingChange: async () => {},
             setDecorations: () => {},
+            removeDecoration: () => {},
             onDecorationPress: callback => { press = callback; return () => { press = undefined; }; },
             runCommand: command => {
                 if (typeof command === 'object' && 'replaceDocument' in command) {

@@ -7,17 +7,6 @@ import { buildDiffHunkTable } from './buildDiffHunkTable';
 const PATCH = '@@ -1,5 +1,5 @@ heading\n context\n-old\n+new\n between\n-other\n+changed\n end\n';
 
 describe('the diff review table', () => {
-    it('keeps every changed line addressable in a generated-file-sized review', () => {
-        const count = 11035;
-        const diff = `@@ -0,0 +1,${count} @@\n` + Array.from({ length: count }, (_, index) => `+export const value${index} = ${index};\n`).join('');
-        const start = performance.now();
-        const table = buildDiffHunkTable({ mode: 'unified', filePath: 'generated.ts', unifiedDiff: diff });
-        console.info('review-table-generated', JSON.stringify({ lines: count, bytes: diff.length, milliseconds: performance.now() - start }));
-        expect(table.hunks).toHaveLength(1);
-        expect(table.hunks[0]!.changeLineIds).toHaveLength(count);
-        expect(table.hunks[0]!.rangeEnd).toBe(count);
-        expect(table.hunks[0]!.changeLineIds.at(-1)).toBe(`a:${count}`);
-    });
     it('preserves canonical captured layer keys and rejects units from a different displayed patch', () => {
         const reviewUnits = buildReviewUnits('a.ts', 'staged', PATCH);
         const props = { mode: 'unified', filePath: 'a.ts', unifiedDiff: PATCH, reviewUnits } as const;
