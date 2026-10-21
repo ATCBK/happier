@@ -8,8 +8,11 @@ import {
     installWorkspaceFileDetailsCommonModuleMocks, prepareWorkspaceFileDetailsActionBoundary,
 } from '../details/workspaceFileDetails/workspaceFileDetailsTestHelpers';
 import type { UseFilePageCodeIntelligenceInput } from './useFilePageCodeIntelligence';
-import type { LanguageIntelligenceQueryInput, LanguageIntelligenceQueryResult, LanguageIntelligenceWatchResult } from '@happier-dev/protocol/machines/languageIntelligence';
+import type { LanguageIntelligenceSyncInput, LanguageIntelligenceQueryInput, LanguageIntelligenceQueryResult, LanguageIntelligenceWatchResult } from '@happier-dev/protocol/machines/languageIntelligence';
 import type { EditorDecoration, TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
+import { applyWorkspaceFileTextEdits } from '@happier-dev/protocol/machines/workspaceFilesReplace';
+import type { CodeLinesViewProps } from '@/components/ui/code/view/CodeLinesView';
 
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
@@ -41,6 +44,8 @@ const { useCodeIntelligencePaneProducer } = await import('./codeIntelligencePane
 const { CodeIntelligencePaneTab } = await import('./CodeIntelligencePaneTab');
 const { registerComposerPresentationTarget } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
 const { storage } = await import('@/sync/domains/state/storage');
+const { FileContentPanel } = await import('../file/FileContentPanel');
+const { CodeLinesView } = await import('@/components/ui/code/view/CodeLinesView');
 const actionBoundary = getWorkspaceFileDetailsActionBoundary();
 const scope = { serverId: '', machineId: 'm1', rootPath: '/repo' };
 const server = { serverId: 'ts', label: 'TS', state: 'ready', loading: false, generation: 'g1' } as const;
@@ -56,11 +61,11 @@ function input(overrides: Partial<UseFilePageCodeIntelligenceInput> = {}): UseFi
         machineName: 'Machine', machineUnreachable: false, agentName: null, ...overrides };
 }
 
-function useRetainedEditor(id: 'a' | 'b', text: string, focused: boolean) {
+function useRetainedEditor(id: 'a' | 'b', text: string, focused: boolean, displayMode: 'file' | 'diff' = 'file') {
     const mountedRef = React.useRef(true);
     React.useEffect(() => () => { mountedRef.current = false; }, []);
     const editor = useWorkspaceFileEditorState({ scope, accountId: 'account-a', filePath: `src/${id}.ts`,
-        displayMode: 'file', fileText: text, fileHash: `base-${id}`, fileWriteSupported: true,
+        displayMode, fileText: text, fileHash: `base-${id}`, fileWriteSupported: true,
         setFileWriteSupported() {}, fileEditorFeatureEnabled: true, filesEditorWebMonacoEnabled: true,
         filesEditorNativeCodeMirrorEnabled: true, filesEditorAutoSave: false, filesEditorChangeDebounceMs: 0,
         mountedRef, refreshAll: async () => {},
@@ -83,6 +88,134 @@ describe('File-page intelligence composition', () => {
         machine.preview.mockReset();
     });
     afterEach(async () => { await standardCleanup(); await cleanupWorkspaceFileDetailsActionBoundary(); portal.restore(); browser.restore(); });
+
+    it('uses the selected View and Changes body coordinates without losing the retained dirty editor', async () => {
+        const saved = 'const savedName = 1;\nmissingSaved();';
+        const draft = 'const draftName = 1;\n// inserted draft line\nmissingDraft();';
+        let remoteText = '';
+        let remoteVersion = 0;
+        let remoteUnsaved = false;
+        let holdSync: Promise<void> | undefined;
+        const otherServer = { ...server, serverId: 'other' };
+        const watches: Array<(response: LanguageIntelligenceWatchResult) => void> = [];
+        machine.sync.mockImplementation(async (_machine, request: LanguageIntelligenceSyncInput) => {
+            const op = request.op;
+            if (op.op === 'open' || op.op === 'snapshot') remoteText = op.text;
+            else if (op.op === 'change') remoteText = applyWorkspaceFileTextEdits(remoteText, [{ range: {
+                start: { line: op.edit.startLine, character: op.edit.startCharacter },
+                end: { line: op.edit.endLine, character: op.edit.endCharacter },
+            }, text: op.edit.text }]).text;
+            if ('version' in op) remoteVersion = op.version;
+            if ('unsaved' in op) remoteUnsaved = op.unsaved;
+            if (op.op === 'change' || op.op === 'snapshot') await holdSync;
+            return { status: 'ok', generation: 'g1', version: remoteVersion, servers: [server], capabilities: {
+                hover: true, definition: true, references: true, documentSymbol: true, diagnostics: 'push', acceptsExternalChanges: false,
+            } };
+        });
+        // The remote Machine is the boundary: its query answers and diagnostic
+        // versions describe exactly the text acknowledged by the real P7 sync.
+        machine.query.mockImplementation(async (_machine, request: LanguageIntelligenceQueryInput) => {
+            if (request.text === 'disk' && remoteUnsaved) return { status: 'error', errorCode: 'unsaved_editor_changes', diskHash: 'a'.repeat(64) };
+            const name = remoteText === saved ? 'savedName' : 'draftName';
+            const range = { start: { line: 0, character: 6 }, end: { line: 0, character: 6 + name.length } };
+            if (request.kind === 'documentSymbols') return { status: 'ok', kind: request.kind, fileHash: 'a'.repeat(64), hasMore: false,
+                symbols: [{ serverId: 'ts', name, kind: 14, range, selectionRange: range }] };
+            if (request.kind === 'definition') return { status: 'ok', kind: request.kind, hasMore: false,
+                locations: [{ serverId: 'ts', path: 'src/a.ts', range }] };
+            return { status: 'ok', kind: 'hover', sections: [{ serverId: 'ts', label: 'TS', markdown: name, range }] };
+        });
+        machine.watch.mockImplementation((_machine, _request, options: { signal: AbortSignal }) => new Promise((resolve, reject) => {
+            watches.push(resolve);
+            options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        }));
+        const hook = await renderHook(({ mode }: { mode: 'edit' | 'file' | 'diff' }) => {
+            const editor = useRetainedEditor('a', saved, true, mode === 'diff' ? 'diff' : 'file');
+            const intelligence = useFilePageCodeIntelligence(input({ liveValue: editor.liveValue,
+                displayedText: mode === 'edit' ? undefined : saved,
+                getUnsaved: () => editor.readSnapshot().dirty, editorHandleRef: editor.editorHandleRef }));
+            return { editor, intelligence };
+        }, { initialProps: { mode: 'edit' }, wrapper: PageWrapper });
+        await act(async () => {
+            hook.getCurrent().editor.startEditingFile();
+            hook.getCurrent().editor.onEditorChange(draft);
+        });
+        const controller = hook.getCurrent().intelligence.controller!;
+        await act(async () => { await controller.hover({ line: 0, character: 8 }); });
+        expect(controller.getSnapshot().querySelection?.identifier.symbol).toBe('draftName');
+        const deliverMarkers = async (revision: number, line: number, version = remoteVersion) => {
+            await vi.waitFor(() => expect(watches.length).toBeGreaterThan(0));
+            await act(async () => { watches.shift()!({ status: 'ok', revision, servers: [server, otherServer], diagnostics: {
+                'src/a.ts': { ts: { version, generation: 'g1', state: 'ready', items: [{ serverId: 'ts', path: 'src/a.ts',
+                    severity: 'error', message: 'Missing name', range: { start: { line, character: 0 }, end: { line, character: 12 } } }] } },
+                'src/b.ts': { other: { version: 1, generation: 'g1', state: 'ready', items: [{ serverId: 'other', path: 'src/b.ts',
+                    severity: 'error', message: 'Other file problem', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }] } },
+            } }); });
+        };
+        await deliverMarkers(1, 2);
+        expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(3)).toBe(true);
+        for (const [index, mode] of (['file', 'diff'] as const).entries()) {
+            const previousVersion = remoteVersion;
+            let acknowledge!: () => void;
+            holdSync = new Promise(resolve => { acknowledge = resolve; });
+            await hook.rerender({ mode });
+            expect(hook.getCurrent().intelligence.controller).toBe(controller);
+            expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(3) ?? false).toBe(false);
+            expect(controller.getDiagnosticsProjection().entries['src/b.ts']?.other.items).toHaveLength(1);
+            if (index === 0) {
+                await deliverMarkers(2, 2, previousVersion);
+                expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(3) ?? false).toBe(false);
+            }
+            await act(async () => { acknowledge(); await controller.syncDocument(); });
+            expect(controller.getDiagnosticsProjection().entries['src/b.ts']?.other.items).toHaveLength(1);
+            holdSync = undefined;
+            const screen = await renderScreen(<FileContentPanel theme={createThemeFixture()} displayMode={mode} sessionId=""
+                filePath="src/a.ts" fileContent={saved} language="typescript" selectedLineKeys={new Set()} lineSelectionEnabled={false}
+                onToggleLine={() => {}} diffContent={`@@ -1,2 +1,2 @@\n-const oldName = 1;\n+const savedName = 1;\n missingSaved();`}
+                intelligence={hook.getCurrent().intelligence.viewBinding} />);
+            try {
+                const body = screen.findAllByType(CodeLinesView).map(node => node.props as CodeLinesViewProps)
+                    .find(props => props.lines.some(line => line.renderCodeText.includes('savedName')))!;
+                const line = body.lines.find(row => row.renderCodeText.includes('savedName'))!;
+                expect(line.newLine).toBe(1);
+                await act(async () => { body.intelligence?.onPointerToken(line.id, 8, null, line.newLine!); });
+                expect(controller.getSnapshot().selection?.identifier.symbol).toBe('savedName');
+                await act(async () => { await controller.hover({ line: 0, character: 8 }); });
+                expect(controller.getSnapshot().querySelection?.identifier.symbol).toBe('savedName');
+                expect(remoteText).toBe(saved);
+                expect(remoteUnsaved).toBe(true);
+                expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(3) ?? false).toBe(false);
+                await deliverMarkers(index + 3, 1);
+                expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(2)).toBe(true);
+                await act(async () => { expect(body.intelligence?.onActivateToken(line.id, 8, { via: 'touch', rect: null }, 1)).toBe(true); });
+                await act(async () => { body.intelligence?.onActivateToken(line.id, 8, { via: 'modifier', rect: null }, 1); });
+                await vi.waitFor(() => expect(controller.getSnapshot()).toMatchObject({ kind: 'definition', status: 'ready',
+                    querySelection: { identifier: { symbol: 'savedName' } } }));
+                const symbols = hook.getCurrent().intelligence.symbols!;
+                expect(symbols.getText()).toBe(saved);
+                const outline = await createWorkspaceSymbolSearchSource(symbols).resolve('savedName', new AbortController().signal);
+                expect(outline.results[0]?.target).toMatchObject({ kind: 'workspaceSymbol', path: 'src/a.ts', anchor: { kind: 'fileLine', startLine: 1 } });
+                const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+                expect(await createDefaultActionExecutor().execute('code.hover.get', { machineId: 'm1', rootPath: '/repo', path: 'src/a.ts',
+                    line: 1, symbol: 'savedName' }, { surface: 'agent', authority: 'account_automation', serverId: scope.serverId }))
+                    .toMatchObject({ ok: true, result: { status: 'error', errorCode: 'unsaved_editor_changes' } });
+            } finally { await screen.unmount(); }
+        }
+        let acknowledgeDraft!: () => void;
+        holdSync = new Promise(resolve => { acknowledgeDraft = resolve; });
+        await hook.rerender({ mode: 'edit' });
+        expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(2) ?? false).toBe(false);
+        acknowledgeDraft();
+        await act(async () => { hook.getCurrent().editor.startEditingFile(); await controller.syncDocument(); });
+        expect(hook.getCurrent().editor.editorSeedText).toBe(draft);
+        expect(hook.getCurrent().editor.getEditorText()).toBe(draft);
+        expect(hook.getCurrent().editor.readSnapshot().dirty).toBe(true);
+        expect(remoteText).toBe(draft);
+        expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(2) ?? false).toBe(false);
+        await deliverMarkers(5, 2);
+        expect(hook.getCurrent().intelligence.viewBinding?.getDiagnosticsByLine()?.has(3)).toBe(true);
+        expect(hook.getCurrent().intelligence.symbols?.getText()).toBe(draft);
+        expect(actionBoundary.calls).toEqual([]);
+    });
 
     it('claims a read-view tap only when the existing controller resolves an identifier', async () => {
         machine.query.mockResolvedValue({ status: 'ok', kind: 'hover', sections: [] });

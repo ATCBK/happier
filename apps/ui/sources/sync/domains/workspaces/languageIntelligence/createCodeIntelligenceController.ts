@@ -5,7 +5,7 @@ import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScop
 import type { Rect } from '@/components/ui/code/editor/codeEditorTypes';
 import { readCodeLineIdentifiers, resolveCodeIdentifier, type CodeIdentifier, type CodeIntelligencePosition } from './codeIdentifiers';
 import { createCodeIntelligenceDocument, type CodeIntelligenceServerPort } from './codeIntelligenceDocument';
-import { EMPTY_CODE_DIAGNOSTICS, mergeCodeDiagnostics, selectCodeDiagnostics } from './codeDiagnostics';
+import { EMPTY_CODE_DIAGNOSTICS, mergeCodeDiagnostics, selectCodeDiagnostics, type CodeDiagnosticsFence } from './codeDiagnostics';
 import type { DocumentOutlineServerAnswer } from './documentOutline';
 
 export type CodeIntelligenceSelection = Readonly<{
@@ -106,31 +106,45 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
     }
     // The servers that speak for this file, as its own sync last named them (null before the first sync).
     let documentServerIds: ReadonlySet<string> | null = null;
+    function diagnosticsFence(servers: readonly LanguageIntelligenceServerStatus[]): CodeDiagnosticsFence {
+        const acknowledged = document?.getAcknowledged();
+        return {
+            documentVersions: new Map(acknowledged ? [[input.path, acknowledged.text === input.getText() ? acknowledged.version : null]] : []),
+            serverGenerations: new Map(servers.map(server => [server.serverId, server.generation])),
+        };
+    }
     const document: ReturnType<typeof createCodeIntelligenceDocument> | null = input.languageServer ? createCodeIntelligenceDocument({
         rootPath: input.scope.rootPath, path: input.path, languageId: input.languageId ?? 'text', port: input.languageServer,
         getText: input.getText, getUnsaved: () => input.getUnsaved?.() ?? false, isCurrent: available,
+        onSynchronize: () => {
+            const acknowledged = document?.getAcknowledged();
+            if (!acknowledged || acknowledged.text === input.getText() || !diagnostics.entries[input.path]) return;
+            // Changed coordinates stop being displayable before the remote ack,
+            // for typing, presentation switches and queries alike.
+            diagnostics = { ...diagnostics, entries: Object.fromEntries(Object.entries(diagnostics.entries).filter(([path]) => path !== input.path)) };
+            publish({ ...snapshot, diagnostics: selectCodeDiagnostics(diagnostics) });
+        },
         onSync: response => {
             documentServerIds = new Set(response.servers.map(server => server.serverId));
-            const acknowledged = document?.getAcknowledged();
             // A startup watch can precede the first known document version.
             // Revalidate its retained root diagnostics as soon as sync supplies it.
-            if (diagnostics.revision >= 0) diagnostics = mergeCodeDiagnostics(diagnostics, {
-                status: 'ok', revision: diagnostics.revision, servers: response.servers, diagnostics: {},
-            }, {
-                documentVersions: new Map(acknowledged ? [[input.path, acknowledged.version]] : []),
-                serverGenerations: new Map(response.servers.map(server => [server.serverId, server.generation])),
-            });
+            if (diagnostics.revision >= 0) {
+                // A file sync names only its selected servers, not every server
+                // in the root. Revalidate this file without retiring other files.
+                const otherFiles = Object.fromEntries(Object.entries(diagnostics.entries).filter(([path]) => path !== input.path));
+                const currentFile = mergeCodeDiagnostics({ revision: diagnostics.revision,
+                    entries: { [input.path]: diagnostics.entries[input.path] ?? {} } }, {
+                    status: 'ok', revision: diagnostics.revision, servers: response.servers, diagnostics: {},
+                }, diagnosticsFence(response.servers));
+                diagnostics = { ...currentFile, entries: { ...otherFiles, ...currentFile.entries } };
+            }
             publish({ ...snapshot, mode: 'server', servers: response.servers, capabilities: response.capabilities,
                 diagnostics: selectCodeDiagnostics(diagnostics),
                 ...(pending && !loadingQuery && snapshot.status === 'loading' ? { status: 'searching' as const } : {}) });
         },
         onWatch: response => {
             const previousServers = snapshot.servers;
-            const acknowledged = document?.getAcknowledged();
-            diagnostics = mergeCodeDiagnostics(diagnostics, response, {
-                documentVersions: new Map(acknowledged ? [[input.path, acknowledged.version]] : []),
-                serverGenerations: new Map(response.servers.map(server => [server.serverId, server.generation])),
-            });
+            diagnostics = mergeCodeDiagnostics(diagnostics, response, diagnosticsFence(response.servers));
             // The root watch lists every server in the root; the file keeps the ones its sync named.
             const servers = documentServerIds
                 ? response.servers.filter(server => documentServerIds?.has(server.serverId))

@@ -22,6 +22,8 @@ export type UseCodeIntelligenceInput = Readonly<{
     active: boolean;
     /** P4 owns the buffer; this hook never subscribes the File page to keystrokes. */
     liveValue: Readonly<{ get(): string; subscribe?(listener: () => void): () => void }>;
+    /** Selected reading text; undefined keeps the editor's live draft basis. */
+    displayedText?: string;
     unsaved?: boolean;
     /** Prefer P4 readSnapshot().dirty so the first edit is fenced before a React commit. */
     getUnsaved?(): boolean;
@@ -54,7 +56,7 @@ export function useCodeIntelligence(input: UseCodeIntelligenceInput) {
         if (!serverId || !machineId || !rootPath || !lifetime) return null;
         return {
             scope: { serverId, machineId, rootPath }, path: input.path, languageId: input.languageId, accountLifetime: lifetime,
-            getText: () => latest.current.liveValue.get(),
+            getText: () => latest.current.displayedText ?? latest.current.liveValue.get(),
             getUnsaved: () => latest.current.getUnsaved?.() ?? latest.current.unsaved === true,
             subscribeText: listener => latest.current.liveValue.subscribe?.(listener) ?? (() => undefined),
             flushPendingChange: async () => { await latest.current.editorHandleRef?.current?.flushPendingChange(); },
@@ -69,6 +71,13 @@ export function useCodeIntelligence(input: UseCodeIntelligenceInput) {
         };
     }, [input.path, input.languageId, input.liveValue, serverId, machineId, rootPath, lifetime]);
     const controller = useCodeIntelligenceController(controllerInput);
+    React.useEffect(() => {
+        // A presentation switch changes coordinates, not document ownership.
+        // Reuse the passive controller and its versioned sync; dirty custody
+        // continues to come from P4 even while saved bytes are displayed.
+        controller?.dismiss();
+        void controller?.syncDocument();
+    }, [controller, input.displayedText]);
     useWorkspaceFileWriteSettlements(input.scope, paths => { void forwardCodeIntelligenceSettlements(paths, {
         acceptsExternalChanges: () => controller?.getSnapshot().capabilities?.acceptsExternalChanges === true,
         syncExternal: paths => controller?.external(paths) ?? Promise.resolve(),

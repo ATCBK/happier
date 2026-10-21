@@ -20,6 +20,7 @@ export function createCodeIntelligenceDocument(input: Readonly<{
     rootPath: string; path: string; languageId: string; port: CodeIntelligenceServerPort;
     getText(): string; getUnsaved(): boolean; isCurrent(): boolean;
     onSync(value: SyncOk): void; onWatch(value: WatchOk): void; onUnavailable(reason: string): void;
+    onSynchronize?(): void;
 }>) {
     let activated = false;
     let disposed = false;
@@ -50,7 +51,9 @@ export function createCodeIntelligenceDocument(input: Readonly<{
         lastResult = result;
         if (result.status !== 'ok') return;
         acknowledged = { text, unsaved, version: result.version ?? version, generation: result.generation };
-        servers = result.servers;
+        // Sync names this document's servers; only the root watch can retire
+        // other server identities from the existing root delivery fence.
+        servers = [...servers.filter(previous => !result.servers.some(next => next.serverId === previous.serverId)), ...result.servers];
         needsSnapshot = false;
         if (current()) input.onSync(result);
         void watch();
@@ -95,6 +98,7 @@ export function createCodeIntelligenceDocument(input: Readonly<{
     }
     function synchronize(activate = false): Promise<LanguageIntelligenceSyncResult | null> {
         if (!current() || (!activated && !activate)) return Promise.resolve(null);
+        input.onSynchronize?.();
         if (!activated) {
             activated = true;
             void enqueue(async (): Promise<LanguageIntelligenceSyncResult> => {

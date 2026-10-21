@@ -42,6 +42,13 @@ single-flight save, a refusal and one recoverable set-aside draft. The live text
 stays in refs and a subscribable text store; page-level state changes when dirty
 or lifecycle state changes, rather than on every keystroke. `liveValue` exposes
 `get()` and `subscribe()` to Markdown eligibility and language intelligence.
+The existing intelligence controller uses that draft only while Edit is selected;
+View and Changes project the saved text shown by their reading body into the same
+controller and `@` outline. Switching this coordinate basis resynchronizes its
+versioned document without replacing the draft. Markers for unacknowledged text
+are removed before synchronization waits, and late older-version diagnostics
+cannot restore them. The unsaved flag still follows
+the retained editor, so disk-based agent Actions continue to refuse dirty files.
 
 `editorStatus` is derived as `clean`, `dirty`, `saving` or `conflict`. A conflict
 requires a changed disk hash and draft text different from disk. When disk equals

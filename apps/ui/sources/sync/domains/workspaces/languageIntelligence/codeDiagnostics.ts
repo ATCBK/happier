@@ -3,7 +3,8 @@ import type { CodeEditorHandle, EditorDecoration } from '@/components/ui/code/ed
 
 type Watch = Extract<LanguageIntelligenceWatchResult, { status: 'ok' }>;
 export type CodeDiagnosticsProjection = Readonly<{ revision: number; entries: Watch['diagnostics'] }>;
-export type CodeDiagnosticsFence = Readonly<{ documentVersions: ReadonlyMap<string, number>; serverGenerations: ReadonlyMap<string, string> }>;
+/** null means the selected text has no acknowledged version yet; absence means no held document. */
+export type CodeDiagnosticsFence = Readonly<{ documentVersions: ReadonlyMap<string, number | null>; serverGenerations: ReadonlyMap<string, string> }>;
 export const EMPTY_CODE_DIAGNOSTICS: CodeDiagnosticsProjection = { revision: -1, entries: {} };
 export function mergeCodeDiagnostics(previous: CodeDiagnosticsProjection, update: Watch, fence: CodeDiagnosticsFence): CodeDiagnosticsProjection {
     if (update.revision < previous.revision) return previous;

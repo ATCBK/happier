@@ -193,6 +193,8 @@ export type UseFilePageCodeIntelligenceInput = Readonly<{
     get(): string;
     subscribe?(listener: () => void): () => void;
   }>;
+  /** View/Changes coordinates address the displayed saved text, not a retained draft. */
+  displayedText?: string;
   getUnsaved: () => boolean;
   editorHandleRef: React.RefObject<TextEditorHandle | null>;
   sessionId: string | null;
@@ -333,6 +335,7 @@ export function useFilePageCodeIntelligence(
     languageId: input.language,
     active: input.active,
     liveValue: input.liveValue,
+    displayedText: input.displayedText,
     getUnsaved: input.getUnsaved,
     editorHandleRef: input.editorHandleRef,
     openLocation,
@@ -692,7 +695,7 @@ export function useFilePageCodeIntelligence(
         accountId: input.accountId,
       },
       resolverKey: `${input.scopeId}:${input.filePath}`,
-      getText: () => latest.current.liveValue.get(),
+      getText: () => latest.current.displayedText ?? latest.current.liveValue.get(),
       flushPendingChange: async () => {
         await latest.current.editorHandleRef.current?.flushPendingChange();
       },
