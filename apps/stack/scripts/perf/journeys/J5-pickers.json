@@ -1,0 +1,19 @@
+{
+  "id": "J5-pickers",
+  "intent": "Partial J5 diagnostic, NOT a first-message baseline: open New Session from Home and exercise the exact perf Machine, selected Claude Agent and selected model controls. No Send, credential setup, installation or Account-default mutation. Full launch/admission remains asserted only by J5.json.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "browser", "args": ["find", "role", "button", "click", "--name", "Start New Session", "--exact"] },
+    { "op": "browser", "args": ["wait", "[role=\"dialog\"] [data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["click", "[role=\"dialog\"] [data-testid=\"agent-input-machine-chip\"]"] },
+    { "op": "browser", "args": ["find", "role", "combobox", "fill", "620a", "--name", "Search machines..."] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["click", "[role=\"dialog\"] [data-testid=\"agent-input-agent-chip\"]"] },
+    { "op": "browser", "args": ["find", "role", "button", "click", "--name", "Claude. Selected.", "--exact"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"model-picker-overlay-selection-list\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"model-picker-overlay-selection-list\"] [aria-selected=\"true\"] [data-testid^=\"model-picker-overlay-option:\"]"] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["wait", "[role=\"dialog\"] [data-testid=\"new-session-composer-input\"]"] }
+  ]
+}

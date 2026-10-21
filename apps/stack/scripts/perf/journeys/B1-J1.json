@@ -1,0 +1,11 @@
+{
+  "id": "J1",
+  "intent": "B1 cold document startup at the real manual-restore route through authenticated app shell; warm mode reloads authenticated root. Excludes optional welcome-tour navigation.",
+  "prepare": [],
+  "steps": [
+    { "op": "open", "path": "/restore/manual", "when": "cold" },
+    { "op": "open", "when": "warm" },
+    { "op": "restore", "when": "cold" },
+    { "op": "home" }
+  ]
+}

@@ -38,6 +38,19 @@ const options = Object.fromEntries(process.argv.slice(4).filter(arg => arg.start
 }));
 const writeJson = (path, data) => writeFile(path, JSON.stringify(data, null, 2) + '\n', { mode: 0o600 });
 
+export async function navigateToRestoreInput(browser, evaluate) {
+  while (!await evaluate(`Boolean(document.querySelector('[data-testid="restore-manual-secret-input"]'))`)) {
+    await browser(['wait', '--fn', `Boolean(document.querySelector('[data-testid="restore-manual-secret-input"]')) || [...document.querySelectorAll('[role="button"],button')].some(e => e.getClientRects().length && /^(Skip|Use canonical|Use a key)/.test(e.textContent.trim()))`]);
+    const label = await evaluate(`(() => { const buttons = [...document.querySelectorAll('[role="button"],button')].filter(e => e.getClientRects().length); return ['Skip', 'Use canonical', 'Use a key'].find(label => buttons.some(e => e.textContent.trim().startsWith(label))); })()`);
+    if (label) {
+      await browser(['find', 'role', 'button', 'click', '--name', label]);
+      // A click can finish before React commits navigation. Wait for the old
+      // screen to leave, using the browser's existing wait/actionability budget.
+      await browser(['wait', '--fn', `Boolean(document.querySelector('[data-testid="restore-manual-secret-input"]')) || ![...document.querySelectorAll('[role="button"],button')].some(e => e.getClientRects().length && e.textContent.trim().startsWith(${JSON.stringify(label)}))`]);
+    }
+  }
+}
+
 async function loadRuns(path) {
   const absolute = resolve(path);
   try { return [JSON.parse(await readFile(join(absolute, 'bundle.json'), 'utf8'))]; }
@@ -120,11 +133,7 @@ async function journey(id) {
     else if (step.op === 'browser') await browser(step.args);
     else if (step.op === 'restore') {
       if (!options['restore-stdin']) throw new Error('J1 cold requires a fresh QA browser and --restore-stdin');
-      while (!await capture.evaluate(`Boolean(document.querySelector('[data-testid="restore-manual-secret-input"]'))`)) {
-        await browser(['wait', '--fn', `document.querySelector('[data-testid="restore-manual-secret-input"]') || [...document.querySelectorAll('[role="button"],button')].some(e => e.getClientRects().length && /^(Skip|Use canonical|Use a key)/.test(e.textContent.trim()))`]);
-        const label = await capture.evaluate(`(() => { const buttons = [...document.querySelectorAll('[role="button"],button')].filter(e => e.getClientRects().length); return ['Skip', 'Use canonical', 'Use a key'].find(label => buttons.some(e => e.textContent.trim().startsWith(label))); })()`);
-        if (label) await browser(['find', 'text', label, 'click']);
-      }
+      await navigateToRestoreInput(browser, capture.evaluate);
       await browser(['wait', '[data-testid="restore-manual-secret-input"]']);
       await command(process.execPath, [join(here, 'restore.mjs')], { stdin: 'inherit', silent: true,
         env: { ...process.env, PERF_CDP: options.cdp, PERF_ORIGIN: new URL(options.url).origin } });
@@ -163,7 +172,7 @@ async function journey(id) {
     if (expectedInstrumentation && !telemetryMeasured) gaps.push('UI telemetry absent or disabled; no store counters established');
     if (expectedInstrumentation && !browserResult.react.renderers.length) gaps.push('React renderer did not inject the pre-document hook; render counts unavailable');
     if (storeTelemetry.events.some(event => /^sync\.store\.storage\.selector\.[^.]+\.\d+$/.test(event.name))) gaps.push('RELOAD NEEDED: obsolete per-function selector ids loaded');
-    if (!server.records.some(record => record.module === 'web-latency')) gaps.push('No server trace records; zero DB/request counts are not established');
+    if (!server.records.some(record => record.role !== 'daemon' && record.module === 'web-latency')) gaps.push('No server trace records; zero DB/request counts are not established');
     if (!server.daemon.length) gaps.push('No daemon operation records; zero RPC/poll counts are not established');
     if (!browserResult.attribution.mappedFrames) gaps.push('Source maps absent/unreadable; CPU attribution is generated script/symbol only');
     const bundle = { version: 2, journey: id, intent: definition.intent, cache: options.cache, uiMode: options['ui-mode'],

@@ -1,0 +1,11 @@
+{
+  "id": "J12-J1-recovery",
+  "intent": "Partial J12 startup diagnostic, not a completed J1/J2 baseline: observe the authenticated phone shell that remains Loading after restore. Capture counts for 180 seconds while preserving its current state; report whether Home became usable separately.",
+  "prepare": [
+    { "op": "browser", "args": ["set", "viewport", "390", "844"] },
+    { "op": "browser", "args": ["wait", "--fn", "window.innerWidth === 390"] }
+  ],
+  "steps": [
+    { "op": "idle", "ms": 180000 }
+  ]
+}

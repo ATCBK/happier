@@ -4,6 +4,34 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
 import { runNodeCapture } from '../testkit/core/run_node_capture.mjs';
+import { runInNewContext } from 'node:vm';
+import { navigateToRestoreInput } from './perf.mjs';
+
+test('cold restore waits for a clicked screen to leave before choosing its next control', async () => {
+  // The browser/DOM is the external boundary: React navigation may commit after
+  // the click command has returned. Keep the actual navigation loop/predicates.
+  let screen = 'Skip', pending;
+  const evaluate = async expression => runInNewContext(expression, { document: {
+    querySelector: () => screen === 'input' ? {} : null,
+    querySelectorAll: () => screen === 'input' ? [] : [{ textContent: screen, getClientRects: () => [1] }],
+  } });
+  const browser = async args => {
+    if (args[0] === 'wait') {
+      if (!await evaluate(args[2]) && pending) { screen = pending; pending = undefined; }
+      const ready = await evaluate(args[2]);
+      // agent-browser evaluates by value over CDP: a DOM element result fails
+      // serialization rather than behaving like a truthy Playwright predicate.
+      assert.equal(typeof ready, 'boolean', 'browser wait predicates must return a primitive');
+      assert.ok(ready, 'browser wait must reach its requested screen state');
+    } else {
+      assert.equal(args.at(-1), screen);
+      assert.equal(pending, undefined, 'must not click the departing control twice');
+      pending = screen === 'Skip' ? 'Use a key' : 'input';
+    }
+  };
+  await navigateToRestoreInput(browser, evaluate);
+  assert.equal(screen, 'input');
+});
 
 test('the existing audit CLI reads journey bundles and prints the measured comparison through its E2E mode', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-perf-cli-' });

@@ -1,12 +1,12 @@
 {
   "id": "J3",
-  "intent": "Scroll the populated Session list, apply the Needs me facet, then restore it. Start from the recorded unfiltered view; wheel movement and resulting membership must be verified on the loaded export before baseline capture.",
+  "intent": "Round-1 available-list scope authorized at 02:01: scroll the currently admitted/retained populated Session list, toggle Needs me using the real accessible switch, restore OFF and close the panel. Background cross-Home query coverage may remain pending; this measures local rendered membership and controls, not complete corpus freshness. Record coverage status with every batch.",
   "prepare": [
-    { "op": "open" },
+    { "op": "browser", "args": ["eval", "(() => { setTimeout(() => location.assign(new URL('/', location.href).href), 0); return true; })()"] },
     { "op": "home" },
     { "op": "browser", "args": ["wait", "[data-testid^=\"session-list-item-\"]"] },
-    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"session-list-skeleton\"], [data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"]')"] },
-    { "op": "browser", "args": ["eval", "(() => { if (document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]')) throw new Error('J3 requires the recorded unfiltered baseline'); return true; })()"] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const list = document.querySelector('[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]'); return !!list && list.scrollHeight > list.clientHeight && !!document.querySelector('[data-testid^=\"session-list-item-\"]'); })()"] },
+    { "op": "browser", "args": ["eval", "(() => { if (document.querySelector('[data-testid=\"session-list-filter-trigger\"]')?.getAttribute('aria-pressed') === 'true') throw new Error('J3 requires the recorded unfiltered baseline'); return true; })()"] },
     { "op": "browser", "args": ["scroll", "up", "100000", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
     { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]')?.scrollTop === 0"] }
   ],
@@ -20,9 +20,14 @@
     { "op": "browser", "args": ["scroll", "up", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-trigger\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"session-list-filter-panel\"]"] },
-    { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-attention\"]"] },
-    { "op": "browser", "args": ["wait", "--fn", "!!document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"], [data-testid=\"session-list-query-empty-state\"], [data-testid=\"session-list-filtered-no-results\"]')"] },
-    { "op": "browser", "args": ["click", "[data-testid=\"session-list-filter-attention\"]"] },
-    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]') && !document.querySelector('[data-testid=\"session-list-query-status\"]') && !!document.querySelector('[data-testid^=\"session-list-item-\"]')"] }
+    { "op": "browser", "args": ["wait", "[data-testid=\"session-list-filter-attention\"][aria-checked=\"false\"]"] },
+    { "op": "browser", "args": ["focus", "[data-testid=\"session-list-filter-attention\"]"] },
+    { "op": "browser", "args": ["press", "Space"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-filter-attention\"]')?.getAttribute('aria-checked') === 'true' && document.querySelector('[data-testid=\"session-list-filter-trigger\"]')?.getAttribute('aria-pressed') === 'true'"] },
+    { "op": "browser", "args": ["focus", "[data-testid=\"session-list-filter-attention\"]"] },
+    { "op": "browser", "args": ["press", "Space"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-filter-attention\"]')?.getAttribute('aria-checked') === 'false' && document.querySelector('[data-testid=\"session-list-filter-trigger\"]')?.getAttribute('aria-pressed') === 'false' && !!document.querySelector('[data-testid^=\"session-list-item-\"]')"] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"session-list-filter-panel\"]')"] }
   ]
 }

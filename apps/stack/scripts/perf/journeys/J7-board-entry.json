@@ -1,0 +1,10 @@
+{
+  "id": "J7-board-entry",
+  "intent": "Diagnostic one-minute observation of entering the real Boards list, including a pending or failed read. This does not establish that the selected Board detail completed.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "browser", "args": ["find", "testid", "app-rail:boards", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"boards-column:list\"]"] },
+    { "op": "idle", "ms": 60000 }
+  ]
+}

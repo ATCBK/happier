@@ -1,0 +1,26 @@
+{
+  "id": "J12-J5-machine-sheet",
+  "intent": "Partial phone diagnostic only: once-typed perf-B8 draft, Machine sheet open/close without selecting a locked or foreign target, and 390x540 then 390x844 web viewport reflow. Preparation excludes New Session bootstrap and includes a diagnostic-only 120s dwell because measured bootstrap reads exceeded 100s; actual input/viewport readiness is still required afterward. The dwell is not timing evidence or a product timeout. Does not claim Agent/model selection, native IME behavior, Session launch or first-message completion.",
+  "prepare": [
+    { "op": "browser", "args": ["set", "viewport", "390", "844"] },
+    { "op": "open", "path": "/new?draftId=ffbf6179-aad3-402b-90df-10048f3a97e0&draftOrigin=ordinary" },
+    { "op": "idle", "ms": 120000 },
+    { "op": "browser", "args": ["set", "viewport", "390", "844"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "innerWidth === 390 && innerHeight === 844"] },
+    { "op": "browser", "args": ["eval", "(() => { const value = document.querySelector('[data-testid=\"new-session-composer-input\"]').value; if (value && !value.startsWith('perf-B8:')) throw new Error('Refusing to replace a foreign draft'); return true; })()"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"new-session-composer-input\"]", ""] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["focus", "[data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["type", "[data-testid=\"new-session-composer-input\"]", "perf-B8: Reply with PERF_E2E_B8_OK only. Do not run tools or change files."] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-machine-chip\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"new-session-machine-option:\"]"] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["set", "viewport", "390", "540"] },
+    { "op": "browser", "args": ["wait", "--fn", "innerWidth === 390 && innerHeight === 540"] },
+    { "op": "browser", "args": ["focus", "[data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["set", "viewport", "390", "844"] },
+    { "op": "browser", "args": ["wait", "--fn", "innerWidth === 390 && innerHeight === 844 && document.querySelector('[data-testid=\"new-session-composer-input\"]')?.value === 'perf-B8: Reply with PERF_E2E_B8_OK only. Do not run tools or change files.'"] }
+  ]
+}

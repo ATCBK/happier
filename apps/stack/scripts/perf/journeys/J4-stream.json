@@ -1,0 +1,21 @@
+{
+  "id": "J4",
+  "intent": "Separate B2-owned stream-only attempt, never a historical Session write. Reuse only ordinary draft 6fea878b-9669-47b4-bbe6-739b0d061145 and exact perf Machine 620a8bc8-99ec-461a-87f7-2b980ac7a68c. Require its empty draft, explicitly select that Machine and send exactly once. No tools/files/commands/changes are requested. Do not rerun after Send without inspecting whether a Session was already created. Not pooled with historical deep-link timing.",
+  "prepare": [
+    { "op": "open", "path": "/new?draftId=6fea878b-9669-47b4-bbe6-739b0d061145&draftOrigin=ordinary" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["eval", "(() => { const input=document.querySelector('[data-testid=\"new-session-composer-input\"]'); if(location.pathname!=='/new' || new URLSearchParams(location.search).get('draftId')!=='6fea878b-9669-47b4-bbe6-739b0d061145' || (input?.value||'').trim()) throw new Error('Requires exact empty B2-owned draft; inspect before retry'); return true; })()"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-machine-chip\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"new-session-composer-input\"]", "perf-B2 transcript fixture. Performance measurement only: do not use tools, read files, run commands, or change anything. Reply with 240 numbered short lines about counting, one sentence per line. Finish with PERF-B2-FIXTURE-DONE on its own line."] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const e=document.querySelector('[data-testid=\"new-session-composer-send\"]'); return !!e && !e.disabled && e.getAttribute('aria-disabled')!=='true'; })()"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["click", "[data-testid=\"new-session-composer-send\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "location.pathname.startsWith('/session/')"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"transcript-chat-list\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const t=document.querySelector('[data-testid=\"transcript-chat-list\"]')?.textContent||''; return t.includes('PERF-B2-FIXTURE-DONE') && /240[.)]/.test(t); })()"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"transcript-session-activity\"]')"] }
+  ]
+}

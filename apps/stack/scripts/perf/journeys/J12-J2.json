@@ -30,6 +30,10 @@
     {
       "op": "idle",
       "ms": 300000
+    },
+    {
+      "op": "browser",
+      "args": ["eval", "(() => { if (innerWidth !== 390) throw new Error('Phone viewport changed during idle'); return true; })()"]
     }
   ]
 }

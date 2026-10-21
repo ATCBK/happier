@@ -27,30 +27,35 @@
     {
       "op": "browser",
       "when": "cold",
-      "args": [
-        "find",
-        "role",
-        "button",
-        "click",
-        "--name",
-        "Skip"
-      ]
+      "args": ["wait", "[data-testid=\"onboarding-showcase-story-skip\"]"]
     },
     {
       "op": "browser",
       "when": "cold",
-      "args": [
-        "find",
-        "role",
-        "button",
-        "click",
-        "--name",
-        "Get started"
-      ]
+      "args": ["click", "[data-testid=\"onboarding-showcase-story-skip\"]"]
+    },
+    {
+      "op": "browser",
+      "when": "cold",
+      "args": ["wait", "[data-testid=\"onboarding-showcase-story-skip\"]", "--state", "detached"]
+    },
+    {
+      "op": "browser",
+      "when": "cold",
+      "args": ["wait", "[data-testid=\"brand-hero-get-started\"], [data-testid=\"welcome-login-provider\"]"]
+    },
+    {
+      "op": "browser",
+      "when": "cold",
+      "args": ["click", "[data-testid=\"brand-hero-get-started\"], [data-testid=\"welcome-login-provider\"]"]
     },
     {
       "op": "restore",
       "when": "cold"
+    },
+    {
+      "op": "browser",
+      "args": ["eval", "(() => { if (innerWidth !== 390) throw new Error('Phone viewport changed during startup/restore'); return true; })()"]
     },
     {
       "op": "home"

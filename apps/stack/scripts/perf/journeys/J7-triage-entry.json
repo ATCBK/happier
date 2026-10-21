@@ -1,0 +1,14 @@
+{
+  "id": "J7-triage-entry",
+  "intent": "Diagnostic one-minute observation of entering the real PRs & Issues list, including its host establishing or source-reading states. This does not establish source-detail completion.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__b5NavigationPending = true; setTimeout(() => location.assign('/'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__b5NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] },
+    { "op": "idle", "ms": 120000 }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["find", "testid", "app-rail-more", "click"] },
+    { "op": "browser", "args": ["find", "testid", "app-rail-more:plugin:happier.triage:triage", "click"] },
+    { "op": "idle", "ms": 60000 }
+  ]
+}

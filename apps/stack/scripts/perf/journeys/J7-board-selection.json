@@ -1,0 +1,15 @@
+{
+  "id": "J7-board-selection",
+  "intent": "Diagnostic saved Board attempt: observe the list for one minute, click existing QA journey r3 overview · PERF-3 only if visible, then observe for one minute. Missing rows/header/body are explicit blocked states, not ready-detail success.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__b5NavigationPending = true; setTimeout(() => location.assign('/'), 0); true"] },
+    { "op": "idle", "ms": 120000 }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["find", "testid", "app-rail:boards", "click"] },
+    { "op": "idle", "ms": 60000 },
+    { "op": "browser", "args": ["eval", "(() => { const row = document.querySelector('[data-testid=\"boards-column:board:a7e6d95f-df5b-47dd-be27-d641b26aef5e\"]'); const visible = Boolean(row && row.getClientRects().length); globalThis.__b5BoardAttempt = { at: new Date().toISOString(), requestedBoard: 'a7e6d95f-df5b-47dd-be27-d641b26aef5e', clickPerformed: visible }; if (visible) row.click(); return true; })()"] },
+    { "op": "idle", "ms": 60000 },
+    { "op": "browser", "args": ["eval", "globalThis.__b5BoardState = { attempt: globalThis.__b5BoardAttempt, at: new Date().toISOString(), path: location.pathname, header: Boolean(document.querySelector('[data-testid=\"board-header\"]')), canvas: Boolean(document.querySelector('[data-testid=\"board-canvas\"]')), empty: Boolean(document.querySelector('[data-testid=\"board-empty\"]')), rows: document.querySelectorAll('[data-testid^=\"boards-column:board:\"]:not([data-testid$=\":need-you\"])').length }; true"] }
+  ]
+}

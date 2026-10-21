@@ -1,14 +1,16 @@
 {
   "id": "J6",
-  "intent": "Authenticated desktop Settings: open Plugins installed inventory, then use the Settings sidebar to visit Connected services, Actions/approvals policy, Appearance, and revisit Plugins. Observe reads and rendering without changing settings or installing plugins. Requires the Settings sidebar to be enabled and a current selected administration Machine.",
+  "intent": "Authenticated desktop Account Settings: Plugins, Connected services, Actions/approvals policy, Appearance, Plugins revisit. Measure each panel as rendered on this device, including no-Machine or locked-Machine states. A Machine is not a prerequisite for Account settings. Do not mutate preferences or install plugins.",
   "prepare": [
     { "op": "open" },
-    { "op": "home" }
+    { "op": "home" },
+    { "op": "idle", "ms": 90000 }
   ],
   "steps": [
-    { "op": "open", "path": "/settings/plugins" },
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail:settings\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings-sidebar.item.plugins\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.plugins\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"settings.plugins.page\"]"] },
-    { "op": "browser", "args": ["wait", "[data-testid=\"settings.plugins.marketplace.installed\"], [data-testid=\"settings.plugins.marketplace.installed.empty\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.connectedServices\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"settings-connected-services-layout\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"connected-services-summary\"]"] },
@@ -17,6 +19,6 @@
     { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.appearance\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"settings-appearance-themeMode\"]"] },
     { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.plugins\"]"] },
-    { "op": "browser", "args": ["wait", "[data-testid=\"settings.plugins.marketplace.installed\"], [data-testid=\"settings.plugins.marketplace.installed.empty\"]"] }
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings.plugins.page\"]"] }
   ]
 }

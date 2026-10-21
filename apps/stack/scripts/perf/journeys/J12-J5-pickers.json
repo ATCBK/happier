@@ -1,0 +1,29 @@
+{
+  "id": "J12-J5-pickers",
+  "intent": "Partial J12/J5 at 390x844: ordinary perf-B8 draft, once-typed prompt, exact QA Machine and phone Agent/model sheets, preserving the draft. Does not send, launch, or claim first-message completion; that requires an authenticated Agent on the exact perf Machine.",
+  "prepare": [
+    { "op": "browser", "args": ["set", "viewport", "390", "844"] },
+    { "op": "open" },
+    { "op": "browser", "args": ["wait", "--fn", "window.innerWidth === 390 && [...document.querySelectorAll('[role=\"tab\"]')].some(e => /^Sessions(?:,|$)/.test(e.getAttribute('aria-label') || ''))"] }
+  ],
+  "steps": [
+    { "op": "open", "path": "/new" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["focus", "[data-testid=\"new-session-composer-input\"]"] },
+    { "op": "browser", "args": ["eval", "(() => { const value = document.querySelector('[data-testid=\"new-session-composer-input\"]').value; if (value && !value.startsWith('perf-B8:')) throw new Error('Refusing to replace a foreign draft'); return true; })()"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"new-session-composer-input\"]", ""] },
+    { "op": "browser", "args": ["type", "[data-testid=\"new-session-composer-input\"]", "perf-B8: Reply with PERF_E2E_B8_OK only. Do not run tools or change files."] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-machine-chip\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"new-session-machine-option:620a8bc8-99ec-461a-87f7-2b980ac7a68c\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-agent-chip\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"agent-input-chip-picker.sheet-back\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-chip-picker.sheet-back\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"agent-input-chip-picker.option:agent:happier.agent.claude/claude\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"agent-input-chip-picker.option:agent:happier.agent.claude/claude\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"model-picker-overlay-selection-list\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid^=\"model-picker-overlay-option:\"][aria-selected=\"true\"]:not([aria-disabled=\"true\"])"] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"new-session-composer-input\"]')?.value === 'perf-B8: Reply with PERF_E2E_B8_OK only. Do not run tools or change files.'"] }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "id": "J12-J3-local",
+  "intent": "Partial J12/J3 phone list: targeted web scrolling with verified displacement plus search focus/input/clear/close. Excludes the server-backed Needs me facet. This is local interaction/virtualization evidence, not completion of full J3 or a native touch/IME claim.",
+  "prepare": [
+    { "op": "browser", "args": ["set", "viewport", "390", "844"] },
+    { "op": "open" },
+    { "op": "home" },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"session-list-item-\"]"] },
+    { "op": "browser", "args": ["eval", "(() => { if (window.innerWidth !== 390 || document.querySelector('[data-testid=\"session-list-filter-trigger-narrowed\"]')) throw new Error('Requires 390px unfiltered baseline'); return true; })()"] },
+    { "op": "browser", "args": ["scroll", "up", "100000", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]')?.scrollTop === 0"] }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["scroll", "down", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "down", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "down", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]')?.scrollTop > 0"] },
+    { "op": "browser", "args": ["scroll", "up", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "up", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["scroll", "up", "720", "--selector", "[data-testid=\"session-list-content\"] > div[style*=\"overflow: auto\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"session-list-search-trigger\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"session-list-search-input\"]"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"session-list-search-input\"]", "counting"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"session-list-search-input\"]", ""] },
+    { "op": "browser", "args": ["click", "[data-testid=\"session-list-search-close\"]"] }
+  ]
+}

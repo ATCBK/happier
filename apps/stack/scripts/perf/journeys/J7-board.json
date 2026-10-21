@@ -1,9 +1,13 @@
 {
   "id": "J7-board",
   "intent": "Authenticated Boards list to an existing saved Work Board, followed by one minute with its live cards and widgets open. Requires at least one readable Board; no Board, card, layout or approval is changed.",
-  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__b5NavigationPending = true; setTimeout(() => location.assign('/'), 0); true"] },
+    { "op": "browser", "args": ["wait", "--fn", "globalThis.__b5NavigationPending !== true && Boolean(document.querySelector('[data-testid=\"session-list-view-options-trigger\"]'))"] },
+    { "op": "idle", "ms": 120000 }
+  ],
   "steps": [
-    { "op": "open", "path": "/boards" },
+    { "op": "browser", "args": ["find", "testid", "app-rail:boards", "click"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"boards-column:list\"]"] },
     { "op": "browser", "args": ["wait", "[data-testid=\"boards-column:board:fe40a772-9e5e-4803-acf9-9ed7958c5169\"]"] },
     { "op": "browser", "args": ["find", "testid", "boards-column:board:fe40a772-9e5e-4803-acf9-9ed7958c5169", "click"] },

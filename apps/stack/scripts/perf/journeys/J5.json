@@ -3,7 +3,7 @@
   "intent": "Open ordinary New Session, reselect the prepared agent/model and exact perf Machine through their real pickers, then submit one harmless first message and observe it in the new transcript. Requires B3 round-1 target and draft preparation described in lanes/B3.md.",
   "prepare": [{ "op": "open" }, { "op": "home" }],
   "steps": [
-    { "op": "open", "path": "/new" },
+    { "op": "browser", "args": ["find", "role", "button", "click", "--name", "Start New Session", "--exact"] },
     { "op": "browser", "args": ["wait", "[role=\"dialog\"] [data-testid=\"new-session-composer-input\"]"] },
     { "op": "browser", "args": ["click", "[role=\"dialog\"] [data-testid=\"agent-input-machine-chip\"]"] },
     { "op": "browser", "args": ["find", "role", "combobox", "fill", "620a", "--name", "Search machines..."] },

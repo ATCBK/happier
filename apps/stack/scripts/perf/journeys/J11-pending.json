@@ -1,0 +1,20 @@
+{
+  "id": "J11-pending",
+  "intent": "Partial J11 diagnostic, NOT a completed Session-search baseline: open the palette, resolve the Account command, close/reopen, query existing R9-TAIL metadata and observe a fixed 10-second pending/result window, then cancel. Session-result completion remains asserted only by J11.json.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail:search\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"selection-list:header:input\"]"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"selection-list:header:input\"]", "account"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"command-palette:option:account\"]"] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const e = document.querySelector('[data-testid=\"app-rail:search\"]'); if (!e || document.querySelector('[data-testid=\"universal-search-host\"]')) return false; const r = e.getBoundingClientRect(); return e.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)); })()"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail:search\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"selection-list:header:input\"]"] },
+    { "op": "browser", "args": ["fill", "[data-testid=\"selection-list:header:input\"]", "R9-TAIL"] },
+    { "op": "idle", "ms": 10000 },
+    { "op": "browser", "args": ["fill", "[data-testid=\"selection-list:header:input\"]", ""] },
+    { "op": "browser", "args": ["press", "Escape"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"universal-search-host\"]')"] }
+  ]
+}

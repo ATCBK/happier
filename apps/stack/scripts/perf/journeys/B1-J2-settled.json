@@ -1,0 +1,6 @@
+{
+  "id": "J2",
+  "intent": "B1 later-window control: allow the first observed five-minute startup-continuation window, then measure a separate five minutes on authenticated Home without interaction. Elapsed time alone does not attest settled hydration.",
+  "prepare": [{ "op": "open" }, { "op": "home" }, { "op": "idle", "ms": 300000 }],
+  "steps": [{ "op": "idle", "ms": 300000 }]
+}

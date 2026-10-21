@@ -1,0 +1,19 @@
+{
+  "id": "J7-triage-selection",
+  "intent": "Diagnostic list observation for one minute, then PR 612 / issue 540 control clicks only when their real rows are visible, with thirty seconds per entry. Missing rows, unchanged routes and pending detail are recorded, never treated as ready source detail.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "globalThis.__b5NavigationPending = true; setTimeout(() => location.assign('/'), 0); true"] },
+    { "op": "idle", "ms": 120000 }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["find", "testid", "app-rail-more", "click"] },
+    { "op": "browser", "args": ["find", "testid", "app-rail-more:plugin:happier.triage:triage", "click"] },
+    { "op": "idle", "ms": 60000 },
+    { "op": "browser", "args": ["eval", "(() => { const row = document.querySelector('[data-testid=\"triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22pull-request%22%2C%22github%3A1117388084%22%2C%22612%22%5D\"]'); const visible = Boolean(row && row.getClientRects().length); globalThis.__b5TriageAttempt = { requestedEntry: 'PR-612', clickPerformed: visible }; if (visible) row.click(); return true; })()"] },
+    { "op": "idle", "ms": 30000 },
+    { "op": "browser", "args": ["eval", "globalThis.__b5JourneyStates = [{ ...globalThis.__b5TriageAttempt, at: new Date().toISOString(), path: location.pathname, chip: document.querySelector('[data-testid=\"plugin-page-execution.chip\"]')?.textContent ?? null, reading: document.body.innerText.includes('Reading this entry'), ready: Boolean(document.querySelector('[data-testid=\"triage-story-agent\"], [data-testid=\"triage-activity-agent\"]')) }]; true"] },
+    { "op": "browser", "args": ["eval", "(() => { const row = document.querySelector('[data-testid=\"triage-entry-row:%5B%22happier.scm.forge.github%22%2C%22github-forge%22%2C%22issue%22%2C%22github%3A1117388084%22%2C%22540%22%5D\"]'); const visible = Boolean(row && row.getClientRects().length); globalThis.__b5TriageAttempt = { requestedEntry: 'issue-540', clickPerformed: visible }; if (visible) row.click(); return true; })()"] },
+    { "op": "idle", "ms": 30000 },
+    { "op": "browser", "args": ["eval", "globalThis.__b5JourneyStates.push({ ...globalThis.__b5TriageAttempt, at: new Date().toISOString(), path: location.pathname, chip: document.querySelector('[data-testid=\"plugin-page-execution.chip\"]')?.textContent ?? null, reading: document.body.innerText.includes('Reading this entry'), ready: Boolean(document.querySelector('[data-testid=\"triage-story-agent\"], [data-testid=\"triage-activity-agent\"]')) }); true"] }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "id": "J4",
+  "intent": "Round-1 read-only historical deep-link open/scroll path authorized at 02:01. Open cmvflznnv003fmc0qs1w3wv8x on its recorded Home, the highest-sequence Session (144) among 107 inventoried rows; 113 loaded renderer records and a 10,683px transcript were observed. Use the ordinary scoped URL, not a fixed virtual-list pixel offset. Scroll 4,200px older and verify movement. Never fill, send, resume, approve, fork or change this shared Session. Streaming and return-to-tail are excluded and separately reported. This is not the full J4 streaming template or a Session-row tap latency.",
+  "prepare": [
+    { "op": "browser", "args": ["eval", "(() => { setTimeout(() => location.assign(new URL('/', location.href).href), 0); return true; })()"] },
+    { "op": "home" },
+    { "op": "browser", "args": ["eval", "(() => { if (location.pathname !== '/') throw new Error('J4 must start from Home'); return true; })()"] }
+  ],
+  "steps": [
+    { "op": "open", "path": "/session/cmvflznnv003fmc0qs1w3wv8x?serverId=srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN" },
+    { "op": "browser", "args": ["wait", "[data-testid=\"transcript-chat-list\"] [data-testid^=\"transcript-item-msg:\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "(() => { const e=document.querySelector('[data-testid=\"transcript-chat-list\"] div[style*=\"overflow: auto\"][style*=\"overflow-anchor: none\"]'); return !!e && e.scrollHeight > e.clientHeight + 300 && e.scrollTop > 0; })()"] },
+    { "op": "browser", "args": ["eval", "(() => { if (location.pathname !== '/session/cmvflznnv003fmc0qs1w3wv8x' || new URLSearchParams(location.search).get('serverId') !== 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN') throw new Error('Wrong historical Session'); window.__perfB2ScrollStart=document.querySelector('[data-testid=\"transcript-chat-list\"] div[style*=\"overflow: auto\"][style*=\"overflow-anchor: none\"]').scrollTop; return true; })()"] },
+    { "op": "browser", "args": ["scroll", "up", "1400", "--selector", "[data-testid=\"transcript-chat-list\"] div[style*=\"overflow: auto\"][style*=\"overflow-anchor: none\"]"] },
+    { "op": "browser", "args": ["scroll", "up", "1400", "--selector", "[data-testid=\"transcript-chat-list\"] div[style*=\"overflow: auto\"][style*=\"overflow-anchor: none\"]"] },
+    { "op": "browser", "args": ["scroll", "up", "1400", "--selector", "[data-testid=\"transcript-chat-list\"] div[style*=\"overflow: auto\"][style*=\"overflow-anchor: none\"]"] },
+    { "op": "browser", "args": ["wait", "--fn", "document.querySelector('[data-testid=\"transcript-chat-list\"] div[style*=\"overflow: auto\"][style*=\"overflow-anchor: none\"]')?.scrollTop < window.__perfB2ScrollStart"] },
+    { "op": "browser", "args": ["wait", "--fn", "!document.querySelector('[data-testid=\"transcript-older-load-progress-overlay\"], [data-testid=\"transcript-older-load-retry-overlay\"], [data-testid=\"transcript-older-load-continuation-overlay\"]')"] }
+  ]
+}

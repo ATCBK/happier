@@ -1,0 +1,9 @@
+{
+  "id": "J5-opening",
+  "intent": "Partial J5 readiness diagnostic, NOT picker or first-message completion: click the real Home Start New Session control and observe the next 10 seconds without setup, Send or Account-default mutation. J5.json retains the composer/pickers/admitted-message assertions.",
+  "prepare": [{ "op": "open" }, { "op": "home" }],
+  "steps": [
+    { "op": "browser", "args": ["find", "role", "button", "click", "--name", "Start New Session", "--exact"] },
+    { "op": "idle", "ms": 10000 }
+  ]
+}

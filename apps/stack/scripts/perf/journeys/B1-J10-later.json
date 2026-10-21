@@ -1,0 +1,19 @@
+{
+  "id": "J10",
+  "intent": "B1 later-window Team-switch control: allow the observed five-minute startup-continuation period before real Home to existing Team navigation and return. Preparation time alone does not attest quiet hydration.",
+  "prepare": [
+    { "op": "open" },
+    { "op": "home" },
+    { "op": "idle", "ms": 300000 }
+  ],
+  "steps": [
+    { "op": "browser", "args": ["click", "[data-testid=\"app-rail:settings\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"settings-sidebar.item.teams\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"settings-sidebar.item.teams\"]"] },
+    { "op": "browser", "args": ["wait", "[data-testid^=\"teams-row:\"]"] },
+    { "op": "browser", "args": ["find", "first", "[data-testid^=\"teams-row:\"]", "click"] },
+    { "op": "browser", "args": ["wait", "[data-testid=\"team-overview-identity\"]"] },
+    { "op": "browser", "args": ["click", "[data-testid=\"app-shell-logo\"]"] },
+    { "op": "home" }
+  ]
+}
