@@ -16992,18 +16992,36 @@ export async function startDaemonSessionControlRuntime(
   let sourceFollow: Readonly<{ machine: ApiMachineClient; personalSettingsLifetime: number; isCurrent: () => Promise<boolean>;
     dispatcher: ReturnType<typeof createSessionFollowOccurrenceDispatcher> }> | null = null;
   const dispatchSessionFollowOccurrence = async (request: import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowOccurrenceDispatch): Promise<import('@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher').SessionFollowReceiverRangeResult | SessionActivityChangedResult | void> => {
-    if (isRuntimePublicationQuiescing()) return;
+    const diagnostic = 'observations' in request ? { entry: 'receiver_range', destinationSessionId: request.destinationSessionId,
+      ...(request.sourceSessionId ? { sourceSessionId: request.sourceSessionId } : {}) }
+      : request.occurrence && !('original' in request.occurrence) ? { entry: 'occurrence', sourceSessionId: request.occurrence.sourceSessionId,
+        ...('sourceMessage' in request.occurrence ? { sourceMessageSeq: request.occurrence.sourceMessage.seq }
+          : { agentStateVersion: request.occurrence.sourceRequests.agentStateVersion }) } : null;
+    if (isRuntimePublicationQuiescing()) {
+      if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'publication', status: 'held', reason: 'quiescing' });
+      return;
+    }
+    if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'requester_context', status: 'started' });
     const sessionId = 'sourceSessionIdChanged' in request || 'accountFollowSourcesChanged' in request ? null : 'observations' in request ? request.destinationSessionId
       : request.destinationSessionId ?? ('original' in request.occurrence
         ? request.occurrence.original.source.kind === 'execution_run' ? request.occurrence.original.source.sessionId : request.contextSessionId ?? null
         : request.occurrence.sourceSessionId);
     return await withSessionAccountContext(sessionId, async requester => {
+      if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'requester_context',
+        status: 'completed', requester: requester !== null });
       const machine = params.getApiMachineForSessions();
       const installation = readInstallationIdentityIfExistsSync();
       const signal = shutdownCancellationDomains.daemonWorkSignal;
-      if (!installation) return;
+      if (!installation) {
+        if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'installation', status: 'held', reason: 'installation_missing' });
+        return;
+      }
       if (requester) {
-        if (!await requester.isCurrent(signal)) return;
+        if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'requester_currentness', status: 'started' });
+        if (!await requester.isCurrent(signal)) {
+          if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'requester_currentness', status: 'held', reason: 'requester_not_current' });
+          return;
+        }
         const bootstrap = requester.bootstrap;
         const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: bootstrap.attribution.accountId,
           credentials: bootstrap.credentials, serverId: bootstrap.attribution.serverId,
@@ -17034,10 +17052,14 @@ export async function startDaemonSessionControlRuntime(
         } finally { dispatcher.dispose(); }
         return;
       }
+      if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'installed_account', status: 'started' });
       const account = await machine?.resolveInstalledAccountObservationRuntime(signal);
       if (!machine || !account || account.serverId !== params.serverId
         || account.machineId !== params.machineId || account.accountId !== readPreviewAccountIdFromToken(params.credentials.token)
-        || !sameStoredCredentials(account.credentials, params.credentials) || !await account.isCurrent?.()) return;
+        || !sameStoredCredentials(account.credentials, params.credentials) || !await account.isCurrent?.()) {
+        if (diagnostic) logger.debug('[Session Follow] Daemon dispatch', { ...diagnostic, phase: 'installed_account', status: 'held', reason: 'installed_account_not_current' });
+        return;
+      }
       if (!sourceFollow || sourceFollow.machine !== machine || !await sourceFollow.isCurrent()
         || sourceFollow.personalSettingsLifetime !== getActiveAccountSettingsSnapshotLifetimeToken()) {
         sourceFollow?.dispatcher.dispose();

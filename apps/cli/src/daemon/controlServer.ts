@@ -1891,15 +1891,28 @@ export function createDaemonControlApp({
     }
     const occurrence = request.body.followOccurrence;
     const runOriginal = occurrence && 'original' in occurrence ? occurrence.original : undefined;
+    const diagnose = (status: 'started' | 'completed' | 'failed' | 'ignored') => {
+      if (occurrence && 'sourceSessionId' in occurrence) logger.debug('[Session Follow] Occurrence ingress', {
+        requestId: request.id, sourceSessionId: occurrence.sourceSessionId, status,
+        ...('sourceMessage' in occurrence ? { sourceMessageSeq: occurrence.sourceMessage.seq }
+          : { agentStateVersion: occurrence.sourceRequests.agentStateVersion }),
+      });
+    };
     if (runOriginal || getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {
       if (runOriginal ? runOriginal.source.kind === 'workflow_run' || runOriginal.source.sessionId === request.body.sessionId
         : !occurrence || 'sourceSessionId' in occurrence && occurrence.sourceSessionId === request.body.sessionId) {
-        const result = await onSessionActivityChanged?.(request.body.sessionId, request.body.followOccurrence);
+        diagnose('started');
+        let result: void | SessionActivityChangedResult;
+        try { result = await onSessionActivityChanged?.(request.body.sessionId, request.body.followOccurrence); }
+        catch (error) { diagnose('failed'); throw error; }
+        diagnose('completed');
         if (result?.personalFollow?.sourceSessionId === request.body.sessionId) {
           return { ok: true as const, personalFollow: result.personalFollow };
         }
+        return { ok: true as const };
       }
     }
+    diagnose('ignored');
     return { ok: true as const };
   });
 

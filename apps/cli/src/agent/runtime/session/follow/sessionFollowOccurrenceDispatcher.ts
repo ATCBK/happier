@@ -71,6 +71,13 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     isCurrent: input.isCurrent,
   });
   const current = async () => !input.signal.aborted && await input.isCurrent();
+  // Only routing identities and fixed decision categories cross this diagnostic boundary.
+  const checkpoint = (facts: Readonly<{ entry: 'source' | 'receiver' | 'receiver_range'; sourceSessionId?: string;
+    destinationSessionId?: string; sourceMessageSeq?: number; agentStateVersion?: number }>,
+    phase: string, status: 'started' | 'completed' | 'held', details: Readonly<{
+      reason?: string; httpStatus?: number; candidateCount?: number; afterSeq?: number; throughSeq?: number;
+      sourceSessionId?: string; sourceMessageSeq?: number;
+    }> = {}) => logger.debug('[Session Follow] Dispatch checkpoint', { ...facts, phase, status, ...details });
   const prepareSourceKey = createSessionFollowSourceKeyPreparationAfterSet({ credentials: input.credentials,
     serverHttpBaseUrl: input.serverHttpBaseUrl, resolveServerFeaturesSnapshot: input.resolveServerFeaturesSnapshot });
   const dispatchRun = async (request: SessionFollowRunOccurrence | Readonly<{ source: RunFollowOriginalV1['source'] }>, receiverSessionId?: string, personalOnly = false): Promise<void> => {
@@ -200,20 +207,35 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
   const dispatch = async (occurrence: SessionFollowRuleSourceOccurrenceV1 | SessionFollowAccountOccurrence, receiverSessionId?: string,
     fromSourceRange = false): Promise<SessionActivityChangedResult | void> => {
       let personalFollow: SessionActivityChangedResult['personalFollow'];
-      if (!await current() || !receiverSessionId && (!('sourcePublisher' in occurrence) || occurrence.sourcePublisher.machineId !== input.machineId)) return;
+      const diagnostic = { entry: receiverSessionId ? 'receiver' as const : 'source' as const,
+        sourceSessionId: occurrence.sourceSessionId, ...(receiverSessionId ? { destinationSessionId: receiverSessionId } : {}),
+        ...('sourceMessage' in occurrence ? { sourceMessageSeq: occurrence.sourceMessage.seq }
+          : { agentStateVersion: occurrence.sourceRequests.agentStateVersion }) };
+      checkpoint(diagnostic, 'currentness', 'started');
+      if (!await current()) { checkpoint(diagnostic, 'currentness', 'held', { reason: 'account_not_current' }); return; }
+      if (!receiverSessionId && (!('sourcePublisher' in occurrence) || occurrence.sourcePublisher.machineId !== input.machineId)) {
+        checkpoint(diagnostic, 'currentness', 'held', { reason: 'source_publisher_mismatch' }); return;
+      }
+      checkpoint(diagnostic, 'rules', 'started');
       const opened = await rules.read();
-      if (opened.status !== 'available' || !await current()) return;
+      if (opened.status !== 'available') { checkpoint(diagnostic, 'rules', 'held', { reason: opened.reason }); return; }
+      if (!await current()) { checkpoint(diagnostic, 'rules', 'held', { reason: 'account_not_current' }); return; }
+      checkpoint(diagnostic, 'source', 'started');
       const [accountEncryption, source] = await Promise.all([
         fetchAccountEncryptionCurrentness({ token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl, signal: input.signal }),
         fetchSessionById({ token: input.credentials.token, sessionId: occurrence.sourceSessionId,
           serverUrl: input.serverHttpBaseUrl, signal: input.signal }),
       ]);
-      if (!source || source.archivedAt !== null && source.archivedAt !== undefined || !await current()) return;
+      if (!source || source.archivedAt !== null && source.archivedAt !== undefined || !await current()) {
+        checkpoint(diagnostic, 'source', 'held', { reason: !source ? 'source_unavailable'
+          : source.archivedAt != null ? 'source_archived' : 'account_not_current' }); return;
+      }
+      checkpoint(diagnostic, 'facts', 'started');
       const facts = await readCliSessionListFilterFactsV1({ credentials: input.credentials, accountEncryption,
         row: source, serverId: input.serverId, nowMs: Date.now(),
         accountId: input.accountId, serverHttpBaseUrl: input.serverHttpBaseUrl, signal: input.signal, isCurrent: current,
         filters: opened.rules.filter(rule => rule.definition.enabled).map(rule => rule.definition.filter) });
-      if (!facts) return;
+      if (!facts) { checkpoint(diagnostic, 'facts', 'held', { reason: 'source_facts_unavailable' }); return; }
       // A request map is a currentness fence, never one aggregate semantic occurrence.
       const originals: (SessionFollowRuleSourceOccurrenceV1 | SessionFollowAccountOccurrence)[] = 'sourceMessage' in occurrence ? [occurrence]
         : occurrence.sourceRequests.requests.flatMap(request => {
@@ -229,8 +251,10 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           personalRequestPassComplete = false;
           continue;
         }
+        checkpoint(diagnostic, 'routes', 'started');
         const ordinary = await readRoutes(original, receiverSessionId);
         if (ordinary === null) {
+          checkpoint(diagnostic, 'routes', 'held', { reason: 'source_routes_unavailable' });
           if (receiverSessionId) return;
           personalRequestPassComplete = false;
           continue;
@@ -245,6 +269,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           ...(ordinary.currentAccountFacts ? { personalFollowSuppressed: ordinary.currentAccountFacts.personalFollowSuppressed } : {}),
         });
         if (evaluated.status !== 'evaluated') {
+          checkpoint(diagnostic, 'selection', 'held', { reason: evaluated.status });
           if (receiverSessionId) return;
           personalRequestPassComplete = false;
           continue;
@@ -342,6 +367,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           }
           candidates.set(route.receiver.sessionId, candidate);
         }
+        checkpoint(diagnostic, 'selection', 'completed', { candidateCount: candidates.size });
         for (const [destinationSessionId, candidate] of candidates) {
           const selected = resolveFollowDeliveryV1({ policies: candidate.policies, event: evidence.event });
           if (!selected.selected || !await current()) continue;
@@ -362,6 +388,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
                 ? [{ requestId: item.requestId, event: item.evidence.event }] : []) };
           const admission = buildTrustedHostSessionInputAdmissionV1('agent');
           const features = await input.resolveServerFeaturesSnapshot?.();
+          checkpoint({ ...diagnostic, destinationSessionId }, 'admission', 'started');
           const result = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, async () => await sendSessionMessage({
             credentials: input.credentials, idOrPrefix: destinationSessionId, wait: false,
             localId: deriveSessionFollowInputLocalIdV1({ destinationSessionId, original: delivery.original }),
@@ -413,7 +440,10 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     observations: readonly SessionFollowSessionPendingObservationV1[]; sourceSessionId?: string }>,
     sourcePublisher?: SessionFollowRuleSourceOccurrenceV1['sourcePublisher']): Promise<SessionFollowReceiverRangeResult> => {
     const coveredEvents: { sourceSessionId: string; kind: FollowEventV1['kind'] }[] = [];
-    if (!await current()) return { coveredEvents };
+    const diagnostic = { entry: 'receiver_range' as const, destinationSessionId: request.destinationSessionId,
+      ...(request.sourceSessionId ? { sourceSessionId: request.sourceSessionId } : {}) };
+    checkpoint(diagnostic, 'currentness', 'started');
+    if (!await current()) { checkpoint(diagnostic, 'currentness', 'held', { reason: 'account_not_current' }); return { coveredEvents }; }
     // Receiver recovery re-reads configured Run sources. A source publisher's
     // notification repairs its own Session prefix without scanning other work.
     // A Run's retained original is never inferred from a parent turn.
@@ -421,10 +451,14 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       let cursor: string | undefined;
       do {
         const path = SESSION_FOLLOW_SOURCES_HTTP_PATHS_V1.list.replace(':destinationSessionId', encodeURIComponent(request.destinationSessionId));
+        checkpoint(diagnostic, 'range_sources', 'started');
         const response = await axios.get(`${input.serverHttpBaseUrl}${path}`, { headers: { Authorization: `Bearer ${input.credentials.token}` },
           ...(cursor ? { params: { cursor } } : {}), signal: input.signal, validateStatus: () => true });
         const page = response.status === 200 ? ListSessionFollowSourcesResponseSchema.safeParse(response.data) : null;
-        if (!page?.success || !await current()) break;
+        if (!page?.success || !await current()) {
+          checkpoint(diagnostic, 'range_sources', 'held', { reason: !page?.success ? 'source_list_unavailable' : 'account_not_current',
+            httpStatus: response.status }); break;
+        }
         for (const relation of page.data.sources) if ('source' in relation
           && (relation.source.kind === 'execution_run' || relation.source.kind === 'workflow_run')
           && relation.deliveryState === 'eligible') await dispatchRun({ source: relation.source }, request.destinationSessionId);
@@ -433,8 +467,11 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     }
     // Progress changes independently of rule configuration. Refresh once at
     // this existing catch-up boundary, never for each original in the range.
+    checkpoint(diagnostic, 'rules', 'started');
     const opened = await rules.read({ refresh: true });
-    if (opened.status !== 'available' || !await current()) return { coveredEvents };
+    if (opened.status !== 'available') { checkpoint(diagnostic, 'rules', 'held', { reason: opened.reason }); return { coveredEvents }; }
+    if (!await current()) { checkpoint(diagnostic, 'rules', 'held', { reason: 'account_not_current' }); return { coveredEvents }; }
+    checkpoint(diagnostic, 'rules', 'completed');
     const ranges = new Map<string, { afterSeq: number; throughSeq: number | null; afterStateVersion: number }>();
     for (const observation of request.observations) {
       if (request.sourceSessionId && request.sourceSessionId !== observation.sourceSessionId) continue;
@@ -476,9 +513,13 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     }
     for (const [sourceSessionId, range] of ranges) {
       if (!await current()) continue;
+      checkpoint(diagnostic, 'range_transport', 'started', { sourceSessionId, afterSeq: range.afterSeq });
       const transport = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => resolveSessionTransportContext({
         credentials: input.credentials, idOrPrefix: sourceSessionId, signal: input.signal }));
-      if (!transport.ok || !await current()) continue;
+      if (!transport.ok || !await current()) {
+        checkpoint(diagnostic, 'range_transport', 'held', { sourceSessionId,
+          reason: !transport.ok ? transport.code : 'account_not_current' }); continue;
+      }
       const ownerAccountId = transport.rawSession.ownerAccountId;
       if (typeof ownerAccountId !== 'string') continue;
       const source = transport.rawSession;
@@ -507,6 +548,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
       let afterSeq = range.afterSeq;
       while (afterSeq < throughSeq && await current()) {
         const pageStart = afterSeq;
+        checkpoint(diagnostic, 'range_transcript', 'started', { sourceSessionId, afterSeq, throughSeq });
         const page = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => fetchEncryptedTranscriptMessagesPage({
           token: input.credentials.token, sessionId: sourceSessionId, afterSeq,
           limit: SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1, signal: input.signal }));
@@ -517,7 +559,11 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
           const read = readCommittedSessionFollowSourceOccurrence({ sourceSessionId, serverId: input.serverId,
             ownerAccountId, origin: transport.rawSession.origin ?? null,
             row, mode: transport.mode, ctx: transport.ctx });
-          if (read.status === 'unavailable') { unavailable = true; break; }
+          if (read.status === 'unavailable') {
+            checkpoint(diagnostic, 'range_transcript', 'held', { sourceSessionId, reason: 'source_row_unavailable',
+              ...(typeof row.seq === 'number' ? { sourceMessageSeq: row.seq } : {}) });
+            unavailable = true; break;
+          }
           if (read.status === 'occurrence' && 'sourceMessage' in read.occurrence) {
             const dispatched = await dispatch({ ...read.occurrence, ...(sourcePublisher ? { sourcePublisher } : {}) }, request.destinationSessionId, true);
             coveredEvents.push({ sourceSessionId, kind: read.occurrence.evidence.event.kind });
@@ -532,6 +578,7 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
         afterSeq = page.nextAfterSeq;
       }
     }
+    checkpoint(diagnostic, 'range', 'completed');
     return { coveredEvents };
   };
   return {

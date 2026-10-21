@@ -17,6 +17,54 @@ import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/session
 
 afterEach(() => vi.restoreAllMocks());
 
+it('identifies a pending and refused range rule read without exposing private source or Account content', async () => {
+  const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+  const sourceSessionId = 'c111111111111111111111111';
+  const destinationSessionId = 'c222222222222222222222222';
+  const token = 'e30.eyJzdWIiOiJhY2NvdW50LTEifQ.signature';
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let readingRules = false;
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/follows/sessions')) return { status: 200, data: { sources: [] } };
+    if (path === '/v1/account/encryption/currentness') return { status: 200,
+      data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
+    if (path === '/v2/account/session-follow-preferences') return { status: 200,
+      data: { assigned: false, direct: false, team: false, group: false } };
+    if (path === '/v2/account/session-follow-rules') {
+      readingRules = true;
+      await gate;
+      return { status: 503, data: { privateDiagnostic: 'private-rule-response' } };
+    }
+    throw new Error(`Unexpected GET ${path}`);
+  });
+  const writes = vi.spyOn(axios, 'post').mockRejectedValue(new Error('No admission is authorized'));
+  const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId: 'account-1', credentials: { token, encryption: null },
+    serverId: 'home', serverHttpBaseUrl: 'http://follow-diagnostic.test', machineId: 'receiver-machine', installationId: 'installation',
+    signal: new AbortController().signal, isCurrent: async () => true, subscribeInvalidation: () => () => {},
+    resolveSourceKeyContext: async () => null, isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
+  try {
+    const pending = dispatcher.dispatchReceiverRange({ destinationSessionId, sourceSessionId, observations: [{
+      sourceSessionId, destinationSessionId, relation: 'follower', policy: { preset: 'quiet' },
+      delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 6 },
+      observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 11 },
+    }] });
+    await vi.waitFor(() => expect(readingRules).toBe(true));
+    const checkpoints = () => log.mock.calls.filter(([message]) => message === '[Session Follow] Dispatch checkpoint')
+      .map(([, fields]) => fields);
+    expect(checkpoints().at(-1)).toMatchObject({ sourceSessionId, destinationSessionId,
+      entry: 'receiver_range', phase: 'rules', status: 'started' });
+    release();
+    expect(await pending).toEqual({ coveredEvents: [] });
+    expect(checkpoints().at(-1)).toMatchObject({ sourceSessionId, destinationSessionId,
+      entry: 'receiver_range', phase: 'rules', status: 'held', reason: 'private-rules-unavailable' });
+    expect(writes).not.toHaveBeenCalled();
+    expect(JSON.stringify(checkpoints())).not.toContain(token);
+    expect(JSON.stringify(checkpoints())).not.toContain('private-rule-response');
+  } finally { release(); dispatcher.dispose(); }
+});
+
 it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the observed original through fresh-rule discovery or overlapping receiver recovery, retaining unreadable ranges (%s)', async entry => {
   const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});
   const authoredLocalId = 'private-authored-follow-source-id';
