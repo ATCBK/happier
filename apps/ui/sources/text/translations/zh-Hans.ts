@@ -298,6 +298,7 @@ const zhHansAcpCatalogSettingsExtension = {
     acpCatalogAuthParser: '状态解析器',
     acpCatalogCapabilities: '能力',
     acpCatalogTransportProfile: '传输配置',
+    acpCatalogSupportsLoadSession: '支持恢复会话',
     acpCatalogSupportsModes: '支持模式',
     acpCatalogSupportsModels: '支持模型',
     acpCatalogSupportsConfigOptions: '支持配置选项',

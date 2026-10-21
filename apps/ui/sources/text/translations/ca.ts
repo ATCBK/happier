@@ -293,6 +293,7 @@ const caAcpCatalogSettingsExtension = {
     acpCatalogAuthParser: "Analitzador d'estat",
     acpCatalogCapabilities: 'Capacitats',
     acpCatalogTransportProfile: 'Perfil de transport',
+    acpCatalogSupportsLoadSession: 'Admet reprendre sessions',
     acpCatalogSupportsModes: 'Admet modes',
     acpCatalogSupportsModels: 'Admet models',
     acpCatalogSupportsConfigOptions: 'Admet opcions de configuració',

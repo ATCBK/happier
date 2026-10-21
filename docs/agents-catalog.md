@@ -184,6 +184,8 @@ Instead:
 - explicit “resume inactive session” is **fail-closed**: if `loadSession` fails, we surface the error instead of silently starting a fresh vendor session
 - any ACP capability probing (e.g. `includeAcpCapabilities`) is reserved for opt-in diagnostics / e2e probes, not day-to-day UX
 
+In development source, the custom ACP backend editor exposes **Supports session resume**, which writes the existing boolean `capabilities.supportsLoadSession` declaration. It defaults to disabled. Enable it before starting a session with an agent that supports `session/load`; the runtime publishes `customAcpSessionId` only when both the declaration and the negotiated capability allow it. Changing the declaration does not recover a missing provider session id from an older session. The setting does not bypass backend identity, enablement, or handshake checks.
+
 Kimi Code discovery is a development exception for executable identity: current Kimi Code and legacy Python `kimi-cli` share the command name and cannot be distinguished by version ordering. Its provider-owned discovery uses a no-auth `initialize` fingerprint (including close/delete/fork and SSE), honors explicit executable overrides, and refuses unknown or legacy launches. This does not create a second resume policy. Probe cache identity includes the effective process environment, hashed in memory to avoid retaining credentials in cache keys.
 
 Built-in ACP `supportsModes: 'no'` disables mode projection and both mode mutation paths at the shared backend. Kimi uses that policy until authenticated live mode behavior is verified; model controls remain available.

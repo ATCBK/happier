@@ -360,6 +360,7 @@ const acpCatalogTranslationExtension = {
     acpCatalogAuthParser: 'Status parser',
     acpCatalogCapabilities: 'Capabilities',
     acpCatalogTransportProfile: 'Transport profile',
+    acpCatalogSupportsLoadSession: 'Supports session resume',
     acpCatalogSupportsModes: 'Supports modes',
     acpCatalogSupportsModels: 'Supports models',
     acpCatalogSupportsConfigOptions: 'Supports config options',

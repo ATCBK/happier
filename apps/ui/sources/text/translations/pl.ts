@@ -293,6 +293,7 @@ const plAcpCatalogSettingsExtension = {
     acpCatalogAuthParser: 'Parser statusu',
     acpCatalogCapabilities: 'Możliwości',
     acpCatalogTransportProfile: 'Profil transportu',
+    acpCatalogSupportsLoadSession: 'Obsługuje wznawianie sesji',
     acpCatalogSupportsModes: 'Obsługuje tryby',
     acpCatalogSupportsModels: 'Obsługuje modele',
     acpCatalogSupportsConfigOptions: 'Obsługuje opcje konfiguracji',

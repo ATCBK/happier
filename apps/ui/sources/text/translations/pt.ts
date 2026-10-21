@@ -344,6 +344,7 @@ const ptAcpCatalogSettingsExtension = {
     acpCatalogAuthParser: 'Analisador de status',
     acpCatalogCapabilities: 'Capacidades',
     acpCatalogTransportProfile: 'Perfil de transporte',
+    acpCatalogSupportsLoadSession: 'Suporta a retomada de sessões',
     acpCatalogSupportsModes: 'Suporta modos',
     acpCatalogSupportsModels: 'Suporta modelos',
     acpCatalogSupportsConfigOptions: 'Suporta opções de configuração',

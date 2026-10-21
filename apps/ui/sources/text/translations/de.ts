@@ -362,6 +362,7 @@ const acpCatalogTranslationExtension = {
     acpCatalogAuthParser: 'Status-Parser',
     acpCatalogCapabilities: 'Fähigkeiten',
     acpCatalogTransportProfile: 'Transport-Profil',
+    acpCatalogSupportsLoadSession: 'Unterstützt das Fortsetzen von Sitzungen',
     acpCatalogSupportsModes: 'Unterstützt Modi',
     acpCatalogSupportsModels: 'Unterstützt Modelle',
     acpCatalogSupportsConfigOptions: 'Unterstützt Konfigurationsoptionen',

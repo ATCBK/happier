@@ -299,6 +299,7 @@ const zhHantAcpCatalogSettingsExtension = {
     acpCatalogAuthParser: '狀態解析器',
     acpCatalogCapabilities: '能力',
     acpCatalogTransportProfile: '傳輸設定',
+    acpCatalogSupportsLoadSession: '支援恢復工作階段',
     acpCatalogSupportsModes: '支援模式',
     acpCatalogSupportsModels: '支援模型',
     acpCatalogSupportsConfigOptions: '支援設定選項',

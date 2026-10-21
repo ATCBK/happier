@@ -296,6 +296,7 @@ const acpCatalogTranslationExtension = {
     acpCatalogAuthParser: 'Парсер статуса',
     acpCatalogCapabilities: 'Возможности',
     acpCatalogTransportProfile: 'Профиль транспорта',
+    acpCatalogSupportsLoadSession: 'Поддержка возобновления сеансов',
     acpCatalogSupportsModes: 'Поддержка режимов',
     acpCatalogSupportsModels: 'Поддержка моделей',
     acpCatalogSupportsConfigOptions: 'Поддержка параметров конфигурации',

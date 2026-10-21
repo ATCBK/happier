@@ -300,6 +300,7 @@ const jaAcpCatalogSettingsExtension = {
     acpCatalogAuthParser: '状態パーサー',
     acpCatalogCapabilities: '機能',
     acpCatalogTransportProfile: '転送プロファイル',
+    acpCatalogSupportsLoadSession: 'セッションの再開をサポート',
     acpCatalogSupportsModes: 'モードをサポート',
     acpCatalogSupportsModels: 'モデルをサポート',
     acpCatalogSupportsConfigOptions: '設定オプションをサポート',
