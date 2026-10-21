@@ -76,7 +76,7 @@ describe('canonical History Account boundary', () => {
     historyHttp.answer(homeId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
     historyHttp.answer(homeId, '/v2/sessions/lookup-by-tags', { body: SessionLookupByTagsResponseV2Schema.parse({ sessions: [wire] }) });
     historyHttp.answer(homeId, `/v2/sessions/${sessionId}`, { body: { session: wire } });
-    historyHttp.answer(homeId, `DELETE /v2/sessions/${sessionId}`, { body: { success: true } });
+    historyHttp.answer(homeId, `DELETE /v1/sessions/${sessionId}`, { body: { success: true } });
     const page = (seq: number, hasMore: boolean) => SessionMessagesPageV1Schema.parse({ messages: [{
       id: `voice-${seq}`, localId: null, seq, createdAt: seq, messageRole: 'agent',
       content: { t: 'plain', v: buildRealtimeConversationRawRecord({ id: `voice-${seq}`, role: 'assistant', text: `Voice ${seq}` }) },

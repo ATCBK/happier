@@ -54,6 +54,10 @@ vi.mock('expo-speech-recognition', () => ({ ExpoSpeechRecognitionModule: {
   stop: () => recognizer.stop(), abort: () => recognizer.abort(),
 } }));
 const sdk = vi.hoisted(() => ({ startSession: vi.fn(), endSession: vi.fn() }));
+// Metro selects the .web mic sources for the web platform these mounted browser cases model;
+// Vitest has no platform extension resolution, so select them explicitly (leaf modules, no UI cycle).
+vi.mock('@/voice/runtime/mic/createRealtimeMicSession', async () => await import('@/voice/runtime/mic/createRealtimeMicSession.web'));
+vi.mock('@/voice/runtime/mic/createLiveMicSession', async () => await import('@/voice/runtime/mic/createLiveMicSession.web'));
 vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: sdk.startSession } }));
 vi.mock('@elevenlabs/client/web', () => ({ Conversation: { startSession: sdk.startSession } }));
 vi.mock('expo-audio', () => ({ AudioModule: {

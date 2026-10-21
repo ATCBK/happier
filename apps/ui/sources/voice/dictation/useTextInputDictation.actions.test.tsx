@@ -12,7 +12,6 @@ import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionAc
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { findAllHostTestInstances, pressTestInstanceAsync } from '@/dev/testkit/render/renderScreen';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 
 const recording = vi.hoisted(() => ({ starts: 0, stops: 0 }));
@@ -157,7 +156,7 @@ describe('mounted field Dictation Actions', () => {
             <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><ActionPort />{children}</CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
         </InjectedAuthProvider>;
         // The AppShell modal host outlives the individual field registration.
-        const modalScreen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
+        await renderScreen(<ModalProvider>{null}</ModalProvider>);
         let words = 'draft';
         const field = await renderHook(() => useTextInputDictation({ controlId: 'mounted-field', enabled: true,
             presented: true, editable: true, transcriptionSessionId: null, onTranscription: text => { words += ` ${text}`; } }), { wrapper });
@@ -171,21 +170,7 @@ describe('mounted field Dictation Actions', () => {
             if (!result) throw new Error('Action did not settle');
             return result;
         };
-        const executeConfirmed = async (...args: Parameters<typeof executor.execute>) => {
-            const startsBeforeConfirmation = recording.starts;
-            let pending: ReturnType<typeof executor.execute> | undefined;
-            await act(async () => { pending = executor.execute(...args); });
-            const confirm = await vi.waitFor(() => {
-                const button = findAllHostTestInstances(modalScreen.tree.root, node => node.props.testID === 'web-modal-confirm'
-                    && node.props.visible !== false).at(-1);
-                expect(button).toBeDefined();
-                return button!;
-            });
-            expect(recording.starts).toBe(startsBeforeConfirmation);
-            await pressTestInstanceAsync(confirm);
-            if (!pending) throw new Error('Confirmed Action did not start');
-            return await pending;
-        };
+        // The person's own Dictation start is direct (no confirmation); only agent callers need approval.
         const ui = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: 'alice' };
         const agent = { ...ui, surface: 'agent' as const, authority: 'account_automation' as const,
             actionRequestId: 'dictation-start-request', defaultSessionMachineId: 'speech-machine' } satisfies ActionExecutorContext;
@@ -197,7 +182,7 @@ describe('mounted field Dictation Actions', () => {
         const start = commands[0]!.id;
         const finish = commands[1]!.id;
         const cancel = commands[2]!.id;
-        const consent = await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui);
+        const consent = await execute('ui.voice_global.dictation.start', { commandId: start }, ui);
         expect(consent, JSON.stringify(consent))
             .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_consent_required' } });
         expect(recording.starts).toBe(0);
@@ -238,7 +223,7 @@ describe('mounted field Dictation Actions', () => {
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'idle', inserted: true } });
         expect(words).toBe('draft editable words');
         expect(home.requests.some(request => request.path.includes('/pending') || request.path.includes('/messages'))).toBe(false);
-        expect(await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui))
+        expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'listening' } });
         expect(await execute('ui.current_context.command.invoke', { commandId: cancel }, agent))
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'idle', inserted: false } });
@@ -247,12 +232,12 @@ describe('mounted field Dictation Actions', () => {
         // Action even while the same focused field/controller are still mounted.
         unregister?.(); unregister = undefined;
         const startsBeforeUnregister = recording.starts;
-        expect(await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui))
+        expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
             .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
         expect(recording.starts).toBe(startsBeforeUnregister);
         expect(voiceDictationController.getSnapshot().status).toBe('idle');
         await field.unmount();
-        expect(await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui))
+        expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
             .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
         expect(home.requests.some(request => request.path.includes('/pending') || request.path.includes('/messages'))).toBe(false);
     });

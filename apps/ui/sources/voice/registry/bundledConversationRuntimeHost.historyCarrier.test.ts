@@ -23,7 +23,7 @@ describe('voice history carrier single ownership', () => {
     const history = createSessionFixture({ id: 'history-carrier', serverId: account.scope.serverId,
       metadata: { path: '/voice-transcript-history', host: 'happier.test', ...buildVoiceTranscriptHistorySessionMetadata() },
     });
-    const sessionHttp = createSessionMetadataHttpBoundary(() => ({ [history.id]: history }));
+    const sessionHttp = createSessionMetadataHttpBoundary(() => ({}));
     const request = account.request.getMockImplementation();
     if (!request) throw new Error('Account HTTP boundary missing');
     account.request.mockImplementation(async (input, init) => {

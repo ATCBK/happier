@@ -200,7 +200,7 @@ describe('external Voice provider activation', () => {
       ...createProviderLeaf(),
       settingsActions: { async execute(_input, context) {
         exposedTools = context.tools;
-        const effect = context.tools.find((tool) => tool.name === 'sendSessionMessage');
+        const effect = context.tools.find((tool) => tool.name === 'invokeAction');
         if (effect) await expect(effect.execute({ message: 'must stay behind custody' }))
           .rejects.toMatchObject({ code: 'voice_effect_call_custody_required' });
         return { patch: { agentId: 'provisioned-agent' } };
@@ -210,7 +210,7 @@ describe('external Voice provider activation', () => {
     const registration = listExternalVoiceProviderRegistrations().find((entry) => entry.localId === provisioningDeclaration.id);
     if (!registration?.settingsActions) throw new Error('settings_actions_not_registered');
     await registration.settingsActions.execute({ actionId: 'create-agent', settings: {}, signal: new AbortController().signal });
-    expect(exposedTools.map((tool) => tool.name)).toContain('sendSessionMessage');
+    expect(exposedTools.map((tool) => tool.name)).toContain('invokeAction');
   });
   it('derives identical Agent runtime requirements and incompatibility for bundled and external declarations', async () => {
     const agentRealtimeDeclaration = requireConversationDeclaration(PluginContributesV2Schema.parse({

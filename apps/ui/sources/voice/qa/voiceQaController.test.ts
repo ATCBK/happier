@@ -1098,8 +1098,9 @@ describe('voiceQaController', () => {
     vi.spyOn(sync, 'sendMessage').mockResolvedValue(undefined as any);
     (sync as any).encryption = { getSessionEncryption: vi.fn(() => ({ encryptRawRecord: vi.fn() })) };
 
+    // Action-bearing text is not a spoken answer; only the follow-up after the tool result is.
     const sendLocalTurn = vi.fn(async () => ({
-      assistantText: 'The message was sent to the coding assistant. Waiting for it to respond with the structured question.',
+      assistantText: '',
       actions: [
         {
           t: 'sendSessionMessage',
@@ -1109,7 +1110,21 @@ describe('voiceQaController', () => {
           },
         },
       ],
-    }));
+    })).mockResolvedValueOnce({
+      assistantText: '',
+      actions: [
+        {
+          t: 'sendSessionMessage',
+          args: {
+            sessionId: 's1',
+            message: 'Ask me which color I prefer using a structured question with Red and Blue options.',
+          },
+        },
+      ],
+    }).mockResolvedValueOnce({
+      assistantText: 'The message was sent to the coding assistant. Waiting for it to respond with the structured question.',
+      actions: [],
+    });
     const ensureLocalBinding = vi.fn(async () => ({
       adapterId: 'local_conversation',
       controlSessionId: '__voice_agent__',
