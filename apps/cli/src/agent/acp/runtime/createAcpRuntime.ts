@@ -1741,8 +1741,10 @@ export function createAcpRuntime(params: {
 
               if (remoteSessionId) {
                 const createReplayBackend = params.createReplayBackend ?? (async () => {
-                      const created = await createCatalogAcpBackend(params.provider as CatalogAgentId, {
+                  const created = await createCatalogAcpBackend(params.provider as CatalogAgentId, {
                     cwd: params.directory,
+                    env: params.processEnv,
+                    happierSessionId: params.happierSessionId,
                     mcpServers: params.mcpServers,
                     permissionHandler: undefined,
                   });

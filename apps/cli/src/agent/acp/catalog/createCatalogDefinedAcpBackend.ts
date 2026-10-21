@@ -1,6 +1,7 @@
 import { type AgentId, getBuiltInAcpConfig } from '@happier-dev/agents';
 
 import type { AcpBackendOptions, AcpPermissionHandler } from '@/agent/acp/AcpBackend';
+import { HAPPIER_SESSION_ID_ENV_KEY, withCurrentHappierSessionId } from '@/agent/runtime/session/currentSessionIdEnv';
 import type { PermissionMode } from '@/api/types';
 import { createAcpBackend } from '@/agent/acp/createAcpBackend';
 import type { AgentBackend, AgentFactoryOptions, AgentSessionOpenOptions, McpServerConfig, SessionId, StartSessionResult } from '@/agent/core';
@@ -9,6 +10,7 @@ import { resolveAcpCatalogTransportHandler } from './transport/resolveAcpCatalog
 
 export type CatalogDefinedAcpBackendOptions = AgentFactoryOptions & Readonly<{
   mcpServers?: Record<string, McpServerConfig>;
+  happierSessionId?: string;
   permissionHandler?: AcpPermissionHandler;
   permissionMode?: PermissionMode;
   getPermissionMode?: () => PermissionMode | null | undefined;
@@ -30,18 +32,19 @@ export function createCatalogDefinedAcpBackend(
   const launch = options.launch
     ?? requireProviderCliLaunchSpec(agentId, { processEnv: { ...process.env, ...options.env } });
 
+  const env = { ...options.env, NODE_ENV: 'production', DEBUG: '' };
   const backend: AgentBackend = createAcpBackend({
     agentName: agentId,
     cwd: options.cwd,
     command: launch.command,
     args: options.launch ? [...launch.args] : [...launch.args, ...config.launcher.args],
-    env: {
-      ...options.env,
-      NODE_ENV: 'production',
-      DEBUG: '',
-    },
+    env: options.happierSessionId !== undefined
+      ? withCurrentHappierSessionId(env, options.happierSessionId)
+      : env,
     prepareProcessLaunch: options.prepareProcessLaunch,
-    unsetEnv: options.unsetEnv,
+    unsetEnv: options.happierSessionId !== undefined
+      ? [...(options.unsetEnv ?? []), HAPPIER_SESSION_ID_ENV_KEY]
+      : options.unsetEnv,
     isAuthenticationSetupFailure: options.isAuthenticationSetupFailure,
     sessionModelAdapter: options.sessionModelAdapter,
     sessionModesEnabled: config.supportsModes !== 'no',
