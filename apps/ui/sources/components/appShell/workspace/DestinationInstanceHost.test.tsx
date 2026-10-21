@@ -161,6 +161,43 @@ describe('DestinationInstanceHost', () => {
             { focused: false, pluginFocus: false, currentContext: false, presented: false },
         ]);
     });
+    it('retains the unhosted router across workspace publications while navigation reads current history and focus', async () => {
+        function RouterProbe() {
+            return React.createElement('RouterProbe', { router: useDestinationRouter() });
+        }
+        const opened: string[] = [];
+        const workspace: WorkspaceNavigationContextValue = {
+            active: true,
+            state: createWorkspaceState({ id: 'first', target: { kind: 'newTab', params: {} }, pinned: false, preview: false }),
+            canGoBack: false, canGoForward: false,
+            openHref: href => { opened.push(`original:${href}`); return true; },
+            activateTab: () => {}, closeTab: () => {}, closeTabs: () => {}, dispatch: () => {},
+            navigationForTab: tabId => ({ push: () => {}, replace: () => {}, back: () => {},
+                pushRetainingCurrent: () => { opened.push(`retained:${tabId}`); },
+                retainCurrent: () => { opened.push(`promoted:${tabId}`); } }),
+            registerBackStep: () => () => {}, back: () => {}, forward: () => {},
+        };
+        const render = (value: WorkspaceNavigationContextValue) => <WorkspaceNavigationContext.Provider value={value}>
+            <RouterProbe />
+        </WorkspaceNavigationContext.Provider>;
+        const screen = await renderScreen(render(workspace));
+        const readRouter = () => screen.root.findByType('RouterProbe').props.router as ReturnType<typeof useDestinationRouter>;
+        const initial = readRouter();
+        expect(initial.canGoBack()).toBe(false);
+        await screen.update(render({ ...workspace, canGoBack: true,
+            state: createWorkspaceState({ id: 'second', target: { kind: 'newTab', params: {} }, pinned: false, preview: false }) }));
+        expect.soft(readRouter()).toBe(initial);
+        expect(readRouter().canGoBack()).toBe(true);
+        readRouter().pushRetainingCurrent('/settings/appearance');
+        readRouter().retainCurrent();
+        expect(opened).toEqual(['retained:second', 'promoted:second']);
+        await screen.update(render({ ...workspace, openHref: href => { opened.push(`replacement:${href}`); return true; } }));
+        expect(readRouter()).not.toBe(initial);
+        initial.push('/settings/appearance');
+        readRouter().push('/settings/appearance');
+        expect(opened.slice(-2)).toEqual(['original:/settings/appearance', 'replacement:/settings/appearance']);
+        await screen.unmount();
+    });
     it('preserves native global search parameters outside the workspace', async () => {
         const screen = await renderScreen(<GlobalParamsProbe />);
         expect(screen.root.findByType('GlobalParamsProbe').props.params).toEqual({ pageId: 'global-route' });

@@ -279,32 +279,42 @@ export function useDestinationRouter(): DestinationRouter {
 function useWorkspaceOrExpoRouter() {
     const workspace = useOptionalWorkspaceNavigation();
     const router = useRouter();
+    // Workspace publications include titles, history and focus. Those are
+    // invocation-time facts, not a new navigation owner for every consumer.
+    const currentWorkspace = React.useRef(workspace);
+    currentWorkspace.current = workspace;
+    const active = workspace?.active === true;
+    const openHref = workspace?.openHref;
+    const navigationForTab = workspace?.navigationForTab;
+    const back = workspace?.back;
     return React.useMemo(() => {
-        if (!workspace) return { ...router, redirect: router.replace, pushRetainingCurrent: router.push, retainCurrent: () => {} };
+        if (!openHref || !navigationForTab || !back) return { ...router, redirect: router.replace, pushRetainingCurrent: router.push, retainCurrent: () => {} };
         const navigate: typeof router.push = (href, options) => {
-            if (!workspace.openHref(resolveHref(href))) router.push(href, options);
+            if (!openHref(resolveHref(href))) router.push(href, options);
         };
         const replace: typeof router.replace = (href, options) => {
-            if (!workspace.openHref(resolveHref(href), { replace: true })) router.replace(href, options);
+            if (!openHref(resolveHref(href), { replace: true })) router.replace(href, options);
         };
         const pushRetainingCurrent: typeof router.push = (href, options) => {
-            if (!workspace.active) { router.push(href, options); return; }
+            const workspace = currentWorkspace.current;
+            if (!workspace?.active) { router.push(href, options); return; }
             const group = workspace.state.groups[workspace.state.focusedGroupId];
-            const navigation = workspace.navigationForTab(group.activeTabId);
+            const navigation = navigationForTab(group.activeTabId);
             if (!navigation.pushRetainingCurrent) throw new Error('The workspace navigation owner did not supply draft retention');
             navigation.pushRetainingCurrent(href, options);
         };
         const retainCurrent = () => {
-            if (!workspace.active) return;
+            const workspace = currentWorkspace.current;
+            if (!workspace?.active) return;
             const group = workspace.state.groups[workspace.state.focusedGroupId];
-            const navigation = workspace.navigationForTab(group.activeTabId);
+            const navigation = navigationForTab(group.activeTabId);
             if (!navigation.retainCurrent) throw new Error('The workspace navigation owner did not supply pane retention');
             navigation.retainCurrent();
         };
         return { ...router, push: navigate, navigate, replace, redirect: replace, pushRetainingCurrent, retainCurrent,
-            back: workspace.active ? workspace.back : router.back,
-            canGoBack: workspace.active ? () => workspace.canGoBack : router.canGoBack };
-    }, [router, workspace]);
+            back: active ? back : router.back,
+            canGoBack: active ? () => currentWorkspace.current?.canGoBack === true : router.canGoBack };
+    }, [active, back, navigationForTab, openHref, router]);
 }
 
 export function useDestinationFocusEffect(effect: React.EffectCallback): void {
