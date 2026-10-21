@@ -151,10 +151,14 @@ export const SearchResultsList = React.memo(({
 
     const renderItem = React.useCallback(({ item: file, index }: { item: FileItem; index: number }) => (
         <WorkspaceDestinationRow href={file.fileType === 'file' ? fileHref?.(file.fullPath) ?? null : null}
-            entityItem={file.fileType === 'file' && workspaceScope && accountScope?.serverId === workspaceScope.serverId
+            entityTitle={file.fileType === 'folder' ? `${file.fileName}/` : file.fileName}
+            entityItem={workspaceScope && accountScope?.serverId === workspaceScope.serverId
                 ? { kind: 'repository-file', scope: accountScope, machineId: workspaceScope.machineId,
+                    entryKind: file.fileType === 'folder' ? 'directory' : 'file',
                     path: resolveMachineAbsolutePath({ rootPath: workspaceScope.rootPath, requestPath: file.fullPath }) } : null}>
+        {actions => (
         <Item
+            onLongPress={actions.openMenu}
             title={(
                 <InlineRepoPathLabel
                     fileName={file.fileName}
@@ -187,6 +191,7 @@ export const SearchResultsList = React.memo(({
                 paddingHorizontal: theme.space.s12,
             }}
         />
+        )}
         </WorkspaceDestinationRow>
     ), [
         workspaceScope,

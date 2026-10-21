@@ -575,8 +575,10 @@ export const WorkspaceRepositoryTreeList = React.memo(function WorkspaceReposito
             <TreeRowArrival arrived={arrived}>
             <WorkspaceDestinationRow existingMenu={Boolean(rowActions)} href={node.type === 'file' ? rowState.fileHref?.(node.path) ?? null : null}
                 dragSource={rowState.accountScope?.serverId === rowState.workspaceScope.serverId}
-                entityItem={node.type === 'file' && rowState.accountScope?.serverId === rowState.workspaceScope.serverId ? {
+                entityTitle={node.type === 'directory' ? `${node.name}/` : node.name}
+                entityItem={(node.type === 'file' || node.type === 'directory') && rowState.accountScope?.serverId === rowState.workspaceScope.serverId ? {
                     kind: 'repository-file', scope: rowState.accountScope,
+                    entryKind: node.type,
                     machineId: rowState.workspaceScope.machineId,
                     path: resolveMachineAbsolutePath({ rootPath: rowState.workspaceScope.rootPath, requestPath: node.path }),
                 } : null}>
