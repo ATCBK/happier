@@ -7,7 +7,7 @@ import { auth } from "@/app/auth/auth";
 import { encryptString } from "@/modules/encrypt";
 import { db } from "@/storage/db";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
-import { validateUsername } from "@/app/social/usernamePolicy";
+import { readUsernameAvailabilityInTx } from "@/app/social/usernameUpdate";
 import { consumeValidOAuthStateAttempt } from "../connectRoutes.oauthStateAttempt";
 import { log } from "@/utils/logging/log";
 import { readAuthOauthKeylessFeatureEnv, readEncryptionFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
@@ -49,6 +49,7 @@ async function createConnectPending(params: Readonly<{
     profile: unknown;
     accessToken: string;
     refreshToken?: string;
+    suggestedUsername?: string;
     /** `false` for a provider whose token was only the profile proof; see `OAuthFlowProvider#accessTokenCustody`. */
     retainAccessToken: boolean;
 }>): Promise<string> {
@@ -84,6 +85,7 @@ async function createConnectPending(params: Readonly<{
                 securityBinding: params.securityBinding,
                 userId: params.userId,
                 profileEnc,
+                ...(params.suggestedUsername ? { suggestedUsername: params.suggestedUsername } : {}),
                 ...(tokenEnc ? { accessTokenEnc: tokenEnc } : {}),
                 ...(refreshTokenEnc ? { refreshTokenEnc } : {}),
             }),
@@ -719,23 +721,17 @@ export function registerOAuthCallbackRoute(app: Fastify) {
                 let usernameReason: "invalid_login" | "login_taken" | null = null;
 
                 if (loginUsername) {
-                    const loginValidation = validateUsername(loginUsername, requestHomeEnv);
-                    if (!loginValidation.ok) {
+                    const availability = await inTx(tx => readUsernameAvailabilityInTx(tx, alreadyLinked?.accountId ?? '', loginUsername, requestHomeEnv));
+                    if (availability.availability === 'invalid' || availability.availability === 'reserved') {
                         if (!isAlreadyLinked) {
                             usernameRequired = true;
                             usernameReason = "invalid_login";
                         }
                     } else {
-                        suggestedUsername = loginValidation.username;
-                        if (!isAlreadyLinked) {
-                            const taken = await db.account.findFirst({
-                                where: { username: suggestedUsername },
-                                select: { id: true },
-                            });
-                            if (taken) {
-                                usernameRequired = true;
-                                usernameReason = "login_taken";
-                            }
+                        suggestedUsername = availability.username;
+                        if (!isAlreadyLinked && availability.availability === 'unavailable') {
+                            usernameRequired = true;
+                            usernameReason = "login_taken";
                         }
                     }
                 } else {
@@ -950,19 +946,13 @@ export function registerOAuthCallbackRoute(app: Fastify) {
                     requireUsername = true;
                     usernameReason = "invalid_login";
                 } else {
-                    const loginValidation = validateUsername(loginUsername, requestHomeEnv);
-                    if (!loginValidation.ok) {
+                    const availability = await inTx(tx => readUsernameAvailabilityInTx(tx, userId!, loginUsername, requestHomeEnv));
+                    if (availability.availability === 'invalid' || availability.availability === 'reserved') {
                         requireUsername = true;
                         usernameReason = "invalid_login";
-                    } else {
-                        const taken = await db.account.findFirst({
-                            where: { username: loginValidation.username },
-                            select: { id: true },
-                        });
-                        if (taken) {
-                            requireUsername = true;
-                            usernameReason = "login_taken";
-                        }
+                    } else if (availability.availability === 'unavailable') {
+                        requireUsername = true;
+                        usernameReason = "login_taken";
                     }
                 }
 
@@ -1008,6 +998,7 @@ export function registerOAuthCallbackRoute(app: Fastify) {
                 securityBinding,
                 profile,
                 accessToken,
+                suggestedUsername: username,
                 ...(refreshToken ? { refreshToken } : {}),
                 retainAccessToken: provider.accessTokenCustody !== "identity_proof_only",
             });

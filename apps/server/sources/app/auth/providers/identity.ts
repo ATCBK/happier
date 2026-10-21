@@ -23,6 +23,7 @@ type ExternalIdentityConnectionParams = {
     accessToken: string;
     refreshToken?: string;
     preferredUsername?: string | null;
+    usernamePolicyEnv?: NodeJS.ProcessEnv;
     transferFromAccountId?: string;
 };
 
@@ -64,6 +65,7 @@ export async function prepareExternalIdentityConnection(
         accessToken: params.accessToken,
         refreshToken: params.refreshToken,
         preferredUsername: params.preferredUsername,
+        usernamePolicyEnv: params.usernamePolicyEnv,
         transferFromAccountId: params.transferFromAccountId,
     });
 }

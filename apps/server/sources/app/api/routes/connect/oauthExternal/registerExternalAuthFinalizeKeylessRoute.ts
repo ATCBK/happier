@@ -14,7 +14,7 @@ import { Context } from "@/context";
 import { decryptString } from "@/modules/encrypt";
 import { resolveOAuthRuntimeById } from "@/app/auth/providers/identityProviderCatalog";
 import { db } from "@/storage/db";
-import { validateUsername } from "@/app/social/usernamePolicy";
+import { readUsernameAvailabilityInTx } from "@/app/social/usernameUpdate";
 import {
     consumeValidOAuthPendingInTx,
     loadValidOAuthPending,
@@ -288,6 +288,7 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
                     profile: pendingProfile,
                     accessToken,
                     refreshToken,
+                    usernamePolicyEnv: requestHomeEnv,
                 });
             } catch (error) {
                 if (error instanceof Error && error.message === "not-eligible") {
@@ -430,23 +431,24 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
         const usernameProvidedRaw = request.body.username?.toString().trim() || "";
         let desiredUsername: string | null = null;
         if (usernameProvidedRaw) {
-            const validation = validateUsername(usernameProvidedRaw, requestHomeEnv);
-            if (!validation.ok) return reply.code(400).send({ error: "invalid-username" });
-            desiredUsername = validation.username;
+            desiredUsername = usernameProvidedRaw;
         } else {
             const required = parsedValue.usernameRequired === true;
             if (required) return reply.code(400).send({ error: "username-required" });
             const suggested = parsedValue.suggestedUsername?.toString().trim() || "";
-            if (suggested) {
-                const validation = validateUsername(suggested, requestHomeEnv);
-                if (validation.ok) desiredUsername = validation.username;
-            }
+            if (suggested) desiredUsername = suggested;
         }
 
         if (desiredUsername) {
-            const taken = await db.account.findFirst({ where: { username: desiredUsername }, select: { id: true } });
-            if (taken) {
+            const proposedUsername = desiredUsername;
+            const availability = await inTx(tx => readUsernameAvailabilityInTx(tx, '', proposedUsername, requestHomeEnv));
+            if (availability.availability === 'invalid' || availability.availability === 'reserved') {
+                if (usernameProvidedRaw) return reply.code(400).send({ error: 'invalid-username' });
+                desiredUsername = null;
+            } else if (availability.availability === 'unavailable') {
                 return reply.code(409).send({ error: "username-taken" });
+            } else {
+                desiredUsername = availability.username;
             }
         }
 
@@ -460,6 +462,7 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
                 accessToken,
                 refreshToken,
                 preferredUsername: desiredUsername,
+                usernamePolicyEnv: requestHomeEnv,
             });
             const account = await inTx(async (tx) => {
                 await acquireTeamOAuthAdmissionAccountsInTx(tx, {
@@ -499,7 +502,10 @@ export function registerExternalAuthFinalizeKeylessRoute(app: Fastify) {
                     insertSemantics: { kind: "must_create", accountId },
                     publicKey: null,
                     encryptionMode: currentEligibility.encryptionMode,
-                    username: desiredUsername,
+                    usernameChange: desiredUsername ? (usernameProvidedRaw
+                        ? { kind: 'manual_set', username: desiredUsername }
+                        : { kind: 'identity_fill', suggestion: desiredUsername }) : undefined,
+                    usernamePolicyEnv: requestHomeEnv,
                     identityConnection,
                     verifiedMailbox: identityConnection.verifiedMailbox,
                     ...(isTeamAdmission ? {

@@ -10,6 +10,7 @@ import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
 import type { PreparedIdentityConnection } from './identityProviders/types';
 import { buildLinkedIdentityManagementProjectionInTx } from './accountLinkedIdentityManagement';
 import { isAccountIdentityEligibleForGenericPresentation } from '@/app/auth/methods/registry';
+import { changeUsernameInTx } from '@/app/social/usernameUpdate';
 
 export type IdentityManagementDeniedReason = 'required_by_team' | 'last_login_method' | 'management_unavailable';
 
@@ -64,6 +65,7 @@ export interface IdentityLinkIntent {
     sameSubject?: 'unchanged';
     /** Only the authenticated provider-reset composition supplies this source. */
     transferFromAccountId?: string;
+    usernamePolicyEnv?: NodeJS.ProcessEnv;
 }
 
 async function publishIdentityChanges(tx: Tx, accountIdsInput: readonly string[]): Promise<void> {
@@ -178,15 +180,10 @@ export async function linkIdentityInTx(tx: Tx, intent: IdentityLinkIntent): Prom
     }
     const proposal = intent.presentation;
     if (proposal) {
-        let username: string | undefined;
-        if (!account.username && proposal.username) {
-            const taken = await tx.account.findFirst({
-                where: { username: proposal.username, NOT: { id: intent.accountId } }, select: { id: true },
-            });
-            if (!taken) username = proposal.username;
+        if (proposal.username) {
+            await changeUsernameInTx(tx, intent.accountId, { kind: 'identity_fill', suggestion: proposal.username }, intent.usernamePolicyEnv);
         }
         await tx.account.update({ where: { id: intent.accountId }, data: {
-            ...(username ? { username } : {}),
             ...(!account.name?.trim() && proposal.name?.trim() ? { name: proposal.name.trim() } : {}),
             ...(!account.avatar && proposal.avatar ? { avatar: proposal.avatar } : {}),
         } });
@@ -203,7 +200,7 @@ export async function unlinkIdentityInTx(tx: Tx, input: { accountId: string; pro
     const { count } = await tx.accountIdentity.deleteMany({ where: { accountId: input.accountId, provider: input.provider } });
     if (!count) return;
     if (input.clearMatchingUsername) {
-        await tx.account.updateMany({ where: { id: input.accountId, username: input.clearMatchingUsername }, data: { username: null } });
+        await changeUsernameInTx(tx, input.accountId, { kind: 'identity_unlink', matchingUsername: input.clearMatchingUsername });
     }
     await publishIdentityChange(tx, input.accountId);
 }

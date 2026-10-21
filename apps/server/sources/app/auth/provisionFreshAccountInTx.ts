@@ -20,6 +20,7 @@ import {
 import type { ProviderReference } from "@/app/auth/providers/providerReference";
 import type { TeamOAuthAdmissionSource } from "@/app/teams/memberships/teamOAuthAdmissionSource";
 import { acceptTeamInvitationAdmissionReferenceInTx } from "@/app/teams/invitations/accept";
+import { changeUsernameInTx, type UsernameChange } from "@/app/social/usernameUpdate";
 
 export type FreshAccountInsertSemantics =
     | Readonly<{ kind: "must_create"; accountId: string }>
@@ -45,7 +46,8 @@ export interface PreparedFreshAccount {
     /** Required for must-create keyed admission; idempotent admission owns its verified key in the semantic. */
     publicKey?: string | null;
     encryptionMode: "plain" | "e2ee";
-    username?: string | null;
+    usernameChange?: Extract<UsernameChange, { kind: "manual_set" | "identity_fill" }>;
+    usernamePolicyEnv?: NodeJS.ProcessEnv;
     contentKeyBinding?: VerifiedAccountContentKeyBinding | null;
     identityConnection?: PreparedIdentityConnection;
     /** Proven by the consuming admission operation, never raw provider profile. */
@@ -75,7 +77,6 @@ export async function provisionFreshAccountInTx(tx: Tx, prepared: PreparedFreshA
             : randomUUID(),
         publicKey,
         encryptionMode: prepared.encryptionMode,
-        ...(prepared.username ? { username: prepared.username } : {}),
         ...(prepared.contentKeyBinding ? {
             contentPublicKey: prepared.contentKeyBinding.contentPublicKey,
             contentPublicKeySig: prepared.contentKeyBinding.contentPublicKeySignature,
@@ -102,6 +103,9 @@ export async function provisionFreshAccountInTx(tx: Tx, prepared: PreparedFreshA
         : await tx.account.create({ data });
     await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
     await recheckAdmission();
+    if (prepared.usernameChange) {
+        await changeUsernameInTx(tx, account.id, prepared.usernameChange, prepared.usernamePolicyEnv);
+    }
     if (prepared.contentKeyBinding) {
         const admission = await admitAccountContentKey(tx, {
             accountId: account.id,
@@ -151,5 +155,7 @@ export async function provisionFreshAccountInTx(tx: Tx, prepared: PreparedFreshA
             preparation: prepared.directoryPreparation,
         });
     }
-    return account;
+    // Prepared identity presentation can also fill name/avatar/username. Return
+    // the admitted row rather than the insertion's stale pre-connection value.
+    return await tx.account.findUniqueOrThrow({ where: { id: account.id } });
 }

@@ -25,6 +25,7 @@ const githubIdentityProvider: IdentityProvider = Object.freeze({
             profile: params.profile,
             accessToken: params.accessToken,
             preferredUsername: params.preferredUsername,
+            usernamePolicyEnv: params.usernamePolicyEnv,
     }),
     disconnect: async (params) => disconnectGitHubIdentity(params.ctx),
     enforceLoginEligibility: async (params) =>

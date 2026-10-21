@@ -18,13 +18,12 @@ export async function prepareGithubConnect(
     ctx: Context,
     githubProfile: GitHubProfile,
     accessToken: string,
-    opts?: { preferredUsername?: string | null; transferFromAccountId?: string }
+    opts?: { preferredUsername?: string | null; transferFromAccountId?: string; usernamePolicyEnv?: NodeJS.ProcessEnv }
 ): Promise<PreparedIdentityConnection> {
     const userId = ctx.uid;
     const githubUserId = githubProfile.id.toString();
     const githubLogin = githubProfile.login?.toString().trim();
     const githubLoginUsername = githubLogin ? githubLogin.toLowerCase() : null;
-    const preferredUsername = opts?.preferredUsername?.toString().trim().toLowerCase() || null;
 
     const sameSubject = await preflightIdentityLink({
         accountId: userId, provider: 'github', providerUserId: githubUserId,
@@ -60,7 +59,8 @@ export async function prepareGithubConnect(
         },
         token: shouldStoreGithubAccessToken({ env: process.env })
             ? encryptString(['user', userId, 'github', 'token'], accessToken) : null,
-        presentation: { username: preferredUsername ?? githubLoginUsername, name: githubProfile.name, ...(preparedAvatar ? { avatar: preparedAvatar.image } : {}) },
+        presentation: { username: opts?.preferredUsername ?? githubLoginUsername, name: githubProfile.name, ...(preparedAvatar ? { avatar: preparedAvatar.image } : {}) },
+        usernamePolicyEnv: opts?.usernamePolicyEnv,
         sameSubject: 'unchanged',
         transferFromAccountId: opts?.transferFromAccountId,
     });
@@ -76,7 +76,7 @@ export async function githubConnect(
     ctx: Context,
     githubProfile: GitHubProfile,
     accessToken: string,
-    opts?: { preferredUsername?: string | null; transferFromAccountId?: string },
+    opts?: { preferredUsername?: string | null; transferFromAccountId?: string; usernamePolicyEnv?: NodeJS.ProcessEnv },
 ): Promise<void> {
     const prepared = await prepareGithubConnect(ctx, githubProfile, accessToken, opts);
     await inTx(prepared.connectInTx, { isolationLevel: "Serializable" /* Identity transfer and fill-if-empty Account presentation depend on the observed link and Account. */ });

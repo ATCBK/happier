@@ -39,6 +39,7 @@ describe("OAuth pending finalization mutation boundary", () => {
         await db.identityProviderInstance.deleteMany();
         await db.team.deleteMany();
         await db.repeatKey.deleteMany();
+        await db.releasedUsername.deleteMany();
         await db.account.deleteMany();
     });
     afterAll(async () => { await harness?.close(); });
@@ -52,6 +53,11 @@ describe("OAuth pending finalization mutation boundary", () => {
             providerReset?: boolean;
             /** Mirrors a provider whose access token is identity-proof-only (`accessTokenCustody`). */
             omitAccessToken?: boolean;
+            username?: string;
+            freshKeyless?: boolean;
+            omitUsername?: boolean;
+            manualUsername?: boolean;
+            freshKeyed?: boolean;
         }> = {},
     ) {
         const providerId = options.providerId ?? "github";
@@ -78,6 +84,7 @@ describe("OAuth pending finalization mutation boundary", () => {
             } : {}),
             ...(mode === "keyless" ? {
                 HAPPIER_FEATURE_AUTH_OAUTH__KEYLESS_ENABLED: "1",
+                HAPPIER_FEATURE_AUTH_OAUTH__KEYLESS_AUTO_PROVISION: "1",
                 HAPPIER_FEATURE_AUTH_OAUTH__KEYLESS_PROVIDERS: providerId,
                 HAPPIER_FEATURE_E2EE__KEYLESS_ACCOUNTS_ENABLED: "1",
                 HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
@@ -107,7 +114,7 @@ describe("OAuth pending finalization mutation boundary", () => {
                 providerLogin: "octocat",
             } });
         }
-        if (mode === "keyless") {
+        if (mode === "keyless" && !options.freshKeyless) {
             await db.accountIdentity.create({
                 data: {
                     accountId: account.id,
@@ -128,6 +135,7 @@ describe("OAuth pending finalization mutation boundary", () => {
                 proofHash: createHash("sha256").update(proof, "utf8").digest("hex"),
             }),
             securityBinding: { provider: runtime.reference, purpose: null, connection: null, admission: null },
+            ...(mode === 'connect' && options.manualUsername ? {} : { suggestedUsername: 'octocat' }),
             ...(options.omitAccessToken ? {} : {
                 accessTokenEnc: privacyKit.encodeBase64(
                     encryptString(mode === "connect" ? prefix : [...prefix, "token"], "token"),
@@ -156,6 +164,7 @@ describe("OAuth pending finalization mutation boundary", () => {
         else registerExternalAuthFinalizeKeylessRoute(app);
         apps.push(app);
         await app.ready();
+        if (options.freshKeyed) await db.account.delete({ where: { id: account.id } });
         const submit = () => app.inject({ method: "POST",
             url: mode === "connect"
                 ? `/v1/connect/external/${providerId}/finalize`
@@ -164,7 +173,7 @@ describe("OAuth pending finalization mutation boundary", () => {
                     : `/v1/auth/external/${providerId}/finalize-keyless`,
             payload: {
                 pending,
-                username: "octocat",
+                ...(options.omitUsername ? {} : { username: options.username ?? "octocat" }),
                 ...(mode === "connect" ? {} : { proof }),
                 ...(options.providerReset ? { reset: true } : {}),
                 ...(mode === "keyed" ? {
@@ -175,6 +184,76 @@ describe("OAuth pending finalization mutation boundary", () => {
         });
         return { account, pending, submit };
     }
+
+    it.each([
+        { mode: 'connect', freshKeyed: false },
+        { mode: 'keyed', freshKeyed: false },
+        { mode: 'keyed', freshKeyed: true },
+        { mode: 'keyless', freshKeyed: false },
+    ] as const)(
+        'protects a deliberately selected username during $mode finalization (fresh keyed $freshKeyed)', async ({ mode, freshKeyed }) => {
+            const { submit } = await fixture(mode, { freshKeyless: true, manualUsername: true, freshKeyed });
+            vi.stubGlobal('fetch', async () => new Response(null, { status: 404 }));
+            const response = await submit();
+            expect(response.statusCode, response.body).toBe(200);
+            const identity = await db.accountIdentity.findFirstOrThrow({ where: { provider: 'github', providerUserId: '987' } });
+            expect(await db.account.findUniqueOrThrow({ where: { id: identity.accountId },
+                select: { username: true, usernameAutoFillEnabled: true } }))
+                .toEqual({ username: 'octocat', usernameAutoFillEnabled: false });
+        },
+    );
+
+    it.each(['connect', 'keyed', 'keyless'] as const)(
+        'keeps a provider-only username suggestion automatic during %s finalization', async mode => {
+            const { submit } = await fixture(mode, { freshKeyless: true, omitUsername: mode !== 'connect' });
+            vi.stubGlobal('fetch', async () => new Response(null, { status: 404 }));
+            const response = await submit();
+            expect(response.statusCode, response.body).toBe(200);
+            const identity = await db.accountIdentity.findFirstOrThrow({ where: { provider: 'github', providerUserId: '987' } });
+            expect(await db.account.findUniqueOrThrow({ where: { id: identity.accountId },
+                select: { username: true, usernameAutoFillEnabled: true } }))
+                .toEqual({ username: 'octocat', usernameAutoFillEnabled: true });
+        },
+    );
+
+    it.each([
+        { username: 'octocat', expectedAutoFill: true },
+        { username: 'chosen-name', expectedAutoFill: false },
+    ])('preserves reset transfer intent unless a different username was chosen: $username', async ({ username, expectedAutoFill }) => {
+        const { account, submit } = await fixture('keyed', { providerReset: true, username });
+        await db.account.update({ where: { id: account.id }, data: { username: 'octocat' } });
+        vi.stubGlobal('fetch', async () => new Response(null, { status: 404 }));
+        const response = await submit();
+        expect(response.statusCode, response.body).toBe(200);
+        const identity = await db.accountIdentity.findFirstOrThrow({ where: { provider: 'github', providerUserId: '987' } });
+        expect(identity.accountId).not.toBe(account.id);
+        expect(await db.account.findUniqueOrThrow({ where: { id: identity.accountId },
+            select: { username: true, usernameAutoFillEnabled: true } }))
+            .toEqual({ username, usernameAutoFillEnabled: expectedAutoFill });
+    });
+
+    it.each(['connect', 'keyed', 'keyless'] as const)(
+        'refuses a reserved username during %s finalization before consuming the continuation', async mode => {
+            const { account, pending, submit } = await fixture(mode, { username: 'admin', freshKeyless: true });
+            const response = await submit();
+            expect(response.statusCode).toBe(400);
+            expect(response.json()).toEqual({ error: 'invalid-username' });
+            expect(await db.repeatKey.findUnique({ where: { key: pending } })).not.toBeNull();
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).username).toBeNull();
+        },
+    );
+
+    it.each(['connect', 'keyed', 'keyless'] as const)(
+        'refuses a held username during %s finalization before consuming the continuation', async mode => {
+            const { account, pending, submit } = await fixture(mode, { username: 'held-name', freshKeyless: true });
+            await db.releasedUsername.create({ data: { username: 'held-name', expiresAt: new Date(Date.now() + 86_400_000) } });
+            const response = await submit();
+            expect(response.statusCode).toBe(409);
+            expect(response.json()).toEqual({ error: 'username-taken' });
+            expect(await db.repeatKey.findUnique({ where: { key: pending } })).not.toBeNull();
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).username).toBeNull();
+        },
+    );
 
     it.each(["connect", "keyed"] as const)(
         "finalizes a %s continuation that retains no access token",
@@ -247,11 +326,13 @@ describe("OAuth pending finalization mutation boundary", () => {
             kind: "account",
             entityId: HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1,
         } } })).toMatchObject({ cursor: administrator.seq + 1, hint: null });
+        // The replacement also receives its canonical username publication;
+        // its Home change need not be the first item in that Account's feed.
         expect(await db.accountChange.findUnique({ where: { accountId_kind_entityId: {
             accountId: replacement.id,
             kind: "account",
             entityId: HOME_GOVERNANCE_ACCOUNT_CHANGE_ENTITY_ID_V1,
-        } } })).toMatchObject({ cursor: 1, hint: null });
+        } } })).toMatchObject({ cursor: expect.any(Number), hint: null });
     });
 
     it("refuses a provider reset of a suspended Account after complete proof", async () => {

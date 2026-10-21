@@ -86,7 +86,6 @@ export function createOidcIdentityProvider(
             throw new Error("not-eligible");
         }
 
-        const preferredUsername = params.preferredUsername?.trim().toLowerCase() || null;
         const refreshToken = params.refreshToken?.trim() ?? "";
         const tokenToPersist =
             instance.storeRefreshToken && refreshToken
@@ -115,7 +114,8 @@ export function createOidcIdentityProvider(
                 eligibilityCheckedAt: new Date(),
                 eligibilityNextCheckAt: null,
             },
-            presentation: { username: preferredUsername, name: normalized.value.name },
+            presentation: { username: params.preferredUsername, name: normalized.value.name },
+            usernamePolicyEnv: params.usernamePolicyEnv,
             transferFromAccountId: params.transferFromAccountId,
         });
         const verifiedMailbox = normalized.value.emailVerified && normalized.value.email

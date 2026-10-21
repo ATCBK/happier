@@ -4,8 +4,17 @@ import { accountDirectoryAuthErrorHandler } from "@/app/accountDirectory/account
 import { deleteOAuthPendingBestEffort } from "../connectRoutes.oauthPending";
 import { AUTH_PROVIDER_CONFIGURATION_CHANGED_ERROR, OAuthProviderConfigurationChangedError } from "./oauthExternalErrors";
 import { TeamOAuthAdmissionAbort } from "@/app/teams/memberships/teamOAuthAdmission";
+import { InvalidUsernameError, UsernameTakenError } from "@/app/social/usernameUpdate";
 
 export async function oauthExternalFinalizeErrorHandler(error: FastifyError, request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    if (error instanceof UsernameTakenError) {
+        reply.code(409).send({ error: 'username-taken' });
+        return;
+    }
+    if (error instanceof InvalidUsernameError) {
+        reply.code(400).send({ error: 'invalid-username' });
+        return;
+    }
     if (error instanceof TeamOAuthAdmissionAbort) {
         // The bounded continuation participates in the rejected transaction.
         // Keep its rolled-back, still-expiring row intact so a recoverable policy

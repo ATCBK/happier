@@ -107,10 +107,11 @@ export function createWorkosProviderModule(input: WorkosProviderModuleInput): Pr
             profile: { ...profile },
             token: null,
             presentation: {
-                username: params.preferredUsername?.trim().toLowerCase() || null,
+                username: params.preferredUsername,
                 name: profile.name,
             },
             transferFromAccountId: params.transferFromAccountId,
+            usernamePolicyEnv: params.usernamePolicyEnv,
         });
         const teamConnection = input.teamConnection;
         const directoryMatch = getDirectoryIdentityMatch(profile);

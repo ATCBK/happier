@@ -17,7 +17,7 @@ import { Context } from "@/context";
 import { decryptString } from "@/modules/encrypt";
 import { resolveOAuthRuntimeById } from "@/app/auth/providers/identityProviderCatalog";
 import { db, isPrismaUniqueConstraintError } from "@/storage/db";
-import { validateUsername } from "@/app/social/usernamePolicy";
+import { changeUsernameInTx, readUsernameAvailabilityInTx } from "@/app/social/usernameUpdate";
 import {
     consumeValidOAuthPendingInTx,
     deleteOAuthPendingBestEffort,
@@ -396,7 +396,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
         }
 
         const usernameProvidedRaw = request.body.username?.toString().trim() || "";
-        let desiredUsername: string | null = null;
+        let proposedUsername: string;
 
         // Only the identity and the display name are read here. The feed
         // cursor and Home role are inherited by the replacement coordinator
@@ -416,11 +416,9 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
         }
 
         if (usernameProvidedRaw) {
-            const validation = validateUsername(usernameProvidedRaw, requestHomeEnv);
-            if (!validation.ok) return reply.code(400).send({ error: "invalid-username" });
-            desiredUsername = validation.username;
+            proposedUsername = usernameProvidedRaw;
         } else if (oldAccountForReset?.username) {
-            desiredUsername = oldAccountForReset.username;
+            proposedUsername = oldAccountForReset.username;
         } else {
             const required = parsedValue.usernameRequired === true;
             if (required) return reply.code(400).send({ error: "username-required" });
@@ -428,24 +426,22 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
             const suggested = parsedValue.suggestedUsername?.toString().trim() || "";
             if (!suggested) return reply.code(400).send({ error: "username-required" });
 
-            const validation = validateUsername(suggested, requestHomeEnv);
-            if (!validation.ok) return reply.code(400).send({ error: "username-required" });
-            desiredUsername = validation.username;
+            proposedUsername = suggested;
         }
 
-        const taken = await db.account.findFirst({
-            where: {
-                username: desiredUsername,
-                NOT: oldAccountForReset ? { id: oldAccountForReset.id } : { publicKey: publicKeyHex },
-            },
-            select: { id: true },
-        });
-        if (taken) {
+        const availability = await inTx(tx => readUsernameAvailabilityInTx(tx,
+            oldAccountForReset?.id ?? existingAccount?.id ?? '', proposedUsername, requestHomeEnv));
+        if (availability.availability === 'invalid' || availability.availability === 'reserved') {
+            return reply.code(400).send({ error: usernameProvidedRaw ? 'invalid-username' : 'username-required' });
+        }
+        if (availability.availability === 'unavailable') {
             return reply.code(409).send({ error: "username-taken" });
         }
+        const desiredUsername = availability.username;
 
         if (alreadyLinked && resetRequested && oldAccountForReset) {
             const oldAccountId = oldAccountForReset.id;
+            const oldUsernameForReset = oldAccountForReset.username;
 
             const identitySnapshot = await db.accountIdentity.findUnique({
                 where: { id: alreadyLinked.id },
@@ -477,7 +473,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                 const prepared = await prepareExternalIdentityConnection({
                     reference: parsedValue.securityBinding?.provider,
                     providerId, ctx: Context.create(replacementAccountId), profile: pendingProfile,
-                    accessToken, refreshToken, preferredUsername: desiredUsername,
+                    accessToken, refreshToken, preferredUsername: desiredUsername, usernamePolicyEnv: requestHomeEnv,
                     transferFromAccountId: oldAccountId,
                 });
                 replacementOutcome = await inTx(async (tx) => {
@@ -507,6 +503,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                             contentPublicKeySignature: contentKeyBinding?.contentPublicKeySignature ?? null,
                         },
                         desiredUsername,
+                        usernamePolicyEnv: requestHomeEnv,
                         retireReplacedAccountInTx: async (retireTx) => {
                             const retired = await setAccountStatusInTx(retireTx, {
                                 actorAccountId: replacementAccountId,
@@ -526,6 +523,10 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                     // cannot commit that one-shot authority as its only durable effect.
                     if (replacement.status === "rejected") {
                         throw new ProviderResetAccountReplacementRejected(replacement);
+                    }
+                    if (usernameProvidedRaw && desiredUsername !== oldUsernameForReset) {
+                        await changeUsernameInTx(tx, replacementAccountId,
+                            { kind: 'manual_set', username: desiredUsername }, requestHomeEnv);
                     }
 
                     await prepared.connectInTx(tx);
@@ -599,6 +600,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                     accessToken,
                     refreshToken,
                     preferredUsername: desiredUsername,
+                    usernamePolicyEnv: requestHomeEnv,
                 });
             } catch (error) {
                 if (error instanceof Error && error.message === "not-eligible") {
@@ -653,7 +655,10 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                         insertSemantics: { kind: "must_create", accountId: proposedAccountId },
                         publicKey: publicKeyHex,
                         encryptionMode: "e2ee",
-                        username: desiredUsername,
+                        usernameChange: usernameProvidedRaw
+                            ? { kind: 'manual_set', username: desiredUsername }
+                            : { kind: 'identity_fill', suggestion: desiredUsername },
+                        usernamePolicyEnv: requestHomeEnv,
                         contentKeyBinding,
                         identityConnection: preparedIdentityConnection,
                         verifiedMailbox: preparedIdentityConnection.verifiedMailbox,
@@ -759,6 +764,7 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                     accessToken,
                     refreshToken,
                     preferredUsername: desiredUsername,
+                    usernamePolicyEnv: requestHomeEnv,
                 });
             } catch (error) {
                 if (error instanceof Error && error.message === "not-eligible") {
@@ -839,15 +845,11 @@ export function registerExternalAuthFinalizeRoute(app: Fastify) {
                         }
                     }
 
-                    await tx.account.update({
-                        where: { id: existingAccount.id },
-                        data: {
-                            updatedAt: new Date(),
-                            ...(!existingAccount.username
-                                ? { username: desiredUsername }
-                                : {}),
-                        },
-                    });
+                    await changeUsernameInTx(tx, existingAccount.id,
+                        usernameProvidedRaw
+                            ? { kind: 'manual_set', username: desiredUsername }
+                            : { kind: 'identity_fill', suggestion: desiredUsername }, requestHomeEnv);
+                    await tx.account.update({ where: { id: existingAccount.id }, data: { updatedAt: new Date() } });
                     await preparedIdentityConnection.connectInTx(tx);
                     if (isTeamAdmission && preparedIdentityConnection.verifiedMailbox) {
                         await upsertVerifiedMailboxEvidenceInTx(tx, {

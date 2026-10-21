@@ -18,6 +18,7 @@ export type IdentityProvider = Readonly<{
         accessToken: string;
         refreshToken?: string;
         preferredUsername?: string | null;
+        usernamePolicyEnv?: NodeJS.ProcessEnv;
         transferFromAccountId?: string;
     }) => Promise<void>;
     prepareConnect: (params: {
@@ -26,6 +27,7 @@ export type IdentityProvider = Readonly<{
         accessToken: string;
         refreshToken?: string;
         preferredUsername?: string | null;
+        usernamePolicyEnv?: NodeJS.ProcessEnv;
         transferFromAccountId?: string;
     }) => Promise<PreparedIdentityConnection>;
     disconnect: (params: { ctx: Context }) => Promise<void>;

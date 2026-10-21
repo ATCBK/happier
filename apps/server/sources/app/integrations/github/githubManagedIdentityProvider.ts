@@ -590,7 +590,7 @@ function createManagedGitHubIdentityProvider(
             profile,
             token: null,
             presentation: {
-                username: params.preferredUsername?.trim().toLowerCase() || profile.login.toLowerCase(),
+                username: params.preferredUsername ?? profile.login,
                 name: profile.name,
             },
             eligibility: {
@@ -600,6 +600,7 @@ function createManagedGitHubIdentityProvider(
                 eligibilityNextCheckAt: null,
             },
             transferFromAccountId: params.transferFromAccountId,
+            usernamePolicyEnv: params.usernamePolicyEnv,
         });
         return {
             connectInTx: async (tx) => {

@@ -9,7 +9,7 @@ import { log } from "@/utils/logging/log";
  *
  * Flow:
  * 1. Check if user has GitHub connected - early exit if not
- * 2. In transaction: clear GitHub link and username from account (keeps avatar) and delete GitHub user record
+ * 2. In transaction: unlink GitHub and clear only an eligible automatic matching username (keeps avatar)
  * 3. Send socket update after transaction completes
  *
  * @param ctx - Request context containing user ID
@@ -18,29 +18,22 @@ export async function githubDisconnect(ctx: Context): Promise<void> {
     const userId = ctx.uid;
 
     // Step 1: Check if user has GitHub connection
-    const user = await db.account.findUnique({
-        where: { id: userId },
-        select: { username: true },
-    });
     const identity = await db.accountIdentity.findFirst({
         where: { accountId: userId, provider: "github" },
-        select: { providerUserId: true, profile: true },
+        select: { providerUserId: true, providerLogin: true, profile: true },
     });
 
     // Early exit if no GitHub connection
-    if (!user || !identity) {
+    if (!identity) {
         log({ module: 'github-disconnect' }, `User ${userId} has no GitHub account connected`);
         return;
     }
 
-    const currentUsername = user.username?.toString().trim() || null;
-    const githubLogin = resolveProfileLogin({ profile: identity.profile, providerLogin: null });
-    const normalize = (v: string | null) => (v ?? '').trim().toLowerCase();
-    const shouldClearUsername = Boolean(currentUsername) && Boolean(githubLogin) && normalize(currentUsername) === normalize(githubLogin);
+    const githubLogin = resolveProfileLogin({ profile: identity.profile, providerLogin: identity.providerLogin });
 
     log({ module: 'github-disconnect' }, `Disconnecting GitHub account ${identity.providerUserId} from user ${userId}`);
 
-    await unlinkIdentity({ accountId: userId, provider: "github", clearMatchingUsername: shouldClearUsername ? currentUsername : null });
+    await unlinkIdentity({ accountId: userId, provider: "github", clearMatchingUsername: githubLogin });
 
     log({ module: 'github-disconnect' }, `GitHub account ${identity.providerUserId} disconnected successfully from user ${userId}`);
 }

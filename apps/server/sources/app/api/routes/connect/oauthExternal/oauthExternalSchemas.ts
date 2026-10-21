@@ -115,6 +115,8 @@ export const connectPendingSchema = z.strictObject({
     securityBinding: z.optional(oauthSecurityBindingSchema),
     userId: z.string(),
     profileEnc: z.string(),
+    /** Callback-proven automatic choice; absent retained/prompt continuations protect manual intent. */
+    suggestedUsername: z.optional(z.string()),
     /**
      * Absent when the provider declared `accessTokenCustody: "identity_proof_only"`: the
      * continuation carries no token because nothing after the callback reads one.

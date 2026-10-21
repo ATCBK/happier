@@ -88,6 +88,7 @@ describe("Provider-reset Account replacement", () => {
     }, 120_000);
     afterAll(async () => await harness?.close());
     afterEach(async () => {
+        await db.releasedUsername.deleteMany({});
         await db.session.deleteMany({});
         await db.teamGroupMembershipExternalContribution.deleteMany({});
         await db.teamExternalGroupBinding.deleteMany({});
@@ -106,6 +107,47 @@ describe("Provider-reset Account replacement", () => {
         await db.teamMembership.deleteMany({});
         await db.team.deleteMany({});
         await db.account.deleteMany({});
+    });
+
+    it('transfers a retained reserved username and manual intent without creating a release hold', async () => {
+        const oldAccountId = await createAccount({ homeRole: 'owner', username: 'admin' });
+        await db.$executeRaw`UPDATE Account SET usernameAutoFillEnabled = false WHERE id = ${oldAccountId}`;
+        const replacementAccountId = nextId('reserved-replacement');
+        const result = await inTx(tx => replaceAccountForProviderResetInTx(tx, {
+            oldAccountId,
+            replacement: { accountId: replacementAccountId, publicKey: nextId('replacement-key') },
+            desiredUsername: 'admin',
+            retireReplacedAccountInTx: async tx => {
+                const retirement = await setAccountStatusInTx(tx, {
+                    actorAccountId: replacementAccountId, targetAccountId: oldAccountId,
+                    status: 'disabled', authority: 'provider_account_replacement',
+                });
+                if (retirement.status === 'rejected') throw new Error(retirement.code);
+            },
+        }), { isolationLevel: 'Serializable' });
+        expect(result.status).toBe('replaced');
+        expect(await db.account.findUniqueOrThrow({ where: { id: replacementAccountId },
+            select: { username: true, usernameAutoFillEnabled: true } }))
+            .toEqual({ username: 'admin', usernameAutoFillEnabled: false });
+        expect((await db.account.findUniqueOrThrow({ where: { id: oldAccountId } })).username).toBeNull();
+        expect(await db.releasedUsername.count()).toBe(0);
+    });
+
+    it('rolls back replacement and membership transfer when a different desired username is held', async () => {
+        const oldAccountId = await createAccount({ homeRole: 'owner', username: 'original' });
+        const membership = await createTeamWithMember({ accountId: oldAccountId });
+        await db.releasedUsername.create({ data: { username: 'held-name', expiresAt: new Date(Date.now() + 86_400_000) } });
+        const replacementAccountId = nextId('held-replacement');
+        await expect(inTx(tx => replaceAccountForProviderResetInTx(tx, {
+            oldAccountId,
+            replacement: { accountId: replacementAccountId, publicKey: nextId('replacement-key') },
+            desiredUsername: 'held-name',
+            retireReplacedAccountInTx: async () => { throw new Error('retirement-must-not-run'); },
+        }), { isolationLevel: 'Serializable' })).rejects.toThrow('username-taken');
+        expect(await db.account.findUnique({ where: { id: replacementAccountId } })).toBeNull();
+        expect(await db.account.findUniqueOrThrow({ where: { id: oldAccountId }, select: { username: true, status: true } }))
+            .toEqual({ username: 'original', status: 'active' });
+        expect((await db.teamMembership.findUniqueOrThrow({ where: { id: membership.membershipId } })).accountId).toBe(oldAccountId);
     });
 
     async function createDirectorySource(teamId: string, suffix: string) {

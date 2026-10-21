@@ -55,6 +55,7 @@ export async function inReadSnapshot<T>(read: (tx: Tx) => Promise<T>, options?: 
 }
 
 export type TransactionReplayReason = "session-account-audience-changed"
+    | "username-admission-changed"
     | "session-input-reply-progress-changed"
     | "autonomous-exchange-root-changed"
     | "follow-input-settlement-conflict"

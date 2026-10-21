@@ -7,7 +7,8 @@ import { Context } from "@/context";
 import { decryptString } from "@/modules/encrypt";
 import { resolveOAuthRuntimeById } from "@/app/auth/providers/identityProviderCatalog";
 import { db } from "@/storage/db";
-import { validateUsername } from "@/app/social/usernamePolicy";
+import { changeUsernameInTx, readUsernameAvailabilityInTx } from "@/app/social/usernameUpdate";
+import { normalizeUsername } from "@/app/social/usernamePolicy";
 import {
     consumeValidOAuthPendingInTx,
     deleteOAuthPendingBestEffort,
@@ -106,18 +107,12 @@ export function registerExternalConnectFinalizeRoute(app: Fastify) {
         const isTeamAdmission = parsedValue.securityBinding?.purpose === "team_admission";
         await requireCurrentOAuthPendingRuntime(bindingInput);
 
-        const validation = validateUsername(request.body.username, requestHomeEnv);
-        if (!validation.ok) return reply.code(400).send({ error: "invalid-username" });
-        const username = validation.username;
-
-        const taken = await db.account.findFirst({
-            where: {
-                username,
-                NOT: { id: request.userId },
-            },
-            select: { id: true },
-        });
-        if (taken) return reply.code(409).send({ error: "username-taken" });
+        const availability = await inTx(tx => readUsernameAvailabilityInTx(tx, request.userId, request.body.username, requestHomeEnv));
+        if (availability.availability === 'invalid' || availability.availability === 'reserved') {
+            return reply.code(400).send({ error: 'invalid-username' });
+        }
+        if (availability.availability === 'unavailable') return reply.code(409).send({ error: 'username-taken' });
+        const username = availability.username;
 
         let accessToken: string;
         let refreshToken: string | undefined;
@@ -159,6 +154,7 @@ export function registerExternalConnectFinalizeRoute(app: Fastify) {
                 accessToken,
                 refreshToken,
                 preferredUsername: username,
+                usernamePolicyEnv: requestHomeEnv,
             });
             const token = await inTx(async (tx) => {
                 await acquireTeamOAuthAdmissionAccountsInTx(tx, {
@@ -174,6 +170,10 @@ export function registerExternalConnectFinalizeRoute(app: Fastify) {
                         actionId: "connect",
                     })) return false;
                 if (!await consumeValidOAuthPendingInTx(tx, pending)) return null;
+                await changeUsernameInTx(tx, request.userId,
+                    parsedValue.suggestedUsername !== undefined && normalizeUsername(parsedValue.suggestedUsername) === username
+                        ? { kind: 'identity_fill', suggestion: username }
+                        : { kind: 'manual_set', username }, requestHomeEnv);
                 await prepared.connectInTx(tx);
                 const teamAuthenticationEvidence = isTeamAdmission
                     ? await requireTeamOAuthAdmissionInTx(tx, {

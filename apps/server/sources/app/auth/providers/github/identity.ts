@@ -7,6 +7,7 @@ export async function prepareGitHubIdentityConnection(params: {
     profile: unknown;
     accessToken: string;
     preferredUsername?: string | null;
+    usernamePolicyEnv?: NodeJS.ProcessEnv;
     transferFromAccountId?: string;
 }): Promise<PreparedIdentityConnection> {
     // Lazy import to avoid provider-registry import cycles during server startup/tests.
@@ -15,7 +16,7 @@ export async function prepareGitHubIdentityConnection(params: {
         params.ctx,
         params.profile as GitHubProfile,
         params.accessToken,
-        { preferredUsername: params.preferredUsername, transferFromAccountId: params.transferFromAccountId },
+        { preferredUsername: params.preferredUsername, transferFromAccountId: params.transferFromAccountId, usernamePolicyEnv: params.usernamePolicyEnv },
     );
 }
 
@@ -24,6 +25,7 @@ export async function connectGitHubIdentity(params: {
     profile: unknown;
     accessToken: string;
     preferredUsername?: string | null;
+    usernamePolicyEnv?: NodeJS.ProcessEnv;
     transferFromAccountId?: string;
 }): Promise<void> {
     const prepared = await prepareGitHubIdentityConnection(params);

@@ -69,6 +69,53 @@ describe("OAuth callback provider security binding", () => {
         await oidc.close();
     });
 
+    it.each(['automatic', 'prompt', 'edited_suggestion'] as const)(
+        'carries %s username intent through callback, strict pending and connect finalization', async mode => {
+            harness.resetEnv({
+                AUTH_SIGNUP_PROVIDERS: 'okta',
+                HAPPIER_WEBAPP_URL: 'https://app.example.test',
+                AUTH_PROVIDERS_CONFIG_JSON: JSON.stringify([{
+                    id: 'okta', type: 'oidc', displayName: 'Acme Okta', issuer: oidc.issuer,
+                    clientId: 'oidc_client', clientSecret: 'oidc_secret',
+                    redirectUrl: 'https://api.example.test/v1/oauth/okta/callback',
+                    claims: { login: 'preferred_username', email: 'email', groups: 'groups' },
+                }]),
+            });
+            const account = await db.account.create({ data: { publicKey: 'a'.repeat(64), encryptionMode: 'plain' } });
+            if (mode === 'prompt') await db.account.create({ data: { username: 'acme_user' } });
+            const app = Fastify({ logger: false });
+            app.setValidatorCompiler(validatorCompiler);
+            app.setSerializerCompiler(serializerCompiler);
+            trackApp(app);
+            // Only the authenticated HTTP principal and external OIDC service are boundaries.
+            app.decorate('authenticate', async (request: { userId: string; authTokenKind: string; authAuthority: string }) => {
+                request.userId = account.id;
+                request.authTokenKind = 'account';
+                request.authAuthority = 'present_user';
+            });
+            const typed = app.withTypeProvider<ZodTypeProvider>() as unknown as Parameters<typeof connectConnectExternalRoutes>[0];
+            connectConnectExternalRoutes(typed);
+            registerOAuthCallbackRoute(typed);
+            const runtime = (await resolveOAuthRuntimeById(process.env, 'okta'))!;
+            const authorizeUrl = await createExternalAuthorizeUrl({
+                flow: 'connect', providerId: 'okta', provider: runtime.provider, reference: runtime.reference,
+                env: process.env, userId: account.id, connectFinalization: 'credential_adoption_v1',
+            });
+            const authorized = await fetch(authorizeUrl!, { redirect: 'manual' });
+            const callback = new URL(authorized.headers.get('location')!);
+            const response = await app.inject({ method: 'GET', url: `${callback.pathname}${callback.search}` });
+            const redirect = new URL(response.headers.location as string);
+            expect(redirect.searchParams.get('status')).toBe(mode === 'prompt' ? 'username_required' : 'connected');
+            const username = mode === 'automatic' ? 'acme_user' : 'chosen_user';
+            const finalized = await app.inject({ method: 'POST', url: '/v1/connect/external/okta/finalize',
+                payload: { pending: redirect.searchParams.get('pending'), username } });
+            expect(finalized.statusCode, finalized.body).toBe(200);
+            expect(await db.account.findUniqueOrThrow({ where: { id: account.id },
+                select: { username: true, usernameAutoFillEnabled: true } }))
+                .toEqual({ username, usernameAutoFillEnabled: mode === 'automatic' });
+        },
+    );
+
     it("consumes a changed deployment attempt before code exchange", async () => {
         const config = {
             id: "okta", type: "oidc", displayName: "Acme Okta",

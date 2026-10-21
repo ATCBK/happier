@@ -1,0 +1,158 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { Context } from '@/context';
+import { db, getDbProviderFromEnv, initDbMysql, initDbPostgres } from '@/storage/db';
+import type { Tx } from '@/storage/inTx';
+
+import { usernameRelease, usernameUpdate, UsernameTakenError } from './usernameUpdate';
+
+function latch() {
+    let resolve!: () => void;
+    return { promise: new Promise<void>(release => { resolve = release; }), release: () => resolve() };
+}
+
+const provider = getDbProviderFromEnv(process.env, 'postgres');
+
+describe.skipIf(provider !== 'postgres' && provider !== 'mysql')('Username claim contention on a real provider', () => {
+    const accountIds: string[] = [];
+    const usernames: string[] = [];
+    let connected = false;
+
+    beforeAll(async () => {
+        const supplied = provider === 'postgres' ? process.env.HAPPIER_TEST_POSTGRES_DATABASE_URL
+            : process.env.HAPPIER_TEST_MYSQL_DATABASE_URL;
+        if (!supplied || process.env.DATABASE_URL !== supplied) {
+            throw new Error('Use the disposable provider DB-contract harness');
+        }
+        if (provider === 'postgres') initDbPostgres();
+        else await initDbMysql();
+        await db.$connect();
+        connected = true;
+    });
+
+    afterAll(async () => {
+        if (!connected) return;
+        await db.releasedUsername.deleteMany({ where: { username: { in: usernames } } });
+        await db.account.deleteMany({ where: { id: { in: accountIds } } });
+        await db.$disconnect();
+    });
+
+    function freshUsername() {
+        const username = `race_${randomUUID().replaceAll('-', '').slice(0, 20)}`;
+        usernames.push(username);
+        return username;
+    }
+
+    async function account(username?: string) {
+        const row = await db.account.create({ data: { encryptionMode: 'plain', ...(username ? { username } : {}) } });
+        accountIds.push(row.id);
+        return row;
+    }
+
+    it('acknowledges exactly one simultaneous claim and returns a domain conflict for the other', async () => {
+        const username = freshUsername();
+        const first = await account();
+        const second = await account();
+        const outcomes = await Promise.allSettled([
+            usernameUpdate(Context.create(first.id), username),
+            usernameUpdate(Context.create(second.id), username),
+        ]);
+        expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
+        const failures = outcomes.filter(outcome => outcome.status === 'rejected');
+        expect(failures).toHaveLength(1);
+        expect(failures[0].reason).toBeInstanceOf(UsernameTakenError);
+        const accounts = [first, second];
+        const winner = accounts[outcomes.findIndex(outcome => outcome.status === 'fulfilled')];
+        const loser = accounts[outcomes.findIndex(outcome => outcome.status === 'rejected')];
+        expect(await db.account.findMany({ where: { username }, select: { id: true, usernameAutoFillEnabled: true } }))
+            .toEqual([{ id: winner.id, usernameAutoFillEnabled: false }]);
+        expect(await db.account.findUniqueOrThrow({ where: { id: loser.id } }))
+            .toMatchObject({ username: null, usernameAutoFillEnabled: true });
+    });
+
+    it('serializes a release racing a claim and retains the hold through Account deletion', async () => {
+        const username = freshUsername();
+        const holder = await account(username);
+        const claimant = await account();
+        const read = latch();
+        const resume = latch();
+        const releaseEntered = latch();
+        const claimantScope = new AsyncLocalStorage<boolean>();
+        const original = db.$transaction;
+        let paused = false;
+
+        // This OS/database boundary instrumentation preserves the real read,
+        // locks, transaction isolation, retry and constraint behavior.
+        db.$transaction = new Proxy(original, { apply(target, receiver, args: unknown[]) {
+            const callback = args[0];
+            if (typeof callback !== 'function') return Reflect.apply(target, receiver, args);
+            if (!claimantScope.getStore()) return Reflect.apply(target, receiver, [(tx: Tx) => {
+                releaseEntered.release();
+                return callback(tx);
+            }, ...args.slice(1)]);
+            const scheduleThisAttempt = !paused;
+            return Reflect.apply(target, receiver, [(tx: Tx) => callback(new Proxy(tx, { get(transaction, property, transactionReceiver) {
+                if (property === 'account' && scheduleThisAttempt) {
+                    return new Proxy(transaction.account, { get(model, method, modelReceiver) {
+                        if (method !== 'findUnique') return Reflect.get(model, method, modelReceiver);
+                        return async (...queryArgs: Parameters<typeof model.findUnique>) => {
+                            // The hold read and holder lookup may complete on
+                            // opposite sides of a concurrent release commit.
+                            if (queryArgs[0].where.username === username) await resume.promise;
+                            return model.findUnique(...queryArgs);
+                        };
+                    } });
+                }
+                if (property !== 'releasedUsername') return Reflect.get(transaction, property, transactionReceiver);
+                return new Proxy(transaction.releasedUsername, { get(model, method, modelReceiver) {
+                    if (method !== 'findUnique') return Reflect.get(model, method, modelReceiver);
+                    return async (...queryArgs: Parameters<typeof model.findUnique>) => {
+                        const result = await model.findUnique(...queryArgs);
+                        if (!paused) {
+                            paused = true;
+                            read.release();
+                            await resume.promise;
+                        }
+                        return result;
+                    };
+                } });
+            } })), ...args.slice(1)]);
+        } });
+        const claim = claimantScope.run(true, () => usernameUpdate(Context.create(claimant.id), username));
+        const outcome = Promise.allSettled([claim]);
+        let releaseOutcome: Promise<PromiseSettledResult<Awaited<ReturnType<typeof usernameRelease>>>[]> | undefined;
+        try {
+            await Promise.race([read.promise, claim.then(() => { throw new Error('Claim bypassed hold admission'); })]);
+            const releasePromise = usernameRelease(Context.create(holder.id));
+            releaseOutcome = Promise.allSettled([releasePromise]);
+            // MySQL Serializable uses predicate locks for the missing hold;
+            // allow the claimant to finish once the competing transaction has
+            // entered instead of demanding an impossible intervening commit.
+            if (provider === 'mysql') {
+                await Promise.race([releaseEntered.promise, releasePromise]);
+                resume.release();
+            }
+            const release = await releasePromise;
+            expect(release).toMatchObject({ username: null, released: true });
+            expect(release.reservedUntilMs).toEqual(expect.any(Number));
+            resume.release();
+            await expect(claim).rejects.toBeInstanceOf(UsernameTakenError);
+            expect(await db.account.findMany({ where: { username } })).toEqual([]);
+            expect(await db.account.findUniqueOrThrow({ where: { id: claimant.id } })).toMatchObject({ username: null });
+            const hold = await db.releasedUsername.findUniqueOrThrow({ where: { username } });
+            expect(hold.expiresAt.getTime()).toBe(release.reservedUntilMs);
+            await expect(usernameUpdate(Context.create(holder.id), username)).rejects.toBeInstanceOf(UsernameTakenError);
+            expect(await usernameRelease(Context.create(holder.id))).toEqual({ username: null, released: false, reservedUntilMs: null });
+            expect((await db.releasedUsername.findUniqueOrThrow({ where: { username } })).expiresAt).toEqual(hold.expiresAt);
+            await db.account.delete({ where: { id: holder.id } });
+            expect(await db.releasedUsername.findUniqueOrThrow({ where: { username } })).toEqual(hold);
+        } finally {
+            resume.release();
+            await outcome;
+            await releaseOutcome;
+            db.$transaction = original;
+        }
+    });
+});

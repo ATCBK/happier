@@ -8,6 +8,7 @@ import {
     rebindPreparedProvisionedIdentitiesForAccountReplacementInTx,
 } from "@/app/teams/directory/provisionedIdentityBinding";
 import { publishAccountTeamMembershipsChangedInTx } from "@/app/teams/teamChanges";
+import { changeUsernameInTx } from "@/app/social/usernameUpdate";
 
 import { assertHomeOwnershipSurvivesTransitionInTx } from "./homeCapabilities";
 
@@ -32,6 +33,7 @@ export type ProviderResetAccountReplacementInput = Readonly<{
     oldAccountId: string;
     replacement: ProviderResetReplacementAccount;
     desiredUsername: string | null;
+    usernamePolicyEnv?: NodeJS.ProcessEnv;
     /**
      * The canonical Account-lifecycle transition that retires the replaced
      * Account: terminal `disabled`, token-epoch increment, and PAT deletion.
@@ -175,14 +177,11 @@ export async function replaceAccountForProviderResetInTx(
         select: { id: true },
     });
 
-    // The display name is a unique column, so it is released before it is taken.
-    await tx.account.update({ where: { id: input.oldAccountId }, data: { username: null } });
-    if (input.desiredUsername !== null) {
-        await tx.account.update({
-            where: { id: input.replacement.accountId },
-            data: { username: input.desiredUsername },
-        });
-    }
+    // Recovery transfers the existing identity and its manual/automatic intent;
+    // it is not a voluntary release and must not create a release hold.
+    await changeUsernameInTx(tx, input.replacement.accountId, {
+        kind: 'account_replacement', oldAccountId: input.oldAccountId, desiredUsername: input.desiredUsername,
+    }, input.usernamePolicyEnv);
 
     const transferredTeamMembershipCount = await transferTeamMembershipsForAccountReplacementInTx(tx, {
         oldAccountId: input.oldAccountId,

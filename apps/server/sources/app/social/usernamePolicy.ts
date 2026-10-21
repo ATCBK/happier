@@ -2,6 +2,16 @@ import { parseIntEnv } from "@/config/env";
 
 export type UsernamePolicy = Readonly<{ minLen: number; maxLen: number; pattern: RegExp }>;
 
+const reservedUsernames = new Set([
+    "admin", "administrator", "support", "happier", "api", "www", "help",
+    "settings", "account", "public", "badge", "og", "v1", "v2",
+]);
+
+/** Prospective admission only: existing holders may retain their current name. */
+export function isReservedUsername(username: string): boolean {
+    return reservedUsernames.has(username);
+}
+
 function clampPolicy(policy: { minLen: number; maxLen: number; pattern: RegExp }): UsernamePolicy {
     const minLen = Number.isFinite(policy.minLen) && policy.minLen > 0 ? policy.minLen : 3;
     const maxLen = Number.isFinite(policy.maxLen) && policy.maxLen > 0 ? policy.maxLen : 32;

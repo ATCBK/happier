@@ -16,9 +16,15 @@ describe('githubDisconnect (AccountChange integration)', () => {
         harness.resetEnv();
         await harness.resetDbTables([() => db.accountChange.deleteMany(), () => db.accountIdentity.deleteMany(), () => db.account.deleteMany()]);
     });
-    it.each([{ username: 'octocat', expected: null }, { username: 'custom', expected: 'custom' }])(
-        'disconnects and preserves only a custom username: $username', async ({ username, expected }) => {
+    it.each([
+        { username: 'octocat', autoFill: true, expected: null },
+        { username: 'octocat', autoFill: false, expected: 'octocat' },
+        { username: 'custom', autoFill: true, expected: 'custom' },
+    ])(
+        'disconnects without clearing protected username: $username, auto-fill $autoFill', async ({ username, autoFill, expected }) => {
             const account = await db.account.create({ data: { publicKey: `disconnect-${username}`, username } });
+            // Retained non-null names are migrated to protected manual intent.
+            await db.$executeRaw`UPDATE Account SET usernameAutoFillEnabled = ${autoFill} WHERE id = ${account.id}`;
             await db.accountIdentity.create({ data: { accountId: account.id, provider: 'github', providerUserId: '123', providerLogin: 'octocat', profile: { login: 'octocat' } } });
             // Replace socket delivery only; real mutation, cursor allocation and afterTx remain exercised.
             const emit = vi.spyOn(eventRouter, 'emitUpdate').mockImplementation(() => {});
@@ -28,8 +34,7 @@ describe('githubDisconnect (AccountChange integration)', () => {
             const change = await db.accountChange.findUniqueOrThrow({ where: { accountId_kind_entityId: { accountId: account.id, kind: 'account', entityId: 'self' } } });
             expect(change.hint).toEqual({ linkedProviders: true });
             const updates = emit.mock.calls.filter(([value]) => value.recipientFilter?.type === 'user-scoped-only');
-            expect(updates).toHaveLength(1);
-            expect(updates[0]?.[0].payload.seq).toBe(change.cursor);
+            expect(updates.at(-1)?.[0].payload.seq).toBe(change.cursor);
         },
     );
 });

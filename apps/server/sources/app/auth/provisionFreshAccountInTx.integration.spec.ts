@@ -19,10 +19,77 @@ describe('fresh Account verified mailbox admission', () => {
     }, 120_000);
     afterEach(async () => {
         vi.unstubAllGlobals();
+        await db.releasedUsername.deleteMany();
         await db.uploadedFile.deleteMany();
         await db.account.deleteMany();
     });
     afterAll(async () => { await harness.close(); });
+
+    it('admits fresh Accounts without claiming reserved or unavailable provider suggestions', async () => {
+        const occupied = await db.account.create({ data: { publicKey: 'occupied-name', username: 'occupied' } });
+        for (const username of ['admin', occupied.username!]) {
+            const account = await inTx((tx) => provisionFreshAccountInTx(tx, {
+                insertSemantics: { kind: 'must_create', accountId: randomUUID() },
+                publicKey: null, encryptionMode: 'plain', usernameChange: { kind: 'identity_fill', suggestion: username },
+            }));
+            expect(account.username).toBeNull();
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).username).toBeNull();
+        }
+    });
+
+    it('returns the current provider-filled username after prepared identity admission', async () => {
+        const accountId = randomUUID();
+        const identityConnection = await prepareIdentityLink({
+            accountId, provider: 'github', providerUserId: 'fresh-name', providerLogin: 'fresh-name',
+            profile: { login: 'fresh-name' }, presentation: { username: 'fresh-name' },
+        });
+        const account = await inTx((tx) => provisionFreshAccountInTx(tx, {
+            insertSemantics: { kind: 'must_create', accountId },
+            publicKey: null, encryptionMode: 'plain', identityConnection,
+        }));
+        expect(account.username).toBe('fresh-name');
+    });
+
+    it('uses the captured effective username policy for prepared provider presentation', async () => {
+        const usernamePolicyEnv = { ...process.env, FRIENDS_USERNAME_MIN_LEN: '2' };
+        const accountId = randomUUID();
+        const identityConnection = await prepareGithubConnect(Context.create(accountId), {
+            id: 12346, login: 'xy',
+        }, '', { usernamePolicyEnv });
+        const account = await inTx(tx => provisionFreshAccountInTx(tx, {
+            insertSemantics: { kind: 'must_create', accountId },
+            publicKey: null, encryptionMode: 'plain', identityConnection,
+        }), { isolationLevel: 'Serializable' });
+        expect(account.username).toBe('xy');
+    });
+
+    it('keeps explicitly released Accounts unclaimed when a new identity is connected', async () => {
+        const account = await db.account.create({ data: {
+            publicKey: null, encryptionMode: 'plain', usernameAutoFillEnabled: false,
+        } });
+        const identityConnection = await prepareIdentityLink({
+            accountId: account.id, provider: 'github', providerUserId: 'released-fill', providerLogin: 'released-fill',
+            profile: { login: 'released-fill' }, presentation: { username: 'released-fill' },
+        });
+        await inTx(identityConnection.connectInTx, { isolationLevel: 'Serializable' });
+        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).username).toBeNull();
+        expect(await db.accountIdentity.count({ where: { accountId: account.id } })).toBe(1);
+    });
+
+    it('does not claim a released hold from a fresh provider presentation', async () => {
+        await db.releasedUsername.create({ data: { username: 'held-name', expiresAt: new Date(Date.now() + 86_400_000) } });
+        const accountId = randomUUID();
+        const identityConnection = await prepareIdentityLink({
+            accountId, provider: 'github', providerUserId: 'held-fill', providerLogin: 'held-name',
+            profile: { login: 'held-name' }, presentation: { username: 'held-name' },
+        });
+        const account = await inTx(tx => provisionFreshAccountInTx(tx, {
+            insertSemantics: { kind: 'must_create', accountId }, publicKey: null, encryptionMode: 'plain',
+            usernameChange: { kind: 'identity_fill', suggestion: 'held-name' }, identityConnection,
+        }), { isolationLevel: 'Serializable' });
+        expect(account.username).toBeNull();
+        expect(await db.accountIdentity.count({ where: { accountId } })).toBe(1);
+    });
 
     it('preserves a prepared provider avatar when its Account does not exist until admission', async () => {
         const image = await sharp({ create: {
