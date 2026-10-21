@@ -1750,6 +1750,42 @@ describe('sessionDraftRepository', () => {
         expect(vi.mocked(remote.transport.mutate).mock.calls.at(-1)?.[0]).toMatchObject({ expectedRevision: 2 });
     });
 
+    it.each([true, false])('orders New Session deletion after its save acknowledgement while scope currentness is %s', async (currentAfterSave) => {
+        const address = { kind: 'newSession' as const, draftId: uuid(219) };
+        const remote = createRemote(undefined, address);
+        const saved = createDeferred<void>();
+        const acknowledge = createDeferred<void>();
+        const repository = createSessionDraftRepository({
+            storage: createMemoryStorage(), cipher: plainCipher(), syncEnabled: true,
+            transport: { ...remote.transport, mutate: async request => {
+                const response = await remote.transport.mutate(request);
+                if (request.content !== null) { saved.resolve(); await acknowledge.promise; }
+                return response;
+            } },
+        });
+        repository.writeNewSessionDraft({ scope, draftId: address.draftId, materializationIntent: 'userEdit', patch: { text: 'Describe this picture' } });
+        const flush = repository.flushSessionDraft({ scope, address });
+        await saved.promise;
+        let current = true;
+        const deleting = repository.deleteSessionDraftWithScopedRuntime({ scope, address,
+            runtime: { transport: remote.transport, cipher: plainCipher() }, isCurrent: () => current });
+        try {
+            // The save has committed remotely while its response is in flight.
+            // Confirming Delete must share that existing outbox ordering.
+            current = currentAfterSave;
+            acknowledge.resolve();
+            await flush;
+            expect(await deleting).toBe(currentAfterSave);
+            if (currentAfterSave) {
+                expect(remote.readCurrent()?.content).toBeNull();
+                expect(repository.getSessionDraftSnapshot(scope, address)).toBeNull();
+            } else {
+                expect(remote.readCurrent()?.content).not.toBeNull();
+                expect(repository.getSessionDraftSnapshot(scope, address)).not.toBeNull();
+            }
+        } finally { acknowledge.resolve(); }
+    });
+
     it('does not resurrect a remotely deleted draft when a stale offline writer reconnects', async () => {
         const cipher = plainCipher();
         const baseDocument = createSessionDocument('base', uuid(220));

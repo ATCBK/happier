@@ -1801,6 +1801,10 @@ export class SessionDraftRepository {
         isCurrent: () => boolean;
     }>): Promise<boolean> {
         if (this.storage.prepare) await this.storage.prepare();
+        // The outbox may already have committed a newer remote revision while
+        // its acknowledgement is still in flight. Delete follows that same
+        // owner's save before capturing the revision for its tombstone.
+        await this.flushInFlight.get(this.replicaListenerKey(params.scope, params.address));
         const replica = this.readReplica(params.scope, params.address);
         if (!replica || !params.isCurrent()) return false;
         let result: SessionDraftMutateResponseV2;
