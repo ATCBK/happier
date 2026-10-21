@@ -135,7 +135,7 @@ export async function discoverMemoryExternalTranscriptSources(input: Parameters<
       agentId: candidate.agentId, source: candidate.source, catalogEntry: boundary?.catalogEntry ?? null });
     if (admitted.ok) configuredSourceKeys.add(JSON.stringify([candidate.agentId, admitted.sourceKey]));
   }
-  const descriptors = await discoverNativeUsageSourceMetadata(input);
+  const descriptors = await discoverNativeUsageSourceMetadata({ ...input, includeAccountingSource: false });
   return { descriptors, configuredSourceKeys };
 }
 

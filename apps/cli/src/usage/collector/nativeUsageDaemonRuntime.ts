@@ -44,7 +44,7 @@ export async function readNativeUsageAccountingAtAdmission(input: Parameters<typ
     cursor?: string;
     changedNativeSessionIds?: readonly string[];
 }>): Promise<AgentExternalSessionsResult<AgentExternalSessionsReadAccountingResult>> {
-    const admitted = await resolveNativeUsageSourceMetadata(input);
+    const admitted = await resolveNativeUsageSourceMetadata({ ...input, includeAccountingSource: false });
     if (!admitted) return { ok: false, code: 'unavailable' };
     return await input.boundary.externalSessions.readAccounting({ source: admitted.descriptor.source, cursor: input.cursor,
         ...(input.changedNativeSessionIds === undefined ? {} : { changedNativeSessionIds: input.changedNativeSessionIds }), signal: input.signal });

@@ -34,12 +34,14 @@ export async function resolveNativeUsageSourceMetadata(input: Readonly<{
     signal: AbortSignal;
     /** A retained capture may resolve metadata, but may not adopt a different source identity. */
     admittedSourceKey?: string;
+    includeAccountingSource?: boolean;
 }>): Promise<Readonly<{ descriptor: NativeUsageSourceDescriptor; metadata: AgentExternalSessionsResolveSourceResult }> | null> {
     const agent = input.agents.find(candidate => candidate.id === input.agentId);
     if (!agent?.identity || !input.boundary.isCurrent() || input.signal.aborted) return null;
     const admitted = await resolveConfiguredExternalSessionSourceAtAdmission({ ...input, catalogEntry: input.boundary.catalogEntry });
     if (!admitted.ok) return null;
-    const resolved = await input.boundary.externalSessions.resolveSource({ source: admitted.source, signal: input.signal });
+    const resolved = await input.boundary.externalSessions.resolveSource({ source: admitted.source, signal: input.signal,
+        ...(input.includeAccountingSource === false ? { includeAccountingSource: false } : {}) });
     if (!resolved.ok || input.signal.aborted || !input.boundary.isCurrent()) return null;
     const canonical = resolveExternalSessionSourceFromAgentProjection({ agents: input.agents }, input.agentId, resolved.value.source);
     if (!canonical.ok) return null;
@@ -74,6 +76,7 @@ export async function discoverNativeUsageSourceMetadata(input: Readonly<{
     activeServerDir: string;
     resolveBoundary(agentId: string): Promise<NativeUsageSourceBoundary | null>;
     signal: AbortSignal;
+    includeAccountingSource?: boolean;
 }>): Promise<readonly NativeUsageSourceDescriptor[]> {
     const candidates = materializeConfiguredExternalSessionSourceCandidates(input);
     const sources: NativeUsageSourceDescriptor[] = [];

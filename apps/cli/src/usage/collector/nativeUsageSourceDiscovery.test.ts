@@ -25,6 +25,13 @@ import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudge
 import { createUsageObservationPublisher } from '../createUsageObservationPublisher';
 import { UsageSourcesListV1Schema } from '@happier-dev/protocol/usage/usageSources';
 
+const nativeFileBoundary = vi.hoisted(() => ({ opendir: vi.fn() }));
+vi.mock('node:fs/promises', async importOriginal => {
+    const fs = await importOriginal<typeof import('node:fs/promises')>();
+    nativeFileBoundary.opendir.mockImplementation(fs.opendir);
+    return { ...fs, opendir: (...args: Parameters<typeof fs.opendir>) => nativeFileBoundary.opendir(...args) };
+});
+
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('native source metadata discovery', () => {
@@ -74,6 +81,18 @@ describe('native source metadata discovery', () => {
                 expect(state.sources[0]).not.toHaveProperty('configuredSourceKey');
                 expect(state.sources[0]).not.toHaveProperty('discoveredFileCount');
                 expect((await collector.get())[0]).not.toHaveProperty('discoveredFileCount');
+                // Reauthorizing a retained source needs identity, not another
+                // accounting inventory. Real plugin/host admission stays live.
+                nativeFileBoundary.opendir.mockRejectedValueOnce(new Error('identity admission must not enumerate accounting history'));
+                const identityOnly = await resolveNativeUsageSourceMetadata({ agents, agentId: 'claude',
+                    source: state.sources[0]!.source, activeServerDir: directory, signal: new AbortController().signal,
+                    includeAccountingSource: false,
+                    boundary: { catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true } });
+                expect(identityOnly?.descriptor.source).toEqual(state.sources[0]!.source);
+                expect(identityOnly?.metadata.accountingSource).toBeUndefined();
+                nativeFileBoundary.opendir.mockReset();
+                const fs = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+                nativeFileBoundary.opendir.mockImplementation(fs.opendir);
             } finally { await collector.dispose(); }
         } finally { await rm(directory, { recursive: true, force: true }); }
     });
