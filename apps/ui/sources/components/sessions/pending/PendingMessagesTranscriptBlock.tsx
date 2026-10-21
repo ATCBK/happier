@@ -53,7 +53,7 @@ import { useHappierCopyFeedback } from '@happier-dev/plugin-ui/presentation';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { SessionMessageAccountByline } from '@/components/sessions/transcript/SessionMessageAccountByline';
 import { TranscriptEventRow } from '@/components/sessions/transcript/events/TranscriptEventRow';
-import { isHostFollowInputMeta } from '@/components/sessions/transcript/events/hostFollowInput';
+import { isHostAuthoredInputMeta } from '@/components/sessions/transcript/events/hostAuthoredInput';
 import { useSessionMessageAuthorshipScope } from '@/components/sessions/transcript/useSessionMessageAuthorshipScope';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
@@ -676,7 +676,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         // Its Session reader hasn't opened it yet: the bubble holds a placeholder, not the message, so
         // nothing that reads or delivers the content is offered until the real text arrives.
         const isContentLoading = message.pendingDecryption?.kind === 'loading';
-        const isHostFollowInput = !hasDecryptFailure && !isContentLoading && isHostFollowInputMeta(message.rawRecord?.meta);
+        const isHostFollowInput = !hasDecryptFailure && !isContentLoading && isHostAuthoredInputMeta(message.rawRecord?.meta);
         const visualState = getPendingMessageVisualState(message, {
             materializingLocalIds,
             hasEarlierRow: pendingMessages.slice(0, index).some((candidate) =>
@@ -1206,7 +1206,7 @@ export function PendingMessagesTranscriptBlock(props: Readonly<{
         const isLastDiscarded = index === all.length - 1;
         const text = getPendingText(message).trim();
         const isHostFollowInput = message.pendingDecryption?.kind !== 'loading'
-            && message.pendingDecryptFailure?.kind !== 'decrypt_failed' && isHostFollowInputMeta(message.rawRecord?.meta);
+            && message.pendingDecryptFailure?.kind !== 'decrypt_failed' && isHostAuthoredInputMeta(message.rawRecord?.meta);
         const menuKey = `discarded:${message.id}`;
         const menuOpen = openMenuKey === menuKey;
         const menuAnchor = menuPressAnchor?.menuKey === menuKey ? menuPressAnchor.anchor : undefined;

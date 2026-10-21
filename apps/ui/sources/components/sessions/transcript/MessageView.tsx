@@ -44,7 +44,7 @@ import { TranscriptEventRow } from '@/components/sessions/transcript/events/Tran
 import { projectWorkerCardDelivery } from '@/components/sessions/transcript/events/followWorkerCardDelivery';
 import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
 import { isRuntimeIssueMessageMeta } from '@/components/sessions/transcript/events/runtimeIssueMessage';
-import { isHostFollowInputMeta } from '@/components/sessions/transcript/events/hostFollowInput';
+import { isHostAuthoredInputMeta } from '@/components/sessions/transcript/events/hostAuthoredInput';
 import type { AgentEvent } from "@happier-dev/session-core/raw";
 import { transcriptMarkdownTextStyle } from '@/components/sessions/transcript/transcriptMarkdownTypography';
 import { parseHappierMetaEnvelope } from '@/components/sessions/transcript/structured/happierMetaEnvelope';
@@ -455,7 +455,7 @@ export const MessageViewWithSessionCommon = React.memo(function MessageViewWithS
     props.message,
     props.messageDisplayCommon.debugInformationEnabled,
   ) === 'hidden') return null;
-  const isHostFollowInput = props.message.kind === 'user-text' && isHostFollowInputMeta(props.message.meta);
+  const isHostFollowInput = props.message.kind === 'user-text' && isHostAuthoredInputMeta(props.message.meta);
   return (
     <View style={styles.messageContainer} renderToHardwareTextureAndroid={true}>
       <View style={messageContentStyle}>

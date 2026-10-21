@@ -44,22 +44,23 @@ afterEach(() => {
 });
 
 describe('MessageView Account attribution', () => {
-    it.each(['next_turn', 'wake'] as const)('renders committed host Follow %s context as a notice, not a person’s bubble', async (delivery) => {
+    it.each(['next_turn', 'wake', 'generated'] as const)('renders committed host %s context as a notice, not a person’s bubble', async (delivery) => {
         const { normalizeRawMessage } = await import('@happier-dev/session-core/raw');
         const { createReducer, reducer } = await import('@happier-dev/session-core/reducer');
         const { UserMessageBubble } = await import('./UserMessageBubble');
         const { TranscriptEventRow } = await import('./events/TranscriptEventRow');
         // Persisted producer shape observed in QA-R42 Bot seq 101/135/136/137.
-        const text = 'Followed source changed. Read the original source context.';
+        const text = delivery === 'generated' ? 'SCM diff summary generator. Return only valid JSON.'
+            : 'Followed source changed. Read the original source context.';
         const meta = {
             happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
             happierInputAuthorityV1: {
                 v: 1, producer: 'sessionAction', caller: { kind: 'host' },
                 permission: { admittedPermissionCeiling: 'default' },
-                followDeliveryV1: { v: 1, delivery,
+                ...(delivery === 'generated' ? {} : { followDeliveryV1: { v: 1, delivery,
                     original: { sourceSessionId: 'cmvgukay000kdmcyhj5avwapl',
                         sourceMessage: { localId: '73a3dbcc-6d07-4fac-b2bb-671af06ccf80', seq: 6 } },
-                    event: { kind: 'finished' } },
+                    event: { kind: 'finished' } } }),
             },
         };
         const normalized = [
@@ -85,20 +86,21 @@ describe('MessageView Account attribution', () => {
         expect(screen.getTextContent()).toContain(text);
     });
 
-    it('keeps host Follow origin visible while queued or discarded without removing queue controls', async () => {
+    it.each(['follow', 'generated'] as const)('keeps host %s origin visible while queued or discarded without removing queue controls', async (kind) => {
         const { PendingMessagesTranscriptBlock } = await import('../pending/PendingMessagesTranscriptBlock');
         const { TranscriptEventRow } = await import('./events/TranscriptEventRow');
-        const text = 'Followed source changed. Read the original source context.';
+        const text = kind === 'generated' ? 'SCM diff summary generator. Return only valid JSON.'
+            : 'Followed source changed. Read the original source context.';
         const follow = {
             id: 'queued-follow', localId: 'queued-follow', text, createdAt: 1, updatedAt: 1,
             rawRecord: { role: 'user', content: { type: 'text', text }, meta: {
                 happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
                 happierInputAuthorityV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' },
                     permission: { admittedPermissionCeiling: 'default' },
-                    followDeliveryV1: { v: 1, delivery: 'next_turn',
+                    ...(kind === 'generated' ? {} : { followDeliveryV1: { v: 1, delivery: 'next_turn',
                         original: { sourceSessionId: 'cmvgukay000kdmcyhj5avwapl',
                             sourceMessage: { localId: '73a3dbcc-6d07-4fac-b2bb-671af06ccf80', seq: 6 } },
-                        event: { kind: 'finished' } } },
+                        event: { kind: 'finished' } } }) },
             } },
         };
         const screen = await renderBareScreen(<AppSessionTranscriptSourceProvider sessionId="bot">
