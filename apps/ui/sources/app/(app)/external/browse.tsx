@@ -12,7 +12,9 @@ import {
 import { useSettings } from '@/sync/domains/state/storage';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { getConnectedMetadataCatalog } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
-import { useProfile } from '@/sync/store/hooks';
+import { useMachine, useProfile } from '@/sync/store/hooks';
+import { readMachineName } from '@/utils/sessions/machineDisplayNames';
+import { resolveBrowseProjectionFailureCopy } from '@/components/sessions/external/browse/browseProjectionFailureCopy';
 import { resolveExternalSessionsAgentBrowseRouteScope } from '@/components/sessions/external/browse/externalSessionBrowseNavigation';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { t } from '@/text';
@@ -38,10 +40,13 @@ const ExternalSessionsBrowseRouteContent = React.memo(function ExternalSessionsB
     const routeScope = props.routeScope;
     const scoped = routeScope.kind !== 'unscoped';
     const resolvedScope = routeScope.kind === 'scoped' ? routeScope.scope : null;
+    // Retry re-keys the projection read, the same way Browse's own retry does.
+    const [projectionRefreshKey, setProjectionRefreshKey] = React.useState(0);
     const daemonMergedProjection = useDaemonMergedProjectionInputs({
         machineId: resolvedScope?.machineId ?? null,
         serverId: resolvedScope?.serverId ?? null,
         enabled: resolvedScope !== null,
+        refreshKey: projectionRefreshKey,
     });
     // The projection owner retains Account-scoped metadata while refreshing.
     // Keep Browse mounted so invalidation cannot discard its query and hits;
@@ -87,9 +92,42 @@ const ExternalSessionsBrowseRouteContent = React.memo(function ExternalSessionsB
         settings,
     ]);
 
+    const machine = useMachine(resolvedScope?.machineId ?? '', resolvedScope !== null);
+    const retryProjection = React.useCallback(() => {
+        setProjectionRefreshKey((current) => current + 1);
+    }, []);
+
     if (scoped && !lockScope) {
         const loading = routeScope.kind === 'scoped'
             && daemonMergedProjection.phase === 'loading';
+        // A projection that could not be read is a failure with a way forward, never "no integrations".
+        const failedPhase = routeScope.kind === 'scoped'
+            && (daemonMergedProjection.phase === 'error' || daemonMergedProjection.phase === 'unsupported')
+            ? daemonMergedProjection.phase
+            : null;
+        if (failedPhase) {
+            const copy = resolveBrowseProjectionFailureCopy({
+                phase: failedPhase,
+                failureReason: daemonMergedProjection.failureReason,
+                machineName: readMachineName(machine),
+            });
+            return (
+                <SurfaceStateCard
+                    testID="external-sessions-browse-route-projection-failed"
+                    kind={failedPhase === 'unsupported' ? 'unavailable' : 'error'}
+                    iconName="link-break"
+                    accessibilitySemantics="alert"
+                    title={copy.title}
+                    reason={copy.reason}
+                    diagnosticCode={copy.diagnosticCode}
+                    action={{ label: t('common.retry'), onPress: retryProjection }}
+                    secondaryAction={{
+                        label: t('common.close'),
+                        onPress: () => router.back(),
+                    }}
+                />
+            );
+        }
         return (
             <SurfaceStateCard
                 testID={loading

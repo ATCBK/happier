@@ -19,6 +19,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import { ExternalSessionSearchProgress } from './ExternalSessionSearchProgress';
+import { resolveBrowseProjectionFailureCopy } from './browseProjectionFailureCopy';
 import { ConversationHitStatus, ConversationHitSummary, isConversationHitStatusInMeta, resolveConversationHitSnippet, resolveConversationHitStatusLabel } from './ConversationHitSummary';
 import { ITEM_SUBTITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
@@ -42,6 +43,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import type { Theme } from '@/theme';
 import { t } from '@/text';
+import type { MachineContributionRegistryProjectionFailureReason } from '@/sync/ops/machineContributionRegistryProjection';
 import { formatSessionPath } from '@/utils/sessions/formatPathRelativeToHome';
 import { stripMarkdown } from '@/utils/sessions/messageUtils';
 import { formatShortRelativeTime } from '@/utils/time/formatShortRelativeTime';
@@ -737,6 +739,8 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     machineHomeDir?: string | null;
     sourceLabel?: string | null;
     projectionPhase?: 'loading' | 'ready' | 'unsupported' | 'error';
+    /** Why the projection read failed, with `projectionPhase: 'error'`. */
+    projectionFailureReason?: MachineContributionRegistryProjectionFailureReason;
     browseCapabilityAvailable?: boolean;
     /** The machine scope; see {@link ExternalSessionBrowseScope}. Absent means ready. */
     scope?: ExternalSessionBrowseScope;
@@ -906,9 +910,15 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
     const indexingBannerVisible = hasLoadedRows && props.preparation !== null;
     const projectionPhase = props.projectionPhase ?? 'ready';
     const scope = props.scope ?? READY_SCOPE;
-    const projectionFailureMessage = projectionPhase === 'unsupported' || projectionPhase === 'error'
-        ? t('newSession.daemonRpcUnavailableBody')
+    const projectionFailureCopy = projectionPhase === 'unsupported' || projectionPhase === 'error'
+        ? resolveBrowseProjectionFailureCopy({
+            phase: projectionPhase,
+            failureReason: props.projectionFailureReason,
+            machineName: props.machineLabel?.trim() || null,
+        })
         : null;
+    // Retained rows stay usable; the footer line names what failed beside Retry.
+    const projectionFailureMessage = projectionFailureCopy?.title ?? null;
     // The visible loading state is a live region on web/Android; iOS mirrors it.
     // An index build is announced by the hidden status below instead, because its
     // visible progress deliberately is not live (count ticks must not speak).
@@ -1017,8 +1027,9 @@ export const ExternalSessionBrowseCandidatesList = React.memo(function ExternalS
             kind={projectionPhase === 'unsupported' ? 'unavailable' : 'error'}
             iconName="link-break"
             accessibilitySemantics="alert"
-            title={t('externalSessions.browseCantReachTitle', { machine: machineInSentence })}
-            reason={t('externalSessions.browseCantReachBody')}
+            title={projectionFailureCopy?.title ?? t('externalSessions.browseCantReachTitle', { machine: machineInSentence })}
+            reason={projectionFailureCopy?.reason ?? t('externalSessions.browseCantReachBody')}
+            diagnosticCode={projectionFailureCopy?.diagnosticCode}
             action={retry}
         />
     ) : props.browseCapabilityAvailable === false ? (

@@ -613,6 +613,21 @@ describe('ExternalSessionsBrowseScreen', () => {
         expect(candidatesListSpy).not.toHaveBeenCalled();
     });
 
+    it('words an unreadable daemon projection and an unsupported daemon differently', async () => {
+        daemonProjectionState.current = { phase: 'error', inputs: null };
+        const { ExternalSessionsBrowseScreen } = await externalSessionsBrowseScreenModulePromise;
+        const failed = await renderScreen(<ExternalSessionsBrowseScreen />);
+        await flushHookEffects();
+        expect(failed.findByTestId('direct-session-candidates:projection-error')).not.toBeNull();
+        expect(failed.getTextContent()).toContain('externalSessions.browseCantReachTitle');
+        expect(failed.getTextContent()).not.toContain('externalSessions.browseUpdateNeededTitle');
+
+        daemonProjectionState.current = { phase: 'unsupported', inputs: null };
+        const unsupported = await renderScreen(<ExternalSessionsBrowseScreen />);
+        await flushHookEffects();
+        expect(unsupported.getTextContent()).toContain('externalSessions.browseUpdateNeededTitle');
+    });
+
     it('retries a failed daemon projection without presenting an authoritative empty result', async () => {
         daemonProjectionState.current = {
             phase: 'error',

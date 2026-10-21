@@ -44,6 +44,7 @@ vi.mock('@/sync/domains/state/storage', () => ({
 
 vi.mock('@/sync/store/hooks', () => ({
     useProfile: () => ({}),
+    useMachine: () => null,
 }));
 
 vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
@@ -134,6 +135,7 @@ describe('External Sessions Browse route feature gate', () => {
             machineId: 'machine-1',
             serverId: 'server-1',
             enabled: true,
+            refreshKey: 0,
         });
     });
 

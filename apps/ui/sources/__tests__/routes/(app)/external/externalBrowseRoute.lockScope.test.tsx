@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
@@ -16,7 +17,10 @@ const routeParamsState = vi.hoisted(() => ({
     } as Record<string, string>,
 }));
 const daemonProjectionState = vi.hoisted(() => ({
-    phase: 'ready' as 'loading' | 'ready' | 'error',
+    phase: 'ready' as 'loading' | 'ready' | 'error' | 'unsupported',
+    failureReason: undefined as string | undefined,
+    retainInputs: false,
+    lastParams: null as Readonly<Record<string, unknown>> | null,
 }));
 const routerBackSpy = vi.hoisted(() => vi.fn());
 
@@ -95,15 +99,22 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
 
 vi.mock('@/sync/store/hooks', () => ({
     useProfile: () => ({ connectedServicesV2: [] }),
+    useMachine: (machineId: string) => machineId
+        ? { id: machineId, metadata: { displayName: 'Devin box' } }
+        : null,
 }));
 
 vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({
-        phase: daemonProjectionState.phase,
-        inputs: daemonProjectionState.phase === 'ready'
-            ? { pluginProjectionV2: projection }
-            : null,
-    }),
+    useDaemonMergedProjectionInputs: (params: Readonly<Record<string, unknown>>) => {
+        daemonProjectionState.lastParams = params;
+        return {
+            phase: daemonProjectionState.phase,
+            inputs: daemonProjectionState.phase === 'ready' || daemonProjectionState.retainInputs
+                ? { pluginProjectionV2: projection }
+                : null,
+            ...(daemonProjectionState.failureReason ? { failureReason: daemonProjectionState.failureReason } : {}),
+        };
+    },
 }));
 
 vi.mock('@/components/ui/surfaces/SurfaceStateCard', () => ({
@@ -128,6 +139,9 @@ describe('ExternalSessionsBrowseRoute locked Agent scope', () => {
             agentLocalId: 'reviewer',
         };
         daemonProjectionState.phase = 'ready';
+        daemonProjectionState.failureReason = undefined;
+        daemonProjectionState.retainInputs = false;
+        daemonProjectionState.lastParams = null;
         routerBackSpy.mockReset();
         browseScreenPropsRef.current = null;
     });
@@ -195,6 +209,54 @@ describe('ExternalSessionsBrowseRoute locked Agent scope', () => {
         state?.props.action?.onPress();
         expect(routerBackSpy).toHaveBeenCalledOnce();
         expect(browseScreenPropsRef.current).toBeNull();
+    });
+
+    it('reports a failed Machine projection as a failure with Retry and Close, not as no integrations', async () => {
+        daemonProjectionState.phase = 'error';
+        daemonProjectionState.failureReason = 'transport-error';
+        const Route = (await import('@/app/(app)/external/browse')).default;
+
+        const screen = await renderScreen(<Route />);
+
+        expect(screen.findByTestId('external-sessions-browse-route-unavailable')).toBeNull();
+        expect(screen.findByTestId('external-sessions-browse-route-loading')).toBeNull();
+        const state = screen.findByTestId('external-sessions-browse-route-projection-failed');
+        expect(state?.props.kind).toBe('error');
+        expect(state?.props.accessibilitySemantics).toBe('alert');
+        expect(state?.props.title).toBe('Can’t reach Happier on Devin box');
+        expect(state?.props.diagnosticCode).toBe('transport-error');
+        expect(state?.props.secondaryAction?.label).toBe('Close');
+        state?.props.secondaryAction?.onPress();
+        expect(routerBackSpy).toHaveBeenCalledOnce();
+        // Retry re-keys the one projection read, rather than starting a second fetch path.
+        expect(state?.props.action?.label).toBe('Retry');
+        const keyBefore = daemonProjectionState.lastParams?.refreshKey;
+        act(() => { state?.props.action?.onPress(); });
+        expect(daemonProjectionState.lastParams?.refreshKey).toBe(Number(keyBefore) + 1);
+        expect(browseScreenPropsRef.current).toBeNull();
+    });
+
+    it('words an unsupported Machine as needing an update', async () => {
+        daemonProjectionState.phase = 'unsupported';
+        const Route = (await import('@/app/(app)/external/browse')).default;
+
+        const screen = await renderScreen(<Route />);
+
+        const state = screen.findByTestId('external-sessions-browse-route-projection-failed');
+        expect(state?.props.kind).toBe('unavailable');
+        expect(state?.props.title).toBe('Update Happier on Devin box');
+    });
+
+    it('keeps Browse mounted when a refresh fails but the projection was retained', async () => {
+        daemonProjectionState.phase = 'error';
+        daemonProjectionState.failureReason = 'timeout';
+        daemonProjectionState.retainInputs = true;
+        const Route = (await import('@/app/(app)/external/browse')).default;
+
+        const screen = await renderScreen(<Route />);
+
+        expect(screen.findByTestId('external-sessions-browse-route-projection-failed')).toBeNull();
+        expect(browseScreenPropsRef.current?.lockScope).not.toBeNull();
     });
 
     it('preserves the ordinary unscoped browse entry point', async () => {

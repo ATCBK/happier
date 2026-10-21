@@ -1052,6 +1052,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                     projectionPhase={daemonMergedProjection.phase === 'idle'
                         ? 'ready'
                         : daemonMergedProjection.phase}
+                    projectionFailureReason={daemonMergedProjection.failureReason}
                     browseCapabilityAvailable={browseProviderIds.length > 0}
                     scope={browseScope}
                     filters={filters}
