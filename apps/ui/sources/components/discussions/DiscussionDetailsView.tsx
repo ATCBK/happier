@@ -142,7 +142,7 @@ const styles = StyleSheet.create((theme) => ({
     selectAffordance: { alignSelf: 'center' },
     rowActions: { flexDirection: 'row', alignItems: 'center' },
     savedDecision: { width: 28, height: 28, alignItems: 'center', justifyContent: 'center' },
-    stateLine: { paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
+    stateLine: { width: '100%', alignSelf: 'center', paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s8 },
     deliveryStatus: { color: theme.colors.text.secondary, fontSize: 12 },
     error: { color: theme.colors.text.destructive, textAlign: 'center' },
     retry: { minHeight: minimumInteractiveTargetSize, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14 },
@@ -1195,7 +1195,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 tone={thread.status === 'offline' ? 'neutral' : 'warning'}
                 action={retryAction}
             /> : null}
-            {operationNotice ? <View style={styles.stateLine}>
+            {operationNotice ? <View style={[styles.stateLine, threadColumn]}>
                 <SurfaceStateCard testID="session-discussion-notice" size="line" kind={lifecycleFailure ? 'error' : 'warning'} title={operationNotice} />
             </View> : null}
             {draft.conflict ? <SessionDraftConflictResolution scope={props.scope} address={draftAddress} conflict={draft.conflict} /> : null}
@@ -1265,7 +1265,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 <TranscriptSelectionToolbar selectableMessagesInOrder={selectableMessages} bulkCopyFormat={transcriptBulkCopyFormat} roleLabels={{ user: t('session.collaboration.discussion.collaborator'), assistant: t('voiceActivity.format.assistant') }} sendToSessionEnabled={discussion.capabilities.sendToSession && props.source?.canSendToSession === true} onSendToSession={sendSelectionToComposer} formatSelection={(selected) => prepareSelection(selected)?.text ?? null} selectionUnavailableText={t('session.collaboration.discussion.contentUnavailable')} additionalAction={discussion.capabilities.askAgent && props.source?.canLaunchExecutionRuns ? { testID: 'session-discussion-selection-ask-agent', label: t('session.collaboration.discussion.selection.askAgent'), onPress: askAgentAboutSelection } : undefined} />
             </View>
             </View>
-            {selectionHandoffRetry ? <View style={styles.stateLine}><SurfaceStateCard
+            {selectionHandoffRetry ? <View style={[styles.stateLine, threadColumn]}><SurfaceStateCard
                 testID="session-discussion-selection-handoff-error"
                 size="line"
                 kind="error"
@@ -1273,7 +1273,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 title={t('session.collaboration.discussion.selection.handoffError')}
                 action={{ testID: 'session-discussion-selection-handoff-retry', label: t('common.retry'), onPress: retrySelectionHandoff, disabled: selectionHandoffRetrying, busy: selectionHandoffRetrying }}
             /></View> : null}
-            {waitingApprovalId && attention ? <View style={styles.stateLine}><SurfaceStateCard
+            {waitingApprovalId && attention ? <View style={[styles.stateLine, threadColumn]}><SurfaceStateCard
                 testID="session-discussion-waiting-approval"
                 size="line"
                 kind="warning"
@@ -1293,10 +1293,10 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     onPress={() => draft.setPassage(null)} />
             </View> : null}
             {discussion.archivedAt !== null
-                ? <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-archived" size="line" kind="unavailable" iconName="archive" title={t('session.collaboration.discussion.archivedNotice')} /></View>
+                ? <View style={[styles.stateLine, threadColumn]}><SurfaceStateCard testID="session-discussion-archived" size="line" kind="unavailable" iconName="archive" title={t('session.collaboration.discussion.archivedNotice')} /></View>
                 : discussion.capabilities.postMessages
                     ? <DiscussionComposer scope={props.scope} accountLifetime={props.accountLifetime} address={props.target.address} discussionId={props.target.discussionId} availability="available" value={{ text: draft.text, mentions: draft.mentions }} onChange={draft.setComposer} disabled={composerBlocked || mutationsDisabled} onSend={(content) => void send(content)} prepareParticipantMentions={prepareParticipantMentions} extraActionChips={runChips} />
-                    : <View style={styles.stateLine}><SurfaceStateCard testID="session-discussion-read-only" size="line" kind="denied" title={t('session.collaboration.discussion.locked')} /></View>}
+                    : <View style={[styles.stateLine, threadColumn]}><SurfaceStateCard testID="session-discussion-read-only" size="line" kind="denied" title={t('session.collaboration.discussion.locked')} /></View>}
         </View>
     </TranscriptMessageSelectionBoundary>;
 }
