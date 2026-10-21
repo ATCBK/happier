@@ -1689,6 +1689,12 @@ function resolveRemoteStackStartInvocation(target, {
   // Co-located services already share the server's projected setting. A daemon
   // placed separately consumes the controller's opt-in, including its withdrawal.
   if (normalizedServices.daemon) serviceEnvironment.HAPPIER_WEB_LATENCY_TRACE ??= env.HAPPIER_WEB_LATENCY_TRACE === '1' ? '1' : '';
+  // The operator's source-built guest CLI (a path on this target) reaches the
+  // daemon's managed installer, which reads it before any release download.
+  const guestCliPayloadRoot = String(env.HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT ?? '').trim();
+  if (normalizedServices.daemon && guestCliPayloadRoot && !/[\0\r\n]/.test(guestCliPayloadRoot)) {
+    serviceEnvironment.HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT = guestCliPayloadRoot;
+  }
   const stackEnvLines = [
     `HAPPIER_STACK_REPO_DIR=${target.repoDir}`,
     `HAPPIER_STACK_CLI_HOME_DIR=${cliHomeDir}`,

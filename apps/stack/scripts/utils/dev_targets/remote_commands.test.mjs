@@ -1957,6 +1957,22 @@ test('remote daemon launch projects the controller latency switch on POSIX and W
   }
 });
 
+test('remote daemon launch carries the operator guest CLI payload root only when the Stack sets it', () => {
+  for (const target of [posix, windows]) {
+    const render = (env) => {
+      const command = buildRemoteStackCommand(target, {
+        services: { server: false, expo: false, daemon: true },
+        serverUrl: 'http://127.0.0.1:43005', stackName: 'remote-qa', env,
+      });
+      return target.platform === 'windows'
+        ? Buffer.from(command.split(' ').at(-1), 'base64').toString('utf16le') : command;
+    };
+    assert.ok(render({ HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT: '/srv/qa/payload' })
+      .includes('HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT=/srv/qa/payload'));
+    assert.doesNotMatch(render({}), /HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT/);
+  }
+});
+
 test('remote daemon command reuses the Stack dev owner and adopts a last-green daemon on reconnect', () => {
   const posixRemoteStack = resolveRemoteStackStatePaths(posix, { stackName: 'repo-local-dev' }).stackName;
   const command = buildRemoteDaemonCommand(posix, {
