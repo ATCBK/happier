@@ -69,7 +69,8 @@ function mapSessionTurnLifecycleToConnectedServiceEvent(value: unknown): Connect
 
 export function handleSessionNewMessageUpdate(params: {
     update: Update;
-    serverId: string;
+    /** Canonical bound Home; undefined is unavailable, null is a legacy Home. */
+    serverId: string | null | undefined;
     sessionId: string;
     receivedMessageIds: Set<string>;
     lastObservedMessageSeq: number;
@@ -158,6 +159,15 @@ export function handleSessionNewMessageUpdate(params: {
     }
 
     let nextLastObservedMessageSeq = params.lastObservedMessageSeq;
+    if (params.serverId === undefined && (params.update.body.message.messageRole === 'user'
+        || body !== null && typeof body === 'object' && 'role' in body && body.role === 'user')) {
+        params.debug('[SOCKET] [UPDATE] Session Home identity unavailable; retaining original observation', { messageId });
+        return {
+            handled: true,
+            lastObservedMessageSeq: params.lastObservedMessageSeq,
+            lastObservedUserMessageSeq: params.lastObservedUserMessageSeq,
+        };
+    }
     let nextLastObservedUserMessageSeq = params.lastObservedUserMessageSeq;
     const msgSeq = params.update.body.message.seq;
     const isStrictlyNewMessageSeq = typeof msgSeq === 'number'
@@ -191,11 +201,11 @@ export function handleSessionNewMessageUpdate(params: {
         // Authored plaintext/E2EE body fields never establish requester identity.
         actionRequestAttributionV1: deriveSessionInputActionRequestAttributionV1({
             requestRef: readPendingLocalId(localId),
-            persona: { serverId: params.serverId, sessionId: params.sessionId },
+            persona: params.serverId ? { serverId: params.serverId, sessionId: params.sessionId } : null,
             messageRole: params.update.body.message.messageRole,
             inputAdmissionReceipt: rawInputAdmissionReceipt,
             inputAuthority: readSessionInputAuthority(body && typeof body === 'object' && 'meta' in body ? body.meta : undefined, 'stored'),
-            origin: hasMessageId && readCommittedUserMessageSeq(msgSeq) !== null
+            origin: params.serverId && hasMessageId && readCommittedUserMessageSeq(msgSeq) !== null
                 ? { kind: 'session', session: { serverId: params.serverId, sessionId: params.sessionId }, messageId }
                 : null,
         }),

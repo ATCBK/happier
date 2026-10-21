@@ -46,12 +46,16 @@ export async function runSessionChangesSyncOnConnect(params: {
     reconcilePendingExecutionRunTarget?: ((runId: string) => Promise<void>) | null;
     refreshAccountSettingsForMinimumVersion?: (settingsVersion: number | null) => Promise<void>;
     refreshDemandedAccountCatalogs?: () => Promise<void>;
+    onSessionFollowInvalidated?: () => void;
     connectionSupervisor?: ManagedConnectionSupervisor | null;
     onDebug: (message: string, data?: unknown) => void;
 }): Promise<void> {
     const requestSupervisionScope = params.connectionSupervisor?.captureProbeReportScope?.();
     const accountId = await params.getAccountId();
-    if (!accountId) return;
+    if (!accountId) {
+        if (params.reason === 'live') params.onSessionFollowInvalidated?.();
+        return;
+    }
     const refreshDemandedAccountCatalogs = async () => {
         try { await params.refreshDemandedAccountCatalogs?.(); }
         catch { params.onDebug('[API] Demanded Account catalog refresh unavailable'); }
@@ -61,6 +65,7 @@ export async function runSessionChangesSyncOnConnect(params: {
     const after = await params.readChangesCursor(accountId);
     const result = await fetchChanges({ token: params.token, after, limit: CHANGES_PAGE_LIMIT });
     if (result.status === 'cursor-gone') {
+        params.onSessionFollowInvalidated?.();
         let transcriptCatchUpSucceeded = true;
         // If the server indicates the cursor is invalid (future cursor or pruned floor),
         // force a snapshot rebuild so we don't miss deletion signals.
@@ -92,6 +97,8 @@ export async function runSessionChangesSyncOnConnect(params: {
         })) {
             return;
         }
+        // Without change details, retain the previous conservative recovery.
+        if (params.reason === 'live') params.onSessionFollowInvalidated?.();
 
         // Backwards compatibility: old servers may not support /v2/changes yet (e.g. 404).
         // On reconnect, fall back to the snapshot-based convergence path.
@@ -186,6 +193,7 @@ export async function runSessionChangesSyncOnConnect(params: {
         await params.reconcilePendingExecutionRunTarget?.(runId);
     }));
     if (changes.length >= CHANGES_PAGE_LIMIT) {
+        params.onSessionFollowInvalidated?.();
         // Slow-path: too many coalesced changes. Snapshot sync gets us back to a known-good state;
         // session transcript catch-up is only needed after reconnect.
         if (params.reason === 'reconnect') {
@@ -218,6 +226,11 @@ export async function runSessionChangesSyncOnConnect(params: {
         const snapshotSucceeded = await params.syncSessionSnapshotFromServer({ reason: snapshotReasonForChangesFallback(params.reason) });
         snapshotSyncFailed = snapshotSyncFailed || !snapshotSucceeded;
     }
+
+    // Follow source changes publish a change for each destination; workflow
+    // delivery publishes one for its origin. Unrelated Account activity cannot
+    // produce context for this Session. Exact socket hints still wake directly.
+    if (hasRelevantSessionChange) params.onSessionFollowInvalidated?.();
 
     if (!transcriptCatchUpFailed && !snapshotSyncFailed) {
         await params.writeChangesCursor(accountId, nextCursor);

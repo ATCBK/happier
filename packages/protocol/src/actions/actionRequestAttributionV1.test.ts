@@ -34,6 +34,20 @@ describe('host request attribution custody', () => {
     expect(Object.isFrozen(retained.origin)).toBe(true);
   });
 
+  it('does not fabricate qualified attribution for a legacy Home, while preserving settled original custody', () => {
+    const receipt = { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'person', sessionRelationship: 'owner' };
+    expect(deriveSessionInputActionRequestAttributionV1({ requestRef: 'input', persona: null, origin: null,
+      messageRole: 'user', inputAdmissionReceipt: receipt })).toBeUndefined();
+    const cause = { requestRef: 'original', requester: { serverId: 'original-home', accountId: 'person' }, persona,
+      origin: { kind: 'session' as const, session: persona, messageId: 'original-message' } };
+    expect(deriveSessionInputActionRequestAttributionV1({ requestRef: 'forwarded', persona: null, origin: null,
+      messageRole: 'user', inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' },
+      inputAuthority: { v: 1, producer: 'sessionAction', caller: { kind: 'host' },
+        sourceSession: { sourceSessionId: 'sender', sourceTurnId: 'turn', via: 'action' },
+        permission: { admittedPermissionCeiling: 'default' }, actionRequestAttributionV1: cause },
+    })).toEqual(cause);
+  });
+
   it('retains the admitted original cause on a forwarded machine input, never an Account-authored claim', () => {
     const cause = { requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' }, persona,
       origin: { kind: 'session' as const, session: persona, messageId: 'bob-message' } };

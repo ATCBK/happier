@@ -390,7 +390,7 @@ it.each([
         const captured = await store.approvalsGet({ serverId, artifactId });
         expect(captured).toMatchObject({ v: 2, status: 'open', actionId: 'discussion.reply',
           discussionDraftReview: true, executionOriginV1: { machineId, sessionInputSource: source,
-            discussionReplyReturn: { serverId, requestLocalId: source.sourceInputId, acceptedTurnId: source.sourceTurnId } },
+            discussionReplyReturn: { serverId: 'srv_fixture_home', requestLocalId: source.sourceInputId, acceptedTurnId: source.sourceTurnId } },
           actionArgs: { content: privateContent } });
         if (captured?.v !== 2) throw new Error('Missing actual private draft');
         expect(await store.approvalsUpdate({ artifactId, serverId, request: { ...captured, status: 'approved',
@@ -632,7 +632,7 @@ it.each([
             replyTarget: { kind: 'message', messageId: 'question-1' },
             content: { v: 1, parts: [{ t: 'text', text: original.message }] } },
           executionOriginV1: { serverId, serverIdentityId: 'srv_fixture_home', sessionId, machineId, accountId: 'owner', discussionReplyReturn: {
-            serverId, requestLocalId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId } } });
+            serverId: 'srv_fixture_home', requestLocalId: original.requestLocalId, acceptedTurnId: original.acceptedTurnId } } });
         if (privateDraft?.v !== 2) throw new Error('Missing captured native return approval');
         if (mode === 'plain') {
           // Consume the actual persisted producer output through the incumbent
@@ -813,7 +813,7 @@ it.each([
             kind: 'post', content: terminalContent, mentionedAccountIds: [], mentionedSessionIds: [],
             replyTarget: { kind: 'message', messageId: 'question-1' } }) }) } } : {}) };
       const terminal = { v: 1 as const, sessionId, discussionId: summary.id, request: body,
-        replyReturn: { serverId, requestLocalId: 'terminal-original', acceptedTurnId: 'retired-turn' } };
+        replyReturn: { serverId: 'srv_fixture_home', requestLocalId: 'terminal-original', acceptedTurnId: 'retired-turn' } };
       corruptNextAck = true;
       await expect(client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminal })).rejects.toThrow();
       expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminal })).toMatchObject({ ok: true });
@@ -832,6 +832,7 @@ it.each([
           actionArgs: { discussionId: summary.id, localId: returnLocalId,
             content: { v: 1, parts: [{ t: 'text', text }] }, replyTarget: { kind: 'message', messageId: 'question-1' } },
           executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, sessionId,
+            serverIdentityId: 'srv_fixture_home',
             // Retain the real fallback producer's complete origin, not the
             // formerly sparse host fixture that skipped policy/source checks.
             sessionAgentSpawnPolicyV1: accountSettingsParse({}).sessionAgentSpawnPolicyV1,

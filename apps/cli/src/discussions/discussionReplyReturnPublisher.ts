@@ -72,7 +72,7 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
         const transport = await resolveSessionTransportContext({ credentials: params.credentials,
           idOrPrefix: original.requestSessionId, signal });
         if (!transport.ok || transport.sessionId !== original.requestSessionId || !await current()) return denied();
-        const replyReturn = { serverId: params.serverId, requestLocalId: original.requestLocalId,
+        const replyReturn = { serverId: origin.serverIdentityId, requestLocalId: original.requestLocalId,
           ...(original.workflow ? { workflow: original.workflow } : {}),
           ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) };
         phase = 'session_publisher';
@@ -102,7 +102,7 @@ export function createDiscussionReplyReturnPublisher(params: Readonly<{
     }, { serverId: params.serverId, surface: 'agent', authority: 'account_automation',
       defaultSessionId: original.requestSessionId, defaultSessionMachineId: params.machineId,
       actionCaller: { kind: 'host' },
-      discussionReplyReturn: { serverId: params.serverId, requestLocalId: original.requestLocalId,
+      discussionReplyReturn: { serverId: origin.serverIdentityId, requestLocalId: original.requestLocalId,
         ...(original.workflow ? { workflow: original.workflow } : {}),
         ...(original.acceptedTurnId ? { acceptedTurnId: original.acceptedTurnId } : {}) },
       actionRequestId: localId, signal, ...(sessionInputSource ? { sessionInputSource } : {}),

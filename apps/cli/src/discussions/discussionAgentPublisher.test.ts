@@ -36,6 +36,7 @@ describe('trusted Discussion reply publisher', () => {
     const posts: unknown[] = [];
     registerDiscussionAgentPublisher({ rpcHandlerManager: rpc,
       serverId: 'home', serverUrl: 'https://home.test',
+      getServerIdentityId: () => 'home',
       readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
       isApprovalExecutionOriginCurrent: async () => false,
       session: { sessionId: 'receiver', postAgentDiscussionMessage: async request => {
@@ -73,6 +74,7 @@ describe('trusted Discussion reply publisher', () => {
     const posts: unknown[] = [];
     registerDiscussionAgentPublisher({ rpcHandlerManager: rpc,
       serverId: 'home', serverUrl: 'https://home.test',
+      getServerIdentityId: () => 'home',
       readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
       isApprovalExecutionOriginCurrent: async () => false,
       session: { sessionId: 'receiver', getActiveTurnAdmissionWitness: () => witness,
@@ -162,6 +164,7 @@ describe('trusted Discussion reply publisher', () => {
     const posts: unknown[] = [];
     registerDiscussionAgentPublisher({ rpcHandlerManager: rpc,
       serverId: 'home', serverUrl: 'https://home.test', readOwnerAccountCredentials: async () => ({ token: 'token', encryption: null }),
+      getServerIdentityId: () => 'home',
       isApprovalExecutionOriginCurrent: async () => false,
       executeSourceAction: async (actionId, input, context) => actionId === 'workflow.run.invocations.get'
         ? { ok: true, result: await owner.execute({ actionId, input: WorkflowInvocationGetRequestV1Schema.parse(input), context }) }

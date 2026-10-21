@@ -34,6 +34,7 @@ import { isDiscussionDocEditProposalContentV1, readDiscussionMentionedParticipan
 import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
 import { bindScmActionToSessionWorkspace, requiresExplicitScmMachineTarget } from '@/scm/actions/placement';
 import { readContributedActionExecutionPlacement } from '@/session/actions/readContributedActionExecutionPlacement';
+import { readServerIdentityIdFromFeaturesSnapshot, type CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
 type SessionActionOperation = Extract<AgentRuntimeDaemonServiceRequestV1['operation'], { kind: 'action.execute' }>;
 type SessionActionAuthority = Readonly<{ sessionId: string; isCurrent(): Promise<boolean>; signal?: AbortSignal }>;
@@ -79,6 +80,8 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
   serverHttpBaseUrl: string;
   token: string;
   credentials?: StoredCredentials;
+  /** Existing observation of this daemon's bound Home, distinct from its local profile. */
+  resolveServerFeaturesSnapshot?: () => CliServerFeaturesSnapshot | undefined;
   /** The installed daemon producer, independent of optional public-API proof. */
   machineId?: string;
   /** Content-free observations from the startup requester-runtime binding. */
@@ -252,6 +255,7 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
       && !proposesPluginInstallApproval
       && !(Object.hasOwn(RoleActionInputSchemasV1, operation.actionId) && operation.actionId.startsWith('session.'));
     if (params.credentials && (operation.actionId === 'discussion.post' || operation.actionId === 'discussion.reply')) {
+      context = { ...context, serverIdentityId: readServerIdentityIdFromFeaturesSnapshot(params.resolveServerFeaturesSnapshot?.()) ?? undefined };
       const bound = await bindDiscussionDraftReply({ actionId: operation.actionId, input: operation.input, context,
         serverId: params.serverId, discussionAction: createDiscussionActionDeps({ credentials: params.credentials,
           serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl }).discussionAction,

@@ -2680,7 +2680,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
     // Eligibility to reach the incumbent trusted publisher only. Its durable
     // execution proof and the Home's original/G checks remain the authority.
     const informationalReturn = Boolean(actionId === 'discussion.reply' && ctx.actionCaller?.kind === 'host' && marker?.workflow
-      && ctx.serverId === marker.serverId && marker.acceptedTurnId
+      && ctx.serverIdentityId === marker.serverId && marker.acceptedTurnId
       && source?.sourceSessionId === publisherSessionId && source.sourceInputId === marker.requestLocalId
       && source.sourceTurnId === marker.acceptedTurnId && addressing?.participantSessionId === publisherSessionId
       && addressing.discussionId === publication.discussionId && target.kind === 'message' && target.messageId === addressing.messageId

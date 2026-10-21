@@ -49,6 +49,7 @@ export function createSessionClientRecoveryRuntime(
         reconcilePendingExecutionRunTarget?: (runId: string) => Promise<void>;
         refreshAccountSettingsForMinimumVersion?: (settingsVersion: number | null) => Promise<void>;
         refreshDemandedAccountCatalogs?: () => Promise<void>;
+        onSessionFollowInvalidated?: () => void;
     }> & SessionStoredContentCryptoContext,
 ): SessionClientRecoveryRuntime {
     const serverUrl = params.serverUrl ?? resolveServerHttpBaseUrl();
@@ -212,7 +213,10 @@ export function createSessionClientRecoveryRuntime(
 
     const syncChangesOnConnect = async (opts: { reason: 'connect' | 'reconnect' | 'live' }): Promise<void> => {
         if (params.accountChangesEnabled !== false && !isV2ChangesSyncEnabled(process.env.HAPPY_ENABLE_V2_CHANGES)) {
-            if (opts.reason === 'live' && !params.getClosed()) await params.refreshDemandedAccountCatalogs?.();
+            if (opts.reason === 'live' && !params.getClosed()) {
+                params.onSessionFollowInvalidated?.();
+                await params.refreshDemandedAccountCatalogs?.();
+            }
             return;
         }
 
@@ -251,6 +255,7 @@ export function createSessionClientRecoveryRuntime(
             reconcilePendingExecutionRunTarget: params.reconcilePendingExecutionRunTarget,
             refreshAccountSettingsForMinimumVersion: params.refreshAccountSettingsForMinimumVersion,
             refreshDemandedAccountCatalogs: params.refreshDemandedAccountCatalogs,
+            onSessionFollowInvalidated: params.onSessionFollowInvalidated,
             connectionSupervisor: params.getSessionConnectionSupervisor(),
             onDebug: (message, data) => logger.debug(message, data),
         }));

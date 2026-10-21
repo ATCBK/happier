@@ -1893,9 +1893,12 @@ export function createDaemonControlApp({
     const runOriginal = occurrence && 'original' in occurrence ? occurrence.original : undefined;
     const diagnose = (status: 'started' | 'completed' | 'failed' | 'ignored') => {
       if (occurrence && 'sourceSessionId' in occurrence) logger.debug('[Session Follow] Occurrence ingress', {
-        requestId: request.id, sourceSessionId: occurrence.sourceSessionId, status,
-        ...('sourceMessage' in occurrence ? { sourceMessageSeq: occurrence.sourceMessage.seq }
-          : { agentStateVersion: occurrence.sourceRequests.agentStateVersion }),
+        requestId: request.id, status,
+        // An ignored source has not matched a tracked Session. Its authored
+        // identity cannot become diagnostic content merely by reaching ingress.
+        ...(status === 'ignored' ? {} : { sourceSessionId: occurrence.sourceSessionId,
+          ...('sourceMessage' in occurrence ? { sourceMessageSeq: occurrence.sourceMessage.seq }
+            : { agentStateVersion: occurrence.sourceRequests.agentStateVersion }) }),
       });
     };
     if (runOriginal || getChildren().some(tracked => tracked.happySessionId === request.body.sessionId)) {

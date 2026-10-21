@@ -98,6 +98,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     };
     return createSessionClientInteractionApi({
       serverId: 'home',
+      getServerIdentityId: () => 'home',
       sessionId: 's1',
       token: 'token-1',
       getClosed: () => false,
@@ -178,6 +179,50 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       reason: 'server_restarting',
       errorMessage: 'Server restart in progress',
     });
+  });
+
+  it('retains Pending custody before claim until the authenticated Home is available, then derives portable requester attribution', async () => {
+    let serverIdentityId: string | null | undefined;
+    const deliver = vi.fn<(message: UserMessage) => boolean>(() => true);
+    const markCustody = vi.fn();
+    socketAckMock.mockResolvedValue({ ok: true, didMaterialize: true, didWrite: true, localId: 'home-original',
+      pendingCount: 0, pendingVersion: 2, message: {
+        id: 'home-message', seq: 7, localId: 'home-original', messageRole: 'user',
+        inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'person', sessionRelationship: 'owner' },
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Preserve this original' } } },
+        createdAt: 1_000, updatedAt: 1_000, providerAction: 'send', deliveryState: { mode: 'provider', unresolved: true },
+      } });
+    const api = createApi({ serverId: 'local-routing-profile', getServerIdentityId: () => serverIdentityId,
+      getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
+      getPendingQueueState: () => ({ known: true, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
+      getStoredContentCryptoContext: () => ({ mode: 'plain', ctx: null }),
+      deliverMaterializedUserMessageToAgentQueue: deliver, markPendingQueueMaterializedLocalId: markCustody,
+    });
+    await expect(api.materializeNextPendingMessageSafely()).resolves.toEqual({ type: 'retryable_transport' });
+    expect(socketAckMock).not.toHaveBeenCalled();
+    expect(markCustody).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    serverIdentityId = 'authenticated-home';
+    await expect(api.materializeNextPendingMessageSafely()).resolves.toMatchObject({ type: 'materialized', localId: 'home-original' });
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]).toMatchObject({ actionRequestAttributionV1: {
+      requestRef: 'home-original', requester: { serverId: serverIdentityId, accountId: 'person' },
+      persona: { serverId: serverIdentityId, sessionId: 's1' },
+      origin: { kind: 'session', session: { serverId: serverIdentityId, sessionId: 's1' }, messageId: 'home-message' },
+    } });
+    expect(markCustody).toHaveBeenCalledWith('home-original');
+    // The recognized older Home contract is different from a missing probe:
+    // valid input still delivers, but no local profile becomes portable identity.
+    const legacyDelivery = vi.fn<(message: UserMessage) => boolean>(() => true);
+    const legacy = createApi({ serverId: 'older-local-profile', getServerIdentityId: () => null,
+      getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
+      getPendingQueueState: () => ({ known: true, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
+      getStoredContentCryptoContext: () => ({ mode: 'plain', ctx: null }),
+      deliverMaterializedUserMessageToAgentQueue: legacyDelivery,
+    });
+    await expect(legacy.materializeNextPendingMessageSafely()).resolves.toMatchObject({ type: 'materialized', localId: 'home-original' });
+    expect(legacyDelivery.mock.calls[0]?.[0]).toMatchObject({ content: { type: 'text', text: 'Preserve this original' } });
+    expect(legacyDelivery.mock.calls[0]?.[0]?.actionRequestAttributionV1).toBeUndefined();
   });
 
   it.each(['indeterminate', 'auth_failed'] as const)('delivers zero provider input for %s compatibility', async (mode) => {

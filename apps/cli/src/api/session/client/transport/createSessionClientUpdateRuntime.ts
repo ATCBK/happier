@@ -23,7 +23,7 @@ export type SessionClientUpdateRuntime = Readonly<{
 
 export function createSessionClientUpdateRuntime(
     deps: Readonly<{
-        serverId: string;
+        getServerIdentityId: () => string | null | undefined;
         sessionId: string;
         getMetadataLayoutVersion?: () => number;
         getMetadata: () => Metadata | null;
@@ -91,7 +91,7 @@ export function createSessionClientUpdateRuntime(
 
                 const newMessageHandlingResult = handleSessionNewMessageUpdate({
                     update: data,
-                    serverId: deps.serverId,
+                    serverId: deps.getServerIdentityId(),
                     sessionId: deps.sessionId,
                     ...(deps.mode === 'plain'
                         ? { mode: 'plain' as const, ctx: null }

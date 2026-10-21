@@ -17,6 +17,7 @@ import type {
 
 import { createTestMetadata } from './sessionMetadata';
 import { UNKNOWN_PENDING_QUEUE_STATE } from '@/api/session/pendingQueueState';
+import { readServerIdentityIdFromFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
 type RecordLike = Record<string, unknown>;
 export type SessionRecordFixture = V2SessionRecord;
@@ -194,6 +195,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
         sessionId,
         getServerBinding: () => serverBinding,
         getServerFeaturesSnapshot: () => null,
+        getServerIdentityId: () => readServerIdentityIdFromFeaturesSnapshot(options?.overrides?.getServerFeaturesSnapshot?.()),
         bindMcpRequestAuthPort(port: Parameters<ApiSessionClient['bindMcpRequestAuthPort']>[0]) {
             mcpRequestAuth = port;
         },

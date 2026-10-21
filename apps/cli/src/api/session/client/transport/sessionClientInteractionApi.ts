@@ -143,7 +143,7 @@ function createMaterializedPendingQueueUpdate(params: {
 function readMaterializedPendingUserMessage(params: Readonly<{
     message: PendingQueueMaterializedMessage | null | undefined;
     sessionId: string;
-    serverId: string;
+    serverId: string | null;
 }> & SessionStoredContentCryptoContext): UserMessage | null {
     const message = params.message;
     if (!message?.content) return null;
@@ -161,11 +161,11 @@ function readMaterializedPendingUserMessage(params: Readonly<{
         callerInputConstraints: inputAdmissionReceipt.success ? inputAdmissionReceipt.data.callerInputConstraints : undefined,
         actionRequestAttributionV1: deriveSessionInputActionRequestAttributionV1({
             requestRef: message.localId ?? null,
-            persona: { serverId: params.serverId, sessionId: params.sessionId },
+            persona: params.serverId ? { serverId: params.serverId, sessionId: params.sessionId } : null,
             messageRole: message.messageRole,
             inputAdmissionReceipt: message.inputAdmissionReceipt,
             inputAuthority: readSessionInputAuthority(body && typeof body === 'object' && 'meta' in body ? body.meta : undefined, 'stored'),
-            origin: message.id && message.seq !== null
+            origin: params.serverId && message.id && message.seq !== null
                 ? { kind: 'session', session: { serverId: params.serverId, sessionId: params.sessionId }, messageId: message.id }
                 : null,
         }),
@@ -500,6 +500,7 @@ export type SessionClientInteractionApi = Readonly<{
 export function createSessionClientInteractionApi(
     deps: Readonly<{
         serverId: string;
+        getServerIdentityId: () => string | null | undefined;
         sessionId: string;
         token: string;
         readCurrentAutonomousCheckIn?: (origin?: DiscussionAddressV1) => Promise<Readonly<{ afterTurns: number | null }> | null>;
@@ -605,6 +606,10 @@ export function createSessionClientInteractionApi(
             return { didMaterialize: false, result: { type: 'auth_failure' } };
         }
         if (contractResult.pendingInput === 'indeterminate') {
+            return { didMaterialize: false, result: { type: 'retryable_transport' } };
+        }
+        const serverIdentityId = deps.getServerIdentityId();
+        if (serverIdentityId === undefined) {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
         }
         const retainedContextLocalIds = target ? [] : [...deps.readRetainedContextLocalIds?.() ?? []];
@@ -796,7 +801,7 @@ export function createSessionClientInteractionApi(
         const materializedUserMessage = readMaterializedPendingUserMessage({
             message: materializedMessage,
             sessionId: deps.sessionId,
-            serverId: deps.serverId,
+            serverId: serverIdentityId,
             ...deps.getStoredContentCryptoContext(),
         });
         const deliveredMaterializedMessage = target

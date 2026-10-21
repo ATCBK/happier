@@ -218,4 +218,36 @@ describe('Session input live-work notification stability', () => {
     unsubscribe();
     expect(notifications).toBeLessThanOrEqual(1);
   });
+
+  it('does not notify observers when a context wake finds no context-only input', async () => {
+    // Every content-free Account change wakes each idle Session. A wake whose take comes back
+    // empty held no custody, so it cannot be new work for the daemon that re-reads on each notice.
+    const controller = new AbortController();
+    let wakes = 0;
+    const takeContextOnlyInput = vi.fn(async () => {
+      await Promise.resolve();
+      if (takeContextOnlyInput.mock.calls.length >= 5) controller.abort();
+      return null;
+    });
+    const consumer = createSessionProviderInputConsumer({ messageQueue: new MessageQueue2<string>(() => 'mode'), session: {
+      waitForMetadataUpdate: signal => new Promise<boolean>(resolve => {
+        signal?.addEventListener('abort', () => resolve(false), { once: true });
+      }),
+      getMetadataSnapshot: () => ({}), getAgentStateSnapshot: () => ({}),
+      readSubagentLiveWork: () => ({ state: 'settled', activeCount: 0 }), readRuntimeActivitySnapshotTail: idleTail,
+      getPendingQueueState: () => ({ known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 }),
+      materializeNextPendingMessageSafely: async () => ({ type: 'no_pending' as const }),
+    }, takeContextOnlyInput,
+    waitForContextOnlyInputChange: signal => new Promise<boolean>(resolve => {
+      wakes += 1;
+      if (wakes <= 5) resolve(true);
+      else signal.addEventListener('abort', () => resolve(false), { once: true });
+    }) });
+    let notifications = 0;
+    const unsubscribe = consumer.subscribeLiveWork(() => { notifications += 1; });
+    await consumer.waitForNextInput({ abortSignal: controller.signal });
+    unsubscribe();
+    expect(takeContextOnlyInput.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(notifications).toBe(0);
+  });
 });

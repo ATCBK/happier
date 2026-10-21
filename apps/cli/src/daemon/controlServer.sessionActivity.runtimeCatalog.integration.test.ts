@@ -56,6 +56,11 @@ describe('private Session activity invalidation', () => {
       release();
       expect((await pending).statusCode).toBe(200);
       expect(checkpoints().at(-1)).toMatchObject({ sourceSessionId: 'source', sourceMessageSeq: 7, status: 'completed' });
+      const ignored = await app.inject({ method: 'POST', url: '/session-activity-changed',
+        headers: { 'x-happier-daemon-token': 'token' }, payload: { sessionId: 'source',
+          followOccurrence: { ...occurrence, sourceSessionId: 'private-mismatched-source' } } });
+      expect(ignored.statusCode).toBe(200);
+      expect(checkpoints().at(-1)).toEqual({ requestId: expect.any(String), status: 'ignored' });
       expect(JSON.stringify(checkpoints())).not.toContain('private-');
     } finally { release(); await app.close(); dispatcher.dispose(); http.mockRestore(); log.mockRestore(); }
   });

@@ -59,6 +59,7 @@ export async function bindDiscussionDraftReply(params: Readonly<{
   // ambient credentials. An unbound deliberate draft still fails closed.
   if (context.externalActionExecutionAuthorization) return participant?.answerPolicy === 'drafts_for_approval'
     ? unavailable() : unchanged;
+  if (!context.serverIdentityId) return unavailable();
   if (addressedReply) {
     const credentials = params.credentials;
     if (!credentials) return unavailable();
@@ -84,6 +85,6 @@ export async function bindDiscussionDraftReply(params: Readonly<{
     localId: source.data.sourceInputId, acceptedTurnId: source.data.sourceTurnId });
   return { actionId: 'discussion.reply', input: { ...parsed.data, localId,
     replyTarget: { kind: 'message', messageId: addressing.messageId } }, context: { ...context, actionRequestId: localId,
-    discussionReplyReturn: { serverId: params.serverId, requestLocalId: source.data.sourceInputId,
+    discussionReplyReturn: { serverId: context.serverIdentityId, requestLocalId: source.data.sourceInputId,
       acceptedTurnId: source.data.sourceTurnId } } };
 }

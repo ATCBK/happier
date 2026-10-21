@@ -20,12 +20,14 @@ vi.mock('axios', () => ({ default: http }));
 
 const source = { sourceSessionId: 'participant', sourceTurnId: 'turn', sourceInputId: 'input', via: 'action' as const,
   discussionAddressing: { discussionId: 'discussion', messageId: 'question', throughSeq: 3, participantSessionId: 'participant' } };
-const context: ActionExecutorContext = { surface: 'agent', authority: 'account_automation', serverId: 'home',
+const homeIdentityId = 'srv_draft_home';
+const context: ActionExecutorContext = { surface: 'agent', authority: 'account_automation', serverId: 'home', serverIdentityId: homeIdentityId,
   defaultSessionId: 'participant', actionCaller: { kind: 'session', sessionId: 'participant', starterDepth: 1, turnDepth: 1 }, sessionInputSource: source,
   actionRequestId: 'tool-request' };
 const input = { discussionId: 'discussion', localId: 'tool-local', content: { v: 1, parts: [{ t: 'text', text: 'Draft answer' }] } };
 const features = { status: 'ready' as const, features: FeaturesResponseSchema.parse({
-  features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+  features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+  capabilities: { serverIdentity: { serverIdentityId: homeIdentityId } },
 }) };
 const readRoster = createDiscussionActionDeps({ credentials: { token: 'token', encryption: null }, serverId: 'home',
   serverHttpBaseUrl: 'https://draft-reply.test', resolveServerFeaturesSnapshot: () => features }).discussionAction!;
@@ -67,12 +69,12 @@ it.each(['draft', 'informational'] as const)('normalizes the verified daemon Ses
     expect(new URL(url).pathname).toBe(bindExternalActionExecutionAuthorizationHttpPathV1('discussion.reply'));
     const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(raw);
     const payload = { version: 1 as const, accountId: 'owner', machineId: 'machine', installationId: 'installation',
-      externalActionOrigin: { homeId: 'identity', actionId: 'discussion.reply', requestId: localId,
+      externalActionOrigin: { homeId: homeIdentityId, actionId: 'discussion.reply', requestId: localId,
         requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope), origin: request.sessionActionOrigin! } };
     expect(verifyMachineInstallationProof({ payload, proof: request.installationProof!, publicKey: keys.publicKey })).toBe(true);
     expect(request.envelope).toMatchObject({ requestId: localId, input: expectedInput });
     return { status: 200, data: { v: 1, token: 'home-issued-reply-root', binding: {
-      accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'identity', machineId: 'machine',
+      accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: homeIdentityId, machineId: 'machine',
       custodianAccountId: 'owner', installationId: 'installation', actionId: 'discussion.reply', requestId: localId, target,
       accountEncryptionMode: 'plain', requestEnvelopeDigest: payload.externalActionOrigin.requestEnvelopeDigest,
       sessionActionOrigin: request.sessionActionOrigin, sessionActionSource: { machineId: 'machine', installationId: 'installation' },
@@ -88,15 +90,16 @@ it.each(['draft', 'informational'] as const)('normalizes the verified daemon Ses
         machineId: 'machine', pat: token, serverHttpBaseUrl: 'https://draft-reply.test', sessionActionOrigin: request.sessionActionOrigin,
         sessionActionSource: { machineId: 'machine', installationId: 'installation' }, installationProof: signMachineInstallationProof({
           privateKey: keys.secretKey, payload: { version: 1, accountId: 'owner', machineId: 'machine', installationId: 'installation',
-            externalActionOrigin: { homeId: 'identity', actionId: request.operation.actionId, requestId: request.operation.requestId,
+            externalActionOrigin: { homeId: homeIdentityId, actionId: request.operation.actionId, requestId: request.operation.requestId,
               requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), origin: request.sessionActionOrigin } },
         }) });
       return minted.ok ? { authorization: minted.authorization, target } : null;
     });
   const execute = createDaemonSessionAccountActionExecutor({ serverId: 'home', serverHttpBaseUrl: 'https://draft-reply.test',
     token, credentials: { token, encryption: null }, prepareExternalActionAuthorization: signedPreparation,
+    resolveServerFeaturesSnapshot: () => features,
     createExecutor: () => createCliActionExecutor({ token, credentials: { token, encryption: null }, sessionId: 'participant', mode: 'plain', ctx: null,
-      serverId: 'home', serverIdentityId: 'identity', serverHttpBaseUrl: 'https://draft-reply.test', pluginActionExecutionOwner: 'current_process',
+      serverId: 'home', serverIdentityId: homeIdentityId, serverHttpBaseUrl: 'https://draft-reply.test', pluginActionExecutionOwner: 'current_process',
       externalActionMachineRequestPrivateKey: keys.secretKey, externalActionMachineInstallationId: 'installation',
       actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {
         'discussion.post': { enabled: false }, 'discussion.reply': { enabled: false },
@@ -122,7 +125,7 @@ it.each(['discussion.post', 'discussion.reply'] as const)('binds an addressed %s
   const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'participant', localId: 'input', acceptedTurnId: 'turn' });
   expect(result).toMatchObject({ actionId: 'discussion.reply', input: { ...input, localId,
     replyTarget: { kind: 'message', messageId: 'question' } }, context: { actionRequestId: localId,
-    sessionInputSource: source, discussionReplyReturn: { serverId: 'home', requestLocalId: 'input', acceptedTurnId: 'turn' } } });
+    sessionInputSource: source, discussionReplyReturn: { serverId: homeIdentityId, requestLocalId: 'input', acceptedTurnId: 'turn' } } });
   expect(http.request.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual(['/v1/discussions/discussion/participants']);
   expect(context).not.toHaveProperty('discussionReplyReturn');
   expect(input.localId).toBe('tool-local');
@@ -173,12 +176,12 @@ it.each(['drafts_for_approval', 'watches_and_speaks_up'] as const)('preserves si
     participants: [{ participant: { kind: 'session', sessionId: 'participant' }, answerPolicy, createdAt: 1 }] } });
   const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(53));
   const signedRoster = createDiscussionActionDeps({ credentials: { token: 'token', encryption: null }, serverId: 'home',
-    serverIdentityId: 'identity', serverHttpBaseUrl: 'https://draft-reply.test', resolveServerFeaturesSnapshot: () => features,
+    serverIdentityId: homeIdentityId, serverHttpBaseUrl: 'https://draft-reply.test', resolveServerFeaturesSnapshot: () => features,
     externalActionMachineRequestPrivateKey: keys.secretKey, externalActionMachineInstallationId: 'installation' }).discussionAction!;
   const invocation: ActionExecutorContext = { ...context, externalActionTarget: { kind: 'machine', machineId: 'machine' },
     externalActionExecutionAuthorization: ExternalActionExecutionAuthorizationV1Schema.parse({
     v: 1, token: 'home-issued-root', binding: { accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 },
-      serverIdentityId: 'identity', machineId: 'machine', custodianAccountId: 'owner', installationId: 'installation',
+      serverIdentityId: homeIdentityId, machineId: 'machine', custodianAccountId: 'owner', installationId: 'installation',
       actionId: 'discussion.post', requestId: 'tool-request', target: { kind: 'machine', machineId: 'machine' },
       accountEncryptionMode: 'plain', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(
         ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: 'tool-request', target: { kind: 'machine', machineId: 'machine' }, input })) },
@@ -213,13 +216,13 @@ it.each(['execute', 'prepare'] as const)('captures the canonical explicit reply 
   });
   const publisher = vi.fn();
   const executor = createCliActionExecutor({ token, credentials: { token, encryption: null }, sessionId: 'participant', mode: 'plain', ctx: null,
-    serverId: 'home', serverIdentityId: 'identity', serverHttpBaseUrl: 'https://draft-reply.test', pluginActionExecutionOwner: 'current_process',
+    serverId: 'home', serverIdentityId: homeIdentityId, serverHttpBaseUrl: 'https://draft-reply.test', pluginActionExecutionOwner: 'current_process',
     resolveServerFeaturesSnapshot: () => features, postAgentDiscussionMessage: publisher,
     actionsSettingsProvider: { getAccountSettings: () => settings, getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
       approvalWaivedSurfaces: { 'discussion.post': ['agent'], 'discussion.reply': ['agent'] } }) },
   });
   const result = await runWithServerHttpBaseUrl('https://draft-reply.test', () => executor[method]('discussion.post', input,
-    { ...context, defaultSessionMachineId: 'machine', serverIdentityId: 'identity' }));
+    { ...context, defaultSessionMachineId: 'machine', serverIdentityId: homeIdentityId }));
   expect(result, JSON.stringify({ result, reads: http.get.mock.calls.map(([url]) => url),
     writes: http.post.mock.calls.map(([url]) => url) })).toMatchObject(method === 'prepare' ? { kind: 'settled', result: { ok: true } } : { ok: true });
   expect(captured).toHaveLength(1);
@@ -228,7 +231,7 @@ it.each(['execute', 'prepare'] as const)('captures the canonical explicit reply 
   expect(request).toMatchObject({ actionId: 'discussion.reply', discussionDraftReview: true, actionArgs: { ...input, localId,
     replyTarget: { kind: 'message', messageId: 'question' } }, executionOriginV1: { actionId: 'discussion.reply', requestId: localId,
     sessionId: 'participant', sessionInputSource: source,
-    discussionReplyReturn: { serverId: 'home', requestLocalId: 'input', acceptedTurnId: 'turn' } } });
+    discussionReplyReturn: { serverId: homeIdentityId, requestLocalId: 'input', acceptedTurnId: 'turn' } } });
   expect(publisher).not.toHaveBeenCalled();
 });
 

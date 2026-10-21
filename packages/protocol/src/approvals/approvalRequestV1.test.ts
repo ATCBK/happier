@@ -134,8 +134,8 @@ it.each(['create', 'post', 'propose'] as const)('retains Session publication cus
     executionOriginV1: { ...request.executionOriginV1, caller: { kind: 'host' }, sessionId: undefined } }))).toBe(false);
 });
 it.each(['session', 'host'] as const)('preserves a protected pre-admission Discussion return from its actual %s executor without inventing a turn', executorKind => {
-  const discussionReplyReturn = { serverId: 'home', requestLocalId: 'original' };
-  const context = { serverId: 'home', actionRequestId: 'return-original', authority: 'account_automation' as const,
+  const discussionReplyReturn = { serverId: 'srv_actual_home', requestLocalId: 'original' };
+  const context = { serverId: 'local-routing-profile', serverIdentityId: 'srv_actual_home', actionRequestId: 'return-original', authority: 'account_automation' as const,
     surface: 'agent' as const, defaultSessionId: 'receiver', defaultSessionMachineId: 'machine', runtimeAccountId: 'alice', discussionReplyReturn,
     actionCaller: executorKind === 'session'
       ? { kind: 'session' as const, sessionId: 'receiver', starterDepth: 0, turnDepth: 0 }
@@ -146,6 +146,9 @@ it.each(['session', 'host'] as const)('preserves a protected pre-admission Discu
   expect(origin).toMatchObject({ sessionId: 'receiver', discussionReplyReturn });
   expect(origin).not.toHaveProperty('sessionInputSource');
   expect(ApprovalExecutionOriginV1Schema.safeParse(origin).success).toBe(true);
+  expect(ApprovalExecutionOriginV1Schema.safeParse({ ...origin,
+    discussionReplyReturn: { ...discussionReplyReturn, serverId: context.serverId } }).success).toBe(false);
+  expect(ApprovalExecutionOriginV1Schema.safeParse({ ...origin, serverIdentityId: undefined }).success).toBe(false);
   const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
     createdBy: { surface: 'agent', sessionId: 'receiver' }, actionId: 'discussion.reply',
     actionArgs: { discussionId: 'discussion', content: { v: 1, parts: [{ t: 'text', text: 'Input failed' }] },

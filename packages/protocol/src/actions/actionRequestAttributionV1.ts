@@ -32,7 +32,8 @@ export function materializeActionRequestAttributionV1(value: unknown): ActionReq
 /** Only call with the authenticated transport receipt, never authored message metadata. */
 export function deriveSessionInputActionRequestAttributionV1(params: Readonly<{
   requestRef: string | null;
-  persona: ActionRequestAttributionV1['persona'];
+  /** Absent on a legacy Home which cannot qualify a newly derived cause. */
+  persona: ActionRequestAttributionV1['persona'] | null;
   messageRole: unknown;
   inputAdmissionReceipt: unknown;
   /** Only settled protected custody; authored top-level projection claims are ignored. */
@@ -47,6 +48,7 @@ export function deriveSessionInputActionRequestAttributionV1(params: Readonly<{
       return materializeActionRequestAttributionV1(authority.data.actionRequestAttributionV1);
     }
   }
+  if (!params.persona) return undefined;
   const accountId = deriveSessionMessageAuthorAccountIdV1(params);
   return materializeActionRequestAttributionV1({
     requestRef: params.requestRef,

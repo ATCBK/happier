@@ -252,7 +252,7 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
   const discussionReturnSessionId = value.caller.kind === 'session' ? value.caller.sessionId
     : value.caller.kind === 'host' && value.machineId ? value.sessionId : undefined;
   if (value.discussionReplyReturn && (value.actionId !== 'discussion.reply' || !discussionReturnSessionId
-    || value.sessionId !== undefined && value.sessionId !== discussionReturnSessionId || value.discussionReplyReturn.serverId !== value.serverId
+    || value.sessionId !== undefined && value.sessionId !== discussionReturnSessionId || value.discussionReplyReturn.serverId !== value.serverIdentityId
     || value.sessionInputSource && (value.sessionInputSource.sourceSessionId !== discussionReturnSessionId
       || value.sessionInputSource.sourceInputId !== value.discussionReplyReturn.requestLocalId
       || value.sessionInputSource.sourceTurnId !== value.discussionReplyReturn.acceptedTurnId))) {

@@ -17,7 +17,7 @@ import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/session
 
 afterEach(() => vi.restoreAllMocks());
 
-it('identifies a pending and refused range rule read without exposing private source or Account content', async () => {
+it.each(['rules', 'source_ranges'] as const)('identifies a pending and refused range rule read without exposing private source or Account content (%s)', async phase => {
   const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});
   const sourceSessionId = 'c111111111111111111111111';
   const destinationSessionId = 'c222222222222222222222222';
@@ -25,7 +25,7 @@ it('identifies a pending and refused range rule read without exposing private so
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let readingRules = false;
-  vi.spyOn(axios, 'get').mockImplementation(async url => {
+  vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
     const path = new URL(String(url)).pathname;
     if (path.endsWith('/follows/sessions')) return { status: 200, data: { sources: [] } };
     if (path === '/v1/account/encryption/currentness') return { status: 200,
@@ -33,6 +33,11 @@ it('identifies a pending and refused range rule read without exposing private so
     if (path === '/v2/account/session-follow-preferences') return { status: 200,
       data: { assigned: false, direct: false, team: false, group: false } };
     if (path === '/v2/account/session-follow-rules') {
+      if (phase === 'source_ranges' && !options?.params?.destinationSessionId) return { status: 200, data: { rules: [{
+        ruleId: 'private-rule', version: 0, receiver: { kind: 'session', sessionId: destinationSessionId },
+        content: { t: 'plain', v: { v: 1, enabled: true,
+          filter: normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible' }), policy: { preset: 'quiet' } } },
+      }] } };
       readingRules = true;
       await gate;
       return { status: 503, data: { privateDiagnostic: 'private-rule-response' } };
@@ -44,25 +49,26 @@ it('identifies a pending and refused range rule read without exposing private so
     serverId: 'home', serverHttpBaseUrl: 'http://follow-diagnostic.test', machineId: 'receiver-machine', installationId: 'installation',
     signal: new AbortController().signal, isCurrent: async () => true, subscribeInvalidation: () => () => {},
     resolveSourceKeyContext: async () => null, isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
-  try {
-    const pending = dispatcher.dispatchReceiverRange({ destinationSessionId, sourceSessionId, observations: [{
+  const pending = dispatcher.dispatchReceiverRange({ destinationSessionId, sourceSessionId, observations: phase === 'source_ranges' ? [] : [{
       sourceSessionId, destinationSessionId, relation: 'follower', policy: { preset: 'quiet' },
       delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 6 },
       observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 11 },
     }] });
+  try {
     await vi.waitFor(() => expect(readingRules).toBe(true));
     const checkpoints = () => log.mock.calls.filter(([message]) => message === '[Session Follow] Dispatch checkpoint')
       .map(([, fields]) => fields);
     expect(checkpoints().at(-1)).toMatchObject({ sourceSessionId, destinationSessionId,
-      entry: 'receiver_range', phase: 'rules', status: 'started' });
+      entry: 'receiver_range', phase, status: 'started' });
     release();
     expect(await pending).toEqual({ coveredEvents: [] });
-    expect(checkpoints().at(-1)).toMatchObject({ sourceSessionId, destinationSessionId,
-      entry: 'receiver_range', phase: 'rules', status: 'held', reason: 'private-rules-unavailable' });
+    expect(checkpoints()).toContainEqual(expect.objectContaining({ sourceSessionId, destinationSessionId,
+      entry: 'receiver_range', phase, status: 'held',
+      reason: phase === 'rules' ? 'private-rules-unavailable' : 'source_ranges_unavailable' }));
     expect(writes).not.toHaveBeenCalled();
     expect(JSON.stringify(checkpoints())).not.toContain(token);
     expect(JSON.stringify(checkpoints())).not.toContain('private-rule-response');
-  } finally { release(); dispatcher.dispose(); }
+  } finally { release(); await pending; dispatcher.dispose(); }
 });
 
 it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the observed original through fresh-rule discovery or overlapping receiver recovery, retaining unreadable ranges (%s)', async entry => {

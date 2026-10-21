@@ -228,6 +228,7 @@ export function registerSessionClientRuntimeHandlers(
     if (params.session) {
         registerDiscussionAgentPublisher({ rpcHandlerManager: params.rpcHandlerManager, serverId: params.serverId,
             serverUrl: params.serverUrl, session: params.session, readOwnerAccountCredentials: params.readOwnerAccountCredentials,
+            getServerIdentityId: () => params.session?.getServerIdentityId(),
             isApprovalExecutionOriginCurrent: args => isApprovalExecutionOriginCurrent(args),
             executeSourceAction: async (actionId, input, context) => {
                 if (actionId !== 'session.transcript.get' && actionId !== 'doc.read' && actionId !== 'workflow.run.invocations.get') {

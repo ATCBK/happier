@@ -37,7 +37,7 @@ import { resolveExecutionRunPublicBackendId } from '@/agent/runtime/bridges/exec
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import type { ActionId, AccountSettings, ActionExecutorContext, ActionExecutorDeps, BackendTargetRefV2 } from '@happier-dev/protocol';
 import { getActionSpec, isActionSpecSurfacedOn } from '@happier-dev/protocol/actions/actionSpecs';
-import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import { readServerIdentityIdFromFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { isMemorySessionSearchHitV1, negotiateMemorySearchV1 } from '@happier-dev/protocol/memory/memorySearch';
 import { MemoryWindowV1Schema } from '@happier-dev/protocol/memory/memoryWindow';
@@ -181,11 +181,7 @@ export function createHappierMcpServer(
     ? await opts.isCredentialCurrent()
     : sameStoredCredentials(credentials, await readStoredCredentialsForServerId(serverId).catch(() => null)));
   const serverFeaturesSnapshot = client.getServerFeaturesSnapshot?.();
-  const serverIdentityId = serverFeaturesSnapshot?.status === 'ready'
-    ? normalizeServerIdentityIdCapability(
-        serverFeaturesSnapshot.features.capabilities.serverIdentity?.serverIdentityId,
-      ) ?? null
-    : null;
+  const serverIdentityId = readServerIdentityIdFromFeaturesSnapshot(serverFeaturesSnapshot) ?? null;
   const actionSettingsProvider = opts?.actionsSettingsProvider ?? createMcpActionSettingsProvider({
     accountSettings: opts?.accountSettings ?? null,
     getAccountSettings: opts?.getAccountSettings ?? null,
@@ -372,7 +368,8 @@ export function createHappierMcpServer(
           if (options?.approvedActionReplay) return DiscussionAgentPublisherResponseV1Schema.parse(await sessionScopedRpc(
             SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1, { request, approvedActionReplay: options.approvedActionReplay },
             options.signal ? { signal: options.signal } : undefined));
-          const publication = prepareActiveDiscussionAgentPublication({ session: client, serverId, request });
+          const publication = prepareActiveDiscussionAgentPublication({ session: client,
+            serverIdentityId: readServerIdentityIdFromFeaturesSnapshot(client.getServerFeaturesSnapshot?.()), request });
           if (!publication) return { v: 1 as const, ok: false as const, error: 'discussion_post_denied' as const };
           return await client.postAgentDiscussionMessage!(publication, options);
         },

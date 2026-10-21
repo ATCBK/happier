@@ -11,6 +11,8 @@ import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/
 import { ApiSessionClient } from './sessionClient';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
 import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { SessionBroadcastContainerSchema } from '@happier-dev/protocol/updates';
 
 const clients = new Set<ApiSessionClient>();
 afterEach(async () => {
@@ -22,10 +24,15 @@ afterEach(async () => {
 
 it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its exact %s return through the current Session publisher', async terminalKind => {
   const sessionId = 'cmv3discussionparticipant';
+  const profileId = 'device-local-discussion-profile';
   const credentials = { token: 'discussion-owner', encryption: null };
-  const features = { status: 'ready' as const, features: FeaturesResponseSchema.parse({
-    features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
-  }) };
+  const features = await fetchServerFeaturesSnapshot({ serverUrl: 'https://discussion-home.test', token: credentials.token,
+    fetchImpl: async () => Response.json(FeaturesResponseSchema.parse({
+      features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+      capabilities: { serverIdentity: { serverIdentityId: 'srv_discussion_home' } },
+    })),
+  });
+  expect(features).toMatchObject({ status: 'ready', provenance: 'authenticated' });
   const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'A participant answer' }] };
   let terminalReturned = false;
   let explicitlyReturned = false;
@@ -48,7 +55,7 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
       v: 1, status: 'available', progress: { v: 1, mode: 'return', disposition: terminalReturned ? 'returned' : 'return_pending', acceptedTurnId: 'turn-1',
         discussion: { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId },
         outcome: explicitlyReturned ? { kind: 'answer', publicationRef: { kind: 'discussion',
-          discussion: { serverId: 'discussion-home', discussionId: 'discussion-1' }, messageId: 'committed-explicit' } }
+          discussion: { serverId: 'srv_discussion_home', discussionId: 'discussion-1' }, messageId: 'committed-explicit' } }
           : terminalKind === 'cancelled' ? { kind: 'cancelled', result: { sessionId, messageId: 'stopped-partial' } } : { kind: 'failed' } },
     } };
     if (String(url).endsWith('/messages/by-local-id/original')) return { status: 200, data: { message: {
@@ -78,7 +85,7 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
       return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
     throw new Error('Unexpected Discussion HTTP effect');
   });
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: { session: {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: { serverIdentity: { serverIdentityId: 'srv_discussion_home' }, session: {
     pendingInput: { protocolVersion: 1 }, runtimeActivity: { protocolVersion: 2 }, publisherAuthority: { protocolVersion: 1 },
   } } }), { status: 200 })));
   const publications: unknown[] = [];
@@ -108,10 +115,12 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
     return home.answer(event, payload) ?? activityHome.answer(event, payload) ?? defaults.emitWithAck(event, payload);
   } });
   const fixture = createPlainSessionFixture({ id: sessionId });
+  const followReobservations: unknown[] = [];
   const client = new ApiSessionClient(credentials.token, { ...fixture, metadata: { ...fixture.metadata, machineId: 'participant-machine' } }, {
     localMachineId: 'participant-machine',
     metadataAuthority: { kind: 'owner', credentials },
-    transport: { serverId: 'discussion-home', serverUrl: 'https://discussion-home.test',
+    onSessionFollowInvalidated: () => { followReobservations.push(client.getServerFeaturesSnapshot()); },
+    transport: { serverId: profileId, serverUrl: 'https://discussion-home.test',
       createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
   });
   clients.add(client);
@@ -141,13 +150,27 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
     sourceInputId: witness.inputId, via: 'action' } });
   const addressing = { discussionId: 'discussion-1', messageId: 'question-1', throughSeq: 1, participantSessionId: sessionId };
   currentWitness = { ...witness, discussionAddressing: addressing };
+  // Use the real connection's public feature observation from this exact
+  // transport origin, not a profile alias or an injected Home accessor.
+  await vi.waitFor(() => expect(client.getServerFeaturesSnapshot()).toMatchObject({ status: 'ready', provenance: 'public',
+    features: { capabilities: { serverIdentity: { serverIdentityId: 'srv_discussion_home' } } } }));
+  // The incumbent exact-Session invalidation is a real re-observation trigger;
+  // no polling or second feature identity reader is needed after recovery.
+  socket.trigger('session', SessionBroadcastContainerSchema.parse({
+    id: 'home-context-recovered', createdAt: 1, body: { t: 'session-changed', sessionId },
+  }));
+  await vi.waitFor(() => expect(followReobservations).toContainEqual(expect.objectContaining({ status: 'ready',
+    features: expect.objectContaining({ capabilities: expect.objectContaining({
+      serverIdentity: { serverIdentityId: 'srv_discussion_home' },
+    }) }),
+  })));
   const activeReply = { ...admittedRequest,
     request: { ...admittedRequest.request, replyTarget: { kind: 'message' as const, messageId: addressing.messageId } },
     replyReturn: { serverId: 'foreign-home', requestLocalId: 'foreign-input', acceptedTurnId: 'foreign-turn' } };
   publications.length = 0;
   expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: activeReply, witness: currentWitness }))
     .toMatchObject({ ok: true });
-  expect(publications[0]).toMatchObject({ replyReturn: { serverId: 'discussion-home', requestLocalId: witness.inputId, acceptedTurnId: witness.turnId } });
+  expect(publications[0]).toMatchObject({ replyReturn: { serverId: 'srv_discussion_home', requestLocalId: witness.inputId, acceptedTurnId: witness.turnId } });
   expect(publications[0]).toMatchObject({ request: { localId: deriveSessionMessageReplyReturnLocalIdV1({
     sessionId, localId: witness.inputId, acceptedTurnId: witness.turnId,
   }) } });
@@ -169,14 +192,14 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
   currentWitness = witness;
   publications.length = 0;
   const execute = createDaemonSessionAccountActionExecutor({
-    serverId: 'discussion-home', serverHttpBaseUrl: 'https://discussion-home.test', token: credentials.token, credentials,
+    serverId: profileId, serverHttpBaseUrl: 'https://discussion-home.test', token: credentials.token, credentials,
     postAgentDiscussionMessage: async (request, admittedWitness, options) => await client.rpcHandlerManager.invokeLocal(
       'discussion.agentPost.v1', { request, witness: admittedWitness }, options,
     ),
     createExecutor: (_depth, _current, postAgentDiscussionMessage) => {
       return createCliActionExecutor({
       token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
-      serverId: 'discussion-home', serverHttpBaseUrl: 'https://discussion-home.test',
+      serverId: profileId, serverHttpBaseUrl: 'https://discussion-home.test',
       resolveServerFeaturesSnapshot: () => features, postAgentDiscussionMessage,
       actionsSettingsProvider: { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: { 'discussion.post': ['agent'], 'discussion.create': ['agent'] } }) },
@@ -213,7 +236,7 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
     request: { ...admittedRequest.request, localId: deriveSessionMessageReplyReturnLocalIdV1({
       sessionId, localId: 'original', acceptedTurnId: witness.turnId }),
       replyTarget: { kind: 'message' as const, messageId: 'question-1' } },
-    replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } };
+    replyReturn: { serverId: 'srv_discussion_home', requestLocalId: 'original', acceptedTurnId: witness.turnId } };
   // The Account owner can reach this RPC, but cannot author a terminal outcome.
   expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request: terminalRequest }))
     .toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
@@ -231,10 +254,10 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
     .toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
   for (const request of [
     admittedRequest,
-    { ...admittedRequest, replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
+    { ...admittedRequest, replyReturn: { serverId: 'srv_discussion_home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
     { ...admittedRequest, sessionId: 'foreign-session', request: { ...admittedRequest.request,
       replyTarget: { kind: 'message', messageId: 'question-1' } },
-      replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
+      replyReturn: { serverId: 'srv_discussion_home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
     { ...admittedRequest, request: { ...admittedRequest.request, replyTarget: { kind: 'message', messageId: 'question-1' } },
       replyReturn: { serverId: 'foreign-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
   ]) expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', { request }))
@@ -242,7 +265,7 @@ it.each(['failed', 'cancelled'] as const)('publishes an Account Action and its e
   runtimeLifetimeAbort.abort();
   expect(await client.rpcHandlerManager.invokeLocal('discussion.agentPost.v1', {
     request: { ...admittedRequest, request: { ...admittedRequest.request, replyTarget: { kind: 'message', messageId: 'question-1' } },
-      replyReturn: { serverId: 'discussion-home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
+      replyReturn: { serverId: 'srv_discussion_home', requestLocalId: 'original', acceptedTurnId: witness.turnId } },
   })).toEqual({ v: 1, ok: false, error: 'discussion_post_denied' });
   expect(publications).toHaveLength(4);
 });

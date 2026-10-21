@@ -688,7 +688,9 @@ export function createSessionProviderInputConsumer<Mode, Message>(
                 value => ({ status: 'fulfilled' as const, value }),
                 reason => ({ status: 'rejected' as const, reason }),
               );
-              notifyLiveWorkChanged();
+              // No notification here: every content-free Account change wakes an idle Session to
+              // probe for context, and an empty probe is not work. Readers still see the in-flight
+              // preparation as busy; the retained result below is the edge observers are told about.
             }
             return contextOnlyPreparation;
           } : null,

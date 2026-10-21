@@ -55,6 +55,38 @@ describe('runSessionChangesSyncOnConnect', () => {
     vi.clearAllMocks();
   });
 
+  it.each(['s1', 'another-session'])('wakes context only for its own durable Session changes (%s)', async entityId => {
+    fetchChanges.mockResolvedValueOnce({ status: 'ok', response: { nextCursor: 4, changes: [
+      { cursor: 4, kind: 'session', entityId, changedAt: 100, hint: { kind: 'workflow-run-delivery', runId: 'run-1', revision: 2 } },
+    ] } });
+    const events: string[] = [];
+    await runSessionChangesSyncOnConnect({
+      reason: 'live', token: 'token-1', sessionId: 's1', lastObservedMessageSeq: 0,
+      getAccountId: async () => 'account-1', readChangesCursor: async () => 3,
+      writeChangesCursor: async () => { events.push('cursor'); },
+      catchUpSessionMessages: async () => {}, syncSessionSnapshotFromServer: async () => true,
+      onSessionFollowInvalidated: () => { events.push('context'); }, onDebug: vi.fn(),
+    });
+    expect(events).toEqual(entityId === 's1' ? ['context', 'cursor'] : ['cursor']);
+  });
+
+  it.each([
+    { name: 'pruned cursor', result: { status: 'cursor-gone', currentCursor: 5 } },
+    { name: 'unavailable changes route', result: { status: 'error', error: { status: 404 } } },
+    { name: 'full changes page', result: { status: 'ok', response: { nextCursor: 203,
+      changes: Array.from({ length: 200 }, (_, i) => ({ cursor: i + 4, kind: 'session', entityId: `other-${i}`, changedAt: 1 })) } } },
+  ])('retains context recovery when the changed Session cannot be determined ($name)', async ({ result }) => {
+    fetchChanges.mockResolvedValueOnce(result);
+    let wakes = 0;
+    await runSessionChangesSyncOnConnect({
+      reason: 'live', token: 'token-1', sessionId: 's1', lastObservedMessageSeq: 0,
+      getAccountId: async () => 'account-1', ...createChangesCursorStore(),
+      catchUpSessionMessages: async () => {}, syncSessionSnapshotFromServer: async () => true,
+      onSessionFollowInvalidated: () => { wakes++; }, onDebug: vi.fn(),
+    });
+    expect(wakes).toBe(1);
+  });
+
   it('re-observes a changed skill-rules row before acknowledging the Account recovery cursor', async () => {
     const events: string[] = [];
     fetchChanges.mockResolvedValueOnce({ status: 'ok', response: { nextCursor: 4, changes: [

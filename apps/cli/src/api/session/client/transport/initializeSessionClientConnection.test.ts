@@ -278,7 +278,7 @@ describe('initializeSessionClientConnection diagnostics', () => {
     expect(onSessionFollowInvalidated).toHaveBeenCalledTimes(2);
     const listener = socketState.userSocket?.on.mock.calls.find(([event]) => event === 'update')?.[1] as ((data: unknown) => void) | undefined;
     listener?.({ body: { t: 'account-change' } });
-    expect(onSessionFollowInvalidated).toHaveBeenCalledTimes(3);
+    expect(onSessionFollowInvalidated).toHaveBeenCalledTimes(2);
   });
 
   it('publishes the identical compatibility result to the shared Pending/Runtime consumer', async () => {

@@ -91,10 +91,9 @@ export function initializeSessionClientConnection(
         ? params.transport.createAccountUpdatesSocket?.() ?? null
         : null;
     userSocket?.on('update', (data: Update) => {
-        // Content-free AccountChange wakes trigger the same re-observation owner
-        // as reconnect/relation hints; they never convey source read authority.
+        // AccountChange carries no Session identity. The existing changes-feed
+        // owner determines whether this destination's context was invalidated.
         if (data.body?.t === 'account-change') {
-            params.onSessionFollowInvalidated?.();
             void params.onAccountCatalogInvalidated?.().catch(() => {
                 logger.debug('[API] Captured Account catalog refresh unavailable');
             });

@@ -104,7 +104,7 @@ import type {
 import type { LocalServicesRuntimeActionRoutes } from '@/daemon/local/services/actions/runtimeActionExecutor';
 import type { DaemonPeerMediationObservabilityRuntimeActionContext } from '@/daemon/peer/mediation/observability/runtimeActionExecutor';
 import type { SimulatorPreviewRoutes } from '@/daemon/devices/simulator/previewRoutes.types';
-import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { readServerIdentityIdFromFeaturesSnapshot, type CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import {
@@ -753,11 +753,13 @@ export class ApiSessionClient extends EventEmitter {
                     }
                     if (original.messageRole !== 'user') throw new Error('Question original input custody unavailable');
                     const body = openSessionMessageContent({ ...this.getStoredContentEncryptionContext(), content: original.content });
-                    const persona = { serverId: this.serverBinding.serverId, sessionId: this.sessionId };
+                    const serverIdentityId = this.getServerIdentityId();
+                    if (serverIdentityId === undefined) throw new Error('Question original Home identity unavailable');
+                    const persona = serverIdentityId ? { serverId: serverIdentityId, sessionId: this.sessionId } : null;
                     return deriveSessionInputActionRequestAttributionV1({ requestRef: original.localId ?? null, persona,
                         messageRole: original.messageRole, inputAdmissionReceipt: original.inputAdmissionReceipt,
                         inputAuthority: readSessionInputAuthority(readRecordProperty(body, 'meta'), 'stored'),
-                        origin: { kind: 'session', session: persona, messageId: original.id } });
+                        origin: persona ? { kind: 'session', session: persona, messageId: original.id } : null });
                 },
                 ...(this.machineAdmissionTransport ? { machineAdmissionTransport: this.machineAdmissionTransport } : {}),
                 signal: this.terminalPendingSettlementOperationAbortController.signal });
@@ -1210,7 +1212,7 @@ export class ApiSessionClient extends EventEmitter {
             })(),
         });
         this.updateRuntime = createSessionClientUpdateRuntime({
-            serverId: this.serverBinding.serverId,
+            getServerIdentityId: () => this.getServerIdentityId(),
             sessionId: this.sessionId,
             onArchivedAtFromServer: archivedAt => this.applyArchivedAtSnapshot(archivedAt),
             ...this.storedContentCrypto,
@@ -1303,6 +1305,7 @@ export class ApiSessionClient extends EventEmitter {
             },
             reconcilePendingExecutionRunTarget: (runId) => this.notifyExecutionRunPendingTarget(runId),
             refreshDemandedAccountCatalogs: () => this.refreshDemandedAccountCatalogs(),
+            onSessionFollowInvalidated: options.onSessionFollowInvalidated,
         });
         this.commitQueueRuntime = createSessionClientCommitQueueRuntime({
             signal: this.socketAckAbortController.signal,
@@ -1810,6 +1813,7 @@ export class ApiSessionClient extends EventEmitter {
 
         this.interactionApi = createSessionClientInteractionApi({
             serverId: this.serverBinding.serverId,
+            getServerIdentityId: () => this.getServerIdentityId(),
             signal: this.socketAckAbortController.signal,
             serverUrl: this.transport.serverUrl,
             sessionId: this.sessionId,
@@ -3650,6 +3654,11 @@ export class ApiSessionClient extends EventEmitter {
         return this.serverBinding;
     }
 
+    /** Portable provenance uses Home identity, never the local routing profile. */
+    getServerIdentityId(): string | null | undefined {
+        return readServerIdentityIdFromFeaturesSnapshot(this.getServerFeaturesSnapshot());
+    }
+
     getServerFeaturesSnapshot(): CliServerFeaturesSnapshot | undefined {
         return this.readServerFeaturesSnapshot();
     }
@@ -4438,13 +4447,15 @@ export class ApiSessionClient extends EventEmitter {
                 if (requestMessage.type !== 'found') return { v: 1, ok: false, error: 'unavailable' };
                 const requestContent = openSessionMessageContent({ ...this.getStoredContentEncryptionContext(), content: requestMessage.message.content });
                 const requestMeta = readRecordProperty(requestContent, 'meta');
-                const persona = { serverId: this.serverBinding.serverId, sessionId: this.sessionId };
+                const serverIdentityId = this.getServerIdentityId();
+                if (serverIdentityId === undefined) return { v: 1, ok: false, error: 'unavailable' };
+                const persona = serverIdentityId ? { serverId: serverIdentityId, sessionId: this.sessionId } : null;
                 const attribution = deriveSessionInputActionRequestAttributionV1({
                     requestRef: requestMessage.message.localId, persona,
                     messageRole: requestMessage.message.messageRole,
                     inputAdmissionReceipt: requestMessage.message.inputAdmissionReceipt,
                     inputAuthority: readSessionInputAuthority(requestMeta, 'stored'),
-                    origin: { kind: 'session', session: persona, messageId: requestMessage.message.id },
+                    origin: persona ? { kind: 'session', session: persona, messageId: requestMessage.message.id } : null,
                 });
                 const publication = await this.enqueueAgentMessageCommitted('happier', {
                     type: 'message', message: reply.message,

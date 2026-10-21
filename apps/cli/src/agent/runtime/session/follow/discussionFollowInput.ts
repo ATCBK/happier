@@ -27,6 +27,7 @@ import { stampTurnFacts } from '../turn/stampTurnFacts';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { resolveSessionInputTargetMachineId } from '@/session/services/sessionInputAdmissionIdentity';
 import { readSessionPresentationContent, sealSessionStoredContent, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { readServerIdentityIdFromFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
 /** The existing Follow observation becomes one original input through the incumbent Pending owner. */
 export function createDiscussionFollowInputIntake(input: Readonly<{
@@ -42,6 +43,8 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
   const artifacts = createCredentialedAccountArtifactStore(input.credentials);
   return async ({ observation, signal }: Readonly<{ observation: SessionFollowDiscussionPendingObservationV1; signal: AbortSignal }>): Promise<boolean> => {
     if (signal.aborted || observation.destinationSessionId !== input.session.sessionId) return false;
+    const serverIdentityId = readServerIdentityIdFromFeaturesSnapshot(input.session.getServerFeaturesSnapshot());
+    if (!serverIdentityId) return false;
     return input.session.runSessionFollowSourceRequest({ credentials: input.credentials, request: async () => {
       const { addressing } = observation;
       const opened = DiscussionReadResultV1Schema.safeParse(await discussionAction({ actionId: 'discussion.read',
@@ -131,9 +134,9 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         ...(doc ? { discussionContext: [{ author: sender, text: JSON.stringify({ doc }) }] } : {}),
       });
       let actionRequestAttributionV1 = materializeActionRequestAttributionV1({
-        requestRef: localId, requester: { serverId: binding.serverId, accountId: question.authorAccountId },
-        persona: { serverId: binding.serverId, sessionId: input.session.sessionId },
-        origin: { kind: 'discussion', discussion: { serverId: binding.serverId, discussionId: addressing.discussionId }, messageId: question.id },
+        requestRef: localId, requester: { serverId: serverIdentityId, accountId: question.authorAccountId },
+        persona: { serverId: serverIdentityId, sessionId: input.session.sessionId },
+        origin: { kind: 'discussion', discussion: { serverId: serverIdentityId, discussionId: addressing.discussionId }, messageId: question.id },
       });
       let admission = buildTrustedHostSessionInputAdmissionV1('agent');
       if (question.producerV1) {
@@ -184,9 +187,9 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
         if (authority?.v !== 1 || !causalPermissionAuthority || !provenance) return false;
         assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: original.message.inputAdmissionReceipt });
         const originalAttribution = deriveSessionInputActionRequestAttributionV1({
-          requestRef: original.message.localId, persona: { serverId: binding.serverId, sessionId: source.sessionId },
+          requestRef: original.message.localId, persona: { serverId: serverIdentityId, sessionId: source.sessionId },
           messageRole: original.message.messageRole, inputAdmissionReceipt: original.message.inputAdmissionReceipt, inputAuthority: authority,
-          origin: { kind: 'session', session: { serverId: binding.serverId, sessionId: source.sessionId }, messageId: original.message.id },
+          origin: { kind: 'session', session: { serverId: serverIdentityId, sessionId: source.sessionId }, messageId: original.message.id },
         });
         if (!originalAttribution) return false;
         actionRequestAttributionV1 = originalAttribution;

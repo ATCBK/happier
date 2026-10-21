@@ -13,6 +13,7 @@ import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
 import { createDiscussionFollowInputIntake } from './discussionFollowInput';
 import type { FollowEventV1, FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
+import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), request: vi.fn() }));
 // Only the HTTP and authenticated Machine socket are replaced; resource opening,
@@ -27,8 +28,9 @@ const message = { id: 'question', discussionId: 'discussion', localId: 'question
   authorAccountId: 'owner', accountActor: actor, producerV1: null,
   content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'What changed?' }, { t: 'mention', participant: { kind: 'session', sessionId } }] } },
   mentionedAccountIds: [], addressingV1: { throughSeq: 2, participantSessionIds: [sessionId] }, createdAt: 1 };
-const features = { status: 'ready' as const, features: FeaturesResponseSchema.parse({
-  features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+const features = { status: 'ready' as const, provenance: 'authenticated' as const, features: FeaturesResponseSchema.parse({
+  features: { sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } } },
+  capabilities: { serverIdentity: { serverIdentityId: 'srv_question_default' } },
 }) };
 
 beforeEach(() => {
@@ -159,8 +161,15 @@ it.each(['busy', 'person_stopped', 'muted'] as const)('keeps default-Quiet direc
 it('admits a human-addressed original into existing Machine Pending without inventing a causal Session or steering a busy turn', async () => {
   const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
   const admission = vi.fn<CliActionMachineAdmissionTransport>(async () => ({ status: 'accepted', localId }));
-  const session = createMutableApiSessionClientFixture({ sessionId, overrides: {
-    getServerFeaturesSnapshot: () => features,
+  const homeId = 'srv_question_home';
+  const home = await fetchServerFeaturesSnapshot({ serverUrl: 'https://question-home.test', token: 'token',
+    fetchImpl: async () => new Response(JSON.stringify({ ...features.features,
+      capabilities: { ...features.features.capabilities, serverIdentity: { serverIdentityId: homeId } },
+    }), { status: 200 }) });
+  expect(home).toMatchObject({ status: 'ready', provenance: 'authenticated' });
+  const session = createMutableApiSessionClientFixture({ sessionId,
+    serverBinding: { serverId: 'device-local-question-profile', serverUrl: 'https://question-home.test' }, overrides: {
+    getServerFeaturesSnapshot: () => home,
     getMachineAdmissionTransport: () => admission,
     runSessionFollowSourceRequest: ({ request }) => request(),
   } });
@@ -184,9 +193,9 @@ it('admits a human-addressed original into existing Machine Pending without inve
   }), expect.any(Object));
   const request = admission.mock.calls[0]?.[0];
   expect(request?.content).toMatchObject({ t: 'plain', v: { meta: { happierInputRequestV1: {
-    actionRequestAttributionV1: { requestRef: localId, requester: { serverId: binding.serverId, accountId: 'owner' },
-      persona: { serverId: binding.serverId, sessionId }, origin: { kind: 'discussion',
-        discussion: { serverId: binding.serverId, discussionId: addressing.discussionId }, messageId: addressing.messageId } },
+    actionRequestAttributionV1: { requestRef: localId, requester: { serverId: homeId, accountId: 'owner' },
+      persona: { serverId: homeId, sessionId }, origin: { kind: 'discussion',
+        discussion: { serverId: homeId, discussionId: addressing.discussionId }, messageId: addressing.messageId } },
   } } } });
   expect(request).not.toHaveProperty('reply.sourceSession');
   expect(request).not.toHaveProperty('content.v.meta.happierInputRequestV1.sourceSession');

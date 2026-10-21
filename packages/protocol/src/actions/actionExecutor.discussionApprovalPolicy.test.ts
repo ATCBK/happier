@@ -14,7 +14,7 @@ import { deriveSessionMessageReplyReturnLocalIdV1 } from '../sessions/messages/s
 
 const input = { discussionId: 'discussion', localId: 'answer', content: { v: 1 as const,
   parts: [{ t: 'text' as const, text: 'Private draft answer' }] }, replyTarget: { kind: 'message' as const, messageId: 'question' } };
-const context: ActionExecutorContext = { surface: 'agent', authority: 'account_automation', serverId: 'home',
+const context: ActionExecutorContext = { surface: 'agent', authority: 'account_automation', serverId: 'home', serverIdentityId: 'srv_home',
   runtimeAccountId: 'alice', actionRequestId: 'original-answer', defaultSessionId: 'receiver', defaultSessionMachineId: 'machine',
   actionCaller: { kind: 'session', sessionId: 'receiver', starterDepth: 0, turnDepth: 0 },
   actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
@@ -70,7 +70,7 @@ describe('Discussion direct-user creation policy', () => {
     state.setPolicy(null);
     const workflow = { runId: 'workflow-run', invocationRecordId: 'leaf', invocationAttempt: '0' };
     const requestLocalId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId: workflow.runId, invocationRecordId: workflow.invocationRecordId });
-    const marker = { serverId: 'home', requestLocalId, acceptedTurnId: 'leaf-turn', workflow };
+    const marker = { serverId: 'srv_home', requestLocalId, acceptedTurnId: 'leaf-turn', workflow };
     const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: 'receiver', localId: requestLocalId, acceptedTurnId: 'leaf-turn' });
     const publication = { ...input, localId };
     const host: ActionExecutorContext = { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1 }),
@@ -377,7 +377,7 @@ describe('Discussion participant publication policy', () => {
   it('retains the original host return publisher for draft review', async () => {
     const h = harness();
     const result = await h.executor.execute('discussion.reply', input, { ...context, actionCaller: { kind: 'host' },
-      discussionReplyReturn: { serverId: 'home', requestLocalId: 'original-input' }, bypassApprovals: true });
+      discussionReplyReturn: { serverId: 'srv_home', requestLocalId: 'original-input' }, bypassApprovals: true });
     expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
     expect(h.publications).toEqual([]);
     expect(requiresExactDaemonApprovalReplay(ApprovalRequestV2Schema.parse(h.stored()))).toBe(true);
@@ -397,7 +397,7 @@ describe('Discussion participant publication policy', () => {
   it.each(['session', 'host'] as const)('publishes once from the original %s executor only after a current human review replay', async caller => {
     const h = harness();
     const publicationContext: ActionExecutorContext = caller === 'host' ? { ...context,
-      actionCaller: { kind: 'host' }, discussionReplyReturn: { serverId: 'home', requestLocalId: 'original-input' } } : context;
+      actionCaller: { kind: 'host' }, discussionReplyReturn: { serverId: 'srv_home', requestLocalId: 'original-input' } } : context;
     await h.executor.execute('discussion.reply', input, publicationContext);
     expect(await h.executor.execute('approval.request.decide', { artifactId: 'private-draft', decision: 'approve' },
       { surface: 'cli', authority: 'account_automation', actionCaller: { kind: 'host' }, serverId: 'home' }))
@@ -447,7 +447,7 @@ describe('Discussion participant publication policy', () => {
       },
     });
     await h.executor.execute('discussion.reply', input, { ...context, actionCaller: { kind: 'host' },
-      discussionReplyReturn: { serverId: 'home', requestLocalId: 'original-input', acceptedTurnId: 'original-turn' } });
+      discussionReplyReturn: { serverId: 'srv_home', requestLocalId: 'original-input', acceptedTurnId: 'original-turn' } });
     const person: ActionExecutorContext = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
       serverId: 'deciding-device-profile', runtimeAccountId: 'alice' };
     expect(await h.executor.execute('approval.request.decide', { artifactId: 'private-draft', decision }, person))
@@ -455,7 +455,7 @@ describe('Discussion participant publication policy', () => {
     expect(h.stored()?.status).toBe(terminal);
     const captured = h.stored();
     expect(settlements).toEqual([{ context: expect.objectContaining({ authority: 'present_user' }),
-      sessionId: 'receiver', requestLocalId: 'original-input', serverId: 'home',
+      sessionId: 'receiver', requestLocalId: 'original-input', serverId: 'srv_home',
       reviewDecision: { kind: 'discussion_review', discussionId: 'discussion', messageId: 'question',
         acceptedTurnId: 'original-turn', decision } }]);
     expect(h.publications).toEqual([]);
@@ -472,7 +472,7 @@ describe('Discussion participant publication policy', () => {
   it.each(['reject', 'cancel'] as const)('requires original settlement support before the addressed %s decision', async decision => {
     const h = harness();
     await h.executor.execute('discussion.reply', input, { ...context, actionCaller: { kind: 'host' },
-      discussionReplyReturn: { serverId: 'home', requestLocalId: 'original-input' } });
+      discussionReplyReturn: { serverId: 'srv_home', requestLocalId: 'original-input' } });
     expect(await h.executor.execute('approval.request.decide', { artifactId: 'private-draft', decision },
       { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home', runtimeAccountId: 'alice' }))
       .toMatchObject({ ok: false, errorCode: 'unsupported_action' });

@@ -49,7 +49,7 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
   /** Canonical read Actions under this independently verified immutable origin. */
   executeSourceAction?: ApprovedDiscussionSourceActionExecute;
   isApprovalExecutionOriginCurrent: NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']>;
-}>): Promise<Readonly<{ sourceSession?: SessionInputSourceSessionV1; replyReturn?: SessionMessageDiscussionReplyReturnV1;
+}>): Promise<Readonly<{ serverIdentityId?: string; sourceSession?: SessionInputSourceSessionV1; replyReturn?: SessionMessageDiscussionReplyReturnV1;
   draftReview?: DiscussionDraftReviewV1; terminalReturn?: true; runId?: string; toolCallId: string }> | null> {
   return await runWithServerHttpBaseUrl(params.serverUrl, async () => {
     const store = createCliApprovalsArtifactStore({ credentials: params.credentials, serverId: params.serverId,
@@ -83,7 +83,7 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
       && Boolean(source.data.sourceInputId && source.data.sourceTurnId);
     const replyReturn = origin.discussionReplyReturn;
     if (replyReturn) {
-      if (actionId !== 'discussion.reply' || 'operation' in params.request
+      if (replyReturn.serverId !== origin.serverIdentityId || actionId !== 'discussion.reply' || 'operation' in params.request
         || !sameStrictJsonValue(params.request.replyReturn, replyReturn)) return null;
     } else if (!sourceIsExact) return null;
 
@@ -233,7 +233,7 @@ export async function readApprovedDiscussionPublication(params: Readonly<{
       }
     }
     params.signal?.throwIfAborted();
-    return { ...(source.success && sourceIsExact ? { sourceSession: source.data } : {}),
+    return { serverIdentityId: origin.serverIdentityId, ...(source.success && sourceIsExact ? { sourceSession: source.data } : {}),
       ...(draftReview ? { draftReview } : {}), ...(terminalReturn ? { terminalReturn: true as const } : {}),
       ...(replyReturn ? { replyReturn } : {}), ...(origin.runId ? { runId: origin.runId } : {}),
       toolCallId: approval.origin?.toolCallId ?? origin.requestId };

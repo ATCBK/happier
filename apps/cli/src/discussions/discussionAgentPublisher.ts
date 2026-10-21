@@ -38,19 +38,19 @@ export function readDiscussionAgentPublisherSourceSession(
 /** The host derives original-return authority; authored markers never survive an active invocation. */
 export function prepareActiveDiscussionAgentPublication(params: Readonly<{
   session: RunnerMcpSessionWithContext<Pick<ApiSessionClient, 'sessionId'>>;
-  serverId: string;
+  serverIdentityId: string | null | undefined;
   request: DiscussionAgentPublisherRequestV1;
 }>): DiscussionAgentPublisherInputV1 | null {
   if (params.request.sessionId !== params.session.sessionId) return null;
   const sourceSession = readDiscussionAgentPublisherSourceSession(params.session);
   return sourceSession ? prepareDiscussionAgentPublication({ sessionId: params.session.sessionId,
-    serverId: params.serverId, request: params.request, sourceSession,
+    serverIdentityId: params.serverIdentityId, request: params.request, sourceSession,
     discussionAddressing: params.session.getActiveTurnAdmissionWitness?.()?.discussionAddressing }) : null;
 }
 
 function prepareDiscussionAgentPublication(params: Readonly<{
   sessionId: string;
-  serverId: string;
+  serverIdentityId: string | null | undefined;
   request: DiscussionAgentPublisherRequestV1;
   sourceSession: SessionInputSourceSessionV1;
   discussionAddressing?: DiscussionAddressingV1;
@@ -65,11 +65,12 @@ function prepareDiscussionAgentPublication(params: Readonly<{
     && addressing.discussionId === publication.discussionId
     && publication.request.replyTarget?.kind === 'message'
     && publication.request.replyTarget.messageId === addressing.messageId) {
+    if (!params.serverIdentityId) return null;
     return { ...publication, sourceSession,
       request: { ...publication.request, localId: deriveSessionMessageReplyReturnLocalIdV1({
         sessionId: params.sessionId, localId: sourceSession.sourceInputId, acceptedTurnId: sourceSession.sourceTurnId,
       }) },
-      replyReturn: { serverId: params.serverId, requestLocalId: sourceSession.sourceInputId, acceptedTurnId: sourceSession.sourceTurnId },
+      replyReturn: { serverId: params.serverIdentityId, requestLocalId: sourceSession.sourceInputId, acceptedTurnId: sourceSession.sourceTurnId },
     };
   }
   return { ...publication, sourceSession };
@@ -99,6 +100,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
   request: DiscussionAgentPublisherRequestV1;
   credentials: StoredCredentials;
   serverId: string;
+  serverIdentityId: string;
   serverUrl: string;
   signal?: AbortSignal;
   executeSourceAction?: ApprovedDiscussionSourceActionExecute;
@@ -107,7 +109,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
   const { request, credentials, signal } = params;
   if ('operation' in request) return false;
   const marker = request.replyReturn;
-  if (!marker || marker.serverId !== params.serverId || request.request.replyTarget?.kind !== 'message'
+  if (!marker || marker.serverId !== params.serverIdentityId || request.request.replyTarget?.kind !== 'message'
     || request.request.localId !== deriveSessionMessageReplyReturnLocalIdV1({ sessionId: request.sessionId,
       localId: marker.requestLocalId, acceptedTurnId: marker.acceptedTurnId })
     || request.request.mentionedAccountIds.length > 0 || (request.request.mentionedSessionIds?.length ?? 0) > 0) return false;
@@ -132,7 +134,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
       || !workflow && progress.outcome.kind === 'answer' && 'publicationRef' in progress.outcome) return false;
     if (workflow && progress.outcome.kind === 'answer' && 'publicationRef' in progress.outcome
       && (progress.outcome.publicationRef.kind !== 'discussion'
-        || progress.outcome.publicationRef.discussion.serverId !== params.serverId
+        || progress.outcome.publicationRef.discussion.serverId !== params.serverIdentityId
         || progress.outcome.publicationRef.discussion.discussionId !== request.discussionId)) return false;
     params.reportStage?.('discussion_reply_result');
     let message: string;
@@ -146,7 +148,7 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
       const opened = result.ok ? WorkflowInvocationGetResultV1Schema.safeParse(result.result) : null;
       if (!opened?.success) return false;
       const delivery = opened.data.discussionResultDelivery;
-      if (!delivery || delivery.discussion.serverId !== params.serverId
+      if (!delivery || delivery.discussion.serverId !== params.serverIdentityId
         || delivery.discussion.discussionId !== request.discussionId
         || delivery.messageId !== parentMessageId || delivery.throughSeq !== progress.discussion.throughSeq) return false;
       const { index, progress: invocation } = opened.data.invocation;
@@ -186,6 +188,8 @@ async function isExactTerminalDiscussionReturn(params: Readonly<{
 export function createDiscussionAgentPublisher(params: Readonly<{
   serverId: string;
   serverUrl: string;
+  /** Canonical Home of this exact Session transport; not its routing profile. */
+  getServerIdentityId?: () => string | null | undefined;
   readOwnerAccountCredentials: () => Promise<StoredCredentials | null>;
   isApprovalExecutionOriginCurrent: NonNullable<ActionExecutorDeps['isApprovalExecutionOriginCurrent']>;
   executeSourceAction?: ApprovedDiscussionSourceActionExecute;
@@ -246,11 +250,11 @@ export function createDiscussionAgentPublisher(params: Readonly<{
           ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}),
         });
         if (!approved || (await params.readOwnerAccountCredentials())?.token !== credentials.token || signal?.aborted) return denied();
-        const { terminalReturn, draftReview, ...reviewedOrigin } = approved;
-        if (terminalReturn && !await isExactTerminalDiscussionReturn({ request: parsed.data.request, credentials,
-          serverId: params.serverId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
+        const { terminalReturn, draftReview, serverIdentityId, ...reviewedOrigin } = approved;
+        if (terminalReturn && (!serverIdentityId || !await isExactTerminalDiscussionReturn({ request: parsed.data.request, credentials,
+          serverId: params.serverId, serverIdentityId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
           reportStage,
-          ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) })) return denied();
+          ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) }))) return denied();
         const { runId: _authoredRun, toolCallId: _authoredTool, sourceSession: _authoredSource, ...reviewedRequest } = parsed.data.request;
         if (approved.replyReturn) {
           if ('operation' in reviewedRequest) return denied();
@@ -261,7 +265,7 @@ export function createDiscussionAgentPublisher(params: Readonly<{
               ...(approved.replyReturn.acceptedTurnId ? { acceptedTurnId: approved.replyReturn.acceptedTurnId } : {}),
             }) } };
         } else {
-          const prepared = approved.sourceSession ? prepareDiscussionAgentPublication({ sessionId: params.session.sessionId, serverId: params.serverId,
+          const prepared = approved.sourceSession ? prepareDiscussionAgentPublication({ sessionId: params.session.sessionId, serverIdentityId,
             request: { ...reviewedRequest, ...reviewedOrigin }, sourceSession: approved.sourceSession,
             discussionAddressing: approved.sourceSession.discussionAddressing }) : null;
           publication = prepared && !('operation' in prepared) && draftReview ? { ...prepared, draftReview } : prepared;
@@ -274,11 +278,12 @@ export function createDiscussionAgentPublisher(params: Readonly<{
     const { v: _version, sessionId: _sessionId, sourceSession: _authoredSource, ...request } = parsed.data.request;
     if (!activePublication) {
       stage = 'discussion_reply_custody';
-      if (!('replyReturn' in request) || request.replyReturn?.serverId !== params.serverId) return denied();
+      const serverIdentityId = params.getServerIdentityId?.();
+      if (!serverIdentityId || !('replyReturn' in request) || request.replyReturn?.serverId !== serverIdentityId) return denied();
       try {
         const credentials = await params.readOwnerAccountCredentials();
         if (!credentials || !await isExactTerminalDiscussionReturn({ request: parsed.data.request, credentials,
-          serverId: params.serverId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
+          serverId: params.serverId, serverIdentityId, serverUrl: params.serverUrl, ...(signal ? { signal } : {}),
           reportStage,
           ...(params.executeSourceAction ? { executeSourceAction: params.executeSourceAction } : {}) })
           || (await params.readOwnerAccountCredentials())?.token !== credentials.token || signal?.aborted) return denied();
@@ -288,7 +293,8 @@ export function createDiscussionAgentPublisher(params: Readonly<{
       const { runId: _authoredRun, toolCallId: _authoredTool, ...terminal } = request;
       return await publish(terminal, signal);
     }
-    const publication = prepareActiveDiscussionAgentPublication({ session: params.session, serverId: params.serverId, request: parsed.data.request });
+    const publication = prepareActiveDiscussionAgentPublication({ session: params.session,
+      serverIdentityId: params.getServerIdentityId?.(), request: parsed.data.request });
     if (!publication) return denied();
     // Workflow replies are accepted by their invocation owner first. Refuse an
     // active explicit answer to that same parent until the durable result path

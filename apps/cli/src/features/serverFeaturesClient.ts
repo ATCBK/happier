@@ -2,6 +2,7 @@ import { readRetryLaterHints, type RetryLaterHints } from '@happier-dev/connecti
 import type { FeaturesResponse as ServerFeatures } from '@happier-dev/protocol';
 import { AsyncTtlCache } from '@happier-dev/protocol/common/asyncTtlCache';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
+import { normalizeServerIdentityIdCapability } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 import { normalizeBaseUrl, withAbortTimeout } from '../diagnostics/httpClient';
 import { decodeServerFeaturesResponseBody } from './serverFeaturesParse';
@@ -21,6 +22,16 @@ export type CliServerFeaturesSnapshot =
       /** When the server said how long it will be unavailable (Retry-After on a non-OK response). */
       retryLater?: RetryLaterHints;
     }>;
+
+/** Portable Home identity from an existing observation of the exact bound origin.
+ * Undefined preserves retryable context custody; null is a ready older Home
+ * without this capability, not permission to substitute a local profile id.
+ */
+export function readServerIdentityIdFromFeaturesSnapshot(snapshot: CliServerFeaturesSnapshot | null | undefined): string | null | undefined {
+  return snapshot?.status === 'ready'
+    ? normalizeServerIdentityIdCapability(snapshot.features.capabilities.serverIdentity?.serverIdentityId) ?? null
+    : undefined;
+}
 
 export type FetchServerFeaturesSnapshotParams = Readonly<{
   serverUrl: string;

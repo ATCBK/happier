@@ -16595,6 +16595,7 @@ export async function startDaemonSessionControlRuntime(
             serverHttpBaseUrl,
             token: credentials.token,
             credentials,
+            resolveServerFeaturesSnapshot: params.resolveServerFeaturesSnapshot,
             machineId: params.machineId,
             initialStartDiagnostic: { phase: 'requester_runtime',
               elapsedMs: Math.max(0, Date.now() - requesterStartedAt), requesterRuntimeBound: Boolean(requesterRuntime) },

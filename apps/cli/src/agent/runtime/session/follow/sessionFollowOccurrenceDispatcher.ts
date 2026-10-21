@@ -494,13 +494,20 @@ export function createSessionFollowOccurrenceDispatcher(input: Readonly<{
     }
     if (opened.rules.some(rule => rule.definition.enabled && rule.receiver.kind === 'session'
       && rule.receiver.sessionId === request.destinationSessionId)) {
+      checkpoint(diagnostic, 'source_ranges', 'started');
       const response = await axios.get<unknown>(`${input.serverHttpBaseUrl}${SESSION_FOLLOW_RULES_ROUTE_V1}`, {
         headers: { Authorization: `Bearer ${input.credentials.token}` }, signal: input.signal,
         params: { destinationSessionId: request.destinationSessionId,
           ...(request.sourceSessionId ? { sourceSessionId: request.sourceSessionId } : {}) }, validateStatus: () => true,
       });
-      if (!await current()) return { coveredEvents };
+      if (!await current()) {
+        checkpoint(diagnostic, 'source_ranges', 'held', { reason: 'account_not_current' }); return { coveredEvents };
+      }
       const parsed = response.status === 200 ? ListSessionFollowRulesResponseV1Schema.safeParse(response.data) : null;
+      if (!parsed?.success) checkpoint(diagnostic, 'source_ranges', 'held', {
+        reason: 'source_ranges_unavailable', httpStatus: response.status,
+      });
+      else checkpoint(diagnostic, 'source_ranges', 'completed');
       if (parsed?.success) for (const source of parsed.data.sourceRanges?.sources ?? []) {
         if (request.sourceSessionId && request.sourceSessionId !== source.sourceSessionId) continue;
         const range = ranges.get(source.sourceSessionId);

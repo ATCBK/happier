@@ -11,7 +11,7 @@ function createRuntime(
   >> = {},
 ) {
   return createSessionClientUpdateRuntime({
-    serverId: 'home',
+    getServerIdentityId: () => 'home',
     sessionId: 'session-1',
     getMetadata: () => null,
     setMetadata: vi.fn(),
@@ -32,6 +32,40 @@ function createRuntime(
 }
 
 describe('createSessionClientUpdateRuntime', () => {
+  it('re-observes an original without consuming its IDs or frontier when its authenticated Home is temporarily unavailable', () => {
+    let serverIdentityId: string | null | undefined;
+    const emit = vi.fn();
+    const runtime = createRuntime({ getServerIdentityId: () => serverIdentityId, emit });
+    const update = { id: 'home-update', seq: 1, createdAt: 1_000,
+      body: { t: 'new-message', sid: 'session-1', message: {
+        id: 'home-message', localId: 'home-original', seq: 7, createdAt: 1_000, updatedAt: 1_000, messageRole: 'user',
+        inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'person', sessionRelationship: 'owner' },
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Preserve this original' } } },
+      } } } as Update;
+    runtime.handleUpdate(update, { source: 'session-scoped' });
+    expect(emit).not.toHaveBeenCalled();
+    expect(runtime.getLastObservedMessageSeq()).toBe(0);
+    expect(runtime.getLastObservedUserMessageSeq()).toBe(0);
+    serverIdentityId = 'authenticated-home';
+    runtime.handleUpdate(update, { source: 'session-scoped' });
+    expect(emit).toHaveBeenCalledWith('user-message', expect.objectContaining({ actionRequestAttributionV1: {
+      requestRef: 'home-original', requester: { serverId: serverIdentityId, accountId: 'person' },
+      persona: { serverId: serverIdentityId, sessionId: 'session-1' },
+      origin: { kind: 'session', session: { serverId: serverIdentityId, sessionId: 'session-1' }, messageId: 'home-message' },
+    } }));
+    expect(runtime.getLastObservedMessageSeq()).toBe(7);
+    expect(runtime.getLastObservedUserMessageSeq()).toBe(7);
+    runtime.handleUpdate(update, { source: 'session-scoped' });
+    expect(emit.mock.calls.filter(([event]) => event === 'user-message')).toHaveLength(1);
+    const legacyEmit = vi.fn();
+    const legacy = createRuntime({ getServerIdentityId: () => null, emit: legacyEmit });
+    legacy.handleUpdate(update, { source: 'session-scoped' });
+    expect(legacyEmit).toHaveBeenCalledWith('user-message', expect.objectContaining({
+      content: { type: 'text', text: 'Preserve this original' }, actionRequestAttributionV1: undefined,
+    }));
+    expect(legacy.getLastObservedMessageSeq()).toBe(7);
+  });
+
   it('withdraws retained questions when an exact Session archive update reaches its owner', async () => {
     let archivedAt: number | null = null;
     let state: AgentState = { requests: { question: { tool: 'AskUserQuestion', kind: 'user_action',
