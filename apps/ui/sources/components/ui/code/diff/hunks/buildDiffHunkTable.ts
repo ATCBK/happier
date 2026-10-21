@@ -84,6 +84,7 @@ export function buildDiffHunkTable(props: DiffViewerProps): DiffHunkTable {
             rangeEnd: range[1],
             rangeSide: added ? 'new' : 'old',
             firstChangeLineId: firstLine.id,
+            revealLineId: anchor.renderIsHeaderLine ? firstLine.id : anchor.id,
             changeLineIds,
         };
         hunks.push(info);

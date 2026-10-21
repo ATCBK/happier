@@ -44,9 +44,9 @@ export function HunkContextMenu(
     items.push({
       id: 'keep',
       testID: `hunk-menu-keep-${hunk.index}`,
+      // The title says the state ("Kept", as on the row and the bar); a trailing mark would repeat the check.
       title: kept ? t('hunkReview.kept') : t('hunkReview.keep'),
       icon: icon('check'),
-      checked: kept,
       disabled: busy || keepReason !== null,
       ...(keepReason ? { subtitle: keepReason } : {}),
     });

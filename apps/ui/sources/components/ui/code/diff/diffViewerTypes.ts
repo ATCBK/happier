@@ -20,6 +20,11 @@ export type DiffHunkInfo = Readonly<{
     rangeEnd: number;
     rangeSide: 'new' | 'old';
     firstChangeLineId: string;
+    /**
+     * Where a page move to this change lands: the line its "Change n" row is drawn after, so a top-aligned
+     * landing shows the row and one line of context; the first changed line when only the hunk header is above.
+     */
+    revealLineId: string;
     /** CodeLine ids of the unit's changed lines (its run), for the kept tint release. */
     changeLineIds: readonly string[];
 }>;
@@ -93,6 +98,11 @@ export type DiffViewerBaseProps = Readonly<{
     renderAfterLine?: CodeLinesViewProps['renderAfterLine'];
     /** The code view's leading lane (Blame on the new side); removed lines get an empty cell. */
     renderLeadingLane?: CodeLinesViewProps['renderLeadingLane'];
+    /**
+     * Content above the first line that scrolls with the diff, inside its own scroller (an SVG's image
+     * compare on a phone), so the page has one scroll. It spans the visible width, never the code's.
+     */
+    leadingContent?: ReactNode;
     showInactiveCommentAffordance?: CodeLinesViewProps['showInactiveCommentAffordance'];
 }>;
 

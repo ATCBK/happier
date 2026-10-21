@@ -274,7 +274,7 @@ export function useFileChangesReview(params: FileChangesReviewParams) {
     controller,
     hunks,
     reviewUnits: controller.reviewUnits,
-    scrollToLineId: controller.revealHunk?.firstChangeLineId,
+    scrollToLineId: controller.revealHunk?.revealLineId,
     keyboard,
     discardDisabledReason,
     machineName,

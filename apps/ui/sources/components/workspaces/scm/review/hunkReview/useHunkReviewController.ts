@@ -118,7 +118,10 @@ export function useHunkReviewController(params: HunkReviewControllerParams) {
         const unit = resolve(key, path);
         if (!unit || latest.current.marks.unavailableReason) return;
         params.onReviewAction?.();
-        marks.setReviewedKeys([unit.key], !latest.current.marked.has(unit.key));
+        const keeping = !latest.current.marked.has(unit.key);
+        marks.setReviewedKeys([unit.key], keeping);
+        // Letting a change go (its row, the phone long-press menu) makes it the current one, where the reader is.
+        if (!keeping && path === params.path) { setSelection({ path, key: unit.key }); setRevealed('reading'); }
     };
     // The handler retains the hash that accompanied its rendered row. Current key membership
     // is resolved at invocation; the canonical Discard owner guards the displayed bytes.

@@ -5,6 +5,7 @@ import { buildCodeLinesFromTextDiff } from '@/components/ui/code/model/buildCode
 import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 import { DiffHorizontalScroll } from './DiffHorizontalScroll';
+import { DiffLeadingContent } from './DiffLeadingContent';
 import type { TextDiffViewerProps } from '../diffViewerTypes';
 
 export const HappierTextDiffViewer = React.memo<TextDiffViewerProps>((props) => {
@@ -34,6 +35,7 @@ export const HappierTextDiffViewer = React.memo<TextDiffViewerProps>((props) => 
                 isCommentActive={props.isCommentActive}
                 renderAfterLine={props.renderAfterLine}
                 renderLeadingLane={props.renderLeadingLane}
+                listHeader={props.leadingContent ? <DiffLeadingContent>{props.leadingContent}</DiffLeadingContent> : undefined}
                 showInactiveCommentAffordance={props.showInactiveCommentAffordance}
                 contentPaddingHorizontal={props.contentPaddingHorizontal}
                 contentPaddingVertical={props.contentPaddingVertical}

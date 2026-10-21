@@ -9,12 +9,12 @@ export function useDiffHunkNavigation(table: DiffHunkTable) {
         if (table.hunks.length === 0) return undefined;
         const nextIndex = Math.max(0, Math.min(table.hunks.length - 1, index + direction));
         setSelection({ table, index: nextIndex });
-        return table.hunks[nextIndex]?.firstChangeLineId;
+        return table.hunks[nextIndex]?.revealLineId;
     };
     return {
         count: table.hunks.length,
         currentIndex: index < 0 ? null : index,
-        scrollToLineId: table.hunks[index]?.firstChangeLineId,
+        scrollToLineId: table.hunks[index]?.revealLineId,
         canPrevious: index > 0,
         canNext: index < table.hunks.length - 1,
         next: () => move(1),

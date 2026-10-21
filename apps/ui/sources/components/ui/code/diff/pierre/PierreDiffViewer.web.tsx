@@ -1130,10 +1130,14 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
         );
     })();
 
+    // Leading content scrolls with the diff, above its first line (Pierre measures the file's offset in its
+    // scroller, so reveals still land on the change).
+    const leading = props.leadingContent ? <div data-diff-leading-content="">{props.leadingContent}</div> : null;
     const body = props.virtualized && !sharedVirtualizer ? (
         <Virtualizer
             style={{ flex: 1, minHeight: 0, maxHeight: 'inherit', overflowY: 'auto' }}
         >
+            {leading}
             <PierreFileDiffBody
                 key={fileDiff.cacheKey}
                 fileDiff={fileDiff}
@@ -1147,6 +1151,8 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             />
         </Virtualizer>
     ) : (
+        <>
+        {leading}
         <PierreFileDiffBody
             key={fileDiff.cacheKey}
             fileDiff={fileDiff}
@@ -1158,6 +1164,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             renderGutterUtility={props.onPressAddComment ? renderGutterUtility : undefined}
             style={{ display: 'block', width: '100%' }}
         />
+        </>
     );
 
     const wrapperStyle = props.virtualized

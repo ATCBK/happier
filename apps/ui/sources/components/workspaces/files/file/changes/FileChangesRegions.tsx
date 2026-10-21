@@ -73,6 +73,8 @@ export type FileChangesDiffSurface = Readonly<{
   scrollToLineId?: string;
   /** Native phones: the page's diff scroll events, so the bar follows the reading line. */
   onScroll?: () => void;
+  /** Phones: content above the diff's first line, in the diff's own scroller (an SVG's image compare), so the page has one scroll. */
+  leadingContent?: React.ReactNode;
 }>;
 
 /**
@@ -109,8 +111,17 @@ export function FileChangesBody(
     keys: review.reviewUnits.map((unit) => unit.key),
     onRead: review.controller.followReadingLine,
   });
+  // With leading content (the compare), the page opens at its top: the arrival reveal of the first change
+  // waits until the review moves (Next, Previous, Keep), so the wells are what you see first.
+  // The arrival reveal is the first change (the cursor's default); any other reveal is a move.
+  const revealKey = review.controller.revealHunk?.key ?? null;
+  const firstKey = review.reviewUnits[0]?.key ?? null;
+  const [reviewMoved, setReviewMoved] = React.useState(false);
+  React.useEffect(() => {
+    if (!reviewMoved && revealKey !== null && revealKey !== firstKey) setReviewMoved(true);
+  }, [firstKey, revealKey, reviewMoved]);
   // The one text region: a text file's diff, or an SVG's source changes under its image compare.
-  const textRegion = (unifiedDiff: string) => (
+  const textRegion = (unifiedDiff: string, leadingContent?: React.ReactNode) => (
     <View ref={diffRootRef} collapsable={false} style={styles.body}
       onTouchStart={phone && Platform.OS !== 'web' ? readingLine.onTouchStart : undefined}>
       <DiffHunkRowRegistryContext.Provider value={phone ? readingLine.registry : null}>
@@ -118,8 +129,9 @@ export function FileChangesBody(
           unifiedDiff,
           hunks: review.hunks,
           reviewUnits: review.reviewUnits,
-          scrollToLineId: review.scrollToLineId,
+          scrollToLineId: leadingContent && !reviewMoved ? undefined : review.scrollToLineId,
           ...(phone && Platform.OS !== 'web' ? { onScroll: readingLine.onScroll } : {}),
+          ...(leadingContent ? { leadingContent } : {}),
         })}
       </DiffHunkRowRegistryContext.Provider>
       {Platform.OS === 'web' && props.ask ? (
@@ -157,10 +169,18 @@ export function FileChangesBody(
   );
   const viewer = props.image ? resolveFileViewerKind({ path: props.image.filePath }) : null;
   if (props.image && viewer && (viewer.kind === 'image' || viewer.kind === 'svg') && review.status !== 'loading') {
+    const imageCompare = (
+      <FileChangesImageCompare review={review} scope={props.image.scope} filePath={props.image.filePath}
+        liveChangeKind={props.image.liveChangeKind} />
+    );
+    // Phones (lab RV1vp): Before over After, then the source changes, in one scroll. The wells lead the
+    // diff inside its own scroller, so they scroll away and the changes get the screen.
+    if (phone && viewer.kind === 'svg' && review.status === 'ready' && review.unifiedDiff) {
+      return textRegion(review.unifiedDiff, imageCompare);
+    }
     return (
       <View style={styles.body}>
-        <FileChangesImageCompare review={review} scope={props.image.scope} filePath={props.image.filePath}
-          liveChangeKind={props.image.liveChangeKind} />
+        {imageCompare}
         {viewer.kind === 'svg' && review.status === 'ready' && review.unifiedDiff ? textRegion(review.unifiedDiff) : null}
       </View>
     );

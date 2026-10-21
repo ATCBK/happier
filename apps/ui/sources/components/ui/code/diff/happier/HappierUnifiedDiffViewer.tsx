@@ -6,6 +6,7 @@ import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
 import { DiffHorizontalScroll } from './DiffHorizontalScroll';
+import { DiffLeadingContent } from './DiffLeadingContent';
 import { useSetting } from '@/sync/store/settingsReadHooks';
 
 import type { UnifiedDiffViewerProps } from '../diffViewerTypes';
@@ -174,6 +175,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 isCommentActive={props.isCommentActive}
                 renderAfterLine={composedAfterLine}
                 renderLeadingLane={props.renderLeadingLane}
+                listHeader={props.leadingContent ? <DiffLeadingContent>{props.leadingContent}</DiffLeadingContent> : undefined}
                 showInactiveCommentAffordance={props.showInactiveCommentAffordance}
                 contentPaddingHorizontal={props.contentPaddingHorizontal}
                 contentPaddingVertical={props.contentPaddingVertical}

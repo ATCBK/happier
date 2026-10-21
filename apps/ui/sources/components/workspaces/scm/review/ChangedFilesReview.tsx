@@ -1082,7 +1082,7 @@ function ChangedFilesReviewInner(props: ChangedFilesReviewProps) {
                 ...(file ? { reviewUnits: buildScmFileReviewUnits({ ...file, evidence: { state: 'available', unifiedDiff } }) } : {}) }).hunks
                 .find(hunk => hunk.key === cursor.key);
             if (cursor.path !== activeReviewPath) focusFile(cursor.path);
-            if (destination) focusLine({ filePath: cursor.path, lineId: destination.firstChangeLineId });
+            if (destination) focusLine({ filePath: cursor.path, lineId: destination.revealLineId });
         },
     });
     const getHunkReview = props.hunkReview ? (path: string) => ({

@@ -78,6 +78,8 @@ type FileContentPanelProps = {
     hunks?: DiffViewerHunks;
     reviewUnits?: readonly ReviewUnit[];
     reviewScrollToLineId?: string;
+    /** Changes mode: content above the diff's first line that scrolls with it (an SVG's image compare on phones). */
+    diffLeadingContent?: React.ReactNode;
     fileContent: string | null;
     language: string | null;
     syntaxHighlighting?: CodeLinesSyntaxHighlightingConfig;
@@ -219,6 +221,7 @@ function FileContentPanelInner({
     hunks,
     reviewUnits,
     reviewScrollToLineId,
+    diffLeadingContent,
     fileContent,
     language,
     syntaxHighlighting,
@@ -644,6 +647,7 @@ function FileContentPanelInner({
                 isCommentActive={reviewCommentControls?.isCommentActive}
                 renderAfterLine={reviewCommentControls?.renderAfterLine}
                 renderLeadingLane={renderLeadingLane}
+                leadingContent={diffLeadingContent}
                 contentPaddingHorizontal={CODE_CANVAS_CONTENT_PADDING}
                 contentPaddingVertical={CODE_CANVAS_CONTENT_PADDING}
                 externalScrollView={!effectiveDiffVirtualized && Platform.OS !== 'web' ? externalCodeScrollView : undefined}

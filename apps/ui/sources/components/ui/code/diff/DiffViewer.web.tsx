@@ -45,7 +45,9 @@ export const DiffViewer = React.memo<DiffViewerProps>((props) => {
         // renderer while the Pierre chunk and its worker load, so the reserved body is never an empty
         // card. A virtualized list diff can be very large, so it keeps the pane's loading state.
         const loading = props.virtualized === true
-            ? <PaneLoadingFallback testID="pierre-diff-loading" />
+            ? props.leadingContent
+                ? <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>{props.leadingContent}<PaneLoadingFallback testID="pierre-diff-loading" /></div>
+                : <PaneLoadingFallback testID="pierre-diff-loading" />
             : props.mode === 'unified'
                 ? <HappierUnifiedDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />
                 : <HappierTextDiffViewer {...props} renderAfterLine={renderAfterLine} reviewedLineIds={reviewedLineIds} wrapLines={wrapLines} />;

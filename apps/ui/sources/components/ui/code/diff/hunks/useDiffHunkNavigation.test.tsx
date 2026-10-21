@@ -16,7 +16,8 @@ describe('review hunk navigation', () => {
         await act(async () => { hook.getCurrent().next(); });
         expect(hook.getCurrent().scrollToLineId).toBe('r:1');
         await act(async () => { hook.getCurrent().next(); });
-        expect(hook.getCurrent().scrollToLineId).toBe('r:4');
+        // The second change lands from the context line its row sits under, so its row stays in view.
+        expect(hook.getCurrent().scrollToLineId).toBe('c:3');
     });
 
     it('visits content in each hunk, bounds navigation, and resets when the diff changes', async () => {

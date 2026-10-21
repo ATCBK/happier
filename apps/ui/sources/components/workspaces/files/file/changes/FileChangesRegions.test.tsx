@@ -68,13 +68,14 @@ function readyReview(): FileChangesReview {
       discardCurrent: noop,
       nextFile: noop,
       followReadingLine: noop,
-      revealHunk: null,
+      // The arrival default: the first change (the viewer has reported its rows).
+      revealHunk: { key: 'u1' },
       currentHunk: null,
       reviewUnits: units,
     },
     hunks: { stateOf: () => 'pending' },
     reviewUnits: units,
-    scrollToLineId: undefined,
+    scrollToLineId: 'line-2',
     keyboard: { next: noop, previous: noop },
     discardDisabledReason: null,
   };
@@ -105,7 +106,8 @@ async function renderBody(filePath: string) {
       >
         {(surface) => {
           surfaces.push(surface);
-          return <RegistryProbe />;
+          // The page's diff draws its leading content inside its own scroller, above the first line.
+          return <>{surface.leadingContent}<RegistryProbe /></>;
         }}
       </FileChangesBody>
     </InjectedAuthProvider>,
@@ -132,6 +134,10 @@ describe('FileChangesBody on a phone (P5 RV1)', () => {
         screen.tree.findByProps({ testID: 'registry-probe' }).props.provided,
       ).toBe(true);
       expect(surfaces.at(-1)?.onScroll).toEqual(expect.any(Function));
+      // One page scroll: the image compare leads the diff inside the diff's scroller, not above it.
+      expect(surfaces.at(-1)?.leadingContent).toBeTruthy();
+      // It opens at the compare: the first change's arrival reveal waits until the review moves.
+      expect(surfaces.at(-1)?.scrollToLineId).toBeUndefined();
     } finally {
       await screen.unmount();
     }

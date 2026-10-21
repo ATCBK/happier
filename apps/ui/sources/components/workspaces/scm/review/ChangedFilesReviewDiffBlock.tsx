@@ -236,7 +236,7 @@ export const ChangedFilesReviewDiffBlock = React.memo((props: ChangedFilesReview
     }, [filePath, measureGeneration, hunkTable.hunks, onAnchorMeasure, props.hunkNotes]);
     const hunks = React.useMemo<DiffViewerHunks | undefined>(() => {
         if (!props.hunkNotes && !props.scrollToLineId) return undefined;
-        const currentIndex = hunkTable.hunks.findIndex((hunk) => hunk.firstChangeLineId === props.scrollToLineId);
+        const currentIndex = hunkTable.hunks.findIndex((hunk) => hunk.revealLineId === props.scrollToLineId);
         return { currentIndex: currentIndex < 0 ? null : currentIndex, renderNote: props.hunkNotes ? renderNote : undefined };
     }, [hunkTable.hunks, props.hunkNotes, props.scrollToLineId, renderNote]);
     const reviewHunks = props.hunkReview ? { ...props.hunkReview, ...(props.hunkNotes ? { renderNote } : {}) } : hunks;

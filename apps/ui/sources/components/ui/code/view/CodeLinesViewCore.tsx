@@ -61,6 +61,8 @@ export type CodeLinesViewProps = {
      * line's own press target, so it can be its own control; it stretches to the line's wrapped height.
      */
     renderLeadingLane?: (line: CodeLine) => React.ReactNode;
+    /** Content above the first line, inside this view's scroller (the diff's `leadingContent`). */
+    listHeader?: React.ReactNode;
     showInactiveCommentAffordance?: boolean;
     contentPaddingHorizontal?: number;
     contentPaddingVertical?: number;
@@ -457,15 +459,27 @@ export function CodeLinesViewCore(
     // decoration refreshes retain the completed target and leave manual reading scroll untouched.
     const scrollTargetKey = codeLineScrollTargetKey(props.scrollToLineId, props.scrollToLineId ? props.findRangesByLineId?.get(props.scrollToLineId) : undefined);
 
+    // The list header's measured height: line offsets start below it.
+    const [headerHeight, setHeaderHeight] = React.useState(0);
+    const hasListHeader = props.listHeader !== undefined && props.listHeader !== null;
+    const listHeaderComponent = React.useMemo(() => hasListHeader ? (
+        <View onLayout={(event) => {
+            const height = Math.round(event.nativeEvent.layout.height);
+            setHeaderHeight((previous) => previous === height ? previous : height);
+        }}>
+            {props.listHeader}
+        </View>
+    ) : null, [hasListHeader, props.listHeader]);
+    const leadingOffset = hasListHeader ? headerHeight : 0;
     const getItemLayout = React.useCallback((_: unknown, index: number) => {
         // A best-effort constant-height layout to make scroll-to-index reliable on React Native Web.
         // If a line wraps, the offset can be slightly off, but the highlight still guides the user.
         return {
             length: estimatedRowHeight,
-            offset: estimatedRowHeight * index,
+            offset: leadingOffset + estimatedRowHeight * index,
             index,
         };
-    }, [estimatedRowHeight]);
+    }, [estimatedRowHeight, leadingOffset]);
 
     React.useEffect(() => {
         const targetId = props.scrollToLineId;
@@ -712,6 +726,8 @@ export function CodeLinesViewCore(
 
     if (!virtualized) {
         return preserveReadingAnchor(
+            <>
+            {listHeaderComponent}
             <View ref={contentRef} style={{ paddingHorizontal, paddingTop: paddingVertical, paddingBottom }} {...intelligenceEvents}>
                 {props.lines.map((line, index) => (
                     <React.Fragment key={line.id}>
@@ -720,6 +736,7 @@ export function CodeLinesViewCore(
                 ))}
                 <View style={{ height: 16 }} />
             </View>
+            </>
         );
     }
 
@@ -742,6 +759,7 @@ export function CodeLinesViewCore(
             initialScrollIndex={scrollIndex >= 0 && Platform.OS !== 'web' ? scrollIndex : undefined}
             getItemLayout={wrapLines ? undefined : getItemLayout}
             contentContainerStyle={contentContainerStyle}
+            ListHeaderComponent={listHeaderComponent}
             ListFooterComponent={listFooterComponent}
             onLayout={props.onLayout}
             onContentSizeChange={props.onContentSizeChange}
