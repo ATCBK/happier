@@ -12,6 +12,7 @@ describe('hosted entity coordinates and mount retirement', () => {
         const scope = { serverId: 'home', accountId: 'account' };
         let refused = false;
         let finish: (() => void) | undefined;
+        let writes = 0;
         const pending = new Promise<void>(resolve => { finish = resolve; });
         let markStarted: (() => void) | undefined;
         const started = new Promise<void>(resolve => { markStarted = resolve; });
@@ -26,7 +27,7 @@ describe('hosted entity coordinates and mount retirement', () => {
             : { status: 'allowed' as const, effect: { actionId: 'plugin:acme.board/add', input: {}, preview: { verb: 'Add', target: 'Board' } } } };
         const binding = createPluginEntityDragDropBinding({ runtime, pluginId: 'acme.board', mountKey: 'iframe', scope, isCurrent: () => true,
             readSource: () => source, readTarget: () => target,
-            executeAction: async () => { markStarted?.(); await pending; return { status: 'applied' }; } });
+            executeAction: async () => { markStarted?.(); await pending; writes++; return { status: 'applied' }; } });
         const hosted = createHostedEntityDragDropHandlers({ binding, isCurrent: () => true, readSessionItem: () => null });
         const surface = { pluginId: 'acme.board', contributionId: 'board', surfaceId: 'iframe', placement: 'sessionPane' as const,
             platform: 'web' as const, channel: 'internal' as const, resourceScope: [], diagnostics: [] };
@@ -50,16 +51,35 @@ describe('hosted entity coordinates and mount retirement', () => {
             publish: state => { states.push(state); }, retain: value => { unsubscribe = value; },
         } })).toEqual({});
         expect(states.at(-1)).toMatchObject({ current: true, phase: 'idle', admission: null });
-        const carry = runtime.begin(binding.runtimeMountId('source'))!; carry.move({ x: 20, y: 20 });
+        const frame = { getHostedFrameBounds: async () => ({ x: 0, y: 0, width: 100, height: 100 }) };
+        expect(await api.handleRequest(request('updateEntityDragDrop', { kind: 'begin', mountId: 'source',
+            pointer: { x: 20, y: 20 }, viewport: { width: 100, height: 100 } }), frame)).toEqual({ accepted: true });
         expect(states.at(-1)).toMatchObject({ current: true, phase: 'carrying', admission: { status: 'allowed' } });
         refused = true; binding.refresh();
         expect(states.at(-1)).toMatchObject({ phase: 'carrying', admission: { status: 'refused', reason: { code: 'read_only' } } });
         refused = false; binding.refresh();
-        const settling = carry.release();
+        const settling = api.handleRequest(request('updateEntityDragDrop', { kind: 'release',
+            pointer: { x: 20, y: 20 }, viewport: { width: 100, height: 100 } }), frame);
         await started;
         expect(states.at(-1)).toMatchObject({ phase: 'pending', admission: { status: 'allowed' } });
-        finish?.(); await settling;
-        expect(states.at(-1)).toMatchObject({ phase: 'settled', outcome: { status: 'applied' } });
+        // Browser dragend keeps issued custody; explicit iframe Escape/cancel retires feedback.
+        const gestureEnd = api.handleRequest(request('updateEntityDragDrop', { kind: 'cancel', mountId: 'source', reason: 'gesture-end' }));
+        expect(runtime.getSnapshot().phase).toBe('pending');
+        expect(await api.handleRequest(request('updateEntityDragDrop', { kind: 'cancel', mountId: 'source' }))).toEqual({ accepted: true });
+        expect(states.at(-1)).toMatchObject({ phase: 'idle', admission: null });
+        let nextBegin: PluginUiJsonValueV1 | undefined;
+        const beginning = Promise.resolve(api.handleRequest(request('updateEntityDragDrop', { kind: 'begin', mountId: 'source', input: 'keyboard',
+            pointer: { x: 0, y: 0 }, viewport: { width: 100, height: 100 } }))).then(result => { nextBegin = result; });
+        try {
+            await vi.waitFor(() => expect(nextBegin).toEqual({ accepted: true }));
+            expect(writes).toBe(0);
+        } finally { finish?.(); await settling; await gestureEnd; await beginning; }
+        expect(writes).toBe(1);
+        expect(runtime.getSnapshot().phase).toBe('carrying');
+        // A late original release must not discard the hosted adapter's new carry handle.
+        expect(await api.handleRequest(request('updateEntityDragDrop', { kind: 'choose', mountId: 'source',
+            targetId: binding.runtimeMountId('target') }))).toEqual({ accepted: true });
+        await api.handleRequest(request('updateEntityDragDrop', { kind: 'cancel', mountId: 'source' }));
         await api.handleRequest(request('updateEntityDragDrop', { kind: 'unmount', mountId: 'target' }));
         expect(states.at(-1)?.destinations).toEqual([]);
         await api.handleRequest(request('updateEntityDragDrop', { kind: 'unmount', mountId: 'source' }));

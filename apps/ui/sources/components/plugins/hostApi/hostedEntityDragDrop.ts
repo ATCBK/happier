@@ -77,9 +77,14 @@ export function createHostedEntityDragDropHandlers(input: Readonly<{
                     const scoped = command.kind === 'cancel' && command.mountId !== undefined;
                     for (const operation of operations) if (operation.command !== 'mount' && (!scoped || operation.mountId === command.mountId)) operation.cancellation.abort();
                     if (scoped && (!source?.isCurrent() || input.binding.runtime.getSnapshot().sourceId !== source.id)) return { accepted: false };
-                    carry?.cancel('hosted-pointer-cancel');
+                    // The iframe's Escape does not bubble to the realm listener. Retire
+                    // its feedback through the runtime's explicit-user cancellation path.
+                    carry?.cancel('escape');
                     carry = null;
-                    input.binding.runtime.cancel('hosted-pointer-cancel');
+                    input.binding.runtime.cancel('escape');
+                    // The issued effect settles on its original promise. A new gesture
+                    // must not wait behind that retired gesture's command tail.
+                    pendingCommands = Promise.resolve();
                     return { accepted: current() };
                 }
                 if (immediate.success && immediate.data.kind === 'unmount') {
@@ -201,8 +206,9 @@ export function createHostedEntityDragDropHandlers(input: Readonly<{
                 }
                 if (carry) carry.move(pointer);
                 else input.binding.runtime.move(pointer);
-                const outcome = carry ? await carry.release() : await input.binding.runtime.release();
-                carry = null;
+                const active = carry;
+                const outcome = active ? await active.release() : await input.binding.runtime.release();
+                if (carry === active) carry = null;
                 return { accepted: outcome !== null, outcome };
                 });
                 pendingCommands = result.then(() => { operations.delete(operation); cancellation.dispose(); }, () => { operations.delete(operation); cancellation.dispose(); });
