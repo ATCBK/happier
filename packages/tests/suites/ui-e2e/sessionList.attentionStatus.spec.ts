@@ -1,9 +1,10 @@
 import type { SocketCollector } from '../../src/testkit/socketClient';
 import { appendBrowserDiagnostics, collectBrowserDiagnostics } from '../../src/testkit/uiE2e/browserDiagnostics';
-import { expect, test } from '@playwright/test';
+import { expect, test, type WebSocketRoute } from '@playwright/test';
 import { mkdir } from 'node:fs/promises';
 
 import { createTestAuthMtls } from '../../src/testkit/auth';
+import { fetchSessionV2 } from '../../src/testkit/sessions';
 import { startServerLight, type StartedServer } from '../../src/testkit/process/serverLight';
 import { startUiWeb, type StartedUiWeb } from '../../src/testkit/process/uiWeb';
 import { createRunDirs } from '../../src/testkit/runDir';
@@ -242,6 +243,92 @@ test.describe('ui e2e: session list attention status', () => {
       livePublisher.close();
     }
   });
+  test('keeps an approved permission settled when an old socket update arrives', async ({ page }) => {
+    test.setTimeout(360_000);
+    if (!server || !token || !uiBaseUrl) throw new Error('missing session list attention fixtures');
+
+    const session = await seedAttentionSession({ baseUrl: server.baseUrl, token, title: 'Settled permission e2e' });
+    const browserDiagnostics = collectBrowserDiagnostics({ page });
+    let publisher: SocketCollector | null = null;
+    let stopKeepAlive: (() => void) | null = null;
+    let pendingUpdate: Readonly<{ route: WebSocketRoute; packet: string }> | null = null;
+    const readPendingUpdate = () => pendingUpdate;
+    // Replay a real server packet at the transport boundary. The UI still runs its
+    // actual decoding, socket handler, batching, store and row subscriptions.
+    await page.routeWebSocket(url => url.pathname === '/v1/updates/', route => {
+      const upstream = route.connectToServer();
+      upstream.onMessage(message => {
+        if (typeof message === 'string' && message.startsWith('42')) {
+          let event: unknown;
+          try { event = JSON.parse(message.slice(2)); } catch { /* Other Socket.IO packets pass through. */ }
+          const data: unknown = Array.isArray(event) && event[0] === 'update' ? event[1] : null;
+          const body = data && typeof data === 'object' && 'body' in data ? data.body : null;
+          if (body && typeof body === 'object' && 'id' in body && body.id === session.id
+            && 'pendingPermissionRequestCount' in body && body.pendingPermissionRequestCount === 1) {
+            pendingUpdate = { route, packet: message };
+          }
+        }
+        route.send(message);
+      });
+    });
+    try {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+      await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+      await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'cozy' });
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+      await waitForInitialAppUi({ page, timeoutMs: 180_000 });
+      await expect(sessionRow(page, session.id)).toHaveCount(1, { timeout: 120_000 });
+      publisher = await connectAuthenticatedSessionPublisher({ baseUrl: server.baseUrl, token, sessionId: session.id, thinking: false });
+      stopKeepAlive = startPresenceKeepAlive(publisher, session.id);
+      await publishRuntimeActivity({ socket: publisher, sessionId: session.id, snapshot: { state: 'active', activeCount: 1 } });
+      const initial = await fetchSessionV2(server.baseUrl, token, session.id);
+      const pendingAck = await publisher.emitWithAck<{ result?: string }>('update-state', {
+        sid: session.id,
+        agentState: JSON.stringify({ requests: {
+          'e2e-permission': { tool: 'Bash', arguments: { command: 'ls' }, createdAt: Date.now() },
+        } }),
+        expectedVersion: initial.agentStateVersion,
+        activitySummaryV1: { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0 },
+      });
+      expect(pendingAck?.result).toBe('success');
+      const permissionIndicator = page.getByTestId(`session-list-attention-indicator-${session.id}-secondary-permission_required`);
+      await expect(permissionIndicator).toHaveCount(1, { timeout: 60_000 });
+      await expect.poll(() => pendingUpdate !== null).toBe(true);
+      await sessionRow(page, session.id).click();
+      const composerStatus = page.getByTestId('agent-input-connection-status-text');
+      await expect(composerStatus).toContainText(/permission required/i, { timeout: 60_000 });
+
+      const current = await fetchSessionV2(server.baseUrl, token, session.id);
+      const ack = await publisher.emitWithAck<{ result?: string }>('update-state', {
+        sid: session.id,
+        agentState: JSON.stringify({ requests: {}, completedRequests: {
+          'e2e-permission': { tool: 'Bash', arguments: { command: 'ls' }, status: 'approved', completedAt: Date.now() },
+        } }),
+        expectedVersion: current.agentStateVersion,
+        activitySummaryV1: { pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 },
+      });
+      expect(ack?.result).toBe('success');
+      await expect(permissionIndicator).toHaveCount(0, { timeout: 60_000 });
+      await expect(composerStatus).not.toContainText(/permission required/i);
+      await expect(sessionStatusSubtitle(page, session.id, 'working')).toHaveCount(1);
+      const stale = readPendingUpdate();
+      if (!stale) throw new Error('Missing captured pending update');
+      stale.route.send(stale.packet);
+      // A subsequent real update provides an observable barrier after the replay.
+      await publishRuntimeActivity({ socket: publisher, sessionId: session.id, snapshot: { state: 'idle', activeCount: 0 } });
+      await expect(sessionStatusSubtitle(page, session.id, 'working')).toHaveCount(0, { timeout: 60_000 });
+      await expect(permissionIndicator).toHaveCount(0);
+      await expect(composerStatus).not.toContainText(/permission required/i);
+      await sessionRow(page, session.id).screenshot({ path: test.info().outputPath('permission-settled-after-stale-update.png') });
+    } catch (error) {
+      throw appendBrowserDiagnostics(error, browserDiagnostics().replaceAll(token, '[redacted]'));
+    } finally {
+      stopKeepAlive?.();
+      publisher?.close();
+    }
+  });
+
   test('presents background replies through all three attention modes and returns to Working once read', async ({ page }) => {
     test.setTimeout(240_000);
     if (!server || !token || !uiBaseUrl) throw new Error('missing session list attention fixtures');
