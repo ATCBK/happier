@@ -99,15 +99,15 @@ vi.mock('./generatedBundledPluginUiArtifacts', async () => {
     const authored = definePlugin({ id: 'happier.fixture', version: '1.0.0', displayName: 'Fixture',
         contributionPoints: { sources: sourceProtocol.point() },
         actions: { read: { title: 'Read Account', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
-            execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
+            execution: { target: 'account', account: { artifactId: 'account-actions', exportName: 'activate' } }, run: async () => null },
             nested: { title: 'Read source', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
-                execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
+                execution: { target: 'account', account: { artifactId: 'account-actions', exportName: 'activate' } }, run: async () => null },
             'nested-local': { title: 'Read local source', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
-                execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
+                execution: { target: 'account', account: { artifactId: 'account-actions', exportName: 'activate' } }, run: async () => null },
             'nested-host': { title: 'Use host Action', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
-                execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
+                execution: { target: 'account', account: { artifactId: 'account-actions', exportName: 'activate' } }, run: async () => null },
             'nested-explicit': { title: 'Use local Action', scopes: ['global'], surfaces: ['ui'], placementBindings: [], dangerLevel: 'safe',
-                execution: { target: 'account', account: { artifactId: 'account', exportName: 'activate' } }, run: async () => null },
+                execution: { target: 'account', account: { artifactId: 'account-actions', exportName: 'activate' } }, run: async () => null },
             'local-machine': { title: 'Local Machine source', scopes: ['global'], surfaces: ['plugin'], placementBindings: [], dangerLevel: 'safe',
                 execution: { target: 'daemon' }, run: async () => null },
             wait: { title: 'Local wait', scopes: ['global'], surfaces: ['plugin'], placementBindings: [], dangerLevel: 'safe',
@@ -125,14 +125,22 @@ vi.mock('./generatedBundledPluginUiArtifacts', async () => {
     const digest = computePluginUiArtifactFileSetSha256DigestV1([{ relativePath, bytes: packaged.bytes }]);
     const artifactGraph = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: 'account', tier: 'reactNative', entry: relativePath, digest,
         files: [{ relativePath, digest: computePluginUiArtifactSha256DigestV1(packaged.bytes), byteSize: packaged.bytes.byteLength }],
-        builtWith: { bundler: 'esbuild', version: '0.27.2' }, executable: { exports: ['activate', 'renderSurface'] }, hostUiApiRange: '^1.0.0' });
+        builtWith: { bundler: 'esbuild', version: '0.27.2' }, executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0' });
+    // A dedicated Account executable must own its cache key independently of
+    // renderer bytes, as it does in separately authored plugins such as Triage.
+    const accountPath = 'react-native/account-actions/entry.cjs.bundle';
+    const accountGraph = PluginUiArtifactsManifestEntryV2Schema.parse({ artifactId: 'account-actions', tier: 'reactNative', entry: accountPath,
+        digest: computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: accountPath, bytes: packaged.bytes }]),
+        files: [{ relativePath: accountPath, digest: computePluginUiArtifactSha256DigestV1(packaged.bytes), byteSize: packaged.bytes.byteLength }],
+        builtWith: { bundler: 'esbuild', version: '0.27.2' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0' });
     const uiDeclaration = { pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture', packageName: '@happier-dev/plugins-fixture',
-        entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifactGraph]),
-        normalizedManifest: manifest, artifactGraphs: [artifactGraph],
+        entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifactGraph, accountGraph]),
+        normalizedManifest: manifest, artifactGraphs: [artifactGraph, accountGraph],
         declaredExecution: { daemonActions: true, contributionPoints: true } };
-    return { BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [{ pluginId: manifest.id, releaseVersion: manifest.version,
-        artifactId: artifactGraph.artifactId, tier: artifactGraph.tier, digest, artifactGraph, uiDeclaration,
-        files: [{ relativePath, asset: 1 }] }], BUNDLED_PLUGIN_BRAND_MARKS: [] };
+    return { BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [artifactGraph, accountGraph].map((graph, index) => ({
+        pluginId: manifest.id, releaseVersion: manifest.version, artifactId: graph.artifactId, tier: graph.tier,
+        digest: graph.digest, artifactGraph: graph, uiDeclaration, files: [{ relativePath: graph.entry, asset: index + 1 }],
+    })), BUNDLED_PLUGIN_BRAND_MARKS: [] };
 });
 vi.mock('expo-asset', () => ({ Asset: { fromModule: () => ({
     localUri: 'file:///test-app/entry.cjs.bundle', downloadAsync: async () => undefined,
@@ -178,6 +186,92 @@ afterEach(async () => {
     await account.reset();
     storage.setState(storage.getInitialState(), true);
     vi.restoreAllMocks();
+});
+
+it('reuses bundled digests through current mounted admission while checking every access and remaining idle without polling', async () => {
+    await account.restore({ machines: [], features: enabledPluginFeatures, serverIdentityId: 'srv_account_admission_counts' });
+    const lifetime = captureActiveServerAccountScopeLifetime()!;
+    const snapshot = { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] };
+    replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot });
+    const { readPluginAccountAvailability } = await import('./projection');
+    const owner = await import('@happier-dev/protocol/plugins/availability');
+    const crypto = await import('@happier-dev/protocol/crypto/canonicalDigest');
+    const { createBoundPluginSurfaceController } = await import('@/components/plugins/surfaces/boundPluginSurfaceController');
+    const { createCanonicalPluginReactNativeHostApiAdapter } = await import('@/components/plugins/reactNative/hostApi');
+    const { createPluginSurfaceContextFixture } = await import('@/dev/testkit/fixtures/pluginSurfaceContextFixture');
+    const { PluginReactNativeSurface } = await import('@/components/plugins/reactNative/PluginReactNativeSurface');
+    const selected = readPluginAccountAvailability(lifetime.scope).readCurrentAccountExecution('happier.fixture');
+    if (selected.kind !== 'available') throw new Error('Expected bundled Account admission');
+    const digests = vi.spyOn(crypto, 'computeCanonicalDomainSeparatedHexDigest');
+    const selections = vi.spyOn(owner, 'resolvePluginAccountExecutionSelectionV1');
+    // The physical host-currentness port is a genuine mount boundary. Internal admission stays real.
+    const hostCurrent = vi.fn(() => true);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval'] });
+    const controller = createBoundPluginSurfaceController({ facts: {
+        pluginId: 'happier.fixture', contributionId: 'account-page', surfaceId: 'account-admission-counts',
+        placement: 'browserSurface', platform: 'web', channel: 'internal', serverId: lifetime.scope.serverId,
+        accountLifetime: lifetime, occurrenceId: selected.custodyId,
+        accountExecutionOrigin: { ...lifetime.scope, custodyId: selected.custodyId, sourceCustody: selected.sourceCustody },
+        interactionEnabled: true, daemonInteractionEnabled: false, isHostCurrent: hostCurrent,
+    } });
+    try {
+        const baseline = selections.mock.calls.length;
+        const checks = Array.from({ length: 200 }, () => controller.isCurrent());
+        expect(checks.every(Boolean)).toBe(true);
+        expect(selections.mock.calls.length - baseline).toBe(200);
+        const beforeIdle = hostCurrent.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(60_000);
+        const idleChecks = hostCurrent.mock.calls.length - beforeIdle;
+        expect(idleChecks).toBe(0);
+        vi.useRealTimers();
+        const surface = createPluginSurfaceContextFixture({ target: { kind: 'app' } });
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface,
+            requestSurface: controller.surfaceContext, installedMethods: controller.installedMethods,
+            getInstalledMethods: () => controller.installedMethods, getAdmissionMethods: () => controller.admissionMethods,
+            isCurrent: controller.isCurrent, handleRequest: controller.hostApi.handleRequest,
+            requestIdPrefix: 'bundled-admission-counts',
+        });
+        try {
+            let before = hostCurrent.mock.calls.length;
+            adapter.api.version();
+            const versionChecks = hostCurrent.mock.calls.length - before;
+            before = hostCurrent.mock.calls.length;
+            await adapter.api.context();
+            const pluginCallChecks = hostCurrent.mock.calls.length - before;
+            before = hostCurrent.mock.calls.length;
+            await controller.hostApi.handleRequest({ version: 1, requestId: 'bundled-context-counts',
+                surface: controller.surfaceContext, method: 'context', payload: {} });
+            const hostRequestChecks = hostCurrent.mock.calls.length - before;
+            const renderContext = Object.freeze({ plugin: { id: 'happier.fixture', version: selected.manifest.version },
+                surface, hostApi: adapter.api, signal: new AbortController().signal });
+            const module = { renderSurface: () => React.createElement('Text', { testID: 'admission-counts-surface' }) };
+            const element = () => <PluginReactNativeSurface surfaceId="account-admission-counts"
+                decision={{ state: 'load', reason: 'compatible', diagnostics: [] }} renderContext={renderContext} module={module} />;
+            const screen = await renderWithAppProviders(element());
+            try {
+                await flushHookEffects({ cycles: 3 });
+                before = hostCurrent.mock.calls.length;
+                for (let index = 0; index < 3; index += 1) await screen.update(element());
+                const renderChecks = hostCurrent.mock.calls.length - before;
+                console.info('R-C mounted bundled admission counts', { directChecks: 200, idleMs: 60_000,
+                    idleChecks, versionChecks, pluginCallChecks, hostRequestChecks, renders: 3, renderChecks, digestCalls: digests.mock.calls.length });
+                expect(hostRequestChecks).toBe(1);
+                expect(screen.tree.root.findAllByProps({ testID: 'admission-counts-surface' })).toHaveLength(1);
+                expect(digests).not.toHaveBeenCalled();
+                replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: { ...snapshot, availabilityCursor: 2,
+                    intentReads: [{ pluginId: 'happier.fixture', response: owner.PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+                        availabilityCursor: 2, hostingCapability: { enabled: false },
+                        intent: { pluginId: 'happier.fixture', desiredVersion: null, enabled: false, offlineUiHosting: 'disabled',
+                            writableCollections: [], revision: 'disabled' }, release: null, packageAssets: [], uiArtifacts: [],
+                    }) }] } });
+                expect(controller.isCurrent()).toBe(false);
+                expect(adapter.api.version().methods).toEqual([]);
+                await expect(adapter.api.context()).rejects.toMatchObject({ code: 'stale_surface' });
+                expect(digests).not.toHaveBeenCalled();
+            } finally { await screen.unmount(); }
+        } finally { adapter.dispose(); }
+    } finally { vi.useRealTimers(); controller.dispose(); }
 });
 
 it.each([
@@ -532,5 +626,15 @@ it('keeps the Account page usable when its optional contribution points belong t
         });
         expect(screen.tree.root.findAllByProps({ 'data-plugin-interaction-state': 'enabled' }).length).toBeGreaterThan(0);
         expect(screen.tree.root.findAllByProps({ 'data-plugin-interaction-state': 'offline-snapshot' })).toHaveLength(0);
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            const action = readCurrentAppShellPluginUiProjection()?.actionsById['happier.fixture/read'];
+            expect(action && resolvePluginUiClientActionRegistration({ action, platform: resolvePluginUiClientExecutablePlatform() })).not.toBeNull();
+        });
+        packaged.machineRpc.mockClear();
+        await act(async () => { await screen.tree.root.findByProps({ testID: 'account-page-invoke' }).props.onPress(); });
+        expect(JSON.parse(screen.tree.root.findByProps({ testID: 'account-page-result' }).props.children))
+            .toEqual({ surface: 'ui', caller: 'plugin' });
+        expect(packaged.machineRpc).not.toHaveBeenCalled();
     } finally { await screen.unmount(); }
 });

@@ -30,6 +30,7 @@ import { normalizePluginInstalledUiDeclarations, type PluginUiActionProjection, 
 import { projectPluginRegistrySourceDeclarationV1 } from '@happier-dev/protocol/registries';
 import { projectPluginSkillDeclarationV1 } from '@happier-dev/protocol/plugins/contributions/skills';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { derivePluginReactNativeBundleCacheKey } from '@/components/plugins/reactNative/bundleCache';
 
 import {
     areServerAccountScopesEqual,
@@ -1699,7 +1700,8 @@ function createBoundReader(input: Readonly<{
                             runtime: Object.freeze({ decision: { state: compatible ? 'load' : 'blocked',
                                 reason: compatible ? 'compatible' : 'generated_ui_host_api_mismatch',
                                 diagnostics: compatible ? [] : ['generated_ui_host_api_mismatch'] },
-                                ...(compatible ? { cacheIdentity: { artifactDigest: graph.digest }, loadPolicy: { source: 'installedArtifact' } } : {}) }),
+                                ...(compatible ? { cacheKey: derivePluginReactNativeBundleCacheKey({ artifactDigest: graph.digest }),
+                                    cacheIdentity: { artifactDigest: graph.digest }, loadPolicy: { source: 'installedArtifact' } } : {}) }),
                         });
                         entries[entry.id] = Object.freeze({ ...entry, occurrenceId: custodyId, hostAccountOrigin, hostAccountDeclaration: manifest });
                     }

@@ -327,7 +327,11 @@ export function createPluginSurfaceHostApi(
                 return createPluginSurfaceHostApiError('stale_surface', ['plugin_surface_retired']);
             }
             const releasedMethod = PluginUiHostMethodV1Schema.safeParse(request.method);
-            if (releasedMethod.success && !resolveLiveInstalledMethods().includes(releasedMethod.data)) {
+            // A request admits only its addressed method. Enumerating the full
+            // live set repeats currentness and unrelated method admissions;
+            // negotiation getters still read that complete set independently.
+            if (releasedMethod.success && (!installedMethods.includes(releasedMethod.data)
+                || (isMethodAvailable !== undefined && !isMethodAvailable(releasedMethod.data)))) {
                 // Structural absence and transient narrowing are different
                 // facts. A daemon-owned method this mount installs is
                 // re-advertised on reconnect without replacing the mount, so

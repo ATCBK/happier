@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
+import * as canonicalDigest from '@happier-dev/protocol/crypto/canonicalDigest';
 
 import {
     createPackageAssetArchiveV1,
@@ -16,6 +17,10 @@ import { normalizePluginUiDestinationBindingV1, PluginUiArtifactsManifestEntryV2
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { admitDeclarativeStaticModel } from '@/components/plugins/surfaces/declarativeStaticModel';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
+import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
+import { createPluginReactNativeModuleRegistry } from '@/components/plugins/reactNative/moduleRegistry';
+import { createPluginUiReactNativeRuntimeProjectionReconciler } from '@/components/plugins/reactNative/projectionInvalidation';
+import { resolveProjectedPluginUiClientExecutables } from '@/components/plugins/reactNative/clientExecutableProjection';
 
 const scope = { serverId: 'srv-local-a', accountId: 'account-a' } as const;
 
@@ -183,6 +188,15 @@ describe('Plugin Account Availability reader', () => {
         const initial = snapshot({ intentReads: [], materializations: [], snapshots: [] });
         store.replace({ scope, snapshot: initial });
         const reader = store.bind(scope);
+        const digests = vi.spyOn(canonicalDigest, 'computeCanonicalDomainSeparatedHexDigest');
+        onTestFinished(() => digests.mockRestore());
+        const selections = Array.from({ length: 201 }, () => store.bind(scope).readCurrentAccountExecution(manifest.id));
+        expect(selections.every(selection => selection.kind === 'available')).toBe(true);
+        const declarationHashes = digests.mock.calls.filter(([domain]) => domain === 'happier.plugin.account.declaration.v1').length;
+        const custodyHashes = digests.mock.calls.filter(([domain]) => domain === 'happier.plugin.account.bundled-custody.v1').length;
+        console.info('R-C bundled reader digest counts', { reads: selections.length, declarationHashes, custodyHashes });
+        expect(declarationHashes).toBe(1);
+        expect(custodyHashes).toBe(1);
         expect(reader.readCurrentAccountExecutionDeclarations()).toMatchObject([{ kind: 'available', manifest,
             sourceCustody: { kind: 'bundled_first_party', packagedRuntime: { kind: 'app_bundle' } } }]);
         expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
@@ -190,12 +204,27 @@ describe('Plugin Account Availability reader', () => {
         expect(reader.readCurrentAccountKvCapability({ pluginId: manifest.id })).toMatchObject({ kind: 'available' });
         expect(reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`]?.authorization?.serviceAvailability)
             .toEqual([{ id: 'account-storage', required: true, status: 'available' }]);
+        const projection = reader.readAccountUiProjection();
+        const target = resolveProjectedPluginUiClientExecutables({ actionProjection: projection ? { projection } : null, platform: 'web' })[0];
+        expect(target).toBeDefined();
+        if (!target) throw new Error('Expected Account executable target');
+        const cache = createPluginReactNativeBundleCache();
+        const runtimeSource = createPluginUiReactNativeRuntimeProjectionReconciler({ cache,
+            surfaceModules: createPluginReactNativeModuleRegistry() }).createSource();
+        onTestFinished(runtimeSource.dispose);
+        const runtimeLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        runtimeSource.update({ projection, accountLifetime: runtimeLifetime, isCurrent: () => true });
+        // The real runtime projection owner must admit a dedicated Account
+        // executable, without a renderer accidentally retaining the same digest.
+        expect(cache.putInstalledArtifact({ identity: target.cacheIdentity, bytes: new Uint8Array([1]), format: 'plainJs',
+            accountScope: scope }, cache.captureWriteFence(target.cacheIdentity))).toEqual({ ok: true, cacheKey: graph.digest });
         const admitted = reader.readCurrentAccountExecution(manifest.id);
         const repeated = store.bind(scope).readCurrentAccountExecution(manifest.id);
         expect(admitted.kind).toBe('available');
         expect(repeated.kind).toBe('available');
         if (admitted.kind !== 'available' || repeated.kind !== 'available') throw new Error('Expected bundled custody');
         expect(repeated.sourceCustody).toBe(admitted.sourceCustody);
+        expect(repeated.manifest).toBe(admitted.manifest);
         const disabled = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...intentRead(),
             intent: { ...intentRead().intent!, pluginId: manifest.id, desiredVersion: null, enabled: false },
             release: null, uiArtifacts: [],
@@ -205,6 +234,8 @@ describe('Plugin Account Availability reader', () => {
         expect(reader.readCurrentAccountExecution(manifest.id)).toEqual({ kind: 'unavailable', code: 'plugin_disabled' });
         expect(reader.readCurrentArtifact({ pluginId: manifest.id, contributionId: 'read', tier: 'reactNative', platform: 'web' }))
             .toMatchObject({ kind: 'unavailable' });
+        runtimeSource.update({ projection: reader.readAccountUiProjection(), accountLifetime: runtimeLifetime, isCurrent: () => true });
+        expect(cache.readInstalledArtifact(target.cacheIdentity)).toBeNull();
         store.replace({ scope: { ...scope, accountId: 'account-b' }, snapshot: initial });
         expect(reader.readCurrentAccountExecution(manifest.id))
             .toEqual({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });

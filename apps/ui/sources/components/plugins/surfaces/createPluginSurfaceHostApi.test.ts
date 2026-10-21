@@ -124,21 +124,37 @@ describe('createPluginSurfaceHostApi', () => {
         await expect(hostApi.handleRequest(request('writeClipboard'))).resolves.toEqual({ copied: true });
     });
 
-    it('keeps structural renderer admission separate from transient method availability', () => {
+    it('keeps structural renderer admission separate from transient method availability', async () => {
         let available = false;
         let current = true;
+        const methodReads: string[] = [];
         const hostApi = createPluginSurfaceHostApi({
             surfaceContext,
             handlers: { readResource: async () => ({}) },
             isCurrent: () => current,
-            isMethodAvailable: (method) => method === 'context' || available,
+            isMethodAvailable: (method) => {
+                methodReads.push(method);
+                return method === 'context' || available;
+            },
         });
 
         expect(hostApi.installedMethods).toEqual(['context']);
         expect(hostApi.admissionMethods).toEqual(['context', 'readResource']);
+        methodReads.length = 0;
+        expect(hostApi.handleRequest(request('context'))).toMatchObject({ pluginId: surfaceContext.pluginId });
+        expect(methodReads).toEqual(['context']);
+        methodReads.length = 0;
+        expect(hostApi.handleRequest(request('readResource'))).toMatchObject({ code: 'unavailable' });
+        expect(methodReads).toEqual(['readResource']);
+        available = true;
+        await expect(hostApi.handleRequest(request('readResource'))).resolves.toEqual({});
 
         current = false;
+        methodReads.length = 0;
         expect(hostApi.admissionMethods).toEqual([]);
+        expect(hostApi.installedMethods).toEqual([]);
+        expect(hostApi.handleRequest(request('context'))).toMatchObject({ code: 'stale_surface' });
+        expect(methodReads).toEqual([]);
     });
 
     it('answers a transiently narrowed method as retryably unavailable, not unsupported', async () => {
