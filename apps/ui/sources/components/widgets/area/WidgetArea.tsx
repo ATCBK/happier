@@ -777,8 +777,9 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
     // Carried, the card keeps its mark and says its source and the size it keeps (lab wgdnd 1).
     const carried = useWidgetCarriedIdentity({ kind: 'widget', mark: candidate?.icon ?? 'squares-four',
         source: groupNamesFollowed ? bodyCaption ?? undefined : followed ?? bodyCaption ?? bindingLabel ?? sourceName, size });
-    const drag = useSessionSurfaceEntityDrag(props.current && props.canEdit ? {
-        scope: surface, title, ...carried, isCurrent: () => props.current && props.canEdit && findWidgetLayoutItemV1(props.layoutItems, instance.id) !== undefined,
+    // A readable copy can be mentioned; movement still admits edit permission at its Action owner.
+    const drag = useSessionSurfaceEntityDrag(props.current ? {
+        scope: surface, title, ...carried, isCurrent: () => props.current && findWidgetLayoutItemV1(props.layoutItems, instance.id) !== undefined,
         getItem: () => ({ kind: 'widget-area-instance', scope: { serverId: surface.serverId, accountId: surface.accountId }, ref: { surface, instanceId: instance.id } }),
         admitWidgetMovement: props.admitWidgetMovement,
         ...(props.port?.movement ? { widgetMovement: props.port.movement } : {}),
@@ -817,7 +818,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
         onSet: size => { void write({ actionId: 'widgets.item.size.set', instanceId: instance.id, size }); },
         ...(sizeLimit ? { unavailable: sizeLimit } : {}),
     } : undefined;
-    const menu = props.canEdit ? (
+    const menu = props.current ? (
         <View
             ref={edit.anchorRef}
             collapsable={false}
@@ -827,7 +828,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
             <RowActionRevealSlot revealed={alwaysVisible || hover.isHovered}>
             <SessionSurfaceEntityDragHandle drag={drag} title={title} testID={`${testID}.move`}
                 renderTrigger={({ toggle, grip }) => <View style={styles.header}>
-                    {props.organizing ? grip : null}
+                    {props.canEdit && props.organizing ? grip : null}
                     <ItemRowActions
                 title={title}
                 compactThreshold={ALWAYS_OVERFLOW}
@@ -839,10 +840,10 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                 onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
                 renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${testID}.size`)}
                 actions={orderWidgetMenu({
-                    instance: buildWidgetInstanceActions({ editInputs: edit.editInputs, onRename: renaming.begin,
+                    instance: buildWidgetInstanceActions({ ...(props.canEdit ? { editInputs: edit.editInputs, onRename: renaming.begin } : {}),
                         onMention: () => { void mention({ kind: 'widget-area-instance', scope: { serverId: surface.serverId, accountId: surface.accountId }, ref: { surface, instanceId: instance.id } }, title); } }),
                     size: buildWidgetSizeActions(sizeControl),
-                    frame: parent ? [] : buildWidgetFrameStyleActions({
+                    frame: !props.canEdit || parent ? [] : buildWidgetFrameStyleActions({
                         placement: GEOMETRY_PLACEMENT[geometry],
                         surfaceDefault: frame.areaDefault,
                         override: placement.frameStyle ?? null,
@@ -851,7 +852,7 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                     }),
                     // One Move… where the host binds widget movement: the Organize chooser lists every place
                     // it can go (lab dbind E). Without it, the steps that reorder this area.
-                    move: [
+                    move: props.canEdit ? [
                         ...(parent ? buildWidgetMoveActions({ index: props.index, count: props.count,
                             onMove: (delta: -1 | 1) => props.groupOperations.move(instance.id, props.index + delta, parent.group.id) })
                         : buildWidgetMoveActions({
@@ -864,14 +865,14 @@ const WidgetAreaItem = React.memo(function WidgetAreaItem(props: PlacementsProps
                         })),
                         ...(supportsGroups ? buildWidgetGroupMembershipActions({ instanceId: instance.id, size, items: props.layoutItems, area: props.area,
                             childTitle: props.childTitle, operations: props.groupOperations }) : []),
-                    ],
-                    ...(collapsible ? { collapse: [collapsed
+                    ] : [],
+                    ...(props.canEdit && collapsible ? { collapse: [collapsed
                         ? { id: 'expand', title: t('projects.widgets.expand'), icon: 'arrows-out' as const, onPress: () => onCollapsedChange(false) }
                         : { id: 'collapse', title: t('projects.widgets.collapse'), icon: 'arrows-in' as const, onPress: () => onCollapsedChange(true) }] } : {}),
-                    definition: buildWidgetDefinitionActions({ onAbout: definition.about, onAddTo: definition.addTo }),
-                    surface: bodyActions ?? [],
-                    remove: [{ id: 'remove', title: t('common.remove'), icon: 'trash', destructive: true,
-                        onPress: () => { void write({ actionId: 'widgets.item.remove', instanceId: instance.id }); } }],
+                    definition: buildWidgetDefinitionActions({ onAbout: definition.about, ...(props.canEdit ? { onAddTo: definition.addTo } : {}) }),
+                    surface: props.canEdit ? bodyActions ?? [] : [],
+                    remove: props.canEdit ? [{ id: 'remove', title: t('common.remove'), icon: 'trash', destructive: true,
+                        onPress: () => { void write({ actionId: 'widgets.item.remove', instanceId: instance.id }); } }] : [],
                 })}
                     />
                 </View>} />

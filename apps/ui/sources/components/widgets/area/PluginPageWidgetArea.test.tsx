@@ -1,4 +1,3 @@
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,38 +20,19 @@ import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtur
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
-import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { createPluginUiPrivatePresentationHost } from '@/components/plugins/surfaces/pluginUiPrivatePresentationHost';
 import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
-import { CardGridCell } from '@/components/ui/cardGrid/CardGrid';
-import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
-import { ItemList } from '@/components/ui/lists/ItemList';
-import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
-import { WidgetSetupStep } from '@/components/widgets/add/WidgetSetupStep';
 import type { WidgetSetup, WidgetSetupSubmitResult } from '@/components/widgets/add/widgetSetupModel';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 
-import { DeclarativePluginSurface } from '@/components/plugins/surfaces/DeclarativePluginSurface';
-import { createDeclarativeWidgetAreaRender, DeclarativeWidgetArea } from '@/components/plugins/surfaces/declarativeWidgetArea';
 import { PluginDeclarativeProjectedModelV1Schema } from '@happier-dev/protocol';
 
-import { PluginPageWidgetArea, pluginPageWidgetContext } from './PluginPageWidgetArea';
-import { WidgetArea } from './WidgetArea';
-import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
-import { WidgetAreaLayoutBar } from './WidgetAreaLayoutBar';
-import { WidgetAreaPresetLine } from './WidgetAreaPresetLine';
-import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { selectMountedWidgetAreaLayout } from './widgetAreaLayoutSelection';
-import { ProjectAsideWidgets, ProjectWidgetArea } from './ProjectWidgetArea';
-import { SessionSurfaceEntityDragHandle } from '@/components/sessions/board/SessionSurfaceEntityDrag';
-import { storage } from '@/sync/domains/state/storage';
-import { projectWidgetEntityMovementResult, readWidgetEntityMovementAdmission } from '@/sync/ops/actions/widgetEntityMovement';
 import type { WidgetAreaPort } from './useWidgetAreaLayout';
 import { createLayoutArtifactHttpBoundary, createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 // Static area consumers reach Sync during collection; install the canonical transport
 // before that graph loads, then configure its disconnected delegate below.
@@ -111,6 +91,30 @@ vi.mock('@/components/ui/overlays/FloatingOverlay', async (importOriginal) => ({
 vi.mock('@/modal/components/BaseModal', () => ({
     BaseModal: ({ children }: React.PropsWithChildren) => <>{children}</>,
 }));
+
+// Match app startup: publish the real Sync singleton before loading its UI consumers.
+await loadSyncSingletonForTests();
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { createPluginUiPrivatePresentationHost } = await import('@/components/plugins/surfaces/pluginUiPrivatePresentationHost');
+const { CardGridCell } = await import('@/components/ui/cardGrid/CardGrid');
+const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');
+const { ItemList } = await import('@/components/ui/lists/ItemList');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+const { WidgetSetupStep } = await import('@/components/widgets/add/WidgetSetupStep');
+const { DeclarativePluginSurface } = await import('@/components/plugins/surfaces/DeclarativePluginSurface');
+const { createDeclarativeWidgetAreaRender, DeclarativeWidgetArea } = await import('@/components/plugins/surfaces/declarativeWidgetArea');
+const { PluginPageWidgetArea, pluginPageWidgetContext } = await import('./PluginPageWidgetArea');
+const { WidgetArea } = await import('./WidgetArea');
+const { WidgetFrame } = await import('@/components/widgets/frame/WidgetFrame');
+const { WidgetAreaLayoutBar } = await import('./WidgetAreaLayoutBar');
+const { WidgetAreaPresetLine } = await import('./WidgetAreaPresetLine');
+const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+const { selectMountedWidgetAreaLayout } = await import('./widgetAreaLayoutSelection');
+const { ProjectAsideWidgets, ProjectWidgetArea } = await import('./ProjectWidgetArea');
+const { SessionSurfaceEntityDragHandle } = await import('@/components/sessions/board/SessionSurfaceEntityDrag');
+const { storage } = await import('@/sync/domains/state/storage');
+const { projectWidgetEntityMovementResult, readWidgetEntityMovementAdmission } = await import('@/sync/ops/actions/widgetEntityMovement');
 
 const scope = { serverId: 'home', accountId: 'viewer' };
 const surface: WidgetSurfaceRefV1 = { ...scope, owner: { kind: 'pluginArea', pluginId: 'acme.prs', pageId: 'overview', area: 'pinned' } };
@@ -927,6 +931,29 @@ describe('a plugin page widget area', () => {
         expect(drag.runtime.getSnapshot().item).toEqual({ kind: 'widget-area-instance', scope, ref: { surface, instanceId: pin.id } });
         standardCleanup();
         expect(drag.runtime.getSnapshot().phase).toBe('idle');
+        expect(widgetPlacements(await area.store.read()).map(entry => entry.instance)).toEqual([pin]);
+    });
+    it('offers reference-only controls for a readable widget in a read-only area', async () => {
+        const area = createArea();
+        await area.store.apply({ kind: 'add', instance: pin });
+        // Host API transport is the permission boundary; layout, source registration and menus stay real.
+        const hostApi: PluginUiHostApi = { ...area.hostApi, widgetArea: async (request, options) => {
+            const value = PluginUiWidgetAreaResultV1Schema.parse(await area.hostApi.widgetArea!(request, options));
+            return value.ok && 'canEdit' in value.result ? { ...value, result: { ...value.result, canEdit: false } } : value;
+        } };
+        const screen = await renderScreen(page(hostApi, 'happier'));
+        await flushHookEffects({ cycles: 4 });
+        const menu = screen.findByTestId('prs.pinned.widget.pin.menu');
+        expect(menu).not.toBeNull();
+        const ids = menu!.findByType(ItemRowActions).props.actions.map((item: { id: string }) => item.id);
+        expect(ids).toContain('mentionInComposer');
+        expect(ids).not.toContain('rename');
+        expect(ids).not.toContain('remove');
+        expect(ids.some((id: string) => id.startsWith('move') || id.startsWith('size-'))).toBe(false);
+        expect(ids.every((id: string) => id === 'mentionInComposer' || id === 'about')).toBe(true);
+        const drag = screen.root.findByType(SessionSurfaceEntityDragHandle).props.drag;
+        await act(async () => { expect(drag.runtime.begin(drag.sourceId, 'keyboard')).not.toBeNull(); });
+        expect(drag.runtime.getSnapshot().item).toMatchObject({ kind: 'widget-area-instance', ref: { surface, instanceId: pin.id } });
         expect(widgetPlacements(await area.store.read()).map(entry => entry.instance)).toEqual([pin]);
     });
     it('refuses a generic placement width that the canonical area layout cannot persist', async () => {
