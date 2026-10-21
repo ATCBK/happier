@@ -4626,7 +4626,8 @@ const enDiagnosis = {
 
 const enConnectedServices = {
   purposeTargets: {
-    serviceUnavailable: "This service is unavailable. Refresh the account list.",
+    serviceUnavailable: "This service isn’t available for this setting.",
+    serviceLookupFailed: "Couldn’t check this service right now. Refresh to try again.",
     targetMissing: "This target is no longer available. Choose another account or pool.",
     accountReconnect: "Sign in again to use this account.",
     accountUnavailable: "This account is not ready. Review its settings and sign-in.",
@@ -12614,6 +12615,7 @@ const enLocalServices = {
   },
   effectReview: {
     startTitle: ({ service }: { service: string }) => `Start ${service}?`,
+    startTitleOn: ({ service, machine }: { service: string; machine: string }) => `Start ${service} on ${machine}?`,
     restartTitle: ({ service }: { service: string }) => `Restart ${service}?`,
     subtitle: 'Review what runs and where. Happier asks again if it changes.',
     start: 'Start',

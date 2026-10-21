@@ -4055,7 +4055,8 @@ const ruValues = {
     accountScopeMismatchTitle: 'Переключите учётную запись сервера, чтобы продолжить',
     accountScopeMismatchDescription: 'Эта машина принадлежит учётной записи другого сервера. Переключитесь на неё, чтобы управлять подключёнными учётными записями.',
     purposeTargets: {
-      serviceUnavailable: "Сервис недоступен. Обновите список аккаунтов.",
+      serviceUnavailable: "Этот сервис недоступен для этой настройки.",
+      serviceLookupFailed: "Сейчас не удалось проверить этот сервис. Обновите, чтобы повторить.",
       targetMissing: "Этот источник больше недоступен. Выберите другой аккаунт или пул.",
       accountReconnect: "Войдите снова, чтобы использовать этот аккаунт.",
       accountUnavailable: "Аккаунт не готов. Проверьте настройки и вход.",
@@ -10630,6 +10631,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
     },
     effectReview: {
       startTitle: ({ service }: { service: string }) => `Запустить ${service}?`,
+      startTitleOn: ({ service, machine }: { service: string; machine: string }) => `Запустить ${service} на ${machine}?`,
       restartTitle: ({ service }: { service: string }) => `Перезапустить ${service}?`,
       subtitle: 'Проверьте, что и где запускается. Happier спросит снова, если что-то изменится.',
       start: 'Запустить',

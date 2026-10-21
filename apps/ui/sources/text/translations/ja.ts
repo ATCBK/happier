@@ -4653,7 +4653,8 @@ localTailscale: {
     accountScopeMismatchTitle: '続行するにはサーバーアカウントを切り替えてください',
     accountScopeMismatchDescription: 'このマシンは別のサーバーアカウントに属しています。接続済みアカウントを管理するには、そのサーバーアカウントに切り替えてください。',
     purposeTargets: {
-      serviceUnavailable: "このサービスは利用できません。アカウント一覧を更新してください。",
+      serviceUnavailable: "このサービスはこの設定では利用できません。",
+      serviceLookupFailed: "いまはこのサービスを確認できません。更新して再試行してください。",
       targetMissing: "この接続先は利用できなくなりました。別のアカウントまたはプールを選んでください。",
       accountReconnect: "このアカウントを使うには、再度サインインしてください。",
       accountUnavailable: "このアカウントは準備ができていません。設定とサインインを確認してください。",
@@ -11076,6 +11077,7 @@ localTailscale: {
     },
     effectReview: {
       startTitle: ({ service }: { service: string }) => `${service} を起動しますか？`,
+      startTitleOn: ({ service, machine }: { service: string; machine: string }) => `${machine} で ${service} を起動しますか？`,
       restartTitle: ({ service }: { service: string }) => `${service} を再起動しますか？`,
       subtitle: '何がどこで実行されるかを確認してください。変更があれば Happier が再度確認します。',
       start: '起動',

@@ -4084,7 +4084,8 @@ const zhHansValues = {
     accountScopeMismatchTitle: '切换服务器帐户以继续',
     accountScopeMismatchDescription: '此机器属于另一个服务器帐户。请切换到该服务器帐户以管理其已连接帐户。',
     purposeTargets: {
-      serviceUnavailable: "此服务不可用。请刷新账户列表。",
+      serviceUnavailable: "此服务不适用于该设置。",
+      serviceLookupFailed: "暂时无法检查此服务。请刷新后重试。",
       targetMissing: "此目标已不可用。请选择其他账户或账户池。",
       accountReconnect: "请重新登录以使用此账户。",
       accountUnavailable: "此账户尚未就绪。请检查设置和登录状态。",
@@ -10412,6 +10413,7 @@ const zhHansValues = {
     },
     effectReview: {
       startTitle: ({ service }: { service: string }) => `启动 ${service}？`,
+      startTitleOn: ({ service, machine }: { service: string; machine: string }) => `在 ${machine} 上启动 ${service}？`,
       restartTitle: ({ service }: { service: string }) => `重新启动 ${service}？`,
       subtitle: '查看将运行什么以及在哪里运行。如有变化，Happier 会再次询问。',
       start: '启动',

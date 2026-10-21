@@ -4024,7 +4024,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
 
     connectedServices: {
         purposeTargets: {
-          serviceUnavailable: "Aquest servei no està disponible. Actualitza la llista de comptes.",
+          serviceUnavailable: "Aquest servei no està disponible per a aquest ajust.",
+          serviceLookupFailed: "Ara mateix no s’ha pogut comprovar aquest servei. Actualitza per tornar-ho a provar.",
           targetMissing: "Aquesta destinació ja no està disponible. Tria un altre compte o grup.",
           accountReconnect: "Torna a iniciar sessió per fer servir aquest compte.",
           accountUnavailable: "Aquest compte no està a punt. Revisa’n la configuració i l’inici de sessió.",
@@ -9922,6 +9923,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
         },
         effectReview: {
             startTitle: ({ service }: { service: string }) => `Vols iniciar ${service}?`,
+            startTitleOn: ({ service, machine }: { service: string; machine: string }) => `Vols iniciar ${service} a ${machine}?`,
             restartTitle: ({ service }: { service: string }) => `Vols reiniciar ${service}?`,
             subtitle: 'Revisa què s’executa i on. Happier ho tornarà a preguntar si canvia.',
             start: 'Inicia',

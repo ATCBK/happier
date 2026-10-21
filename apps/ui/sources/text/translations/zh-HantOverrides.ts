@@ -2437,7 +2437,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
 
     connectedServices: {
         purposeTargets: {
-          serviceUnavailable: "此服務無法使用。請重新整理帳號清單。",
+          serviceUnavailable: "此服務不適用於此設定。",
+          serviceLookupFailed: "暫時無法檢查此服務。請重新整理後再試。",
           targetMissing: "此目標已無法使用。請選擇其他帳號或帳號池。",
           accountReconnect: "請重新登入以使用此帳號。",
           accountUnavailable: "此帳號尚未就緒。請檢查設定和登入狀態。",
@@ -8785,6 +8786,7 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
         },
         effectReview: {
             startTitle: ({ service }: { service: string }) => `啟動 ${service}？`,
+            startTitleOn: ({ service, machine }: { service: string; machine: string }) => `在 ${machine} 上啟動 ${service}？`,
             restartTitle: ({ service }: { service: string }) => `重新啟動 ${service}？`,
             subtitle: '查看將執行什麼以及在哪裡執行。如有變更，Happier 會再次詢問。',
             start: '啟動',

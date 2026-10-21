@@ -3952,7 +3952,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
 
     connectedServices: {
         purposeTargets: {
-          serviceUnavailable: "Dieser Dienst ist nicht verfügbar. Aktualisiere die Kontoliste.",
+          serviceUnavailable: "Dieser Dienst ist für diese Einstellung nicht verfügbar.",
+          serviceLookupFailed: "Dieser Dienst konnte gerade nicht geprüft werden. Aktualisiere, um es erneut zu versuchen.",
           targetMissing: "Dieses Ziel ist nicht mehr verfügbar. Wähle ein anderes Konto oder einen Pool.",
           accountReconnect: "Melde dich erneut an, um dieses Konto zu verwenden.",
           accountUnavailable: "Dieses Konto ist nicht bereit. Prüfe Einstellungen und Anmeldung.",
@@ -10622,6 +10623,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
         },
         effectReview: {
             startTitle: ({ service }: { service: string }) => `${service} starten?`,
+            startTitleOn: ({ service, machine }: { service: string; machine: string }) => `${service} auf ${machine} starten?`,
             restartTitle: ({ service }: { service: string }) => `${service} neu starten?`,
             subtitle: 'Prüfe, was wo läuft. Happier fragt erneut, wenn sich etwas ändert.',
             start: 'Starten',
