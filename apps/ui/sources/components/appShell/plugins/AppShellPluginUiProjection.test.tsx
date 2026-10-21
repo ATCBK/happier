@@ -8,6 +8,8 @@ import {
     type VoiceProviderContribution,
 } from '@happier-dev/protocol';
 import { PluginMachineExecutionOriginV1Schema, type PluginMachineExecutionOriginV1, type PluginMachineMaterializationExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { DaemonPluginUiArtifactBytesReadResponse } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -441,6 +443,8 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
     materializationEnabled?: boolean;
     artifacts?: readonly AppScopeArtifactFixture[];
     accountId?: string;
+    contributes?: ReturnType<typeof PluginContributesV2Schema.parse>;
+    releaseMetadataPending?: boolean;
 }>): PluginMachineMaterializationExecutionOriginV1 {
     const artifacts = input.artifacts ?? [];
     const accountId = input.accountId ?? APP_SCOPE_FIXTURE.accountId;
@@ -516,7 +520,7 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
                     writableCollections: [],
                     revision: 'fixture-1',
                 },
-                release: {
+                release: input.releaseMetadataPending ? null : {
                     ref: { pluginId: input.pluginId, version: '1.0.0' },
                     archiveDigestSha256: APP_SCOPE_ARCHIVE_DIGEST,
                     normalizedManifest: {
@@ -528,7 +532,7 @@ function installSelectedAppScopePluginFixture(input: Readonly<{
                         runtime: { apiVersion: 1 },
                         hostAccess: { required: [], optional: [] },
                         secrets: [],
-                        contributes: PluginContributesV2Schema.parse({}),
+                        contributes: input.contributes ?? PluginContributesV2Schema.parse({}),
                     },
                     collectionContracts: [],
                     uiSlots: artifacts,
@@ -734,18 +738,13 @@ function pluginUiProjectionWithAppTab(input: Readonly<{
     container?: 'rightSidebarTab' | 'appPage';
     title?: string;
 }>): PluginProjectionV2 {
-    const localId = input.localId ?? 'panel';
-    const id = `surfacePlacement:${input.pluginId}:${localId}`;
-    const binding = normalizePluginUiDestinationBindingV1({
-        pluginId: input.pluginId,
-        destinationId: localId,
-        rendererId: 'inspector',
-        container: input.container ?? 'rightSidebarTab',
-        target: { kind: 'app' },
+    const manifest = PluginPortableReleaseManifestV1Schema.parse({
+        schemaVersion: 2, id: input.pluginId, version: '1.0.0', displayName: input.pluginId,
+        runtime: { apiVersion: 1 }, contributes: appTabContributes(input),
     });
-    if (!binding) {
-        throw new Error('test fixture must use an admitted V2 destination binding');
-    }
+    const declarations = projectPluginPortableUiDeclarationsV1(manifest);
+    const occurrenceId = (input.origin && 'materializationRef' in input.origin ? input.origin.materializationRef.materializationId : undefined)
+        ?? `${input.pluginId}:${input.localId ?? 'panel'}:occurrence`;
     return PluginProjectionV2Schema.parse({
         v: 2,
         generation: input.generation,
@@ -759,28 +758,26 @@ function pluginUiProjectionWithAppTab(input: Readonly<{
         familiesById: {
             pluginUi: {
                 family: 'pluginUi',
-                entriesById: {
-                    [id]: {
-                        id,
-                        pluginId: input.pluginId,
-                        contributionKind: 'surfacePlacement',
-                        descriptorId: localId,
-                        occurrenceId: (input.origin && 'materializationRef' in input.origin ? input.origin.materializationRef.materializationId : undefined)
-                            ?? `${input.pluginId}:${localId}:occurrence`,
-                        ...(input.origin ? {
-                            executionOrigin: PluginMachineExecutionOriginV1Schema.parse(input.origin),
-                        } : {}),
-                        binding,
-                        target: { kind: 'app' },
-                        renderer: { kind: 'declarative', contributionId: 'inspector' },
-                        display: { developerFallback: input.title ?? 'Panel' },
-                        availability: { state: 'available', reason: 'available', diagnostics: [] },
-                    },
-                },
+                entriesById: Object.fromEntries(Object.entries(declarations).map(([id, entry]) => [id, {
+                    ...entry, occurrenceId,
+                    ...(input.origin ? { executionOrigin: PluginMachineExecutionOriginV1Schema.parse(input.origin) } : {}),
+                }])),
             },
         },
         diagnostics: [],
     });
+}
+
+function appTabContributes(input: Readonly<{
+    localId?: string;
+    container?: 'rightSidebarTab' | 'appPage';
+    title?: string;
+}> = {}): ReturnType<typeof PluginContributesV2Schema.parse> {
+    return PluginContributesV2Schema.parse({ ui: {
+        renderers: [{ id: 'inspector', kind: 'declarative', root: { kind: 'text', text: 'Panel' } }],
+        views: [{ id: input.localId ?? 'panel', container: input.container ?? 'rightSidebarTab',
+            target: { kind: 'app' }, title: input.title ?? 'Panel', renderer: 'inspector' }],
+    } });
 }
 
 async function createAppShellClientActionFixture(input: Readonly<{
@@ -1123,35 +1120,22 @@ describe('AppShellPluginUiProjectionProvider', () => {
         })).toEqual(new Map());
     });
 
-    it('contains projection invalidation and activation rejections from the React effect', async () => {
-        const activationAfterFailedInvalidation = vi.fn(async () => {});
+    it('contains activation rejections and cancellation from the React effect', async () => {
         await expect(settleAppShellPluginRuntimeUpdate({
-            invalidate: async () => { throw new Error('invalidation failed'); },
-            activate: activationAfterFailedInvalidation,
-            isCancelled: () => false,
-        })).resolves.toEqual({ status: 'unavailable', failures: [] });
-        expect(activationAfterFailedInvalidation).not.toHaveBeenCalled();
-
-        await expect(settleAppShellPluginRuntimeUpdate({
-            invalidate: async () => {},
             activate: async () => { throw new Error('activation failed'); },
             isCancelled: () => false,
         })).resolves.toEqual({ status: 'unavailable', failures: [] });
 
-        const supersededInvalidation = vi.fn(async () => {});
         const supersededActivation = vi.fn(async () => {});
         await expect(settleAppShellPluginRuntimeUpdate({
-            invalidate: supersededInvalidation,
             activate: supersededActivation,
             isCancelled: () => true,
         })).resolves.toEqual({ status: 'cancelled' });
-        expect(supersededInvalidation).not.toHaveBeenCalled();
         expect(supersededActivation).not.toHaveBeenCalled();
     });
 
     it('preserves typed complete-set activation failures for AppShell availability', async () => {
         const settlement = await settleAppShellPluginRuntimeUpdate({
-            invalidate: async () => {},
             activate: async () => [{
                 activation: {
                     pluginId: 'acme.shared-runtime',
@@ -1212,6 +1196,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const origin = installSelectedAppScopePluginFixture({
             machineId: 'machine-1',
             pluginId,
+            contributes: appTabContributes(),
         });
         projectionDescribeSpy.mockImplementation(async () => ({
             supported: true,
@@ -1255,7 +1240,9 @@ describe('AppShellPluginUiProjectionProvider', () => {
     it('opens Browse from a recovered Session resolver through the mounted App page owner', async () => {
         storageState.machines = [{ id: 'machine-1', active: true, activeAt: Date.now(), metadata: { host: 'local' } }];
         const pluginId = 'acme.recovered-browse';
-        const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-1', pluginId });
+        const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-1', pluginId,
+            releaseMetadataPending: true,
+            contributes: appTabContributes({ localId: 'triage', container: 'appPage' }) });
         const pending = createDeferred<SupportedMachineContributionRegistryProjectionDescribeResult>();
         projectionDescribeSpy.mockReturnValue(pending.promise);
         const { AppShellPluginUiProjectionProvider } = await import('./AppShellPluginUiProjection');
@@ -1297,7 +1284,8 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const pluginId = 'happier.triage';
         storageState.machines = ['machine-1', 'machine-2'].map(id => ({ id, active: true, activeAt: Date.now(), metadata: { host: id } }));
         const origin = installSelectedAppScopePluginFixture({ machineId: 'machine-1', pluginId,
-            replicaMachineIds: ['machine-2'], selectOrigin: false });
+            replicaMachineIds: ['machine-2'], selectOrigin: false,
+            contributes: appTabContributes({ localId: 'triage', container: 'appPage' }) });
         projectionDescribeSpy.mockImplementation(async (machineId) => ({ supported: true,
             projection: pluginUiProjectionWithAppTab({ generation: 3, pluginId, localId: 'triage', container: 'appPage',
                 origin: { serverIdentityId: origin.serverIdentityId,
@@ -1853,6 +1841,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const origin = installSelectedAppScopePluginFixture({
             machineId: 'machine-1',
             pluginId,
+            contributes: appTabContributes(),
         });
         projectionDescribeSpy.mockResolvedValue({
             supported: true,
@@ -2202,6 +2191,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const origin = installSelectedAppScopePluginFixture({
             machineId: 'machine-1',
             pluginId,
+            contributes: appTabContributes(),
         });
         const beforeDisconnect = createDeferred<SupportedMachineContributionRegistryProjectionDescribeResult>();
         const afterReconnect = createDeferred<SupportedMachineContributionRegistryProjectionDescribeResult>();
@@ -2282,6 +2272,7 @@ describe('AppShellPluginUiProjectionProvider', () => {
         const origin = installSelectedAppScopePluginFixture({
             machineId: 'machine-1',
             pluginId,
+            contributes: appTabContributes(),
         });
         let generation = 5;
         projectionDescribeSpy.mockImplementation(async () => ({

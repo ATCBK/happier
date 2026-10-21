@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { PluginMachineMaterializationV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { createPluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
+import { readPluginUiContributionSupplies } from '@/sync/domains/plugins/ui/projectionUnion';
 import { createAppShellPluginUiProjectionPublication } from './appShellPluginUiProjectionPublication';
 import {
     publishCommittedAppShellPluginUiProjection,
@@ -27,6 +30,208 @@ function currentness(projection: PluginUiProjectionModel): PluginUiProjectionCur
 }
 
 describe('AppShell projection source publication', () => {
+    it('publishes the prepared Skills identity atomically and retains it across runtime generation changes', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        const pluginId = 'acme.publication';
+        const id = `${pluginId}/check`;
+        const model = { ...translationProjection(1, 'First'), skillsById: { [id]: { id, pluginId, pluginVersion: '1.0.0',
+            definition: { id: 'check', directory: './skills/check' } } } };
+        const emptyIdentity = owner.getSnapshot().skillSourceIdentity;
+        owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+            activeServerId: null, serverProfilesGeneration: 0, activeInventoryLoaded: true,
+            onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] });
+        owner.publishMachineCurrentness('machine', null, currentness(model));
+        const first = owner.getSnapshot().skillSourceIdentity;
+        expect(first).not.toBe(emptyIdentity);
+        const generations = { ...model, generation: 999 };
+        owner.publishMachineCurrentness('machine', null, currentness(generations));
+        expect(owner.getSnapshot().skillSourceIdentity).toBe(first);
+        expect(readPluginUiContributionSupplies(owner.getSnapshot().pluginUiProjection?.skillsById[id])[0]?.generation).toBe(999);
+        const notifications: Array<ReturnType<typeof owner.getSnapshot>> = [];
+        const stop = owner.subscribe(() => { notifications.push(owner.getSnapshot()); });
+        try {
+            owner.publishMachineCurrentness('machine', null, currentness({ ...generations, skillsById: { [id]: {
+                ...model.skillsById[id]!, definition: { id: 'check', directory: './skills/changed' },
+            } } }));
+            expect(notifications).toHaveLength(1);
+            expect(notifications[0]?.skillSourceIdentity).not.toBe(first);
+            expect(notifications[0]?.pluginUiProjection?.skillsById[id]?.definition.directory).toBe('./skills/changed');
+        } finally { stop(); owner.dispose(); }
+        expect(owner.getSnapshot().skillSourceIdentity).toBe(emptyIdentity);
+    });
+
+    it('does not withdraw current declarations until the installed UI census is known', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        const scope = { serverId: 'server-1', accountId: 'account-1' };
+        const materialization = PluginMachineMaterializationV1Schema.parse({
+            serverIdentityId: 'srv_test', machineId: 'machine', materializationId: 'installation',
+            pluginId: 'acme.publication', version: '1.0.0', sourceClass: 'localPath', portableRelease: false,
+            uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: 1_700_000_000_000,
+        });
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({ schemaVersion: 2, id: materialization.pluginId,
+            version: materialization.version, displayName: 'Publication', runtime: { apiVersion: 1 },
+            contributes: { registrySources: [{ id: 'skills', title: 'Skills', format: 'git', kinds: ['skill'],
+                url: 'https://github.com/acme/skills' }] } });
+        const readerFor = (stage: 'unknown' | 'manifest' | 'complete') => {
+            const installation = stage === 'unknown' ? materialization
+                : { ...materialization, declaredManifest: manifest, ...(stage === 'complete' ? { declaredUiEntries: {} } : {}) };
+            return createPluginAccountAvailabilityReader({ scope, snapshot: {
+                availabilityCursor: stage === 'unknown' ? 1 : stage === 'manifest' ? 2 : 3,
+                intentReads: [], materializations: [installation],
+                snapshots: [{ serverIdentityId: installation.serverIdentityId, machineId: installation.machineId,
+                    materializations: [installation] }],
+            } });
+        };
+        const preparing = readerFor('unknown');
+        expect(preparing.readInstalledPlugins()).toMatchObject({ plugins: [{ installations: [{ uiDeclarationState: 'preparing' }] }] });
+        const sources = { accountLifetime: null, availabilityReader: preparing, hostBundledUiEnabled: false,
+            activeServerId: scope.serverId, serverProfilesGeneration: 0, activeInventoryLoaded: true,
+            onlineMachineIds: ['machine'], selectableMachineIds: ['machine'] };
+        try {
+            owner.publishSources(sources);
+            owner.publishMachineCurrentness('machine', null, { ...currentness(translationProjection(1, 'Live title')),
+                serverId: scope.serverId });
+            expect(owner.getSnapshot().pluginUiProjection?.translationsByPluginId['acme.publication']?.bundles)
+                .toEqual({ en: { title: 'Live title' } });
+
+            // Known non-UI declarations survive while the UI census is still preparing.
+            owner.publishSources({ ...sources, availabilityReader: readerFor('manifest') });
+            expect(owner.getSnapshot().pluginUiProjection?.translationsByPluginId['acme.publication']?.bundles)
+                .toEqual({ en: { title: 'Live title' } });
+            expect(owner.getSnapshot().unionMembers.find(member => member.machineId === 'machine')
+                ?.projection?.registrySourcesById['acme.publication/skills'])
+                .toMatchObject({ definition: { id: 'skills' } });
+
+            // A proven empty census really does withdraw the preceding daemon declaration.
+            owner.publishSources({ ...sources, availabilityReader: readerFor('complete') });
+            expect(owner.getSnapshot().pluginUiProjection?.translationsByPluginId['acme.publication']).toBeUndefined();
+            expect(owner.getSnapshot().unionMembers.find(member => member.machineId === 'machine')
+                ?.projection?.registrySourcesById['acme.publication/skills'])
+                .toMatchObject({ definition: { id: 'skills' } });
+        } finally { owner.dispose(); }
+    });
+
+    it('ignores non-declaring selectable-origin changes without hiding real unpinned conflict transitions', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        const pluginId = 'acme.publication';
+        const machines = ['conflict-a', 'conflict-b', 'conflict-c'];
+        const origins = machines.map(machineId => PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test',
+            sourceRef: { machineId, pluginId, sourceCustody: { kind: 'development', registeredRootId: `${machineId}-root` } } }));
+        const unrepresented = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test', sourceRef: {
+            machineId: machines[0]!, pluginId, sourceCustody: { kind: 'development', registeredRootId: 'not-the-declaring-root' },
+        } });
+        let declarationWalks = 0;
+        const models = machines.map((machineId, index) => {
+            const base = translationProjection(1, `Conflicting content from ${machineId}`);
+            return Object.freeze({ ...base,
+                installedPackagesById: Object.freeze({ [pluginId]: Object.freeze({ ...base.installedPackagesById[pluginId]!,
+                    occurrenceId: machineId, executionOrigin: origins[index]!,
+                    source: { kind: 'localPath' as const, locator: machineId } }) }),
+                translationsByPluginId: Object.freeze({ [pluginId]: new Proxy(Object.freeze({ ...base.translationsByPluginId[pluginId]!,
+                    occurrenceId: machineId, executionOrigin: origins[index]!,
+                }), { ownKeys(target) { declarationWalks++; return Reflect.ownKeys(target); } }) }),
+            });
+        });
+        const declaration = () => owner.getSnapshot().pluginUiProjection?.translationsByPluginId[pluginId];
+        try {
+            owner.publishSources({ accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+                activeServerId: 'server-1', serverProfilesGeneration: 0, activeInventoryLoaded: true,
+                onlineMachineIds: machines, selectableMachineIds: machines });
+            models.forEach((model, index) => owner.publishMachineCurrentness(machines[index]!, null,
+                { ...currentness(model), machineId: machines[index]!, serverId: 'server-1' }));
+            owner.publishExecutionOrigin(pluginId, null, null, [origins[0]!, unrepresented, origins[1]!]);
+            expect(declaration()).toMatchObject({ hostCompatibility: 'conflict' });
+            expect(declarationWalks).toBeGreaterThan(0);
+            const initial = owner.getSnapshot();
+            declarationWalks = 0;
+            for (const selectable of [[unrepresented, origins[0]!, origins[1]!], [origins[0]!, origins[1]!],
+                [origins[0]!, unrepresented, origins[1]!]]) {
+                owner.publishExecutionOrigin(pluginId, null, null, selectable);
+                expect(owner.getSnapshot().projectionUnion).toBe(initial.projectionUnion);
+                expect(owner.getSnapshot().candidateFactsByPluginId).toBe(initial.candidateFactsByPluginId);
+            }
+            expect.soft(declarationWalks).toBe(0);
+            declarationWalks = 0;
+            owner.publishExecutionOrigin(pluginId, null, null, [origins[0]!, unrepresented]);
+            expect(declaration()).toMatchObject({ hostCompatibility: 'compatible' });
+            expect(declarationWalks).toBeGreaterThan(0);
+            owner.publishExecutionOrigin(pluginId, null, null, [origins[0]!, origins[2]!]);
+            expect(declaration()).toMatchObject({ hostCompatibility: 'conflict' });
+            owner.publishMachineCurrentness(machines[2]!, null, { ...currentness(models[2]!), machineId: machines[2]!, serverId: 'server-1',
+                phase: 'establishing', interactionEnabled: false });
+            expect(declaration()).toMatchObject({ hostCompatibility: 'compatible' });
+        } finally { owner.dispose(); }
+    });
+
+    it('isolates currentness reports to changed plugin slices across a many-Machine catalog', () => {
+        const owner = createAppShellPluginUiProjectionPublication();
+        const machines = Array.from({ length: 12 }, (_, index) => `report-machine-${index}`);
+        const ids = machines.map((_, index) => `acme.report-${index}`);
+        const models = machines.map((machineId, index) => {
+            const pluginId = ids[index]!;
+            const sourceCustody = { kind: 'development' as const, registeredRootId: `${machineId}-root` };
+            const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({ serverIdentityId: 'srv_test',
+                sourceRef: { machineId, pluginId, sourceCustody } });
+            return Object.freeze({ ...EMPTY_PLUGIN_UI_PROJECTION, generation: 1,
+                installedPackagesById: Object.freeze({ [pluginId]: Object.freeze({ id: pluginId, displayName: pluginId,
+                    version: '1.0.0', enabled: true, source: { kind: 'localPath' as const, locator: `${machineId}-root` },
+                    occurrenceId: `${machineId}-occurrence`, executionOrigin, sourceCustody }) }),
+                translationsByPluginId: Object.freeze(index === 11 ? {} : { [pluginId]: Object.freeze({
+                    id: `translations:${pluginId}`, pluginId, contributionKind: 'translations' as const,
+                    locales: ['en'], bundles: { en: { title: pluginId } },
+                    occurrenceId: `${machineId}-occurrence`, executionOrigin,
+                }) }),
+            }) satisfies PluginUiProjectionModel;
+        });
+        const sources = { accountLifetime: null, availabilityReader: null, hostBundledUiEnabled: false,
+            activeServerId: 'server-1', serverProfilesGeneration: 0, activeInventoryLoaded: true,
+            onlineMachineIds: machines, selectableMachineIds: machines };
+        owner.publishSources(sources);
+        models.forEach((model, index) => owner.publishMachineCurrentness(machines[index]!, null,
+            { ...currentness(model), machineId: machines[index]!, serverId: 'server-1' }));
+        const initial = owner.getSnapshot();
+        const siblingMaps = new Set(models.slice(1, 11).flatMap(model => [model.translationsByPluginId, model.installedPackagesById]));
+        const entries = vi.spyOn(Object, 'entries');
+        const values = vi.spyOn(Object, 'values');
+        const keys = vi.spyOn(Object, 'keys');
+        const siblingWalks = () => entries.mock.calls.filter(([value]) => siblingMaps.has(value)).length
+            + values.mock.calls.filter(([value]) => siblingMaps.has(value)).length
+            + keys.mock.calls.filter(([value]) => siblingMaps.has(value)).length;
+        try {
+            // Native-only currentness is still published to its candidate
+            // owner, but cannot change any already-admitted UI declaration.
+            for (let generation = 2; generation <= 4; generation++) {
+                owner.publishMachineCurrentness(machines[11]!, null,
+                    { ...currentness({ ...models[11]!, generation }), machineId: machines[11]!, serverId: 'server-1' });
+                owner.publishSources({ ...sources });
+                expect.soft(owner.getSnapshot().projectionUnion).toBe(initial.projectionUnion);
+                expect(owner.getSnapshot().candidateFactsByPluginId.get(ids[11]!)?.sourceCandidates[0]?.source.generation).toBe(generation);
+            }
+            expect.soft(siblingWalks()).toBe(0);
+            owner.publishMachineCurrentness(machines[0]!, null, { ...currentness(models[0]!), machineId: machines[0]!, serverId: 'server-1',
+                phase: 'establishing', interactionEnabled: false });
+            const pending = owner.getSnapshot();
+            expect(readPluginUiContributionSupplies(pending.pluginUiProjection?.translationsByPluginId[ids[0]!])).toMatchObject([
+                { phase: 'establishing', interactionEnabled: false, generation: 1 },
+            ]);
+            for (const id of ids.slice(1, 11)) {
+                expect(pending.pluginUiProjection?.translationsByPluginId[id]).toBe(initial.pluginUiProjection?.translationsByPluginId[id]);
+                expect(pending.candidateFactsByPluginId.get(id)).toBe(initial.candidateFactsByPluginId.get(id));
+            }
+            expect(siblingWalks()).toBe(0);
+            const firstId = ids[0]!;
+            const edited = { ...models[0]!, translationsByPluginId: {
+                [firstId]: { ...models[0]!.translationsByPluginId[firstId]!, bundles: { en: { title: 'Edited same-generation source' } } },
+            } };
+            owner.publishMachineCurrentness(machines[0]!, null, { ...currentness(edited), machineId: machines[0]!, serverId: 'server-1' });
+            const updated = owner.getSnapshot();
+            expect(updated.pluginUiProjection?.translationsByPluginId[firstId]?.bundles).toEqual({ en: { title: 'Edited same-generation source' } });
+            for (const id of ids.slice(1, 11)) expect(updated.pluginUiProjection?.translationsByPluginId[id])
+                .toBe(initial.pluginUiProjection?.translationsByPluginId[id]);
+            expect(siblingWalks()).toBe(0);
+        } finally { entries.mockRestore(); values.mockRestore(); keys.mockRestore(); owner.dispose(); }
+    });
+
     it('keeps eleven UI provisioners stable while controller selection checks stream in', () => {
         const owner = createAppShellPluginUiProjectionPublication();
         const pluginIds = Array.from({ length: 11 }, (_, index) => `acme.provisioner-${index}`);

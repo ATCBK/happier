@@ -1247,6 +1247,7 @@ type BundledAccountExecution = NonNullable<Parameters<typeof resolvePluginAccoun
 
 type PreparedBundledUiDeclaration = PluginHostBundledUiDeclaration & Readonly<{
     accountExecution: BundledAccountExecution | null;
+    accountActionArtifactGraphs: readonly PluginUiArtifactsManifestEntryV2[];
     artifactGraphsByContributionId: ReadonlyMap<string, readonly PluginUiArtifactsManifestEntryV2[]>;
 }>;
 
@@ -1275,6 +1276,7 @@ function prepareBundledUiDeclarations(bundles: readonly PluginHostBundledUiDecla
             ...declaration,
             entriesById,
             artifactGraphs,
+            accountActionArtifactGraphs: distinctAccountActionArtifactGraphs(artifactGraphs),
             artifactGraphsByContributionId,
             ...(manifest ? { normalizedManifest: manifest } : {}),
             ...(bundle.declaredExecution ? { declaredExecution: Object.freeze({ ...bundle.declaredExecution }) } : {}),
@@ -1325,8 +1327,13 @@ function accountActionArtifactGraphs(
     selection: Extract<PluginAccountExecutionSelectionV1, { kind: 'available' }>,
     hostBundledUi: readonly PreparedBundledUiDeclaration[],
 ): readonly PluginUiArtifactsManifestEntryV2[] {
-    const graphs = selection.release ? selection.release.uiSlots.flatMap(slot => slot.artifactGraph ? [slot.artifactGraph] : [])
-        : hostBundledUi.find(bundle => bundle.pluginId === selection.manifest.id)?.artifactGraphs ?? [];
+    // Bundled declarations are immutable for this reader's lifetime. Prepare
+    // their graph identity once, not in each live Artifact currentness predicate.
+    if (!selection.release) return hostBundledUi.find(bundle => bundle.pluginId === selection.manifest.id)?.accountActionArtifactGraphs ?? [];
+    return distinctAccountActionArtifactGraphs(selection.release.uiSlots.flatMap(slot => slot.artifactGraph ? [slot.artifactGraph] : []));
+}
+
+function distinctAccountActionArtifactGraphs(graphs: readonly PluginUiArtifactsManifestEntryV2[]): readonly PluginUiArtifactsManifestEntryV2[] {
     return Object.freeze([...new Map(graphs.map(graph => [createCanonicalJsonSigningInput(graph), graph])).values()]);
 }
 

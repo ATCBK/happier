@@ -216,19 +216,20 @@ function projectStructuredMessageActionFailure(result: Readonly<{
  * feature decisions), brand assets, execution origins and applied policy.
  */
 type ProjectionBuild = Readonly<{
+    inputKey: string;
     response: DaemonContributionRegistryProjectionDescribeResponse;
 }>;
 
 /**
- * Builds for the current runtime-registry generation, one per client context.
- * A new generation replaces the whole set, so the cache needs no timer: every
- * input it does not key on is derived from the registry generation.
+ * Builds for the current runtime-registry generation, one per effective
+ * output context and selection. Changed authority facts replace that context's
+ * previous response; a new generation replaces the whole set.
  */
 let projectionBuildsGenerationToken: string | null = null;
 const projectionBuildsByKey = new Map<string, ProjectionBuild>();
 
 /**
- * Builds in flight right now, keyed like the cache. Several callers arriving
+ * Builds in flight right now, keyed by the exact current input witness. Callers arriving
  * while a build runs share it instead of each running their own — the
  * amplification once measured as 137,870 ms of concurrent work and 22 s
  * event-loop stalls on one daemon. An entry lives only until it settles, so a
@@ -346,26 +347,43 @@ async function resolveHostedWebFeatureDecision(
 function createProjectionCacheKeyParts(input: Readonly<{
     generation: number;
     registryCacheToken: string;
-    pluginUiHostRuntime: ReturnType<typeof resolvePluginUiProjectionHostRuntime>;
+    selection?: ProjectionClientContext['selection'];
+    pluginUiHostRuntime?: ReturnType<typeof resolvePluginUiProjectionHostRuntime>;
     brandAssetsByPluginId: Readonly<Record<string, PluginProjectionBrandAssetV2>>;
     pluginExecutionOriginsByPluginId: Readonly<Record<string, PluginMachineExecutionOriginV1>>;
     pluginFinalPolicyCurrentRuntimesById?: ReadonlyMap<string, PluginFinalPolicyCurrentRuntime>;
+    targetActivationFacts?: ProjectionLease['targetActivationFacts'];
+    pluginDiagnosticsByPluginId?: ProjectionLease['pluginDiagnosticsByPluginId'];
     /**
      * The projected translation bundles depend on it, so two clients with
      * different display locales must not share one cached body.
      */
     requestedLocale?: string;
 }>): Readonly<Record<string, string>> {
+    const full = input.selection === undefined;
+    const admission = input.selection === 'connectedAccountAdmission';
+    const hostedWeb = input.pluginUiHostRuntime?.hostedWeb;
+    const reactNative = input.pluginUiHostRuntime?.reactNativeBundles;
     const parts = {
         generation: input.generation,
         registryCacheToken: input.registryCacheToken,
-        pluginUiHostRuntime: input.pluginUiHostRuntime,
-        brandAssetsByPluginId: input.brandAssetsByPluginId,
-        pluginExecutionOriginsByPluginId: input.pluginExecutionOriginsByPluginId,
-        pluginFinalPolicyCurrentRuntimes: input.pluginFinalPolicyCurrentRuntimesById
+        selection: input.selection ?? 'full',
+        // Artifact admission consumes the Host UI API and physical-frame
+        // availability, not app release/channel or the frame adapter's name.
+        pluginUiHostRuntime: full ? {
+            hostedWebEnabled: hostedWeb?.featureEnabled === true,
+            hostedWebFrameAvailable: hostedWeb?.featureEnabled === true && hostedWeb.frameCapability !== undefined,
+            reactNativeBundlesEnabled: reactNative?.featureEnabled === true,
+            hostUiApiVersion: reactNative?.hostRuntime?.hostUiApiVersion ?? null,
+        } : null,
+        brandAssetsByPluginId: full || admission ? input.brandAssetsByPluginId : null,
+        pluginExecutionOriginsByPluginId: full || admission ? input.pluginExecutionOriginsByPluginId : null,
+        pluginFinalPolicyCurrentRuntimes: (full || admission) && input.pluginFinalPolicyCurrentRuntimesById
             ? [...input.pluginFinalPolicyCurrentRuntimesById.entries()].sort(([left], [right]) => left.localeCompare(right))
             : [],
-        requestedLocale: input.requestedLocale ?? null,
+        targetActivationFacts: full || admission ? input.targetActivationFacts ?? null : null,
+        pluginDiagnosticsByPluginId: full || admission ? input.pluginDiagnosticsByPluginId ?? null : null,
+        requestedLocale: full ? input.requestedLocale ?? null : null,
     };
     return Object.fromEntries(Object.entries(parts).map(([name, value]) => [name, JSON.stringify(value)]));
 }
@@ -1248,6 +1266,7 @@ async function acquireProjectionContributionRegistryLease(
 }
 
 type ProjectionClientContext = Readonly<{
+    selection?: 'agents' | 'settings' | 'connectedAccountAdmission';
     locale?: string;
     reactNativeHostRuntimeIdentity?: DaemonReactNativeHostRuntimeIdentityV1;
     hostedWebFrameCapability?: DaemonHostedWebFrameCapabilityV1;
@@ -1287,84 +1306,111 @@ async function withProjectionBuild<T>(
     context: ProjectionClientContext,
     requireRuntimeRegistry: boolean,
     consume: (build: ProjectionBuild, lease: ProjectionLease) => T | Promise<T>,
+    signal?: AbortSignal,
 ): Promise<T> {
     const generation = await (opts?.resolveGeneration ?? defaultResolveGeneration)();
     const lease = await acquireProjectionContributionRegistryLease(opts, generation, requireRuntimeRegistry);
     try {
-        const resolvedPluginUiHostRuntime = await resolveProjectionHostRuntime(opts, {
+        signal?.throwIfAborted();
+        const full = context.selection === undefined;
+        const admission = context.selection === 'connectedAccountAdmission';
+        const resolvedPluginUiHostRuntime = full ? await resolveProjectionHostRuntime(opts, {
             ...(context.reactNativeHostRuntimeIdentity
                 ? { reactNativeHostRuntimeIdentity: context.reactNativeHostRuntimeIdentity }
                 : {}),
             ...(context.hostedWebFrameCapability
                 ? { hostedWebFrameCapability: context.hostedWebFrameCapability }
                 : {}),
-        });
-        const brandAssetsByPluginId = readCurrentPluginBrandAssetsForProjection({
-            registry: lease.registry,
-            runtimeRegistry: lease.runtimeRegistry,
-        });
-        const pluginExecutionOriginsByPluginId = await resolvePluginExecutionOriginsForProjection(
+        }) : undefined;
+        const pluginExecutionOriginsByPluginId = full || admission ? await resolvePluginExecutionOriginsForProjection(
             opts,
             lease.registry,
             lease.runtimeRegistry,
-        );
-        const pluginFinalPolicyCurrentRuntimesById = lease.runtimeRegistry
-            ?.pluginFinalPolicyCurrentRuntimesById;
-        const inputs: ProjectionBuildInputs = {
+        ) : {};
+        const baseInputs: ProjectionBuildInputs = {
             generation,
-            resolvedPluginUiHostRuntime,
-            brandAssetsByPluginId,
+            ...(context.selection ? { selection: context.selection } : {}),
+            ...(resolvedPluginUiHostRuntime ? { resolvedPluginUiHostRuntime } : {}),
+            brandAssetsByPluginId: {},
             pluginExecutionOriginsByPluginId,
-            ...(pluginFinalPolicyCurrentRuntimesById ? { pluginFinalPolicyCurrentRuntimesById } : {}),
-            ...(context.locale ? { locale: context.locale } : {}),
+            installedPackages: [],
+            ...(full && context.locale ? { locale: context.locale } : {}),
         };
-        // A metadata-only registry is re-read from disk on every lease and has
-        // no generation of its own, so only runtime-registry builds are cached.
-        if (!lease.runtimeRegistry) {
-            return await consume(await buildProjection(opts, lease, inputs), lease);
-        }
-        if (projectionBuildsGenerationToken !== lease.cacheToken) {
+        if (lease.runtimeRegistry && projectionBuildsGenerationToken !== lease.cacheToken) {
             projectionBuildsByKey.clear();
             projectionBuildsGenerationToken = lease.cacheToken;
         }
-        const cacheKeyParts = createProjectionCacheKeyParts({
-            generation,
-            registryCacheToken: lease.cacheToken,
-            pluginUiHostRuntime: resolvedPluginUiHostRuntime,
-            brandAssetsByPluginId,
-            pluginExecutionOriginsByPluginId,
-            ...(pluginFinalPolicyCurrentRuntimesById ? { pluginFinalPolicyCurrentRuntimesById } : {}),
-            ...(context.locale ? { requestedLocale: context.locale } : {}),
-        });
-        const cacheKey = JSON.stringify(cacheKeyParts);
-        const cached = projectionBuildsByKey.get(cacheKey);
-        if (cached) return await consume(cached, lease);
-        let running = inFlightProjectionBuildsByKey.get(cacheKey);
-        if (!running) {
-            const changedKeyParts = changedProjectionBuildKeyParts(cacheKeyParts);
-            const startedAtMs = Date.now();
-            const started = buildProjection(opts, lease, inputs);
-            void started.then(() => {
-                logger.debug('[PLUGIN PROJECTION] Built projection (cache miss)', {
-                    generation,
-                    clientKind: projectionClientKind(context),
-                    durationMs: Date.now() - startedAtMs,
-                    changedKeyParts,
-                });
-            }, () => {});
-            running = started;
-            inFlightProjectionBuildsByKey.set(cacheKey, started);
-            void started.then((build) => {
-                if (projectionBuildsGenerationToken === lease.cacheToken) {
-                    projectionBuildsByKey.set(cacheKey, build);
-                }
-            }, () => {}).finally(() => {
-                if (inFlightProjectionBuildsByKey.get(cacheKey) === started) {
-                    inFlightProjectionBuildsByKey.delete(cacheKey);
-                }
+        const capture = (inputs: ProjectionBuildInputs) => {
+            const currentLease = {
+                ...lease,
+                targetActivationFacts: lease.runtimeRegistry?.targetActivationFacts ?? lease.targetActivationFacts,
+                pluginDiagnosticsByPluginId: lease.runtimeRegistry?.pluginDiagnosticsByPluginId ?? lease.pluginDiagnosticsByPluginId,
+            };
+            const currentInputs = { ...inputs,
+                brandAssetsByPluginId: full || admission ? readCurrentPluginBrandAssetsForProjection({
+                    registry: lease.registry, runtimeRegistry: lease.runtimeRegistry,
+                }) : inputs.brandAssetsByPluginId,
+                pluginFinalPolicyCurrentRuntimesById: lease.runtimeRegistry?.pluginFinalPolicyCurrentRuntimesById,
+            };
+            const parts = createProjectionCacheKeyParts({ generation, registryCacheToken: lease.cacheToken,
+                selection: context.selection, pluginUiHostRuntime: resolvedPluginUiHostRuntime,
+                brandAssetsByPluginId: currentInputs.brandAssetsByPluginId,
+                pluginExecutionOriginsByPluginId: currentInputs.pluginExecutionOriginsByPluginId,
+                pluginFinalPolicyCurrentRuntimesById: currentInputs.pluginFinalPolicyCurrentRuntimesById,
+                targetActivationFacts: currentLease.targetActivationFacts,
+                pluginDiagnosticsByPluginId: currentLease.pluginDiagnosticsByPluginId,
+                ...(context.locale ? { requestedLocale: context.locale } : {}),
             });
-        }
-        return await consume(await running, lease);
+            return { lease: currentLease, inputs: currentInputs, parts, inputKey: JSON.stringify(parts) };
+        };
+        const initial = capture(baseInputs);
+        // Keep one current response per output context, replacing superseded
+        // live authority facts rather than retaining each former body.
+        const contextKey = JSON.stringify([initial.parts.generation, initial.parts.registryCacheToken,
+            initial.parts.selection, initial.parts.pluginUiHostRuntime, initial.parts.requestedLocale]);
+        const readCached = (inputKey: string) => {
+            const cached = lease.runtimeRegistry ? projectionBuildsByKey.get(contextKey) : undefined;
+            return cached?.inputKey === inputKey ? cached : undefined;
+        };
+        const cached = readCached(initial.inputKey);
+        if (cached) return await consume(cached, lease);
+        const existing = lease.runtimeRegistry ? inFlightProjectionBuildsByKey.get(initial.inputKey) : undefined;
+        if (existing) return await consume(await existing, lease);
+
+        const changedKeyParts = changedProjectionBuildKeyParts(initial.parts);
+        const startedAtMs = Date.now();
+        const started = (async () => {
+            // Full demand alone activates SCM. Capture its resulting facts
+            // before keying and synchronously projecting the response.
+            if (full && lease.runtimeRegistry) await activateScmRuntimeContributionsOnDemand(lease.runtimeRegistry);
+            const installedPackages = full || admission
+                ? await resolveInstalledPackagesForProjection(opts, lease.runtimeRegistry) : [];
+            const prepared = capture({ ...baseInputs, installedPackages,
+                pluginExecutionOriginsByPluginId: full || admission
+                    ? await resolvePluginExecutionOriginsForProjection(opts, lease.registry, lease.runtimeRegistry) : {},
+            });
+            const cachedAfterPreparation = readCached(prepared.inputKey);
+            if (cachedAfterPreparation) return cachedAfterPreparation;
+            // Initial-key callers already share preparation. From this exact
+            // snapshot, build/store is synchronous; joining another build's
+            // initial witness here can form a cycle after authority recovery.
+            const response = buildSelectedProjection(prepared.lease, prepared.inputs);
+            const build = Object.freeze({ inputKey: prepared.inputKey, response });
+            if (lease.runtimeRegistry && projectionBuildsGenerationToken === lease.cacheToken) {
+                projectionBuildsByKey.set(contextKey, build);
+            }
+            return build;
+        })();
+        if (lease.runtimeRegistry) inFlightProjectionBuildsByKey.set(initial.inputKey, started);
+        void started.then(() => {
+            logger.debug('[PLUGIN PROJECTION] Built projection (cache miss)', { generation,
+                clientKind: projectionClientKind(context), durationMs: Date.now() - startedAtMs, changedKeyParts });
+        }, () => {}).finally(() => {
+            if (inFlightProjectionBuildsByKey.get(initial.inputKey) === started) {
+                inFlightProjectionBuildsByKey.delete(initial.inputKey);
+            }
+        });
+        return await consume(await started, lease);
     } finally {
         await lease.release();
     }
@@ -1372,7 +1418,9 @@ async function withProjectionBuild<T>(
 
 type ProjectionBuildInputs = Readonly<{
     generation: number;
-    resolvedPluginUiHostRuntime: ReturnType<typeof resolvePluginUiProjectionHostRuntime>;
+    selection?: ProjectionClientContext['selection'];
+    resolvedPluginUiHostRuntime?: ReturnType<typeof resolvePluginUiProjectionHostRuntime>;
+    installedPackages: readonly PluginCatalogEntry[];
     brandAssetsByPluginId: Readonly<Record<string, PluginProjectionBrandAssetV2>>;
     pluginExecutionOriginsByPluginId: Readonly<Record<string, PluginMachineExecutionOriginV1>>;
     pluginFinalPolicyCurrentRuntimesById?: ReadonlyMap<string, PluginFinalPolicyCurrentRuntime>;
@@ -1406,11 +1454,39 @@ function projectActivationIntrospectionRuntimeSnapshot(
         : undefined;
 }
 
-async function buildProjection(
-    opts: DaemonContributionRegistryProjectionRegistrationOptions | undefined,
+function buildSelectedProjection(
+    lease: ProjectionLease,
+    inputs: ProjectionBuildInputs,
+): DaemonContributionRegistryProjectionDescribeResponse {
+    if (inputs.selection === 'settings') return { protocolVersion: 1,
+        projection: buildPluginSettingsProjectionV2({ registry: lease.registry, generation: inputs.generation }) };
+    if (inputs.selection === 'agents') return { protocolVersion: 1, projection: {
+        v: 2, generation: inputs.generation, agentsById: buildAgentsById(lease.registry, inputs.generation),
+        installedPackagesById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {},
+        settingsById: {}, familiesById: {}, diagnostics: [],
+    } };
+    if (inputs.selection === 'connectedAccountAdmission') return { protocolVersion: 1,
+        projection: buildPluginConnectedAccountAdmissionProjectionV2({
+            registry: lease.registry, generation: inputs.generation, installedPackages: inputs.installedPackages,
+            pluginDiagnosticsByPluginId: lease.pluginDiagnosticsByPluginId,
+            brandAssetsByPluginId: inputs.brandAssetsByPluginId,
+            pluginExecutionOriginsByPluginId: inputs.pluginExecutionOriginsByPluginId,
+            ...(lease.runtimeRegistry?.resolveActionPresentUserGatePolicy ? {
+                resolveActionPresentUserGatePolicy: lease.runtimeRegistry.resolveActionPresentUserGatePolicy,
+            } : {}),
+            ...(inputs.pluginFinalPolicyCurrentRuntimesById ? {
+                pluginFinalPolicyCurrentRuntimesById: inputs.pluginFinalPolicyCurrentRuntimesById,
+            } : {}),
+            introspectionRuntimeSnapshot: projectActivationIntrospectionRuntimeSnapshot(lease, inputs.generation),
+        }),
+    };
+    return buildProjection(lease, inputs);
+}
+
+function buildProjection(
     lease: ProjectionLease,
     buildInputs: ProjectionBuildInputs,
-): Promise<ProjectionBuild> {
+): DaemonContributionRegistryProjectionDescribeResponse {
     const {
         generation,
         resolvedPluginUiHostRuntime,
@@ -1418,19 +1494,10 @@ async function buildProjection(
         pluginExecutionOriginsByPluginId,
         pluginFinalPolicyCurrentRuntimesById,
     } = buildInputs;
-    const scmRuntimeAvailability = await (async () => {
-        if (!lease.runtimeRegistry) {
-            return {
-                backendIds: new Set<string>(),
-                hostingProviderIds: new Set<string>(),
-            };
-        }
-        await activateScmRuntimeContributionsOnDemand(lease.runtimeRegistry);
-        return {
-            backendIds: new Set(lease.runtimeRegistry.scmBackendsById?.keys() ?? []),
-            hostingProviderIds: new Set(lease.runtimeRegistry.scmHostingProvidersById.keys()),
-        };
-    })();
+    const scmRuntimeAvailability = {
+        backendIds: new Set(lease.runtimeRegistry?.scmBackendsById?.keys() ?? []),
+        hostingProviderIds: new Set(lease.runtimeRegistry?.scmHostingProvidersById.keys() ?? []),
+    };
     const modelsByRendererKey = typeof lease.runtimeRegistry?.generation === 'number'
         ? resolveDeclarativeProjectionModels({
             registry: lease.registry,
@@ -1463,7 +1530,7 @@ async function buildProjection(
     const baseProjection = buildPluginProjectionV2({
         registry: lease.registry,
         generation,
-        installedPackages: await resolveInstalledPackagesForProjection(opts, lease.runtimeRegistry),
+        installedPackages: buildInputs.installedPackages,
         pluginDiagnosticsByPluginId: lease.pluginDiagnosticsByPluginId,
         pluginUiHostRuntime,
         brandAssetsByPluginId,
@@ -1573,9 +1640,7 @@ async function buildProjection(
             .parse(automationEligibleEvents),
         ...(composerSurfaceCatalog ? { composerSurfaceCatalog: [...composerSurfaceCatalog] } : {}),
     };
-    return Object.freeze({
-        response,
-    });
+    return response;
 }
 
 async function describeProjection(
@@ -1583,80 +1648,27 @@ async function describeProjection(
     request: DaemonContributionRegistryProjectionDescribeRequest,
     signal?: AbortSignal,
 ): Promise<DaemonContributionRegistryProjectionDescribeResponse> {
-    if (request.selection === 'agents' || request.selection === 'skills'
-        || request.selection === 'settings' || request.selection === 'connectedAccountAdmission') {
+    if (request.selection === 'skills') {
         const generation = await (opts?.resolveGeneration ?? defaultResolveGeneration)();
-        const requireRuntimeRegistry = request.selection === 'skills'
-            || request.selection === 'connectedAccountAdmission';
-        const lease = await acquireProjectionContributionRegistryLease(opts, generation, requireRuntimeRegistry);
+        const lease = await acquireProjectionContributionRegistryLease(opts, generation, true);
         try {
             signal?.throwIfAborted();
-            const skills = request.selection === 'skills';
-            const registry = skills && request.skillIds ? { ...lease.registry, skills: (lease.registry.skills ?? []).filter(
+            const registry = request.skillIds ? { ...lease.registry, skills: (lease.registry.skills ?? []).filter(
                 entry => request.skillIds!.includes(pluginSkillIdV1(entry.identity))) } : lease.registry;
-            const pluginExecutionOriginsByPluginId = skills ? await resolvePluginExecutionOriginsForProjection(
-                opts, registry, lease.runtimeRegistry) : undefined;
-            if (request.selection === 'settings') {
-                return {
-                    protocolVersion: 1,
-                    projection: buildPluginSettingsProjectionV2({
-                        registry,
-                        generation,
-                    }),
-                };
-            }
-            if (request.selection === 'connectedAccountAdmission') {
-                const admissionExecutionOriginsByPluginId = await resolvePluginExecutionOriginsForProjection(
-                    opts,
-                    registry,
-                    lease.runtimeRegistry,
-                );
-                const pluginFinalPolicyCurrentRuntimesById = lease.runtimeRegistry
-                    ?.pluginFinalPolicyCurrentRuntimesById;
-                const introspectionRuntimeSnapshot = projectActivationIntrospectionRuntimeSnapshot(
-                    lease,
-                    generation,
-                );
-                return {
-                    protocolVersion: 1,
-                    projection: buildPluginConnectedAccountAdmissionProjectionV2({
-                        registry,
-                        generation,
-                        installedPackages: await resolveInstalledPackagesForProjection(opts, lease.runtimeRegistry),
-                        pluginDiagnosticsByPluginId: lease.pluginDiagnosticsByPluginId,
-                        brandAssetsByPluginId: readCurrentPluginBrandAssetsForProjection({
-                            registry,
-                            runtimeRegistry: lease.runtimeRegistry,
-                        }),
-                        pluginExecutionOriginsByPluginId: admissionExecutionOriginsByPluginId,
-                        ...(lease.runtimeRegistry?.resolveActionPresentUserGatePolicy
-                            ? {
-                                resolveActionPresentUserGatePolicy:
-                                    lease.runtimeRegistry.resolveActionPresentUserGatePolicy,
-                            }
-                            : {}),
-                        ...(pluginFinalPolicyCurrentRuntimesById
-                            ? { pluginFinalPolicyCurrentRuntimesById }
-                            : {}),
-                        ...(introspectionRuntimeSnapshot
-                            ? { introspectionRuntimeSnapshot }
-                            : {}),
-                        ...(request.locale ? { requestedLocale: request.locale } : {}),
-                    }),
-                };
-            }
-            // Selected reads share the full catalog's producers and current
-            // registry without resolving unrelated UI features or assets.
+            const pluginExecutionOriginsByPluginId = await resolvePluginExecutionOriginsForProjection(
+                opts, registry, lease.runtimeRegistry);
+            // Package bytes remain a fresh filesystem read, separate from the
+            // immutable registry-shaped responses retained by the cache owner.
             return {
                 protocolVersion: 1,
-                ...(skills ? { pluginSkills: PluginSkillLibraryContentV1Schema.parse(
-                    await readPluginSkills(signal, request.skillIds, registry)) } : {}),
+                pluginSkills: PluginSkillLibraryContentV1Schema.parse(
+                    await readPluginSkills(signal, request.skillIds, registry)),
                 projection: {
                     v: 2,
                     generation,
-                    familiesById: skills ? { skills: buildPluginProjectionFamilyV2({ registry, generation,
-                        pluginExecutionOriginsByPluginId }, skillsProjectionFamily) } : {},
-                    agentsById: skills ? {} : buildAgentsById(registry, generation),
+                    familiesById: { skills: buildPluginProjectionFamilyV2({ registry, generation,
+                        pluginExecutionOriginsByPluginId }, skillsProjectionFamily) },
+                    agentsById: {},
                     installedPackagesById: {},
                     actionsById: {},
                     toolsById: {},
@@ -1674,7 +1686,11 @@ async function describeProjection(
         clientKind: projectionClientKind(request),
         locale: request.locale ?? null,
     });
-    return await withProjectionBuild(opts, request, false, (build) => build.response);
+    signal?.throwIfAborted();
+    return await withProjectionBuild(opts, request, request.selection === 'connectedAccountAdmission', (build) => {
+        signal?.throwIfAborted();
+        return build.response;
+    }, signal);
 }
 
 /**

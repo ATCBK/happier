@@ -6,8 +6,7 @@ import { pluginSkillIdV1, type SkillListItemV1 } from '@happier-dev/protocol/pro
 import type { ReadOnlySkillV1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
 import { readAvailablePluginSkillItemsV1, readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
-import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
-import { readPluginUiContributionOrigin, readPluginUiContributionSupplies } from '@/sync/domains/plugins/ui/projectionUnion';
+import { readPluginUiContributionSupplies } from '@/sync/domains/plugins/ui/projectionUnion';
 import { randomUUID } from '@/platform/randomUUID';
 import type { LazyActionAccountContext } from './actionAccountContext';
 
@@ -20,15 +19,6 @@ function sources(account: LazyActionAccountContext) {
 }
 type Source = ReturnType<typeof sources>[number];
 const unavailable = (code: string): never => { throw Object.assign(new Error(code), { code }); };
-
-/** Invalidate only when skill declarations or their supplying installation changes. */
-export function uiPluginSkillSourceRevisionV1(projection: PluginUiProjectionModel | null): string {
-    return JSON.stringify(Object.entries(projection?.skillsById ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([id, entry]) =>
-        [id, entry.pluginVersion, entry.definition, entry.occurrenceId, entry.executionOrigin,
-            readPluginUiContributionOrigin(entry)?.executionOrigin, Reflect.get(entry, 'hostCompatibility'),
-            readPluginUiContributionSupplies(entry).map(supply => [supply.machineId, supply.serverId, supply.occurrenceId,
-                supply.pluginVersion, supply.executionOrigin, supply.phase, supply.interactionEnabled])]));
-}
 
 async function accountExecutor(account: LazyActionAccountContext) {
     const [{ storage }, { resolveVisibleMachinesForActiveServerFromState }, { isMachineReachable }] = await Promise.all([

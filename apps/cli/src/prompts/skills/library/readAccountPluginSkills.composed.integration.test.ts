@@ -47,7 +47,7 @@ describe('installed external plugin skills through Account discovery', () => {
   }, 0);
   afterAll(async () => { if (sqlite) await sqlite.close(); });
 
-  it('lists, reads, seeds reach and copies an installed external plugin skill through authenticated HTTP and SQLite', async () => {
+  it('lists, reads and copies a supplier plugin skill from a different Account Action executor through authenticated HTTP and SQLite', async () => {
     const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_SERVER_UI_DIR', 'HAPPIER_SERVER_UI_REQUIRED']);
     const app = createAuthenticatedTestApp({ authentication: 'real' }) as import('../../../../../server/sources/app/api/types').Fastify;
     const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 1 } });
@@ -139,7 +139,8 @@ describe('installed external plugin skills through Account discovery', () => {
         await seedPluginSkillDefaults({ skills, port });
         const deps = createCliActionDeps({ credentials, token: credentials.token, sessionId: 'cli-global', mode: 'plain', ctx: null });
         const execute = createActionExecutor(deps);
-        const context = { surface: 'ui', authority: 'present_user' } as const;
+        const context = { surface: 'ui', authority: 'present_user', defaultSessionMachineId: 'separate-account-executor',
+          externalActionTarget: { kind: 'machine', machineId: 'separate-account-executor' } } as const;
         const listed = await execute.execute('skills.list', {}, context);
         expect(listed.ok).toBe(true);
         if (!listed.ok) throw new Error('Plugin skill list failed');

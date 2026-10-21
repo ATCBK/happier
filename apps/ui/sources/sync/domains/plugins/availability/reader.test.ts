@@ -1,5 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import * as availability from '@happier-dev/protocol/plugins/availability';
+import * as canonicalJson from '@happier-dev/protocol/crypto/canonicalJson';
 import * as uiProjection from '@/sync/domains/plugins/ui/projection';
 
 import {
@@ -18,6 +19,8 @@ import { normalizePluginUiDestinationBindingV1, PluginUiArtifactsManifestEntryV2
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import { admitDeclarativeStaticModel } from '@/components/plugins/surfaces/declarativeStaticModel';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
+import { PluginSourceCustodyV1Schema } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { readPluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
 
 const scope = { serverId: 'srv-local-a', accountId: 'account-a' } as const;
 
@@ -115,6 +118,51 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it.each(['equal', 'different'] as const)('prepares %s bundled Account Action graphs once, without repeating graph traversal during currentness checks', (duplicate) => {
+        const graph = PluginUiArtifactsManifestEntryV2Schema.parse({
+            artifactId: 'account-actions', tier: 'reactNative', entry: 'react-native/account-actions/entry.cjs.bundle',
+            digest: artifactDigest,
+            files: [{ relativePath: 'react-native/account-actions/entry.cjs.bundle', digest: artifactDigest, byteSize: 1 }],
+            builtWith: { bundler: 'esbuild', version: '1.0.0' }, executable: { exports: ['activate'] }, hostUiApiRange: '^1.0.0',
+        });
+        const manifest = PluginPortableReleaseManifestV1Schema.parse({
+            ...intentRead().release!.normalizedManifest,
+            contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui'],
+                placementBindings: [], dangerLevel: 'safe', execution: {
+                    target: 'account', account: { artifactId: graph.artifactId, exportName: 'activate' },
+                }, inputSchema: { type: 'object' }, resultSchema: { type: 'object' } }] },
+        });
+        const store = createPluginAccountAvailabilityReaderStore({ hostBundledUi: [{
+            pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+            packageName: '@happier-dev/plugins-fixture', normalizedManifest: manifest, entriesById: {},
+            artifactGraphs: [graph, duplicate === 'equal' ? structuredClone(graph) : { ...graph, hostUiApiRange: '^2.0.0' }],
+        }] });
+        const empty = snapshot({ intentReads: [], materializations: [], snapshots: [] });
+        store.replace({ scope, snapshot: empty });
+        const reader = store.bind(scope);
+        const slot = { pluginId: manifest.id, contributionId: 'read', tier: 'reactNative' as const, platform: 'web' as const };
+        const expected = duplicate === 'equal' ? { kind: 'available', artifact: { digest: artifactDigest } }
+            : { kind: 'unavailable', code: 'artifact_slot_ambiguous' };
+        expect(reader.readCurrentArtifact(slot)).toMatchObject(expected);
+        // Observe the real encoder, without replacing validation or admission.
+        // The measured live regression walks multi-megabyte graphs on every predicate.
+        const encode = vi.spyOn(canonicalJson, 'createCanonicalJsonSigningInput');
+        onTestFinished(() => encode.mockRestore());
+        for (let index = 0; index < 50; index += 1) {
+            expect(reader.readCurrentArtifact(slot)).toMatchObject(expected);
+        }
+        expect(encode.mock.calls.filter(([value]) => value !== null && typeof value === 'object'
+            && 'artifactId' in value && 'files' in value)).toHaveLength(0);
+        expect(store.bind({ ...scope, accountId: 'other' }).readCurrentArtifact(slot).kind).toBe('unavailable');
+        const disabled = { ...intentRead(), intent: { ...intentRead().intent!, desiredVersion: null, enabled: false }, release: null, uiArtifacts: [] };
+        store.replace({ scope, snapshot: { ...empty, intentReads: [{ pluginId: manifest.id, response: disabled }] } });
+        expect(reader.readCurrentArtifact(slot).kind).toBe('unavailable');
+        store.replace({ scope, snapshot: { ...empty, intentReads: [{ pluginId: manifest.id,
+            response: { ...disabled, intent: { ...disabled.intent, enabled: true } } }] } });
+        expect(reader.readCurrentArtifact(slot)).toMatchObject(expected);
+        store.retire([manifest.id]);
+        expect(reader.readCurrentArtifact(slot).kind).toBe('unavailable');
+    });
     it('projects current portable Account Actions and exact graphs without a Machine, retiring disabled and replaced custody', () => {
         const artifactGraph = PluginUiArtifactsManifestEntryV2Schema.parse({
             artifactId: 'account-actions', tier: 'reactNative', entry: 'react-native/account-actions/entry.cjs.bundle',
@@ -154,13 +202,45 @@ describe('Plugin Account Availability reader', () => {
             .toMatchObject({ artifactGraph, generatedOwnerKind: 'clientContribution', contributionId: 'read',
                 occurrenceId: custodyId, runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' } } });
         expect(reader.readCurrentAccountExecution(manifest.id)).toMatchObject({ kind: 'available', manifest, custodyId });
+        // Count the real decoder after the canonical Account publication, not a
+        // synthetic frozen input or a replacement for its validation logic.
+        const decodeCustody = vi.spyOn(PluginSourceCustodyV1Schema, 'safeParse');
+        onTestFinished(() => decodeCustody.mockRestore());
+        const placement = first?.surfacePlacementsById[`surfacePlacement:${manifest.id}:account-page`];
+        const origins = Array.from({ length: 100 }, () => readPluginUiAccountExecutableOrigin(placement));
+        expect(decodeCustody).toHaveBeenCalledTimes(0);
+        const ownedOrigin = origins[0];
+        expect(ownedOrigin).not.toBeNull();
+        expect(origins.every(origin => origin === ownedOrigin)).toBe(true);
+        expect(Object.isFrozen(ownedOrigin)).toBe(true);
+        expect(Object.isFrozen(ownedOrigin?.sourceCustody)).toBe(true);
+        if (!ownedOrigin || ownedOrigin.sourceCustody.kind !== 'account_release') throw new Error('Missing Account release origin');
+        const raw = { pluginId: manifest.id, hostAccountOrigin: { ...ownedOrigin,
+            sourceCustody: { ...ownedOrigin.sourceCustody } } };
+        // A frozen wrapper is not a decoder-owned immutable publication.
+        Object.freeze(raw);
+        Object.freeze(raw.hostAccountOrigin);
+        const decodedRaw = readPluginUiAccountExecutableOrigin(raw);
+        expect(decodedRaw).toEqual(ownedOrigin);
+        expect(decodeCustody).toHaveBeenCalledTimes(1);
+        expect(readPluginUiAccountExecutableOrigin(structuredClone(raw))).toEqual(ownedOrigin);
+        expect(decodeCustody).toHaveBeenCalledTimes(2);
+        raw.hostAccountOrigin.sourceCustody.version = '2.0.0';
+        expect(readPluginUiAccountExecutableOrigin(raw)?.sourceCustody).toMatchObject({ version: '2.0.0' });
+        expect(decodedRaw?.sourceCustody).toMatchObject({ version: manifest.version });
+        expect(decodeCustody).toHaveBeenCalledTimes(3);
+        raw.hostAccountOrigin.sourceCustody.archiveDigestSha256 = 'invalid';
+        expect(readPluginUiAccountExecutableOrigin(raw)).toBeNull();
+        expect(decodeCustody).toHaveBeenCalledTimes(4);
         const changed = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...response,
             intent: { ...response.intent!, desiredVersion: '2.0.0', revision: 'intent-2' },
             release: { ...response.release!, ref: { ...response.release!.ref, version: '2.0.0' },
                 normalizedManifest: { ...manifest, version: '2.0.0' } },
         });
         store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id, response: changed }], materializations: [], snapshots: [] }) });
-        expect(reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`]?.occurrenceId).not.toBe(custodyId);
+        const changedAction = reader.readAccountUiProjection()?.actionsById[`${manifest.id}/read`];
+        expect(changedAction?.occurrenceId).not.toBe(custodyId);
+        expect(readPluginUiAccountExecutableOrigin(changedAction)?.sourceCustody).toMatchObject({ version: '2.0.0' });
         store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: manifest.id,
             response: { ...changed, intent: { ...changed.intent!, enabled: false } } }], materializations: [], snapshots: [] }) });
         expect(reader.readAccountUiProjection()).toBeNull();

@@ -1,9 +1,10 @@
 import {
+    arePluginMachineExecutionOriginsEqual,
     getPluginMachineExecutionOriginRef,
     PluginMachineExecutionOriginV1Schema,
     type PluginMachineExecutionOriginV1,
 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
-import { PluginSourceCustodyV1Schema, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import { PluginSourceCustodyV1Schema, pluginSourceCustodyV1Equal, type PluginSourceCustodyV1 } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import type { PluginUiProjectionModel } from './projection';
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
@@ -36,13 +37,22 @@ export type PluginUiContributionSupplyV1 = PluginUiContributionOriginV1 & Readon
     executionTargetAutoPick?: boolean;
 }>;
 
+export type PluginUiAccountExecutableOrigin = Readonly<{
+    serverId: string;
+    accountId: string;
+    custodyId: string;
+    sourceCustody: Extract<PluginSourceCustodyV1, Readonly<{ kind: 'account_release' | 'bundled_first_party' }>>;
+    declarationDigest?: string;
+}>;
+
 // These proofs live only with immutable values owned by this decoder. Freezing
 // an arbitrary input does not establish validation, nor does copying a brand.
 const directOriginProof = Symbol('pluginUiDirectOrigin');
 const contributionOriginProof = Symbol('pluginUiContributionOrigin');
+const accountOriginProof = Symbol('pluginUiAccountOrigin');
 const parsedSupplyProof = Symbol('pluginUiParsedSupply');
 const parsedContributionSupplies = Symbol('pluginUiParsedSupplies');
-const originProofKeys = [directOriginProof, contributionOriginProof, parsedSupplyProof] as const;
+const originProofKeys = [directOriginProof, contributionOriginProof, accountOriginProof, parsedSupplyProof] as const;
 
 function asRecord(value: unknown): UnknownRecord | null {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as UnknownRecord : null;
@@ -70,6 +80,27 @@ function freezeOwnedFacts(value: unknown): void {
     if (!value || typeof value !== 'object' || Object.isFrozen(value)) return;
     for (const child of Object.values(value)) freezeOwnedFacts(child);
     Object.freeze(value);
+}
+
+/** Availability supplies custody, not invocation admission. Raw stamps validate anew. */
+export function readPluginUiAccountExecutableOrigin(entry: unknown): PluginUiAccountExecutableOrigin | null {
+    const record = asRecord(entry);
+    const stamp = asRecord(record?.hostAccountOrigin);
+    const prepared = readProof<PluginUiAccountExecutableOrigin>(stamp, accountOriginProof);
+    if (prepared) return prepared.sourceCustody.kind !== 'account_release'
+        || prepared.sourceCustody.pluginId === record?.pluginId ? prepared : null;
+    if (!stamp || typeof stamp.serverId !== 'string' || !stamp.serverId.trim()
+        || typeof stamp.accountId !== 'string' || !stamp.accountId.trim()
+        || typeof stamp.custodyId !== 'string' || !stamp.custodyId.trim()
+        || (stamp.declarationDigest !== undefined && (typeof stamp.declarationDigest !== 'string' || !stamp.declarationDigest.trim()))) return null;
+    const custody = PluginSourceCustodyV1Schema.safeParse(stamp.sourceCustody);
+    if (!custody.success || (custody.data.kind !== 'bundled_first_party' && custody.data.kind !== 'account_release')
+        || (custody.data.kind === 'account_release' && custody.data.pluginId !== record?.pluginId)) return null;
+    const origin: PluginUiAccountExecutableOrigin = { serverId: stamp.serverId, accountId: stamp.accountId,
+        custodyId: stamp.custodyId, sourceCustody: custody.data,
+        ...(typeof stamp.declarationDigest === 'string' ? { declarationDigest: stamp.declarationDigest } : {}) };
+    freezeOwnedFacts(origin);
+    return origin;
 }
 
 function readCanonicalDirectOrigin(value: unknown): PluginMachineExecutionOriginV1 | null {
@@ -183,6 +214,18 @@ function prepareContributionOrigin(value: unknown): unknown {
     return Object.freeze(owned);
 }
 
+function prepareAccountOrigin(value: unknown, pluginId: unknown): unknown {
+    const record = asRecord(value);
+    if (!record || readProof(record, accountOriginProof)) return value;
+    const origin = readPluginUiAccountExecutableOrigin({ pluginId, hostAccountOrigin: record });
+    if (!origin) return value;
+    // Retain the stamp's enumerable fields and order; the parsed, immutable
+    // semantic facts are private, and no caller-owned custody graph is kept.
+    const owned = { ...record, sourceCustody: projectNativeJsonValueForTransport(record.sourceCustody) };
+    installProof(owned, accountOriginProof, origin);
+    return Object.freeze(owned);
+}
+
 /** Called by live, warm and Availability acquisition, never by a render/read. */
 export function preparePluginUiProjectionOrigins(model: PluginUiProjectionModel): PluginUiProjectionModel {
     const updates: Record<string, unknown> = {};
@@ -196,11 +239,13 @@ export function preparePluginUiProjectionOrigins(model: PluginUiProjectionModel)
             if (!entry) continue;
             const executionOrigin = prepareDirectOrigin(entry.executionOrigin);
             const hostOrigin = prepareContributionOrigin(entry.hostOrigin);
-            if (executionOrigin === entry.executionOrigin && hostOrigin === entry.hostOrigin) continue;
+            const hostAccountOrigin = prepareAccountOrigin(entry.hostAccountOrigin, entry.pluginId);
+            if (executionOrigin === entry.executionOrigin && hostOrigin === entry.hostOrigin && hostAccountOrigin === entry.hostAccountOrigin) continue;
             nextMap ??= { ...map };
             nextMap[id] = Object.freeze({ ...entry,
                 ...(Object.hasOwn(entry, 'executionOrigin') ? { executionOrigin } : {}),
                 ...(Object.hasOwn(entry, 'hostOrigin') ? { hostOrigin } : {}),
+                ...(Object.hasOwn(entry, 'hostAccountOrigin') ? { hostAccountOrigin } : {}),
             });
         }
         if (nextMap) { updates[key] = Object.freeze(nextMap); changed = true; }
@@ -220,6 +265,11 @@ export function retainPluginUiProjectionValue(previous: unknown, next: unknown):
             // particular, first publication must not walk an entire new graph.
             return value;
         }
+        // Canonical supplies have a closed, validated shape. A currentness
+        // change does not authorize traversing their immutable custody graphs.
+        const beforeSupply = readProof<PluginUiContributionSupplyV1>(asRecord(old), parsedSupplyProof);
+        const nextSupply = readProof<PluginUiContributionSupplyV1>(asRecord(value), parsedSupplyProof);
+        if (beforeSupply && nextSupply && beforeSupply === old && nextSupply === value) return retainCanonicalSupply(beforeSupply, nextSupply);
         let values = retainedPairs.get(old);
         if (values?.has(value)) return values.get(value);
         const retained = retainPluginUiProjectionNode(old, value, retain);
@@ -228,6 +278,27 @@ export function retainPluginUiProjectionValue(previous: unknown, next: unknown):
         return retained;
     };
     return retain(previous, next);
+}
+
+function retainCanonicalSupply(previous: PluginUiContributionSupplyV1, next: PluginUiContributionSupplyV1): PluginUiContributionSupplyV1 {
+    const executionOrigin = previous.executionOrigin === next.executionOrigin
+        || (previous.executionOrigin && next.executionOrigin && arePluginMachineExecutionOriginsEqual(previous.executionOrigin, next.executionOrigin))
+        ? previous.executionOrigin : next.executionOrigin;
+    const sourceCustody = previous.sourceCustody === next.sourceCustody
+        || (previous.sourceCustody && next.sourceCustody && pluginSourceCustodyV1Equal(previous.sourceCustody, next.sourceCustody))
+        ? previous.sourceCustody : next.sourceCustody;
+    if (executionOrigin === previous.executionOrigin && sourceCustody === previous.sourceCustody
+        && previous.machineId === next.machineId && previous.serverId === next.serverId
+        && previous.serverIdentityId === next.serverIdentityId && previous.unavailableReasonCode === next.unavailableReasonCode
+        && previous.generation === next.generation && previous.interactionEnabled === next.interactionEnabled && previous.phase === next.phase
+        && previous.occurrenceId === next.occurrenceId && previous.pluginVersion === next.pluginVersion
+        && previous.executionTargetDefault === next.executionTargetDefault && previous.executionTargetAutoPick === next.executionTargetAutoPick) return previous;
+    if (executionOrigin === next.executionOrigin && sourceCustody === next.sourceCustody) return next;
+    const retained = { ...next, executionOrigin, sourceCustody };
+    const origin = readProof<PluginUiContributionOriginV1>(asRecord(next), contributionOriginProof)!;
+    installProof(retained, contributionOriginProof, Object.freeze({ ...origin, executionOrigin }));
+    installProof(retained, parsedSupplyProof, retained);
+    return Object.freeze(retained);
 }
 
 function retainPluginUiProjectionNode(previous: unknown, next: unknown, retain: (previous: unknown, next: unknown) => unknown): unknown {

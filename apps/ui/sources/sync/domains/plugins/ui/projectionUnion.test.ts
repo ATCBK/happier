@@ -11,7 +11,7 @@ import {
 } from '@happier-dev/protocol/plugins/ui';
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
 import type { PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
-import { PluginReleaseFactsV1Schema, PluginMachineMaterializationV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginReleaseFactsV1Schema, PluginMachineMaterializationV1Schema, PluginPortableReleaseManifestV1Schema } from '@happier-dev/protocol/plugins/availability/v1';
 import { projectPluginPortableUiDeclarationsV1, projectPluginReactNativeArtifactEntryV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
@@ -128,6 +128,16 @@ it('retains current Account Actions through installed composition without replac
     const composedPage = mergeInstalledPluginUiProjections([installed], runtimeWithSupplier)?.surfacePlacementsById[pageId];
     expect(composedPage).toMatchObject({ occurrenceId: action.occurrenceId, hostAccountOrigin: action.hostAccountOrigin });
     expect(readPluginUiContributionSupplies(composedPage)).toMatchObject([{ machineId: 'machine-optional', executionOrigin: origin }]);
+    const withoutPage = PluginPortableReleaseManifestV1Schema.parse({ ...manifest, contributes: {
+        ...manifest.contributes, ui: { ...manifest.contributes.ui, views: [] },
+    } });
+    const retiredPage = createPluginAccountAvailabilityReader({ scope: { serverId: 'server-1', accountId: 'account-1' },
+        snapshot: { availabilityCursor: 2, intentReads: [], materializations: [], snapshots: [] },
+        hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture',
+            packageName: '@happier-dev/plugins-fixture', normalizedManifest: withoutPage, artifactGraphs: [graph],
+            entriesById: projectPluginPortableUiDeclarationsV1(withoutPage) }],
+    }).readAccountUiProjection()!;
+    expect(mergeInstalledPluginUiProjections([retiredPage], runtimeWithSupplier)?.surfacePlacementsById[pageId]).toBeUndefined();
 });
 
 it('retains an external archive renderer only from its exact reported installation and artifact slot', () => {
@@ -149,6 +159,7 @@ it('retains an external archive renderer only from its exact reported installati
             contributes: { ui: {
                 renderers: [{ id: 'main', kind: 'reactNative', artifact: 'main', requiredHostMethods: [] }],
                 views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, title: 'External', renderer: 'main' }],
+                translations: [{ locale: 'en', messages: { title: 'External' } }],
             } },
         },
         collectionContracts: [],
@@ -162,11 +173,19 @@ it('retains an external archive renderer only from its exact reported installati
         archiveDigestSha256: release.archiveDigestSha256, uiArtifacts: release.uiSlots,
         enabled: true, trustState: 'trusted', observedAt: 1,
     });
-    const reader = createPluginAccountAvailabilityReader({
+    const intentRead = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+        availabilityCursor: 1,
+        hostingCapability: { enabled: false },
+        intent: { pluginId, desiredVersion: release.ref.version, enabled: true, offlineUiHosting: 'disabled',
+            writableCollections: [], revision: 'selected-release' },
+        release, packageAssets: [], uiArtifacts: [],
+    });
+    const availability = {
         scope: { serverId: 'server-1', accountId: 'account-1' },
         snapshot: { availabilityCursor: 1, intentReads: [], releases: [release], materializations: [materialization],
             snapshots: [{ serverIdentityId: 'srv_test', machineId: 'machine-external', materializations: [materialization] }] },
-    });
+    };
+    const reader = createPluginAccountAvailabilityReader(availability);
     const installed = reader.readInstalledPlugins();
     if (installed.kind !== 'available') throw new Error('Expected external archive census');
     const models = installed.plugins[0]!.installations.map(installation => installation.uiModel);
@@ -197,6 +216,18 @@ it('retains an external archive renderer only from its exact reported installati
     const reports = { [pluginId]: materialization };
     const merged = mergeInstalledPluginUiProjections(models, runtime, reports);
     expect(merged?.reactNativeBundlesById[bundle.id]).toEqual(runtime.reactNativeBundlesById[bundle.id]);
+    const accountProjection = createPluginAccountAvailabilityReader({ ...availability,
+        snapshot: { ...availability.snapshot, intentReads: [{ pluginId, response: intentRead }] },
+    }).readAccountUiProjection()!;
+    // App shell composes Account custody after the exact Machine installation
+    // and renderer slot have already been admitted; no reports reach this layer.
+    const finalProjection = projectionUnion.mergeInstalledPluginUiProjections([accountProjection], merged);
+    const pageId = `surfacePlacement:${pluginId}:page`;
+    expect(finalProjection?.surfacePlacementsById[pageId]).toBe(merged?.surfacePlacementsById[pageId]);
+    expect(finalProjection?.reactNativeBundlesById[bundle.id]).toBe(merged?.reactNativeBundlesById[bundle.id]);
+    expect(finalProjection?.reactNativeBundlesById[bundle.id]).toMatchObject({ executionOrigin: origin });
+    expect(merged?.translationsByPluginId[pluginId]).toBeDefined();
+    expect(finalProjection?.translationsByPluginId[pluginId]).toBe(merged?.translationsByPluginId[pluginId]);
     // Composing descriptive graph facts grants neither Account selection nor bytes.
     expect(reader.readCurrentArtifact({ pluginId, contributionId: 'main', tier: 'reactNative', platform: 'web' }).kind)
         .toBe('unavailable');
@@ -205,7 +236,9 @@ it('retains an external archive renderer only from its exact reported installati
         { ...bundle, executionOrigin: { ...origin, materializationRef: { ...origin.materializationRef, materializationId: 'replaced' } } },
         { ...bundle, artifactGraph: { ...graph, digest: `sha256:${'d'.repeat(64)}` } },
     ]) {
-        expect(mergeInstalledPluginUiProjections(models, runtimeFor(invalid), reports)?.reactNativeBundlesById[bundle.id])
+        const rejected = mergeInstalledPluginUiProjections(models, runtimeFor(invalid), reports);
+        expect(rejected?.reactNativeBundlesById[bundle.id]).toBeUndefined();
+        expect(projectionUnion.mergeInstalledPluginUiProjections([accountProjection], rejected)?.reactNativeBundlesById[bundle.id])
             .toBeUndefined();
     }
     expect(mergeInstalledPluginUiProjections(models, runtime)?.reactNativeBundlesById[bundle.id]).toBeUndefined();
@@ -214,6 +247,19 @@ it('retains an external archive renderer only from its exact reported installati
     } };
     expect(mergeInstalledPluginUiProjections(models, runtime, otherPlatform)?.reactNativeBundlesById[bundle.id])
         .toBeUndefined();
+    const rendererOnlyRelease = PluginReleaseFactsV1Schema.parse({ ...release, normalizedManifest: {
+        ...release.normalizedManifest, contributes: { ...release.normalizedManifest.contributes,
+            ui: { ...release.normalizedManifest.contributes.ui, views: [], translations: [] } },
+    } });
+    const rendererOnlyInstalled = createPluginAccountAvailabilityReader({ ...availability,
+        snapshot: { ...availability.snapshot, releases: [rendererOnlyRelease] },
+    }).readInstalledPlugins();
+    if (rendererOnlyInstalled.kind !== 'available') throw new Error('Expected renderer-only installation');
+    const rendererOnlyModels = rendererOnlyInstalled.plugins[0]!.installations.map(installation => installation.uiModel);
+    expect(mergeInstalledPluginUiProjections(rendererOnlyModels, runtime)?.reactNativeBundlesById[bundle.id]).toBeUndefined();
+    const rendererOnlyMerged = mergeInstalledPluginUiProjections(rendererOnlyModels, runtime, reports);
+    expect(rendererOnlyMerged?.reactNativeBundlesById[bundle.id]).toEqual(runtime.reactNativeBundlesById[bundle.id]);
+    expect(rendererOnlyMerged?.surfacePlacementsById[pageId]).toBeUndefined();
 });
 
 it('uses a development override only for the explicitly selected source and otherwise retains the host bundle', () => {

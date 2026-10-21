@@ -32,11 +32,10 @@ import { PluginDeclarativeProjectedModelV1Schema, projectPluginDeclarativeModelC
 import type { PluginUiProjectionPhase } from './usePluginUiProjectionCurrentness';
 import { composePluginMachineExecutionOriginV1, type PluginMachineSourceExecutionOriginCandidateV1, type PluginMachineExecutionOriginRejectionV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import { resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
-import { projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
-import { readPluginUiAccountExecutableOrigin } from '@/components/plugins/reactNative/executableModuleHost';
+import { normalizeStrictJsonValue, projectNativeJsonValueForTransport, sameStrictJsonValue, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import {
-    PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY,
     publishPluginUiContributionSupplies,
+    readPluginUiAccountExecutableOrigin,
     readPluginUiContributionSupplies,
     readPluginUiProjectionEntryExecutionOrigin,
     retainPluginUiProjectionValue,
@@ -55,6 +54,11 @@ export {
 } from './projectionOrigins';
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
+type UnionSupplyFacts = Readonly<{
+    facts: Map<UnknownRecord, PluginUiContributionSupplyV1>;
+    /** Previous carriers are available only during this synchronous publication. */
+    previousFacts?: ReadonlyMap<UnknownRecord, PluginUiContributionSupplyV1>;
+}>;
 
 export type PluginUiProjectionUnionMember = Readonly<{
     machineId: string;
@@ -97,8 +101,10 @@ export function mergeInstalledPluginUiProjections(
     runtime: PluginUiProjectionModel | null,
     materializations?: Readonly<Record<string, PluginMachineMaterializationV1>>,
     explicitOrigins?: PluginUiProjectionUnionOriginSelections,
+    /** Only a proven complete census can withdraw runtime rows omitted by an installation. */
+    completeUiPluginIds?: ReadonlySet<string>,
 ): PluginUiProjectionModel | null {
-    return deriveInstalledPluginUiProjection(installed, runtime, materializations, explicitOrigins, createDeclarationComparisons());
+    return deriveInstalledPluginUiProjection(installed, runtime, materializations, explicitOrigins, createDeclarationComparisons(), completeUiPluginIds);
 }
 
 function deriveInstalledPluginUiProjection(
@@ -107,10 +113,22 @@ function deriveInstalledPluginUiProjection(
     materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined,
     explicitOrigins: PluginUiProjectionUnionOriginSelections | undefined,
     comparisons: DeclarationComparisons,
+    completeUiPluginIds?: ReadonlySet<string>,
 ): PluginUiProjectionModel | null {
     if (installed.length === 0) return runtime;
-    const installedPluginIds = new Set(installed.flatMap(model => declarationMaps(model).flatMap(map =>
-        Object.values(map).flatMap(entry => { const id = readString(asRecord(entry)?.pluginId); return id ? [id] : []; }))));
+    // A renderer descriptor selects that renderer, not the plugin's entire
+    // declaration census. Partial installation metadata retains known rows,
+    // but cannot turn an unobserved UI declaration into a withdrawal.
+    // Complete installations still retire omitted entries,
+    // including renderer-only Machine installations with exact artifact slots.
+    const installedPluginIds = new Set(installed.flatMap(model => [
+        ...Object.keys(model.installedPackagesById),
+        ...declarationMaps(model).flatMap(map => Object.values(map).flatMap(entry => {
+            const record = asRecord(entry);
+            const id = readString(record?.pluginId);
+            return id && record?.contributionKind !== 'uiRenderer' ? [id] : [];
+        })),
+    ]).filter(id => completeUiPluginIds === undefined || completeUiPluginIds.has(id)));
     const hostBundledPluginIds = new Set(installed.flatMap(model => Object.values(model.installedPackagesById)
         .filter(plugin => plugin.source.kind === 'bundled' && !plugin.occurrenceId).map(plugin => plugin.id)));
     const merge = <T>(read: (model: PluginUiProjectionModel) => Readonly<Record<string, T>>, artifactFacts = false) => {
@@ -158,7 +176,7 @@ function deriveInstalledPluginUiProjection(
                 }));
                 continue;
             }
-            if (!pluginId || !installedPluginIds.has(pluginId)
+            if (!pluginId || (!installedPluginIds.has(pluginId) && !declared[key])
                 || (artifactFacts && matchesInstalledArtifactSlot(entry, materializations))
                 || (declared[key] && sameDeclarationContent(declared[key], entry, comparisons))) {
                 declared[key] = entry;
@@ -265,18 +283,36 @@ export function createPluginUiProjectionUnionPublication() {
         getSnapshot: (): PluginUiProjectionUnion => snapshot,
         publish(nextMembers: readonly PluginUiProjectionUnionMember[], nextSelections?: PluginUiProjectionUnionOriginSelections): PluginUiProjectionUnion {
             if (publishedMembers === nextMembers && publishedSelections === nextSelections) return snapshot;
-            if (members && source && arePluginUiProjectionUnionMembersEquivalentForPlugins(members, nextMembers, true)) {
+            if (members && source) {
+                const currentSource = source;
+                const sameMembers = arePluginUiProjectionUnionMembersEquivalentForPlugins(members, nextMembers, true);
+                if ((!sameMembers && (members.some(member => member.projection && !nextMembers.some(next => next.projection === member.projection))
+                    || nextMembers.some(member => member.projection && !members!.some(previous => previous.projection === member.projection))))
+                    || [...comparisons.materializations.keys()].some(value => !nextMembers.some(member => member.materializationsByPluginId?.[value.pluginId] === value))) {
+                    comparisons = retainDeclarationComparisons(nextMembers.flatMap(member => member.projection ? [member.projection] : []), comparisons,
+                        nextMembers.flatMap(member => member.materializationsByPluginId ? Object.values(member.materializationsByPluginId) : []));
+                }
+                const nextSource = sameMembers ? source
+                    : prepareUnionPublicationSource(nextMembers, snapshot.pluginUiProjection, comparisons, source, members);
                 const changed = new Set<string>();
-                for (const id of source.pluginIds) {
+                for (const id of new Set([...source.pluginIds, ...nextSource.pluginIds])) {
                     const before = selections?.get(id);
                     const after = nextSelections?.get(id);
-                    if (before !== after && (!before || !after || !arePluginMachineExecutionOriginsEqual(before, after))) changed.add(id);
-                    else if (source.conflictSensitivePluginIds.has(id)
-                        && !(after && source.declaredOrigins.get(id)?.some(origin => arePluginMachineExecutionOriginsEqual(origin, after)))
-                        && !members.every((member, index) => sameRelevantSelectableOrigins(member.selectableExecutionOrigins,
-                            nextMembers[index]?.selectableExecutionOrigins, new Set([id])))) changed.add(id);
+                    if (!sameMembers && !samePluginUnionInputs(members, nextMembers, source, nextSource, id)) changed.add(id);
+                    else if (before !== after && (!before || !after || !arePluginMachineExecutionOriginsEqual(before, after))) changed.add(id);
+                    else if (nextSource.conflictSensitivePluginIds.has(id)
+                        && !(after && nextSource.declaredOrigins.get(id)?.some(origin => arePluginMachineExecutionOriginsEqual(origin, after)))
+                        && !members.every((member, index) => {
+                            const next = nextMembers[index];
+                            if (!next) return false;
+                            if (member.selectableExecutionOrigins === next.selectableExecutionOrigins) return true;
+                            return memberHasSelectableDeclaration(member, id, member.projection ? currentSource.slices.get(member.projection)?.get(id) ?? null : null)
+                                === memberHasSelectableDeclaration(next, id, next.projection ? nextSource.slices.get(next.projection)?.get(id) ?? null : null);
+                        })) changed.add(id);
                 }
-                if (changed.size > 0) snapshot = publishPluginUnionChanges(snapshot, nextMembers, nextSelections ?? new Map(), source, changed, comparisons);
+                if (changed.size > 0 || !sameMembers) snapshot = publishPluginUnionChanges(snapshot, nextMembers,
+                    nextSelections ?? new Map(), nextSource, changed, comparisons, source);
+                source = refreshUnionDeclaredOrigins(nextSource, snapshot.pluginUiProjection, changed);
                 members = [...nextMembers];
                 selections = nextSelections ? new Map(nextSelections) : undefined;
                 publishedMembers = nextMembers;
@@ -285,12 +321,15 @@ export function createPluginUiProjectionUnionPublication() {
             }
             comparisons = retainDeclarationComparisons(nextMembers.flatMap(member => member.projection ? [member.projection] : []), comparisons);
             const previousIndex = readPublishedProjectionPluginIndex(snapshot.pluginUiProjection);
-            snapshot = retainPluginUiProjectionValue(snapshot, derivePluginUiProjectionUnion(nextMembers, nextSelections ?? new Map(), comparisons)) as PluginUiProjectionUnion;
-            if (snapshot.pluginUiProjection) snapshot = Object.freeze({ ...snapshot,
-                pluginUiProjection: publishProjectionPluginIndex(snapshot.pluginUiProjection,
-                    prepareProjectionPluginIndex(snapshot.pluginUiProjection, previousIndex)),
-            });
             source = prepareUnionPublicationSource(nextMembers, snapshot.pluginUiProjection, comparisons, source);
+            snapshot = retainPluginUiProjectionValue(snapshot, derivePluginUiProjectionUnion(nextMembers, nextSelections ?? new Map(), comparisons,
+                new Map(source.supplyFacts.map(({ member, facts }) => [member, { facts }])))) as PluginUiProjectionUnion;
+            if (snapshot.pluginUiProjection) {
+                const model = publishProjectionPluginIndex(snapshot.pluginUiProjection,
+                    prepareProjectionPluginIndex(snapshot.pluginUiProjection, previousIndex));
+                if (model !== snapshot.pluginUiProjection) snapshot = Object.freeze({ ...snapshot, pluginUiProjection: model });
+            }
+            source = refreshUnionDeclaredOrigins(source, snapshot.pluginUiProjection, source.pluginIds);
             members = [...nextMembers];
             selections = nextSelections ? new Map(nextSelections) : undefined;
             publishedMembers = nextMembers;
@@ -300,22 +339,20 @@ export function createPluginUiProjectionUnionPublication() {
     };
 }
 
-function sameRelevantSelectableOrigins(
-    left: readonly PluginMachineExecutionOriginV1[] | undefined,
-    right: readonly PluginMachineExecutionOriginV1[] | undefined,
-    pluginIds: ReadonlySet<string>,
+/** The exact fleet-agreement input, not the report's origin-list representation. */
+function memberHasSelectableDeclaration(
+    member: PluginUiProjectionUnionMember,
+    pluginId: string,
+    projection = member.projection,
 ): boolean {
-    if (left === right) return true;
-    let leftIndex = 0;
-    let rightIndex = 0;
-    for (;;) {
-        while (leftIndex < (left?.length ?? 0) && !pluginIds.has(getPluginMachineExecutionOriginRef(left![leftIndex]!).pluginId)) leftIndex++;
-        while (rightIndex < (right?.length ?? 0) && !pluginIds.has(getPluginMachineExecutionOriginRef(right![rightIndex]!).pluginId)) rightIndex++;
-        const leftOrigin = left?.[leftIndex++];
-        const rightOrigin = right?.[rightIndex++];
-        if (!leftOrigin || !rightOrigin) return leftOrigin === rightOrigin;
-        if (!arePluginMachineExecutionOriginsEqual(leftOrigin, rightOrigin)) return false;
-    }
+    if (!projection || member.phase !== 'current' || !member.interactionEnabled || !member.selectableExecutionOrigins?.length) return false;
+    const currentMember = { ...member, projection };
+    return declarationMaps(projection).some(map => Object.values(map).some(entry => {
+        const record = asRecord(entry);
+        if (record?.pluginId !== pluginId) return false;
+        const origin = resolveMemberEntryExecutionOrigin(currentMember, record);
+        return origin !== null && member.selectableExecutionOrigins?.some(selectable => arePluginMachineExecutionOriginsEqual(selectable, origin));
+    }));
 }
 
 /** Mounted and AppShell compositions have separate, explicitly scoped lifetimes. */
@@ -325,12 +362,14 @@ export function createInstalledPluginUiProjectionPublication() {
         runtime: PluginUiProjectionModel | null;
         materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined;
         selections: PluginUiProjectionUnionOriginSelections | undefined;
+        completeUiPluginIds: ReadonlySet<string> | undefined;
     }> | null = null;
     let publishedInputs: Readonly<{
         installed: readonly PluginUiProjectionModel[];
         runtime: PluginUiProjectionModel | null;
         materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined;
         selections: PluginUiProjectionUnionOriginSelections | undefined;
+        completeUiPluginIds: ReadonlySet<string> | undefined;
     }> | null = null;
     let comparisons = createDeclarationComparisons();
     let snapshot: PluginUiProjectionModel | null = null;
@@ -340,13 +379,16 @@ export function createInstalledPluginUiProjectionPublication() {
         getSnapshot: (): PluginUiProjectionModel | null => snapshot,
         publish(installed: readonly PluginUiProjectionModel[], runtime: PluginUiProjectionModel | null,
             materializations?: Readonly<Record<string, PluginMachineMaterializationV1>>,
-            selections?: PluginUiProjectionUnionOriginSelections): PluginUiProjectionModel | null {
+            selections?: PluginUiProjectionUnionOriginSelections,
+            completeUiPluginIds?: ReadonlySet<string>): PluginUiProjectionModel | null {
             if (publishedInputs && publishedInputs.installed === installed && publishedInputs.runtime === runtime
-                && publishedInputs.materializations === materializations && publishedInputs.selections === selections) return snapshot;
+                && publishedInputs.materializations === materializations && publishedInputs.selections === selections
+                && publishedInputs.completeUiPluginIds === completeUiPluginIds) return snapshot;
             if (inputs && inputs.runtime === runtime && arePluginUiMaterializationsEquivalent(inputs.materializations, materializations)
                 && installed.length === inputs.installed.length && installed.every((model, index) => model === inputs!.installed[index])
-                && arePluginExecutionOriginSelectionsEquivalent(inputs.selections, selections)) {
-                publishedInputs = { installed, runtime, materializations, selections };
+                && arePluginExecutionOriginSelectionsEquivalent(inputs.selections, selections)
+                && sameCompleteUiPluginIds(inputs.completeUiPluginIds, completeUiPluginIds)) {
+                publishedInputs = { installed, runtime, materializations, selections, completeUiPluginIds };
                 return snapshot;
             }
             if (installed.length === 0) {
@@ -357,25 +399,32 @@ export function createInstalledPluginUiProjectionPublication() {
                 runtimeIndex = readPublishedProjectionPluginIndex(runtime);
                 installedIndexes = new Map();
                 comparisons = createDeclarationComparisons();
-                inputs = { installed: [], runtime, materializations, selections: selections ? new Map(selections) : undefined };
-                publishedInputs = { installed, runtime, materializations, selections };
+                inputs = { installed: [], runtime, materializations, selections: selections ? new Map(selections) : undefined,
+                    completeUiPluginIds: completeUiPluginIds ? new Set(completeUiPluginIds) : undefined };
+                publishedInputs = { installed, runtime, materializations, selections, completeUiPluginIds };
                 return snapshot;
             }
             const nextRuntimeIndex = readPublishedProjectionPluginIndex(runtime);
             const previousIndex = readPublishedProjectionPluginIndex(snapshot);
+            // The existing comparison owner retains only current inputs.
+            // Stable owned plugin slices reuse their prepared record sets;
+            // replacing one runtime slice cannot retain its retired rows.
+            comparisons = retainDeclarationComparisons([...installed,
+                ...(nextRuntimeIndex ? Object.values(nextRuntimeIndex.slices).map(slice => slice.model) : runtime ? [runtime] : [])], comparisons);
             if (inputs && runtime && runtimeIndex && nextRuntimeIndex && previousIndex
                 && installed.length === inputs.installed.length && installed.every((model, index) => model === inputs!.installed[index])) {
                 const ids = new Set([...Object.keys(runtimeIndex.slices), ...Object.keys(nextRuntimeIndex.slices),
                     ...[...installedIndexes.values()].flatMap(index => Object.keys(index.slices))]);
                 const changed = new Set([...ids].filter(id => runtimeIndex!.slices[id] !== nextRuntimeIndex.slices[id]
                     || !samePluginUiMaterializationFacts(inputs!.materializations?.[id], materializations?.[id])
-                    || !sameOptionalOrigin(inputs!.selections?.get(id), selections?.get(id))));
+                    || !sameOptionalOrigin(inputs!.selections?.get(id), selections?.get(id))
+                    || (inputs!.completeUiPluginIds === undefined || inputs!.completeUiPluginIds.has(id))
+                        !== (completeUiPluginIds === undefined || completeUiPluginIds.has(id))));
                 snapshot = publishInstalledPluginChanges(snapshot, installed, installedIndexes, runtime, nextRuntimeIndex,
-                    previousIndex, materializations, selections, changed, comparisons);
+                    previousIndex, materializations, selections, changed, comparisons, completeUiPluginIds);
             } else {
-                comparisons = retainDeclarationComparisons(runtime ? [...installed, runtime] : installed, comparisons);
                 snapshot = retainPluginUiProjectionValue(snapshot,
-                    deriveInstalledPluginUiProjection(installed, runtime, materializations, selections, comparisons)) as PluginUiProjectionModel | null;
+                    deriveInstalledPluginUiProjection(installed, runtime, materializations, selections, comparisons, completeUiPluginIds)) as PluginUiProjectionModel | null;
                 if (snapshot) snapshot = publishProjectionPluginIndex(snapshot, prepareProjectionPluginIndex(snapshot, previousIndex));
                 const nextInstalled = new Map<PluginUiProjectionModel, PublishedProjectionPluginIndex>();
                 for (const model of installed) nextInstalled.set(model, installedIndexes.get(model)
@@ -383,11 +432,16 @@ export function createInstalledPluginUiProjectionPublication() {
                 installedIndexes = nextInstalled;
             }
             runtimeIndex = nextRuntimeIndex;
-            inputs = { installed: [...installed], runtime, materializations, selections: selections ? new Map(selections) : undefined };
-            publishedInputs = { installed, runtime, materializations, selections };
+            inputs = { installed: [...installed], runtime, materializations, selections: selections ? new Map(selections) : undefined,
+                completeUiPluginIds: completeUiPluginIds ? new Set(completeUiPluginIds) : undefined };
+            publishedInputs = { installed, runtime, materializations, selections, completeUiPluginIds };
             return snapshot;
         },
     };
+}
+
+function sameCompleteUiPluginIds(left: ReadonlySet<string> | undefined, right: ReadonlySet<string> | undefined): boolean {
+    return left === right || Boolean(left && right && left.size === right.size && [...left].every(id => right.has(id)));
 }
 
 function readString(value: unknown): string | null {
@@ -414,13 +468,6 @@ function asRecord(value: unknown): UnknownRecord | null {
     return value && typeof value === 'object' && !Array.isArray(value)
         ? value as UnknownRecord
         : null;
-}
-
-function stamp<T extends UnknownRecord>(entry: T, origin: PluginUiContributionOriginV1): T {
-    return Object.freeze({
-        ...entry,
-        [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: origin,
-    }) as T;
 }
 
 /**
@@ -454,8 +501,18 @@ function selectedOriginOwnsEntry(input: Readonly<{
 }>): boolean {
     const pluginId = readString(asRecord(input.entry)?.pluginId);
     if (!pluginId) return false;
-    const selectedOrigin = input.selectedOriginsByPluginId.get(pluginId);
     const producerOrigin = readPluginUiProjectionEntryExecutionOrigin(input.entry);
+    return selectedOriginOwnsProducer({ ...input, pluginId, producerOrigin });
+}
+
+function selectedOriginOwnsProducer(input: Readonly<{
+    selectedOriginsByPluginId: PluginUiProjectionUnionOriginSelections;
+    pluginId: string;
+    producerOrigin: PluginMachineExecutionOriginV1 | null;
+    machineId: string;
+}>): boolean {
+    const { pluginId, producerOrigin } = input;
+    const selectedOrigin = input.selectedOriginsByPluginId.get(pluginId);
     return selectedOrigin !== undefined
         && producerOrigin !== null
         && getPluginMachineExecutionOriginRef(selectedOrigin).pluginId === pluginId
@@ -468,11 +525,15 @@ function memberHasAdmittedContribution(
     member: PluginUiProjectionUnionMember,
     selectedOriginsByPluginId: PluginUiProjectionUnionOriginSelections,
     inspectDeclarations = true,
+    resourceOrigins?: readonly PluginMachineExecutionOriginV1[],
 ): boolean {
     const projection = member.projection;
     return projection !== null && ((inspectDeclarations && declarationMaps(projection).some(map => Object.values(map).some(entry => readString(asRecord(entry)?.pluginId) !== null)))
-        || Object.values(projection.resourcesById).some(entry => resourceHasCurrentProducerOrigin(projection, entry)
-            && selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId })));
+        || (resourceOrigins ? resourceOrigins.some(producerOrigin => selectedOriginOwnsProducer({
+            selectedOriginsByPluginId, producerOrigin, machineId: member.machineId,
+            pluginId: getPluginMachineExecutionOriginRef(producerOrigin).pluginId,
+        })) : Object.values(projection.resourcesById).some(entry => resourceHasCurrentProducerOrigin(projection, entry)
+            && selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId }))));
 }
 
 function declarationMaps(model: PluginUiProjectionModel): readonly Readonly<Record<string, unknown>>[] {
@@ -550,6 +611,7 @@ function pluginSliceKeys(models: readonly (PluginUiProjectionModel | undefined |
 
 function replacePublishedPluginSlices(previous: PublishedProjectionPluginIndex,
     changed: ReadonlyMap<string, PluginUiProjectionModel | null>): PublishedProjectionPluginIndex {
+    if (changed.size === 0) return previous;
     const slices = { ...previous.slices };
     for (const [id, sliceModel] of changed) {
         const slice = sliceModel ? prepareProjectionPluginIndex(sliceModel, previous).slices[id] : undefined;
@@ -565,7 +627,8 @@ function publishInstalledPluginChanges(previous: PluginUiProjectionModel | null,
     installed: readonly PluginUiProjectionModel[], installedIndexes: ReadonlyMap<PluginUiProjectionModel, PublishedProjectionPluginIndex>,
     runtime: PluginUiProjectionModel, runtimeIndex: PublishedProjectionPluginIndex, previousIndex: PublishedProjectionPluginIndex,
     materializations: Readonly<Record<string, PluginMachineMaterializationV1>> | undefined,
-    selections: PluginUiProjectionUnionOriginSelections | undefined, changed: ReadonlySet<string>, comparisons: DeclarationComparisons): PluginUiProjectionModel {
+    selections: PluginUiProjectionUnionOriginSelections | undefined, changed: ReadonlySet<string>, comparisons: DeclarationComparisons,
+    completeUiPluginIds?: ReadonlySet<string>): PluginUiProjectionModel {
     const replacements = new Map<UnionMapKey, Map<string, unknown>>();
     const removed = new Map<UnionMapKey, Set<string>>();
     const changedModels = new Map<string, PluginUiProjectionModel | null>();
@@ -576,7 +639,7 @@ function publishInstalledPluginChanges(previous: PluginUiProjectionModel | null,
         });
         const runtimeSlice = runtimeIndex.slices[id]?.model ?? null;
         const derived = deriveInstalledPluginUiProjection(installedSlices, runtimeSlice,
-            materializations?.[id] ? { [id]: materializations[id]! } : undefined, selections, comparisons);
+            materializations?.[id] ? { [id]: materializations[id]! } : undefined, selections, comparisons, completeUiPluginIds);
         const keys = pluginSliceKeys([previousIndex.slices[id]?.model, runtimeSlice, ...installedSlices]);
         const retained = retainPluginUnionSlice(previous, derived, keys);
         changedModels.set(id, derived ? Object.freeze({ ...derived, ...Object.fromEntries(retained) }) as PluginUiProjectionModel : null);
@@ -621,12 +684,17 @@ function publishInstalledPluginChanges(previous: PluginUiProjectionModel | null,
 }
 
 type UnionSourceModelIndex = Readonly<{
+    publicationIndex: PublishedProjectionPluginIndex;
+    declarationComparison: ProjectionDeclarationComparison;
     slices: ReadonlyMap<string, PluginUiProjectionModel>;
     keysByPlugin: ReadonlyMap<string, ReadonlyMap<UnionMapKey, ReadonlySet<string>>>;
     hasDeclarations: boolean;
     pictureOrdinals: ReadonlyMap<string, number>;
+    resourceOrigins: readonly PluginMachineExecutionOriginV1[];
 }>;
 type UnionPublicationSource = Readonly<{
+    /** Validated descriptive carriers live only with these exact current inputs. */
+    supplyFacts: readonly Readonly<{ member: PluginUiProjectionUnionMember; facts: Map<UnknownRecord, PluginUiContributionSupplyV1> }>[];
     modelIndexes: ReadonlyMap<PluginUiProjectionModel, UnionSourceModelIndex>;
     slices: ReadonlyMap<PluginUiProjectionModel, ReadonlyMap<string, PluginUiProjectionModel>>;
     pluginIds: ReadonlySet<string>;
@@ -637,9 +705,71 @@ type UnionPublicationSource = Readonly<{
     pictureSources: readonly Readonly<{ machineId: string; serverKey: string; ordinals: ReadonlyMap<string, number> }>[];
 }>;
 
+function samePluginUnionInputs(leftMembers: readonly PluginUiProjectionUnionMember[], rightMembers: readonly PluginUiProjectionUnionMember[],
+    leftSource: Pick<UnionPublicationSource, 'modelIndexes' | 'slices'>,
+    rightSource: Pick<UnionPublicationSource, 'modelIndexes' | 'slices'>, id: string, declarationsOnly = false): boolean {
+    const contributing = (members: readonly PluginUiProjectionUnionMember[], source: typeof leftSource) => members.filter(member => {
+        if (!readString(member.machineId) || !member.projection) return false;
+        const keys = source.modelIndexes.get(member.projection)?.keysByPlugin.get(id);
+        return keys && [...keys].some(([key, ids]) => key !== 'installedPackagesById' && ids.size > 0);
+    }).sort((left, right) => left.machineId.localeCompare(right.machineId)
+        || (left.serverIdentityId ?? left.serverId ?? '').localeCompare(right.serverIdentityId ?? right.serverId ?? ''));
+    const left = contributing(leftMembers, leftSource);
+    const right = contributing(rightMembers, rightSource);
+    return left.length === right.length && left.every((member, index) => {
+        const other = right[index]!;
+        const model = member.projection!;
+        const next = other.projection!;
+        const beforeIndex = leftSource.modelIndexes.get(model)!;
+        const afterIndex = rightSource.modelIndexes.get(next)!;
+        if (member.machineId !== other.machineId || member.serverId !== other.serverId
+            || member.serverIdentityId !== other.serverIdentityId
+            || beforeIndex.publicationIndex.slices[id] !== afterIndex.publicationIndex.slices[id]
+            || !samePluginUiMaterializationFacts(member.materializationsByPluginId?.[id], other.materializationsByPluginId?.[id])) return false;
+        // Declaration correspondence consumes no generation or live phase.
+        // Those facts still invalidate the runtime publication below.
+        return declarationsOnly || (member.phase === other.phase
+            && member.interactionEnabled === other.interactionEnabled && member.unavailableReasonCode === other.unavailableReasonCode
+            && model.generation === next.generation
+            && (model.diagnostics === next.diagnostics || memberHasActivationRefusal(member, id) === memberHasActivationRefusal(other, id))
+            && [...beforeIndex.keysByPlugin.get(id)?.get('atmospherePicturesById') ?? []].every(key =>
+                beforeIndex.pictureOrdinals.get(key) === afterIndex.pictureOrdinals.get(key)));
+    });
+}
+
+function refreshUnionDeclaredOrigins(source: UnionPublicationSource, published: PluginUiProjectionModel | null,
+    changed: ReadonlySet<string>): UnionPublicationSource {
+    if (changed.size === 0) return source;
+    const declaredOrigins = new Map(source.declaredOrigins);
+    for (const id of changed) declaredOrigins.set(id, readPublishedPluginOrigins(source.keysByPlugin.get(id), published));
+    return { ...source, declaredOrigins };
+}
+
+function readPublishedPluginOrigins(keys: ReadonlyMap<UnionMapKey, ReadonlySet<string>> | undefined,
+    published: PluginUiProjectionModel | null): readonly PluginMachineExecutionOriginV1[] {
+    const origins: PluginMachineExecutionOriginV1[] = [];
+    for (const key of DECLARATION_MAP_KEYS) for (const entryId of keys?.get(key) ?? []) {
+        for (const supply of readPluginUiContributionSupplies(published?.[key][entryId])) {
+            const origin = supply.executionOrigin;
+            if (origin && getPluginMachineExecutionOriginRef(origin).machineId === supply.machineId
+                && !origins.some(previous => arePluginMachineExecutionOriginsEqual(previous, origin))) origins.push(origin);
+        }
+    }
+    return origins;
+}
+
 /** Prepare only current source rows, before any controller selection feedback. */
 function prepareUnionPublicationSource(members: readonly PluginUiProjectionUnionMember[], published: PluginUiProjectionModel | null,
-    comparisons: DeclarationComparisons, previous: UnionPublicationSource | null): UnionPublicationSource {
+    comparisons: DeclarationComparisons, previous: UnionPublicationSource | null,
+    previousMembers: readonly PluginUiProjectionUnionMember[] = []): UnionPublicationSource {
+    const supplyFacts = members.map((member, index) => {
+        const preceding = previous?.supplyFacts[index];
+        const sameTarget = (other: PluginUiProjectionUnionMember) => member.machineId === other.machineId
+            && member.serverId === other.serverId && member.serverIdentityId === other.serverIdentityId;
+        const old = preceding && sameTarget(preceding.member) ? preceding : previous?.supplyFacts.find(value => sameTarget(value.member));
+        return old && samePluginUiProjectionUnionMemberInputs(old.member, member, true) ? old
+            : { member, facts: new Map<UnknownRecord, PluginUiContributionSupplyV1>() };
+    });
     const modelIndexes = new Map<PluginUiProjectionModel, UnionSourceModelIndex>();
     const slices = new Map<PluginUiProjectionModel, ReadonlyMap<string, PluginUiProjectionModel>>();
     const pluginIds = new Set<string>();
@@ -648,48 +778,67 @@ function prepareUnionPublicationSource(members: readonly PluginUiProjectionUnion
     const sortedMembers = [...members].sort((left, right) => left.machineId.localeCompare(right.machineId)
         || (left.serverIdentityId ?? left.serverId ?? '').localeCompare(right.serverIdentityId ?? right.serverId ?? ''));
     const pictureOrdinals = new Map<PluginUiProjectionModel, ReadonlyMap<string, number>>();
+    // Make every reusable current dictionary visible before normalizing any
+    // new one. A new source may converge on a later member's existing content.
+    for (const member of sortedMembers) {
+        const model = member.projection;
+        if (!model) continue;
+        const before = previousMembers.find(old => old.machineId === member.machineId
+            && old.serverId === member.serverId && old.serverIdentityId === member.serverIdentityId);
+        const index = previous?.modelIndexes.get(model)
+            ?? (before?.projection ? previous?.modelIndexes.get(before.projection) : undefined);
+        if (index && (previous?.modelIndexes.has(model)
+            || (before?.projection && UNION_MAP_KEYS.every(key => before.projection![key] === model[key])))) {
+            comparisons.projections.set(model, index.declarationComparison);
+        }
+    }
     for (const member of sortedMembers) {
         const model = member.projection;
         if (!model || slices.has(model)) continue;
-        const preceding = previous?.modelIndexes.get(model);
-        if (preceding) {
+        const previousMember = previousMembers.find(old => old.machineId === member.machineId
+            && old.serverId === member.serverId && old.serverIdentityId === member.serverIdentityId);
+        const preceding = previous?.modelIndexes.get(model)
+            ?? (previousMember?.projection ? previous?.modelIndexes.get(previousMember.projection) : undefined);
+        if (preceding && previous?.modelIndexes.has(model)) {
+            comparisons.projections.set(model, preceding.declarationComparison);
+            for (const slice of preceding.slices.values()) comparisons.projections.set(slice, preceding.declarationComparison);
             modelIndexes.set(model, preceding);
             slices.set(model, preceding.slices);
             hasDeclarations.set(model, preceding.hasDeclarations);
             pictureOrdinals.set(model, preceding.pictureOrdinals);
             continue;
         }
-        const groups = new Map<string, Partial<Record<UnionMapKey, Record<string, unknown>>>>();
-        const modelPluginKeys = new Map<string, Map<UnionMapKey, Set<string>>>();
-        let declarations = false;
-        for (const mapKey of UNION_MAP_KEYS) {
-            for (const [key, entry] of Object.entries(model[mapKey])) {
-                const id = mapKey === 'installedPackagesById' ? key : readString(asRecord(entry)?.pluginId);
-                if (!id) continue;
-                if (mapKey !== 'resourcesById' && mapKey !== 'installedPackagesById') declarations = true;
-                const group = groups.get(id) ?? {};
-                const map = group[mapKey] ??= {};
-                Object.defineProperty(map, key, { value: entry, enumerable: true, configurable: true, writable: true });
-                groups.set(id, group);
-                const pluginKeys = modelPluginKeys.get(id) ?? new Map<UnionMapKey, Set<string>>();
-                const keys = pluginKeys.get(mapKey) ?? new Set<string>();
-                keys.add(key);
-                pluginKeys.set(mapKey, keys);
-                modelPluginKeys.set(id, pluginKeys);
-            }
-        }
-        const modelSlices = new Map<string, PluginUiProjectionModel>();
-        for (const [id, maps] of groups) {
-            const emptyMaps = Object.fromEntries(UNION_MAP_KEYS.map(key => [key, Object.freeze(maps[key] ?? {})]));
-            // Every union-consumed dictionary is indexed above; scalar source
-            // diagnostics and generation keep their original canonical facts.
-            modelSlices.set(id, Object.freeze({ ...model, ...emptyMaps }) as PluginUiProjectionModel);
-        }
+        const sameDictionaries = previousMember?.projection && UNION_MAP_KEYS.every(key => previousMember.projection![key] === model[key]);
+        const publicationIndex = readPublishedProjectionPluginIndex(model)
+            ?? (sameDictionaries && preceding ? preceding.publicationIndex : prepareProjectionPluginIndex(model, preceding?.publicationIndex));
+        const modelSlices = new Map(Object.entries(publicationIndex.slices).map(([id, slice]) => {
+            const old = preceding?.slices.get(id);
+            return [id, old && preceding?.publicationIndex.slices[id] === slice && old.generation === model.generation
+                && old.diagnostics === model.diagnostics ? old
+                : Object.freeze({ ...slice.model, generation: model.generation, diagnostics: model.diagnostics })] as const;
+        }));
+        // Currentness roots and their plugin slices are wrappers around the
+        // same immutable declaration dictionaries. Rebind this owner's existing
+        // comparison facts instead of reconstructing portable JSON families.
+        const declarationComparison = sameDictionaries && preceding ? preceding.declarationComparison
+            : readProjectionDeclarationComparison(model, comparisons);
+        comparisons.projections.set(model, declarationComparison);
+        for (const slice of modelSlices.values()) comparisons.projections.set(slice, declarationComparison);
+        const modelPluginKeys = publicationIndex === preceding?.publicationIndex ? preceding.keysByPlugin
+            : new Map([...modelSlices].map(([id, slice]) => [id, pluginSliceKeys([slice])]));
+        const declarations = [...modelPluginKeys.values()].some(keys => DECLARATION_MAP_KEYS.some(key => (keys.get(key)?.size ?? 0) > 0));
         slices.set(model, modelSlices);
         hasDeclarations.set(model, declarations);
-        const ordinals = new Map(Object.keys(model.atmospherePicturesById).map((key, index) => [key, index]));
+        const ordinals = sameDictionaries && preceding ? preceding.pictureOrdinals
+            : new Map(Object.keys(model.atmospherePicturesById).map((key, index) => [key, index]));
+        const resourceOrigins: PluginMachineExecutionOriginV1[] = [];
+        if (!sameDictionaries || !preceding) for (const entry of Object.values(model.resourcesById)) {
+            const origin = readCurrentResourceProducerOrigin(model, entry);
+            if (origin && !resourceOrigins.some(previous => arePluginMachineExecutionOriginsEqual(previous, origin))) resourceOrigins.push(origin);
+        }
         pictureOrdinals.set(model, ordinals);
-        modelIndexes.set(model, { slices: modelSlices, keysByPlugin: modelPluginKeys, hasDeclarations: declarations, pictureOrdinals: ordinals });
+        modelIndexes.set(model, { publicationIndex, declarationComparison, slices: modelSlices, keysByPlugin: modelPluginKeys, hasDeclarations: declarations,
+            pictureOrdinals: ordinals, resourceOrigins: sameDictionaries && preceding ? preceding.resourceOrigins : Object.freeze(resourceOrigins) });
     }
     for (const index of modelIndexes.values()) for (const [id, maps] of index.keysByPlugin) {
         const combined = keysByPlugin.get(id) ?? new Map<UnionMapKey, Set<string>>();
@@ -702,36 +851,48 @@ function prepareUnionPublicationSource(members: readonly PluginUiProjectionUnion
         keysByPlugin.set(id, combined);
     }
     const conflictSensitivePluginIds = new Set<string>();
-    const declaredOrigins = new Map<string, PluginMachineExecutionOriginV1[]>();
+    const declaredOrigins = new Map<string, readonly PluginMachineExecutionOriginV1[]>();
+    const prepared = { modelIndexes, slices };
     for (const id of pluginIds) {
+        if (previous && samePluginUnionInputs(previousMembers, members, previous, prepared, id, true)) {
+            if (previous.conflictSensitivePluginIds.has(id)) conflictSensitivePluginIds.add(id);
+            declaredOrigins.set(id, previous.declaredOrigins.get(id) ?? []);
+            continue;
+        }
         const supplying = members.filter((member): member is PluginUiProjectionUnionMember & { projection: PluginUiProjectionModel } => (
             member.projection !== null && slices.get(member.projection)?.has(id) === true
         ));
         const first = supplying[0];
         if (first && DECLARATION_MAP_KEYS.some(key => (keysByPlugin.get(id)?.get(key)?.size ?? 0) > 0)
             && supplying.slice(1).some(member => !samePluginDeclarationContent(first, member, id, comparisons))) conflictSensitivePluginIds.add(id);
-        const origins: PluginMachineExecutionOriginV1[] = [];
-        for (const key of DECLARATION_MAP_KEYS) {
-            for (const entryId of keysByPlugin.get(id)?.get(key) ?? []) for (const supply of readPluginUiContributionSupplies(published?.[key][entryId])) {
-                const origin = supply.executionOrigin;
-                if (origin && getPluginMachineExecutionOriginRef(origin).machineId === supply.machineId
-                    && !origins.some(previous => arePluginMachineExecutionOriginsEqual(previous, origin))) origins.push(origin);
-            }
-        }
-        declaredOrigins.set(id, origins);
+        declaredOrigins.set(id, readPublishedPluginOrigins(keysByPlugin.get(id), published));
     }
     const pictureSources = sortedMembers.flatMap(member => member.projection ? [{ machineId: member.machineId,
         serverKey: member.serverIdentityId ?? member.serverId ?? '', ordinals: pictureOrdinals.get(member.projection)! }] : []);
-    return { modelIndexes, slices, pluginIds, conflictSensitivePluginIds, hasDeclarations, keysByPlugin, declaredOrigins, pictureSources };
+    return { supplyFacts, modelIndexes, slices, pluginIds, conflictSensitivePluginIds, hasDeclarations, keysByPlugin, declaredOrigins, pictureSources };
 }
 
-function pluginUnionMembers(members: readonly PluginUiProjectionUnionMember[], source: UnionPublicationSource, pluginId: string): readonly PluginUiProjectionUnionMember[] {
-    return members.map(member => ({ ...member,
-        projection: member.projection ? source.slices.get(member.projection)?.get(pluginId) ?? null : null,
-        materializationsByPluginId: member.materializationsByPluginId?.[pluginId]
-            ? { [pluginId]: member.materializationsByPluginId[pluginId]! } : undefined,
-        selectableExecutionOrigins: member.selectableExecutionOrigins?.filter(origin => getPluginMachineExecutionOriginRef(origin).pluginId === pluginId),
-    }));
+function pluginUnionMembers(members: readonly PluginUiProjectionUnionMember[], source: UnionPublicationSource, pluginId: string,
+    previousSource: UnionPublicationSource) {
+    const supplyFacts = new Map<PluginUiProjectionUnionMember, UnionSupplyFacts>();
+    const scopedMembers = members.map((member, index) => {
+        const scoped = { ...member,
+            // The source slice, unlike an output-index dictionary slice, carries
+            // this exact current root's generation and activation diagnostics.
+            projection: member.projection ? source.slices.get(member.projection)?.get(pluginId) ?? null : null,
+            materializationsByPluginId: member.materializationsByPluginId?.[pluginId]
+                ? { [pluginId]: member.materializationsByPluginId[pluginId]! } : undefined,
+            selectableExecutionOrigins: member.selectableExecutionOrigins?.filter(origin => getPluginMachineExecutionOriginRef(origin).pluginId === pluginId),
+        };
+        const facts = source.supplyFacts[index];
+        const before = previousSource.supplyFacts[index];
+        const sameTarget = (other: PluginUiProjectionUnionMember) => member.machineId === other.machineId
+            && member.serverId === other.serverId && member.serverIdentityId === other.serverIdentityId;
+        const previous = before && sameTarget(before.member) ? before : previousSource.supplyFacts.find(value => sameTarget(value.member));
+        if (facts) supplyFacts.set(scoped, { facts: facts.facts, previousFacts: previous?.facts });
+        return scoped;
+    });
+    return { members: scopedMembers, supplyFacts };
 }
 
 function retainPluginUnionSlice(previous: PluginUiProjectionModel | null, next: PluginUiProjectionModel | null,
@@ -748,18 +909,23 @@ function retainPluginUnionSlice(previous: PluginUiProjectionModel | null, next: 
 
 /** Report changes reuse every other published row; only dictionary shells change. */
 function publishPluginUnionChanges(snapshot: PluginUiProjectionUnion, members: readonly PluginUiProjectionUnionMember[],
-    selections: PluginUiProjectionUnionOriginSelections, source: UnionPublicationSource, changed: ReadonlySet<string>, comparisons: DeclarationComparisons): PluginUiProjectionUnion {
+    selections: PluginUiProjectionUnionOriginSelections, source: UnionPublicationSource, changed: ReadonlySet<string>, comparisons: DeclarationComparisons,
+    previousSource: UnionPublicationSource): PluginUiProjectionUnion {
     const replacements = new Map<UnionMapKey, Map<string, unknown>>();
     const removed = new Map<UnionMapKey, Set<string>>();
     const changedModels = new Map<string, PluginUiProjectionModel | null>();
     for (const id of changed) {
-        const derived = derivePluginUiProjectionUnion(pluginUnionMembers(members, source, id), selections, comparisons);
-        const maps = retainPluginUnionSlice(snapshot.pluginUiProjection, derived.pluginUiProjection, source.keysByPlugin.get(id));
+        const scoped = pluginUnionMembers(members, source, id, previousSource);
+        const derived = derivePluginUiProjectionUnion(scoped.members, selections, comparisons, scoped.supplyFacts);
+        const pluginKeys = new Map(UNION_MAP_KEYS.map(key => [key, new Set([
+            ...previousSource.keysByPlugin.get(id)?.get(key) ?? [], ...source.keysByPlugin.get(id)?.get(key) ?? [],
+        ])]));
+        const maps = retainPluginUnionSlice(snapshot.pluginUiProjection, derived.pluginUiProjection, pluginKeys);
         changedModels.set(id, derived.pluginUiProjection ? Object.freeze({ ...derived.pluginUiProjection, ...Object.fromEntries(maps) }) as PluginUiProjectionModel : null);
         for (const key of UNION_MAP_KEYS) {
             const updates = replacements.get(key) ?? new Map<string, unknown>();
             const keys = removed.get(key) ?? new Set<string>();
-            for (const entryId of source.keysByPlugin.get(id)?.get(key) ?? []) {
+            for (const entryId of pluginKeys.get(key) ?? []) {
                 keys.add(entryId);
                 const map = maps.get(key)!;
                 if (Object.hasOwn(map, entryId)) updates.set(entryId, map[entryId]);
@@ -768,22 +934,20 @@ function publishPluginUnionChanges(snapshot: PluginUiProjectionUnion, members: r
             removed.set(key, keys);
         }
     }
-    const admitted = members.filter((member): member is PluginUiProjectionUnionMember & { projection: PluginUiProjectionModel } => (
-        readString(member.machineId) !== null && member.projection !== null
-        && (source.hasDeclarations.get(member.projection) === true || memberHasAdmittedContribution(member, selections, false))
-    )).sort((left, right) => left.machineId.localeCompare(right.machineId)
-        || (left.serverIdentityId ?? left.serverId ?? '').localeCompare(right.serverIdentityId ?? right.serverId ?? ''));
-    let modelChanged = false;
+    const { phase, hasEstablishingMembers, soleMember, admittedContributing: admitted, establishingFacts, emptyProjection }
+        = readUnionPublicationFacts(members, selections, source);
     const maps: Partial<Record<UnionMapKey, Readonly<Record<string, unknown>>>> = {};
     for (const key of UNION_MAP_KEYS) {
         const old = snapshot.pluginUiProjection?.[key] ?? EMPTY_PLUGIN_UI_PROJECTION[key];
-        const updates = replacements.get(key)!;
-        const removals = removed.get(key)!;
-        if ([...removals].every(id => Object.hasOwn(old, id) === updates.has(id) && (!updates.has(id) || old[id] === updates.get(id)))) {
+        const updates = replacements.get(key) ?? new Map<string, unknown>();
+        const removals = removed.get(key) ?? new Set<string>();
+        const pictureOrderChanged = key === 'atmospherePicturesById' && (source.pictureSources.length !== previousSource.pictureSources.length
+            || source.pictureSources.some((member, index) => member.machineId !== previousSource.pictureSources[index]?.machineId
+                || member.serverKey !== previousSource.pictureSources[index]?.serverKey || member.ordinals !== previousSource.pictureSources[index]?.ordinals));
+        if (!pictureOrderChanged && [...removals].every(id => Object.hasOwn(old, id) === updates.has(id) && (!updates.has(id) || old[id] === updates.get(id)))) {
             maps[key] = old;
             continue;
         }
-        modelChanged = true;
         const map: Record<string, unknown> = { ...old };
         for (const id of removals) delete map[id];
         for (const [id, value] of updates) Object.defineProperty(map, id, { value, enumerable: true, configurable: true, writable: true });
@@ -799,26 +963,44 @@ function publishPluginUnionChanges(snapshot: PluginUiProjectionUnion, members: r
             };
             const ordered = Object.keys(map).map(id => ({ id, coordinate: coordinate(id) }))
                 .sort((left, right) => left.coordinate[0] - right.coordinate[0] || left.coordinate[1] - right.coordinate[1]);
-            maps[key] = Object.freeze(Object.fromEntries(ordered.map(({ id }) => [id, map[id]])));
+            const oldKeys = Object.keys(old);
+            maps[key] = ordered.length === oldKeys.length && ordered.every(({ id }, index) => id === oldKeys[index] && old[id] === map[id])
+                ? old : Object.freeze(Object.fromEntries(ordered.map(({ id }) => [id, map[id]])));
         } else maps[key] = Object.freeze(map);
     }
+    const modelChanged = UNION_MAP_KEYS.some(key => maps[key] !== (snapshot.pluginUiProjection?.[key] ?? EMPTY_PLUGIN_UI_PROJECTION[key]));
     const generation = resolveUnionGeneration(admitted);
-    const interactionEnabled = snapshot.phase === 'current' && admitted.some(member => member.phase === 'current' && member.interactionEnabled);
+    const interactionEnabled = phase === 'current' && admitted.some(member => member.phase === 'current' && member.interactionEnabled);
     let pluginUiProjection = snapshot.pluginUiProjection;
     if (admitted.length === 0) {
-        const establishing = pluginUiProjection?.establishingExecutionTargetsByPluginId;
-        pluginUiProjection = establishing && Object.keys(establishing).length > 0
-            ? Object.freeze({ ...EMPTY_PLUGIN_UI_PROJECTION, establishingExecutionTargetsByPluginId: establishing }) : null;
-    } else if (modelChanged || pluginUiProjection?.generation !== generation) {
-        pluginUiProjection = Object.freeze({ ...(pluginUiProjection ?? EMPTY_PLUGIN_UI_PROJECTION), ...maps, generation }) as PluginUiProjectionModel;
+        pluginUiProjection = emptyProjection;
+    } else {
+        const pending = retainPluginUiProjectionValue(pluginUiProjection?.establishingExecutionTargetsByPluginId,
+            establishingFacts.establishingExecutionTargetsByPluginId);
+        if (modelChanged || pluginUiProjection?.generation !== generation
+            || pending !== pluginUiProjection?.establishingExecutionTargetsByPluginId) {
+            const base = pluginUiProjection ?? [...changedModels.values()].find(model => model !== null) ?? EMPTY_PLUGIN_UI_PROJECTION;
+            const { establishingExecutionTargetsByPluginId: _previousPending, ...withoutPending } = base;
+            pluginUiProjection = Object.freeze({ ...withoutPending, ...maps, generation,
+                ...(pending ? { establishingExecutionTargetsByPluginId: pending } : {}),
+            }) as PluginUiProjectionModel;
+        }
+        if (generation === null && UNION_MAP_KEYS.filter(key => key !== 'installedPackagesById')
+            .every(key => Object.keys(pluginUiProjection?.[key] ?? {}).length === 0)) pluginUiProjection = emptyProjection ?? EMPTY_PLUGIN_UI_PROJECTION;
     }
+    if (pluginUiProjection && snapshot.pluginUiProjection && admitted.length === 0) pluginUiProjection =
+        retainPluginUiProjectionValue(snapshot.pluginUiProjection, pluginUiProjection) as PluginUiProjectionModel;
     if (pluginUiProjection && pluginUiProjection !== snapshot.pluginUiProjection) {
         const previousIndex = readPublishedProjectionPluginIndex(snapshot.pluginUiProjection);
         pluginUiProjection = publishProjectionPluginIndex(pluginUiProjection, previousIndex
             ? replacePublishedPluginSlices(previousIndex, changedModels) : prepareProjectionPluginIndex(pluginUiProjection));
     }
     return pluginUiProjection === snapshot.pluginUiProjection && interactionEnabled === snapshot.interactionEnabled
-        ? snapshot : Object.freeze({ ...snapshot, pluginUiProjection, interactionEnabled });
+        && phase === snapshot.phase && hasEstablishingMembers === snapshot.hasEstablishingMembers
+        && soleMember?.unavailableReasonCode === snapshot.unavailableReasonCode
+        && (soleMember?.machineId ?? null) === snapshot.machineId && (soleMember?.serverId ?? null) === snapshot.serverId
+        ? snapshot : Object.freeze({ pluginUiProjection, phase, hasEstablishingMembers, interactionEnabled,
+            unavailableReasonCode: soleMember?.unavailableReasonCode, machineId: soleMember?.machineId ?? null, serverId: soleMember?.serverId ?? null });
 }
 
 /** Runtime identity and health are not portable declaration content. */
@@ -837,15 +1019,29 @@ type DeclarationComparisons = {
     entries: Map<UnknownRecord, JsonValue>;
     projections: Map<PluginUiProjectionModel, ProjectionDeclarationComparison>;
     recordsByProjection: Map<PluginUiProjectionModel, ReadonlySet<UnknownRecord>>;
+    materializations: Map<PluginMachineMaterializationV1, MaterializationDeclarationComparison>;
 };
 
 function createDeclarationComparisons(): DeclarationComparisons {
-    return { entries: new Map(), projections: new Map(), recordsByProjection: new Map() };
+    return { entries: new Map(), projections: new Map(), recordsByProjection: new Map(), materializations: new Map() };
 }
 
 /** Current inputs bound retention; unchanged source rows keep their prepared facts. */
-function retainDeclarationComparisons(models: readonly PluginUiProjectionModel[], previous: DeclarationComparisons): DeclarationComparisons {
+function retainDeclarationComparisons(models: readonly PluginUiProjectionModel[], previous: DeclarationComparisons,
+    materializations: readonly PluginMachineMaterializationV1[] = []): DeclarationComparisons {
     const next = createDeclarationComparisons();
+    // Register every surviving descriptive fact before preparing new inputs.
+    // A replaced report may keep the same owned manifest/artifact roots; no
+    // phase, trust, selection or execution admission decision is retained here.
+    for (const materialization of materializations) {
+        const previousInput = previous.materializations.has(materialization) ? materialization
+            : [...previous.materializations.keys()].find(value => value.portableRelease === materialization.portableRelease
+                && value.sourceClass === materialization.sourceClass
+                && value.archiveDigestSha256 === materialization.archiveDigestSha256
+                && value.declaredManifest === materialization.declaredManifest && value.uiArtifacts === materialization.uiArtifacts);
+        const facts = previousInput && previous.materializations.get(previousInput);
+        if (facts) next.materializations.set(materialization, facts);
+    }
     for (const model of models) {
         if (next.recordsByProjection.has(model)) continue;
         let records = previous.recordsByProjection.get(model);
@@ -883,10 +1079,37 @@ function sameDeclarationContent(left: unknown, right: unknown, comparisons: Decl
 }
 
 type DeclarationComparisonEntry = readonly [string, JsonValue];
+type DeclarationComparisonFamilies = readonly (readonly DeclarationComparisonEntry[])[];
 type ProjectionDeclarationComparison = Readonly<{
-    familiesByPluginId: ReadonlyMap<string, readonly (readonly DeclarationComparisonEntry[])[]>;
+    familiesByPluginId: ReadonlyMap<string, DeclarationComparisonFamilies>;
     stampedPluginIds: ReadonlySet<string>;
 }>;
+type MaterializationDeclarationComparison = Readonly<{
+    manifest: JsonValue;
+    artifacts: readonly JsonValue[];
+}>;
+
+function readMaterializationDeclarationComparison(materialization: PluginMachineMaterializationV1,
+    comparisons: DeclarationComparisons): MaterializationDeclarationComparison {
+    const previous = comparisons.materializations.get(materialization);
+    if (previous) return previous;
+    let manifest = materialization.portableRelease ? null : projectNativeJsonValueForTransport(materialization.declaredManifest ?? null);
+    for (const facts of comparisons.materializations.values()) {
+        if (sameStrictJsonValue(manifest, facts.manifest)) { manifest = facts.manifest; break; }
+    }
+    const artifacts: JsonValue[] = [];
+    for (const artifact of materialization.uiArtifacts) {
+        let snapshot = normalizeStrictJsonValue(artifact);
+        const candidates = [...artifacts, ...[...comparisons.materializations.values()].flatMap(facts => facts.artifacts)];
+        for (const candidate of candidates) {
+            if (sameStrictJsonValue(snapshot, candidate)) { snapshot = candidate; break; }
+        }
+        artifacts.push(snapshot);
+    }
+    const facts = Object.freeze({ manifest, artifacts: Object.freeze(artifacts) });
+    comparisons.materializations.set(materialization, facts);
+    return facts;
+}
 
 /** Index one comparison pass, not one full-family scan for every plugin. */
 function readProjectionDeclarationComparison(model: PluginUiProjectionModel, comparisons: DeclarationComparisons): ProjectionDeclarationComparison {
@@ -894,24 +1117,42 @@ function readProjectionDeclarationComparison(model: PluginUiProjectionModel, com
     if (previous) return previous;
     const declarationFamilies = declarationMaps(model);
     const families = [...declarationFamilies, model.resourcesById];
-    const familiesByPluginId = new Map<string, DeclarationComparisonEntry[][]>();
+    const groupedFamiliesByPluginId = new Map<string, DeclarationComparisonEntry[][]>();
     const stampedPluginIds = new Set<string>();
     for (const [index, family] of families.entries()) {
         for (const [key, entry] of Object.entries(family)) {
             const pluginId = asRecord(entry)?.pluginId;
             if (typeof pluginId !== 'string') continue;
-            let grouped = familiesByPluginId.get(pluginId);
+            let grouped = groupedFamiliesByPluginId.get(pluginId);
             if (!grouped) {
                 grouped = Array.from({ length: families.length }, (): DeclarationComparisonEntry[] => []);
-                familiesByPluginId.set(pluginId, grouped);
+                groupedFamiliesByPluginId.set(pluginId, grouped);
             }
             grouped[index]!.push([key, readDeclarationComparisonSnapshot(entry, comparisons)]);
             if (index < declarationFamilies.length && !stampedPluginIds.has(pluginId)
                 && readPluginUiProjectionEntryExecutionOrigin(entry) !== null) stampedPluginIds.add(pluginId);
         }
     }
-    for (const grouped of familiesByPluginId.values()) for (const family of grouped) {
-        family.sort(([left], [right]) => left.localeCompare(right));
+    const familiesByPluginId = new Map<string, DeclarationComparisonFamilies>();
+    for (const [pluginId, grouped] of groupedFamiliesByPluginId) {
+        for (const family of grouped) {
+            family.sort(([left], [right]) => left.localeCompare(right));
+            for (const entry of family) Object.freeze(entry);
+            Object.freeze(family);
+        }
+        Object.freeze(grouped);
+        let canonical: DeclarationComparisonFamilies = grouped;
+        const compared = new Set<DeclarationComparisonFamilies>();
+        for (const other of comparisons.projections.values()) {
+            const candidate = other.familiesByPluginId.get(pluginId);
+            if (!candidate || compared.has(candidate)) continue;
+            compared.add(candidate);
+            if (sameStrictJsonValue(candidate, grouped)) { canonical = candidate; break; }
+        }
+        // Only this owner prepares these source-neutral cloned JSON facts.
+        // Both raw one-shot inputs and live dictionaries pass this strict
+        // comparison before reference inequality can mean disagreement.
+        familiesByPluginId.set(pluginId, canonical);
     }
     const comparison = { familiesByPluginId, stampedPluginIds };
     comparisons.projections.set(model, comparison);
@@ -926,7 +1167,9 @@ function samePluginDeclarationContent(
 ): boolean {
     const leftComparison = readProjectionDeclarationComparison(left.projection, comparisons);
     const rightComparison = readProjectionDeclarationComparison(right.projection, comparisons);
-    if (!sameStrictJsonValue(leftComparison.familiesByPluginId.get(pluginId) ?? [], rightComparison.familiesByPluginId.get(pluginId) ?? [])) return false;
+    const leftFamilies = leftComparison.familiesByPluginId.get(pluginId);
+    const rightFamilies = rightComparison.familiesByPluginId.get(pluginId);
+    if (leftFamilies !== rightFamilies) return false;
     const installedContent = (member: typeof left) => {
         const installed = member.projection.installedPackagesById[pluginId];
         return installed ? [installed.id, installed.displayName, installed.version, installed.executionTarget ?? null] : null;
@@ -936,12 +1179,19 @@ function samePluginDeclarationContent(
     const rightMaterialization = right.materializationsByPluginId?.[pluginId];
     const correspondence = (member: typeof left, materialization: typeof leftMaterialization, comparison: ProjectionDeclarationComparison) => (
         materialization?.portableRelease && materialization.archiveDigestSha256 ? materialization.archiveDigestSha256
-            : materialization && !materialization.portableRelease ? projectNativeJsonValueForTransport(materialization.declaredManifest ?? null)
+            : materialization && !materialization.portableRelease ? readMaterializationDeclarationComparison(materialization, comparisons).manifest
                 : comparison.stampedPluginIds.has(pluginId) ? ['unprovenPortableContent', member.serverId, member.machineId] : null
     );
-    if (!sameStrictJsonValue(correspondence(left, leftMaterialization, leftComparison), correspondence(right, rightMaterialization, rightComparison))) return false;
+    const leftCorrespondence = correspondence(left, leftMaterialization, leftComparison);
+    const rightCorrespondence = correspondence(right, rightMaterialization, rightComparison);
+    if (leftMaterialization && !leftMaterialization.portableRelease && rightMaterialization && !rightMaterialization.portableRelease) {
+        // Both native manifests were strictly normalized and canonicalized in
+        // this current comparison owner; inequality is already known content
+        // disagreement, not a reason to walk the same payload again.
+        if (leftCorrespondence !== rightCorrespondence) return false;
+    } else if (!sameStrictJsonValue(leftCorrespondence, rightCorrespondence)) return false;
     const artifacts = (materialization: typeof leftMaterialization) => materialization && (!materialization.portableRelease || materialization.archiveDigestSha256)
-        ? materialization.uiArtifacts : [];
+        ? readMaterializationDeclarationComparison(materialization, comparisons).artifacts : [];
     const leftArtifacts = artifacts(leftMaterialization);
     const rightArtifacts = artifacts(rightMaterialization);
     if (leftArtifacts === rightArtifacts) return true;
@@ -950,7 +1200,7 @@ function samePluginDeclarationContent(
     // creating sorted, serialized copies of already admitted artifact facts.
     const matched = new Set<number>();
     return leftArtifacts.every(artifact => {
-        const index = rightArtifacts.findIndex((other, index) => !matched.has(index) && sameStrictJsonValue(artifact, other));
+        const index = rightArtifacts.findIndex((other, index) => !matched.has(index) && artifact === other);
         if (index < 0) return false;
         matched.add(index);
         return true;
@@ -1129,12 +1379,28 @@ export function createPluginUiExecutionOriginCandidatePublication() {
                     ?? prepareProjectionPluginIndex(nextProjection, projectionIndex) : null;
             }
             if (!arePluginUiProjectionUnionMembersEquivalentForPlugins(members, nextMembers, true)) {
-                membersByPluginId = new Map();
-                for (const member of nextMembers) for (const id of Object.keys(member.projection?.installedPackagesById ?? {})) {
-                    const supplying = membersByPluginId.get(id) ?? [];
-                    supplying.push(member);
-                    membersByPluginId.set(id, supplying);
+                // Membership keys belong to the installed-package dictionary,
+                // not currentness/generation. Rebind changed member facts to
+                // their existing groups without rescanning sibling sources.
+                const previousIds = new Map<PluginUiProjectionUnionMember, string[]>();
+                for (const [id, suppliers] of membersByPluginId) for (const member of suppliers) {
+                    const ids = previousIds.get(member) ?? [];
+                    ids.push(id);
+                    previousIds.set(member, ids);
                 }
+                const grouped = new Map<string, PluginUiProjectionUnionMember[]>();
+                for (const member of nextMembers) {
+                    const previous = members.find(old => old.machineId === member.machineId && old.serverId === member.serverId
+                        && old.serverIdentityId === member.serverIdentityId
+                        && old.projection?.installedPackagesById === member.projection?.installedPackagesById);
+                    const ids = previous ? previousIds.get(previous) ?? [] : Object.keys(member.projection?.installedPackagesById ?? {});
+                    for (const id of ids) {
+                        const supplying = grouped.get(id) ?? [];
+                        supplying.push(member);
+                        grouped.set(id, supplying);
+                    }
+                }
+                membersByPluginId = grouped;
             }
             const nextInputs = new Map<string, CandidatePublicationInput>();
             const nextSnapshot = new Map<string, PluginUiExecutionOriginCandidateFacts>();
@@ -1182,7 +1448,12 @@ function readPluginUiSupplyRejection(supply: PluginUiContributionOriginV1): Plug
 
 /** A Resource without a View still has its own producer and current runtime slot. */
 function resourceHasCurrentProducerOrigin(projection: PluginUiProjectionModel, entry: PluginUiResourceProjection): boolean {
-    return readPluginUiProjectionEntryExecutionOrigin(entry) !== null && entryHasCurrentOccurrence(projection, entry);
+    return readCurrentResourceProducerOrigin(projection, entry) !== null;
+}
+
+function readCurrentResourceProducerOrigin(projection: PluginUiProjectionModel, entry: PluginUiResourceProjection): PluginMachineExecutionOriginV1 | null {
+    const origin = readPluginUiProjectionEntryExecutionOrigin(entry);
+    return origin && entryHasCurrentOccurrence(projection, entry) ? origin : null;
 }
 
 function entryHasCurrentOccurrence(projection: PluginUiProjectionModel, entry: Readonly<{ pluginId: string; occurrenceId?: string }>): boolean {
@@ -1266,11 +1537,14 @@ function arePluginUiProjectionUnionMembersEquivalentForPlugins(
     if (left.length !== right.length) {
         return false;
     }
-    return left.every((member, index) => {
-        const other = right[index];
-        if (member === other) return true;
-        return other !== undefined
-            && member.machineId === other.machineId
+    return left.every((member, index) => right[index] !== undefined
+        && samePluginUiProjectionUnionMemberInputs(member, right[index]!, ignoreSelectableOrigins));
+}
+
+function samePluginUiProjectionUnionMemberInputs(member: PluginUiProjectionUnionMember,
+    other: PluginUiProjectionUnionMember, ignoreSelectableOrigins = false): boolean {
+    return member === other || (
+            member.machineId === other.machineId
             && member.serverId === other.serverId
             && member.serverIdentityId === other.serverIdentityId
             && member.projection === other.projection
@@ -1281,8 +1555,7 @@ function arePluginUiProjectionUnionMembersEquivalentForPlugins(
                     ))))
             && member.phase === other.phase
             && member.unavailableReasonCode === other.unavailableReasonCode
-            && member.interactionEnabled === other.interactionEnabled;
-    });
+            && member.interactionEnabled === other.interactionEnabled);
 }
 
 /** Derive one descriptive Account catalog; exact effects remain origin-bound. */
@@ -1293,11 +1566,12 @@ export function unionPluginUiProjections(
     return derivePluginUiProjectionUnion(members, selectedOriginsByPluginId, createDeclarationComparisons());
 }
 
-function derivePluginUiProjectionUnion(
+/** One admission/aggregate policy serves full adapters and incremental publications. */
+function readUnionPublicationFacts(
     members: readonly PluginUiProjectionUnionMember[],
     selectedOriginsByPluginId: PluginUiProjectionUnionOriginSelections,
-    comparisons: DeclarationComparisons,
-): PluginUiProjectionUnion {
+    source?: UnionPublicationSource,
+) {
     const eligible = members.filter((member) => readString(member.machineId) !== null);
     const phase = resolveUnionProjectionPhase(eligible);
     const hasEstablishingMembers = eligible.some((member) => member.phase === 'establishing');
@@ -1329,6 +1603,21 @@ function derivePluginUiProjectionUnion(
         .sort((left, right) => left.machineId.localeCompare(right.machineId)
             || (left.serverIdentityId ?? left.serverId ?? '').localeCompare(right.serverIdentityId ?? right.serverId ?? ''));
 
+    const admittedContributing = contributing.filter(member => source
+        ? source.hasDeclarations.get(member.projection) === true || memberHasAdmittedContribution(member, selectedOriginsByPluginId, false,
+            source.modelIndexes.get(member.projection)?.resourceOrigins)
+        : memberHasAdmittedContribution(member, selectedOriginsByPluginId));
+    return { phase, hasEstablishingMembers, emptyProjection, soleMember, contributing, admittedContributing, establishingFacts };
+}
+
+function derivePluginUiProjectionUnion(
+    members: readonly PluginUiProjectionUnionMember[],
+    selectedOriginsByPluginId: PluginUiProjectionUnionOriginSelections,
+    comparisons: DeclarationComparisons,
+    supplyFacts?: ReadonlyMap<PluginUiProjectionUnionMember, UnionSupplyFacts>,
+): PluginUiProjectionUnion {
+    const { phase, hasEstablishingMembers, emptyProjection, soleMember, contributing, admittedContributing, establishingFacts }
+        = readUnionPublicationFacts(members, selectedOriginsByPluginId);
     if (contributing.length === 0) {
         return Object.freeze({
             pluginUiProjection: emptyProjection,
@@ -1341,7 +1630,6 @@ function derivePluginUiProjectionUnion(
         });
     }
 
-    const admittedContributing = contributing.filter(member => memberHasAdmittedContribution(member, selectedOriginsByPluginId));
     const suppliesByPluginId = new Map<string, (typeof contributing)[number][]>();
     for (const member of admittedContributing) {
         const pluginIds = new Set(declarationMaps(member.projection).flatMap(map => Object.values(map)
@@ -1359,17 +1647,7 @@ function derivePluginUiProjectionUnion(
         const agreement = resolveFleetSupplyAgreement({
             identity: () => pluginId,
             sameContent: (left, right) => samePluginDeclarationContent(left, right, pluginId, comparisons),
-            supplies: supplies.map(member => ({ value: member, selectable:
-                member.phase === 'current' && member.interactionEnabled && Boolean(member.selectableExecutionOrigins?.length)
-                && declarationMaps(member.projection).some(map => Object.values(map).some(entry => {
-                const record = asRecord(entry);
-                if (record?.pluginId !== pluginId) return false;
-                const origin = resolveMemberEntryExecutionOrigin(member, record);
-                return origin !== null && member.selectableExecutionOrigins?.some(selectable => (
-                    arePluginMachineExecutionOriginsEqual(selectable, origin)
-                ));
-                })),
-            })),
+            supplies: supplies.map(member => ({ value: member, selectable: memberHasSelectableDeclaration(member, pluginId) })),
         });
         return agreement.conflictingIdentities;
     }));
@@ -1437,17 +1715,23 @@ function derivePluginUiProjectionUnion(
         occurrenceId: string | null;
         supply: PluginUiContributionSupplyV1;
     }>>();
-    const publishFirstAdmitted = <T>(model: PluginUiProjectionModel, map: Record<string, T>, key: string, value: T, origin: PluginUiContributionOriginV1,
+    const publishFirstAdmitted = <T>(member: PluginUiProjectionUnionMember & Readonly<{ projection: PluginUiProjectionModel }>, map: Record<string, T>, key: string, value: T, origin: PluginUiContributionOriginV1,
         retainDeclarationOccurrence = false): void => {
-        const entry = asRecord(value);
-        const pluginId = readString(entry?.pluginId);
-        if (!entry || !pluginId) return;
+        const model = member.projection;
+        const sourceEntry = asRecord(value);
+        const pluginId = readString(sourceEntry?.pluginId);
+        if (!sourceEntry || !pluginId) return;
+        // Preserve the original stamp's field insertion slot without making a
+        // fresh carrier the identity of the immutable authored source row.
+        const entry: UnknownRecord = { ...sourceEntry, hostOrigin: origin };
         const previous = asRecord(map[key]);
         const installed = model.installedPackagesById[pluginId];
         const sourceCustody = installed?.sourceCustody ?? null;
         const occurrenceId = readString(entry.occurrenceId);
         const normalized = normalizedSupplies.get(origin);
-        let supply = normalized?.occurrenceId === occurrenceId ? normalized.supply : undefined;
+        const prepared = supplyFacts?.get(member);
+        const cached = prepared?.facts.get(sourceEntry);
+        let supply = cached ?? (normalized?.occurrenceId === occurrenceId ? normalized.supply : undefined);
         if (!supply) {
             const rawSupply: PluginUiContributionSupplyV1 = { ...origin, occurrenceId,
                 pluginVersion: installed?.version ?? null, sourceCustody,
@@ -1455,9 +1739,10 @@ function derivePluginUiProjectionUnion(
                 executionTargetAutoPick: installed?.executionTarget?.autoPick };
             const parsedSupply = readPluginUiContributionSupplies({ hostSupplies: [rawSupply] })[0];
             if (!parsedSupply) return;
-            supply = parsedSupply;
+            supply = retainPluginUiProjectionValue(prepared?.previousFacts?.get(sourceEntry), parsedSupply) as PluginUiContributionSupplyV1;
             normalizedSupplies.set(origin, { occurrenceId, supply });
         }
+        if (!cached) prepared?.facts.set(sourceEntry, supply);
         const supplies = publishPluginUiContributionSupplies([...readPluginUiContributionSupplies(previous), supply]);
         const conflict = conflictedPluginIds.has(pluginId) && !selectedMembersByPluginId.has(pluginId);
         const selected = selectedOriginsByPluginId.get(pluginId);
@@ -1514,68 +1799,68 @@ function derivePluginUiProjectionUnion(
 
         for (const [pluginId, entry] of Object.entries(model.translationsByPluginId)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, translationsByPluginId, pluginId, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, translationsByPluginId, pluginId, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.sessionHeaderActionsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, sessionHeaderActionsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, sessionHeaderActionsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.searchProvidersById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, searchProvidersById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, searchProvidersById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.composerControlsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, composerControlsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, composerControlsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.composerRegionsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, composerRegionsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, composerRegionsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.hostedWebById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, hostedWebById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, hostedWebById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.reactNativeBundlesById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, reactNativeBundlesById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, reactNativeBundlesById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.surfacePlacementsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, surfacePlacementsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, surfacePlacementsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.settingsGroupsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, settingsGroupsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, settingsGroupsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.settingsPagesById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, settingsPagesById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, settingsPagesById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.actionsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, actionsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, actionsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.voiceProvidersById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, voiceProvidersById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, voiceProvidersById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.dragSourcesById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, dragSourcesById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, dragSourcesById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.workItemsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, workItemsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, workItemsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.dropTargetsById)) {
             const origin = originFor(entry);
-            if (origin) publishFirstAdmitted(model, dropTargetsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, dropTargetsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.unknownEntriesById)) {
             const origin = originFor(entry);
             if (origin) {
-                publishFirstAdmitted(model, unknownEntriesById, id, stamp(entry, origin), origin);
+                publishFirstAdmitted(member, unknownEntriesById, id, entry, origin);
             }
         }
         for (const [id, entry] of Object.entries(model.resourcesById)) {
@@ -1586,7 +1871,7 @@ function derivePluginUiProjectionUnion(
                 // Earlier rows are only contextual facts of an admitted UI
                 // contribution, never independent app-scope read authority.
                 : admittedOriginsByPluginId.get(entry.pluginId);
-            if (origin) publishFirstAdmitted(model, resourcesById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, resourcesById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.inputTypesById)) {
             const origin = entryHasCurrentOccurrence(model, entry)
@@ -1598,7 +1883,7 @@ function derivePluginUiProjectionUnion(
             // A registered type's schema remains a declaration when its source
             // cannot execute. Keep that occurrence for schema/options identity;
             // only the selected hostOrigin may authorize Resource or picker effects.
-            if (origin) publishFirstAdmitted(model, inputTypesById, id, stamp(entry, origin), origin, true);
+            if (origin) publishFirstAdmitted(member, inputTypesById, id, entry, origin, true);
         }
         for (const [id, entry] of Object.entries(model.registrySourcesById)) {
             // Source visibility and suppliers are installation declarations;
@@ -1608,11 +1893,11 @@ function derivePluginUiProjectionUnion(
             // A supplier must declare this row's content, not a conflicting URL.
             if (representative && !sameDeclarationContent(entry.definition, representative.definition, comparisons)) continue;
             const origin = model.installedPackagesById[entry.pluginId]?.enabled === true ? originFor(entry) : null;
-            if (origin) publishFirstAdmitted(model, registrySourcesById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, registrySourcesById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.skillsById)) {
             const origin = model.installedPackagesById[entry.pluginId]?.enabled === true ? originFor(entry) : null;
-            if (origin) publishFirstAdmitted(model, skillsById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, skillsById, id, entry, origin);
         }
         for (const [id, entry] of Object.entries(model.atmospherePicturesById)) {
             const origin = entryHasCurrentOccurrence(model, entry)
@@ -1620,7 +1905,7 @@ function derivePluginUiProjectionUnion(
                     || selectedOriginOwnsEntry({ entry, machineId: member.machineId, selectedOriginsByPluginId }))
                 ? originFor(entry)
                 : null;
-            if (origin) publishFirstAdmitted(model, atmospherePicturesById, id, stamp(entry, origin), origin);
+            if (origin) publishFirstAdmitted(member, atmospherePicturesById, id, entry, origin);
         }
         // A package catalog fact has no contribution-level origin stamp of its
         // own. It is therefore visible in an app union only after one of that

@@ -3,6 +3,7 @@ import { DaemonPluginStructuredMessageActionExecuteRequestSchema, type DaemonPlu
 import type { PluginActionInvocationSurfaceV2 } from '@happier-dev/plugin-sdk/actions';
 import type { PluginUiTargetedContributionsV1 } from '@happier-dev/protocol/plugins/ui';
 import type { DaemonPluginTargetedSourceDeclarationV1 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { preparePluginContributionPointDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/targeted';
 import {
     DaemonPluginSettingsWatchRequestSchema,
     DaemonPluginSettingsWatchResponseSchema,
@@ -15,6 +16,7 @@ import {
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { createScopedResolutionSingleFlight } from '@/sync/runtime/orchestration/serverScopedRpc/scopedResolutionSingleFlight';
+import type { MachineRpcReadAdmission, MachineRpcReadAdmissionInput } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
 import {
     isRpcMethodNotAvailableError,
     isRpcMethodNotFoundError,
@@ -254,13 +256,10 @@ function pluginRpcOperationOptions(opts: Readonly<{ timeoutMs?: number | null; s
 }
 
 /**
- * One in-flight read per question. The key is the routed machine scope, its
- * projection revision (endpoint identity: reconnect, daemon replacement,
- * explicit invalidation) and the request payload. Nothing caller-specific —
- * a timeout, a caller epoch — enters it, so every reader of the same question
- * shares one request.
+ * One pending physical acquisition per question and already-admitted authority.
+ * Every caller reaches the canonical RPC admission before this owner can join.
+ * Direct V2 grants are one-use operations and never enter this server binding.
  */
-type SharedProjectionRead<T> = Readonly<{ wait(signal?: AbortSignal): Promise<T> }>;
 const projectionReads = createScopedResolutionSingleFlight<unknown>();
 
 /**
@@ -270,33 +269,19 @@ const projectionReads = createScopedResolutionSingleFlight<unknown>();
  */
 type ProjectionReadAccount = Readonly<{ scope: ServerAccountScope }>;
 
-function shareProjectionRead<T>(
+function projectionReadAdmission(
     scope: MachineContributionRegistryProjectionScope,
     payload: unknown,
-    account: ProjectionReadAccount | null | undefined,
-    read: (signal: AbortSignal) => Promise<T>,
-): SharedProjectionRead<T> {
-    const key = JSON.stringify([
-        machineContributionRegistryProjectionScopeKey(scope),
-        getMachineContributionRegistryProjectionRevision(scope),
-        account ? serverAccountScopeKeySuffix(account.scope) : null,
-        payload,
-    ]);
-    return { wait: async signal => await projectionReads.run(key, read, { signal }) as T };
-}
-
-/** The last departing reader retires the shared transport and allows a fresh attempt. */
-async function waitForSharedRead<T>(
-    entry: SharedProjectionRead<T>,
-    signal: AbortSignal | undefined,
-    aborted: () => T,
-): Promise<T> {
-    try {
-        return await entry.wait(signal);
-    } catch (error) {
-        if (signal?.aborted) return aborted();
-        throw error;
-    }
+): MachineRpcReadAdmission {
+    const question = [machineContributionRegistryProjectionScopeKey(scope),
+        getMachineContributionRegistryProjectionRevision(scope), payload];
+    return {
+        async run<T>(input: MachineRpcReadAdmissionInput<T>): Promise<T> {
+            return await projectionReads.run(JSON.stringify([...question, input.binding.key]),
+                input.resolve, { signal: input.signal, scope: input.binding.scope,
+                    onPhysicalAcquire: input.onPhysicalAcquire }) as T;
+        },
+    };
 }
 
 async function readProjectionClientContext(machineId: string) {
@@ -344,8 +329,7 @@ export async function machineContributionRegistryProjectionDescribe(
         machineId: payload.machineId,
         serverId: opts?.serverId ?? null,
     } satisfies MachineContributionRegistryProjectionScope;
-    const request = shareProjectionRead(scope, payload, opts?.accountLifetime, async (signal): Promise<MachineContributionRegistryProjectionDescribeResult> => {
-        try {
+    try {
             const response = await machineRpcWithServerScope<unknown, typeof payload>({
                 machineId: payload.machineId,
                 serverId: opts?.serverId,
@@ -355,7 +339,8 @@ export async function machineContributionRegistryProjectionDescribe(
                 // Projection work has no operation deadline, like capability
                 // detection. Connection/setup admission keeps its RPC budget.
                 operationTimeoutMs: null,
-                signal,
+                signal: opts?.signal,
+                readAdmission: projectionReadAdmission(scope, payload),
             });
             if (isRpcMethodNotFoundResult(response)) {
                 return { supported: false, reason: 'not-supported' };
@@ -378,8 +363,6 @@ export async function machineContributionRegistryProjectionDescribe(
             }
             return { supported: false, reason: classifyMachineProjectionReadError(error) };
         }
-    });
-    return await waitForSharedRead(request, opts?.signal, () => ({ supported: false, reason: 'aborted' }));
 }
 
 /**
@@ -413,8 +396,7 @@ export async function machinePluginUiTargetedContributionsRead(
         machineId: payload.machineId,
         serverId: opts.serverId ?? null,
     } satisfies MachineContributionRegistryProjectionScope;
-    const request = shareProjectionRead(scope, payload, opts.accountLifetime, async (signal): Promise<MachinePluginUiTargetedContributionsReadResult | MachinePluginTargetedSourceDeclarationsReadResult> => {
-        try {
+    try {
             const response = await machineRpcWithServerScope<unknown, typeof payload>({
                 machineId: payload.machineId,
                 serverId: opts.serverId,
@@ -422,7 +404,8 @@ export async function machinePluginUiTargetedContributionsRead(
                 method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
                 payload,
                 operationTimeoutMs: null,
-                signal,
+                signal: opts.signal,
+                readAdmission: projectionReadAdmission(scope, payload),
             });
             if (isRpcMethodNotFoundResult(response)) {
                 return { supported: false, reason: 'not-supported' };
@@ -436,7 +419,10 @@ export async function machinePluginUiTargetedContributionsRead(
                 if (parsed.status !== 'sourceDeclarations' || parsed.pluginId !== payload.pluginId) {
                     return { supported: false, reason: 'invalid-response' };
                 }
-                return { supported: true, sourceDeclarations: parsed.sourceDeclarations };
+                return { supported: true, sourceDeclarations: parsed.sourceDeclarations.map(row => ({ ...row,
+                    manifest: { ...row.manifest,
+                        contributes: preparePluginContributionPointDeclarationsV1(row.manifest.contributes) },
+                })) };
             }
             if (parsed.status !== 'current') return { supported: false, reason: 'invalid-response' };
             // A snapshot for another plugin, or mounts for another target,
@@ -462,8 +448,6 @@ export async function machinePluginUiTargetedContributionsRead(
             }
             return { supported: false, reason: classifyMachinePluginTransportError(error) };
         }
-    });
-    return await waitForSharedRead(request, opts.signal, () => ({ supported: false, reason: 'aborted' }));
 }
 
 /** The same target-read transport, requesting current Machine sources for an invoking Account target. */
@@ -907,8 +891,9 @@ export async function machinePluginActionFormConnectedAccountOptionsResolve(
  */
 type ActionSchemaRead = {
     occurrenceId: string;
-    request: SharedProjectionRead<MachinePluginActionSchemasReadResult>;
-    result?: MachinePluginActionSchemasReadResult;
+    bindingKey: string;
+    scope: readonly (object | string)[];
+    result?: DaemonPluginActionSchemasReadResponse;
 };
 const actionSchemaReadsByKey = new Map<string, ActionSchemaRead>();
 
@@ -940,55 +925,56 @@ export async function machinePluginActionSchemasRead(
         machineContributionRegistryProjectionScopeKey({ machineId, serverId: opts.serverId ?? null }),
         payload.qualifiedActionId,
     ]);
-    const incumbent = actionSchemaReadsByKey.get(key);
-    let request = incumbent?.occurrenceId === payload.expectedOccurrenceId ? incumbent.request : null;
-    if (!request) {
-        const read = async (signal: AbortSignal): Promise<MachinePluginActionSchemasReadResult> => {
-            try {
-                const response = await machineRpcWithServerScope<unknown, typeof payload>({
-                    machineId,
-                    serverId: opts.serverId,
-                    method: RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ,
-                    payload,
-                    operationTimeoutMs: null,
-                    signal,
-                });
-                if (isRpcMethodNotFoundResult(response)) return { supported: false, reason: 'not-supported' };
-                const parsed = DaemonPluginActionSchemasReadResponseSchema.safeParse(response);
-                return parsed.success
-                    ? { supported: true, result: parsed.data }
-                    : { supported: false, reason: 'error' };
-            } catch (error) {
-                return { supported: false, reason: classifyMachinePluginTransportError(error) };
-            }
-        };
-        const forget = () => {
-            if (actionSchemaReadsByKey.get(key) === entry) actionSchemaReadsByKey.delete(key);
-        };
-        const issued: SharedProjectionRead<MachinePluginActionSchemasReadResult> = {
-            async wait(signal) {
-                if (entry.result) return entry.result;
-                return await projectionReads.run(key, async sharedSignal => {
-                    // The pending owner aborts only after the final borrower leaves.
-                    // Retire this occurrence's abandoned entry synchronously so a new
-                    // reader cannot inherit an abandoned physical continuation.
-                    sharedSignal.addEventListener('abort', forget, { once: true });
-                    try {
-                        const result = await read(sharedSignal);
-                        if (sharedSignal.aborted || !result.supported || !result.result.ok) forget();
-                        else if (actionSchemaReadsByKey.get(key) === entry) entry.result = result;
-                        return result;
-                    } finally {
-                        sharedSignal.removeEventListener('abort', forget);
-                    }
-                }, { signal, scope: entry }) as MachinePluginActionSchemasReadResult;
+    const pending = projectionReadAdmission({ machineId, serverId: opts.serverId ?? null }, payload);
+    try {
+        const response = await machineRpcWithServerScope<unknown, typeof payload>({
+            machineId, serverId: opts.serverId, method: RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ,
+            payload, operationTimeoutMs: null, signal: opts.signal,
+            readAdmission: {
+                async run<T>(input: MachineRpcReadAdmissionInput<T>): Promise<T> {
+                    const incumbent = actionSchemaReadsByKey.get(key);
+                    const matches = incumbent?.occurrenceId === payload.expectedOccurrenceId
+                        && incumbent.bindingKey === input.binding.key
+                        && incumbent.scope.length === input.binding.scope.length
+                        && incumbent.scope.every((part, index) => part === input.binding.scope[index]);
+                    const entry: ActionSchemaRead = matches ? incumbent : {
+                        occurrenceId: payload.expectedOccurrenceId, bindingKey: input.binding.key, scope: input.binding.scope,
+                    };
+                    if (entry.result) return entry.result as T;
+                    actionSchemaReadsByKey.set(key, entry);
+                    const forget = () => {
+                        if (actionSchemaReadsByKey.get(key) === entry) actionSchemaReadsByKey.delete(key);
+                    };
+                    return await pending.run({ ...input,
+                        onPhysicalAcquire: signal => {
+                            const release = input.onPhysicalAcquire(signal);
+                            signal.addEventListener('abort', forget, { once: true });
+                            return async () => {
+                                signal.removeEventListener('abort', forget);
+                                if (signal.aborted) forget();
+                                await release();
+                            };
+                        },
+                        resolve: async signal => {
+                            try {
+                                const value = await input.resolve(signal);
+                                const parsed = DaemonPluginActionSchemasReadResponseSchema.safeParse(value);
+                                input.binding.assertCurrent();
+                                if (!parsed.success || !parsed.data.ok || signal.aborted) forget();
+                                else if (actionSchemaReadsByKey.get(key) === entry) entry.result = parsed.data;
+                                return value;
+                            } catch (error) { forget(); throw error; }
+                        },
+                    }) as T;
+                },
             },
-        };
-        const entry: ActionSchemaRead = { occurrenceId: payload.expectedOccurrenceId, request: issued };
-        actionSchemaReadsByKey.set(key, entry);
-        request = entry.request;
+        });
+        if (isRpcMethodNotFoundResult(response)) return { supported: false, reason: 'not-supported' };
+        const parsed = DaemonPluginActionSchemasReadResponseSchema.safeParse(response);
+        return parsed.success ? { supported: true, result: parsed.data } : { supported: false, reason: 'error' };
+    } catch (error) {
+        return { supported: false, reason: classifyMachinePluginTransportError(error) };
     }
-    return await waitForSharedRead(request, opts.signal, () => ({ supported: false, reason: 'aborted' }));
 }
 
 /**

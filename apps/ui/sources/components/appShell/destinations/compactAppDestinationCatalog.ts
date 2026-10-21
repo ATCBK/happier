@@ -509,7 +509,7 @@ export function resolveCompactAppDestinations(input: Readonly<{
     return Object.freeze(destinations.sort(compare).map((destination, order) => Object.freeze({ ...destination, order })));
 }
 
-export type CompactAppDestinationSources = AppShellPluginUiDeclarationSources & Readonly<{
+export type CompactAppDestinationSources = Pick<AppShellPluginUiDeclarationSources, 'projection' | 'accountLifetime' | 'ready'> & Readonly<{
     locale: SupportedLanguage;
     builtins: AppBuiltinDestinationAvailability;
 }>;

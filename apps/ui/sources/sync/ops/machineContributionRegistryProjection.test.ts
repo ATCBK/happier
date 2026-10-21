@@ -6,6 +6,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcError, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { createSocketIoAckTimeoutError } from '@happier-dev/sync-client';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { MachineReadBatchRequestV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
 let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
@@ -72,13 +73,19 @@ await import('./machineContributionRegistryProjection');
 describe('machine contribution registry projection ops', () => {
     it('reads exact Machine source declarations for an Account target through the existing target RPC', async () => {
         const { PluginContributesV2Schema } = await import('@happier-dev/protocol');
+        const { defineProtocolObject, defineProtocolLiteral } = await import('@happier-dev/protocol/plugins/actions/protocol-composable-schema');
+        const { rehydratePluginContributionPointSemanticsV1 } = await import('@happier-dev/protocol/plugins/contributions/targeted');
+        const { PluginJsonSchemaV2Schema } = await import('@happier-dev/protocol/plugins/contributions/public-types');
         const contributes = PluginContributesV2Schema.parse({
+                pluginContributionPoints: [{ id: 'own-point', protocols: [{ id: 'own-protocol', version: 1, operations: {},
+                    descriptor: defineProtocolObject({ authority: defineProtocolLiteral('first') }, { policy: 'closed' }).jsonSchema,
+                }] }],
                 targetedPluginContributions: [{ id: 'external-source', target: { pluginId: mountedTarget.pluginId, pointId: 'sources' },
                     protocol: { id: 'external-source', version: 1 }, descriptor: {}, operations: {} }],
         });
         const row = {
             manifest: { id: 'acme.source', contributes: {
-                actions: contributes.actions, pluginContributionPoints: [],
+                actions: contributes.actions, pluginContributionPoints: contributes.pluginContributionPoints,
                 targetedPluginContributions: contributes.targetedPluginContributions,
                 ui: { renderers: contributes.ui.renderers },
             } },
@@ -89,9 +96,41 @@ describe('machine contribution registry projection ops', () => {
             status: 'sourceDeclarations', pluginId: mountedTarget.pluginId, sourceDeclarations: [row],
         });
         const { machinePluginUiTargetedContributionsRead } = await import('./machineContributionRegistryProjection');
-        await expect(machinePluginUiTargetedContributionsRead('machine-1', {
+        const result = await machinePluginUiTargetedContributionsRead('machine-1', {
             serverId: serverAId, pluginId: mountedTarget.pluginId, readMode: 'sourceDeclarations',
-        })).resolves.toEqual({ supported: true, sourceDeclarations: [row] });
+        });
+        expect(result).toEqual({ supported: true, sourceDeclarations: [row] });
+        if (!result.supported) throw new Error('Expected acquired declarations');
+        const protocol = result.sourceDeclarations[0]!.manifest.contributes.pluginContributionPoints[0]!.protocols[0]!;
+        const schemaParses = vi.spyOn(PluginJsonSchemaV2Schema, 'safeParse');
+        try {
+            for (let index = 0; index < 100; index += 1) {
+                expect(rehydratePluginContributionPointSemanticsV1(protocol)?.descriptor?.safeParse({ authority: 'first' }).success).toBe(true);
+            }
+            expect(schemaParses.mock.calls.length).toBe(0);
+            for (const [machineId, descriptor, accepted] of [
+                ['machine-2', defineProtocolObject({ authority: defineProtocolLiteral('replacement') }, { policy: 'closed' }).jsonSchema, true],
+                ['machine-3', { $ref: '#/$defs/missing' }, false],
+            ] as const) {
+                const replacement = { ...row, manifest: { ...row.manifest, contributes: { ...row.manifest.contributes,
+                    pluginContributionPoints: [{ ...row.manifest.contributes.pluginContributionPoints[0]!,
+                        protocols: [{ ...protocol, descriptor }] }],
+                } } };
+                machineRpcWithServerScopeMock.mockResolvedValueOnce({ status: 'sourceDeclarations',
+                    pluginId: mountedTarget.pluginId, sourceDeclarations: [replacement] });
+                schemaParses.mockClear();
+                const fresh = await machinePluginUiTargetedContributionsRead(machineId, {
+                    serverId: serverAId, pluginId: mountedTarget.pluginId, readMode: 'sourceDeclarations',
+                });
+                expect(fresh).toEqual({ supported: true, sourceDeclarations: [replacement] });
+                expect(schemaParses.mock.calls.length).toBeGreaterThan(0);
+                if (!fresh.supported) throw new Error('Point refusal must not reject the declaration');
+                const semantics = rehydratePluginContributionPointSemanticsV1(fresh.sourceDeclarations[0]!
+                    .manifest.contributes.pluginContributionPoints[0]!.protocols[0]!);
+                expect(semantics?.descriptor?.safeParse({ authority: 'replacement' }).success ?? false).toBe(accepted);
+                expect(rehydratePluginContributionPointSemanticsV1(protocol)?.descriptor?.safeParse({ authority: 'first' }).success).toBe(true);
+            }
+        } finally { schemaParses.mockRestore(); }
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledWith(expect.objectContaining({
             method: RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ,
             payload: expect.objectContaining({ pluginId: mountedTarget.pluginId, readMode: 'sourceDeclarations' }),
@@ -233,7 +272,7 @@ describe('machine contribution registry projection ops', () => {
             payload: expect.not.objectContaining({ mountedTarget: expect.anything() }),
         }));
         expect(network.requests).toHaveLength(1);
-        expect(network.requests[0]?.timeoutMs).toBeNull();
+        expect(network.requests[0]?.timeoutMs ?? null).toBeNull();
     });
 
     it('classifies why a projection read failed', async () => {
@@ -291,10 +330,12 @@ describe('machine contribution registry projection ops', () => {
         deleteServerFeaturesSnapshot({ serverId: serverAId });
         let setupAttempts = 0;
         let recovered = false;
-        network.setHttpResponder(async (input) => {
+        network.setHttpResponder(async (input, init) => {
             const path = new URL(String(input)).pathname;
+            const machineRead = path === '/v1/machines/read-batch' && init?.method === 'POST'
+                && MachineReadBatchRequestV1Schema.parse(JSON.parse(String(init.body))).machineIds.includes('machine-1');
             const held = phase === 'reachability' ? path === '/health' || path === '/v1/auth/ping'
-                : path === (phase === 'features' ? '/v1/features' : '/v1/machines/machine-1');
+                : phase === 'features' ? path === '/v1/features' : machineRead;
             if (!held || phase === 'socket') return null;
             setupAttempts++;
             // The network boundary deliberately ignores cancellation. The real
@@ -604,6 +645,81 @@ describe('machine contribution registry projection ops', () => {
         expect(issuedRpcCount).toBe(1);
     });
 
+    it('admits replacement credentials before joining an unobserved same-Account projection', async () => {
+        const { machineContributionRegistryProjectionDescribe } = await import('./machineContributionRegistryProjection');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const replacement = { token: `${createAccountTokenForTests('account-a')}-replacement` };
+        let releaseFirst!: (value: unknown) => void;
+        network.setRpcAckResponder(async request => request.token === replacement.token
+            ? { ok: false, error: 'The replacement credential is refused', errorCode: RPC_ERROR_CODES.FORBIDDEN }
+            : { ok: true, result: await new Promise(resolve => { releaseFirst = resolve; }) });
+        const options = { serverId: serverAId,
+            accountLifetime: { scope: { serverId: serverAId, accountId: 'account-a' } } };
+        const first = machineContributionRegistryProjectionDescribe('machine-1', options);
+        await vi.waitFor(() => expect(releaseFirst).toBeTypeOf('function'));
+        await network.addHome('https://server-a', 'account-a', { credentials: replacement });
+        expect((await TokenStorage.getCredentialsForServerUrl('https://server-a', { serverId: serverAId }))?.token)
+            .toBe(replacement.token);
+        const second = machineContributionRegistryProjectionDescribe('machine-1', options);
+        try {
+            await vi.waitFor(() => expect(network.requests).toHaveLength(2));
+        } finally {
+            releaseFirst({ protocolVersion: 1, projection: v2Projection() });
+            await Promise.allSettled([first, second]);
+        }
+        await expect(first).resolves.toMatchObject({ supported: true });
+        await expect(second).resolves.toEqual({ supported: false, reason: 'access-denied' });
+    });
+
+    it('separates captured encryption material with an unchanged bearer and Account', async () => {
+        const { machineContributionRegistryProjectionDescribe } = await import('./machineContributionRegistryProjection');
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const initial = await TokenStorage.getCredentialsForServerUrl('https://server-a', { serverId: serverAId });
+        if (!initial) throw new Error('Expected the fixture Home credentials');
+        const credentials = (fill: number) => ({ token: initial.token, secret: Buffer.alloc(32, fill).toString('base64url') });
+        await network.addHome('https://server-a', 'account-a', { credentials: credentials(1) });
+        const pending: Array<(value: unknown) => void> = [];
+        machineRpcWithServerScopeMock.mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+        const options = { serverId: serverAId,
+            accountLifetime: { scope: { serverId: serverAId, accountId: 'account-a' } } };
+        const first = machineContributionRegistryProjectionDescribe('machine-1', options);
+        await vi.waitFor(() => expect(pending).toHaveLength(1));
+        await network.addHome('https://server-a', 'account-a', { credentials: credentials(2) });
+        const second = machineContributionRegistryProjectionDescribe('machine-1', options);
+        try {
+            await vi.waitFor(() => expect(pending).toHaveLength(2));
+        } finally {
+            pending.forEach((release, index) => release({ protocolVersion: 1, projection: v2Projection(index + 1) }));
+            await Promise.allSettled([first, second]);
+        }
+        await expect(first).resolves.toMatchObject({ supported: true, projection: { generation: 1 } });
+        await expect(second).resolves.toMatchObject({ supported: true, projection: { generation: 2 } });
+    });
+
+    it('admits each same-credential borrower before reusing a pending Machine projection', async () => {
+        const { machineContributionRegistryProjectionDescribe } = await import('./machineContributionRegistryProjection');
+        let releaseFirst!: (value: unknown) => void;
+        machineRpcWithServerScopeMock.mockImplementationOnce(async () => await new Promise(resolve => { releaseFirst = resolve; }));
+        const options = { serverId: serverAId,
+            accountLifetime: { scope: { serverId: serverAId, accountId: 'account-a' } } };
+        const first = machineContributionRegistryProjectionDescribe('machine-1', options);
+        await vi.waitFor(() => expect(releaseFirst).toBeTypeOf('function'));
+        network.setHttpResponder(async input => new URL(String(input)).pathname.startsWith('/v1/machines')
+            ? Response.json({ error: 'Forbidden' }, { status: 403 }) : null);
+        let secondSettled = false;
+        const second = machineContributionRegistryProjectionDescribe('machine-1', options).finally(() => { secondSettled = true; });
+        try {
+            await vi.waitFor(() => expect(secondSettled).toBe(true));
+        } finally {
+            releaseFirst({ protocolVersion: 1, projection: v2Projection() });
+            await Promise.allSettled([first, second]);
+        }
+        await expect(second).resolves.toMatchObject({ supported: false });
+        await expect(first).resolves.toMatchObject({ supported: true });
+        expect(network.requests).toHaveLength(1);
+    });
+
     it('shares a read between handles of one Account but never with a successor Account', async () => {
         const pendingResolvers: Array<(value: unknown) => void> = [];
         machineRpcWithServerScopeMock.mockImplementation(() => new Promise((resolve) => { pendingResolvers.push(resolve); }));
@@ -867,12 +983,13 @@ describe('machine contribution registry projection ops', () => {
             expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(4);
         });
         expect(onInvalidated).toHaveBeenCalledTimes(1);
+        // Both null and a cleared native override mean no operation deadline.
+        expect(machineRpcWithServerScopeMock.mock.calls.slice(0, 3).every(([input]) => input.timeoutMs == null)).toBe(true);
         expect(machineRpcWithServerScopeMock.mock.calls.slice(0, 3).map(([input]) => input)).toEqual([
             expect.objectContaining({
                 machineId: 'machine-1',
                 serverId: 'server-a',
                 method: RPC_METHODS.DAEMON_PLUGIN_SETTINGS_WATCH,
-                timeoutMs: null,
                 payload: {
                     serverIdentityId: 'srv_server_a',
                     machineId: 'machine-1',
@@ -900,7 +1017,7 @@ describe('machine contribution registry projection ops', () => {
             }),
         ]);
         for (const request of network.requests.slice(0, 3)) {
-            expect(request.timeoutMs).toBeNull();
+            expect(request.timeoutMs ?? null).toBeNull();
         }
         expect(JSON.stringify(machineRpcWithServerScopeMock.mock.calls)).not.toContain('values');
 
@@ -1316,6 +1433,23 @@ describe('machine contribution registry projection ops', () => {
             result: { ok: true, inputSchema: reloadedInputSchema },
         });
         expect(machineRpcWithServerScopeMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('admits a successor Account before reusing a retained Action schema occurrence', async () => {
+        const { machinePluginActionSchemasRead } = await import('./machineContributionRegistryProjection');
+        const inputSchema = { type: 'object', properties: { privateOption: { type: 'string' } }, additionalProperties: false };
+        machineRpcWithServerScopeMock.mockResolvedValue({ ok: true, inputSchema });
+        const input = { serverId: serverAId, expectedOccurrenceId: 'retained-occurrence', qualifiedActionId: 'acme.preview/refresh' };
+        await expect(machinePluginActionSchemasRead('machine-1', input))
+            .resolves.toMatchObject({ supported: true, result: { ok: true, inputSchema } });
+        await network.setAccount('https://server-a', 'account-b');
+        network.setHttpResponder(async request => new URL(String(request)).pathname.startsWith('/v1/machines')
+            ? Response.json({ error: 'Forbidden' }, { status: 403 }) : null);
+        const retained = await machinePluginActionSchemasRead('machine-1', input);
+        await expect(machinePluginActionSchemasRead('machine-1', { ...input, expectedOccurrenceId: 'uncached-occurrence' }))
+            .resolves.toMatchObject({ supported: false });
+        expect(retained).toMatchObject({ supported: false });
+        expect(network.requests).toHaveLength(1);
     });
 
     it('does not keep a failed Action schema read', async () => {

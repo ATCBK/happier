@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,12 +9,14 @@ import { computePluginUiArtifactFileSetSha256DigestV1, computePluginUiArtifactSh
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui/uiArtifactsManifest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readDeclaredConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
+import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { definePlugin } from '@happier-dev/plugin-sdk';
 import type { RpcHandler } from '@/api/rpc/types';
 import { reloadConfiguration } from '@/configuration';
-import { createResolvedContributionRegistry, getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH } from '@/plugins/install/ui/generatedArtifacts';
 import { resolveContainedPluginResourcePath } from '@/plugins/projection/resources/package/resolve';
-import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import {
     invalidateDaemonContributionRegistryProjectionCache,
@@ -48,15 +50,31 @@ describe('bundled daemon contribution describe cost', () => {
             let serverFeatureReads = 0;
             let installedPackageReads = 0;
             let executionOriginContextReads = 0;
+            let serverIdentityId: string | null = 'srv_cost';
+            let blockedCatalogRead: Readonly<{ entered(): void; wait: Promise<void> }> | undefined;
+            const blockNextCatalogRead = () => {
+                let enterCatalog = () => {};
+                let release = () => {};
+                const entered = new Promise<void>(resolve => { enterCatalog = resolve; });
+                const wait = new Promise<void>(resolve => { release = resolve; });
+                blockedCatalogRead = { entered: enterCatalog, wait };
+                return { entered, release };
+            };
             registerDaemonContributionRegistryProjectionHandler({
                 registerHandler: (method, handler) => { handlers.set(method, handler); },
             }, {
                 resolveRuntimeRegistry: async () => runtime,
                 resolveGeneration: async () => 1,
-                resolveInstalledPackages: async () => { installedPackageReads += 1; return []; },
+                resolveInstalledPackages: async () => {
+                    installedPackageReads += 1;
+                    const blocked = blockedCatalogRead;
+                    blockedCatalogRead = undefined;
+                    if (blocked) { blocked.entered(); await blocked.wait; }
+                    return [];
+                },
                 resolvePluginProjectionExecutionOriginContext: async () => {
                     executionOriginContextReads += 1;
-                    return { serverIdentityId: 'srv-cost', machineId: 'test-machine' };
+                    return serverIdentityId === null ? null : { serverIdentityId, machineId: 'test-machine' };
                 },
                 // This replaces only the server-features network boundary.
                 resolveServerFeaturesSnapshot: async () => { serverFeatureReads += 1; return undefined; },
@@ -67,9 +85,13 @@ describe('bundled daemon contribution describe cost', () => {
                 hostingProviders: [...runtime.scmHostingProvidersById.keys()],
             });
             const initialScmRegistrations = readScmRegistrations();
-            const settings = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
+            const settingsResponse = await handler({
                 machineId: 'test-machine', locale: 'fr-FR', selection: 'settings',
-            }));
+            });
+            const settings = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(settingsResponse);
+            expect.soft(await handler({ machineId: 'test-machine', locale: 'ja', selection: 'settings',
+                reactNativeHostRuntimeIdentity: { platform: 'ios', channel: 'internal', appVersion: '99.0.0' },
+            })).toBe(settingsResponse);
             expect(settings.projection).toMatchObject({ installedPackagesById: {}, agentsById: {}, actionsById: {},
                 toolsById: {}, commandsById: {}, resourcesById: {}, familiesById: {}, diagnostics: [] });
             expect(settings.automationEligibleEvents).toBeUndefined();
@@ -85,21 +107,38 @@ describe('bundled daemon contribution describe cost', () => {
             expect(initialAdmission.composerSurfaceCatalog).toBeUndefined();
             expect(serverFeatureReads).toBe(0);
             expect(installedPackageReads).toBe(1);
-            expect(executionOriginContextReads).toBe(1);
+            expect(executionOriginContextReads).toBeGreaterThan(0);
             expect(readScmRegistrations()).toEqual(initialScmRegistrations);
             serverFeatureReads = 0;
             installedPackageReads = 0;
             executionOriginContextReads = 0;
-            const full = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
+            const fullResponse = await handler({
                 machineId: 'test-machine', locale: 'fr-FR',
-            }));
+            });
+            const full = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(fullResponse);
+            const fullAgain = await handler({ machineId: 'test-machine', locale: 'fr-FR' });
+            expect.soft(fullAgain).toBe(fullResponse);
+            const equivalentHostResponse = await handler({ machineId: 'test-machine', locale: 'fr-FR',
+                reactNativeHostRuntimeIdentity: { platform: 'ios', channel: 'internal', appVersion: '99.0.0' },
+            });
+            expect(equivalentHostResponse).toEqual(fullAgain);
+            expect.soft(equivalentHostResponse).toBe(fullAgain);
+            const equivalentFullBuildReads = installedPackageReads;
+            const equivalentFullResponses = new Set([fullResponse, fullAgain, equivalentHostResponse]).size;
+            expect.soft(equivalentFullBuildReads).toBe(1);
             // Full SCM demand activates runtime leaves and changes their applied
             // authorization facts. Compare projections of that same live state;
             // admission-only demand must not activate unrelated SCM leaves.
-            const admission = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
+            const admissionResponse = await handler({
                 machineId: 'test-machine', locale: 'fr-FR', selection: 'connectedAccountAdmission',
-            }));
-            const selected = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({ machineId: 'test-machine', selection: 'agents' }));
+            });
+            const admission = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(admissionResponse);
+            expect.soft(await handler({ machineId: 'test-machine', locale: 'ja', selection: 'connectedAccountAdmission',
+                reactNativeHostRuntimeIdentity: { platform: 'android', channel: 'store', appVersion: '99.0.0' },
+            })).toBe(admissionResponse);
+            const selectedResponse = await handler({ machineId: 'test-machine', selection: 'agents' });
+            const selected = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(selectedResponse);
+            expect.soft(await handler({ machineId: 'test-machine', selection: 'agents', locale: 'ja' })).toBe(selectedResponse);
             expect(serverFeatureReads).toBeGreaterThan(0);
             expect(installedPackageReads).toBeGreaterThan(0);
             expect(executionOriginContextReads).toBeGreaterThan(0);
@@ -126,10 +165,17 @@ describe('bundled daemon contribution describe cost', () => {
                 connectedAccounts: full.projection.familiesById.connectedAccounts,
                 machineProvisioners: full.projection.familiesById.machineProvisioners,
             });
+            // Independently build the other report only after checking that
+            // the pre-full admission cache refreshed to the new live state.
+            // This also prevents a cache hit hiding a new report dependency.
+            invalidateDaemonContributionRegistryProjectionCache();
+            expect(await handler({ machineId: 'test-machine', locale: 'fr-FR',
+                reactNativeHostRuntimeIdentity: { platform: 'ios', channel: 'internal', appVersion: '99.0.0' },
+            })).toEqual(fullAgain);
             const byteSize = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
             const families = Object.fromEntries(Object.entries(full.projection).map(([id, value]) => [id, byteSize(value)]));
             console.info(JSON.stringify({ method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
-                bytes: byteSize(full), agentSelectionBytes: byteSize(selected), families,
+                bytes: byteSize(full), agentSelectionBytes: byteSize(selected), equivalentFullBuildReads, equivalentFullResponses, families,
                 automationEligibleEventsBytes: byteSize(full.automationEligibleEvents ?? null),
                 composerSurfaceCatalogBytes: byteSize(full.composerSurfaceCatalog ?? null) }));
             expect(Object.keys(full.projection.actionsById).length).toBeGreaterThan(0);
@@ -144,6 +190,65 @@ describe('bundled daemon contribution describe cost', () => {
             expect(byteSize(settings)).toBeLessThan(byteSize(full));
             expect(byteSize(admission)).toBeLessThan(byteSize(full));
             expect(await handler({ machineId: 'test-machine', locale: 'fr-FR' })).toEqual(full);
+            // The catalog is a filesystem boundary. A slower earlier request
+            // must use the authority observed after preparation, not republish
+            // the origin retired while it waited. Exercise both selected and
+            // full demand, including withdrawal rather than last-known-good.
+            expect(Object.values(full.projection.actionsById).some(action => action.executionOrigin)).toBe(true);
+            for (const selection of ['connectedAccountAdmission', undefined] as const) {
+                for (const currentServerIdentityId of ['srv_origin_current', null]) {
+                    invalidateDaemonContributionRegistryProjectionCache();
+                    serverIdentityId = 'srv_origin_before';
+                    const catalog = blockNextCatalogRead();
+                    const request = { machineId: 'test-machine', ...(selection ? { selection } : {}) };
+                    const earlier = handler(request);
+                    await catalog.entered;
+                    serverIdentityId = currentServerIdentityId;
+                    let current;
+                    try { current = await handler(request); } finally { catalog.release(); }
+                    const projection = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(current).projection;
+                    const origins = Object.values(projection.actionsById).flatMap(action => action.executionOrigin ? [action.executionOrigin] : []);
+                    if (currentServerIdentityId === null) expect(origins).toEqual([]);
+                    else {
+                        expect(origins.length).toBeGreaterThan(0);
+                        expect(origins.every(origin => origin.serverIdentityId === currentServerIdentityId)).toBe(true);
+                    }
+                    expect.soft(await earlier).toBe(current);
+                    expect.soft(await handler(request)).toBe(current);
+                }
+            }
+            // Withdrawal and recovery can cross two initial input witnesses.
+            // Once both filesystem reads finish, neither build may wait on the
+            // other's now-superseded initial witness. No timeout is involved:
+            // each event-loop turn drains all runnable preparation microtasks.
+            invalidateDaemonContributionRegistryProjectionCache();
+            serverIdentityId = 'srv_origin_before';
+            const firstCatalog = blockNextCatalogRead();
+            let secondCatalog: ReturnType<typeof blockNextCatalogRead> | undefined;
+            const request = { machineId: 'test-machine', selection: 'connectedAccountAdmission' };
+            const first = handler(request);
+            let firstSettled = false;
+            void first.then(() => { firstSettled = true; }, () => { firstSettled = true; });
+            try {
+                await firstCatalog.entered;
+                serverIdentityId = null;
+                secondCatalog = blockNextCatalogRead();
+                const second = handler(request);
+                let secondSettled = false;
+                void second.then(() => { secondSettled = true; }, () => { secondSettled = true; });
+                await secondCatalog.entered;
+                firstCatalog.release();
+                await new Promise(resolve => setImmediate(resolve));
+                serverIdentityId = 'srv_origin_before';
+                secondCatalog.release();
+                await new Promise(resolve => setImmediate(resolve));
+                expect(firstSettled).toBe(true);
+                expect(secondSettled).toBe(true);
+                await Promise.all([first, second]);
+            } finally {
+                firstCatalog.release();
+                secondCatalog?.release();
+            }
         } finally {
             clock.mockRestore();
             await runtime.dispose();
@@ -155,12 +260,8 @@ describe('bundled daemon contribution describe cost', () => {
     }, 120_000);
 
     it('returns verified Artifact metadata and detects changed installed files on the next read', async () => {
-        const happyHomeDir = await mkdtemp(join(tmpdir(), 'gi-artifact-cost-'));
         const relativePath = 'hosted-web/panel/index.html';
-        const installedRoot = join(happyHomeDir, GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH);
-        await mkdir(join(installedRoot, 'hosted-web/panel'), { recursive: true });
         const bytes = new Uint8Array(2 * 1024 * 1024).fill(97);
-        await writeFile(join(installedRoot, relativePath), bytes);
         const files = [{ relativePath, bytes }];
         const digest = computePluginUiArtifactFileSetSha256DigestV1(files);
         const graph = PluginUiArtifactsManifestEntryV2Schema.parse({
@@ -168,21 +269,74 @@ describe('bundled daemon contribution describe cost', () => {
             files: [{ relativePath, digest: computePluginUiArtifactSha256DigestV1(bytes), byteSize: bytes.byteLength }],
             digest, builtWith: { staging: 'staticDirectory' }, hostUiApiRange: '^1.0.0',
         });
-        const registry = createResolvedContributionRegistry({ agents: [],
-            occurrenceIdsByPluginId: { 'cost.plugin': createPluginRuntimeOccurrenceId('cost.plugin') },
-            uiRenderersV2: [{ provenance: 'external', source: { kind: 'path' }, pluginId: 'cost.plugin',
-                identity: { pluginId: 'cost.plugin', localId: 'panel-renderer' },
-                manifestPath: join(happyHomeDir, '.happier-plugin/plugin.json'), pluginRootPath: happyHomeDir,
-                generatedUiArtifactsManifest: { version: 2, entries: [graph] },
-                definition: { id: 'panel-renderer', kind: 'hostedWeb', source: { kind: 'artifact', artifact: 'panel' } },
-            }],
+        const author = definePlugin({ id: 'cost.plugin', version: '1.0.0', entrypoints: { daemon: './daemon.mjs' },
+            ui: { renderers: [{ id: 'panel-renderer', kind: 'hostedWeb',
+                source: { kind: 'artifact', artifact: 'panel' } }] },
         });
-        const runtime = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, contributes: registry,
-            generation: 1, pluginIds: [], resolveServerFeaturesSnapshot: () => undefined });
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ plugins: [{ manifest: author.manifest,
+            files: { 'daemon.mjs': 'export function activate() {}',
+                [`${GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH}/ui-artifacts.json`]: JSON.stringify({ version: 2, entries: [graph] }),
+                [`${GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH}/${relativePath}`]: Buffer.from(bytes).toString('utf8'),
+            } }], coldStart: true });
+        const runtime = fixture.registry;
+        const generation = fixture.committed.generations.get('cost.plugin');
+        if (!generation) throw new Error('Missing admitted Artifact fixture');
+        const installedRoot = join(generation.rootPath, GENERATED_PLUGIN_UI_ARTIFACTS_ROOT_RELATIVE_PATH);
         try {
             const handlers = new Map<string, RpcHandler>();
+            let hostedWebEnabled = true;
+            let failCatalogRead = false;
+            let catalogReads = 0;
+            let catalogGate: Promise<void> | undefined;
             registerDaemonContributionRegistryProjectionHandler({ registerHandler: (method, handler) => { handlers.set(method, handler); } },
-                { resolveRuntimeRegistry: async () => runtime });
+                { resolveRuntimeRegistry: async () => runtime, resolveGeneration: async () => 1,
+                    processEnv: { HAPPIER_FEATURE_PLUGINS_UI_HOSTED_WEB__ENABLED: '1' },
+                    // Home features and the installed-package filesystem are system boundaries.
+                    resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({
+                        features: { plugins: { enabled: true, ui: { enabled: hostedWebEnabled, hostedWeb: { enabled: true } } } },
+                    }) }),
+                    resolveInstalledPackages: async () => {
+                        catalogReads += 1;
+                        if (failCatalogRead) { failCatalogRead = false; throw new Error('catalog filesystem unavailable'); }
+                        await catalogGate;
+                        return [];
+                    },
+                });
+            const describe = handlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)!;
+            const noFrame = await describe({ machineId: 'test-machine' });
+            expect(DaemonContributionRegistryProjectionDescribeResponseSchema.parse(noFrame).projection.familiesById.pluginUi
+                ?.entriesById['hostedWeb:cost.plugin:panel-renderer']).toMatchObject({ runtime: {
+                    state: 'fallback', decision: { reason: 'hosted_web_frame_adapter_unavailable' },
+                } });
+            const webRequest = { machineId: 'test-machine', hostedWebFrameCapability: { platform: 'web', adapter: 'domIframe' } };
+            const web = await describe(webRequest);
+            expect(web).not.toBe(noFrame);
+            expect(DaemonContributionRegistryProjectionDescribeResponseSchema.parse(web).projection.familiesById.pluginUi
+                ?.entriesById['hostedWeb:cost.plugin:panel-renderer']).toMatchObject({ runtime: { state: 'available' } });
+            expect(await describe({ machineId: 'test-machine', hostedWebFrameCapability: { platform: 'ios', adapter: 'WKWebView' } })).toBe(web);
+            invalidateDaemonContributionRegistryProjectionCache();
+            expect(await describe({ machineId: 'test-machine', hostedWebFrameCapability: { platform: 'ios', adapter: 'WKWebView' } })).toEqual(web);
+            await expect(describe({ machineId: 'test-machine', hostedWebFrameCapability: { platform: 'web', adapter: 'WKWebView' } })).rejects.toThrow();
+            hostedWebEnabled = false;
+            const disabled = await describe(webRequest);
+            expect(disabled).not.toBe(web);
+            expect(DaemonContributionRegistryProjectionDescribeResponseSchema.parse(disabled).projection.familiesById.pluginUi
+                ?.entriesById['hostedWeb:cost.plugin:panel-renderer']).toMatchObject({ runtime: {
+                    state: 'fallback', decision: { reason: 'feature_disabled' },
+                } });
+            invalidateDaemonContributionRegistryProjectionCache();
+            failCatalogRead = true;
+            await expect(describe(webRequest)).rejects.toThrow('catalog filesystem unavailable');
+            const readsBeforeConcurrent = catalogReads;
+            let releaseCatalog = () => {};
+            catalogGate = new Promise<void>(resolve => { releaseCatalog = resolve; });
+            const pending = [describe(webRequest), describe(webRequest), describe(webRequest)];
+            await new Promise(resolve => setImmediate(resolve));
+            releaseCatalog();
+            const responses = await Promise.all(pending);
+            expect(catalogReads - readsBeforeConcurrent).toBe(1);
+            expect(responses[1]).toBe(responses[0]);
+            expect(responses[2]).toBe(responses[0]);
             const request = { machineId: 'test-machine', artifactFamily: 'hostedWeb', cacheIdentity: { artifactDigest: digest } };
             const read = () => handlers.get(RPC_METHODS.DAEMON_PLUGIN_UI_ARTIFACT_BYTES_READ)!(request);
             // Same filesystem-produced Buffer as the real RPC. Hashing a plain
@@ -209,6 +363,6 @@ describe('bundled daemon contribution describe cost', () => {
             // or second identity authority is introduced by metadata reuse.
             await writeFile(join(installedRoot, relativePath), new Uint8Array(bytes.length).fill(98));
             expect(await read()).toMatchObject({ ok: false, code: 'artifact_integrity_failed' });
-        } finally { await runtime.dispose(); }
+        } finally { invalidateDaemonContributionRegistryProjectionCache(); await fixture.dispose(); }
     });
 });

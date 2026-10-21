@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as React from 'react';
-import { act, renderHook } from '@/dev/testkit';
+import { act, flushHookEffects, renderHook } from '@/dev/testkit';
 import {
     ApprovalRequestSchema,
     FeaturesResponseSchema,
@@ -21,7 +21,7 @@ import {
     type ApprovalRequest,
 } from '@happier-dev/protocol';
 import { RegistryFetchRequestV1Schema, RegistryFetchResponseV1Schema } from '@happier-dev/protocol/registries';
-import { ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { installPromptRegistryItemInLibrary, projectLegacySkillRegistryInstallActionResultV1 } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { PromptRegistryInstallInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { DEFAULT_CURATED_MARKETPLACE_SOURCE_URL } from '@happier-dev/protocol/marketplace';
@@ -34,6 +34,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { SessionReadBatchResponseV1Schema } from '@happier-dev/protocol/sessions/read/sessionReadBatchV1';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsagePromptCompositionSchema } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
@@ -47,7 +48,7 @@ import { MetadataSchema } from '@happier-dev/session-core/state';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { SessionTeamCredentialBindingMetadataPatchV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
@@ -88,7 +89,7 @@ vi.mock('@happier-dev/iroh-native', async (original) => {
     return { ...actual, getOptionalHappierIrohNativeModule: () => native };
 });
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     // This connected network boundary has no real Socket.IO engine, including
     // the fire-and-forget human-presence leave emitted during Account disposal.
     vi.spyOn(socket, 'emit').mockReturnValue(socket);
@@ -191,6 +192,15 @@ function serveSession(session: Session, beforeWrite?: (input: unknown) => void, 
     } };
     homes.answer(serverId, `GET /v2/sessions/${session.id}`, read);
     homes.answer(serverId, `GET /v2/sessions/${session.id}?accessProjectionVersion=1`, read);
+    const sessionBatch = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
+        : homes.request(request.url, { method: request.method, headers: request.headers, signal: request.signal }));
+    homes.answer(serverId, 'POST /v2/sessions/read-batch', { select: async (body, request) => {
+        const url = new URL(request.url);
+        const response = await sessionBatch.handle({ url, path: url.pathname, home: serverId, accountId: 'account-a',
+            method: 'POST', headers: new Headers(request.init?.headers), signal: request.signal, body });
+        if (!response) throw new Error('Expected the canonical Session batch fixture to respond');
+        return { status: response.status, body: await response.json() };
+    } });
     homes.answer(serverId, `PATCH /v2/sessions/${session.id}`, { select: (input) => {
         writes.push(input);
         beforeWrite?.(input);
@@ -303,11 +313,11 @@ async function servePromptTransfers() {
         daemonState: { status: 'running', transfer: { supported: { import: true, export: true },
             listenerClasses: { loopback_http: { enabled: true, configured: true, active: true }, tailscale_serve_https: { enabled: false, configured: false, active: false } },
             lifecycle: { mode: 'lazy_idle_shutdown', version: 1 } } } });
-    const publishedMachine = { ...machine, ...ExternalActionMachineBootstrapV1Schema.parse({ id: machine.id, kind: 'persistent', active: true,
-        installationId: 'prompt-fixture-installation', revokedAt: null, replacedByMachineId: null,
-        dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-        access: { custodian: { accountId: 'account-a', displayName: 'Prompt custodian' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }),
-        metadata: encodePlainMachineStoredContent(machine.metadata), daemonState: encodePlainMachineStoredContent(machine.daemonState) };
+    const publishedMachine = { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+        installationId: 'prompt-fixture-installation',
+        metadata: encodePlainMachineStoredContent(machine.metadata), daemonState: encodePlainMachineStoredContent(machine.daemonState),
+        operationProtocolCapabilities: machine.operationProtocolCapabilities,
+        operationProtocolCapabilitiesRevision: machine.operationProtocolCapabilitiesRevision };
     homes.answer(serverId, '/v1/machines', { body: [publishedMachine] });
     homes.answer(serverId, '/v1/machines/machine_1', { body: { machine: publishedMachine } });
     homes.answer(serverId, 'POST /v1/actions/registries.items.read', { select: input => {
@@ -695,7 +705,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const { SkillReadInputV1Schema } = await import('@happier-dev/protocol/prompts/library/skills/skillReadV1');
         const { readSkillZipFilesV1 } = await import('@happier-dev/protocol/prompts/library/skills/skillZipV1');
         const { useSkillsLibrary } = await import('@/sync/domains/skills/useSkillsLibrary');
-        const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+        const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiDeclarationSources } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
         const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
         const { PluginProjectionV2Schema } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
         const pluginId = 'com.acme.skills';
@@ -725,10 +735,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const machine = createMachineFixture({ id: 'plugin-executor-b', active: true, activeAt: Date.now() });
         const originFor = (machineId: string) => ({ serverIdentityId: account.serverIdentityId!,
             materializationRef: { machineId, pluginId, materializationId: machineId } });
-        const published = { ...machine, ...ExternalActionMachineBootstrapV1Schema.parse({ id: machine.id, kind: 'persistent', active: true,
-            installationId: 'plugin-installation', revokedAt: null, replacedByMachineId: null,
-            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-            access: { custodian: { accountId: 'account-a', displayName: 'Plugin custodian' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }),
+        const published = { ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+            installationId: 'plugin-installation',
             metadata: encodePlainMachineStoredContent(machine.metadata), daemonState: encodePlainMachineStoredContent(machine.daemonState) };
         homes.answer(serverId, '/v1/machines', { body: [published] });
         storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.serverId]: [machine] } });
@@ -751,6 +759,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         let sourceUnavailable = false;
         let staleOccurrence = false;
         let wrongSkill = false;
+        let holdListResponses = false;
+        const heldListResponses: Array<ReturnType<typeof createDeferred<void>>> = [];
         for (const actionId of ['skills.list', 'skills.read', 'skills.duplicate'] as const) homes.answer(serverId, `POST /v1/actions/${actionId}`, {
             select: async input => {
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
@@ -765,6 +775,11 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                     result = { ...list, items: list.items.filter(item => !missingSkill || item.skillId !== pluginSkills[0]!.skillId)
                         .map(item => staleOccurrence && item.skillId === pluginSkills[0]!.skillId && item.provenance.kind === 'plugin'
                             ? { ...item, provenance: { ...item.provenance, occurrenceId: 'retired-occurrence' } } : item) };
+                    if (holdListResponses) {
+                        const held = createDeferred<void>();
+                        heldListResponses.push(held);
+                        await held.promise;
+                    }
                 }
                 return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: envelope.requestId,
                     execution: { ok: true, result: miswired ? {} : result } }) };
@@ -790,7 +805,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             expect(rule).toMatchObject({ ok: true, result: { ok: true, items: [{ skillId: pluginSkills[1]!.skillId }] } });
             seedSession(false);
             const sessionChange = await executor.execute('session.capabilities.set', { sessionId: 'session_1', kind: 'skill', id: 'acme-review', state: 'on' }, context);
-            expect(sessionChange, sessionChange.ok ? 'Session capability result' : `${sessionChange.errorCode}: ${sessionChange.error}`).toMatchObject({ ok: true, result: { ok: true, state: 'on' } });
+            expect(sessionChange, JSON.stringify(sessionChange)).toMatchObject({ ok: true, result: { ok: true, state: 'on' } });
             missingSkill = true;
             expect(await executor.execute('skills.list', {}, context)).toMatchObject({ ok: true, result: { items: expect.arrayContaining([
                 expect.objectContaining({ skillId: 'happier:happier' }), expect.objectContaining({ skillId: copiedId }),
@@ -829,12 +844,19 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             miswired = false;
             storage.setState({ isDataReady: true, artifactsLoaded: true });
             const lifetime = captureActiveServerAccountScopeLifetime();
+            const sourceObservations: Array<ReturnType<typeof useAppShellPluginUiDeclarationSources>> = [];
+            function DeclarationProbe() {
+                const source = useAppShellPluginUiDeclarationSources();
+                React.useLayoutEffect(() => { sourceObservations.push(source); });
+                return null;
+            }
             function Wrapper(props: React.PropsWithChildren) {
                 return React.createElement(AppShellPluginUiProjectionValueProvider, { value: { pluginUiProjection: projected,
                     pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: machine.id,
                     serverId: account.serverId, platform: 'web', accountLifetime: lifetime,
                     reloadConnectedAccountProjection: () => {}, reloadClientExecutables: () => {},
-                    clientExecutableActivation: { status: 'ready' } }, children: props.children });
+                    clientExecutableActivation: { status: 'ready' } }, children: React.createElement(React.Fragment, null,
+                        React.createElement(DeclarationProbe), props.children) });
             }
             const hook = await renderHook(() => useSkillsLibrary(), { wrapper: Wrapper });
             try {
@@ -849,10 +871,43 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                     items: expect.not.arrayContaining([expect.objectContaining({ skillId: pluginSkills[0]!.skillId })]) }));
                 staleOccurrence = false;
                 await act(async () => hook.getCurrent().retry());
-                await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
-                const requests = homes.requestsFor('/v1/actions/skills.list').length;
-                projected = installedProjection ? { ...installedProjection, generation: 999,
+                await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: false }));
+                const publishVersion = (version: string) => installedProjection ? { ...installedProjection,
                     skillsById: Object.fromEntries(Object.entries(installedProjection.skillsById).map(([id, entry]) => [id, {
+                        ...entry, pluginVersion: version, definition: { ...entry.definition, directory: `./skills/${version}/${entry.definition.id}` },
+                        hostSupplies: readPluginUiContributionSupplies(entry).map(supply => ({ ...supply, pluginVersion: version })),
+                    }])) } : null;
+                holdListResponses = true;
+                projected = publishVersion('2.0.0');
+                await hook.rerender();
+                await vi.waitFor(() => expect(heldListResponses).toHaveLength(1));
+                expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: true });
+                const pendingIdentity = sourceObservations.at(-1)?.skillSourceIdentity;
+                sourceObservations.length = 0;
+                projected = projected ? { ...projected, generation: 998,
+                    skillsById: Object.fromEntries(Object.entries(projected.skillsById).map(([id, entry]) => [id, {
+                        ...entry, hostSupplies: readPluginUiContributionSupplies(entry).map(supply => ({ ...supply, generation: 998 })),
+                    }])) } : null;
+                await hook.rerender();
+                expect(heldListResponses).toHaveLength(1);
+                expect(sourceObservations.length).toBeGreaterThan(0);
+                expect(sourceObservations.every(source => source.ready && source.skillSourceIdentity === pendingIdentity)).toBe(true);
+                const previousDescription = hook.getCurrent().items.find(item => item.skillId === pluginSkills[0]!.skillId)?.description;
+                pluginSkills[0]!.files[0]!.contentBase64 = Buffer.from('---\nname: acme-check\ndescription: Current plugin source\n---\nUpdated instructions').toString('base64');
+                projected = publishVersion('3.0.0');
+                await hook.rerender();
+                await vi.waitFor(() => expect(heldListResponses).toHaveLength(2));
+                await act(async () => { heldListResponses[0]!.resolve(); });
+                await flushHookEffects();
+                expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: true });
+                expect(hook.getCurrent().items.find(item => item.skillId === pluginSkills[0]!.skillId)?.description).toBe(previousDescription);
+                await act(async () => { heldListResponses[1]!.resolve(); });
+                await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: false,
+                    items: expect.arrayContaining([expect.objectContaining({ skillId: pluginSkills[0]!.skillId, description: 'Current plugin source' })]) }));
+                holdListResponses = false;
+                const requests = homes.requestsFor('/v1/actions/skills.list').length;
+                projected = projected ? { ...projected, generation: 999,
+                    skillsById: Object.fromEntries(Object.entries(projected.skillsById).map(([id, entry]) => [id, {
                         ...entry, hostSupplies: readPluginUiContributionSupplies(entry).map(supply => ({ ...supply, generation: 999 })),
                     }])) } : null;
                 await hook.rerender();
@@ -860,7 +915,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
                 projected = null;
                 await hook.rerender();
                 await vi.waitFor(() => expect(hook.getCurrent().items.some(item => item.skillId === pluginSkills[0]!.skillId)).toBe(false));
-            } finally { await hook.unmount(); }
+            } finally { holdListResponses = false; for (const held of heldListResponses) held.resolve(); await hook.unmount(); }
         } finally { stop(); account.dispose(); }
     });
 
@@ -987,15 +1042,6 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
 
     it('composes retained completed-model evidence through usage query, exact Apply/Undo and intervening-edit refusal', async () => {
         vi.stubGlobal('fetch', homes.request);
-        const sessionBatch = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
-            : homes.request(request.url, { method: request.method, headers: request.headers, signal: request.signal }));
-        homes.answer(serverId, 'POST /v2/sessions/read-batch', { select: async (body, request) => {
-            const url = new URL(request.url);
-            const response = await sessionBatch.handle({ url, path: url.pathname, home: serverId, accountId: 'account-a',
-                method: 'POST', headers: new Headers(request.init?.headers), signal: request.signal, body });
-            if (!response) throw new Error('Expected the canonical Session batch fixture to respond');
-            return { status: response.status, body: await response.json() };
-        } });
         const { resolveServerProfileScopeIdForIdentifier, areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
         const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
         const accountScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-a' };
@@ -1097,8 +1143,21 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const receipt = UsageCoachApplyResultSchema.parse(applied.ok ? applied.result : null);
         expect(receipt.reversal).toMatchObject({ kind: 'model', owner: { before: heavy, applied: selection('light-model') } });
         expect(remote.readMetadata().modelSelectionIntentV1?.selection).toEqual(selection('light-model'));
+        const exactResponse = await account.request('/v2/sessions/session_1?accessProjectionVersion=1', { method: 'GET' }, { includeAuth: true });
+        const exactBody: unknown = await exactResponse.json();
+        const exact = V2SessionRecordSchema.parse(exactBody && typeof exactBody === 'object' ? Reflect.get(exactBody, 'session') : null);
+        const batchResponse = await account.request('/v2/sessions/read-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionIds: ['session_1'], accessProjectionVersion: 1, includeSnapshot: true, includeTurns: false, includeMessages: false }) },
+            { includeAuth: true });
+        const batched = SessionReadBatchResponseV1Schema.parse(await batchResponse.json()).results[0]?.detail;
+        if (!batched || batched.status !== 200 || !batched.body.session) throw new Error('Expected the updated Session in the real batch fixture');
+        expect(batched.body.session.metadataVersion).toBe(exact.metadataVersion);
+        expect(batched.body.session.metadata).toBe(exact.metadata);
+        expect(batched.body.session.ownerMetadata).toEqual(exact.ownerMetadata);
+        expect(exact.metadataVersion).toBeGreaterThan(session.metadataVersion);
         const undo = () => executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: receipt.reversal }, { serverId, surface: 'ui' });
-        expect(await undo()).toMatchObject({ ok: true, result: { kind: 'undone' } });
+        const undone = await undo();
+        expect(undone, JSON.stringify(undone)).toMatchObject({ ok: true, result: { kind: 'undone' } });
         expect(remote.readMetadata().modelSelectionIntentV1?.selection).toEqual(heavy);
         const modelOff = { ...accountSettings, usageCoachPreferencesV1: { ...accountSettings.usageCoachPreferencesV1, modelSuggestion: 'off' as const } };
         homes.answer(serverId, 'GET /v2/account/settings', { body: { content: { t: 'plain', v: modelOff }, version: ++settingsVersion } });

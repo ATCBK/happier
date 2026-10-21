@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { definePlugin } from '@happier-dev/plugin-sdk';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -29,6 +31,14 @@ describe('plugin skill source selection', () => {
       expect(response).toMatchObject({ pluginSkills: [{ skillId, provenance: { kind: 'plugin', pluginId } }] });
       expect(response.pluginSkills![0]!.files.map(file => file.path).sort()).toEqual(['SKILL.md', 'reference.txt'].sort());
       expect(response.projection.familiesById.skills?.entriesById[`${pluginId}/check`]).toBeDefined();
+      const declaration = runtime.registry.contributes.skills?.find(entry => entry.pluginId === pluginId);
+      if (!declaration) throw new Error('Missing admitted skill fixture');
+      await writeFile(join(declaration.pluginRootPath, declaration.definition.directory, 'SKILL.md'),
+        '---\nname: check\n---\nUpdated package instructions.');
+      const refreshed = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handlers
+        .get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)!({ machineId: 'source-A', selection: 'skills', skillIds: [skillId] }));
+      const updatedFile = refreshed.pluginSkills![0]!.files.find(file => file.path === 'SKILL.md');
+      expect(Buffer.from(updatedFile?.contentBase64 ?? '', 'base64').toString('utf8')).toContain('Updated package instructions.');
       const absent = await handlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)!({
         machineId: 'source-A', selection: 'skills', skillIds: ['plugin:absent/check'] });
       expect(absent).toMatchObject({ pluginSkills: [] });

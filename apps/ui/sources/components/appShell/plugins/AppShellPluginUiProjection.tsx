@@ -7,13 +7,14 @@ import {
     type AppShellPluginUiProjectionPublication,
 } from './appShellPluginUiProjectionPublication';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { createPluginSkillSourceIdentityPublication, EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY,
+    type PluginSkillSourceIdentity } from '@/sync/domains/skills/pluginSkillSourceIdentity';
 
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import {
-    applyInstalledAppShellPluginUiReactNativeExecutableAuthorityInvalidation,
     createInstalledPluginUiReactNativeRuntimeProjectionSource,
     type PluginUiReactNativeRuntimeProjectionSource,
 } from '@/components/plugins/reactNative/projectionInvalidation';
@@ -184,11 +185,13 @@ const AppShellPluginUiProjectionContext = React.createContext<AppShellPluginUiPr
 );
 export type AppShellPluginUiDeclarationSources = Readonly<{
     projection: PluginUiProjectionModel | null;
+    skillSourceIdentity: PluginSkillSourceIdentity;
     accountLifetime: ActiveServerAccountScopeLifetime | null;
     /** This exact source scope has completed its first descriptive publication. */
     ready: boolean;
 }>;
-const EMPTY_DECLARATION_SOURCES: AppShellPluginUiDeclarationSources = Object.freeze({ projection: null, accountLifetime: null, ready: true });
+const EMPTY_DECLARATION_SOURCES: AppShellPluginUiDeclarationSources = Object.freeze({ projection: null,
+    skillSourceIdentity: EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY, accountLifetime: null, ready: true });
 const AppShellPluginUiDeclarationProjectionContext = React.createContext<Readonly<{
     current: AppShellPluginUiDeclarationSources;
     retired: AppShellPluginUiDeclarationSources;
@@ -213,18 +216,11 @@ function accountLifetimeScopeKey(lifetime: ActiveServerAccountScopeLifetime | nu
     return lifetime ? JSON.stringify([lifetime.scope.serverId, lifetime.scope.accountId]) : 'no-active-account';
 }
 
-async function applyAppShellProjectionInvalidation(previous: PluginUiProjectionModel, next: PluginUiProjectionModel): Promise<void> {
-    await applyInstalledAppShellPluginUiReactNativeExecutableAuthorityInvalidation(previous, next);
-}
-
 export async function settleAppShellPluginRuntimeUpdate(input: Readonly<{
-    invalidate: () => Promise<void>;
     activate: () => Promise<readonly PluginUiClientExecutableReconciliationAttempt[] | void>;
     isCancelled: () => boolean;
 }>): Promise<AppShellPluginRuntimeUpdateSettlement> {
     try {
-        if (input.isCancelled()) return { status: 'cancelled' };
-        await input.invalidate();
         if (input.isCancelled()) return { status: 'cancelled' };
         const attempts = await input.activate();
         if (input.isCancelled()) return { status: 'cancelled' };
@@ -263,15 +259,38 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
     // Standalone composition/specimens use the same descriptive candidate
     // publisher. The real AppShell supplies its already-published fact map.
     const [standaloneCandidates] = React.useState(createPluginUiExecutionOriginCandidatePublication);
+    const [standaloneSkills] = React.useState(createPluginSkillSourceIdentityPublication);
+    const [standaloneDeclarations, setStandaloneDeclarations] = React.useState<AppShellPluginUiDeclarationSources>(() => Object.freeze({
+        projection: null, skillSourceIdentity: EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY, accountLifetime: lifetime, ready: false,
+    }));
     const standaloneBasis = React.useRef<PluginUiProjectionModel | null | undefined>(undefined);
+    const published = props.publication?.getSnapshot();
+    const currentDeclarations = React.useMemo<AppShellPluginUiDeclarationSources>(() => {
+        if (!props.publication) return standaloneDeclarations;
+        const ready = props.declarationReady !== false && published?.accountLifetime === lifetime;
+        return Object.freeze({ projection: ready ? published!.pluginUiProjection : null,
+            skillSourceIdentity: ready ? published!.skillSourceIdentity : EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY,
+            accountLifetime: lifetime, ready });
+    }, [props.publication, props.declarationReady, published?.accountLifetime, published?.pluginUiProjection,
+        published?.skillSourceIdentity, lifetime, standaloneDeclarations]);
     const declarationSources = React.useMemo(() => Object.freeze({
-        current: Object.freeze({ projection: props.value.pluginUiProjection, accountLifetime: props.value.accountLifetime,
-            ready: props.declarationReady !== false }),
+        current: currentDeclarations,
         // Preserve the retired identity: null must not relabel an in-progress
         // Account transition as an admitted, unscoped builtin-only catalog.
-        retired: Object.freeze({ projection: null, accountLifetime: props.value.accountLifetime, ready: false }),
-    }), [props.declarationReady, props.value.accountLifetime, props.value.pluginUiProjection]);
+        retired: Object.freeze({ projection: null, skillSourceIdentity: EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY,
+            accountLifetime: currentDeclarations.accountLifetime, ready: false }),
+    }), [currentDeclarations]);
     React.useLayoutEffect(() => {
+        if (!props.publication) {
+            const ready = props.declarationReady !== false && isCurrentAccountLifetime(lifetime);
+            const projection = ready ? props.value.pluginUiProjection : null;
+            const skillSourceIdentity = standaloneSkills.publish(projection);
+            // Publish projection, identity and original lifetime together. A
+            // generation-only preparation never withdraws an in-flight read.
+            setStandaloneDeclarations(previous => previous.projection === projection && previous.skillSourceIdentity === skillSourceIdentity
+                && previous.accountLifetime === lifetime && previous.ready === ready ? previous
+                : Object.freeze({ projection, skillSourceIdentity, accountLifetime: lifetime, ready }));
+        }
         if (!props.publication && standaloneBasis.current !== props.value.pluginUiProjection) {
             standaloneBasis.current = props.value.pluginUiProjection;
             standaloneCandidates.publish(props.value.pluginUiProjection, [],
@@ -294,7 +313,7 @@ export function AppShellPluginUiProjectionValueProvider(props: Readonly<{
                 ? snapshot.candidateFactsByPluginId.get(pluginId) ?? null : null;
         };
         return publishCommittedAppShellPluginUiProjection(read, readCandidates, props.publication?.subscribe);
-    }, [lifetime, props.publication, props.value, standaloneCandidates]);
+    }, [lifetime, props.publication, props.value, props.declarationReady, standaloneCandidates, standaloneSkills]);
     return (
         <AppShellPluginUiDeclarationProjectionContext.Provider value={declarationSources}>
             <AppShellPluginUiProjectionContext.Provider value={props.value}>
@@ -321,12 +340,12 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
 }>): React.ReactElement {
     const activeInventoryLoaded = useIsActiveMachineListSettled();
     const activeServer = useActiveServerSnapshot();
-    const { onlineMachineIds, selectableMachineIds } = useMachinePresenceMembership(activeServer.serverId);
-    const serverProfilesGeneration = useServerProfilesGeneration();
     // The union is an Account-scoped consumer even when its server id does not
     // change. Capturing the incumbent lifetime gives every report a synchronous
     // fence before Account B renders under the same server/machine coordinates.
     const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const { onlineMachineIds, selectableMachineIds } = useMachinePresenceMembership(activeServer.serverId, accountLifetime);
+    const serverProfilesGeneration = useServerProfilesGeneration();
     const currentAccountLifetimeKey = accountLifetimeScopeKey(accountLifetime);
     const availabilityReader = useActivePluginAccountAvailabilityReader();
     const hostBundledUiEnabled = useFeatureEnabled('plugins.ui.reactNativeBundles', {
@@ -411,10 +430,12 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     const voiceUnionMember = voiceMachineIsUnionMember && voiceExecutionMachineId
         ? currentnessForActiveAccountByMachineId.get(voiceExecutionMachineId)
         : undefined;
-    // Membership, not publication: a member whose probe has not published yet
-    // must not be double-described by a second dedicated subscription. The
+    // Target membership, not currentness settlement: a member whose probe has
+    // not published yet must not be double-described by a second subscription. The
     // disabled dedicated hook is exactly the inert placeholder for that gap.
-    const requiresDedicatedVoiceProjection = Boolean(voiceExecutionMachineId) && !voiceMachineIsUnionMember;
+    // First publish the source's target set; an unpublished membership is not
+    // evidence that this Voice machine needs a separate reader.
+    const requiresDedicatedVoiceProjection = declarationReady && Boolean(voiceExecutionMachineId) && !voiceMachineIsUnionMember;
     const dedicatedVoiceProjectionCurrentness = usePluginUiProjectionCurrentness({
         machineId: voiceExecutionMachineId,
         serverId: activeServer.serverId,
@@ -513,7 +534,6 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     React.useEffect(() => {
         commitConnectedAccountProjection(accountLifetime, connectedAccountResolution);
     }, [accountLifetime, commitConnectedAccountProjection, connectedAccountResolution]);
-    const appliedProjectionRef = React.useRef<PluginUiProjectionModel>(EMPTY_PLUGIN_UI_PROJECTION);
     const pluginRuntimeUpdateTailRef = React.useRef<Promise<void>>(Promise.resolve());
     // Activation consumes live admission methods, not the diagnostic observer's
     // cursor/telemetry revision. Actual executable facts and explicit Retry
@@ -581,12 +601,6 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
         const update = pluginRuntimeUpdateTailRef.current.then(async () => {
             await retention;
             const settlement = await settleAppShellPluginRuntimeUpdate({
-                invalidate: async () => {
-                    const applied = appliedProjectionRef.current;
-                    if (applied === next) return;
-                    await applyAppShellProjectionInvalidation(applied, next);
-                    appliedProjectionRef.current = next;
-                },
                 isCancelled: () => cancelled,
                 activate: async () => {
                     return await reconcileAppShellProjectedClientExecutables({
@@ -614,11 +628,6 @@ export function AppShellPluginUiProjectionProvider(props: Readonly<{
     }, [clientExecutableActivationRequest, readAppNavigationBinding]);
 
     React.useEffect(() => () => {
-        const previous = appliedProjectionRef.current;
-        appliedProjectionRef.current = EMPTY_PLUGIN_UI_PROJECTION;
-        void applyAppShellProjectionInvalidation(previous, EMPTY_PLUGIN_UI_PROJECTION).catch(() => {
-            // Unmount must remain safe if cache invalidation fails.
-        });
         // The executable host is process-global while this update tail belongs
         // to one component instance. Fence every exact-authority leaf so a
         // pending Action or Voice activation cannot publish on remount.

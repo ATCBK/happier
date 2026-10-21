@@ -16,6 +16,8 @@ import {
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createPluginSkillSourceIdentityPublication, EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY,
+    type PluginSkillSourceIdentity } from '@/sync/domains/skills/pluginSkillSourceIdentity';
 import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server/resolvePortableServerIdentityForRoutingId';
 import { loadPluginUiProjectionWarmCacheEntries } from '@/sync/domains/state/warmCachePersistence';
 import {
@@ -37,6 +39,7 @@ export type AppShellAccountScopedPluginUiCurrentnessReport = Readonly<{
 }>;
 type InstalledMachineDeclarations = Readonly<{
     models: readonly PluginUiProjectionModel[];
+    completeUiPluginIds: ReadonlySet<string>;
     materializationsByPluginId: Readonly<Record<string, PluginMachineMaterializationV1>>;
     serverIdentityId: string;
     hasUnprovenDeclarations: boolean;
@@ -102,6 +105,7 @@ export type AppShellPluginUiProjectionSnapshot = Readonly<{
     unionMembers: readonly PluginUiProjectionUnionMember[];
     projectionUnion: PluginUiProjectionUnion;
     pluginUiProjection: PluginUiProjectionModel | null;
+    skillSourceIdentity: PluginSkillSourceIdentity;
     destinationSurfacePlacements: ReturnType<typeof selectPluginDestinationSurfacePlacements>;
     settingsPages: readonly PluginUiProjectionModel['settingsPagesById'][string][];
     candidateFactsByPluginId: ReadonlyMap<string, PluginUiExecutionOriginCandidateFacts>;
@@ -124,7 +128,7 @@ export const EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT: AppShellPluginUiProj
     accountUiProjection: null, executionOriginMaterializations: NO_MATERIALIZATIONS,
     executionOriginPluginIds: NO_IDS, projectionTargets: NO_TARGETS,
     currentnessForActiveAccountByMachineId: NO_CURRENTNESS, unionMembers: NO_MEMBERS,
-    projectionUnion: EMPTY_UNION, pluginUiProjection: null, candidateFactsByPluginId: NO_FACTS,
+    projectionUnion: EMPTY_UNION, pluginUiProjection: null, skillSourceIdentity: EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY, candidateFactsByPluginId: NO_FACTS,
     destinationSurfacePlacements: NO_DESTINATION_PLACEMENTS, settingsPages: NO_SETTINGS_PAGES,
     connectedAccountResolution: Object.freeze({ kind: 'loading', descriptors: Object.freeze([]), conflicts: Object.freeze([]) }) });
 const EMPTY_SNAPSHOT = EMPTY_APP_SHELL_PLUGIN_UI_PROJECTION_SNAPSHOT;
@@ -157,6 +161,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
     let accountMerge = createInstalledPluginUiProjectionPublication();
     let candidates = createPluginUiExecutionOriginCandidatePublication();
     let connectedAccounts = createConnectedAccountDescriptorProjectionPublication();
+    let skills = createPluginSkillSourceIdentityPublication();
     const machineMerges = new Map<string, ReturnType<typeof createInstalledPluginUiProjectionPublication>>();
     const listeners = new Set<() => void>();
     const notify = () => { for (const listener of listeners) listener(); };
@@ -175,6 +180,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
         accountMerge = createInstalledPluginUiProjectionPublication();
         candidates = createPluginUiExecutionOriginCandidatePublication();
         connectedAccounts = createConnectedAccountDescriptorProjectionPublication();
+        skills = createPluginSkillSourceIdentityPublication();
         snapshot = EMPTY_SNAPSHOT;
     }
 
@@ -198,6 +204,8 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
                 const preceding = machines.get(report.machineId);
                 machines.set(report.machineId, Object.freeze({
                     models: Object.freeze([...(preceding?.models ?? []), installation.uiModel]),
+                    completeUiPluginIds: new Set([...preceding?.completeUiPluginIds ?? [],
+                        ...(installation.uiDeclarationState === 'known' ? [plugin.pluginId] : [])]),
                     materializationsByPluginId: Object.freeze({ ...preceding?.materializationsByPluginId, [plugin.pluginId]: report }),
                     serverIdentityId: report.serverIdentityId,
                     hasUnprovenDeclarations: preceding?.hasUnprovenDeclarations === true || installation.uiDeclarationState === 'preparing',
@@ -207,6 +215,8 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
                 const old = installedByMachineId.get(machineId);
                 if (old && old.serverIdentityId === next.serverIdentityId && old.hasUnprovenDeclarations === next.hasUnprovenDeclarations
                     && old.models.length === next.models.length && old.models.every((model, index) => model === next.models[index])
+                    && old.completeUiPluginIds.size === next.completeUiPluginIds.size
+                    && [...old.completeUiPluginIds].every(id => next.completeUiPluginIds.has(id))
                     && arePluginUiMaterializationsEquivalent(old.materializationsByPluginId, next.materializationsByPluginId)) {
                     machines.set(machineId, old);
                 }
@@ -234,7 +244,8 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
         const sameCurrentness = previous.currentnessForActiveAccountByMachineId.size === currentness.size
             && [...currentness].every(([id, value]) => previous.currentnessForActiveAccountByMachineId.get(id) === value);
         const currentnessForActiveAccountByMachineId = sameCurrentness ? previous.currentnessForActiveAccountByMachineId : currentness;
-        const nextModelBasis = [materializations, installedByMachineId, ...[...currentness.values()].map(value => value.pluginUiProjection)];
+        const nextModelBasis = [materializations, installedByMachineId,
+            ...[...currentness.values()].map(value => value.pluginUiProjection?.installedPackagesById)];
         let pluginIds = previous.executionOriginPluginIds;
         if (nextModelBasis.length !== modelBasis.length || nextModelBasis.some((value, index) => value !== modelBasis[index])) {
             const nextIds = [...new Set([...materializations.map(value => value.pluginId),
@@ -271,7 +282,8 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
                 serverIdentityId: declaration?.serverIdentityId ?? activeServerIdentity,
                 materializationsByPluginId: declaration?.materializationsByPluginId,
                 selectableExecutionOrigins: selectableByMachine.get(target.machineId),
-                projection: merge.publish(declaration?.models ?? NO_MODELS, current?.pluginUiProjection ?? null, declaration?.materializationsByPluginId),
+                projection: merge.publish(declaration?.models ?? NO_MODELS, current?.pluginUiProjection ?? null,
+                    declaration?.materializationsByPluginId, undefined, declaration?.completeUiPluginIds),
                 phase: current?.phase === 'unavailable' || current?.phase === 'retainedOffline' ? current.phase
                     : current?.pluginUiProjection?.generation == null && declaration?.hasUnprovenDeclarations ? 'establishing' : current?.phase ?? 'establishing',
                 unavailableReasonCode: current?.unavailableReasonCode, interactionEnabled: current?.interactionEnabled ?? false,
@@ -286,6 +298,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
         const pluginUiProjection = accountMerge.publish(accountUiProjection ? [accountUiProjection] : NO_MODELS,
             projectionUnion.pluginUiProjection, undefined, explicit);
         const candidateFactsByPluginId = candidates.publish(pluginUiProjection, members, pluginIds);
+        const skillSourceIdentity = skills.publish(pluginUiProjection);
         const destinationSurfacePlacements = previous.pluginUiProjection?.surfacePlacementsById === pluginUiProjection?.surfacePlacementsById
             ? previous.destinationSurfacePlacements
             : pluginUiProjection ? selectPluginDestinationSurfacePlacements(pluginUiProjection) : NO_DESTINATION_PLACEMENTS;
@@ -317,7 +330,7 @@ export function createAppShellPluginUiProjectionPublication(): AppShellPluginUiP
         const connectedAccountResolution = connectedAccounts.publish(descriptorInputs);
         const next: AppShellPluginUiProjectionSnapshot = Object.freeze({ accountLifetime, activeServerId: sources.activeServerId, accountUiProjection,
             executionOriginMaterializations: materializations, executionOriginPluginIds: pluginIds, projectionTargets: targets,
-            currentnessForActiveAccountByMachineId, unionMembers: members, projectionUnion, pluginUiProjection,
+            currentnessForActiveAccountByMachineId, unionMembers: members, projectionUnion, pluginUiProjection, skillSourceIdentity,
             destinationSurfacePlacements, settingsPages, candidateFactsByPluginId, connectedAccountResolution });
         if ((Object.keys(next) as (keyof AppShellPluginUiProjectionSnapshot)[]).every(key => next[key] === previous[key])) return;
         snapshot = next;

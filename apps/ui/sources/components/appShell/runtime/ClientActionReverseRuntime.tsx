@@ -19,7 +19,7 @@ import {
 import { getMountedWorkReadAddresses, subscribeMountedWorkReadOwners } from '@/sync/ops/actions/mountedWorkReadAction';
 import { createCurrentUiContributedActionRpcHandler } from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
 import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
-import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projectionUnion';
 import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 
@@ -68,7 +68,7 @@ export function ClientActionReverseRuntime(): React.ReactElement | null {
     const { serverId, generation } = useActiveServerSnapshot();
     const accountId = storage(state => state.profile?.id ?? null);
     const { selectableMachineIds } = useMachinePresenceMembership(serverId);
-    const { pluginUiProjection } = useAppShellPluginUiProjection();
+    const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
     const contributedMachineIds = new Set(Object.values(pluginUiProjection?.actionsById ?? {}).flatMap(action => {
         const origin = readPluginUiContributionOrigin(action);
         return action.execution.target === 'client' && origin?.phase === 'current' && origin.interactionEnabled
