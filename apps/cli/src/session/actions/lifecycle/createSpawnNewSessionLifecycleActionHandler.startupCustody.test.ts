@@ -6,6 +6,7 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 import { awaitTrackedRunnerAgentSessionOpen, recordTrackedRunnerAgentSessionOpenAttestation } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
 import { createStopSession } from '@/daemon/sessions/stopSession';
+import { createSessionRunnerRespawnManager } from '@/daemon/processSupervision/sessionRunnerRespawn';
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import type { TrackedSession } from '@/daemon/types';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
@@ -345,6 +346,8 @@ describe('Session startup operation custody', () => {
     // observed by the actual tracked-runner startup owner, not a test promise.
     const handler = createSpawnNewSessionLifecycleActionHandler({ spawnSession: async options => {
       captured = options;
+      tracked.projectSetupOperation = options.projectSetupOperation;
+      tracked.spawnOptions = options;
       return { type: 'success', sessionId: 'session-child' };
     }, stopSession: async () => { throw new Error('Open, cancellation and observed exit do not retire a refused runner'); },
     awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({
@@ -376,8 +379,18 @@ describe('Session startup operation custody', () => {
         expect(operations.runner.cancel(scope, 'original-startup')).toEqual({ kind: 'requested' });
         expect(captured?.projectSetupOperation?.signal.aborted).toBe(true);
       } else if (outcome === 'exit') {
+        const successors: SpawnSessionOptions[] = [];
+        const recovery = createSessionRunnerRespawnManager({ enabled: true, maxRestarts: 2,
+          baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+          isSessionAlreadyRunning: () => false, spawnSession: async options => { successors.push(options); return { type: 'success' }; },
+          random: () => 0, logDebug: () => {}, logWarn: () => {},
+        });
+        recovery.handleUnexpectedExit(tracked, { reason: 'process-exit', code: 143, signal: 'SIGTERM' },
+          { forceRestart: true, restartReason: 'account_changed' });
         trackedSessions.length = 0;
-        await vi.advanceTimersByTimeAsync(25);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(successors).toEqual([]);
+        expect(recovery.hasPendingIntendedRestarts('session-child')).toBe(false);
       } else {
         tracked.agentRuntimeDaemonServiceSessionOpenAttestation = {
           request: { kind: 'create', sessionId: 'session-child', cwd: '/project' }, providerSessionId: 'native-child',
