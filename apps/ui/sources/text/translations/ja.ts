@@ -9970,6 +9970,11 @@ localTailscale: {
       stop: "停止",
     },
     noMachinesAvailable: "マシンなし",
+
+    chipRail: {
+      accessibilityLabel: "入力欄のコントロール",
+      moreControlsHint: "ほかにもコントロールがあります。左右の矢印キーで移動できます。",
+    },
   },
 
   machineLauncher: {
@@ -14254,6 +14259,14 @@ settingsSession: {
         details: {
             ...PRODUCT_STORY_DETAILS_ENGLISH,
             voice: { ...PRODUCT_STORY_DETAILS_ENGLISH.voice, body: "セッションについて聞き、次の変更を声に出して相談できます。権限リクエストの承認にはタップが必要です。" },
+            handoff: {
+                wideTitle: "実行中のセッションを\n別のマシンへ。",
+                body: "実行中のセッションをデスクトップ、VPS、開発用マシンに引き継いで、中断したところから続けられます。作業ツリーも、全体のスナップショットまたは変更分だけを一緒に移せます。上書きせずに同じ階層にコピーを作成し、無視対象のファイルは指定しない限り転送しません。",
+            },
+            worktrees: {
+                wideTitle: "セッションごとにワークツリー。\n使わない選択も。",
+                body: "セッションを専用の Git ワークツリーで開始できます。独自のブランチを持つ実際のチェックアウトなので、複数のエージェントが互いの作業を妨げずに同じリポジトリで作業できます。ブランチを選ぶと、Happier がワークツリーを作成し、名前を提案します。既存のワークツリーがあれば、複製せずに再利用します。今いるフォルダでの開始も、ワンタップで選べます。",
+            },
         },
                 "title": "Happierへようこそ",
                 "subtitle": "あなたのAIエージェントを、働くすべての場所で。",
@@ -14523,6 +14536,12 @@ settingsSession: {
       spawnFailed: "ターミナルプロセスの起動に失敗しました。",
       invalidRequest: "無効なターミナルリクエストです。",
       busy: "ターミナルが使用中です。もう一度お試しください。",
+
+      projectRequesterCredentialsUnavailable: "プロジェクトのリクエスト元の認証情報が利用できなくなりました。プロジェクトを開き直して、もう一度お試しください。",
+      projectWorkspaceChanged: "このプロジェクトのワークスペースが変更されました。ターミナルを起動する前に、プロジェクトを開き直してください。",
+      projectWorkspaceUnavailable: "このプロジェクトのワークスペースは、選択したマシンで利用できなくなりました。",
+      projectSetupConsentRequired: "ターミナルを起動する前に、このプロジェクトのセットアップを確認して承認してください。",
+      projectSetupEffectChanged: "このプロジェクトのセットアップが変更されました。ターミナルを起動する前に、もう一度確認してください。",
     },
 
     openNewTabA11y: "新しいターミナルタブを開く",},
@@ -15778,6 +15797,16 @@ settingsSession: {
             purposeRecap: "期間のハイライトを、プライベートに共有できる形で。",
             purposeFootprint: "エネルギーと排出量の推定値と、その算出方法。",
             purposeSources: "各マシンで使用量を読み取る場所。",
+
+            coverageReason_missing_baseline: "以前のカウンター履歴がありません",
+            coverageReason_counter_discontinuity: "使用量カウンターがリセットまたは変更されました",
+            coverageReason_ambiguous_overlap: "一部のソースの記録が重複しており、区別できません",
+            coverageReason_unattributed_model: "一部の使用量にモデルが記録されていません",
+            coverageReason_unpriced_tokens: "一部のトークンに価格がありません",
+            coverageReason_unknown_source: "一部の使用量のソースが不明です",
+            coverageReason_incomplete_history: "ソースの履歴が不完全です",
+            coverageReason_ranked_truncation: "ランキング結果が一部のみです",
+            coverageReason_unknown_token_categories: "一部のトークンの種類が不明です",
           },
           plans: {
             calendarExport: "表示中のリセットと更新をエクスポート",
@@ -16018,6 +16047,12 @@ settingsSession: {
             earlierShown: ({ count }: { count: string | number }) => `灰色の線: 同じ期間に重ねた比較可能な以前のウィンドウ ${count} 件`,
             earlierNone: ({ reason }: { reason: string | number }) => `比較できる以前のウィンドウがありません: ${reason}`,
             earlierSingleReading: "読み取りが1回のみ",
+
+            endedUnusedTitle: "終了した期間の未使用枠",
+            endedUnusedObserved: ({ amount, unit, time }: { amount: string | number; unit: string | number; time: string | number }) => `${time} 時点で ${amount} ${unit} が未使用 · リセット時に記録`,
+            endedUnusedEstimated: ({ amount, unit, time }: { amount: string | number; unit: string | number; time: string | number }) => `${time} 時点で約 ${amount} ${unit} が未使用 · 最後の読み取りからの線形推定`,
+            endedUnusedInsufficient: "未使用枠を計測するには、比較可能な利用枠を持つ有効な履歴が足りません。",
+            endedUnusedPartial: "取得した履歴ページのみ表示しています。ほかにも履歴があります。",
           },
           work: {
       // usage-board:work
@@ -16492,6 +16527,11 @@ settingsSession: {
             footprintProxyDetail: "トークンはエネルギーの計測値ではありません",
             footprintMethodTitle: "推定の仕組み",
             footprintMethodBody: "モデルごとのトークン × そのモデル提供に対するバージョン管理された公開トークン係数（キャッシュ読み取りは別に重み付け）と提供地域の電源構成。これらの情報がモデルについて揃うと、手法・日付・不確実性の幅とともにここに表示されます。",
+
+            nightStart: "夜間の開始",
+            nightEnd: "夜間の終了",
+            nightChooseHour: "時刻を選択",
+            nightClear: "夜間の時間帯をクリア",
           },
           recap: {
             // usage-board:recap
@@ -16612,6 +16652,9 @@ settingsSession: {
             noMachinesTitle: "マシンはまだありません",
             noMachinesReason: "マシンを接続すると、そこにあるエージェントの使用量を Happier が見つけます。",
             sourceOptions: ({ agent }: { agent: string | number }) => `ソースのオプション: ${agent}`,
+
+            emptyScopedTitle: "この範囲にはネイティブソースがありません",
+            emptyScopedReason: "接続済みのマシンを選び、ネイティブの使用量を含めると、ソースの一覧が表示されます。期間や指標では一覧を絞り込みません。",
           },
         },
     // Usage panel strings
@@ -16877,6 +16920,17 @@ settingsSession: {
       fromPage: ({ project, page }: { project: string; page: string }) => `${project} · ${page} から`,
       scriptsCount: ({ count }: { count: number }) => (count === 1 ? `スクリプト 1 件` : `スクリプト ${count} 件`),
       servicesCount: ({ count }: { count: number }) => (count === 1 ? `サービス 1 件` : `サービス ${count} 件`),
+
+      prompt: "このチェックアウトを Happier 用にセットアップするのを手伝ってください。既存のプロジェクト固有のツールを、実行せずに調べてください。コマンドの本体をコピーするのではなく、既存のスクリプト、サービス、環境を参照する .happier/project.json を提案してください。セットアップによる変更と必要な環境の割り当てを説明してください。編集や実行の前に確認してください。既存のチェックが失敗した場合は報告し、準備が実際に成功するまでセットアップ完了としないでください。",
+      empty: "作成対象のチェックアウトを選択",
+      invalid: "この作成リクエストは無効です",
+      stale: "対象が変更されました。現在の対象で作成画面を開き直してください。",
+      offline: "対象のマシンはオフラインです。編集を続けるか、別の対象を選んでください。",
+      refused: "この対象では作成できません",
+      pending: "承認待ち",
+      unavailable: "この下書きを編集するには、利用可能な Happier クライアントを開いてください",
+      notReady: "作成が完了しました。セットアップにはまだ準備が必要です。",
+      lastSession: ({ session, time }: { session: string; time: string }) => `最終作成: ${session} · ${time}`,
     },
     open: {
         focus: "プロジェクトへ移動",
@@ -17167,6 +17221,14 @@ settingsSession: {
         moveAside: "サイドエリアに移動",
         remove: "ウィジェットを削除",
         offline: "このレイアウトを変更するには再接続してください。",
+
+        about: "概要",
+        branch: "ブランチ",
+        readme: "README",
+        readmeMissing: "このチェックアウトには README がありません。",
+        checkouts: "チェックアウト",
+        sessions: "セッション",
+        localChanges: "ローカルの変更",
     },
     dashboard: {
         label: "ダッシュボード",
@@ -18341,7 +18403,6 @@ settingsSession: {
             description: "何を担当するか伝えてください。名前と指示はいつでも変更できます。",
             placeholder: "このボットは何を担当しますか？",
             documentFailed: "指示を準備できませんでした。下書きは保持されています。",
-            unknown: "ボットが開始したか確認できませんでした。再試行する前にセッションを確認してください。",
         },
     },
     workflows: workflowTranslations.ja,

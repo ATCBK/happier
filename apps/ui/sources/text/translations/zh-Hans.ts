@@ -9322,6 +9322,11 @@ const zhHansValues = {
       sectionTitle: '配置文件',
     },
     noMachinesAvailable: "无设备",
+
+    chipRail: {
+      accessibilityLabel: "输入区控件",
+      moreControlsHint: "还有更多控件可用。使用左右方向键在控件之间移动。",
+    },
   },
 
   machineLauncher: {
@@ -13478,6 +13483,14 @@ settingsSession: {
         details: {
             ...PRODUCT_STORY_DETAILS_ENGLISH,
             voice: { ...PRODUCT_STORY_DETAILS_ENGLISH.voice, body: "询问会话情况并讨论下一步修改。权限请求仍需你点按批准。" },
+            handoff: {
+                wideTitle: "把运行中的会话\n移到另一台机器。",
+                body: "将运行中的会话交接到桌面电脑、VPS 或开发机器，从停下的地方继续。工作树也可以一起转移，可以是完整快照，也可以只带上更改。Happier 会创建同级副本而不覆盖现有内容；除非你明确指定，否则不会转移被忽略的文件。",
+            },
+            worktrees: {
+                wideTitle: "每个会话一个工作树。\n也可以不用。",
+                body: "在独立的 Git 工作树中启动会话。这是真正的检出，拥有自己的分支，让多个智能体可以在同一仓库中工作而互不干扰。选择分支后，Happier 会创建工作树、建议名称，并复用现有工作树，避免重复创建。也可以轻点一下，直接在当前文件夹中开始。",
+            },
         },
                 "title": "欢迎使用 Happier",
                 "subtitle": "你的 AI 代理，覆盖每一个工作场景。",
@@ -13746,6 +13759,12 @@ settingsSession: {
       spawnFailed: "无法启动终端进程。",
       invalidRequest: "无效的终端请求。",
       busy: "终端正忙。请重试。",
+
+      projectRequesterCredentialsUnavailable: "项目请求方的凭据已不可用。请重新打开项目后重试。",
+      projectWorkspaceChanged: "此项目的工作区已更改。请在启动终端前重新打开项目。",
+      projectWorkspaceUnavailable: "此项目的工作区在所选机器上已不可用。",
+      projectSetupConsentRequired: "请在启动终端前检查并批准此项目的设置。",
+      projectSetupEffectChanged: "此项目的设置已更改。请在启动终端前重新检查。",
     },
 
     openNewTabA11y: "打开新的终端标签页",},
@@ -15136,6 +15155,16 @@ settingsSession: {
             purposeRecap: "本期亮点，可私下分享。",
             purposeFootprint: "能耗与排放估算，附计算方法。",
             purposeSources: "在每台机器上从哪里读取用量。",
+
+            coverageReason_missing_baseline: "缺少更早的计数器历史",
+            coverageReason_counter_discontinuity: "用量计数器已重置或更改",
+            coverageReason_ambiguous_overlap: "部分来源记录存在无法明确区分的重叠",
+            coverageReason_unattributed_model: "部分用量没有记录模型",
+            coverageReason_unpriced_tokens: "部分令牌没有价格",
+            coverageReason_unknown_source: "部分用量的来源未知",
+            coverageReason_incomplete_history: "来源历史不完整",
+            coverageReason_ranked_truncation: "排名结果不完整",
+            coverageReason_unknown_token_categories: "部分令牌类别未知",
           },
           plans: {
             calendarExport: "导出显示的重置和续订",
@@ -15376,6 +15405,12 @@ settingsSession: {
             earlierShown: ({ count }: { count: string | number }) => `灰色线：同一时段上 ${count} 个可比较的较早窗口`,
             earlierNone: ({ reason }: { reason: string | number }) => `没有可与之并列显示的较早窗口：${reason}`,
             earlierSingleReading: "只有一次读数",
+
+            endedUnusedTitle: "已结束周期的未用额度",
+            endedUnusedObserved: ({ amount, unit, time }: { amount: string | number; unit: string | number; time: string | number }) => `${time}时有 ${amount} ${unit} 未使用 · 重置时记录`,
+            endedUnusedEstimated: ({ amount, unit, time }: { amount: string | number; unit: string | number; time: string | number }) => `${time}时约有 ${amount} ${unit} 未使用 · 根据最后读数线性估算`,
+            endedUnusedInsufficient: "具有可比额度的有效历史不足，无法衡量未用额度。",
+            endedUnusedPartial: "仅显示已返回的历史页，还有更多历史可用。",
           },
           work: {
       // usage-board:work
@@ -15850,6 +15885,11 @@ settingsSession: {
             footprintProxyDetail: "token 不是能耗的度量",
             footprintMethodTitle: "估算将如何进行",
             footprintMethodBody: "按模型统计的 token × 该模型服务的已发布、带版本的每 token 系数（缓存读取单独加权）以及服务地区的电网结构。一旦你的模型具备这些信息，估算会连同方法、日期和不确定范围显示在这里。",
+
+            nightStart: "夜间开始时间",
+            nightEnd: "夜间结束时间",
+            nightChooseHour: "选择小时",
+            nightClear: "清除夜间时段",
           },
           recap: {
             // usage-board:recap
@@ -15970,6 +16010,9 @@ settingsSession: {
             noMachinesTitle: "还没有设备",
             noMachinesReason: "连接一台设备后，Happier 会找到其中已有的智能体用量。",
             sourceOptions: ({ agent }: { agent: string | number }) => `来源选项：${agent}`,
+
+            emptyScopedTitle: "此范围内没有原生来源",
+            emptyScopedReason: "选择一台已连接的机器并包含原生用量，即可查看其来源清单。周期和指标不会筛选清单。",
           },
         },
     // Usage panel strings
@@ -16574,6 +16617,17 @@ settingsSession: {
       fromPage: ({ project, page }: { project: string; page: string }) => `来自 ${project} · ${page}`,
       scriptsCount: ({ count }: { count: number }) => (count === 1 ? `1 个脚本` : `${count} 个脚本`),
       servicesCount: ({ count }: { count: number }) => (count === 1 ? `1 个服务` : `${count} 个服务`),
+
+      prompt: "请帮我为 Happier 设置此检出。检查项目现有的原生工具，但不要运行。建议一个 .happier/project.json，引用现有的脚本、服务和环境，而不是复制命令内容。说明设置的影响及所需的环境绑定。编辑或执行前先征求同意。报告所有失败的现有检查；准备工作实际成功之前，不要将设置标记为完成。",
+      empty: "选择要编写设置的检出",
+      invalid: "此编写请求无效",
+      stale: "目标已更改。请为当前目标重新打开编写界面。",
+      offline: "目标机器离线。可以继续编辑或选择其他目标。",
+      refused: "此目标无法用于编写",
+      pending: "等待批准",
+      unavailable: "打开可用的 Happier 客户端以编辑此草稿",
+      notReady: "编写已完成。设置仍需准备。",
+      lastSession: ({ session, time }: { session: string; time: string }) => `上次编写于 ${session}，时间为 ${time}`,
     },
     open: {
         focus: "前往项目",
@@ -16864,6 +16918,14 @@ settingsSession: {
         moveAside: "移到侧边区域",
         remove: "移除小组件",
         offline: "重新连接后才能更改此布局。",
+
+        about: "关于",
+        branch: "分支",
+        readme: "README",
+        readmeMissing: "此检出中没有 README。",
+        checkouts: "检出",
+        sessions: "会话",
+        localChanges: "本地更改",
     },
     dashboard: {
         label: "仪表板",
@@ -18038,7 +18100,6 @@ settingsSession: {
             description: "告诉它要负责什么。你可以随时更改它的名称和指令。",
             placeholder: "这个机器人要负责什么？",
             documentFailed: "无法准备它的指令。你的草稿已保留。",
-            unknown: "无法确认机器人是否已启动。请先查看它的会话再重试。",
         },
     },
     workflows: workflowTranslations.zhHans,

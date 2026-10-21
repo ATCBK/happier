@@ -14043,6 +14043,14 @@ settingsSession: {
         onboardingShowcase: {
             details: {
                 ...PRODUCT_STORY_DETAILS_ENGLISH,
+                handoff: {
+                    wideTitle: 'Eine laufende Session\nauf einen anderen Rechner verschieben.',
+                    body: 'Übergib eine laufende Session an deinen Desktop, einen VPS oder eine Entwicklungsmaschine und mach dort weiter, wo sie aufgehört hat. Der Arbeitsbaum kann mitreisen: als vollständiger Snapshot oder nur mit den Änderungen. Dabei entsteht eine Kopie im Nachbarordner, statt vorhandene Dateien zu überschreiben. Ignorierte Dateien bleiben zurück, sofern du sie nicht ausdrücklich auswählst.',
+                },
+                worktrees: {
+                    wideTitle: 'Ein Worktree pro Session.\nWenn du willst.',
+                    body: 'Starte eine Session in einem eigenen Git-Worktree: einem echten Checkout mit eigenem Branch. So können mehrere Agents am selben Repository arbeiten, ohne sich in die Quere zu kommen. Wähl einen Branch, und Happier erstellt den Worktree, schlägt einen Namen vor und verwendet einen vorhandenen Worktree wieder, statt ihn zu duplizieren. Im aktuellen Ordner zu starten bleibt einen Fingertipp entfernt.',
+                },
                 voice: { ...PRODUCT_STORY_DETAILS_ENGLISH.voice, body: "Frag nach deinen Sessions und besprich die nächsten Änderungen. Berechtigungsanfragen brauchen weiterhin dein Tippen." },
             },
                 "title": "Willkommen bei Happier",

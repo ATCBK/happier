@@ -17426,6 +17426,8 @@ const enReleaseNotes = {
         wideTitle: 'Never work alone.\nMeet Pets.',
         body: 'A small companion follows session activity across Happier and adds a little warmth to long-running work. It is optional, playful, and more charming than strictly necessary.',
       },
+      handoff: PRODUCT_STORY_DETAILS_ENGLISH.handoff,
+      worktrees: PRODUCT_STORY_DETAILS_ENGLISH.worktrees,
     },
   },
 };
