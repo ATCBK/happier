@@ -65,7 +65,13 @@ const NO_IDS: readonly string[] = Object.freeze([]);
 const NO_MACHINES: Readonly<Record<string, Machine[] | null>> = Object.freeze({});
 
 /** The open Add surface consumes each library's real lifecycle, independently of its current rows. */
-export function useBoardAddSources(homes: BoardHomes) {
+export function useBoardAddSources(homes: BoardHomes): {
+    rowsByServerId: ReturnType<typeof useSessionListRowsByServerId>;
+    machineLists: ReturnType<typeof useMachineListByServerId>;
+    library: ReturnType<typeof useWorkflowDefinitionLibrary>;
+    runs: ReturnType<typeof useWorkflowRunWindow>;
+    loading: { sessions: boolean; workflows: boolean; runs: boolean; machines: boolean };
+} {
     const rowsByServerId = useSessionListRowsByServerId(homes.mountedServerIds);
     const machineLists = useMachineListByServerId();
     const library = useWorkflowDefinitionLibrary();
@@ -302,7 +308,7 @@ export function useBoardMembership(board: WorkBoardV1, homes: BoardHomes, enable
 const NO_CARDS: readonly BoardCard[] = Object.freeze([]);
 
 /** Widget content is already in the Board document; it never enters work-status classification. */
-export function useBoardWidgets(board: WorkBoardV1) {
+export function useBoardWidgets(board: WorkBoardV1): WorkBoardWidgetPlacementV1[] {
     return React.useMemo(() => {
         const order = resolveWorkBoardItemOrderV1(board);
         return (board.widgets ?? []).slice().sort((a, b) => order.indexOf(buildWorkBoardWidgetKeyV1(a.ref)) - order.indexOf(buildWorkBoardWidgetKeyV1(b.ref)));

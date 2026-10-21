@@ -74,8 +74,8 @@ export function createSessionFileNativeTransferBoundary(input: Readonly<{ bytes?
             prepares.push(request);
             if (isFilesystemDownload) {
                 return (async () => {
-                    const envelope = request.payload as { input?: unknown };
-                    const download = FilesystemDownloadInputSchema.parse(envelope.input);
+                    // The Account Action supplies its input directly to the native effect.
+                    const download = FilesystemDownloadInputSchema.parse(request.payload);
                     const transferId = `preview-transfer-${++counter}`;
                     const exportedBytes = new Uint8Array(bytes);
                     const exportedName = name;

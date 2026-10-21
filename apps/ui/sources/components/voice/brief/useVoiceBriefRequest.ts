@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useVoiceAttemptControl, VOICE_ATTEMPT_IDLE_TARGET_GLOBAL, type VoiceAttemptControlProjection } from '@/components/voice/attempt/useVoiceAttemptControl';
@@ -53,7 +54,17 @@ export function useVoiceBriefHomeRequest(input: Readonly<{ available: boolean; o
 }
 
 /** One request owner for the visible Brief and agent Actions; lifecycle and output remain incumbent. */
-export function useVoiceBriefRequest(onClose?: () => void) {
+export function useVoiceBriefRequest(onClose?: () => void): {
+    brief: ReturnType<typeof buildVoiceBrief>;
+    voice: VoiceAttemptControlProjection;
+    delivery: Delivery;
+    waitingUnavailable: boolean;
+    actionReady: boolean;
+    canStopReply: boolean;
+    retry: () => Promise<ActionExecuteResult>;
+    stopReply: () => Promise<ActionExecuteResult>;
+    closeBrief: () => Promise<ActionExecuteResult>;
+} {
     const inbox = useInboxModel();
     const settings = storage((state) => state.settings);
     const brief = React.useMemo(() => buildVoiceBrief({ inbox, settings }), [inbox, settings]);

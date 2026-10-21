@@ -26,7 +26,7 @@ function agent(input: Partial<MachineAgent> & Pick<MachineAgent, 'agentId' | 'ti
     };
 }
 
-export const FIXTURE_AGENTS = {
+export const FIXTURE_AGENTS: Readonly<Record<'claude' | 'codex' | 'opencode' | 'gemini' | 'antigravity' | 'cursor' | 'kimi' | 'qwen', MachineAgent>> = {
     claude: agent({
         agentId: 'claude', title: 'Claude Code', state: 'ready', installed: true, version: '2.1.278',
         signIn: {

@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { JSDOM } from 'jsdom';
 import { onTestFinished, vi } from 'vitest';
-import { SessionMessagesPageV1Schema, SessionMessageV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { SessionMessagesPageV1Schema, SessionMessageV1Schema, FeaturesResponseSchema, type SessionMessagesPageV1 } from '@happier-dev/protocol';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createSessionFixture, createSessionMessagesFixture, renderHook } from '@/dev/testkit';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -35,7 +35,7 @@ import { useTranscriptJumpHost, useTranscriptJumpWindowFacts, type TranscriptJum
 const ref = <T,>(current: T) => ({ current });
 let environmentSequence = 0;
 
-export function transcriptJumpPage(seq: number, id = 'message-' + seq) {
+export function transcriptJumpPage(seq: number, id = 'message-' + seq): SessionMessagesPageV1 {
     return SessionMessagesPageV1Schema.parse({
         messages: [SessionMessageV1Schema.parse({ id, seq, localId: null, sidechainId: null,
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Prompt ' + seq } } },
@@ -43,7 +43,7 @@ export function transcriptJumpPage(seq: number, id = 'message-' + seq) {
         hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
     });
 }
-export function emptyTranscriptJumpPage() {
+export function emptyTranscriptJumpPage(): SessionMessagesPageV1 {
     return SessionMessagesPageV1Schema.parse({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null });
 }
 
