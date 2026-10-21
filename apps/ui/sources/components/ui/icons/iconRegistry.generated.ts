@@ -178,6 +178,7 @@ import { PencilIcon } from 'phosphor-react-native/src/icons/Pencil';
 import { PencilSimpleIcon } from 'phosphor-react-native/src/icons/PencilSimple';
 import { PersonIcon } from 'phosphor-react-native/src/icons/Person';
 import { PhoneIcon } from 'phosphor-react-native/src/icons/Phone';
+import { PlanetIcon } from 'phosphor-react-native/src/icons/Planet';
 import { PlayCircleIcon } from 'phosphor-react-native/src/icons/PlayCircle';
 import { PlayIcon } from 'phosphor-react-native/src/icons/Play';
 import { PlugIcon } from 'phosphor-react-native/src/icons/Plug';
@@ -444,6 +445,7 @@ export const ICON_REGISTRY = {
     'person': PersonIcon,
     'phone': PhoneIcon,
     'phone-hang-up': PhoneIcon,
+    'planet': PlanetIcon,
     'play': PlayIcon,
     'play-circle': PlayCircleIcon,
     'plug': PlugIcon,

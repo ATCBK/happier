@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { BUILTIN_WIDGET_DESCRIPTORS_V1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 
 const SOURCES_DIR = join(__dirname, '..', '..', '..');
 const REGISTRY_FILE = join(__dirname, 'iconRegistry.generated.ts');
@@ -33,6 +34,14 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 describe('icon registry coverage', () => {
+    it('registers every builtin widget descriptor icon', () => {
+        const registry = new Set(
+            [...readFileSync(REGISTRY_FILE, 'utf8').matchAll(/^\s+'([a-z0-9-]+)':/gm)].map((match) => match[1]),
+        );
+        expect([...new Set(BUILTIN_WIDGET_DESCRIPTORS_V1.map((descriptor) => descriptor.icon))]
+            .filter((icon) => !registry.has(icon))).toEqual([]);
+    });
+
     it('registers every icon name the app asks for', () => {
         const registry = new Set(
             [...readFileSync(REGISTRY_FILE, 'utf8').matchAll(/^\s+'([a-z0-9-]+)':/gm)].map((m) => m[1]),
