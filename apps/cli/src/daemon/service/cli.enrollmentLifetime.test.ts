@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { spawnSleepyDetachedProcess, withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { spawnDaemonLifecycleOwner } from '@/testkit/process/daemonLifecycleOwner';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import { createHappierJsonExecutorFromTextRunner } from '@happier-dev/cli-common/systemTasks';
@@ -11,6 +11,7 @@ import { createHappierJsonExecutorFromTextRunner } from '@happier-dev/cli-common
 afterEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock('node:child_process');
+    vi.doUnmock('node:fs/promises');
     vi.doUnmock('./commandExistsInPath');
     vi.resetModules();
 });
@@ -18,6 +19,9 @@ afterEach(() => {
 it.each([
     { scenario: 'late-owner', platform: 'linux' },
     { scenario: 'late-owner-slow-probe', platform: 'linux' },
+    { scenario: 'starting-process-owner', platform: 'linux' },
+    { scenario: 'transient-inactive-owner', platform: 'linux' },
+    { scenario: 'stale-exit-owner', platform: 'linux' },
     { scenario: 'late-owner', platform: 'darwin' },
     { scenario: 'late-owner', platform: 'win32' },
     { scenario: 'queued-owner', platform: 'win32' },
@@ -42,8 +46,12 @@ it.each([
             HAPPIER_DAEMON_SERVICE_OWNERSHIP_ACTIVE_GRACE_TIMEOUT_MS: undefined,
             HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_POLL_MS: '100',
             HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '1000',
+            HAPPIER_DAEMON_PROCESS_INVENTORY_FALLBACK: scenario === 'starting-process-owner' ? '1' : undefined,
         } }, async () => {
             const owner = spawnDaemonLifecycleOwner();
+            let startingOwner: ReturnType<typeof spawnSleepyDetachedProcess> | undefined;
+            const incidentSequence = ['starting-process-owner', 'transient-inactive-owner', 'stale-exit-owner'].includes(scenario);
+            const readyAtMs = incidentSequence ? 114_000 : 145_000;
             let elapsedMs = 0;
             let serviceStarted = false;
             let publishedOwner = false;
@@ -54,6 +62,16 @@ it.each([
             try {
                 vi.resetModules();
                 vi.doMock('./commandExistsInPath', () => ({ commandExistsInPath: () => true }));
+                if (scenario === 'starting-process-owner') {
+                    // Restrict the genuine procfs directory boundary to this fixture's
+                    // processes. Keep census reads, classification and ownership real.
+                    vi.doMock('node:fs/promises', async (importOriginal) => {
+                        const actual = await importOriginal<typeof import('node:fs/promises')>();
+                        return { ...actual, readdir: (...args: unknown[]) => String(args[0]) === '/proc'
+                            ? Promise.resolve([process.pid, owner.pid, ...(startingOwner ? [startingOwner.pid] : [])].map(String))
+                            : Reflect.apply(actual.readdir, actual, args) };
+                    });
+                }
                 // Only the service manager/process boundary is replaced. Service planning,
                 // credential persistence and daemon ownership evaluation remain real.
                 vi.doMock('node:child_process', async (importOriginal) => ({
@@ -64,10 +82,16 @@ it.each([
                         }
                         if ((command === 'systemctl' && (args.includes('start') || args.includes('restart')))
                             || (command === 'launchctl' && ['bootstrap', 'kickstart'].includes(args[0]!))
-                            || (command === 'schtasks' && args[0] === '/Run')) serviceStarted = true;
+                            || (command === 'schtasks' && args[0] === '/Run')) {
+                            serviceStarted = true;
+                            if (scenario === 'starting-process-owner' && !startingOwner) {
+                                // A real OS process is visible before it publishes daemon state.
+                                startingOwner = spawnSleepyDetachedProcess(['@happier-dev/cli', join(process.cwd(), 'src/index.ts'), 'daemon', 'start-sync']);
+                            }
+                        }
                         if (command === 'launchctl' && args[0] === 'bootstrap') launchdBootstrap = true;
                         if (['queued-owner', 'kickstart-exit'].includes(scenario) && command === 'launchctl' && args[0] === 'kickstart') retireOwner();
-                        if (serviceStarted && !publishedOwner && elapsedMs >= 145_000 && (scenario.startsWith('late-owner') || scenario === 'queued-owner')) {
+                        if (serviceStarted && !publishedOwner && elapsedMs >= readyAtMs && (incidentSequence || scenario.startsWith('late-owner') || scenario === 'queued-owner')) {
                             publishOwner();
                             publishedOwner = true;
                         }
@@ -88,6 +112,16 @@ it.each([
                         let stdout = stopped ? 'failed' : starting ? 'activating' : 'active';
                         if (command === 'systemctl' && args.includes('show')) {
                             stdout = `ActiveState=${stopped ? scenario === 'crash-loop' ? 'activating' : 'failed' : starting ? 'activating' : 'active'}\nSubState=${stopped ? 'auto-restart' : starting ? 'start' : 'running'}\nResult=${stopped ? 'exit-code' : 'success'}\nExecMainStatus=${stopped ? 1 : 0}\nNRestarts=${scenario === 'crash-loop' ? 7 : 0}\n`;
+                            if (incidentSequence) {
+                                // systemctl show property sequences: restart's inactive/dead
+                                // transition, start-pre, then Type=simple active/running while
+                                // the daemon is still importing. Exit properties can be from
+                                // the preceding invocation; they do not prove current failure.
+                                const inactive = scenario === 'transient-inactive-owner' && serviceStarted && elapsedMs < 1_000;
+                                const activating = scenario === 'transient-inactive-owner' && elapsedMs >= 1_000 && elapsedMs < 2_000;
+                                const priorExit = scenario === 'stale-exit-owner' || inactive;
+                                stdout = `ActiveState=${inactive ? 'inactive' : activating ? 'activating' : 'active'}\nSubState=${inactive ? 'dead' : activating ? 'start-pre' : 'running'}\nResult=${priorExit ? 'exit-code' : 'success'}\nExecMainStatus=${priorExit ? 1 : 0}\nExecMainExitTimestamp=${priorExit ? 'Wed 2026-10-21 03:30:00 UTC' : ''}\nNRestarts=0\nMainPID=${inactive || activating ? 0 : startingOwner?.pid ?? owner.pid}\n`;
+                            }
                         }
                         if (command === 'launchctl' && args[0] === 'print') stdout = stopped || (scenario === 'queued-owner' && serviceStarted && !publishedOwner)
                             ? `state = waiting\nruns = ${scenario === 'kickstart-exit' ? 2 : 1}\nlast exit code = 1\n` : 'state = running\nruns = 1\nlast exit code = 1\n';
@@ -111,7 +145,7 @@ it.each([
                 mkdirSync(dirname(paths.installedPath), { recursive: true });
                 writeFileSync(paths.installedPath, planDaemonServiceInstall({ ...runtime, mode: 'user', uid: runtime.uid ?? undefined }).files[0]!.content);
                 await writeCredentialsTokenOnly({ token: 'enrollment-lifetime-token' });
-                publishOwner = () => writeDaemonState({ pid: owner.pid, httpPort: 43124, startedAt: Date.now(),
+                publishOwner = () => writeDaemonState({ pid: startingOwner?.pid ?? owner.pid, httpPort: 43124, startedAt: Date.now(),
                     startedWithCliVersion: configuration.currentCliVersion, startupSource: 'background-service',
                     serviceLabel: scenario === 'wrong-owner' ? 'another-service' : paths.label });
                 retireOwner = clearDaemonStateForTestTeardown;
@@ -137,12 +171,16 @@ it.each([
                         }
                     });
                     const result = executor.runHappierJson(['start', '--wait-timeout-ms', scenario === 'late-owner-slow-probe' ? '147000' : '480000', '--json']);
-                    if (scenario === 'late-owner' || scenario === 'queued-owner') {
+                    if (incidentSequence || scenario === 'late-owner' || scenario === 'queued-owner') {
                         await expect(result).resolves.toMatchObject({ ok: true });
-                        expect(elapsedMs).toBeGreaterThanOrEqual(145_000);
+                        expect(elapsedMs).toBeGreaterThanOrEqual(readyAtMs + 1_000);
                         expect(elapsedMs).toBeLessThan(480_000);
                     } else {
-                        await expect(result).rejects.toMatchObject({ code: 'cli_command_failed' });
+                        const reason = scenario === 'never-owner' || scenario === 'late-owner-slow-probe' ? 'deadline_elapsed'
+                            : scenario === 'wrong-owner' ? 'owner_service_label_mismatch'
+                            : platform === 'linux' ? scenario === 'crash-loop' ? 'systemd_auto_restart_failed' : 'systemd_failed'
+                            : platform === 'darwin' ? 'launchd_exited' : 'scheduled_task_exited';
+                        await expect(result).rejects.toMatchObject({ code: 'cli_command_failed', message: expect.stringContaining(`reason: ${reason}`) });
                         if (scenario === 'late-owner-slow-probe') expect(elapsedMs).toBeGreaterThanOrEqual(147_000);
                         else if (scenario === 'never-owner') expect(elapsedMs).toBe(480_000);
                         else expect(elapsedMs).toBeLessThan(5_000);
@@ -151,6 +189,7 @@ it.each([
                 } finally { output.restore(); }
             } finally {
                 vi.restoreAllMocks();
+                if (startingOwner) expect(await startingOwner.kill()).toBe(true);
                 expect(await owner.kill()).toBe(true);
             }
         });

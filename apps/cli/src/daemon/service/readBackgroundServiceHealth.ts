@@ -92,8 +92,16 @@ export function readBackgroundServiceActivity(params: Readonly<{
   return 'unknown';
 }
 
+export type BackgroundServiceStartupFailure =
+  | 'systemd_failed'
+  | 'systemd_auto_restart_failed'
+  | 'launchd_unloaded'
+  | 'launchd_exited'
+  | 'scheduled_task_missing'
+  | 'scheduled_task_exited';
+
 /** Positive exit/failure evidence for a finite startup wait; unknown/queued startup is not failure. */
-export function hasBackgroundServiceStartupFailed(params: Readonly<{
+export function readBackgroundServiceStartupFailure(params: Readonly<{
   platform: NodeJS.Platform;
   uid: number | null;
   label: string;
@@ -101,35 +109,41 @@ export function hasBackgroundServiceStartupFailed(params: Readonly<{
   startedAtMs: number;
   /** A newly bootstrapped launchd job starts at zero; kickstart retains its prior runs. */
   priorLaunchdRuns?: number | null;
-}>): boolean {
+}>): BackgroundServiceStartupFailure | null {
   if (params.platform === 'linux') {
     const status = tryReadSystemdStatus({ unitName: normalizeSystemdUnitName(params.label), mode: params.mode, uid: params.uid });
-    if (!status) return false;
-    return status.activeState === 'failed' || status.activeState === 'inactive'
-      || (status.subState === 'auto-restart' && isFaultedSystemdUnit(status));
+    if (!status) return null;
+    if (status.activeState === 'failed') return 'systemd_failed';
+    if (status.subState === 'auto-restart' && isFaultedSystemdUnit(status)) return 'systemd_auto_restart_failed';
+    // inactive/dead can be the stop half of a restart. ExecMainStatus and Result
+    // may describe the preceding run; neither proves this startup failed while
+    // the unit is inactive, activating, or already active/running.
+    return null;
   }
   if (params.platform === 'darwin') {
-    if (params.uid === null) return false;
+    if (params.uid === null) return null;
     const output = tryReadLaunchctl(params.uid, params.label);
-    if (output === null) return false;
-    if (!output) return true;
+    if (output === null) return null;
+    if (!output) return 'launchd_unloaded';
     const state = /^\s*state\s*=\s*(.+)$/m.exec(output)?.[1]?.trim();
     const { runs, lastExitCode } = parseLaunchctlFields(output);
     return (state === 'waiting' || state === 'not running' || state === 'exited')
-      && params.priorLaunchdRuns != null && runs !== null && runs > params.priorLaunchdRuns && lastExitCode !== null;
+      && params.priorLaunchdRuns != null && runs !== null && runs > params.priorLaunchdRuns && lastExitCode !== null
+      ? 'launchd_exited' : null;
   }
   if (params.platform === 'win32') {
     const status = tryReadScheduledTaskStatus(params.label);
-    if (!status) return false;
-    if (!status.exists) return true;
-    if (status.active || status.stateValue === 2) return false;
+    if (!status) return null;
+    if (!status.exists) return 'scheduled_task_missing';
+    if (status.active || status.stateValue === 2) return null;
     // Task Scheduler can report the preceding run while the accepted /Run is
     // queued. Only completion of this invocation proves its wrapper exited.
     return status.stateValue === 3 && Date.parse(status.lastRunTime) >= params.startedAtMs
       && status.lastTaskResult !== null
-      && ![0x41300, 0x41301, 0x41303, 0x41325].includes(status.lastTaskResult);
+      && ![0x41300, 0x41301, 0x41303, 0x41325].includes(status.lastTaskResult)
+      ? 'scheduled_task_exited' : null;
   }
-  return false;
+  return null;
 }
 
 function tryReadScheduledTaskActivity(label: string): BackgroundServiceActivity {

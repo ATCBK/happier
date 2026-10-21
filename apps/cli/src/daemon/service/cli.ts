@@ -69,7 +69,7 @@ import { writeJsonStdout } from '@/cli/output/jsonEnvelope';
 import { discoverInstalledDaemonServiceEntries } from './discoverInstalledDaemonServiceEntries';
 import { isInstalledDaemonServiceForHappierHome, isValidInstalledDaemonServiceFile, resolveInstalledDaemonServiceDefinitionPath } from './discoverInstalledDaemonServiceEntries';
 import { readInstalledDaemonServiceAutostartMode, readInstalledDaemonServiceInstallOptions, readInstalledDaemonServiceManagedBy } from './discoverInstalledDaemonServiceEntries';
-import { hasBackgroundServiceStartupFailed, readBackgroundServiceAutostartMode, readBackgroundServiceHealth } from './readBackgroundServiceHealth';
+import { readBackgroundServiceStartupFailure, readBackgroundServiceAutostartMode, readBackgroundServiceHealth, type BackgroundServiceStartupFailure } from './readBackgroundServiceHealth';
 import { resolveDaemonServiceDiscoveryTargets } from './resolveDaemonServiceDiscoveryTargets';
 import type { DaemonServiceInstallStrategy } from './daemonInstallConflict';
 import { assertDaemonServiceModeSupported } from './assertDaemonServiceModeSupported';
@@ -567,6 +567,12 @@ async function shouldRestartRunningDefaultFollowingServiceForSelectedRelay(param
   return runCommandCaptureBestEffort(params.healthCommand).ok;
 }
 
+type ServiceOwnershipFailureReason = BackgroundServiceStartupFailure
+  | 'deadline_elapsed'
+  | 'owner_conflict'
+  | 'owner_not_service_managed'
+  | 'owner_service_label_mismatch';
+
 async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
   platform: SupportedPlatform;
   expectedServiceLabel: string;
@@ -579,10 +585,11 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
   expectedInstalledServiceContents?: string | null;
   installedServicePath?: string | null;
   healthCommand?: Readonly<{ cmd: string; args: readonly string[] }> | null;
-}>): Promise<boolean> {
+}>): Promise<Readonly<{ observed: boolean; failureReason: ServiceOwnershipFailureReason }>> {
   let stableSince: number | null = null;
   let terminalFailure = false;
-  return await waitForDaemonRunningWithinBudget({
+  let failureReason: ServiceOwnershipFailureReason = 'deadline_elapsed';
+  const observed = await waitForDaemonRunningWithinBudget({
     timeoutMs: params.timeoutMs,
     pollMs: params.pollMs,
     // Linux is-active proves live service startup before local ownership appears.
@@ -599,10 +606,12 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
         if (Date.now() >= params.deadlineMs) return false;
         // A stopped/crashed service or a different owner is terminal evidence,
         // whereas an active service without a published owner is still starting.
-        if (params.startupObservation && hasBackgroundServiceStartupFailed({
+        const startupFailure = params.startupObservation && readBackgroundServiceStartupFailure({
           platform: params.platform, label: params.expectedServiceLabel, ...params.startupObservation,
-        })) {
+        });
+        if (startupFailure) {
           terminalFailure = true;
+          failureReason = startupFailure;
           return false;
         }
       }
@@ -628,19 +637,25 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
       }
 
       if (ownership.kind !== 'compatible') {
-        terminalFailure = params.deadlineMs !== undefined;
+        // A stateless process has unknown version and service metadata. It is
+        // discoverable during imports, before the daemon writes its ownership
+        // file. Keep waiting; it cannot establish success or a definite conflict.
+        terminalFailure = params.deadlineMs !== undefined && ownership.owner.source === 'state';
+        if (terminalFailure) failureReason = 'owner_conflict';
         stableSince = null;
         return false;
       }
 
       if (ownership.owner.serviceManaged !== true) {
         terminalFailure = params.deadlineMs !== undefined;
+        if (terminalFailure) failureReason = 'owner_not_service_managed';
         stableSince = null;
         return false;
       }
 
       if (ownership.owner.state.serviceLabel !== params.expectedServiceLabel) {
         terminalFailure = params.deadlineMs !== undefined;
+        if (terminalFailure) failureReason = 'owner_service_label_mismatch';
         stableSince = null;
         return false;
       }
@@ -679,6 +694,7 @@ async function waitForExpectedDaemonServiceOwnership(params: Readonly<{
         && (params.deadlineMs === undefined || now < params.deadlineMs);
     },
   });
+  return { observed, failureReason };
 }
 
 function buildStandingByJson(
@@ -736,7 +752,8 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
   ) : 0;
   const pollMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_OWNERSHIP_WAIT_POLL_MS', 100);
   const stableMs = readPositiveIntEnv('HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS', 1000);
-  const expectedOwnerObserved = timeoutMs > 0 && await waitForExpectedDaemonServiceOwnership({
+  const waitStartedAt = performance.now();
+  const expectedOwnerObserved = timeoutMs > 0 ? await waitForExpectedDaemonServiceOwnership({
     platform: params.platform,
     expectedServiceLabel: params.expectedServiceLabel,
     timeoutMs,
@@ -747,8 +764,8 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
     expectedInstalledServiceContents: params.expectedInstalledServiceContents,
     installedServicePath: params.installedServicePath,
     healthCommand: params.healthCommand,
-  });
-  if (expectedOwnerObserved) {
+  }) : { observed: false, failureReason: 'deadline_elapsed' as const };
+  if (expectedOwnerObserved.observed) {
     return;
   }
 
@@ -767,7 +784,7 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
       installedServicePath: params.installedServicePath,
       healthCommand: params.healthCommand,
     });
-    if (expectedOwnerObservedDuringGrace) {
+    if (expectedOwnerObservedDuringGrace.observed) {
       return;
     }
   }
@@ -776,7 +793,11 @@ async function assertExpectedDaemonServiceOwnership(params: Readonly<{
 
   let message =
     `Background service ${params.action} completed, but the expected background service did not become the active daemon for the selected Home ` +
-    `within ${effectiveTimeoutMs}ms. Run \`${params.commandPath} status\` to inspect the active owner and system service state.`;
+    (params.deadlineMs === undefined
+      ? `within ${effectiveTimeoutMs}ms. `
+      : `after ${Math.max(0, Math.round(performance.now() - waitStartedAt))}ms of ownership waiting ` +
+        `(budget: ${timeoutMs}ms; reason: ${expectedOwnerObserved.failureReason}). `) +
+    `Run \`${params.commandPath} status\` to inspect the active owner and system service state.`;
 
   if (params.platform === 'win32' && params.windowsLaunchDiagnostics) {
     const diagnostics = collectWindowsServiceLaunchDiagnostics({
