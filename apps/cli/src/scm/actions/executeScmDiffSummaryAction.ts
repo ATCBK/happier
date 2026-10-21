@@ -169,7 +169,9 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             waitForCompletion: false,
         };
         let startResult = await params.executeCanonicalAction('execution.run.start', startInput).catch(() => null);
-        if (!startResult) return failed('Diff-summary execution run start outcome is unknown');
+        // Losing Start's observation does not revoke its saved revision: that
+        // same request may still be preparing or publishing on the receiver.
+        if (!startResult) return latestOutput();
         if (!startResult.ok && startResult.errorCode === 'execution_run_parent_selection_unavailable'
             && readExecutionRunStartRunCreation(startResult.details) === 'noRunCreated'
             && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId && selector?.modelId) {
@@ -190,10 +192,11 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
                     modelId: selector.modelId,
                 },
             }).catch(() => null);
-            if (!startResult) return failed('Diff-summary execution run start outcome is unknown');
+            if (!startResult) return latestOutput();
         }
         if (!startResult.ok) {
             const noRunCreated = readExecutionRunStartRunCreation(startResult.details) === 'noRunCreated';
+            if (!noRunCreated) return latestOutput();
             if (noRunCreated && startResult.errorCode === 'execution_run_parent_selection_unavailable'
                 && !params.request.modelSelector?.modelId && !params.request.modelSelector?.profileId) {
                 return failed('Diff-summary model is unavailable', 'MODEL_UNAVAILABLE');
@@ -201,12 +204,11 @@ export async function executeScmDiffSummaryAction(params: Readonly<{
             // The typed refusal and its reason travel together; the code alone is not a reason.
             const refusal = startResult.error.includes(startResult.errorCode) ? startResult.error
                 : `${startResult.errorCode}: ${startResult.error}`;
-            return failed(noRunCreated ? refusal : 'Diff-summary execution run start outcome is unknown',
-                noRunCreated && startResult.errorCode === 'DIFF_UNAVAILABLE' ? 'DIFF_UNAVAILABLE' : undefined);
+            return failed(refusal, startResult.errorCode === 'DIFF_UNAVAILABLE' ? 'DIFF_UNAVAILABLE' : undefined);
         }
         const started = ExecutionRunStartResponseSchema.safeParse(startResult.result);
         return started.success
             ? latestOutput(started.data.runId, inputId)
-            : failed('Diff-summary execution run did not return a run id');
+            : latestOutput();
     });
 }

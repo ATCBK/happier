@@ -118,7 +118,7 @@ describe('ReviewProfile', () => {
         if (!replacement.success) throw new Error(replacement.error);
       }
       const first = await ReviewProfile.onTurnComplete?.({ start: profileStart, turnId: 'findings-turn',
-        inputIds: [`initial:${start.runId}`], rawText: JSON.stringify({
+        inputIds: [`execution-run-initial:${start.runId}`], rawText: JSON.stringify({
         summary: 'No findings in this captured comparison.', findings: [], overviewMarkdown: 'Review completed.' }), finishedAtMs: 2 });
       expect(first?.structuredMeta?.kind).toBe('review_findings.v2');
       if (replaced) {
@@ -132,7 +132,7 @@ describe('ReviewProfile', () => {
       expect(first?.nextInput).toBeDefined();
       expect(first?.nextInput?.instructions).toContain('walkthrough');
       expect(await scmDiffSummaryResultStore.readInput({ cwd, sessionId: start.sessionId!, resultId: pending.resultId!,
-        inputIds: [`initial:${start.runId}`] })).toBeNull();
+        inputIds: [`execution-run-initial:${start.runId}`] })).toBeNull();
       const writingStart = { ...profileStart, intentInput: first!.nextInput!.intentInput };
       const second = await ReviewProfile.onTurnComplete?.({ start: writingStart, turnId: 'narration-turn',
         inputIds: [first!.nextInput!.localId], previousStructuredMeta: first!.structuredMeta,

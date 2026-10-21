@@ -302,7 +302,14 @@ If attached Run admission proves the parent unavailable and no fallback can be
 admitted, generation also returns `MODEL_UNAVAILABLE`, keeping its captured
 evidence and failed saved result available. This typed refusal carries
 `nextAction: 'chooseModel'` for UI and Action callers. An unknown Start outcome is not
-reclassified as an unavailable model or retried.
+reclassified as an unavailable model or retried. It leaves the saved output and
+revision unchanged: the original request may still be preparing, and must remain
+able to bind its captured revision and publish. Reconciliation reads that same
+saved result through the existing generation admission receipt. SCM Machine
+effects use the captured Action's lifetime rather than a subordinate RPC deadline.
+Initial output admission and publication use the Run's existing initial input
+identity, including its host default when no explicit input id was supplied.
+Ordinary later discussion retains an empty output scope.
 A Machine-custodian request that names a Session derives that Session's backend target from
 its metadata, as the Session route does, so an unset model preference can inherit the attached
 parent there too. When Run start is refused before any Run exists, the failed output's reason carries

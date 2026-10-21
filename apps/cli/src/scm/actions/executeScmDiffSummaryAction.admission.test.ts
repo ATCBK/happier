@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import { getAgentStaticModels } from '@happier-dev/agents';
 import { getActionSpec, ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, ScmComparisonSchema, PluginManifestV2Schema,
-    createActionExecutor, accountSettingsParse,
+    createActionExecutor, accountSettingsParse, ExecutionRunStartResponseSchema,
     type BackendTargetRefV2, type ScmDiffSummaryGenerateInput } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { buildTrustedHostSessionInputAdmissionV1, SessionInputAdmissionReceiptV1Schema,
@@ -690,6 +690,8 @@ describe('SCM generation through real host admission', () => {
         const delivered = new Set<string>();
         const deliveredModels = new Map<string, string | undefined>();
         let failProvision = false;
+        let loseNextStartResponse = false;
+        let pendingStart: unknown;
         let releaseModel = () => {};
         let modelGate = new Promise<void>(resolve => { releaseModel = resolve; });
         const createRuntime: Parameters<typeof startExecutionRun>[0]['createRuntime'] = (options) => {
@@ -723,6 +725,14 @@ describe('SCM generation through real host admission', () => {
         });
         const execute = (client: string): Parameters<typeof executeScmDiffSummaryAction>[0]['executeCanonicalAction'] => async (_action, input) => {
             const request = ExecutionRunStartRequestSchema.parse(input);
+            if (loseNextStartResponse) {
+                loseNextStartResponse = false;
+                pendingStart = request;
+                // The remote Start is still queued. Losing its observation
+                // cannot grant generation a new saved-result revision.
+                return { ok: false, errorCode: 'execution_run_target_unavailable', error: 'Start acknowledgement unavailable',
+                    details: { executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } } };
+            }
             const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ request, cwd: fixture.rootPath, sessionId });
             const result = await startExecutionRun({
                 params: { ...request, ...prepared, sessionId, cwd: fixture.rootPath,
@@ -805,6 +815,22 @@ describe('SCM generation through real host admission', () => {
             // Native delivery precedes publication. Each sequential regeneration
             // must publish before the next scenario or temporary-home teardown.
             await waitForOutput(cancellationRetry);
+            loseNextStartResponse = true;
+            const uncertain = await generate('lost-observation', { outputs: ['walkthrough'], cachePolicy: { mode: 'bypass' } });
+            const observedAgain = await generate('reconcile-only', { outputs: ['walkthrough'] });
+            expect(observedAgain).toMatchObject({ resultId: uncertain.resultId, revision: 0,
+                outputs: { walkthrough: { state: 'pending' } } });
+            expect(delivered.size).toBe(7);
+            // Resume the original physical request through real profile,
+            // Run start, initial-input admission and host publication.
+            const lateStart = await execute('late-original-request')('execution.run.start', pendingStart);
+            if (!lateStart.ok) throw new Error(lateStart.error);
+            const lateRun = ExecutionRunStartResponseSchema.parse(lateStart.result);
+            await waitForOutput(uncertain, 'walkthrough');
+            expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId, resultId: uncertain.resultId! }))
+                .toMatchObject({ success: true, result: { output: { runId: lateRun.runId,
+                    outputs: { walkthrough: { state: 'complete' } } } } });
+            expect(delivered.size).toBe(8);
         } finally {
             releaseModel();
             await Promise.all([...controllers.values()].map(async controller => {

@@ -154,7 +154,7 @@ async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'r
       const params = { ...start(preparedInitial.intentInput), sessionId: null, instructions: preparedInitial.instructions ?? '', connectedServices };
       const begun = await ScmDiffSummaryProfile.onStarted!({ start: params, rawText: '', finishedAtMs: 1 });
       const generated = await ScmDiffSummaryProfile.onTurnComplete!({ start: params, rawText: JSON.stringify({ summaryMarkdown: 'UNTRUSTED_PRIOR_OUTPUT_DIRECTIVE' }),
-        turnId: 'initial-turn', inputIds: ['initial:run-1'], previousStructuredMeta: begun?.structuredMeta, finishedAtMs: 2 });
+        turnId: 'initial-turn', inputIds: ['execution-run-initial:run-1'], previousStructuredMeta: begun?.structuredMeta, finishedAtMs: 2 });
       const produced = ScmDiffSummaryGenerateOutputSchema.parse(generated?.toolResultOutput);
       const savedResponse = ScmDiffSummaryResultResponseSchema.parse(await scmDiffSummaryResultStore.read({ cwd, resultId: produced.resultId! }));
       if (!savedResponse.success) throw new Error(savedResponse.error);
@@ -570,11 +570,11 @@ describe('ScmDiffSummaryProfile', () => {
     const seeded = start({ ...input(['walkthrough']), ...scope, resultBaseRevision: 0, stopIds: ['stop'],
       reviewExplanationInputId: 'explain' }, 'native-model');
     await ScmDiffSummaryProfile.onStarted?.({ start: seeded, rawText: '', finishedAtMs: 9 });
-    expect(await scmDiffSummaryResultStore.readInput({ ...scope, inputIds: ['initial:run-1'] }))
+    expect(await scmDiffSummaryResultStore.readInput({ ...scope, inputIds: ['execution-run-initial:run-1'] }))
       .toMatchObject({ reviewExplanation: { requestedBy: { kind: 'user' }, requestedAtMs: 7 } });
     expect(await scmDiffSummaryResultStore.readInput({ ...scope, inputIds: ['explain'] })).toBeNull();
     const completed = await ScmDiffSummaryProfile.onTurnComplete?.({ start: seeded,
-      turnId: 'native-turn', inputIds: ['initial:run-1'], finishedAtMs: 11,
+      turnId: 'native-turn', inputIds: ['execution-run-initial:run-1'], finishedAtMs: 11,
       previousStructuredMeta: { kind: 'scm_diff_summary.v1', payload: created.output },
       rawText: JSON.stringify({ reviewExplanations: [{ stopId: 'stop', markdown: 'Finding clarification' }] }) });
     expect(completed?.toolResultOutput).toMatchObject({ outputs: { walkthrough: { value: { stops: [{
@@ -636,7 +636,7 @@ describe('ScmDiffSummaryProfile', () => {
     const manual = await scmDiffSummaryResultStore.edit({ ...scope, expectedRevision: replacement.result.revision,
       edit: { kind: 'replaceWalkthrough', value: { title: 'Manual title', intro: '', stops: [], otherChangeRefs: ['change-1'] } } });
     if (!manual.success) throw new Error(manual.error);
-    for (const inputIds of [undefined, ['unmatched'], ['initial:run-1']]) {
+    for (const inputIds of [undefined, ['unmatched'], ['execution-run-initial:run-1']]) {
       expect(await ScmDiffSummaryProfile.onTurnComplete?.({ start: incumbent, turnId: 'late', inputIds, finishedAtMs: 4,
         previousStructuredMeta: initial?.structuredMeta, rawText: JSON.stringify({ walkthrough: {
           title: 'Old overwrite', intro: '', stops: [], otherChangeRefs: ['c1'],

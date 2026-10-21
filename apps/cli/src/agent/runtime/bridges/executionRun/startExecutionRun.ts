@@ -78,6 +78,7 @@ import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
 import { assertExecutionRunStructuredOutputModelAllowed } from './structuredOutputAdmission';
 import { executionRunChildSelectionNeedsAppliedParent, resolveExecutionRunAgentDefaultSelection, resolveExecutionRunChildSelection, type ExecutionRunAppliedParentSelection, type ExecutionRunAppliedParentSelectionReader, type ResolvedExecutionRunChildSelection } from './runtime/openInputs';
 import { projectExecutionRunError } from './errors';
+import { resolveExecutionRunInitialInputLocalId } from './initialInput';
 
 type SendAcp = ExecutionRunTranscriptPublisher;
 
@@ -1262,7 +1263,7 @@ async function startAdmittedExecutionRun(
     const initialInstructions = args.params.initialInput?.kind !== 'deferred_session_pending' && typeof args.params.instructions === 'string'
       ? args.params.instructions
       : '';
-    const retainedInitialInputLocalId = args.params.localInputId ?? `execution-run-initial:${runId}`;
+    const retainedInitialInputLocalId = resolveExecutionRunInitialInputLocalId(runId, args.params.localInputId);
     const retainedSessionInputWasKnownAtStart = ctrl.backend.interaction != null && args.params.sessionId != null;
     let retainedInitialPendingCustodyError: unknown;
     let retainedInitialPendingCustodyFailed = false;

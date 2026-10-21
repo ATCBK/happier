@@ -600,22 +600,37 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
     expect(callSessionRpc).not.toHaveBeenCalled();
   }));
 
-  it('forwards exact-machine generation with the selected session and strict public comparison input', async () => {
+  it.each(['scm.diffSummary.generate', 'scm.diffSummary.draftPullRequest'] as const)('keeps delayed %s admission and its typed refusal under the caller lifetime', async actionId => {
     const credentials = { token: 'token', encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) } };
-    callMachineRpc.mockImplementation(async ({ request, authorization }) => {
+    const controller = new AbortController();
+    let release!: () => void;
+    let dispatched!: () => void;
+    const admitted = new Promise<void>(resolve => { dispatched = resolve; });
+    const response = new Promise<void>(resolve => { release = resolve; });
+    // Authenticated Machine RPC is the boundary. Its ordinary read deadline
+    // cannot decide whether the external generation effect was admitted.
+    callMachineRpc.mockImplementation(async ({ request, authorization, timeoutMs, signal }) => {
       const input = ScmDiffSummaryGenerateInputSchema.parse(request);
       expect(input.sessionId).toBe('session-1');
       expect(authorization).toEqual({ kind: 'session.write', sessionId: 'session-1' });
-      return { success: false, errorCode: 'MODEL_UNAVAILABLE', error: 'Unavailable test model', sourceKey: 'workingTree:/workspace' };
+      expect(signal).toBe(controller.signal);
+      dispatched();
+      await response;
+      if (timeoutMs !== null) throw Object.assign(new Error('Machine RPC call timeout'), { code: 'MACHINE_RPC_TIMEOUT' });
+      return { success: false, errorCode: 'DIFF_UNAVAILABLE', error: 'Saved comparison is unavailable', sourceKey: 'workingTree:/workspace' };
     });
     const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'cli-global', mode: 'plain', ctx: null });
-    await expect(deps.scmActionExecute?.({
-      actionId: 'scm.diffSummary.generate',
+    const pending = deps.scmActionExecute!({
+      actionId,
       input: { cwd: '/workspace', sessionId: 'session-1', source: { kind: 'workingTree' } },
       context: { defaultSessionId: 'session-1', externalActionTarget: { kind: 'machine', machineId: 'machine-1' },
+        signal: controller.signal,
         rpcSessionAuthorization: { kind: 'session.write', sessionId: 'session-1' } },
       executeCanonicalAction: async () => { throw new Error('Remote invocation must be admitted on the owning machine'); },
-    })).resolves.toMatchObject({ success: false, errorCode: 'MODEL_UNAVAILABLE' });
+    });
+    await admitted;
+    release();
+    await expect(pending).resolves.toMatchObject({ success: false, errorCode: 'DIFF_UNAVAILABLE', error: 'Saved comparison is unavailable' });
   });
 
   it('captures selected-session inventory without model admission', () => withLocalScmMachine(async () => {

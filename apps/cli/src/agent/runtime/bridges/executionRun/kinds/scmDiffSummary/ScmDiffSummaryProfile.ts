@@ -21,7 +21,7 @@ import {
 } from '@/agent/executionRuns/tasks/scmDiffSummary/cache/cacheStore';
 import type { ScmDiffSummaryCacheKeyInput } from '@/agent/executionRuns/tasks/scmDiffSummary/cache/cacheKey';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
-import { buildPendingScmDiffSummaryOutput, publishSavedScmDiffSummaryTurn, readOrCreateSavedScmResult } from './publishSavedScmDiffSummaryTurn';
+import { buildPendingScmDiffSummaryOutput, publishSavedScmDiffSummaryTurn, readOrCreateSavedScmResult, readInitialScmDiffSummaryInputId } from './publishSavedScmDiffSummaryTurn';
 import { buildReviewNarrationInputContext, readReviewNarration, readReviewFindingCitationContext } from '@/agent/executionRuns/profiles/review/reviewNarrationContext';
 import { findingCitationInstructions, publishReviewFindingCitations } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 import { resolveScmDiffSummarySettings } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
@@ -211,7 +211,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
   prepareStartParams: async ({ request, cwd, sessionId, contextWindowTokens, captureScmCommitTarget }) => {
     const { cachedOutput: _callerCachedOutput, scmAnalysis: _callerAnalysis, scmContextWindowTokens: _callerCapacity, cacheScopeKey: _callerCacheScope,
       resolvedSelector: _callerSelector, requestedModelId: _callerModel,
-      resultGenerator: _callerGenerator, resultBaseRevision: _callerRevision,
+      resultGenerator: _callerGenerator, resultBaseRevision: _callerRevision, resultInitialInputId: _callerInitialInputId,
       reviewNarration: _callerReviewNarration,
       reviewExplanation: _callerReviewExplanation,
       ...parsedInput } = ExecutionRunScmDiffSummaryInputV1Schema.parse(request.intentInput ?? {});
@@ -258,6 +258,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const draftEvidence = retainedScope?.pullRequestDraftEvidence;
     const citations = retainedScope?.reviewFindingCitations ?? [];
     const savedInput = { ...input, resultId: saved.resultId, resultBaseRevision: saved.revision, resultGenerator: generator,
+      ...(request.localInputId ? { resultInitialInputId: request.localInputId } : {}),
       reviewNarration: { reviewFindingCitations: citations } };
     if (draftEvidence) savedInput.pullRequestDraft ??= {};
     const isSeededResult = Boolean(savedId && (saved.output.runId || typeof input.instructions === 'string'
@@ -369,7 +370,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const cached = ScmDiffSummaryGenerateOutputSchema.safeParse(input.cachedOutput);
     if (start.runClass === 'bounded' && (!cached.success || shouldBypassCache(input))) return null;
     const saved = await readOrCreateSavedScmResult(start);
-    const initialInputId = `initial:${start.runId}`;
+    const initialInputId = readInitialScmDiffSummaryInputId(start);
     const explanationInputId = readNonEmptyString(input.reviewExplanationInputId);
     const explanationInput = explanationInputId
       ? await scmDiffSummaryResultStore.readInput({ ...saved.scope, inputIds: [initialInputId] })

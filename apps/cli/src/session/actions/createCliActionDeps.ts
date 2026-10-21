@@ -3359,11 +3359,19 @@ export function createCliActionDeps(params: Readonly<{
       };
       const request = root ? createTargetedActionRpcRequestV1(machineInput,
         { kind: 'machine', machineId, project: selectedTarget?.project ?? { machineId, directory: root } }, context) : machineInput;
-      const invoke = () => callMachineAction({ machineId, serverId: context.serverId ?? undefined, method, request,
-        ...(sessionAuthorization ? { authorization: sessionAuthorization } : {}),
-        context, effectActionId: actionId,
-        authority: context.authority, exactMachine: true,
-        ...(context.signal ? { signal: context.signal } : {}) });
+      const invoke = () => executeCapturedMachineAction({ actionId,
+        assertCurrent: async () => {
+          if (!await isMachineActionServerScopeCurrent({ serverId: context.serverId, machineId, context,
+            ...(context.signal ? { signal: context.signal } : {}) })) {
+            throw Object.assign(new Error('server_scope_mismatch'), { code: 'server_scope_mismatch' });
+          }
+        },
+        invoke: options => callMachineAction({ machineId, serverId: context.serverId ?? undefined, method, request,
+          ...(sessionAuthorization ? { authorization: sessionAuthorization } : {}),
+          context, effectActionId: actionId,
+          authority: context.authority, exactMachine: true,
+          ...(context.signal ? { signal: context.signal } : {}), ...options }),
+      });
       try {
         return await attachSuccessfulPullRequest(await (params.serverHttpBaseUrl
           ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke()));

@@ -7,9 +7,16 @@ import type {
 } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { scmDiffSummaryResultStore, type ScmDiffSummaryResultScope } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { parseDiffSummaryModelOutput } from './parseDiffSummaryModelOutput';
+import { resolveExecutionRunInitialInputLocalId } from '../../initialInput';
 
 export function readScmDiffSummaryIntent(input: unknown): Readonly<Record<string, unknown>> {
   return input && typeof input === 'object' && !Array.isArray(input) ? input as Readonly<Record<string, unknown>> : {};
+}
+
+export function readInitialScmDiffSummaryInputId(start: ExecutionRunProfileStartParams): string {
+  const inputId = readScmDiffSummaryIntent(start.intentInput).resultInitialInputId;
+  return resolveExecutionRunInitialInputLocalId(start.runId,
+    typeof inputId === 'string' && inputId.trim() ? inputId : undefined);
 }
 
 export function buildPendingScmDiffSummaryOutput(input: Readonly<Record<string, unknown>>): ScmDiffSummaryGenerateOutput {
@@ -68,7 +75,7 @@ export async function publishSavedScmDiffSummaryTurn(params: ExecutionRunProfile
   if (saved.result.output.runId && saved.result.output.runId !== params.start.runId) return null;
   // The native initial turn may omit input IDs, but onStarted already admitted
   // its revision. Completion never grants itself authority at a newer revision.
-  const inputIds = params.inputIds?.length ? params.inputIds : [`initial:${params.start.runId}`];
+  const inputIds = params.inputIds?.length ? params.inputIds : [readInitialScmDiffSummaryInputId(params.start)];
   const pending = await scmDiffSummaryResultStore.readInput({ ...saved.scope, inputIds });
   if (!pending) return null;
   if (!pending.outputs.length) {

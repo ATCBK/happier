@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { createEncryptedRpcTestClient } from '@/rpc/handlers/encryptedRpc.testkit';
 import { registerScmHandlers } from '@/rpc/handlers/scm';
 import axios from 'axios';
-import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, accountSettingsParse, buildBackendTargetKeyV2, type ScmComparisonSource } from '@happier-dev/protocol';
+import { ExecutionRunStartRequestSchema, ExecutionRunScmDiffSummaryInputV1Schema, ScmComparisonSchema, accountSettingsParse, buildBackendTargetKeyV2, type ScmComparisonSource } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
 
 import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
@@ -30,6 +30,7 @@ import { createActionExecutor, type ScmDiffSummaryGenerateInput } from '@happier
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { executeScmActionOperation } from './executeScmActionOperation';
 import { ScmDiffSummaryProfile } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/ScmDiffSummaryProfile';
+import type { ExecutionRunProfileStartParams } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { ScmComparisonCaptureOutputSchema, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { loadScmPullRequestDraftEvidence } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/loadScmDiffSummaryContext';
 
@@ -448,7 +449,7 @@ describe('executeScmDiffSummaryAction', () => {
         });
         if (runCreation === 'outcomeUnknown') {
             expect(inputs).toHaveLength(1);
-            expect(generated).toMatchObject({ outputs: { commitPlan: { state: 'failed' } } });
+            expect(generated).toMatchObject({ revision: 0, outputs: { commitPlan: { state: 'pending' } } });
             expect(generated.runId).toBeUndefined();
         } else {
             expect(generated).toMatchObject({ success: true, runId: 'configured-default-run' });
@@ -609,8 +610,70 @@ describe('executeScmDiffSummaryAction', () => {
             request: { cwd: fixture.rootPath, source: { kind: 'workingTree' } },
             sessionId: 'session-1', backendTarget: BACKEND_TARGET, executeCanonicalAction,
         });
-        expect(output).toMatchObject({ success: true, comparison: { inventory: { state: 'complete' } },
-            outputs: { summary: { state: 'failed', reason: 'Diff-summary execution run start outcome is unknown' } } });
+        expect(output).toMatchObject({ success: true, revision: 0, comparison: { inventory: { state: 'complete' } },
+            outputs: { summary: { state: 'pending' } } });
+        expect(executeCanonicalAction).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([true, false])('publishes a fresh walkthrough through the initial Run input identity with explicit id %s', async explicitInputId => {
+        const fixture = await changedRepository();
+        const sessionId = 'initial-generator-session';
+        let admittedOutputs: readonly string[] | undefined;
+        const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, outputs: ['walkthrough'], modelSelector: { modelId: 'test-model' } },
+            sessionId, backendTarget: BACKEND_TARGET, executeCanonicalAction: async (_action, input) => {
+                const parsed = ExecutionRunStartRequestSchema.parse(input);
+                const { localInputId: generatedInputId, ...withoutInputId } = parsed;
+                const request = { ...(explicitInputId ? parsed : withoutInputId), intentInput: { ...ExecutionRunScmDiffSummaryInputV1Schema.parse(parsed.intentInput),
+                    resultInitialInputId: 'caller-cannot-replace-the-initial-input' } };
+                const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ request, cwd: fixture.rootPath, sessionId });
+                const intent = ExecutionRunScmDiffSummaryInputV1Schema.parse(prepared.intentInput);
+                const start: ExecutionRunProfileStartParams = { ...request, sessionId, runId: 'initial-generator', callId: 'call',
+                    sidechainId: 'sidechain', backendId: 'codex', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+                    instructions: typeof prepared.instructions === 'string' ? prepared.instructions : '',
+                    intentInput: intent, startedAtMs: 1 };
+                const initial = await ScmDiffSummaryProfile.onStarted!({ start, rawText: '', finishedAtMs: 1 });
+                const deliveredInputId = explicitInputId ? generatedInputId : `execution-run-initial:${start.runId}`;
+                if (!deliveredInputId || !intent.resultId) throw new Error('Fresh generation lost its admitted input/result identity');
+                await ScmDiffSummaryProfile.onBeforeRetainedInput!({ start, localId: deliveredInputId });
+                admittedOutputs = (await scmDiffSummaryResultStore.readInput({ cwd: fixture.rootPath, sessionId,
+                    resultId: intent.resultId, inputIds: [deliveredInputId] }))?.outputs;
+                const comparison = ScmComparisonSchema.parse(intent.comparison);
+                await ScmDiffSummaryProfile.onTurnComplete!({ start, turnId: 'native-first-turn',
+                    inputIds: [deliveredInputId], previousStructuredMeta: initial?.structuredMeta, finishedAtMs: 2,
+                    rawText: JSON.stringify({ walkthrough: { title: 'Captured changes', intro: '',
+                        stops: [{ id: 'change', title: 'Changed file', explanationMarkdown: 'Explains the captured change.',
+                            changeRefs: comparison.inventory.files.flatMap(file => file.occurrences.map(change => change.alias)) }],
+                        otherChangeRefs: [] } }) });
+                return { ok: true, result: { runId: start.runId, callId: start.callId, sidechainId: start.sidechainId } };
+            } });
+        expect(admittedOutputs).toEqual(['walkthrough']);
+        expect(generated).toMatchObject({ success: true, runId: 'initial-generator',
+            outputs: { walkthrough: { state: 'complete', value: { title: 'Captured changes' } } } });
+    });
+
+    it.each(['lost response', 'unknown receipt', 'malformed receipt'])('keeps a fresh saved revision admissible after %s while its generator is still preparing', async outcome => {
+        const fixture = await changedRepository();
+        const sessionId = 'preparing-generator-session';
+        let pendingStart: unknown;
+        // Only the Run transport loses its response. Capture, persistence,
+        // request validation and the eventual profile preparation remain real.
+        const executeCanonicalAction = vi.fn(async (_action: string, input: unknown) => {
+            pendingStart = ExecutionRunStartRequestSchema.parse(input);
+            if (outcome === 'lost response') throw new Error('RPC socket disconnected before acknowledgement');
+            if (outcome === 'malformed receipt') return { ok: true as const, result: {} };
+            return { ok: false as const, errorCode: 'execution_run_target_unavailable', error: 'Start outcome unavailable',
+                details: withExecutionRunStartFailureDetails(undefined, 'outcomeUnknown') };
+        });
+        const generated = await executeScmDiffSummaryAction({ request: { cwd: fixture.rootPath,
+            source: { kind: 'workingTree' }, outputs: ['walkthrough'], modelSelector: { modelId: 'test-model' },
+            cachePolicy: { mode: 'bypass' } }, sessionId, backendTarget: BACKEND_TARGET, executeCanonicalAction });
+        const request = ExecutionRunStartRequestSchema.parse(pendingStart);
+        const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ request, cwd: fixture.rootPath, sessionId });
+        expect(prepared.intentInput).toMatchObject({ resultId: generated.resultId, resultBaseRevision: 0,
+            comparison: { id: generated.comparison?.id }, outputs: ['walkthrough'] });
+        expect(await scmDiffSummaryResultStore.read({ cwd: fixture.rootPath, sessionId, resultId: generated.resultId! }))
+            .toMatchObject({ success: true, result: { revision: 0, output: { outputs: { walkthrough: { state: 'pending' } } } } });
         expect(executeCanonicalAction).toHaveBeenCalledTimes(1);
     });
 
@@ -620,8 +683,8 @@ describe('executeScmDiffSummaryAction', () => {
             request: { cwd: fixture.rootPath, source: { kind: 'workingTree' } },
             sessionId: 'session-1', backendTarget: BACKEND_TARGET,
             executeCanonicalAction: async () => { throw new Error('Admission transport disconnected'); },
-        })).resolves.toMatchObject({ success: true, comparison: { inventory: { state: 'complete' } },
-            outputs: { summary: { state: 'failed', reason: 'Diff-summary execution run start outcome is unknown' } },
+        })).resolves.toMatchObject({ success: true, revision: 0, comparison: { inventory: { state: 'complete' } },
+            outputs: { summary: { state: 'pending' } },
         });
     });
 });

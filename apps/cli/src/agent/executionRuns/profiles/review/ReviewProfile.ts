@@ -10,7 +10,7 @@ import { stripTrailingJsonObjectFromText } from '../shared/stripTrailingJsonObje
 import { resolveReviewScmScope } from '../../../reviews/scope/resolve';
 import { readCapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { ScmDiffSummaryProfile } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/ScmDiffSummaryProfile';
-import { readScmDiffSummaryIntent } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/publishSavedScmDiffSummaryTurn';
+import { readScmDiffSummaryIntent, readInitialScmDiffSummaryInputId } from '@/agent/runtime/bridges/executionRun/kinds/scmDiffSummary/publishSavedScmDiffSummaryTurn';
 import { prepareSavedReviewWalkthroughInput, readReviewNarration } from './reviewWalkthroughTurn';
 import { scmDiffSummaryResultStore } from '../../tasks/scmDiffSummary/results/resultStore';
 import { readRetainedReviewFindings } from '../../../reviews/normalize/readRetainedReviewFindings';
@@ -90,7 +90,7 @@ export const ReviewProfile: ExecutionRunIntentProfile = {
     const comparison = ScmComparisonSchema.parse(input.comparison);
     // Findings consumed the initial admitted input, not a walkthrough publication.
     if (typeof input.resultId === 'string') {
-      for (const inputId of params.inputIds?.length ? params.inputIds : [`initial:${params.start.runId}`]) {
+      for (const inputId of params.inputIds?.length ? params.inputIds : [readInitialScmDiffSummaryInputId(params.start)]) {
         await scmDiffSummaryResultStore.abandonInput({ cwd: comparison.repository.rootPath,
           ...(params.start.sessionId ? { sessionId: params.start.sessionId } : {}), resultId: input.resultId, inputId });
       }
