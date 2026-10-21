@@ -237,6 +237,8 @@ export const managedMachines: ManagedMachinesTranslations = {
             canceledCleanup: "S’ha cancel·lat la creació. La neteja encara està pendent.",
             enrollmentRefused: ({ home }: { home: string }) => `Aquesta màquina no s’ha pogut unir a ${home}. Revisa’n la connexió.`,
             joined: ({ name, home }: { name: string; home: string }) => `${name} s’ha unit a ${home}.`,
+            enrollmentUnavailable: "La teva Home no ha pogut registrar aquesta màquina. Comprova que estigui disponible i torna-ho a provar.",
+            homeRequestFailed: "La teva Home no ha pogut completar aquesta sol·licitud. Comprova-la i torna-ho a provar.",
             retryInstall: "Torna a provar la instal·lació",
             openDetails: "Mostra els detalls de la creació",
         },

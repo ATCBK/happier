@@ -4,6 +4,23 @@ import { describeManagedLifecycleState, type ManagedLifecycleState } from './man
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { machinePageHref } from '@/components/machines/page/machinePageHref';
+import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
+
+/** Home request and registration failures retain installation-specific recovery copy. */
+export function describeManagedInstallationFailure(
+    error: NonNullable<ActionOperationProjection['snapshot']['error']>,
+    progress: ActionOperationProjection['snapshot']['progress'],
+): string {
+    const details = error.details;
+    const request = details && 'kind' in details && details.kind === 'managedControllerRequest' ? details : undefined;
+    if (error.errorCode === 'database_connection_unavailable' || error.errorCode === 'database_transaction_conflict_exhausted'
+        || request?.category === 'status' && (request.status ?? 0) >= 500) {
+        return t('managedMachines.creation.homeRequestFailed');
+    }
+    if (error.errorCode === 'provider_unavailable' && progress?.kind === 'phase'
+        && progress.phase === 'ssh.auth.wait') return t('managedMachines.creation.enrollmentUnavailable');
+    return resolveSystemTaskFailureMessage({ code: error.errorCode, message: error.error }) ?? error.error;
+}
 
 /** Setup is observed on the admitted row; Join alone cannot complete this stage. */
 export function managedCreationSetup(machine: ManagedMachineV1) {

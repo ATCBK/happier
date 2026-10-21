@@ -5,6 +5,7 @@ import {
   canRetryManagedInstallation,
   currentManagedCreationOperation,
   describeManagedCreation,
+  describeManagedInstallationFailure,
   managedCreationState,
   managedMachineDestination,
   managedCreationSetup,
@@ -39,6 +40,17 @@ const machine: ManagedMachineV1 = {
 };
 
 describe('managed creation presentation', () => {
+  it('explains a Home controller failure while preserving native installation diagnostics', () => {
+    const progress = { kind: 'phase' as const, phase: 'ssh.installCli', label: 'Installing Happier' };
+    for (const errorCode of ['database_connection_unavailable', 'database_transaction_conflict_exhausted', 'internal_error']) {
+      expect(describeManagedInstallationFailure({ errorCode, error: errorCode,
+        details: { kind: 'managedControllerRequest', path: '/v1/machines/managed/controller/current',
+          category: 'status', status: errorCode === 'internal_error' ? 500 : 503, code: errorCode } }, progress))
+        .toBe(t('managedMachines.creation.homeRequestFailed'));
+    }
+    expect(describeManagedInstallationFailure({ errorCode: 'provider_unavailable', error: 'Native command failed' }, progress))
+      .toBe('Native command failed');
+  });
   it('retires a failed pre-effect idle observation only after newer healthy guest presence', () => {
     const enrolled = { ...machine, enrolledMachineId: 'guest' };
     const failed: ActionOperationProjection = {

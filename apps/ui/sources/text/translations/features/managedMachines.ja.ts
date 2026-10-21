@@ -237,6 +237,8 @@ export const managedMachines: ManagedMachinesTranslations = {
             canceledCleanup: "作成をキャンセルしました。クリーンアップはまだ保留中です。",
             enrollmentRefused: ({ home }: { home: string }) => `このマシンは ${home} に参加できませんでした。接続を確認してください。`,
             joined: ({ name, home }: { name: string; home: string }) => `${name} が ${home} に参加しました。`,
+            enrollmentUnavailable: "Home にこのマシンを登録できませんでした。Home が利用可能か確認してから、もう一度お試しください。",
+            homeRequestFailed: "Home でこのリクエストを完了できませんでした。Home を確認してから、もう一度お試しください。",
             retryInstall: "インストールを再試行",
             openDetails: "作成の詳細を表示",
         },

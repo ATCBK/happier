@@ -1759,6 +1759,28 @@ describe('managed Machine detail', () => {
         const enrolled = { ...machine, enrolledMachineId: 'installed-guest' };
         await act(async () => screen.tree.update(<ManagedCreationProgress {...{ machine,
             operation: { ...failed, snapshot: { ...failed.snapshot,
+                progress: { kind: 'phase', phase: 'ssh.auth.wait', label: 'Waiting for pairing' },
+                error: { errorCode: 'provider_unavailable', error: 'provider_unavailable' } } } }} />));
+        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
+            && node.props.title === t('managedMachines.creation.enrollmentUnavailable')
+            && node.props.diagnosticCode === 'provider_unavailable').length).toBeGreaterThan(0);
+        for (const errorCode of ['database_connection_unavailable', 'database_transaction_conflict_exhausted', 'internal_error']) {
+            await act(async () => screen.tree.update(<ManagedCreationProgress {...{ machine,
+                operation: { ...failed, snapshot: { ...failed.snapshot,
+                    progress: { kind: 'phase', phase: 'ssh.installCli', label: 'Installing Happier' },
+                    error: { errorCode, error: errorCode, details: { kind: 'managedControllerRequest',
+                        path: '/v1/machines/managed/controller/current', category: 'status',
+                        status: errorCode === 'internal_error' ? 500 : 503, code: errorCode } } } },
+                handlers: { reinstall: () => retried.push('same-resource-after-home-failure') } }} />));
+            expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
+                && node.props.title === t('managedMachines.creation.homeRequestFailed')
+                && node.props.diagnosticCode === errorCode).length).toBeGreaterThan(0);
+            const homeRetry = screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-retry'
+                && typeof node.props.onPress === 'function')[0];
+            expect(homeRetry).toBeDefined();
+        }
+        await act(async () => screen.tree.update(<ManagedCreationProgress {...{ machine,
+            operation: { ...failed, snapshot: { ...failed.snapshot,
                 error: { errorCode: 'remote_cli_update_required', error: 'legacy daemon diagnostic' } } } }} />));
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
             && node.props.title === t('setupOnboarding.remoteSshChecklist.remoteCliUpdateRequired')).length).toBeGreaterThan(0);

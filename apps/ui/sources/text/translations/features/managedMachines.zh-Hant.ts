@@ -237,6 +237,8 @@ export const managedMachines: ManagedMachinesTranslations = {
             canceledCleanup: "已取消建立。清理仍在等待中。",
             enrollmentRefused: ({ home }: { home: string }) => `這台機器無法加入 ${home}。請檢查它的連線。`,
             joined: ({ name, home }: { name: string; home: string }) => `${name} 已加入 ${home}。`,
+            enrollmentUnavailable: "你的 Home 無法註冊此機器。請確認 Home 是否可用，然後重試。",
+            homeRequestFailed: "你的 Home 無法完成此請求。請檢查 Home，然後重試。",
             retryInstall: "重試安裝",
             openDetails: "顯示建立詳細資料",
         },

@@ -237,6 +237,8 @@ export const managedMachines: ManagedMachinesTranslations = {
             canceledCleanup: "Erstellung abgebrochen. Die Bereinigung steht noch aus.",
             enrollmentRefused: ({ home }: { home: string }) => `Dieser Rechner konnte ${home} nicht beitreten. Prüfe ihre Verbindung.`,
             joined: ({ name, home }: { name: string; home: string }) => `${name} ist ${home} beigetreten.`,
+            enrollmentUnavailable: "Dein Home konnte diesen Rechner nicht registrieren. Prüfe, ob dein Home verfügbar ist, und versuche es erneut.",
+            homeRequestFailed: "Dein Home konnte diese Anfrage nicht abschließen. Prüfe dein Home und versuche es erneut.",
             retryInstall: "Installation wiederholen",
             openDetails: "Details zur Erstellung anzeigen",
         },

@@ -13,11 +13,10 @@ import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet } from 'react-native-unistyles';
 import { t } from '@/text';
 import { ManagedMachineStateRow, type ManagedLifecycleHandlers } from './ManagedMachineStateRow';
-import { canRetryManagedInstallation, currentManagedCreationOperation, isManagedCreationStateRowVisible, managedCreationSetup, managedCreationState, readManagedInstallationPrompt, type ManagedCreationContext } from './managedCreationPresentation';
+import { canRetryManagedInstallation, currentManagedCreationOperation, describeManagedInstallationFailure, isManagedCreationStateRowVisible, managedCreationSetup, managedCreationState, readManagedInstallationPrompt, type ManagedCreationContext } from './managedCreationPresentation';
 import { describeManagedLifecycleState } from './managedLifecyclePresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from '@/components/inbox/actionOperations/actionOperationPresentation';
-import { resolveSystemTaskFailureMessage } from '@/components/systemTasks/resolveSystemTaskFailureMessage';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
 /** Only durable allocation/enrollment observations; task stages are supplied by their operation owner. */
@@ -106,7 +105,7 @@ export function ManagedCreationProgress(props: Readonly<{ machine: ManagedMachin
                         testID="managed-machine.installation-prompt-approve" onPress={() => props.answerPrompt?.(true)} />
                 </View> : installationRetry} />
             {operation?.snapshot.error ? <SurfaceStateCard kind="error" size="line"
-                title={resolveSystemTaskFailureMessage({ code: operation.snapshot.error.errorCode, message: operation.snapshot.error.error }) ?? operation.snapshot.error.error}
+                title={describeManagedInstallationFailure(operation.snapshot.error, operation.snapshot.progress)}
                 diagnosticCode={operation.snapshot.error.errorCode}
                 testID="managed-machine.installation-error" /> : null}
         </ItemGroup> : null}

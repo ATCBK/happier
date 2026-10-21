@@ -242,6 +242,8 @@ export const managedMachinesEn = {
             mayBill: "This resource may still be billed by your provisioner.",
             canceledCleanup: "Creation canceled. Cleanup is still pending.",
             enrollmentRefused: ({ home }: { home: string }) => `This machine couldn’t join ${home}. Review its connection.`,
+            enrollmentUnavailable: "Your Home couldn’t register this machine. Check your Home’s availability and try again.",
+            homeRequestFailed: "Your Home couldn’t complete this request. Check your Home, then try again.",
             joined: ({ name, home }: { name: string; home: string }) => `${name} joined ${home}.`,
             retryInstall: "Retry install",
             openDetails: "Show creation details",
