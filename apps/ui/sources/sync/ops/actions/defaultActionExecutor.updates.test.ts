@@ -8,7 +8,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import type { UpdateItem } from '@/updates/items/updateItem';
 import type { UpdatesGroup } from '@/updates/buildMachineUpdateGroups';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 
@@ -17,7 +17,7 @@ vi.mock('@/modal', async () =>
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
     .createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary(socket => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     vi.spyOn(socket, 'emitWithAck').mockResolvedValue({ ok: true, result: {} });
 });

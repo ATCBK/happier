@@ -3,7 +3,7 @@ import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/cre
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
 
 const homes = createHomeGovernanceHarness();
@@ -13,7 +13,7 @@ installDisconnectedServerSocketBoundary(socket => {
     if (typeof socket.auth === 'object' && socket.auth.clientPurpose === 'scoped-rpc') {
         socket.connected = false;
         socket.connect = vi.fn(() => { dialing = true; return socket; });
-    } else socket.connected = true;
+    } else configureConnectedServerSocketBoundary(socket);
 });
 const { dispatchSessionSpawnNewToMachine } = await import('./sessionSpawnNewAction');
 

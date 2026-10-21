@@ -8,7 +8,7 @@ import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol
 import { V2SessionByIdNotFoundSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 import { createPlainAccountEncryptionCurrentnessFixture, standardCleanup } from '@/dev/testkit';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage, readSessionOrganizationProjectionCached } from '@/sync/domains/state/storage';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -22,7 +22,7 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
+installDisconnectedServerSocketBoundary(socket => { configureConnectedServerSocketBoundary(socket); });
 
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 

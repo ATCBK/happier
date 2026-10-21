@@ -8,7 +8,7 @@ import { socketRpcCodec } from '@happier-dev/sync-client';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -84,7 +84,7 @@ describe('Machines advertised UI and eligible Voice execution', () => {
     const requests: Array<{ serverUrl: string | undefined; method: string; input: unknown }> = [];
     const neighboringAcks = createSocketIoBoundaryStub().socket.emitWithAck;
     installDisconnectedServerSocketBoundary((socket, serverUrl) => {
-      socket.connected = true;
+      configureConnectedServerSocketBoundary(socket);
       socket.emitWithAck = vi.fn(async (event: string, payload: unknown) => {
         if (event !== SOCKET_RPC_EVENTS.CALL) return await neighboringAcks(event, payload);
         if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string' || !('params' in payload)) {

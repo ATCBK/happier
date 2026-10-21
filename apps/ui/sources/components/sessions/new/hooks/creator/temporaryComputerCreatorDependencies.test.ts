@@ -19,7 +19,7 @@ import { createTemporaryComputerCreatorDependencies } from './temporaryComputerC
 
 installPromptRegistriesCommonModuleMocks({ storage: original => original() });
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
-const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+const { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
 installDisconnectedServerSocketBoundary();
 // Collect the real execution graph before the test's lifecycle begins. The
 // composed test exercises requests, not the bundler's cold module transform.
@@ -752,7 +752,7 @@ describe('createTemporaryComputerCreatorDependencies external Agent acquisition'
         const { value } = await acquisition.http(acquisition.sources[1]!.url);
         const snapshot = { ...value, source: { ...value.source, id: sourceId, sourceUrl } };
         installDisconnectedServerSocketBoundary(socket => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
             socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: unknown) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };

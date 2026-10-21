@@ -9,7 +9,7 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { SessionUserMessageSendRequestSchema, SessionUserMessageSendResponseSchema } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { MINIMUM_CLI_SESSION_USER_MESSAGE_RPC_VERSION } from '@/utils/system/versionUtils';
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -121,7 +121,7 @@ import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/
 
 const submittedSessionIds: string[] = [];
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     vi.mocked(socket.connect).mockImplementation(() => {
         socket.connected = true;
         queueMicrotask(() => { for (const listener of socket.listeners('connect')) listener(); });

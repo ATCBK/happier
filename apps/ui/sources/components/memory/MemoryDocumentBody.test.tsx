@@ -30,7 +30,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { HappierDisclosure } from '@happier-dev/plugin-ui/presentation';
@@ -61,7 +61,7 @@ vi.mock('@/modal', async () => {
 
 // HTTP, persistence, device credentials and the reachable cold Socket transport are the boundaries.
 // The memory hook, Actions front door, codecs, admission and Artifact CAS owners stay real.
-installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
+installDisconnectedServerSocketBoundary(socket => { configureConnectedServerSocketBoundary(socket); });
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const { ItemRowActions } = await import('@/components/ui/lists/ItemRowActions');

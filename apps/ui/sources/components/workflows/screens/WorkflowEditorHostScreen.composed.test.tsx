@@ -72,7 +72,7 @@ import { clearDaemonMergedProjectionCacheForTests, readCachedDaemonMergedProject
 import { publishMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjection';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
@@ -320,7 +320,7 @@ const daemonProjection = vi.hoisted(() => ({
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
         if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };

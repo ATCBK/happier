@@ -17,7 +17,7 @@ import {
     clearProjectedAgentUiBehaviorDescriptors,
 } from '@/agents/registry/agentUiBehaviorProjection';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineFixture, createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { PluginProjectionV2Schema, DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginSettingsGetRequestSchema, DaemonPluginSettingsSetRequestSchema, DaemonPluginSettingsGetResponseSchema, DaemonPluginSettingsSetResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -162,7 +162,7 @@ vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 const account = createProviderSettingsAccountHarness();
 const homes = account.home;
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
         if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };

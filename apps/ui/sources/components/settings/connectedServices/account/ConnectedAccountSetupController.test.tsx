@@ -1651,7 +1651,7 @@ describe('ConnectedAccountSetupController real ownership', () => {
         // pre-emission callbacks. Only HTTP and Socket.IO are substituted.
         vi.mocked(apiSocket.machineRPC).mockRestore();
         installDisconnectedServerSocketBoundary(socket => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             socket.emitWithAck = vi.fn(async (_event: string, payload: unknown) => {
                 if (payload && typeof payload === 'object' && 'params' in payload) {
                     const request = ConnectedAccountControlCommandRequestSchema.safeParse(payload.params);

@@ -14,7 +14,7 @@ import { MachinePathBrowserView } from '@/components/ui/pathBrowser/MachinePathB
 import { MachineSelector } from '@/components/sessions/new/components/MachineSelector';
 import { AgentInputSelectionListPopover } from '@/components/sessions/agentInput/components/AgentInputSelectionListPopover';
 import { createWorkflowActionHttpTransport } from '@/dev/testkit/fixtures/workflowActionHttpTransport';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
 import type { SelectionListStep } from '@/components/ui/selectionList';
 import { storage } from '@/sync/domains/state/storage';
@@ -37,7 +37,7 @@ vi.mock('socket.io-client', async (importOriginal) =>
 // The socket is the native Machine RPC boundary; scoped routing, guards,
 // currentness, parsers and caches all run through their real owners.
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, raw: unknown) => {
         if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };

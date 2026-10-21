@@ -6,7 +6,7 @@ import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAv
 import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { PendingResetStartSetResultV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { ServerReachabilityWaitTimeoutError } from '@/sync/runtime/connectivity/serverReachabilitySupervisorPool';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
@@ -7091,7 +7091,7 @@ describe('sync.fetchMessages server-scoped known-session checks', () => {
         const readStarted = createDeferred<void>();
         let holdRead = false;
         const socketBoundary = installDisconnectedServerSocketBoundary(socket => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: SocketRpcRequestPayload) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL || request.method !== `machine-1:${ACTION_OPERATION_RPC_METHODS_V2.get}`) {
                     throw new Error(`Unexpected operation socket request: ${event}`);

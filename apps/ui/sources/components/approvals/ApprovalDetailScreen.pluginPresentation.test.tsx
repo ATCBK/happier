@@ -6,7 +6,7 @@ import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { installApprovalCommonModuleMocks } from './approvalsTestHelpers';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -48,7 +48,7 @@ it.each(['refused', 'lost', 'settled-success'] as const)('shows the settled plug
     let request: ReturnType<typeof TargetActionApprovalRequestV1Schema.parse>;
     const outgoing: SocketRpcRequestPayload[] = [];
     installDisconnectedServerSocketBoundary(socket => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         vi.spyOn(socket, 'timeout').mockReturnValue(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
             if (event !== SOCKET_RPC_EVENTS.CALL) return { ok: true, result: {} };
@@ -108,7 +108,7 @@ it.each(['approve', 'reject'] as const)('routes plugin %s from the creator profi
     const outgoing: SocketRpcRequestPayload[] = [];
     const outgoingHomes: string[] = [];
     installDisconnectedServerSocketBoundary((socket, serverUrl) => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         vi.spyOn(socket, 'timeout').mockReturnValue(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
             if (event === SOCKET_RPC_EVENTS.CALL) {
@@ -166,7 +166,7 @@ it.each(['approve', 'reject'] as const)('updates plugin %s routing when the matc
     const outgoing: SocketRpcRequestPayload[] = [];
     const outgoingHomes: string[] = [];
     const configureSocket = (socket: Socket, serverUrl?: string) => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         vi.spyOn(socket, 'timeout').mockReturnValue(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
             if (event === SOCKET_RPC_EVENTS.CALL) {

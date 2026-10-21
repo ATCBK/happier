@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -11,7 +11,7 @@ installDisconnectedServerSocketBoundary(socket => {
         socket.connected = false;
         socket.connect = vi.fn(() => { dialing = true; return socket; });
     } else {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
     }
 });
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;

@@ -4,7 +4,7 @@ import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { AccessibleMachineAccessV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import type { MachineMetadata } from '@/sync/domains/state/storageTypes';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createDeferred } from '@/dev/testkit';
@@ -22,7 +22,7 @@ let respond: (request: MachineUpdateMetadataRequest) => Promise<MachineUpdateMet
 let readySocket: Socket | undefined;
 installDisconnectedServerSocketBoundary((socket) => {
     readySocket = socket;
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, request: MachineUpdateMetadataRequest) => {
         if (event !== 'machine-update-metadata') throw new Error('Unexpected metadata socket event: ' + event);

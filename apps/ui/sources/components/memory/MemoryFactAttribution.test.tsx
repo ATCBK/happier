@@ -7,7 +7,7 @@ import { MemoryFactV1Schema, type MemoryFactV1 } from '@happier-dev/protocol/pro
 import { renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import type { MemoryDocumentSource } from './useMemoryDocument';
@@ -23,7 +23,7 @@ vi.mock('@/text', async () => {
 
 // Only Home HTTP, credential persistence and the cold Socket transport are substituted.
 // Both Memory presenters, profile-scope admission and Account actor projection stay real.
-installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
+installDisconnectedServerSocketBoundary(socket => { configureConnectedServerSocketBoundary(socket); });
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 await loadSyncSingletonForTests();

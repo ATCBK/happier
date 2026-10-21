@@ -14,7 +14,7 @@ import { ConnectedAccountCatalogRowMutationV1Schema, ConnectedPurposeCatalogV1Sc
 import { CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD, ConnectedAccountAuthenticationCommandRequestSchema, CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, ConnectedAccountControlCommandRequestSchema, ConnectedAccountRevokeResponseV1Schema } from '@happier-dev/protocol/connect/connectedAccountDaemonRpcV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { storage } from '@/sync/domains/state/storage';
@@ -64,7 +64,7 @@ it.each(['retired-before-issue', 'cancelled-before-issue', 'retired-after-ack', 
         // Exact Account custody uses a scoped socket. Hold its HTTP machine admission;
         // transport acquisition, issuance guards, the ACK codec and settlement stay real.
         installDisconnectedServerSocketBoundary(socket => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
                 if (!payload || typeof payload !== 'object' || !('method' in payload)

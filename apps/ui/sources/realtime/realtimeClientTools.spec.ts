@@ -4,7 +4,7 @@ import type { RenderScreenResult } from '@/dev/testkit/render/renderScreen';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
@@ -15,7 +15,7 @@ const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const outgoing: SocketRpcRequestPayload[] = [];
 installDisconnectedServerSocketBoundary((socket) => {
-  socket.connected = true;
+  configureConnectedServerSocketBoundary(socket);
   vi.spyOn(socket, 'emit').mockReturnValue(socket);
   vi.spyOn(socket, 'timeout').mockReturnValue(socket);
   vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => {

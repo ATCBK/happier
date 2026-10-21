@@ -19,7 +19,7 @@ import type { ActionExecuteResult } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentsListActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
@@ -41,7 +41,7 @@ let sessionRpcAvailable = true;
 // The Home/daemon network is the boundary. Its bounded command and ACK use
 // the real mounted UI runtime, exact-address target and viewer reducer below.
 installDisconnectedServerSocketBoundary((socket) => {
-  socket.connected = true;
+  configureConnectedServerSocketBoundary(socket);
   vi.spyOn(socket, 'timeout').mockReturnValue(socket);
   vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
     if (event !== SOCKET_RPC_EVENTS.CALL) return { ok: true };

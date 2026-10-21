@@ -30,7 +30,7 @@ const requestMock = vi.hoisted(() => vi.fn());
 const machineExternalSessionTranscriptPageMock = vi.hoisted(() => vi.fn());
 const machineExternalSessionTranscriptReadAfterMock = vi.hoisted(() => vi.fn());
 
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -45,7 +45,7 @@ async function restorePagingAccount() {
         metadata: null, daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     installDisconnectedServerSocketBoundary((socket) => {
         // Keep real SDK/host RPC codecs and replace only the remote ACK boundary.
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
             if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
             if (!payload || typeof payload !== 'object' || !('method' in payload)

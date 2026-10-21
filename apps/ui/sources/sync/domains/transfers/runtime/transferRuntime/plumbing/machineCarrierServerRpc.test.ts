@@ -14,7 +14,7 @@ import {
     type PreparedTransferRpcRequestV1,
 } from '@happier-dev/protocol/machines/transfer/preparedTransferRpcV1';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createDeferred } from '@/dev/testkit';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
@@ -33,7 +33,7 @@ installHomeGovernanceBoundaries(homes);
 const outgoing: SocketRpcRequestPayload[] = [];
 let respond: (request: SocketRpcRequestPayload) => Promise<unknown>;
 installDisconnectedServerSocketBoundary(socket => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, request: SocketRpcRequestPayload) => {
         if (event !== 'rpc-call') return { ok: true };

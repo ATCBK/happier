@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 import { renderHook, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { adoptHomeProfile } from '@/sync/domains/server/serverProfiles';
@@ -79,7 +79,7 @@ it.each(['approve', 'reject', 'disabled', 'stale'] as const)('admits the shared 
         return { ok: true, receipt: { idempotencyKey: 'reset-receipt', providerCreditId: 'credit-1', status: 'nothing_to_reset' }, snapshot: null };
     };
     installDisconnectedServerSocketBoundary(socket => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
             if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
             if (!payload || typeof payload !== 'object' || !('method' in payload)

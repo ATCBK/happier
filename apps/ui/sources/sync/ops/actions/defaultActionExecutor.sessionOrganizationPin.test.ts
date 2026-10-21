@@ -7,7 +7,7 @@ import { AccountSettingsV2GetResponseSchema, CurrentCursorResponseSchema, Featur
 import { SetSessionPinRequestSchema } from '@happier-dev/protocol/sessions/organization/mutations';
 
 import { createPlainAccountEncryptionCurrentnessFixture, createSessionListRenderableSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { storage } from '@/sync/domains/state/storage';
@@ -22,7 +22,7 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 installDisconnectedServerSocketBoundary(socket => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async () => { throw new Error('Unexpected Machine RPC from personal organization Action'); });
 });
 

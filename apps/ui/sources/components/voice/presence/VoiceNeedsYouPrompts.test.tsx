@@ -6,7 +6,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { SessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
@@ -26,7 +26,7 @@ const sessionRpcTransport = vi.hoisted(() => vi.fn(async (_request: Readonly<{
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 installDisconnectedServerSocketBoundary((socket, serverUrl) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
         if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
         if (!payload || typeof payload !== 'object' || !('method' in payload)

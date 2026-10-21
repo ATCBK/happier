@@ -9,7 +9,7 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { createSessionFixture, createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
@@ -46,7 +46,7 @@ it('binds the recovery Action to the existing Session RPC adapter for an agent',
     const effects: string[] = [];
     let reply: unknown = { ok: true, status: 'waiting', sessionId: session.id };
     installDisconnectedServerSocketBoundary(socket => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
             if (event !== 'rpc-call') return {};
             if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string') throw new Error('Malformed RPC');
@@ -115,7 +115,7 @@ it.each(controls.flatMap(control => (['approve', 'reject'] as const).map(decisio
         storage.getState().applyMachines([createMachineFixture({ id: machine.id, activeAt: Date.now() })], true, { sourceServerId: serverId });
         const effects: Array<{ method: string; payload: unknown }> = [];
         installDisconnectedServerSocketBoundary(socket => {
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload: unknown) => {
                 if (event !== 'rpc-call') return { v: 1, ok: true, admittedSessionIds: [] };
                 if (!payload || typeof payload !== 'object' || !('method' in payload) || typeof payload.method !== 'string'

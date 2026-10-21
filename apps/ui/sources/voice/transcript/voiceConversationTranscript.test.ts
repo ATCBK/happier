@@ -24,8 +24,8 @@ const writeSchema = z.strictObject({ content: z.strictObject({ t: z.literal('pla
     localId: z.string().check(z.minLength(1)), messageRole: SessionMessageRoleSchema });
 
 beforeEach(async () => {
-    const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
-    installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
+    const { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    installDisconnectedServerSocketBoundary(configureConnectedServerSocketBoundary);
     const { createVoiceSettingsAccountTestHarness } = await import('@/voice/settings/panels/voiceSettingsAccountTestHarness');
     account = await createVoiceSettingsAccountTestHarness(settingsParse({}));
     writes.length = 0;

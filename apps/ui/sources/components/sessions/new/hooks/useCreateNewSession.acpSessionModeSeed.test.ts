@@ -12,7 +12,7 @@ import type { Settings } from '@/sync/domains/settings/settings';
 import type { UseMachineEnvPresenceResult } from '@/hooks/machine/useMachineEnvPresence';
 import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installNewSessionScreenModelCommonModuleMocks, selectNewSessionTestHome } from './newSessionScreenModelTestHelpers';
@@ -30,7 +30,7 @@ import { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV2RequestSchema, Act
 const localStorageBoundary = installLocalStorageMock();
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-installDisconnectedServerSocketBoundary(socket => { socket.connected = true; });
+installDisconnectedServerSocketBoundary(socket => { configureConnectedServerSocketBoundary(socket); });
 
 const modalAlertSpy = vi.hoisted(() => vi.fn());
 const scopedSocketEmitWithAckSpy = vi.hoisted(() => vi.fn());

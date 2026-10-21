@@ -11,7 +11,7 @@ import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@
 import { createTransferManifestHasher } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher';
 import { createEncryptedTransferChunkEnvelope } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from './homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
 import { createMachineFixture } from '../fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
@@ -59,7 +59,7 @@ export function installPromptMachineSocketBoundary() {
     // runtime graph reaches Sync's Home HTTP client.
     installHomeGovernanceBoundaries(createHomeGovernanceHarness());
     installDisconnectedServerSocketBoundary(socket => {
-        socket.connected = true;
+        configureConnectedServerSocketBoundary(socket);
         socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
         socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: unknown) => {
             if (event !== SOCKET_RPC_EVENTS.CALL || !request || typeof request !== 'object'

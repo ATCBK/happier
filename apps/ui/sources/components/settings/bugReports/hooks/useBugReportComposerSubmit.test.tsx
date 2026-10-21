@@ -9,14 +9,14 @@ import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalR
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { BugReportSubmitOutputSchema, type BugReportDraftInput } from '@happier-dev/protocol/actions/specs/bugReport';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { persistPreRestartBugReportSnapshot, peekPreRestartBugReportSnapshot } from '@/utils/system/preRestartBugReportSnapshot';
 
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
   .createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary(socket => {
-  socket.connected = true;
+  configureConnectedServerSocketBoundary(socket);
   vi.spyOn(socket, 'timeout').mockReturnValue(socket);
   vi.spyOn(socket, 'emitWithAck').mockResolvedValue({ ok: true, result: {} });
 });

@@ -14,7 +14,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { upsertServerProfileOnly } from '@/sync/domains/server/serverRuntime';
 import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { resolveFreshMachineAdministrationExecutionTarget, useMachineAdministrationTargetSelection } from '@/sync/domains/machines/administration/useTargetSelection';
@@ -76,7 +76,7 @@ describe('offered MCP Machine Actions through their selected Home', () => {
         installDisconnectedServerSocketBoundary((socket, home) => {
             // Socket.IO is the external network boundary. The real scoped RPC
             // owner and request-correlated codec remain beneath the panel.
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             socket.emitWithAck = vi.fn(async (event: string, payload: unknown) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
                 if (!payload || typeof payload !== 'object') throw new Error('Expected a wire RPC request');

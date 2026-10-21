@@ -35,7 +35,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 
 import {
     installMcpServersCommonModuleMocks,
@@ -266,7 +266,7 @@ describe('MCP servers collection and tools', () => {
         installDisconnectedServerSocketBoundary((socket, home) => {
             // The fake network acknowledges genuine request-correlated RPC envelopes;
             // Machine resolution, Actions, admission, and codecs all stay real.
-            socket.connected = true;
+            configureConnectedServerSocketBoundary(socket);
             socket.emitWithAck = vi.fn(async (event: string, payload: unknown) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
                 if (!payload || typeof payload !== 'object') throw new Error('Expected a wire RPC request');

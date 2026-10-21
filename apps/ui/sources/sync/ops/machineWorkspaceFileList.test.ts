@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const homes = createHomeGovernanceHarness();
@@ -21,7 +21,7 @@ vi.mock('@legendapp/list/react-native', async () => {
 const outgoing: SocketRpcRequestPayload[] = [];
 let respond: (payload: SocketRpcRequestPayload) => Promise<unknown>;
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => {
         if (typeof payload?.method !== 'string') return { ok: true };

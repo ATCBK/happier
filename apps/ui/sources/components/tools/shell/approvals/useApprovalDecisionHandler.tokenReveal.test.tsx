@@ -4,7 +4,7 @@ import { API_TOKEN_FULL_GRANT_V1, ApprovalRequestSchema } from '@happier-dev/pro
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 
 const modal = vi.hoisted(() => ({ boundary: null as ReturnType<typeof import('@/dev/testkit/mocks/modal').createModalModuleMock> | null }));
@@ -20,7 +20,7 @@ const home = createHomeGovernanceHarness();
 let restoreNativeFetch: (() => void) | undefined;
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 installHomeGovernanceBoundaries(home);
-installDisconnectedServerSocketBoundary((socket) => { socket.connected = true; });
+installDisconnectedServerSocketBoundary((socket) => { configureConnectedServerSocketBoundary(socket); });
 // Import the real host graph after transport mocks are installed, as explicit
 // setup. A transform/fetch timeout must not be mistaken for a hung approval.
 const [{ createDefaultActionExecutor }, { useApprovalDecisionHandler }] = await Promise.all([

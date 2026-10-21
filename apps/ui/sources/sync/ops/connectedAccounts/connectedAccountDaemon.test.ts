@@ -5,7 +5,7 @@ import { MACHINE_PLAIN_DATA_KEY_MARKER, CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND
     CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD, type ConnectedAccountDaemonControlResponse } from '@happier-dev/protocol';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
@@ -15,7 +15,7 @@ installHomeGovernanceBoundaries(homes);
 const outgoing: SocketRpcRequestPayload[] = [];
 const answers: unknown[] = [];
 installDisconnectedServerSocketBoundary((socket) => {
-    socket.connected = true;
+    configureConnectedServerSocketBoundary(socket);
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
     vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => {
         outgoing.push(payload);
