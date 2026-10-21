@@ -1,6 +1,7 @@
 import type { SessionSystemRecordStored, SessionSystemRecordStoredPageResponse } from '@happier-dev/protocol';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { linearBackoffDelay } from '@/utils/timing/time';
 import {
     createSessionSystemRecordTransport,
     type HostSessionSystemRecordAddress,
@@ -35,6 +36,9 @@ type Entry = {
     listeners: Set<() => void>;
     pending?: Promise<void>;
     invalidatedWhileLoading: boolean;
+    /** Consecutive transient failures of this query; reset by any answer. */
+    transientFailures: number;
+    retryTimer?: ReturnType<typeof setTimeout>;
     measurements?: Partial<Record<'reply' | `intrinsic:${string}`, number>>;
 };
 type SessionEntries = {
@@ -62,8 +66,26 @@ function retainValue(previous: RecordValue | null, next: RecordValue): RecordVal
     return { ...next, records };
 }
 
+/**
+ * A read that could not complete (`offline` is only the transport's name for a
+ * thrown request) or a retryable server answer. Neither proves the retained
+ * record gone, nor the Home unreachable.
+ */
+function isTransientFailure(result: FetchError): boolean {
+    return result.status === 'offline' || (result.status === 'server_error' && result.retryable);
+}
+
+export type SessionSystemRecordRepositoryOptions = SessionSystemRecordTransportOptions & Readonly<{
+    /**
+     * The app's existing sync backoff (`SyncTuning.invalidateSyncBackoff*`).
+     * When given, an observed query that failed transiently re-reads on that
+     * schedule until it answers or loses its last observer.
+     */
+    retryBackoff?: Readonly<{ minDelayMs: number; maxDelayMs: number }>;
+}>;
+
 /** Runtime projection retained for one captured Server/Account lifetime. */
-export function createSessionSystemRecordRepository(options: SessionSystemRecordTransportOptions) {
+export function createSessionSystemRecordRepository(options: SessionSystemRecordRepositoryOptions) {
     const transport = createSessionSystemRecordTransport(options);
     const sessions = new Map<string, SessionEntries>();
     // Opening follows retained record identity, never a separate content store.
@@ -94,7 +116,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         const key = queryKey(query);
         let entry = queries.get(key);
         if (!entry && create) {
-            entry = { session, query, snapshot: empty, listeners: new Set(), invalidatedWhileLoading: false };
+            entry = { session, query, snapshot: empty, listeners: new Set(), invalidatedWhileLoading: false, transientFailures: 0 };
             queries.set(key, entry);
         }
         return entry ?? null;
@@ -127,10 +149,26 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             ? { ...next, records: next.records.map(retain) }
             : retain(next));
     }
+    function clearRetry(entry: Entry) {
+        if (entry.retryTimer === undefined) return;
+        clearTimeout(entry.retryTimer);
+        entry.retryTimer = undefined;
+    }
+    function scheduleRetry(entry: Entry): boolean {
+        const backoff = options.retryBackoff;
+        if (!backoff || retired || entry.listeners.size === 0 || entry.retryTimer !== undefined) return false;
+        const delayMs = linearBackoffDelay(entry.transientFailures, backoff.minDelayMs, Math.max(backoff.minDelayMs, backoff.maxDelayMs), 50);
+        entry.retryTimer = setTimeout(() => {
+            entry.retryTimer = undefined;
+            if (!retired && entry.listeners.size > 0) void refresh(entry.session, entry.query);
+        }, delayMs);
+        return true;
+    }
     function refresh(session: SessionAddress, query: SessionSystemRecordQuery): Promise<void> {
         const entry = lookup(session, query, true);
         if (!entry) return Promise.resolve();
         if (entry.pending) return entry.pending;
+        clearRetry(entry);
         publish(entry, { ...entry.snapshot, loading: entry.snapshot.data === null ? 'initial' : 'refreshing' });
         const operation = query.type === 'read' ? transport.read(session, query.address)
             : query.type === 'legacy_workflow' ? readLegacyWorkflowSystemRecord(options, session, query.localId)
@@ -138,9 +176,25 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         entry.pending = operation.then((result) => {
             if (retired) return;
             if (result.status === 'ok') {
+                entry.transientFailures = 0;
                 publish(entry, { data: retainObservedValue(entry, result.value), loading: 'idle', freshness: entry.invalidatedWhileLoading ? 'stale' : 'fresh', reachability: 'reachable', lastError: null });
+            } else if (isTransientFailure(result)) {
+                // A failed read never proves absence. The last record stays, its freshness is
+                // whatever invalidation made it (a failure does not stale it), and reachability
+                // is not demoted: no request answered "unreachable", one simply did not finish.
+                entry.transientFailures += 1;
+                const retrying = scheduleRetry(entry);
+                const previous = entry.snapshot;
+                publish(entry, {
+                    data: previous.data,
+                    loading: !retrying ? 'idle' : previous.data === null ? 'initial' : 'refreshing',
+                    freshness: previous.data === null || entry.invalidatedWhileLoading ? 'stale' : previous.freshness,
+                    reachability: previous.data === null && result.status === 'offline' ? 'unknown' : 'reachable',
+                    lastError: result,
+                });
             } else {
-                publish(entry, { ...entry.snapshot, data: result.status === 'forbidden' || result.status === 'not_found' ? null : entry.snapshot.data, loading: 'idle', freshness: 'stale', reachability: result.status === 'offline' ? 'offline' : 'reachable', lastError: result });
+                entry.transientFailures = 0;
+                publish(entry, { ...entry.snapshot, data: result.status === 'forbidden' || result.status === 'not_found' ? null : entry.snapshot.data, loading: 'idle', freshness: 'stale', reachability: 'reachable', lastError: result });
             }
         }).finally(() => {
             entry.pending = undefined;
@@ -206,6 +260,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
             if (entry.snapshot.freshness === 'stale') void refresh(session, query);
             return () => {
                 entry.listeners.delete(listener);
+                if (entry.listeners.size === 0) clearRetry(entry);
             };
         },
         invalidate(session: SessionAddress) {
@@ -233,6 +288,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         retire() {
             retired = true;
             for (const retained of sessions.values()) for (const entry of retained.queries.values()) {
+                clearRetry(entry);
                 publish(entry, forbidden);
                 entry.listeners.clear();
             }

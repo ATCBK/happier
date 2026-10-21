@@ -3000,6 +3000,10 @@ class Sync {
                         scope: authority.scope,
                         activeRequest: this.requestViaConfiguredSocket,
                     }),
+                    retryBackoff: {
+                        minDelayMs: this.syncTuning.invalidateSyncBackoffMinDelayMs,
+                        maxDelayMs: this.syncTuning.invalidateSyncBackoffMaxDelayMs,
+                    },
                 });
                 this.sessionSystemRecordRepositories.set(key, repository);
             }

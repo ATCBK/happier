@@ -41,6 +41,8 @@ export function createSessionSystemRecordTransport(options: SessionSystemRecordT
                 `/v2/sessions/${encodeURIComponent(session.sessionId)}/system-records${suffix}?${query}`,
                 { method: 'GET', headers: { [SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER]: SESSION_SYSTEM_RECORDS_PROTOCOL_V1_HTTP_HEADER_VALUE } },
             ));
+        // A thrown request is a read that did not complete, not evidence the Home is unreachable;
+        // the repository decides what it means for retained records.
         } catch { return { status: 'offline' } as const; }
     }
     return {

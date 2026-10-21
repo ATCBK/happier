@@ -96,7 +96,8 @@ describe('Board repository binding', () => {
         const previous = latest.snapshot.itemsById.get('note');
         failure = 'offline'; repository.invalidate(session);
         await flushHookEffects({ cycles: 50 });
-        expect(latest).toMatchObject({ status: 'ready', snapshot: { freshness: 'stale', reachability: 'offline', canEdit: true, capabilities: { editSessionRecords: true } } });
+        // A thrown read is not evidence the Home is offline: the retained Board stays reachable.
+        expect(latest).toMatchObject({ status: 'ready', snapshot: { freshness: 'stale', reachability: 'reachable', canEdit: true, capabilities: { editSessionRecords: true } } });
         expect(latest.snapshot.itemsById.get('note')).toBe(previous);
         failure = 'forbidden'; repository.invalidate(session);
         await flushHookEffects({ cycles: 50 });
@@ -248,6 +249,42 @@ describe('Board encryption and authority renewal', () => {
             settleAuthority?.({ status: 'ok', value: authority });
             await flushHookEffects({ cycles: 20 });
             expect(seen.at(-1)).toEqual({ status: 'unavailable', reason: 'forbidden' });
+        } finally { stop(); }
+    });
+
+    it('keeps an installed widget running through a thrown Board read and recovers on the sync backoff', async () => {
+        const widget = { ...item, source: { kind: 'widget', instance: {
+            v: 1, id: 'counter', bindings: {},
+            definition: { kind: 'installed', surface: { pluginId: 'acme.widgets', localId: 'counter' } },
+        } } } as const;
+        let failing = false;
+        const repository = createSessionSystemRecordRepository({ scope, retryBackoff: { minDelayMs: 20, maxDelayMs: 40 }, request: async () => {
+            if (failing) throw new TypeError('network unavailable');
+            return Response.json({ records: [layout, record('counter', 'item.v1', widget)], nextCursor: null, hasNext: false });
+        } });
+        const seen: SessionBoardBinding[] = [];
+        const stop = observeSessionBoard({ session, repository, authority, readCapabilities: () => authority.capabilities,
+            readContentContext: () => authority.contentContext, renewAuthority: async () => ({ status: 'ok', value: authority }),
+            isCurrent: () => true, onChange: value => { seen.push(value); } });
+        try {
+            await flushHookEffects({ cycles: 50 });
+            const initial = seen.at(-1);
+            if (initial?.status !== 'ready') throw new Error('Board not ready');
+            const counter = initial.snapshot.itemsById.get('counter')!;
+            const runtime = { phase: 'current' as const, interactionEnabled: true, pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION };
+            failing = true;
+            seen.length = 0;
+            repository.invalidate(session);
+            await flushHookEffects({ cycles: 30 });
+            await new Promise(resolve => setTimeout(resolve, 100));
+            await flushHookEffects({ cycles: 30 });
+            expect(seen.length).toBeGreaterThan(0);
+            expect(seen.every(binding => binding.status === 'ready' && binding.snapshot.reachability === 'reachable'
+                && resolveSessionBoardExecutableCurrentness(binding.snapshot, counter, runtime) === 'current')).toBe(true);
+            failing = false;
+            await new Promise(resolve => setTimeout(resolve, 150));
+            await flushHookEffects({ cycles: 30 });
+            expect(seen.at(-1)).toMatchObject({ status: 'ready', snapshot: { freshness: 'fresh', loading: 'idle', reachability: 'reachable' } });
         } finally { stop(); }
     });
 

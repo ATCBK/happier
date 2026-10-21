@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SessionSystemRecordListQuerySchema, SessionSystemRecordStoredSchema } from '@happier-dev/protocol';
 import { createSessionSystemRecordRepository } from './repository';
 import { selectWorkflowSystemRecordQuery } from './compatibility/legacyHostTransport';
@@ -217,9 +217,78 @@ describe('Account-scoped Session System Record repository', () => {
         const refresh = repository.refresh(session, query);
         expect(repository.getSnapshot(session, query)).toMatchObject({ loading: 'refreshing', data });
         await refresh;
-        expect(repository.getSnapshot(session, query)).toMatchObject({ loading: 'idle', freshness: 'stale', reachability: 'offline', lastError: { status: 'offline' } });
+        // A read that did not finish never proves the Home unreachable or the record gone: the
+        // last record stays, reachable, and is not staled by the failure itself.
+        expect(repository.getSnapshot(session, query)).toMatchObject({ loading: 'idle', freshness: 'fresh', reachability: 'reachable', lastError: { status: 'offline' } });
         expect(repository.getSnapshot(session, query).data).toBe(data);
         stop();
+    });
+
+    it('keeps the last record through a failed read and re-reads on the sync backoff until it answers or its last observer leaves', async () => {
+        vi.useFakeTimers();
+        try {
+            let requests = 0;
+            let failing = false;
+            const repository = createSessionSystemRecordRepository({
+                scope,
+                retryBackoff: { minDelayMs: 500, maxDelayMs: 30_000 },
+                request: async () => {
+                    requests += 1;
+                    if (failing) throw new TypeError('network unavailable');
+                    return page();
+                },
+            });
+            const stop = repository.subscribe(session, query, () => {});
+            await repository.refresh(session, query);
+            const data = repository.getSnapshot(session, query).data;
+            expect(data).toMatchObject({ records: [record] });
+
+            failing = true;
+            repository.invalidate(session);
+            await vi.advanceTimersByTimeAsync(0);
+            // Invalidated and unreadable: still the last record, reachable, rereading (never "offline").
+            expect(repository.getSnapshot(session, query)).toMatchObject({ freshness: 'stale', loading: 'refreshing', reachability: 'reachable', lastError: { status: 'offline' } });
+            expect(repository.getSnapshot(session, query).data).toBe(data);
+            const failedRequests = requests;
+
+            await vi.advanceTimersByTimeAsync(30_000);
+            expect(requests).toBeGreaterThan(failedRequests);
+            expect(repository.getSnapshot(session, query).data).toBe(data);
+
+            failing = false;
+            await vi.advanceTimersByTimeAsync(30_000);
+            expect(repository.getSnapshot(session, query)).toMatchObject({ freshness: 'fresh', loading: 'idle', reachability: 'reachable', lastError: null });
+
+            failing = true;
+            repository.invalidate(session);
+            await vi.advanceTimersByTimeAsync(0);
+            stop();
+            const afterLeaving = requests;
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(requests).toBe(afterLeaving);
+        } finally { vi.useRealTimers(); }
+    });
+
+    it('does not re-read a definitive refusal on the backoff', async () => {
+        vi.useFakeTimers();
+        try {
+            let requests = 0;
+            const repository = createSessionSystemRecordRepository({
+                scope,
+                retryBackoff: { minDelayMs: 500, maxDelayMs: 30_000 },
+                request: async () => {
+                    requests += 1;
+                    return new Response(JSON.stringify({ error: 'denied', code: 'plugin_session_record_forbidden' }), { status: 403 });
+                },
+            });
+            const stop = repository.subscribe(session, query, () => {});
+            await vi.advanceTimersByTimeAsync(0);
+            expect(repository.getSnapshot(session, query)).toMatchObject({ data: null, lastError: { status: 'forbidden' } });
+            const settled = requests;
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(requests).toBe(settled);
+            stop();
+        } finally { vi.useRealTimers(); }
     });
 
     it('refreshes an observed fresh projection when reconnect asks it to converge', async () => {
