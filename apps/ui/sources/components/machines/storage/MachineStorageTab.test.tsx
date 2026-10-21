@@ -468,6 +468,8 @@ describe('MachineStorageTab', () => {
         expect(screen.findByTestId(`machine-storage-disk-row-${folder}/file`)).not.toBeNull();
         // A folder scan has no total to divide by: it stays indeterminate and never shows a made-up share.
         expect(screen.findByTestId('machine-storage-disk-progress')?.props.accessibilityValue).toBeUndefined();
+        // The spinner and the running count are the whole signal: a bar here would always be drawn part-filled.
+        expect(screen.findByTestId('machine-storage-disk-progress-bar')).toBeNull();
         expect(screen.getTextContent()).toContain(t('machineStorage.disk.progressMetaOpen', { sized: formatMachineBytes(131072, 'storage'), items: '1' }));
         expect(screen.getTextContent()).not.toMatch(/\d+\s?%/);
         const complete: DiskScanStateV1 = { ...running, status: 'complete', finishedAt: 5, progress: { sizedBytes: 266240, usedBytes: 266240, items: 3 } };

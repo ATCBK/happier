@@ -11,7 +11,6 @@ import {
   CapacityBar,
   HappierBreadcrumb,
   happierPageTextMetrics,
-  HappierProgress,
   Sunburst,
   Treemap,
   useHappierCollection,
@@ -684,16 +683,7 @@ function ScanProgress(
               onPress={props.onCancel}
             />
           </View>
-          {percent === null ? (
-            <HappierProgress
-              theme={pluginTheme}
-              semantics="none"
-              label={t('machineStorage.disk.progressLabel')}
-              height={4}
-              fillColor={pluginTheme.colors.accent}
-              trackColor={theme.colors.border.default}
-            />
-          ) : (
+          {percent === null ? null : (
             <CapacityBar
               theme={pluginTheme}
               label={t('machineStorage.disk.progressLabel')}
