@@ -20,6 +20,7 @@ import { useMachineAdministrationTargetSelection } from '@/sync/domains/machines
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
 import type { ScmDiffArea } from '@happier-dev/protocol';
 import { getLanguageEnglishName, getLanguageNativeName, SUPPORTED_LANGUAGE_CODES, t, type TranslationKey } from '@/text';
+import type { ImageBackground, ImageBackgroundByKind } from '@/sync/domains/settings/registry/local/localSettingDefinitions.files';
 import { Switch } from '@/components/ui/forms/Switch';
 import type {
     ScmGitRepoPreferredBackend,
@@ -172,6 +173,38 @@ function translateOptions<T extends string>(options: ReadonlyArray<{ id: T; labe
 /** The most a segmented row holds; longer backend lists use a field select. */
 const MAX_SEGMENTED_OPTIONS = 4;
 
+const IMAGE_BACKGROUND_OPTIONS = [
+    { id: 'checkerboard', labelKey: 'files.viewer.backgroundCheckerboard' },
+    { id: 'light', labelKey: 'files.viewer.backgroundLight' },
+    { id: 'dark', labelKey: 'files.viewer.backgroundDark' },
+] as const satisfies ReadonlyArray<Readonly<{ id: ImageBackground; labelKey: TranslationKey }>>;
+
+/**
+ * The preview background (lab FV4, P2 Background): the device's one value per kind, also set from a file's
+ * `⋯ › Background`. The row sets images and SVGs together; when they differ it names both instead of picking one.
+ */
+function ImageBackgroundRow(props: Readonly<{ value: ImageBackgroundByKind | undefined; onChange: (value: ImageBackgroundByKind) => void }>) {
+    const options = translateOptions(IMAGE_BACKGROUND_OPTIONS);
+    const image = props.value?.image ?? 'checkerboard';
+    const svg = props.value?.svg ?? 'checkerboard';
+    const label = (id: ImageBackground) => options.find((option) => option.id === id)?.label ?? id;
+    return (
+        <SettingAnchor setting={SOURCE_CONTROL_SETTINGS.settings.imageBackground}>
+            <SegmentedChoiceItem<ImageBackground>
+                subtitleLines={0}
+                title={t(SOURCE_CONTROL_SETTINGS.settings.imageBackground.titleKey)}
+                subtitle={image === svg
+                    ? t('settingsSourceControl.page.files.imageBackgroundDescription')
+                    : t('settingsSourceControl.page.files.imageBackgroundMixed', { image: label(image), svg: label(svg) })}
+                testIDPrefix="settings.sourceControl.imageBackground"
+                options={options}
+                value={image}
+                onChange={(next) => props.onChange({ image: next, svg: next })}
+            />
+        </SettingAnchor>
+    );
+}
+
 export const SourceControlSettingsView = React.memo(function SourceControlSettingsView() {
     const { push } = useRouter();
     // The canonical declaration gates legacy SCM rows; the mixed Files page is not gated.
@@ -219,6 +252,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
     const [scmChangedFilesLayout, setScmChangedFilesLayout] = useSettingMutable('scmChangedFilesLayout');
     const [showLineNumbers, setShowLineNumbers] = useSettingMutable('showLineNumbers');
     const [filesTrackAgentEdits, setFilesTrackAgentEdits] = useLocalSettingMutable('filesTrackAgentEdits');
+    const [filesImageBackgroundByKind, setFilesImageBackgroundByKind] = useLocalSettingMutable('filesImageBackgroundByKind');
     const [filesAskWithoutSessionTarget, setFilesAskWithoutSessionTarget] = useSettingMutable('filesAskWithoutSessionTarget');
     const [showLineNumbersInToolViews, setShowLineNumbersInToolViews] = useSettingMutable('showLineNumbersInToolViews');
     const [wrapLinesInDiffs, setWrapLinesInDiffs] = useSettingMutable('wrapLinesInDiffs');
@@ -560,6 +594,7 @@ export const SourceControlSettingsView = React.memo(function SourceControlSettin
                         onChange={setFilesAskWithoutSessionTarget}
                     />
                 </SettingAnchor>
+                <ImageBackgroundRow value={filesImageBackgroundByKind} onChange={setFilesImageBackgroundByKind} />
             </ItemGroup>
             </SettingSection>
 

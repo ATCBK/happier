@@ -4860,6 +4860,8 @@ const ruValues = {
         unified: "Единая",
         split: "Рядом",
         highlighting: "Подсветка синтаксиса",
+        imageBackgroundDescription: "За прозрачными изображениями и SVG на этом устройстве.",
+        imageBackgroundMixed: ({ image, svg }: { image: string; svg: string }) => `Изображения: ${image} · SVG: ${svg}. Выбор здесь меняет оба.`,
         off: "Выкл.",
         simple: "Простая",
         advanced: "Расширенная",

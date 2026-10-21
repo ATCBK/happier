@@ -4874,6 +4874,8 @@ const zhHansValues = {
         unified: "统一",
         split: "并排",
         highlighting: "语法高亮",
+        imageBackgroundDescription: "在此设备上显示于透明图片和 SVG 之后。",
+        imageBackgroundMixed: ({ image, svg }: { image: string; svg: string }) => `图片：${image} · SVG：${svg}。在这里选择会同时更改两者。`,
         off: "关闭",
         simple: "简单",
         advanced: "高级",

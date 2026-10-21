@@ -5646,6 +5646,8 @@ const enSettingsSourceControl = {
       unified: 'Unified',
       split: 'Side by side',
       highlighting: 'Syntax highlighting',
+      imageBackgroundDescription: 'Behind transparent images and SVGs on this device.',
+      imageBackgroundMixed: ({ image, svg }: { image: string; svg: string }) => `Images: ${image} · SVGs: ${svg}. Choosing here sets both.`,
       off: 'Off',
       simple: 'Simple',
       advanced: 'Advanced',

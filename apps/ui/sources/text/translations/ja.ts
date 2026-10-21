@@ -5455,6 +5455,8 @@ localTailscale: {
         unified: "統合",
         split: "左右に並べる",
         highlighting: "シンタックスハイライト",
+        imageBackgroundDescription: "このデバイスで透明な画像と SVG の背景に表示します。",
+        imageBackgroundMixed: ({ image, svg }: { image: string; svg: string }) => `画像: ${image} · SVG: ${svg}。ここで選ぶと両方が変わります。`,
         off: "オフ",
         simple: "シンプル",
         advanced: "高度",

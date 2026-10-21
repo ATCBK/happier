@@ -4329,6 +4329,8 @@ const zhHantOverrides: DeepPartial<typeof zhHans> = {
                 unified: "統一",
                 split: "並排",
                 highlighting: "語法醒目提示",
+                imageBackgroundDescription: "在此裝置上顯示於透明圖片和 SVG 之後。",
+                imageBackgroundMixed: ({ image, svg }: { image: string; svg: string }) => `圖片：${image} · SVG：${svg}。在這裡選擇會同時變更兩者。`,
                 off: "關閉",
                 simple: "簡單",
                 advanced: "進階",

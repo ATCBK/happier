@@ -30,7 +30,11 @@ const {
     routerPush,
     daemonProjectionRequest,
     daemonProjectionState,
+    setFilesImageBackgroundByKind,
+    imageBackgroundState,
 } = vi.hoisted(() => ({
+    setFilesImageBackgroundByKind: vi.fn(),
+    imageBackgroundState: { value: {} as Readonly<Record<string, string>> },
     setScmCommitStrategy: vi.fn(),
     setExplainChanges: vi.fn(),
     setPrepareAfterTurn: vi.fn(),
@@ -97,6 +101,8 @@ installSettingsViewCommonModuleMocks({
                 if (name === 'scmCommitMessageGeneratorInstructions') return ['', setScmCommitMessageGeneratorInstructions];
                 return [null, vi.fn()];
             }),
+            useLocalSettingMutable: ((name: string) => name === 'filesImageBackgroundByKind'
+                ? [imageBackgroundState.value, setFilesImageBackgroundByKind] : [undefined, vi.fn()]) as never,
         });
     },
     text: async () => {
@@ -539,6 +545,23 @@ describe('SourceControlSettingsView', () => {
         act(() => control.onSelectTab('compact'));
 
         expect(setFilesChangedFilesRowDensity).toHaveBeenCalledWith('compact');
+    });
+
+    it('sets the preview background for images and SVGs together, and says when they differ', async () => {
+        setFilesImageBackgroundByKind.mockClear();
+        imageBackgroundState.value = {};
+        const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
+        const control = segmentedControl(screen.findRowByTitle('settingsAppearance.themeProfiles.groups.background'));
+        expect(control.tabs.map((tab) => tab.id)).toEqual(['checkerboard', 'light', 'dark']);
+        expect(control.activeTabId).toBe('checkerboard');
+        act(() => control.onSelectTab('dark'));
+        expect(setFilesImageBackgroundByKind).toHaveBeenCalledWith({ image: 'dark', svg: 'dark' });
+
+        // One kind changed from a file's ⋯ › Background: the row names both instead of picking one.
+        imageBackgroundState.value = { image: 'light', svg: 'dark' };
+        const mixed = await renderSettingsView(React.createElement(SourceControlSettingsView));
+        expect(JSON.stringify(mixed.findRowByTitle('settingsAppearance.themeProfiles.groups.background')?.props.subtitle))
+            .toContain('settingsSourceControl.page.files.imageBackgroundMixed');
     });
 
     it('renders code view toggles and updates their settings', async () => {
