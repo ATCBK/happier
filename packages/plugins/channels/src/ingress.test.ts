@@ -5906,7 +5906,8 @@ pairingRequestId: 'pairing-request-1',
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     try {
-      const harness = createIngressHarness();
+      const readIds: string[] = [];
+      const harness = createIngressHarness({ beforeCollectionGet: ({ rowId }) => { readIds.push(rowId); } });
       await ingestConversationProviderObservationForInvocation(
         observation({ messageRevision: 'retention:terminal', occurredAt: 1_000 }),
         harness.context,
@@ -5917,8 +5918,12 @@ pairingRequestId: 'pairing-request-1',
       ));
       if (obligation === undefined) throw new Error('Expected the completed ingress obligation.');
 
+      readIds.length = 0;
       await expect(runConversationIngressRetentionForInvocation({ now: 61_000, limit: 1 }, harness.context))
         .resolves.toMatchObject({ deletedCensuses: 0 });
+      // Settlement/compaction still read the unit, but projection custody cannot
+      // make it forgettable before its frozen horizon, so do not demand it yet.
+      expect(readIds).not.toContain('binding-1');
       expect(harness.rows.get(census.rowId)?.deleted).not.toBe(true);
       // Body compaction does not physically forget the member before the
       // checkpoint/horizon retirement predicate admits the whole unit.
