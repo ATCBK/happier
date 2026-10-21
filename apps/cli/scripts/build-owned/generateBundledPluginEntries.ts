@@ -2824,6 +2824,7 @@ async function collectBundledPluginSourcePackages(
     mode: Mode;
     dependencies: GeneratorWorkspaceDependencies;
     synchronizeSerializedManifest: boolean;
+    daemonProjectionsOnly?: boolean;
   }>,
 ): Promise<Readonly<{
   sourcePluginPackages: readonly BundledPluginSourcePackage[];
@@ -2834,13 +2835,10 @@ async function collectBundledPluginSourcePackages(
     return Object.freeze({ sourcePluginPackages: Object.freeze([]), failures: Object.freeze([]) });
   }
 
-  const collectedSources = await mapWithConcurrency(
-    params.bundledPluginPackageNames,
-    2,
-    async (packageName): Promise<Readonly<{
-      sourcePluginPackage?: BundledPluginSourcePackage;
-      failure?: BundledPluginPackageFailure;
-    }>> => await withTypescriptModuleInspectionSession(async () => {
+  const collectSource = async (packageName: string): Promise<Readonly<{
+    sourcePluginPackage?: BundledPluginSourcePackage;
+    failure?: BundledPluginPackageFailure;
+  }>> => {
     try {
       const pluginPackageId = pluginPackageNameToPackageId(packageName);
       const packageRoot = resolve(pluginsRoot, pluginPackageId);
@@ -2875,7 +2873,7 @@ async function collectBundledPluginSourcePackages(
         )
         : await normalizeBundledSourceManifest({ packageRoot, manifest: sourceManifest, dependencies: params.dependencies });
       assertNoBundledAgentManifestUiBehavior(manifest, packageName);
-      const sourceProjectionFacts = await readSourceProjectionFacts({
+      const sourceProjectionFacts: BundledPluginSourceProjectionFacts = params.daemonProjectionsOnly ? {} : await readSourceProjectionFacts({
         repoRoot: params.repoRoot,
         pluginPackageId,
         packageName,
@@ -2924,8 +2922,14 @@ async function collectBundledPluginSourcePackages(
         error,
       }) });
     }
-    }),
-  );
+  };
+  // Daemon admission reads the first-party declarations as one captured
+  // graph. Share its inspection worker instead of loading the SDK separately
+  // for every manifest; full publication retains per-plugin process isolation.
+  const collectedSources = params.daemonProjectionsOnly
+    ? await withTypescriptModuleInspectionSession(() => mapWithConcurrency(params.bundledPluginPackageNames, 2, collectSource))
+    : await mapWithConcurrency(params.bundledPluginPackageNames, 2,
+      packageName => withTypescriptModuleInspectionSession(() => collectSource(packageName)));
 
   const sourcePluginPackages = collectedSources.flatMap(
     (entry) => entry.sourcePluginPackage ? [entry.sourcePluginPackage] : [],
@@ -4304,6 +4308,26 @@ async function generateBundledPluginEntries(
   publicationLease: WorkspaceBundleLockContext,
   inheritedFailures: readonly BundledPluginPackageFailure[] = [],
 ): Promise<readonly BundledPluginPackageFailure[]> {
+  if (options.daemonProjectionsOnly) {
+    const { sourcePluginPackages: pluginPackages, failures } = await collectBundledPluginSourcePackages({
+      repoRoot: options.rootDir,
+      bundledPluginPackageNames: readBundledPluginPackageNames(options.rootDir),
+      mode: options.mode,
+      dependencies,
+      synchronizeSerializedManifest: false,
+      daemonProjectionsOnly: true,
+    });
+    assertNoBundledPluginPublicationFailures(failures, options.mode);
+    // These are precisely readCliSourceEntries' generated inputs. Normalization
+    // above still evaluates real Agent registration to derive runner locators;
+    // UI/Voice/locale and Agent catalog projections belong to the full gate.
+    const { cliManifestOutPath } = resolveGeneratorHostProjectionOutPaths(options.rootDir);
+    assertGeneratedOutputMatches(cliManifestOutPath, renderCliBundledPluginManifestEntriesTs({ pluginPackages }));
+    for (const asset of renderCliBundledPluginManifestAssets({ pluginPackages })) {
+      assertGeneratedOutputMatches(resolve(options.rootDir, 'apps/cli', asset.relativePath), asset.out);
+    }
+    return failures;
+  }
   if (options.aggregateOnly) {
     return await publishBundledPluginSemanticProjection(options, dependencies, publicationLease, [], inheritedFailures);
   }

@@ -9,6 +9,16 @@ import {
 } from './options.ts';
 
 describe('bundled Plugin publisher options', () => {
+  it('restricts daemon projection admission to an unscoped source check', () => {
+    expect(parseGeneratorCliArgs(['--mode', 'check', '--daemon-projections']))
+      .toMatchObject({ mode: 'check', scope: 'projections', daemonProjectionsOnly: true });
+    for (const args of [[], ['--aggregate'], ['--compiler-inputs'], ['--agent-definitions'],
+      ['--workspace', 'plugins-codex'], ['--package-artifacts']]) {
+      expect(() => parseGeneratorCliArgs([
+        ...(args.length ? ['--mode', 'check'] : []), ...args, '--daemon-projections',
+      ])).toThrow();
+    }
+  });
   it('gives direct and shared-dependency all-plugin writes one canonical publication', () => {
     const argv = ['--mode', 'write', '--workspace', '@happier-dev/plugins-codex', '--workspace', 'plugins-claude'];
     const normalized = normalizeCanonicalGeneratorPublication(argv, parseGeneratorCliArgs(argv), ['plugins-claude', 'plugins-codex']);

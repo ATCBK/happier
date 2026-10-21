@@ -19,7 +19,6 @@ import { captureBuildInputFiles, mountCapturedWorkspaceDependencies, readBuildIn
 import { probeCliDistRuntimeImport } from '../utils/cli/cliDistIntegrity.mjs';
 import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } from '../runtime/shared/pending_source_start.mjs';
 import { readBundledPluginPackageResourceRelativePaths } from '../../../../packages/cli-common/bundledPluginResources.mjs';
-import { stagePublicProfileAssets } from '../../../server/scripts/buildPublicProfileRenderer.mjs';
 
 import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
@@ -749,7 +748,7 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
       // locators; the canonical publisher must reject that mixed closure.
       await run(process.execPath, ['--conditions=happier-source', '--experimental-strip-types',
         join(projectDir, 'scripts/build-owned/generateBundledPluginEntries.ts'),
-        '--mode', 'check', '--scope', 'projections'], {
+        '--mode', 'check', '--scope', 'projections', '--daemon-projections'], {
         cwd: repoDir, env, signal, stdio: ['ignore', 'ignore', 'inherit'], captureFailureDiagnostic: true,
       });
     }
@@ -966,6 +965,7 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   } else {
     await linkInstalledDirectory(join(installedProjectDir, 'generated'), join(runtimeDir, 'generated'));
     if (existsSync(join(projectDir, 'sources/app/account/profile/render/publicProfileFonts.ts'))) {
+      const { stagePublicProfileAssets } = await import('../../../server/scripts/buildPublicProfileRenderer.mjs');
       retainedCodeFiles.push(...await stagePublicProfileAssets({ projectDir, outDir: runtimeDir }));
     } else await linkInstalledDirectory(join(installedProjectDir, 'assets'), join(runtimeDir, 'assets'));
     const copyPrismaInputs = async (source, destination) => {

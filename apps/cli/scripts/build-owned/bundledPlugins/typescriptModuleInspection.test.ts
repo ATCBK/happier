@@ -23,6 +23,24 @@ async function createFixture(): Promise<string> {
 }
 
 describe('per-Plugin TypeScript inspection worker', () => {
+  it('shares one dependency graph within an inspection session and isolates the next session', async () => {
+    const root = await createFixture();
+    const shared = join(root, 'plug#in', 'shared.mts');
+    const first = join(root, 'plug#in', 'first.mts');
+    const second = join(root, 'plug#in', 'second.mts');
+    await writeFile(shared, `
+      globalThis.inspectionEvaluations = (globalThis.inspectionEvaluations ?? 0) + 1;
+      export const evaluation = globalThis.inspectionEvaluations;
+    `);
+    for (const path of [first, second]) await writeFile(path, 'export { evaluation } from "./shared.mjs";');
+    for (let invocation = 0; invocation < 2; invocation += 1) {
+      const session = createTypescriptModuleInspectionSession();
+      try {
+        await expect(session.inspect(first)).resolves.toMatchObject({ evaluation: 1 });
+        await expect(session.inspect(second)).resolves.toMatchObject({ evaluation: 1 });
+      } finally { await session.close(); }
+    }
+  }, 120_000);
   it('closes after inspection even when the authored module retains a runtime timer', async () => {
     const root = await createFixture();
     const authored = join(root, 'plug#in', 'runtime-timer.mts');

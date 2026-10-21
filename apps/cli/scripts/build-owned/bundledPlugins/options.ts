@@ -28,6 +28,8 @@ export type GeneratorOptions = Readonly<{
   compilerInputsOnly: boolean;
   /** Publish source Agent definition facts without compiling/staging executable runtimes. */
   agentDefinitionsOnly: boolean;
+  /** Check only the declarations consumed by readCliSourceEntries, from authored registration. */
+  daemonProjectionsOnly?: boolean;
   inheritedFailuresStdin: boolean;
   /** Npm publication explicitly prepares installed runtime/package bytes. */
   packageArtifacts?: boolean;
@@ -54,7 +56,7 @@ export function resolvePluginAuthorRuntimeLoadScope({
 
 export function printGeneratorUsage(): void {
   console.log([
-    'Usage: node --conditions=happier-source --experimental-strip-types apps/cli/scripts/build-owned/generateBundledPluginEntries.ts [--root DIR] [--mode write|check] [--scope projections] [--workspace plugins-<id>] [--target-owned-only] [--aggregate] [--compiler-inputs] [--agent-definitions] [--package-artifacts]',
+    'Usage: node --conditions=happier-source --experimental-strip-types apps/cli/scripts/build-owned/generateBundledPluginEntries.ts [--root DIR] [--mode write|check] [--scope projections] [--daemon-projections] [--workspace plugins-<id>] [--target-owned-only] [--aggregate] [--compiler-inputs] [--agent-definitions] [--package-artifacts]',
     '',
     'Generates/patches bundled plugin entry maps from packages/plugins/*.',
     '',
@@ -74,6 +76,10 @@ export function printGeneratorUsage(): void {
     '',
     '--package-artifacts additionally prepares the installed plugin manifests and runtime',
     'bytes for npm publication. Ordinary projection writes and checks consume authored source.',
+    '',
+    '--daemon-projections checks only the daemon source entry locator table and manifest',
+    'assets, including runner factories derived from authored registration. It requires',
+    '--mode check and cannot be combined with other preparation selectors.',
   ].join('\n'));
 }
 
@@ -84,6 +90,7 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
   let aggregateOnly = false;
   let compilerInputsOnly = false;
   let agentDefinitionsOnly = false;
+  let daemonProjectionsOnly = false;
   let targetOwnedOnly = false;
   let packageArtifacts = false;
   let inheritedFailuresStdin = false;
@@ -145,6 +152,10 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
       agentDefinitionsOnly = true;
       continue;
     }
+    if (arg === '--daemon-projections') {
+      daemonProjectionsOnly = true;
+      continue;
+    }
     if (arg === '--target-owned-only') {
       targetOwnedOnly = true;
       continue;
@@ -160,6 +171,10 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
     throw new Error(`Unknown arg: ${arg}`);
   }
 
+  if (daemonProjectionsOnly && (mode !== 'check' || aggregateOnly || compilerInputsOnly
+    || agentDefinitionsOnly || workspaceNames.length > 0 || packageArtifacts || inheritedFailuresStdin)) {
+    throw new Error('--daemon-projections requires an unscoped --mode check without other preparation selectors');
+  }
   if (aggregateOnly && workspaceNames.length > 0) {
     throw new Error('--aggregate cannot be combined with --workspace');
   }
@@ -193,6 +208,7 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
     aggregateOnly,
     compilerInputsOnly,
     agentDefinitionsOnly,
+    ...(daemonProjectionsOnly ? { daemonProjectionsOnly: true } : {}),
     inheritedFailuresStdin,
     targetOwnedOnly,
     ...(packageArtifacts ? { packageArtifacts: true } : {}),

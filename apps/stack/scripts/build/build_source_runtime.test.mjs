@@ -32,6 +32,21 @@ import { withJsonOwnerFileLock } from '../utils/proc/jsonOwnerFileLock.mjs';
 import { startDevServer, createDevServerReloadExecutor } from '../utils/dev/server.mjs';
 import { resolveHeavyweightMemoryFloorKiB } from '../utils/dev_targets/remote_commands.mjs';
 
+test('every component captures the projection path owner imported by source tooling', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'happier-source-projection-owner-' });
+  const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = true;');
+  const owner = 'apps/cli/scripts/build-owned/bundledPlugins/projectionPaths.mjs';
+  await mkdir(dirname(join(repoDir, owner)), { recursive: true });
+  await cp(new URL('../../../cli/scripts/build-owned/bundledPlugins/projectionPaths.mjs', import.meta.url), join(repoDir, owner));
+  for (const component of ['daemon', 'expo', 'server']) {
+    const outputDir = fixture.path(component);
+    await captureSourceWebBuildInputs({ repoDir, outputDir, component });
+    const loaded = await import(pathToFileURL(join(outputDir, owner)));
+    assert.equal(loaded.resolveGeneratorHostProjectionOutPaths(outputDir).cliManifestOutPath,
+      join(outputDir, 'apps/cli/src/plugins/projection/registry/sources/generatedBundledPluginManifests.ts'));
+  }
+});
+
 test('daemon capture includes canonical generated UI projections without unrelated UI source', async t => {
   const fixture = await createTempFixture(t, { prefix: 'happier-source-ui-projections-' });
   const repoDir = await createReloadDaemonRepo(fixture, 'export const ready = true;');
@@ -1178,7 +1193,7 @@ test('source daemon rejects stale plugin projections before replacing its workin
     import assert from 'node:assert/strict';
     import {readFileSync,writeFileSync} from 'node:fs';
     import {resolveWorkspaceBundleLockPath,withWorkspaceBundleLock} from ${JSON.stringify(new URL('../../../../packages/cli-common/workspaceBundleLock.mjs', import.meta.url).href)};
-    assert.deepEqual(process.argv.slice(2), ['--mode', 'check', '--scope', 'projections']);
+    assert.deepEqual(process.argv.slice(2), ['--mode', 'check', '--scope', 'projections', '--daemon-projections']);
     await withWorkspaceBundleLock(async () => {
       const declaration = readFileSync(new URL('../../assets/bundled-plugin-manifests/fixture.json', import.meta.url), 'utf8');
       const authored = readFileSync(new URL('../../../../packages/plugins/fixture/src/manifest.ts', import.meta.url), 'utf8');
