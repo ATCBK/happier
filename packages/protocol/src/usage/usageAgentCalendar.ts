@@ -101,25 +101,21 @@ function appendBucketPopulation(target: BucketPopulation, source: BucketPopulati
 }
 
 type CoverageSource = NonNullable<UsageAnalyticsQueryResponse['coverage']>['sources'][number];
-const coverageSourceKey = (source: string | null, path: string, machineId: string | null) => JSON.stringify([source, path, machineId]);
 
 /** Each contribution's source member, resolved once: coverage is asked per Agent in every bucket of every granularity. */
 function createCoverageSourceLookup(accounting: UsageAnalyticsQueryResponse | undefined): (row: UsageAnalyticsContribution) => CoverageSource | undefined {
-    const index = new Map<string, CoverageSource>();
+    // source → path → machine (null for none); nested maps avoid building a key string for every row of every projection.
+    const index = new Map<string | null, Map<string, Map<string | null, CoverageSource>>>();
     for (const source of accounting?.coverage?.sources ?? []) {
-        const key = coverageSourceKey(source.source, source.path, source.machineId ?? null);
+        const byPath = index.get(source.source) ?? new Map<string, Map<string | null, CoverageSource>>();
+        index.set(source.source, byPath);
+        const byMachine = byPath.get(source.path) ?? new Map<string | null, CoverageSource>();
+        byPath.set(source.path, byMachine);
         // The first matching entry wins, as the previous linear search did.
-        if (!index.has(key)) index.set(key, source);
+        const machineId = source.machineId ?? null;
+        if (!byMachine.has(machineId)) byMachine.set(machineId, source);
     }
-    const byRow = new WeakMap<UsageAnalyticsContribution, CoverageSource | null>();
-    return row => {
-        let source = byRow.get(row);
-        if (source === undefined) {
-            source = index.get(coverageSourceKey(row.source, row.sourceContext?.path ?? 'unknown', row.machineId)) ?? null;
-            byRow.set(row, source);
-        }
-        return source ?? undefined;
-    };
+    return row => index.get(row.source)?.get(row.sourceContext?.path ?? 'unknown')?.get(row.machineId);
 }
 
 /** Completeness belongs to the actual source members, never a global badge copied to each Agent. */
