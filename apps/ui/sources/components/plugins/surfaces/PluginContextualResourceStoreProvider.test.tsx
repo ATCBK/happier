@@ -6,7 +6,7 @@ import type { PluginUiResourceSnapshot } from '@happier-dev/plugin-ui/hostApi';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { createPluginSurfaceActionHostApi } from './pluginSurfaceActionDispatch';
 import { createCanonicalPluginReactNativeHostApiAdapter } from '@/components/plugins/reactNative/hostApi';
@@ -35,7 +35,7 @@ vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
 ).createSocketIoClientBoundary(importOriginal));
 
-installDisconnectedServerSocketBoundary();
+installDisconnectedServerSocketBoundary(configureConnectedServerSocketBoundary);
 const connections: Awaited<ReturnType<typeof restoreServerAccountForTest>>[] = [];
 afterEach(async () => {
     for (const connection of connections.splice(0).reverse()) await connection.dispose();

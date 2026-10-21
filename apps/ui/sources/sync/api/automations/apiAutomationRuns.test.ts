@@ -7,6 +7,12 @@ import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { apiSocket } from '@/sync/api/session/apiSocket';
+
+vi.mock('socket.io-client', async () => {
+    const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
+    return { io: () => createSocketIoBoundaryStub().socket };
+});
 
 beforeEach(async () => {
     const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
@@ -65,6 +71,7 @@ const eventRun = {
 
 describe('apiAutomationRuns', () => {
     afterEach(() => {
+        apiSocket.disconnect();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
@@ -75,6 +82,8 @@ describe('apiAutomationRuns', () => {
         const basis = getActiveServerSnapshot();
         publishAppliedActiveServerSnapshot(basis);
         const nativeCredentials = { token: createAccountTokenForTests('summary-account') };
+        apiSocket.initialize({ endpoint: basis.serverUrl, serverId: basis.serverId,
+            generation: basis.generation, token: nativeCredentials.token, credentials: nativeCredentials }, null);
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(nativeCredentials);
         const held = createDeferred<void>();
         let requests = 0;

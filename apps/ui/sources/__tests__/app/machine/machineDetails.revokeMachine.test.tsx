@@ -1,5 +1,6 @@
 import React from 'react';
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 // Keep browser persistence owners real above IndexedDB's environment boundary.
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
@@ -207,14 +208,14 @@ async function serveMachineHome(input: string | URL | Request, init?: RequestIni
     }
     const machines = (machineState.machinesByServerId['server-a'] ?? []).map(machine =>
         machine.id === machineState.currentMachine.id ? machineState.currentMachine : machine);
-    const publishedMachines = machines.map(machine => ({
+    const publishedMachines = machines.map(machine => MachinePublishedRowV1Schema.parse({
         ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
         ...machine, storageMode: 'plain',
         dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         // These page fixtures vary presentation fields, but the Home emits complete published metadata.
         metadata: encodePlainMachineStoredContent(machine.metadata === null ? null : MachinePublishedMetadataV1Schema.parse({
             ...Object.assign({}, createMachineFixture().metadata, { host: '' }, machine.metadata),
-        })), daemonState: null }));
+        })), daemonState: null })));
     if (path === '/v1/machines') return Response.json(publishedMachines);
     if (path === '/v1/machines/read-batch' && method === 'POST') return createMachineReadBatchResponseFixture(body,
         id => publishedMachines.find(machine => machine.id === id) ?? null);

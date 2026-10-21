@@ -5,8 +5,10 @@ import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/ma
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import '@/sync/syncEngine';
 
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
@@ -120,6 +122,13 @@ describe('normalizeActionOperationEphemeralIngress', () => {
     });
     it('observes keyless Plain Script updates through the restored Sync socket and drops retired Account interest', async () => {
         const sockets: Socket[] = [];
+        let releaseRead: (() => void) | undefined;
+        let readStarted: (() => void) | undefined;
+        let holdRead = false;
+        const started = new Promise<void>(resolve => { readStarted = resolve; });
+        const heldRead = new Promise<void>(resolve => { releaseRead = resolve; });
+        let modeReads = 0;
+        let currentnessReads = 0;
         const snapshot: ActionOperationSnapshotV1 = { version: 1, operationId: 'plain-restored-script', revision: 1,
             actionId: 'projects.script.run', state: 'accepted', scope: { accountId: 'plain-restored-account', machineId: 'machine-1' },
             title: 'Run Script', createdAt: 1, cancellation: 'supported', domainRef: { kind: 'projectCommand', purpose: 'script',
@@ -132,30 +141,30 @@ describe('normalizeActionOperationEphemeralIngress', () => {
             sockets.push(socket);
             socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, request: SocketRpcRequestPayload) => {
                 if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error(`Unexpected socket event: ${event}`);
-                if (request.method === `machine-1:${ACTION_OPERATION_RPC_METHODS_V2.get}`)
+                if (request.method === `machine-1:${ACTION_OPERATION_RPC_METHODS_V2.get}`) {
+                    if (holdRead) { readStarted?.(); await heldRead; }
                     return { ok: true, result: { kind: 'found', operation: rpcSnapshot } };
+                }
                 if (request.method.endsWith(ACTION_OPERATION_RPC_METHODS_V2.list))
                     return { ok: true, result: { operations: [] } };
                 throw new Error(`Unexpected Machine method: ${request.method}`);
             });
         });
         const bridge = await loadSyncSingletonForTests();
-        let releaseMode: (() => void) | undefined;
-        let modeStarted: (() => void) | undefined;
-        let holdMode = false;
-        const started = new Promise<void>(resolve => { modeStarted = resolve; });
-        const heldMode = new Promise<void>(resolve => { releaseMode = resolve; });
         const connection = await restoreServerAccountForTest({ serverUrl: 'https://plain-operation-restored.test',
             accountId: 'plain-restored-account', request: async (url) => {
                 const path = new URL(String(url)).pathname;
                 if (path === '/v1/account/encryption') {
-                    if (holdMode) { modeStarted?.(); await heldMode; }
+                    modeReads += 1;
                     return Response.json({ mode: 'plain', updatedAt: 1 });
                 }
-                if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-                if (path === '/v1/machines/machine-1') return Response.json({ machine: {
-                    id: 'machine-1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-                } });
+                if (path === '/v1/account/encryption/currentness') {
+                    currentnessReads += 1;
+                    return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+                }
+                if (path === '/v1/machines/machine-1') return Response.json({ machine: createPlainMachineRowFixture({
+                    id: 'machine-1', accountId: 'plain-restored-account',
+                }) });
                 return Response.json({ error: 'not_found' }, { status: 404 });
             } });
         const { actionOperationStore } = await import('./actionOperationStore');
@@ -168,21 +177,27 @@ describe('normalizeActionOperationEphemeralIngress', () => {
         try {
             expect(connection.credentials).toEqual({ token: expect.any(String) });
             expect(sockets[0]!.listenersAny().length).toBeGreaterThan(0);
+            const { apiSocket } = await import('@/sync/api/session/apiSocket');
+            await apiSocket.getAccountEncryptionObservationBinding(connection.credentials)!.read();
+            const beforeMode = modeReads;
+            const beforeCurrentness = currentnessReads;
             deliver(snapshot);
             await vi.waitFor(() => expect([...actionOperationStore.getSnapshot().operationsByKey.values()])
                 .toEqual([{ serverId: connection.home.id, snapshot }]));
-            holdMode = true;
+            expect(modeReads).toBe(beforeMode);
+            expect(currentnessReads).toBe(beforeCurrentness);
+            holdRead = true;
             deliver({ ...snapshot, operationId: 'late-retired-script' });
             await started;
             await connection.dispose();
-            releaseMode?.();
+            releaseRead?.();
             // Drain the released external response, not a timer or an internal Sync callback.
-            await heldMode;
+            await heldRead;
             await flushHookEffects();
             expect([...actionOperationStore.getSnapshot().operationsByKey.values()]
                 .some(operation => operation.snapshot.operationId === 'late-retired-script')).toBe(false);
         } finally {
-            releaseMode?.();
+            releaseRead?.();
             await connection.dispose(); bridge.dispose(); actionOperationStore.reset();
             installDisconnectedServerSocketBoundary();
         }

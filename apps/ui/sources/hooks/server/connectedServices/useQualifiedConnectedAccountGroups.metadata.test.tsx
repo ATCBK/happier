@@ -19,6 +19,13 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+
+vi.mock('socket.io-client', async importOriginal => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
 
 const navigationBoundary = vi.hoisted(() => ({ events: [] as string[], onPending: null as (() => Promise<void>) | null }));
 installConnectedServicesCommonModuleMocks({
@@ -58,13 +65,14 @@ async function advertiseQualifiedPools(home: ReturnType<typeof createHomeGoverna
 async function publishMountedHomeFixture(home: ReturnType<typeof createHomeGovernanceHarness>) {
     const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-    const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    const { configureConnectedServerSocketBoundary, restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
     const snapshot = getActiveServerSnapshot();
     const credentials = await TokenStorage.getCredentialsForServerUrl(snapshot.serverUrl, { serverId: snapshot.serverId });
     if (!credentials) throw new Error('The mounted Home fixture has no device credentials');
     const previousCredentials = auth.credentials;
     auth.credentials = credentials;
-    const connection = await restoreServerAccountForTest({ serverUrl: snapshot.serverUrl, credentials, request: home.request });
+    const connection = await restoreServerAccountForTest({ serverUrl: snapshot.serverUrl, credentials, request: home.request,
+        configureSocket: configureConnectedServerSocketBoundary });
     const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
     expect(getActiveServerAccountScope()).not.toBeNull();
     return async () => {
@@ -170,6 +178,59 @@ describe('pool deletion through its shared Action owner', () => {
             expect(await mutation).toBe(true);
             expect(home.requestsFor(path).filter(request => request.input !== null)).toHaveLength(1);
         } finally { await hook.unmount(); await restoreMountedHome(); await home.reset(); }
+    });
+    it('writes a mounted Agent purpose choice while settings-history maintenance is pending', async () => {
+        const home = createHomeGovernanceHarness();
+        await prepareMountedHomeBoundary(home);
+        const serverId = await home.addHome({ name: 'Purpose maintenance', serverUrl: 'https://mounted-purpose-maintenance.test',
+            accountId: 'mounted-purpose-owner', currentAccount: true });
+        const path = '/v1/account/entity-rows/connected-accounts/purposes';
+        home.answer(serverId, 'GET /v1/account/encryption/currentness', {
+            body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 0 }),
+        });
+        home.answer(serverId, `GET ${PROFILE_TRANSFER_ROUTE_V1}`, { body: { status: 'absent' } });
+        let stored = { v: 1 as const, bindings: [] as import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1').ConnectedPurposeCatalogV1['bindings'] };
+        let revision = 1;
+        home.answer(serverId, `GET ${path}`, { select: () => ({ body: { status: 'present', revision,
+            content: { t: 'plain', v: { key: 'purposes', value: stored } } } }) });
+        home.answer(serverId, `POST ${path}`, { select: async input => {
+            const { ConnectedAccountCatalogRowMutationV1Schema } = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
+            const mutation = ConnectedAccountCatalogRowMutationV1Schema.parse(input);
+            expect(mutation.expectedRevision).toBe(revision);
+            if (mutation.content?.t !== 'plain' || mutation.content.v.key !== 'purposes') throw new Error('Expected plain purpose envelope');
+            stored = mutation.content.v.value;
+            return { body: { status: 'updated', revision: ++revision, cursor: revision } };
+        } });
+        const restoreMountedHome = await publishMountedHomeFixture(home);
+        const maintenance = createDeferred<void>();
+        home.answer(serverId, 'GET /v2/account/settings/history', {
+            respondAfter: maintenance.promise, body: { snapshots: [] },
+        });
+        const { useConnectedAccountPurposeDefaults } = await import('./useConnectedAccountPurposeDefaults');
+        const hook = await renderHook(() => useConnectedAccountPurposeDefaults());
+        let mutation: Promise<boolean> | undefined;
+        try {
+            await waitForHomeGovernance(() => {
+                expect(hook.getCurrent().execution.ready).toBe(true);
+                expect(hook.getCurrent().catalog).toMatchObject({ status: 'ready', stale: false });
+            });
+            await act(async () => {
+                mutation = hook.getCurrent().mutateDefaults({ kind: 'service', input: { agentId: 'codex',
+                    service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, purpose: 'primary',
+                    selection: { source: 'connected', selection: 'profile', profileId: 'work' } } });
+                void mutation.catch(() => {});
+            });
+            await waitForHomeGovernance(() => expect(stored.bindings).toEqual([{
+                purpose: { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary' },
+                target: { kind: 'account', account: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' } },
+            }]));
+            expect(await mutation).toBe(true);
+            expect(home.requestsFor(path).filter(request => request.input !== null)).toHaveLength(1);
+        } finally {
+            maintenance.resolve();
+            await mutation?.catch(() => {});
+            await hook.unmount(); await restoreMountedHome(); await home.reset();
+        }
     });
     it('admits the device identity-privacy effect before changing the local identity presenter', async () => {
         const home = createHomeGovernanceHarness();

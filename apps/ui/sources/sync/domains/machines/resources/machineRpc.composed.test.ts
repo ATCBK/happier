@@ -8,7 +8,7 @@ import { socketRpcCodec } from '@happier-dev/sync-client';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MachineVitalsGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createPlainMachineRowFixture, createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { MachineGuardViewV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 import { MachineVitalsHistoryV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsHistoryV1';
@@ -76,9 +76,6 @@ async function withMachineHome(run: (home: Readonly<{
     serverUrl = `http://127.0.0.1:${address.port}`;
     const serverId = await homes.addHome({ name: 'Resources seam', serverUrl, accountId: 'owner', currentAccount: true });
     const machine = createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'owner' });
-    homes.answer(serverId, 'POST /v1/machines/read-batch', { select: async input => ({
-        body: await createMachineReadBatchResponseFixture(input, id => id === machine.id ? machine : null).json(),
-    }) });
     homes.answer(serverId, '/v1/machines/shared-machine', { body: { machine } });
     const calls: MachineCall[] = [];
     const cancellations: string[] = [];

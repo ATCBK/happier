@@ -1,5 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Modal } from '@/modal';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ed25519, x25519 } from '@noble/curves/ed25519';
 import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -35,7 +34,6 @@ import { createArtifactReadBatchHttpResponse } from '@/dev/testkit/harness/artif
 // Artifact, Action, kind-policy and cryptographic owners execute their real logic.
 installApprovalCommonModuleMocks({ storage: (importOriginal) => importOriginal() });
 beforeAll(loadSyncSingletonForTests);
-beforeEach(() => { vi.spyOn(Modal, 'confirm').mockResolvedValue(true); });
 const initialStorageState = getStorage().getState();
 afterEach(() => {
     retireActiveServerAccountScopeLifetime();
@@ -182,7 +180,7 @@ async function fixture(mode: 'plain' | 'e2ee', document?: Readonly<{ header: Rec
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
     else await account.workflowArtifacts.create({ artifactId: 'document', header, body });
     const context = { serverId: home.id, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
-    return { account, context, executor: createDefaultActionExecutor(), requests, envelopes, recipientSecret, fingerprint,
+    return { account, context, executor: createDefaultActionExecutor({ presentUserActionConfirmation: async () => true }), requests, envelopes, recipientSecret, fingerprint,
         publicLinkBody: () => publicLinkBody,
         stored: () => stored!, setAccess: (value: typeof access) => { access = value; },
         setGrantStatus: (value: number) => { grantStatus = value; }, setCensusCallerEnvelope: (value: string) => { censusCallerEnvelope = value; },
@@ -205,6 +203,7 @@ describe('UI Artifact sharing Action front door', () => {
             const row = (id: string, header: Readonly<Record<string, unknown>>, body?: string) => ({ id,
                 header: encodePlainArtifactStoredContent(header), ...(body ? { body: encodePlainArtifactStoredContent({ body }) } : {}),
                 dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+                publicAudience: 'none',
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
             const requests: string[] = [];
             let mixedInstalledPlacement = false;
@@ -214,7 +213,8 @@ describe('UI Artifact sharing Action front door', () => {
                 requests.push(target.pathname);
                 if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return Response.json({});
                 if (target.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-                if (target.pathname === '/v1/artifacts') return Response.json([row('authored', buildWidgetDefinitionArtifactHeaderV1(definition))]);
+                if (target.pathname === '/v1/artifacts/authored') return Response.json(row('authored',
+                    buildWidgetDefinitionArtifactHeaderV1(definition), JSON.stringify(definition)));
                 if (target.pathname === `/v1/artifacts/${homeId}`) return Response.json(row(homeId,
                     { kind: HOME_HUB_ARTIFACT_KIND_V1, v: 1 }, JSON.stringify(mixedInstalledPlacement ? { ...layout,
                         items: [...layout.items, { kind: 'widget', instance: { v: 1, id: 'installed-copy',
@@ -226,7 +226,9 @@ describe('UI Artifact sharing Action front door', () => {
             expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: {
                 layout, sections: expect.arrayContaining([expect.objectContaining({ id: instance.id, size: 'wide', frameStyle: 'plain' })]),
             } });
-            expect(requests).not.toContain('/v1/artifacts/authored');
+            expect(new Set(requests.filter(path => path.startsWith('/v1/artifacts/'))))
+                .toEqual(new Set([`/v1/artifacts/${homeId}`, '/v1/artifacts/authored']));
+            expect(requests).not.toContain('/v1/artifacts');
             mixedInstalledPlacement = true;
             expect(await f.executor.execute('home.hub.layout.get', {}, f.context))
                 .toEqual({ ok: false, errorCode: 'widget_catalog_unavailable', error: 'widget_catalog_unavailable' });

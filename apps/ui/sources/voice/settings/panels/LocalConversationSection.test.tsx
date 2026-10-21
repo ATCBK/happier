@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -279,9 +280,9 @@ beforeEach(async () => {
       const machineId = path.startsWith('/v1/machines/') ? decodeURIComponent(path.slice('/v1/machines/'.length)) : null;
       const machineRow = (id: string) => {
         const machine = storage.getState().machines[id];
-        return { ...createPlainMachineRowFixture({ id, accountId: 'voice-account' }),
+        return MachinePublishedRowV1Schema.parse({ ...createPlainMachineRowFixture({ id, accountId: 'voice-account' }),
           ...(machine ? { ...machine, metadata: encodePlainMachineStoredContent(machine.metadata),
-            daemonState: encodePlainMachineStoredContent(machine.daemonState) } : {}) };
+            daemonState: encodePlainMachineStoredContent(machine.daemonState) } : {}) });
       };
       if (path === '/v1/machines/read-batch' && init?.method === 'POST') return createMachineReadBatchResponseFixture(init.body, machineRow);
       if (machineId) return Response.json({ machine: machineRow(machineId) });

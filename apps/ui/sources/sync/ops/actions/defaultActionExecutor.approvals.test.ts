@@ -200,7 +200,72 @@ await import('@/sync/syncEngine');
 await import('./defaultActionExecutor');
 
 describe('createDefaultActionExecutor approvals', () => {
+    it('acquires an ordinary built-in once for initial family routing, retaining the fresh CAS read', async () => {
+        await connectPermissionTransport();
+        const result = await executor.execute('approval.request.decide', { artifactId: 'artifact-1', decision: 'reject' }, context());
+        expect(result, JSON.stringify({ result, paths: homes.requests.map(request => request.path) }))
+            .toMatchObject({ ok: true, result: { status: 'rejected' } });
+        const requests = homes.requestsFor('/v1/artifacts/artifact-1');
+        const firstWrite = requests.findIndex(request => request.input !== null);
+        expect(firstWrite).toBeGreaterThan(0);
+        // One initial classification acquisition plus the writer's fresh revision basis.
+        expect(requests.slice(0, firstWrite).filter(request => request.input === null)).toHaveLength(2);
+        expect(persistedApproval('artifact-1')).toMatchObject({ status: 'rejected' });
+        expect(outgoing).toEqual([]);
+    });
+
+    it('rejects a malformed approval family after one initial acquisition without effects', async () => {
+        await connectPermissionTransport();
+        const artifact = homes.artifacts(homeId).read('artifact-1');
+        if (!artifact) throw new Error('Missing approval fixture');
+        homes.artifacts(homeId).replaceStoredRow({ ...artifact,
+            body: encodePlainArtifactStoredContent({ body: JSON.stringify({ ...approvalRequest(), kind: 'plugin_target_action' }) }),
+        });
+        const result = await executor.execute('approval.request.decide', { artifactId: 'artifact-1', decision: 'approve' }, context());
+        expect(result, JSON.stringify({ result, paths: homes.requests.map(request => request.path) }))
+            .toMatchObject({ ok: false, errorCode: 'approval_not_found' });
+        expect(homes.requestsFor('/v1/artifacts/artifact-1')).toHaveLength(1);
+        expect(outgoing).toEqual([]);
+    });
+
+    it('does not accept a caller-authored initial approval body', async () => {
+        expect(await executor.execute('approval.request.decide', {
+            artifactId: 'artifact-missing', decision: 'approve', initialRead: { request: approvalRequest() },
+        }, context())).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+        expect(homes.requestsFor('/v1/artifacts/artifact-missing')).toEqual([]);
+        expect(outgoing).toEqual([]);
+    });
+
+    it.each([false, true])('rechecks Account custody after a held execution claim (retired: %s)', async retired => {
+        await connectPermissionTransport();
+        const { artifactId } = await invitationApproval('account.name.set', false);
+        homes.answer(homeId, '/v1/account/profile', { body: { name: 'Captain', firstName: 'Captain', lastName: null, timestamp: 10 } });
+        let claimReached!: () => void;
+        let releaseClaim!: () => void;
+        const reached = new Promise<void>(resolve => { claimReached = resolve; });
+        const release = new Promise<void>(resolve => { releaseClaim = resolve; });
+        const artifacts = homes.artifacts(homeId);
+        artifacts.beforeNextUpdate(async () => {
+            // Consent commits first; hold the subsequent execution claim at the HTTP boundary.
+            artifacts.beforeNextUpdate(async () => { claimReached(); await release; });
+        });
+        const pending = executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context());
+        try {
+            await Promise.race([reached, pending.then(result => { throw new Error(`Claim not reached: ${JSON.stringify(result)}`); })]);
+            if (retired) {
+                const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+                retireActiveServerAccountScopeLifetime();
+            }
+        } finally { releaseClaim(); }
+        await pending;
+        expect(homes.requestsFor('/v1/account/profile').filter(request => request.input !== null)).toHaveLength(retired ? 0 : 1);
+        expect(outgoing).toEqual([]);
+        if (retired) expect(persistedApproval(artifactId).status).not.toBe('executed');
+        else expect(persistedApproval(artifactId)).toMatchObject({ status: 'executed', execution: { ok: true } });
+    });
+
     it.each(['approve', 'reject'] as const)('records a public %s decision for a live Account Action without a Machine', async decision => {
+        await connectPermissionTransport();
         const artifactId = `account-target-${decision}`;
         const request = TargetActionApprovalRequestV1Schema.parse({
             v: 1, kind: 'plugin_target_action', status: 'open', createdAtMs: 1, updatedAtMs: 1,
@@ -216,10 +281,15 @@ describe('createDefaultActionExecutor approvals', () => {
             body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
         }) });
         expect(seeded?.ok).toBe(true);
-        expect(await executor.execute('approval.request.decide', { artifactId, decision }, context()))
+        const result = await executor.execute('approval.request.decide', { artifactId, decision }, context());
+        expect(result, JSON.stringify({ result, paths: homes.requests.map(request => request.path) }))
             .toMatchObject({ ok: true, result: { status: decision === 'approve' ? 'approved' : 'rejected' } });
         expect(TargetActionApprovalRequestV1Schema.parse(JSON.parse(homes.artifacts(homeId).readPlainBody(artifactId) ?? 'null')))
             .toMatchObject({ status: decision === 'approve' ? 'approved' : 'rejected', decision: { kind: decision } });
+        const requests = homes.requestsFor(`/v1/artifacts/${artifactId}`);
+        const firstWrite = requests.findIndex(request => request.input !== null);
+        expect(firstWrite).toBeGreaterThan(0);
+        expect(requests.slice(0, firstWrite).filter(request => request.input === null)).toHaveLength(2);
         expect(outgoing).toEqual([]);
     });
 
@@ -723,6 +793,7 @@ describe('createDefaultActionExecutor approvals', () => {
         expect(outgoing).toEqual([expect.objectContaining({ method: 's1:' + RPC_METHODS.APPROVAL_REQUEST_DECIDE,
             params: { artifactId: 'requester-preview', sessionId: 's1', decision } })]);
         expect(homes.artifacts(homeId).readPlainBody('requester-preview')).toBe(originalBody);
+        expect(homes.requestsFor('/v1/artifacts/requester-preview')).toHaveLength(1);
     });
 
     it('exposes the approval replay entry point through the app client executor', async () => {
