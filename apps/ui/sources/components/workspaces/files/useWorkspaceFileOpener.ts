@@ -4,7 +4,7 @@ import type { WorkspaceFileOpenInput, WorkspaceFileTarget, WorkspaceFindSeedSche
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { executeWorkspaceUiAction, openWorkspaceHrefOrElse } from '@/components/appShell/workspace/workspaceActionRuntime';
 import { useWorkspaceFileNavigationCapabilities } from '@/components/appShell/workspace/WorkspaceNavigationContext';
-import { useRouter, type Href } from 'expo-router';
+import type { Href } from 'expo-router';
 import { resolveHref } from 'expo-router/build/link/href';
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
 import { setTranscriptJumpHighlight, type TranscriptJumpHighlightRowIdentity } from '@/components/sessions/transcript/navigation/transcriptJumpHighlightStore';
@@ -12,6 +12,7 @@ import { useOptionalAppPaneContext, useOptionalPaneFocusReturnOwner } from '@/co
 import { usePaneRegion } from '@/components/appShell/panes/paneRegion';
 import { buildProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { DestinationInstanceContext } from '@/components/appShell/workspace/destinationInstanceContext';
+import { useDestinationRouter } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { areSessionAddressesEqual, normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -34,7 +35,7 @@ export type WorkspaceFileOpen = (target: WorkspaceFileOpenTarget, options?: Work
 /** Every file entry point enters the same Action policy and mounted navigation owner. */
 export function useWorkspaceFileOpener() {
     const { canOpen, phone } = useWorkspaceFileNavigationCapabilities();
-    const router = useRouter();
+    const router = useDestinationRouter();
     const focusReturnOwner = useOptionalPaneFocusReturnOwner();
     const instance = React.useContext(DestinationInstanceContext);
     const instanceKey = instance?.tabId ?? null;
