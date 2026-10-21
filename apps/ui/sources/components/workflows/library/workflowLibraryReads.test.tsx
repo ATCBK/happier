@@ -24,6 +24,9 @@ const { storage } = await import('@/sync/domains/state/storageStore');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { apiSocket } = await import('@/sync/api/session/apiSocket');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
 const { createWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
@@ -42,8 +45,16 @@ let available = isAppliedActiveServerRuntimeAvailable();
 beforeEach(async () => {
     previous = storage.getState(); applied = getAppliedActiveServerSnapshot(); available = isAppliedActiveServerRuntimeAvailable();
     await home.reset(); accountId = 'account-a';
+    // Synthetic logical Homes must not borrow an earlier test's installed HTTP configuration.
+    await disconnectActiveServerConnection();
+    apiSocket.disconnect();
     serverId = await home.addHome({ name: 'Library Home', serverUrl: 'https://workflow-library.test', accountId });
-    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const target = getActiveServerSnapshot();
+    const credentials = await TokenStorage.getCredentialsForServerUrl(target.serverUrl, { serverId: target.serverId });
+    if (!credentials) throw new Error('Workflow library fixture requires its captured Home credentials');
+    apiSocket.initialize({ endpoint: target.serverUrl, serverId: target.serverId, generation: target.generation,
+        token: credentials.token, credentials }, null);
+    publishAppliedActiveServerSnapshot(target);
     storage.setState({ profileScope: { serverId, accountId }, workflowRunsById: {}, workflowRunListWindows: {}, workflowRunInvocationsByRunId: {}, machines: {}, machineListByServerId: {} });
     home.answer(serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
     home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
@@ -51,6 +62,8 @@ beforeEach(async () => {
 });
 afterEach(async () => {
     await standardCleanup(); resetWorkflowLibraryReadsForTests(); retireActiveServerAccountScopeLifetime();
+    await disconnectActiveServerConnection();
+    apiSocket.disconnect();
     clearDaemonMergedProjectionCacheForTests(); await home.reset();
     storage.setState(previous); publishAppliedActiveServerSnapshot(applied, available);
 });
@@ -617,6 +630,9 @@ describe('Automation attention through real HTTP and the shared Run store', () =
     });
 
     it('shares attention, retains known rows on failure, and removes cleared rows on retry', async () => {
+        const target = getActiveServerSnapshot();
+        expect(() => apiSocket.createReadTransportForActiveServer({ endpoint: target.serverUrl,
+            serverId: target.serverId, generation: target.generation })).not.toThrow();
         const failed = createAutomationRunFixture({ id: 'pre-session', state: 'failed', errorCode: 'machine_unavailable' });
         const pending = createDeferred<void>();
         home.answer(serverId, '/v3/automations/runs', { body: { runs: [failed], nextCursor: null }, respondAfter: pending.promise });

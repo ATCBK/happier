@@ -199,20 +199,19 @@ describe('Account trigger reads through real Action and Automation owners', () =
         expect(hook.getCurrent().sets).toEqual([]);
     });
 
-    it('pages the shared Run window until a habit has its true latest result', async () => {
-        // Unopened content is explicit here; the last-result consumer needs the
-        // public index, not a fabricated private accepted snapshot.
+    it('reads a habit latest result from public summaries without a Run history window', async () => {
         const route = '/v3/automations/runs/workflow-storage';
-        const page = (id: string, automationId: string, nextCursor?: string) => ({ runs: [createWorkflowRunSummaryFixture({ id,
-            ownerAccountId: 'account-one', state: 'failed', origin: { kind: 'automation', automationId } })],
-            acceptedEnvelopesByRunId: {}, keyCensusByRunId: {}, ...(nextCursor ? { nextCursor } : {}) });
-        let reads = 0;
-        home.answer(serverId, route, { select: () => ({ body: ++reads === 1 ? page('other-run', 'other', 'next') : page('habit-run', 'habit') }) });
+        const lastRun = { id: 'habit-run', state: 'failed', workflowCustodyState: null,
+            attentionRequired: true, createdAt: '2026-10-21T03:00:00.000Z' };
+        home.answer(serverId, route, { body: {
+            automationSummaries: [{ automationId: 'habit', lastRun }], remainingAutomationIds: [],
+        } });
         const ids = ['habit']; const hook = await renderHook(() => useSessionTriggerLastRuns(ids));
-        await waitForHomeGovernance(() => expect(hook.getCurrent().lastRunsByAutomationId.habit?.state).toBe('failed'));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().lastRunsByAutomationId.habit).toEqual(lastRun));
         expect(home.requestsFor(route).map(request => request.input)).toEqual([
-            expect.objectContaining({ request: {} }), expect.objectContaining({ request: { cursor: 'next' } }),
+            expect.objectContaining({ operation: 'summaries', request: { automationIds: ids } }),
         ]);
+        expect(storage.getState().workflowRunListWindows).toEqual({});
     });
 
     it('shares lower HTTP reads after independent Action admission without a cancelled caller aborting another', async () => {

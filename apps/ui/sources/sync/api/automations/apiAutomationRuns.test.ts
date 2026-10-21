@@ -8,6 +8,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { apiSocket } from '@/sync/api/session/apiSocket';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 
 vi.mock('socket.io-client', async () => {
     const { createSocketIoBoundaryStub } = await import('@/dev/testkit/mocks/socketIo');
@@ -89,6 +90,9 @@ describe('apiAutomationRuns', () => {
         let requests = 0;
         vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
             if (isServerFetchConnectivityProbeRequest(input)) return Response.json({ ok: true });
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path !== '/v3/automations/runs') throw new Error(`Unexpected native summary request: ${path}`);
             requests += 1;
             await held.promise;
             return Response.json({ runs: [eventRun], nextCursor: 'opaque_cursor' });

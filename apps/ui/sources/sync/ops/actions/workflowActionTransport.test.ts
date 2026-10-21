@@ -132,7 +132,7 @@ describe('Workflow Action relay and resource target', () => {
                     // The invoking Session is the Run origin; its exact address resolves to its Machine.
                     resolveSessionTarget: async value => typeof value === 'string'
                         ? { address: { serverId: 'home', sessionId: value }, machineId: 'executor-a' }
-                        : value && typeof value === 'object' && !Array.isArray(value) && value.serverId === 'home' && typeof value.sessionId === 'string'
+                        : value && typeof value === 'object' && 'serverId' in value && value.serverId === 'home' && 'sessionId' in value && typeof value.sessionId === 'string'
                             ? { address: { serverId: value.serverId, sessionId: value.sessionId }, machineId: 'executor-a' } : null,
                     readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }) },
             }),
