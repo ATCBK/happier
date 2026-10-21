@@ -36,6 +36,8 @@ import {
   type SystemTaskSshConnectionConfig,
 } from './relayRuntimeKinds.js';
 
+const REMOTE_MACHINE_ENROLLMENT_TIMEOUT_MS = 10 * 60_000;
+
 type RemoteCommandResult = Readonly<{
   ok: boolean;
   data: Record<string, unknown>;
@@ -866,12 +868,13 @@ type RemoteMachineBootstrapRecipeParams = Readonly<{
   approveLocalAuthRequest(request: Omit<Parameters<RemoteSshBootstrapMachineDeps['approveLocalAuthRequest']>[0], 'parsed'> & { parsed: RemoteBootstrapMachineConfiguration }): Promise<void>;
   assertCurrent?: () => Promise<void>;
   enrollmentProcessIO?: 'streaming' | 'buffered';
+  enrollmentDeadlineMs?: number;
   onEnrollmentDeadline?: (deadlineMs: number) => void;
 }>;
 
 async function runRemoteMachineBootstrapRecipe({
   ctx, parsedRemote, parsedLocalForApproval, relayRuntime, relayRuntimeLocalServerUrl,
-  remoteHappierExecutor, serviceRecipeExecutor, createRemoteEnrollmentExecutor, approveLocalAuthRequest, assertCurrent, enrollmentProcessIO, onEnrollmentDeadline,
+  remoteHappierExecutor, serviceRecipeExecutor, createRemoteEnrollmentExecutor, approveLocalAuthRequest, assertCurrent, enrollmentProcessIO, enrollmentDeadlineMs, onEnrollmentDeadline,
 }: RemoteMachineBootstrapRecipeParams) {
   const webappUrl = deriveWebappUrl(parsedRemote.relay.relayUrl, parsedRemote.relay.webappUrl);
   const relayProfile = {
@@ -922,7 +925,8 @@ async function runRemoteMachineBootstrapRecipe({
               ? createTransferableHomeTargetInput(parsedRemote.homeTarget)
               : { kind: 'https_url', url: parsedRemote.relay.relayUrl },
             signal: ctx.signal,
-            timeoutMs: 10 * 60_000,
+            timeoutMs: enrollmentDeadlineMs === undefined ? REMOTE_MACHINE_ENROLLMENT_TIMEOUT_MS
+              : Math.max(0, enrollmentDeadlineMs - Date.now()),
             onEnrollmentDeadline,
             ...(parsedRemote.managedEnrollment ? { managedEnrollment: parsedRemote.managedEnrollment } : {}),
             approvePairingRequest: async (request) => {
@@ -1116,6 +1120,10 @@ export function createRemoteNativeBootstrapMachineTaskKind(input: Readonly<{
 }>): InteractiveSystemTaskKind<Readonly<{ publicKey?: string; machineId: string | null }>> {
   return {
     async run(ctx) {
+      // Installation authority reads consume the same finite request budget
+      // as sign-in. Starting sign-in must not renew that budget.
+      const enrollmentDeadlineMs = Date.now() + REMOTE_MACHINE_ENROLLMENT_TIMEOUT_MS;
+      input.onEnrollmentDeadline?.(enrollmentDeadlineMs);
       await input.assertCurrent();
       ctx.signal?.throwIfAborted();
       ctx.emit({ type: 'progress', stepId: 'ssh.installCli', message: 'Ensuring Happier is installed on the remote machine' });
@@ -1144,6 +1152,7 @@ export function createRemoteNativeBootstrapMachineTaskKind(input: Readonly<{
         approveLocalAuthRequest: input.approveLocalAuthRequest,
         assertCurrent: input.assertCurrent,
         enrollmentProcessIO: 'buffered',
+        enrollmentDeadlineMs,
         onEnrollmentDeadline: input.onEnrollmentDeadline,
       });
     },

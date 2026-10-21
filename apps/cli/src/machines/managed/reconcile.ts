@@ -562,6 +562,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     params.options.context?.operationOwnerUpdate?.update({ domainRef });
     let bootstrapTask: Readonly<{ id: string; taskKind: 'remote.ssh.bootstrapMachine.v1' }> | undefined;
     let enrollmentLifetime: HomeOperationRetry | undefined;
+    let enrollmentAttempted = false;
     try {
         const enrollment = await runManagedMachineEnrollment({ correlation, target, carrier, signal: params.options.signal,
             onTask: ({ taskId, kind }) => {
@@ -576,6 +577,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
             },
             onEvent: (event) => {
                 if (event.type !== 'progress' || !event.message) return;
+                if (event.stepId === 'ssh.auth.wait') enrollmentAttempted = true;
                 const progress = (event.stepId
                     ? { kind: 'phase', phase: event.stepId, label: event.message }
                     : { kind: 'indeterminate', label: event.message }) satisfies ActionOperationProgressV1;
@@ -606,7 +608,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     } catch (error) {
         // A guest may have committed enrollment while Home cannot be read.
         // Unavailable confirmation never proves that the guest effect failed.
-        if (enrollmentLifetime && !params.options.signal?.aborted && isRetryableHomeOperationError(error)) {
+        if (enrollmentLifetime && enrollmentAttempted && !params.options.signal?.aborted && isRetryableHomeOperationError(error)) {
             throw new ManagedMachineControllerError('action_outcome_unknown');
         }
         throw error;

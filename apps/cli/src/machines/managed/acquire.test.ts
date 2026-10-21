@@ -123,7 +123,7 @@ function driver() {
     return createManagedMachineAcquisitionDriver({ token: 'token', serverUrl: 'https://home.example', homeId: 'home', controller, runtimeRegistry, ...accountInputs });
 }
 describe('creation environment stage', () => {
-    it.each(['recover', 'expire', 'late-confirmation'] as const)('keeps Create truthful when controller Home currentness is unavailable after guest enrollment (%s)', async scenario => {
+    it.each(['recover', 'expire', 'late-confirmation', 'install-recover', 'install-expire'] as const)('keeps Create truthful when controller Home currentness is unavailable during installation or after guest enrollment (%s)', async scenario => {
         const root = await filesystem.mkdtemp(join(tmpdir(), 'managed-controller-home-recovery-'));
         const guestHome = join(root, 'guest');
         const payload = join(root, 'payload');
@@ -132,14 +132,16 @@ describe('creation environment stage', () => {
             contributionRef: input.selection.launch.provider, schemaVersion: 1, value: {},
         } });
         let unavailableReads = 0;
+        let installing = false;
         let nowMs = Date.now();
         const startedAt = nowMs;
         const server = createServer((request, response) => {
             response.setHeader('Content-Type', 'application/json');
-            if (request.url?.endsWith('/controller/current') && retained.enrolledMachineId
-                && (scenario === 'expire' || scenario === 'recover' && unavailableReads === 0)) {
+            if (request.url?.endsWith('/controller/current')
+                && (scenario.startsWith('install-') ? installing && (scenario === 'install-expire' || unavailableReads === 0) : retained.enrolledMachineId
+                    && (scenario === 'expire' || scenario === 'recover' && unavailableReads === 0))) {
                 unavailableReads++;
-                if (scenario === 'expire' && unavailableReads === 2) nowMs = startedAt + 10 * 60_000 + 1;
+                if ((scenario === 'expire' || scenario === 'install-expire') && unavailableReads === 2) nowMs = startedAt + 10 * 60_000 + 1;
                 response.writeHead(503);
                 response.end(JSON.stringify({ error: 'database_connection_unavailable' }));
                 return;
@@ -217,7 +219,11 @@ describe('creation environment stage', () => {
             const actionInput = { ...input, selection: { ...input.selection, homeId } };
             let work: Promise<unknown> | undefined;
             const executor = createActionExecutor({ managedMachineAction: async ({ actionId, input, context }) =>
-                await acquisition.execute(actionId, input, { requestId: 'creation', context, signal: context.signal }) } as ActionExecutorDeps);
+                await acquisition.execute(actionId, input, { requestId: 'creation', signal: context.signal,
+                    context: { ...context, operationOwnerUpdate: { update(value) {
+                        if (value.progress?.phase === 'ssh.installCli') installing = true;
+                        context.operationOwnerUpdate?.update(value);
+                    } } } }) } as ActionExecutorDeps);
             await operations.observeExecution({ actionId: 'machines.managed.acquire', input: actionInput, actionRequestId: 'creation',
                 execute: async context => {
                     const execution = executor.execute('machines.managed.acquire', actionInput, { ...context, surface: 'cli', authority: 'present_user',
@@ -226,6 +232,16 @@ describe('creation environment stage', () => {
                     return await execution;
                 } });
             let taskId = '';
+            if (scenario === 'install-expire') {
+                await work;
+                expect(await operations.handlers.getV2({ operationId: `controller-home-${scenario}`, waitForTerminal: true }))
+                    .toMatchObject({ kind: 'found', operation: { state: 'failed', error: {
+                        errorCode: 'database_connection_unavailable', details: { kind: 'managedControllerRequest', status: 503 },
+                    } } });
+                expect(unavailableReads).toBe(2);
+                expect(retained.enrolledMachineId).toBeUndefined();
+                return;
+            }
             await expect.poll(async () => {
                 const found = await operations.handlers.getV2({ operationId: `controller-home-${scenario}` });
                 if (found.kind === 'found' && found.operation.state === 'failed') throw new Error(JSON.stringify(found.operation.error));
@@ -239,7 +255,7 @@ describe('creation environment stage', () => {
             const found = await operations.handlers.getV2({ operationId: `controller-home-${scenario}`, waitForTerminal: true });
             expect(found, JSON.stringify(found.kind === 'found' ? found.operation.error : found)).toMatchObject({ kind: 'found', operation: scenario === 'expire'
                 ? { state: 'running', observation: { kind: 'outcome_uncertain', code: 'action_outcome_unknown' } } : { state: 'succeeded' } });
-            expect(unavailableReads).toBe(scenario === 'expire' ? 2 : scenario === 'recover' ? 1 : 0);
+            expect(unavailableReads).toBe(scenario === 'expire' ? 2 : scenario === 'recover' || scenario === 'install-recover' ? 1 : 0);
             if (scenario === 'expire' && found.kind === 'found') expect(found.operation.settledAt).toBeUndefined();
             expect(retained.enrolledMachineId).toBe('enrolled-guest');
         } finally {

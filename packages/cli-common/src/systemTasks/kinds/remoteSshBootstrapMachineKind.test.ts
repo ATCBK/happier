@@ -18,6 +18,34 @@ type RemoteEnrollmentExecutorParams = Parameters<
 >[0];
 
 describe('native transport through the remote bootstrap task', () => {
+  it('shares the existing enrollment budget with installation authority reads without renewing it at sign-in', async () => {
+    const stdout = await readFile(new URL('../recipes/fixtures/authRequest.cli-v0.2.16.json', import.meta.url), 'utf8');
+    vi.useFakeTimers();
+    try {
+      const startedAt = Date.now();
+      const deadlines: number[] = [];
+      const task = createRemoteNativeBootstrapMachineTaskKind({
+        onEnrollmentDeadline: deadline => { deadlines.push(deadline); },
+        configuration: { relay: { relayUrl: HOME_TARGET.canonicalAuthUrl }, homeTarget: HOME_TARGET, serviceMode: 'none' },
+        assertCurrent: async () => {},
+        installRemoteCli: async () => {
+          expect(deadlines).toEqual([startedAt + 10 * 60_000]);
+          vi.setSystemTime(startedAt + 2 * 60_000);
+        },
+        approveLocalAuthRequest: async () => {},
+        executor: {
+          runHappierJson: async () => ({ ok: true, data: { authenticated: false, machineId: null } }),
+          runHappierText: async (_args, options) => {
+            expect(options?.timeoutMs).toBe(8 * 60_000);
+            return { status: 0, stdout, stderr: '' };
+          },
+        },
+      });
+      await expect(task.run({ params: {}, emit() {}, prompt: async () => ({ approved: false }) }))
+        .rejects.toMatchObject({ code: 'remote_cli_update_required' });
+      expect(deadlines.every(deadline => deadline === startedAt + 10 * 60_000)).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
   it.each([60_000, 15 * 60_000])('settles unanswered pairing at the earlier Home/operation deadline (%i ms) with a Retry outcome', async lifetimeMs => {
     vi.useFakeTimers();
     try {
