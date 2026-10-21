@@ -240,10 +240,22 @@ export async function readWorkflowRunKeyProjectionsInTx(tx: Tx, input: Readonly<
     if (runIds.length === 0) return new Map();
     const rows = await tx.automationRun.findMany({ where: { id: { in: runIds } }, select: { id: true, ...runAccessFactsSelect } });
     if (rows.length !== runIds.length) throw new WorkflowRunAccessError("run_not_found");
+    const authorityByFacts = new Map<string, Promise<{ access: WorkflowRunAccess; audience: Set<string> }>>();
     const admitted = await Promise.all(rows.map(async row => {
-        const access = await accessFromFactsInTx(tx, row, input.actorAccountId);
-        if (!access) throw new WorkflowRunAccessError("run_not_found");
-        return { row, access, audience: new Set(await audienceFromFactsInTx(tx, row)) };
+        // These are all inputs to the canonical access/audience decisions. The
+        // actor and transaction are fixed for this invocation; Run keys stay separate.
+        const key = JSON.stringify([row.accountId, row.sourceArtifactId, row.visibleTeamId,
+            row.workflowCustodyState, row.account.encryptionMode]);
+        let authority = authorityByFacts.get(key);
+        if (!authority) {
+            authority = (async () => {
+                const access = await accessFromFactsInTx(tx, row, input.actorAccountId);
+                if (!access) throw new WorkflowRunAccessError("run_not_found");
+                return { access, audience: new Set(await audienceFromFactsInTx(tx, row)) };
+            })();
+            authorityByFacts.set(key, authority);
+        }
+        return { row, ...await authority };
     }));
     const recipientIds = [...new Set(admitted.flatMap(item => [...item.audience]))];
     const [accounts, envelopes] = await Promise.all([

@@ -13,7 +13,8 @@ import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from "@/app/encryption/accountRecipientEnvelopeReadiness";
 import { inTx } from "@/storage/inTx";
-import { resolveWorkflowRunAdmissionVisibilityInTx } from "./workflowRunAccess";
+import { readWorkflowRunKeyProjectionsInTx, resolveWorkflowRunAdmissionVisibilityInTx } from "./workflowRunAccess";
+import { logger } from "@/utils/logging/log";
 import { readTeamSummaryForActorInTx } from "@/app/teams/lifecycle";
 import { hashPasswordMaterial } from "@/app/auth/password/passwordMaterialVerifier";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
@@ -25,7 +26,8 @@ import { inviteDiscussionParticipant } from '@/app/discussions/accessService';
 describe("Workflow Run live Team access (real SQLite)", () => {
     let harness: LightSqliteHarness;
     beforeAll(async () => {
-        harness = await createLightSqliteHarness({ tempDirPrefix: "happier-run-access-", initEncrypt: true });
+        harness = await createLightSqliteHarness({ tempDirPrefix: "happier-run-access-", initEncrypt: true,
+            env: { HAPPIER_WEB_LATENCY_TRACE: "1" } });
     }, 180_000);
     afterAll(async () => { if (harness) await harness.close(); });
 
@@ -122,6 +124,73 @@ describe("Workflow Run live Team access (real SQLite)", () => {
         await expect(pauseWorkflowRun({ accountId: f.viewer.id, runId: f.runId, expectedRevision: 0 })).rejects.toMatchObject({ code: "run_access_denied" });
         await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
         await expect(getWorkflowRun({ accountId: f.viewer.id, runId: f.runId })).rejects.toMatchObject({ code: "run_not_found" });
+    });
+
+    it("shares identical live Team authority reads across a Run page and rechecks them on the next invocation", async () => {
+        const f = await fixture();
+        const runIds = [f.runId, ...Array.from({ length: 128 }, () => crypto.randomUUID())];
+        await db.automationRun.createMany({ data: runIds.slice(1).map(id => ({
+            id, accountId: f.owner.id, sourceArtifactId: f.artifact.id, visibleTeamId: f.team.id,
+            originKind: "direct", causeKind: null, state: "queued", scheduledAt: new Date(), dueAt: new Date(),
+            workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: f.acceptedEnvelope,
+        })) });
+        // The diagnostics sink observes real database operations; all policy and storage remain real.
+        const debug = vi.spyOn(logger, "debug").mockImplementation(() => {});
+        const authorityReads = () => debug.mock.calls.flatMap(([record]) => record !== null && typeof record === "object"
+            && "phase" in record && typeof record.phase === "string"
+            && /^db\.(?:TeamMembership|Artifact|ArtifactTeamGrant|ArtifactAccountGrant|ArtifactGroupGrant|TeamGroupMembership)\./u.test(record.phase)
+            ? [record.phase] : []).sort();
+        try {
+            const single = await inTx(tx => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: f.viewer.id, runIds: [f.runId] }));
+            const singleReads = authorityReads();
+            expect(singleReads.length).toBeGreaterThan(0);
+            debug.mockClear();
+            const page = await inTx(tx => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: f.viewer.id, runIds }));
+            expect(new Set(page.keys())).toEqual(new Set(runIds));
+            for (const runId of runIds) expect(page.get(runId)).toEqual({ ...single.get(f.runId), runId });
+            const pageReads = authorityReads();
+            expect({ singleAuthorityReads: singleReads.length, pageAuthorityReads: pageReads.length })
+                .toEqual({ singleAuthorityReads: singleReads.length, pageAuthorityReads: singleReads.length });
+            expect(pageReads).toEqual(singleReads);
+            await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
+            await expect(inTx(tx => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: f.viewer.id, runIds })))
+                .rejects.toMatchObject({ code: "run_not_found" });
+        } finally { debug.mockRestore(); }
+    });
+
+    it("keeps distinct Run owners, sources and frozen Teams separate in the same key batch", async () => {
+        const f = await fixture();
+        const late = await db.account.create({ data: { encryptionMode: "plain" } });
+        const otherTeam = await db.team.create({ data: { name: "Another frozen audience" } });
+        await db.teamMembership.createMany({ data: [f.viewer.id, late.id].map(accountId => ({
+            teamId: otherTeam.id, accountId, role: "member",
+        })) });
+        await db.artifactTeamGrant.create({ data: { artifactId: f.artifact.id, teamId: otherTeam.id,
+            accessLevel: "view", createdByAccountId: f.owner.id } });
+        const otherSource = await db.artifact.create({ data: { id: crypto.randomUUID(), accountId: f.owner.id,
+            header: f.artifact.header, body: f.artifact.body, dataEncryptionKey: f.artifact.dataEncryptionKey } });
+        const otherOwnerRunId = crypto.randomUUID();
+        const otherTeamRunId = crypto.randomUUID();
+        const otherSourceRunId = crypto.randomUUID();
+        await db.automationRun.createMany({ data: [
+            { id: otherOwnerRunId, accountId: f.viewer.id, sourceArtifactId: f.artifact.id, visibleTeamId: f.team.id },
+            { id: otherTeamRunId, accountId: f.owner.id, sourceArtifactId: f.artifact.id, visibleTeamId: otherTeam.id },
+            { id: otherSourceRunId, accountId: f.owner.id, sourceArtifactId: otherSource.id, visibleTeamId: f.team.id },
+        ].map(row => ({ ...row, originKind: "direct", causeKind: null, state: "queued", scheduledAt: new Date(),
+            dueAt: new Date(), workflowCustodyState: "pending", workflowAcceptedSnapshotEnvelope: f.acceptedEnvelope })) });
+        const read = (runIds: string[]) => inTx(tx => readWorkflowRunKeyProjectionsInTx(tx, { actorAccountId: f.viewer.id, runIds }));
+        const page = await read([f.runId, otherOwnerRunId, otherTeamRunId]);
+        expect(page.get(f.runId)).toMatchObject({ ownerAccountId: f.owner.id, access: "view", visibleTeamId: f.team.id });
+        expect(page.get(f.runId)?.recipients.map(row => row.recipientAccountId).sort()).toEqual([f.owner.id, f.viewer.id].sort());
+        expect(page.get(otherOwnerRunId)).toMatchObject({ ownerAccountId: f.viewer.id, access: "owner" });
+        expect(page.get(otherOwnerRunId)?.recipients.map(row => row.recipientAccountId)).toEqual([f.viewer.id]);
+        expect(page.get(otherTeamRunId)?.recipients.map(row => row.recipientAccountId).sort())
+            .toEqual([f.owner.id, f.viewer.id, late.id].sort());
+        await expect(read([f.runId, otherSourceRunId])).rejects.toMatchObject({ code: "run_not_found" });
+        await db.automationRun.update({ where: { id: otherTeamRunId }, data: { visibleTeamId: null } });
+        await expect(read([f.runId, otherTeamRunId])).rejects.toMatchObject({ code: "run_not_found" });
+        await db.automationRun.delete({ where: { id: otherOwnerRunId } });
+        await expect(read([f.runId, otherOwnerRunId])).rejects.toMatchObject({ code: "run_not_found" });
     });
 
     it("removing the frozen Team grant revokes a Team Run even when the caller retains a personal document grant", async () => {
