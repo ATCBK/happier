@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
@@ -17,8 +17,10 @@ import * as protocolComposableKernel from './jsonSchemaValidation.js';
 import { createProtocolComposableSchema, createProtocolStoredReadSchema } from './protocolComposableSchema.js';
 import { LaunchProfileIdV2ProtocolSchema } from '../../profiles/v2/profileId.js';
 import { compileProtocolJsonSchema } from './jsonSchemaCompiler.js';
+import { PluginJsonSchemaV2Schema } from '../contributions/publicTypes.js';
 import {
   compilePluginJsonSchema,
+  cloneStrictPluginJsonValue,
   createPluginJsonSchemaZodObjectAdapter,
   defineProtocolJsonValue,
   defineProtocolLiteral,
@@ -47,6 +49,36 @@ function deepSortObjectKeys(value: unknown): unknown {
 }
 
 describe('plugin JSON Schema validation policy', () => {
+  it('reuses validated owned schema snapshots without trusting new immutable or copied inputs', () => {
+    const raw = JSON.parse(JSON.stringify(defineProtocolObject({ authority: defineProtocolLiteral('first') },
+      { policy: 'closed' }).jsonSchema)) as { properties: { authority: { const: string } } };
+    const owned = cloneStrictPluginJsonValue(raw, 'schema');
+    if (!owned || typeof owned !== 'object' || Array.isArray(owned)) throw new Error('Expected owned schema');
+    const first = rehydrateCanonicalProtocolComposableSchema(owned);
+    expect(first?.safeParse({ authority: 'first' }).success).toBe(true);
+    const parses = vi.spyOn(PluginJsonSchemaV2Schema, 'safeParse');
+    try {
+      for (let index = 0; index < 100; index += 1) expect(rehydrateCanonicalProtocolComposableSchema(owned)).toBe(first);
+      expect(parses.mock.calls.length).toBe(0);
+      const copied = { ...owned };
+      expect(rehydrateCanonicalProtocolComposableSchema(copied)).not.toBeNull();
+      expect(parses.mock.calls.length).toBeGreaterThan(0);
+      parses.mockClear();
+      const frozen = Object.freeze({ ...raw });
+      expect(rehydrateCanonicalProtocolComposableSchema(frozen)?.safeParse({ authority: 'first' }).success).toBe(true);
+      raw.properties.authority.const = 'replacement';
+      const changed = rehydrateCanonicalProtocolComposableSchema(frozen);
+      expect(changed?.safeParse({ authority: 'first' }).success).toBe(false);
+      expect(changed?.safeParse({ authority: 'replacement' }).success).toBe(true);
+      expect(parses.mock.calls.length).toBeGreaterThan(0);
+      const invalid = cloneStrictPluginJsonValue({ type: 'unsupported' }, 'schema');
+      if (!invalid || typeof invalid !== 'object' || Array.isArray(invalid)) throw new Error('Expected owned invalid schema');
+      parses.mockClear();
+      expect(rehydrateCanonicalProtocolComposableSchema(invalid)).toBeNull();
+      expect(parses.mock.calls.length).toBeGreaterThan(0);
+      expect(first?.safeParse({ authority: 'first' }).success).toBe(true);
+    } finally { parses.mockRestore(); }
+  });
   it('reuses executable semantics for unchanged normalized schemas without retaining mutable input semantics', () => {
     const mutable = JSON.parse(JSON.stringify(defineProtocolObject({
       authority: defineProtocolLiteral('first'),

@@ -25,6 +25,7 @@ import type { PluginActionContributionV2, PluginCollectionContractRefV1 } from '
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginDeclaredUiEntriesV1Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { projectPluginPortableUiDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
+import { preparePluginContributionPointDeclarationsV1 } from '@happier-dev/protocol/plugins/contributions/targeted';
 import { samePluginUiMaterializationFacts, normalizePluginInstalledUiDeclarations, type PluginUiActionProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { preparePluginUiProjectionOrigins } from '@/sync/domains/plugins/ui/projectionOrigins';
 import { projectPluginRegistrySourceDeclarationV1 } from '@happier-dev/protocol/registries';
@@ -1255,7 +1256,8 @@ function prepareBundledUiDeclarations(bundles: readonly PluginHostBundledUiDecla
         const { normalizedManifest: _manifest, entriesById: _entries, artifactGraphs: _graphs, ...declaration } = bundle;
         const parsed = PluginPortableReleaseManifestV1Schema.safeParse(bundle.normalizedManifest);
         const manifest = parsed.success && parsed.data.id === bundle.pluginId && parsed.data.version === bundle.pluginVersion
-            ? freezeDeepDeclaration(parsed.data) : null;
+            ? freezeDeepDeclaration({ ...parsed.data,
+                contributes: preparePluginContributionPointDeclarationsV1(parsed.data.contributes) }) : null;
         const artifactGraphs = Object.freeze((bundle.artifactGraphs ?? []).map(graph =>
             freezeDeepDeclaration(PluginUiArtifactsManifestEntryV2Schema.parse(graph))));
         const entriesById = freezeDeepDeclaration(PluginDeclaredUiEntriesV1Schema.parse(bundle.entriesById));

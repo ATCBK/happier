@@ -3,6 +3,7 @@ import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { ManagedResourceDependencyV1Schema } from '../../machines/managed/managedDependencyV1.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
+import { preparePluginContributionPointDeclarationsV1 } from '../contributions/targetedContributions.js';
 
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { SERVER_IDENTITY_ID_PATTERN } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
@@ -205,9 +206,12 @@ function deepFreezeReleaseFactValue<T>(value: T): T {
  * caller or registry reader can mutate a later canonical signing payload.
  */
 function snapshotPluginReleaseFactsV1(value: PluginReleaseFactsV1): PluginReleaseFactsV1 {
-  return deepFreezeReleaseFactValue(PluginReleaseFactsV1Schema.parse(
+  const parsed = PluginReleaseFactsV1Schema.parse(
     cloneReleaseFactValue(value),
-  ));
+  );
+  return deepFreezeReleaseFactValue({ ...parsed, normalizedManifest: { ...parsed.normalizedManifest,
+    contributes: preparePluginContributionPointDeclarationsV1(parsed.normalizedManifest.contributes),
+  } });
 }
 
 /**

@@ -7,6 +7,7 @@ import {
 } from '../actions/vocabulary.js';
 import {
   rehydrateCanonicalProtocolComposableSchema,
+  cloneStrictPluginJsonValue,
   type ProtocolComposableSchema,
   type ProtocolJsonValue,
 } from '../actions/protocolComposableSchema.js';
@@ -24,7 +25,7 @@ import {
   PluginUiTargetedContributionSurfacePresentationV1Schema,
   type PluginUiTargetedContributionSurfacePresentationV1,
 } from '../ui/targetedContributions.js';
-import { PluginJsonSchemaV2Schema, PluginJsonValueV2Schema } from './publicTypes.js';
+import { PluginJsonSchemaV2Schema, PluginJsonValueV2Schema, type PluginJsonSchemaV2 } from './publicTypes.js';
 import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 const TARGETED_CONTRIBUTION_MAX_ROLES_PER_PROTOCOL = 16;
@@ -217,6 +218,42 @@ export const PluginContributionPointV1Schema = lazyZodSchema(() => z.strictObjec
   });
 })));
 export type PluginContributionPointV1 = z.infer<typeof PluginContributionPointV1Schema>;
+
+/** Prepare exact schema bytes at declaration acquisition, never an admission decision. */
+export function preparePluginContributionPointDeclarationsV1<T extends Readonly<{
+  pluginContributionPoints: readonly PluginContributionPointV1[];
+}>>(contributes: T): T {
+  if (contributes.pluginContributionPoints.length === 0) return contributes;
+  const prepareSchema = (schema: PluginJsonSchemaV2): PluginJsonSchemaV2 => {
+    // The strict clone preserves this already schema-parsed JSON shape and owns
+    // its immutable identity; the existing decoder still validates new input.
+    let owned: PluginJsonSchemaV2;
+    try {
+      owned = cloneStrictPluginJsonValue(schema, 'schema') as PluginJsonSchemaV2;
+    } catch {
+      // The decoder owns point-local refusal. Preparation must not reject an
+      // otherwise admitted release or its unrelated contribution points.
+      return schema;
+    }
+    rehydrateCanonicalProtocolComposableSchema(owned);
+    return owned;
+  };
+  return { ...contributes, pluginContributionPoints: contributes.pluginContributionPoints.map(point => ({
+    ...point,
+    protocols: point.protocols.map(protocol => ({
+      ...protocol,
+      ...(protocol.descriptor === undefined ? {} : { descriptor: prepareSchema(protocol.descriptor) }),
+      operations: Object.fromEntries(Object.entries(protocol.operations).map(([role, operation]) => [role, {
+        ...operation,
+        input: operation.input.kind === 'protocolDefined'
+          ? { ...operation.input, schema: prepareSchema(operation.input.schema) } : operation.input,
+        resultSchema: prepareSchema(operation.resultSchema),
+      }])),
+      ...(protocol.surfaces === undefined ? {} : { surfaces: Object.fromEntries(Object.entries(protocol.surfaces)
+        .map(([role, surface]) => [role, { ...surface, inputSchema: prepareSchema(surface.inputSchema) }])) }),
+    })),
+  })) };
+}
 
 export const PluginTargetedContributionTargetV1Schema = lazyZodSchema(() => z.strictObject({
   pluginId: asProtocolZod(PluginIdSchema),

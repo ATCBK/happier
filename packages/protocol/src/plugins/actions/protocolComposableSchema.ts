@@ -115,6 +115,9 @@ export function normalizePluginJsonSchema(schema: object): PluginJsonSchemaV2 {
   } catch (error) {
     throw invalidSchema(error instanceof Error ? error.message : 'schema is not strict JSON');
   }
+  // Only this strict-JSON owner's immutable graph can reuse an earlier successful
+  // validation. Object.freeze or a copied caller object does not establish it.
+  if (previous && normalized === schema) return previous;
   const cloned = normalized as Readonly<Record<string, unknown>>;
   if (cloned.$schema !== undefined) {
     if (typeof cloned.$schema !== 'string' || !ACCEPTED_PLUGIN_JSON_SCHEMA_DIALECTS.has(cloned.$schema)) {

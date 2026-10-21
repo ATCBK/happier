@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
+import { defineProtocolObject, defineProtocolString } from '../actions/protocolComposableSchema.js';
+import { preparePluginContributionPointDeclarationsV1, rehydratePluginContributionPointSemanticsV1 } from '../contributions/targetedContributions.js';
 import * as availability from './index.js';
 import { PluginReleaseRefV1Schema as PluginReleaseRefV1NeutralSchema } from './releaseRefV1.js';
 import {
@@ -48,6 +50,55 @@ function packageAssetArchive(resources: readonly Record<string, unknown>[] = [])
 }
 
 describe('Plugin Account availability v1', () => {
+  it('prepares exact declaration bytes without rejecting an Account release for unsupported point semantics', () => {
+    const schemas = [defineProtocolObject({ id: defineProtocolString() }, { policy: 'closed' }).jsonSchema,
+      { not: { type: 'null' } }, { $ref: '#/$defs/missing' }, { type: 'string', enum: undefined }];
+    const parsed = PluginReleaseFactsV1Schema.parse({
+      ref: { pluginId: 'com.acme.fixture', version: '1.2.3' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+      normalizedManifest: manifest({ contributes: { pluginContributionPoints: schemas.map((inputSchema, index) => ({
+        id: `point-${index}`, protocols: [{ id: 'detail', version: 1, operations: {},
+          surfaces: { detail: { required: true, presentation: 'content', inputSchema } } }],
+      })) } }), collectionContracts: [], uiSlots: [], packageAssetArchive: packageAssetArchive(),
+    });
+    expect(rehydratePluginContributionPointSemanticsV1(parsed.normalizedManifest.contributes
+      .pluginContributionPoints[3]!.protocols[0]!)).toBeNull();
+    const normalized = normalizePluginReleaseFactsV1(parsed);
+    expect(JSON.stringify(normalized.normalizedManifest)).toBe(JSON.stringify(parsed.normalizedManifest));
+    const custody = (declaration: typeof normalized.normalizedManifest) => availability.computePluginAccountBundledCustodyV1({
+      packageName: '@acme/fixture', manifest: declaration, artifacts: [],
+    });
+    const strictDeclaration = (declaration: typeof normalized.normalizedManifest) => ({ ...declaration,
+      contributes: { ...declaration.contributes, pluginContributionPoints: declaration.contributes.pluginContributionPoints.slice(0, 3) },
+    });
+    expect(custody(strictDeclaration(normalized.normalizedManifest))).toEqual(custody(strictDeclaration(parsed.normalizedManifest)));
+    // Raw non-JSON data was never valid bundled signing input. Preparation
+    // preserves that refusal while Account release selection stays point-local.
+    expect(() => custody(parsed.normalizedManifest)).toThrow(/strict JSON/u);
+    expect(() => custody(normalized.normalizedManifest)).toThrow(/strict JSON/u);
+    const semantics = normalized.normalizedManifest.contributes.pluginContributionPoints.map(point =>
+      rehydratePluginContributionPointSemanticsV1(point.protocols[0]!));
+    expect(semantics[0]).not.toBeNull();
+    expect(semantics.slice(1)).toEqual([null, null, null]);
+    const intentRead = availability.PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+      availabilityCursor: 1, hostingCapability: { enabled: false }, release: normalized, uiArtifacts: [], packageAssets: [],
+      intent: { pluginId: parsed.ref.pluginId, desiredVersion: parsed.ref.version, enabled: true,
+        offlineUiHosting: 'disabled', writableCollections: [], revision: 'one' },
+    });
+    expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: parsed.ref.pluginId, intentRead }))
+      .toMatchObject({ kind: 'available', manifest: normalized.normalizedManifest });
+    const rawProtocol = parsed.normalizedManifest.contributes.pluginContributionPoints[3]!.protocols[0]!;
+    const rawSchema = rawProtocol.surfaces!.detail!.inputSchema;
+    const prepared = preparePluginContributionPointDeclarationsV1(parsed.normalizedManifest.contributes);
+    expect(prepared.pluginContributionPoints[3]!.protocols[0]!.surfaces!.detail!.inputSchema).toBe(rawSchema);
+    expect(Object.keys(normalized.normalizedManifest.contributes.pluginContributionPoints[3]!.protocols[0]!
+      .surfaces!.detail!.inputSchema)).toEqual(Object.keys(rawSchema));
+    expect(rehydratePluginContributionPointSemanticsV1(rawProtocol)).toBeNull();
+    expect(Reflect.deleteProperty(rawSchema, 'enum')).toBe(true);
+    Object.assign(rawSchema, schemas[0]);
+    expect(rehydratePluginContributionPointSemanticsV1(rawProtocol)?.surfaces[0]!.inputSchema.safeParse({ id: 'repaired' }).success).toBe(true);
+    expect(rehydratePluginContributionPointSemanticsV1(normalized.normalizedManifest.contributes
+      .pluginContributionPoints[3]!.protocols[0]!)).toBeNull();
+  });
   it('binds bundled Account custody to normalized declaration and artifact content', () => {
     const declaration = availability.PluginPortableReleaseManifestV1Schema.parse(manifest());
     const input = { packageName: '@acme/fixture', manifest: declaration, artifacts: [{ artifactId: 'portable', digest: `sha256:${'a'.repeat(64)}` as const }] };
