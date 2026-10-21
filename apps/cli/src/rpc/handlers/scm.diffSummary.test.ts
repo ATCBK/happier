@@ -15,6 +15,7 @@ describe('SCM diff-summary RPC admission', () => {
         const handlers = new Map<string, RpcHandler>();
         registerScmHandlers({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, '/workspace');
         for (const [method, request] of [
+            [RPC_METHODS.SCM_BLAME_FILE, { cwd: '/workspace', path: 'a.ts' }],
             ['scm.diffSummary.result.list', {}],
             ['scm.diffSummary.result.clear', { results: [] }],
             ['scm.diffSummary.result.read', { cwd: '/workspace', resultId: 'saved' }],

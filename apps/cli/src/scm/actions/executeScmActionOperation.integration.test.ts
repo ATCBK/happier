@@ -19,6 +19,7 @@ import { createGitScmBackendRuntimeRegistration } from '../../../../../packages/
 import { createScmHostingProviderRuntimeServicesForTest } from '../../../../../packages/plugins/scm-git/src/testkit/scmRuntime.test-support';
 import { createBareGitRemoteFixture, createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
 import { executeScmActionOperation } from './executeScmActionOperation';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 
 describe('SCM Action execution at the Git backend', () => {
   const registration = createGitScmBackendRuntimeRegistration();
@@ -88,7 +89,11 @@ describe('SCM Action execution at the Git backend', () => {
     repositories.push(fixture.rootPath);
     await writeFile(join(fixture.rootPath, fixture.trackedPath), 'uncommitted line\n');
     const handlers = new Map<string, RpcHandler>();
-    registerScmHandlers({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, fixture.rootPath, { registry });
+    const executor = createActionExecutor({ ...createCliActionDeps({ token: 'blame-ingress-token', sessionId: '', mode: 'plain', ctx: null }),
+      scmActionExecute: async ({ actionId, input }) => executeScmActionOperation({ actionId, input, registry, workingDirectory: fixture.rootPath }),
+    });
+    registerScmHandlers({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, fixture.rootPath,
+      { registry, machineId: 'blame-machine', actionExecutor: executor });
     const handler = handlers.get('scm.blame.file');
     expect(handler, 'Blame RPC must reach the canonical SCM Action dispatcher').toBeTypeOf('function');
     const input = { cwd: fixture.rootPath, path: fixture.trackedPath };
@@ -96,7 +101,7 @@ describe('SCM Action execution at the Git backend', () => {
     expect(action).toMatchObject({ success: true, ranges: [{ startLine: 1, lineCount: 1, commitIndex: null }], commits: [] });
     expect(await handler!(input)).toEqual(action);
     expect(await handler!({ ...input, expectedHash: '0'.repeat(64) })).toMatchObject({ success: false, errorCode: 'stale_file' });
-    expect(await handler!({ ...input, unknownAuthority: true })).toMatchObject({ success: false, errorCode: 'INVALID_REQUEST' });
+    expect(await handler!({ ...input, unknownAuthority: true })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
     const registered = createGitScmBackendRuntimeRegistration();
     const noBlameRegistration = { ...registered,
       handlers: { ...registered.handlers, read: { ...registered.handlers.read, blameFile: undefined } },

@@ -22,6 +22,7 @@ import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { ScmHostingRepositoryGetRequestV1Schema } from '@happier-dev/protocol/scm/repositoryClone';
+import * as machineRpc from '@/session/transport/rpc/machineRpc';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -137,6 +138,46 @@ describe('Session-backed SCM owner workspace', () => {
 });
 
 describe('exact-machine SCM Action targeting', () => {
+  it('reads blame at the installed native SCM owner without recursively invoking its own RPC', async () => {
+    await withTempDir('scm-blame-native-home-', async home => {
+      const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
+      const fixture = createLocalScmRepositoryFixture({ executable: 'git', repoMode: '.git', prefix: 'scm-native-blame-' });
+      let admitted: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+      try {
+        env.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: 'blame-native-home' });
+        reloadConfiguration();
+        await updateSettings(settings => ({ ...settings, machineIdByServerId: { 'blame-native-home': 'machine' } }));
+        admitted = await createAdmittedPluginRuntimeFixture({ happyHomeDir: home, controller: pluginReloadController,
+          runtimeOptions: { pluginIds: ['happier.scm.backend.git'] } });
+        await writeFile(join(fixture.rootPath, fixture.trackedPath), 'native uncommitted line\n');
+        // Network is the boundary. A received Action must not call that same
+        // Machine RPC again; the installed Git contribution reads real bytes.
+        const network = vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async () => {
+          throw new Error('Recursive native SCM RPC');
+        });
+        const token = 'blame-native-requester';
+        const executor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
+          serverId: configuration.activeServerId, serverHttpBaseUrl: configuration.serverUrl,
+          sessionId: '', mode: 'plain', ctx: null,
+          scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [fixture.rootPath] } }));
+        const context = { surface: 'rpc' as const, authority: 'account_automation' as const,
+          serverId: configuration.activeServerId, externalActionTarget: { kind: 'machine' as const, machineId: 'machine' } };
+        const request = { cwd: fixture.rootPath, path: fixture.trackedPath };
+        expect(await executor.execute('scm.blame.get', request, context)).toMatchObject({ ok: true, result: {
+          success: true, commits: [], ranges: [{ startLine: 1, lineCount: 1, commitIndex: null }],
+        } });
+        expect(await executor.execute('scm.blame.get', { ...request, expectedHash: '0'.repeat(64) }, context))
+          .toMatchObject({ ok: true, result: { success: false, errorCode: 'stale_file' } });
+        expect(await executor.execute('scm.blame.get', request, { ...context, serverId: 'srv_foreign_home' }))
+          .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
+        expect(network).not.toHaveBeenCalled();
+      } finally {
+        await admitted?.dispose(); env.restore(); reloadConfiguration();
+        await rm(fixture.rootPath, { recursive: true, force: true });
+      }
+    });
+  });
+
   it.each(['accessible', 'denied', 'foreignProof'] as const)('checks authenticated Session access for local machine comparison capture (%s)', async access => {
     await withTempDir('scm-machine-session-home-', async home => {
       const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);

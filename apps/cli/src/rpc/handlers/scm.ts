@@ -80,7 +80,7 @@ import type {
     ScmWorktreeRemoveResponse,
 } from '@happier-dev/protocol';
 import type { ScmCommitUndoLastRequest, ScmCommitUndoLastResponse, ScmConflictAcceptSideRequest, ScmConflictMarkResolvedRequest } from '@happier-dev/protocol/scm';
-import type { ScmBlameFileRequest, ScmBlameFileResponse, ScmFileAtRevisionRequest, ScmFileReadResponse } from '@happier-dev/protocol/scm';
+import type { ScmFileAtRevisionRequest, ScmFileReadResponse } from '@happier-dev/protocol/scm';
 import { SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol/scm/operationError';
 import { ScmLogListRequestSchema } from '@happier-dev/protocol/scm';
 import { ScmHistoryEntriesRequestSchema, type ScmHistoryEntriesRequest, type ScmHistoryEntriesResponse } from '@happier-dev/protocol/scm/entriesHistoryV1';
@@ -188,7 +188,7 @@ export function registerScmHandlers(
     };
     registerActionSpecRpcHandlers({
         rpcHandlerManager: scopedRegistrar(false),
-        actionIds: ['scm.diffSummary.capture', 'scm.diffSummary.generate', 'scm.diffSummary.draftPullRequest',
+        actionIds: ['scm.blame.get', 'scm.diffSummary.capture', 'scm.diffSummary.generate', 'scm.diffSummary.draftPullRequest',
             'scm.diffSummary.result.list', 'scm.diffSummary.result.clear',
             'scm.diffSummary.result.read', 'scm.diffSummary.result.edit',
             'scm.diffSummary.result.undo', 'scm.diffSummary.result.delete',
@@ -340,13 +340,6 @@ export function registerScmHandlers(
             ...routeBase,
             rpcCompatibility: true,
         }) as ScmDiffFileResponse,
-    );
-
-    scmRpcHandlerManager.registerHandler<ScmBlameFileRequest, ScmBlameFileResponse>(
-        RPC_METHODS.SCM_BLAME_FILE,
-        async (request) => await executeScmActionOperation({
-            actionId: 'scm.blame.get', input: request, ...routeBase, rpcCompatibility: true,
-        }) as ScmBlameFileResponse,
     );
 
     scmRpcHandlerManager.registerHandler<ScmDiffCommitRequest, ScmDiffCommitResponse>(

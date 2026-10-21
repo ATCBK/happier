@@ -10,6 +10,7 @@ import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScop
 import { deriveFileBlameRuns, type FileBlameRun, type FileBlameSession } from '../derivation/fileBlameRuns';
 import { deriveLatestTurnScopedChangeSet } from '../derivation/deriveLatestTurnScopedChangeSet';
 import { useDerivedSessionChangeSet } from './useDerivedSessionChangeSet';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 
 export type FileBlameScope = WorkspaceScopeBase & Readonly<{
     accountId: string;
@@ -21,6 +22,8 @@ export type UseFileBlameInput = Readonly<{
     content: Readonly<{ text: string; hash: string }> | null;
     session?: FileBlameSession | null;
     enabled: boolean;
+    /** Admit a new read only on the active page; an existing approval retains its read intent. */
+    active?: boolean;
     readBlame: boolean;
     /** Canonical SCM refresh completion; HEAD can change while file bytes stay identical. */
     revision?: string | number | null;
@@ -41,6 +44,7 @@ export type UseFileBlameResult = Readonly<{
 
 type BlameSnapshot = Readonly<{ key: string; resourceKey: string; response: ScmBlameFileResponse; observedAtMs: number }>;
 const NO_RUNS: readonly FileBlameRun[] = [];
+const retainedResultDeliveredByInvocation = () => {};
 
 export function useFileBlame(input: UseFileBlameInput): UseFileBlameResult {
     const { scope, content } = input;
@@ -60,29 +64,41 @@ export function useFileBlame(input: UseFileBlameInput): UseFileBlameResult {
     const accountId = scope?.accountId;
     const path = input.path;
     const hash = content?.hash;
+    const pageActive = input.active !== false;
+    const invocation = React.useRef<Readonly<{ key: string; controller: AbortController }> | null>(null);
+    const approval = useActionApprovalContinuation({ scopeKey: key ?? 'blame-disabled', serverId: serverId ?? '',
+        onExecuted: retainedResultDeliveredByInvocation, openOnRequest: true });
+    const requestApproval = React.useRef(approval.requestApproval);
+    requestApproval.current = approval.requestApproval;
 
+    // Inbox navigation retains this File page but makes it inactive. Only a
+    // changed read intent or unmount retires its controller, not that navigation.
     React.useEffect(() => {
-        if (!key || !resourceKey || !machineId || !hash) return;
+        return () => {
+            if (invocation.current?.key !== key) return;
+            invocation.current.controller.abort();
+            invocation.current = null;
+        };
+    }, [key]);
+    React.useEffect(() => {
+        if (!pageActive || !key || !resourceKey || !machineId || !hash || invocation.current?.key === key) return;
         const controller = new AbortController();
-        let current = true;
+        invocation.current = { key, controller };
         void machineScmBlameFile(machineId, { cwd: rootPath, path, expectedHash: hash }, {
             serverId, accountId, signal: controller.signal,
+            onApprovalPending: registration => { if (!controller.signal.aborted) requestApproval.current(registration); },
         }).then((response) => {
-            if (current) setSnapshot({ key, resourceKey, response, observedAtMs: Date.now() });
+            if (!controller.signal.aborted) setSnapshot({ key, resourceKey, response, observedAtMs: Date.now() });
         }, (error: unknown) => {
-            if (!current || controller.signal.aborted) return;
+            if (controller.signal.aborted) return;
             setSnapshot({ key, resourceKey, observedAtMs: Date.now(), response: {
                 success: false, errorCode: SCM_OPERATION_ERROR_CODES.COMMAND_FAILED, error: error instanceof Error ? error.message : String(error),
             } });
         });
-        return () => {
-            current = false;
-            controller.abort();
-        };
-    }, [key, resourceKey, machineId, rootPath, path, hash, serverId, accountId]);
+    }, [pageActive, key, resourceKey, machineId, rootPath, path, hash, serverId, accountId]);
 
     // Machine scope and Session evidence must describe the same Home. Project pages read no turns.
-    const session = active && input.session && input.session.address.serverId === serverId ? input.session : null;
+    const session = active && pageActive && input.session && input.session.address.serverId === serverId ? input.session : null;
     const derived = useDerivedSessionChangeSet(session?.address ?? null, rootPath);
     const turns = React.useMemo(() => {
         if (!session) return [];
@@ -135,7 +151,7 @@ export function useFileBlame(input: UseFileBlameInput): UseFileBlameResult {
         });
     }, [currentSnapshot, content?.text, noHistory, turns, input.labels.uncommitted]);
     return {
-        runs, loading: key !== null && currentSnapshot?.key !== key,
+        runs, loading: key !== null && currentSnapshot?.key !== key && (pageActive || invocation.current?.key === key),
         error: response && !response.success && !noHistory ? response.error ?? null : null,
         errorCode, stale, noHistory, refresh,
     };

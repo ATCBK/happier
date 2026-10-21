@@ -447,6 +447,7 @@ export type FileBlameRegionInput = Readonly<{
   path: string;
   content: Readonly<{ text: string; hash: string }> | null;
   enabled: boolean;
+  active?: boolean;
   readBlame: boolean;
   revision?: UseFileBlameInput['revision'];
   refreshContent?: UseFileBlameInput['refreshContent'];
@@ -508,6 +509,7 @@ export function useFileBlameRegion(
     path: input.path,
     content: input.content,
     enabled: input.enabled,
+    active: input.active,
     readBlame: input.readBlame,
     session,
     labels,
