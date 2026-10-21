@@ -5,6 +5,7 @@ import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx
 import { buildPluginDomainAccountChangeEntityId } from '@happier-dev/protocol/changes/pluginDomain';
 
 import { enqueueAccountChangePublication, markAccountChanged } from "@/app/changes/markAccountChanged";
+import { withdrawPublicProfileInTx } from '@/app/account/profile/publicProfileWithdrawal';
 import { readMachineAccessKeySessionBindingsInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
 import { eventRouter } from "@/app/events/eventRouter";
 import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
@@ -774,6 +775,8 @@ export async function deleteAccountForErasure(input: Readonly<{
                 ? { status: "rejected" as const, code: "home_owner_transfer_required" as const }
                 : { status: "already-deleted" as const };
         }
+        // Public disclosure retires with access, not with retryable physical IO.
+        await withdrawPublicProfileInTx(tx, input.accountId);
         // An administrator's erasure is audited when access is revoked and again when the
         // Account is gone, so an erasure that stops in between still has its row (§3.9).
         if (actor.kind === "home_administration" && retired.status === "applied") {
