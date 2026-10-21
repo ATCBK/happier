@@ -13,7 +13,9 @@ import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
 import type { CodeLineDiagnosticRange } from '@/components/ui/code/view/CodeLineRow';
 import type { DiffViewerHunks } from '@/components/ui/code/diff/diffViewerTypes';
 import type { ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences';
-import { MarkdownView, type MarkdownSourceRange, type MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
+import type { MarkdownSourceRange, MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
+import { WorkspaceMarkdownView } from '@/components/markdown/WorkspaceMarkdownView';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
@@ -69,6 +71,7 @@ type FileContentPanelProps = {
     theme: any;
     displayMode: FileDisplayMode;
     sessionId: string;
+    workspaceScope?: WorkspaceScopeBase | null;
     filePath: string;
     diffContent: string | null;
     /** Changes mode: per-change rows and the current change from the File page review owner. */
@@ -209,6 +212,7 @@ function FileContentPanelInner({
     theme,
     displayMode,
     sessionId: _sessionId,
+    workspaceScope,
     filePath,
     diffContent,
     hunks,
@@ -708,7 +712,9 @@ function FileContentPanelInner({
                                 paddingBottom: markdownPreviewBottomPadding,
                             }}
                         >
-                            <MarkdownView
+                            <WorkspaceMarkdownView
+                                scope={workspaceScope}
+                                filePath={filePath}
                                 testID="file-markdown-preview"
                                 markdown={fileContent}
                                 sourceRangeLayoutObserver={Platform.OS === 'web' || find?.open ? markdownReading.observer : undefined}

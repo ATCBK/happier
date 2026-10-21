@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 
-import { MarkdownView } from '@/components/markdown/MarkdownView';
+import { WorkspaceMarkdownView } from '@/components/markdown/WorkspaceMarkdownView';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -62,7 +62,7 @@ export const CodeReadmeCard = React.memo(function CodeReadmeCard(props: Readonly
             </View>
             <View style={styles.body}>
                 {file.kind === 'ready' ? (
-                    <MarkdownView testID={`${testID}-markdown`} markdown={file.text} renderCacheKey={props.path} />
+                    <WorkspaceMarkdownView scope={props.scope} filePath={props.path} testID={`${testID}-markdown`} markdown={file.text} renderCacheKey={props.path} />
                 ) : file.kind === 'error' ? (
                     // The same one-line state and Retry as the Overview README widget.
                     <SurfaceStateCard testID={`${testID}-error`} size="line" kind="error" title={t('projects.code.readUnavailable')}

@@ -30,7 +30,7 @@ import {
     type HappierSurfaceProps,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { MarkdownView } from '@/components/markdown/MarkdownView';
+import { PluginUiMarkdown, type PluginMarkdownWorkspace } from './PluginUiMarkdown';
 import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
 import { QRCode } from '@/components/qr/QRCode';
 import { DiffViewer } from '@/components/ui/code/diff/DiffViewer';
@@ -174,6 +174,8 @@ export type PluginDestinationRowInput = NavigationListDestination & Readonly<{
 export type PluginUiPrivatePresentationHostOptions = Readonly<{
     /** Canonical mounted plugin identity, supplied by the physical host. */
     pluginId?: string;
+    /** Workspace image bytes stay bound to the physical mount's already admitted target. */
+    markdownWorkspace?: PluginMarkdownWorkspace;
     renderDragSource?: (input: DragSourceProps) => React.ReactNode;
     renderDropTarget?: (input: DropTargetProps) => React.ReactNode;
     renderLiveStream?: NonNullable<PluginUiPrivatePresentationHost['renderLiveStream']>;
@@ -390,7 +392,7 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
     renderMaterialSurface: renderThemeMaterialSurface,
     renderMarkdown(input: HappierMarkdownRenderInput) {
         // Plugin Markdown sits inside interface chrome (a detail step, a page section): the document scale.
-        return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} inlineReferences={input.inlineReferences} images={input.images} profile="document" />;
+        return <PluginUiMarkdown input={input} />;
     },
     renderCodeBlock(input: Readonly<{ code: string; language?: string; selectable: boolean; testID?: string }>) {
         return (
@@ -656,6 +658,9 @@ export function createPluginUiPrivatePresentationHost(
     const pluginId = options?.pluginId;
     return Object.freeze({
         ...presentationRenderers,
+        ...(options?.markdownWorkspace ? { renderMarkdown(input: HappierMarkdownRenderInput) {
+            return <PluginUiMarkdown input={input} workspace={options.markdownWorkspace} />;
+        } } : {}),
         ...(pluginId === undefined ? {} : { panelSizing: {
             useWidth(resizeKey: string) {
                 return useCollectionRailWidth(`plugin:${JSON.stringify([pluginId, resizeKey])}`);

@@ -4,8 +4,20 @@ import { act, renderHook } from '@/dev/testkit';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { loadLocalSettings } from '@/sync/domains/state/settingsPersistence';
 import { useWorkspaceMarkdownImages } from './useWorkspaceMarkdownImages';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
 describe('workspace Markdown image consent wiring', () => {
+    it('keeps images opted out until the document has an explicit Machine context', async () => {
+        const hook = await renderHook((scope: WorkspaceScopeBase | null) => useWorkspaceMarkdownImages({ scope, filePath: 'docs/README.md' }), { initialProps: null });
+        try {
+            expect(hook.getCurrent()).toEqual({});
+            await hook.rerender({ serverId: 'markdown-home', machineId: 'markdown-machine', rootPath: '/repo' });
+            expect(hook.getCurrent().images?.resolve('./shot.png')).toEqual({ kind: 'workspace', path: 'docs/shot.png' });
+            await hook.rerender(null);
+            expect(hook.getCurrent()).toEqual({});
+        } finally { await hook.unmount(); }
+    });
+
     it('writes only on explicit Load, persists by workspace/file, and preserves another document choice', async () => {
         const state = getStorage().getState();
         const previous = state.localSettings.remoteImageConsentV1;

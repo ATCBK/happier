@@ -1664,6 +1664,10 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
             canonicalRenderIdentity.brand,
             {
                 pluginId: canonicalRenderIdentity.pluginId,
+                ...(canonicalAccountLifetime ? { markdownWorkspace: {
+                    target: canonicalRenderIdentity.target,
+                    serverId: canonicalAccountLifetime.scope.serverId,
+                } } : {}),
                 direction: environment.direction,
                 mediaStage,
                 renderLiveStream: (input) => <PluginLiveStreamViewer {...input} hostApi={props.hostApi}
@@ -1730,6 +1734,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
             props.focusEligible,
             canonicalRenderIdentity.brand,
             canonicalRenderIdentity.pluginId,
+            canonicalRenderIdentity.target,
             brandTargetPresentation?.fallbackBrandDisplayName,
             brandTargetPresentation?.machineId,
             brandTargetPresentation?.resolveBrandTarget,
