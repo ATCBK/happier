@@ -117,6 +117,7 @@ test('lead initialization owns the session before sending notes and retains it o
   const session = { id: leadSessionId, async send(message, options) {
     assert.equal(store.canOpenSession('salesperson', leadSessionId), true);
     assert.match(message, /Northstar|research team/);
+    assert.match(message, /dev\.leads-fixture\/actions\/record-analysis/);
     sendOptions.push(options);
     if (rejectSend) throw new Error('network_lost');
     store.apply('record_analysis', analysis, 'analysis-result', leadSessionId);
@@ -138,6 +139,23 @@ test('lead initialization owns the session before sending notes and retains it o
   assert.notEqual(sendOptions[0].requestId, creationInputs[0].options.requestId);
   assert.deepEqual(sendOptions[1], sendOptions[0]);
   await assert.rejects(createLeadChat({ happier, store, userId: 'other-salesperson', leadId: 'northstar' }), /lead_forbidden/);
+});
+
+test('an ambiguous initial send returns the retained Session for recovery', async () => {
+  const store = createFixtureStore();
+  const session = {
+    id: leadSessionId,
+    async send() {
+      return { status: 'outcomeUnknown', localId: 'first-turn' };
+    },
+  };
+  const happier = {
+    embed: { async createSession() { return session; } },
+    sessions: { get: () => session },
+  };
+
+  assert.equal(await createLeadChat({ happier, store, userId: 'salesperson', leadId: 'northstar' }), leadSessionId);
+  assert.equal(store.listLeads('salesperson')[0].sessionId, leadSessionId);
 });
 
 test('lead creation identity is stable for retries but fresh after fixture state restarts', async () => {

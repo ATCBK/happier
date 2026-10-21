@@ -79,10 +79,10 @@ export async function createLeadChat({ happier, store, userId, leadId }) {
     : await happier.embed.createSession({ title: lead.name }, { requestId: store.leadCreationRequestId(userId, lead.id) });
   store.attachLeadSession(userId, lead.id, session.id);
   const result = await session.send(
-    `Analyze this lead. Call the Leads fixture record-analysis Action with leadId=${lead.id}, score (0-100), summary and nextStep.\n${lead.notes}`,
+    `Analyze this lead. Call the dev.leads-fixture/actions/record-analysis Action with leadId=${lead.id}, score (0-100), summary and nextStep.\n${lead.notes}`,
     { requestId: `fixture-analysis-${userId}-${lead.id}` },
   );
-  if (result.status !== 'accepted' && result.status !== 'alreadyAccepted') {
+  if (result.status !== 'accepted' && result.status !== 'alreadyAccepted' && result.status !== 'outcomeUnknown') {
     throw new Error(`fixture_initial_input_${result.status}`);
   }
   return session.id;
