@@ -384,7 +384,7 @@ export type ScmActionExecute = (args: Readonly<{
    * second dispatcher, Session adapter, or execution-run service.
    */
   executeCanonicalAction: (
-    actionId: Extract<ActionId, 'execution.run.start' | 'execution.run.get' | 'execution.run.send' | 'execution.run.ensure' | 'session.message.send' | 'action.invoke'>,
+    actionId: Extract<ActionId, 'execution.run.start' | 'execution.run.get' | 'execution.run.send' | 'execution.run.ensure' | 'session.message.send' | 'action.invoke' | 'scm.pullRequest.openCompose'>,
     input: unknown,
     options?: Readonly<{ requiredContributedActionDangerLevel?: 'safe' }>,
   ) => Promise<ActionExecuteResult>;
