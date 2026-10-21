@@ -5,6 +5,6 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 const CanonicalMessageMetaSchema = createSessionMessageMetaSchema(z);
 
 // Shared message metadata schema
-export const MessageMetaSchema = createStoredReadSchema(CanonicalMessageMetaSchema);
+export const MessageMetaSchema: ReturnType<typeof createSessionMessageMetaSchema> = createStoredReadSchema(CanonicalMessageMetaSchema);
 
 export type MessageMeta = z.infer<typeof MessageMetaSchema>;
