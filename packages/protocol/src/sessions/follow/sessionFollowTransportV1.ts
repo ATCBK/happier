@@ -157,7 +157,7 @@ export const SessionFollowRunOccurrenceRoutesResponseV1Schema = lazyZodSchema(()
     personal: z.optional(z.strictObject({ policy: FollowPolicyV1Schema, alreadyRepresented: z.boolean() })),
     routes: z.array(z.strictObject({ ...runRouteFields,
       expectedTerminalEventId: z.nullable(z.string().check(z.minLength(1))) })) }).check(z.refine(value =>
-        ExecutionRunFollowOccurrenceV1Schema.safeParse({ original: value.original, event: value.event }).success)),
+    ExecutionRunFollowOccurrenceV1Schema.safeParse({ original: value.original, event: value.event }).success)),
   z.strictObject({ ok: z.literal(true), v: z.literal(1), original: WorkflowRunFollowOriginalV1Schema,
     event: WorkflowRunFollowEventV1Schema,
     personal: z.optional(z.strictObject({ policy: FollowPolicyV1Schema, alreadyRepresented: z.boolean() })),
