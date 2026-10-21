@@ -158,6 +158,14 @@ export function MediaViewerSpecimen() {
         onPress={() => stage.open(gallery, 3)}
         testID="dev-media-open-pdf"
       />
+      {/* MS1 failure: a picture whose read does not finish; the stage offers Retry (RFSM-02). */}
+      <RoundButton
+        size="small"
+        display="secondary"
+        title="Open a picture whose read fails"
+        onPress={() => stage.open([{ kind: 'image', title: 'harbour-at-dusk.jpg', source: uriSource('/dev-media/harbour-at-dusk.jpg') }], 0)}
+        testID="dev-media-open-failed"
+      />
 
       <Text variant="heading" style={{ color: theme.colors.text.primary }}>Image well · transparent, tiny, SVG</Text>
       <View style={[styles.page, { borderColor: theme.colors.border.default }]}>
