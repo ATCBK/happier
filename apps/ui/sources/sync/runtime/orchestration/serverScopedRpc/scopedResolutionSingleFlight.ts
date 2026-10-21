@@ -4,12 +4,63 @@ import { mergeAbortSignals, throwIfAborted } from '@/utils/runtime/abortSignals'
 export type ScopedReadOptions = Readonly<{
     signal?: AbortSignal;
     /** Opaque captured authorities stay identity-partitioned; proven neutral bindings use their key. */
-    scope?: object | string;
+    scope?: ReadPartitionScope;
     /** A required fresh witness cannot join an earlier ordinary acquisition. */
     fresh?: boolean;
 }>;
 
 type ReadScope = object | string;
+type ReadPartitionScope = ReadScope | readonly ReadScope[];
+
+export type ScopedPhysicalReadOptions = ScopedReadOptions & Readonly<{
+    /** Transfer prepared RPC custody synchronously, before dispatch or borrower retirement. */
+    onPhysicalAcquire?: (signal: AbortSignal) => (() => void | Promise<void>);
+}>;
+
+/** Ordered existing references partition pending work without assigning identities to them. */
+function createReadPartitions<T>() {
+    type Node = { children: Map<ReadScope, Node>; value?: T };
+    const root: Node = { children: new Map() };
+    const path = (scope: ReadPartitionScope): readonly ReadScope[] => Array.isArray(scope) ? scope : [scope];
+    const find = (scope: ReadPartitionScope, create: boolean) => {
+        let node = root;
+        for (const key of path(scope)) {
+            let child = node.children.get(key);
+            if (!child) {
+                if (!create) return undefined;
+                child = { children: new Map() };
+                node.children.set(key, child);
+            }
+            node = child;
+        }
+        return node;
+    };
+    const remove = (scope: ReadPartitionScope, expected?: T) => {
+        let node = root;
+        const ancestry: Array<{ parent: Node; key: ReadScope; child: Node }> = [];
+        for (const key of path(scope)) {
+            const child = node.children.get(key);
+            if (!child) return;
+            ancestry.push({ parent: node, key, child });
+            node = child;
+        }
+        if (expected !== undefined && node.value !== expected) return;
+        delete node.value;
+        if (expected === undefined) node.children.clear();
+        for (let index = ancestry.length - 1; index >= 0; index -= 1) {
+            const { parent, key, child } = ancestry[index]!;
+            if (child.value !== undefined || child.children.size > 0 || parent.children.get(key) !== child) break;
+            parent.children.delete(key);
+        }
+    };
+    return {
+        get: (scope: ReadPartitionScope) => find(scope, false)?.value,
+        set: (scope: ReadPartitionScope, value: T) => { find(scope, true)!.value = value; },
+        forget: (scope: ReadPartitionScope, value: T) => remove(scope, value),
+        invalidate: (scope: ReadPartitionScope) => remove(scope),
+        clear: () => { root.children.clear(); delete root.value; },
+    };
+}
 
 function abortReason(signal: AbortSignal): unknown {
     return signal.reason ?? Object.assign(new Error('Scoped read cancelled'), { name: 'AbortError' });
@@ -17,16 +68,16 @@ function abortReason(signal: AbortSignal): unknown {
 
 /** Pending work only: parsing, admission, retry cadence and retained data belong to domain owners. */
 export type ScopedResolutionSingleFlight<T> = Readonly<{
-    run: (key: string, resolve: (signal: AbortSignal) => Promise<T>, options?: ScopedReadOptions) => Promise<T>;
+    run: (key: string, resolve: (signal: AbortSignal) => Promise<T>, options?: ScopedPhysicalReadOptions) => Promise<T>;
     /** Forget joins after a write/wake without cancelling incumbent operations or their publication fences. */
-    invalidate: (scope?: ReadScope) => void;
+    invalidate: (scope?: ReadPartitionScope) => void;
     reset: () => void;
 }>;
 
 export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleFlight<T> {
     type Flight = { result: Promise<T>; abort: AbortController; waiters: number; settled: boolean };
     const defaultScope = {};
-    const partitions = new Map<ReadScope, Map<string, Flight>>();
+    const partitions = createReadPartitions<Map<string, Flight>>();
 
     return {
         async run(key, resolve, options = {}) {
@@ -42,14 +93,24 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
             const forget = (entry: Flight) => {
                 if (partition.get(key) !== entry) return;
                 partition.delete(key);
-                if (partition.size === 0 && partitions.get(scope) === partition) partitions.delete(scope);
+                if (partition.size === 0) partitions.forget(scope, partition);
             };
             if (!flight) {
                 const abort = new AbortController();
-                const result = Promise.resolve().then(() => {
+                let dispose: (() => void | Promise<void>) | undefined;
+                try {
+                    dispose = options.onPhysicalAcquire?.(abort.signal);
+                } catch (error) {
+                    if (partition.size === 0) partitions.forget(scope, partition);
+                    throw error;
+                }
+                const operation = Promise.resolve().then(() => {
                     throwIfAborted(abort.signal);
                     return resolve(abort.signal);
                 });
+                // Also disposes a selected capture when its final borrower
+                // leaves before the deferred resolver gets a chance to run.
+                const result = dispose ? operation.finally(dispose) : operation;
                 flight = { result, abort, waiters: 0, settled: false };
                 const created = flight;
                 partition.set(key, created);
@@ -90,7 +151,7 @@ export function createScopedResolutionSingleFlight<T>(): ScopedResolutionSingleF
             });
         },
         invalidate(scope = defaultScope) {
-            partitions.delete(scope);
+            partitions.invalidate(scope);
         },
         reset() {
             partitions.clear();
@@ -102,7 +163,7 @@ export type ScopedBatchResolutionSingleFlight<T> = Readonly<{
     run: (groupKey: string, ids: readonly string[],
         read: (ids: readonly string[], signal: AbortSignal) => Promise<ReadonlyMap<string, T>>,
         options?: ScopedReadOptions) => Promise<ReadonlyMap<string, T>>;
-    invalidate: (scope?: ReadScope) => void;
+    invalidate: (scope?: ReadPartitionScope) => void;
     reset: () => void;
 }>;
 
@@ -112,7 +173,7 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
     const defaultScope = {};
     type Item = { id: string; signal: AbortSignal; accept: (value: T) => void; reject: (error: unknown) => void };
     type Batch = { items: Item[]; read: Parameters<ScopedBatchResolutionSingleFlight<T>['run']>[2] };
-    const queues = new Map<ReadScope, Map<string, Batch>>();
+    const queues = createReadPartitions<Map<string, Batch>>();
 
     async function dispatch(batch: Batch) {
         const items = batch.items.filter(item => !item.signal.aborted);
@@ -159,7 +220,7 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
                             partition.set(groupKey, created);
                             queueMicrotask(() => {
                                 if (partition.get(groupKey) === created) partition.delete(groupKey);
-                                if (partition.size === 0 && queues.get(scope) === partition) queues.delete(scope);
+                                if (partition.size === 0) queues.forget(scope, partition);
                                 void dispatch(created);
                             });
                         }
@@ -178,7 +239,7 @@ export function createScopedBatchResolutionSingleFlight<T>(): ScopedBatchResolut
         },
         invalidate(scope = defaultScope) {
             reads.invalidate(scope);
-            queues.delete(scope);
+            queues.invalidate(scope);
         },
         reset() {
             reads.reset();

@@ -27,6 +27,8 @@ function machineRowTimeoutError() {
 type MachineInstallationTransportIdentity = Readonly<{
     installationId?: string | null;
     installationPublicKey?: string | null;
+    /** Existing retained key/access selection, not a new lifetime or an allow verdict. */
+    readScope?: object;
 }>;
 
 export type ScopedMachineTransport =
@@ -244,7 +246,7 @@ export async function resolveScopedMachineTransport(params: Readonly<{
         ...evidence.identity,
         isCurrent: () => isEvidenceCurrent() && localContext?.isCurrent() !== false,
     };
-    const installation = { installationId: evidence.machine.installationId ?? null,
+    const installation = { readScope: evidence.identity, installationId: evidence.machine.installationId ?? null,
         installationPublicKey: evidence.machine.installationPublicKey ?? null };
     if (resolution.status === 'legacy') return { mode: 'e2ee', dataKey: null, context, ...installation };
     return resolution.status === 'plain'

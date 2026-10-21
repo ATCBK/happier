@@ -91,6 +91,8 @@ import {
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { runAdmittedMachineRpcRead, type MachineRpcReadAdmission } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
 import { createSocketAccountEncryptionObservation, invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
 import { bindAccountEncryptionObservation, matchesAccountEncryptionObservationCredentials, type AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
 
@@ -703,9 +705,11 @@ class ApiSocket {
             signal?: AbortSignal;
             waitForResultOnCancel?: boolean;
             requestId?: string;
+            readAdmission?: MachineRpcReadAdmission;
         },
     ): Promise<R> {
         const releaseRequestLease = userRequestLeaseOwner.acquire();
+        let physicalReadOwnsCustody = false;
         try {
             if (options?.signal?.aborted) throw createSocketRpcAbortError();
             if (this.getSessionScopedTarget()) throw new Error('Machine RPC is unavailable to a Session-scoped viewer');
@@ -728,8 +732,35 @@ class ApiSocket {
             if (!usePlaintextParams && !machineEncryption) {
                 throw new Error(`Machine encryption not found for ${machineId}`);
             }
-            return await callSocketRpc<R>({
-                socket: this.requireRpcSocket(),
+            const socket = this.requireRpcSocket();
+            const config = this.config;
+            if (!config) throw createNotAuthenticatedError();
+            const controller = this.requestConfigurationAbortController;
+            const capturedToken = config.token;
+            const machineContext = capturedEncryption?.getMachineEncryptionContext(machineId) ?? capturedMachine ?? config;
+            const { readAdmission, ...rpcOptions } = options ?? {};
+            const assertCurrent = () => {
+                if (this.config !== config || config.token !== capturedToken || this.requestConfigurationAbortController !== controller || controller.signal.aborted
+                    || !isMachineCurrent()) throw new StaleServerGenerationError();
+            };
+            return await runAdmittedMachineRpcRead({
+                admission: readAdmission,
+                signal: options?.signal,
+                binding: {
+                    key: JSON.stringify([config.serverId, config.endpoint, config.runtimeOrigin ?? null, config.carrier ?? null,
+                        config.homeCarrier?.endpointId ?? null, config.generation,
+                        config.credentials ? resolveAuthCredentialsScopeKey({ ...config.credentials, token: config.token }) : config.token,
+                        usePlaintextParams ? 'plain' : 'e2ee', capturedMachine?.dataEncryptionKey ?? null,
+                        capturedMachine?.keyBasis?.dataEncryptionKey ?? null]),
+                    scope: [controller, machineContext],
+                    assertCurrent,
+                },
+                onPhysicalAcquire: () => {
+                    physicalReadOwnsCustody = true;
+                    return releaseRequestLease;
+                },
+                resolve: async sharedSignal => await callSocketRpc<R>({
+                socket,
                 randomBytes: getRandomBytes,
                 target: { kind: 'machine', id: machineId },
                 method,
@@ -737,17 +768,19 @@ class ApiSocket {
                 content: usePlaintextParams
                     ? { mode: 'plain' }
                     : { mode: 'e2ee', cipher: machineEncryption! },
-                ...options,
+                ...rpcOptions,
+                signal: sharedSignal,
                 onIssued: () => {
                     if (!isMachineCurrent()) throw new Error(`Machine encryption context changed for ${machineId}`);
                     options?.onIssued?.();
                 },
+                }),
             });
         } catch (error) {
             if (method === RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE) throw createPrivateContinuationTransportError(error);
             throw await this.coerceAckTimeoutAuthError(error);
         } finally {
-            releaseRequestLease();
+            if (!physicalReadOwnsCustody) releaseRequestLease();
         }
     }
 

@@ -154,6 +154,41 @@ describe('machineRpcWithServerScope signal (direct peer route)', () => {
         }
     });
 
+    it('shares an admitted active projection and retains its acknowledgement after the first borrower retires', async () => {
+        const { machineContributionRegistryProjectionDescribe } = await import('@/sync/ops/machineContributionRegistryProjection');
+        const { userRequestLeaseOwner } = await import('@/sync/runtime/connectivity/userRequestLease');
+        const reply = createDeferred<unknown>();
+        boundary.setRpcResponder(async () => await reply.promise);
+        const abort = new AbortController();
+        const input = { serverId: account!.home.id };
+        const beforeCredentialReads = boundary.credentialRequests.length;
+        const first = machineContributionRegistryProjectionDescribe('machine_1', { ...input, signal: abort.signal });
+        const survivor = machineContributionRegistryProjectionDescribe('machine_1', input);
+        const settled = Promise.allSettled([first, survivor]);
+        const routineTeardown = vi.fn();
+        try {
+            await vi.waitFor(() => expect(boundary.requests).toHaveLength(1));
+            abort.abort();
+            await expect(first).resolves.toEqual({ supported: false, reason: 'aborted' });
+            expect(userRequestLeaseOwner.deferRoutineTeardown(routineTeardown)).toBe(true);
+            expect(routineTeardown).not.toHaveBeenCalled();
+            reply.resolve({ protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {} } });
+            await expect(survivor).resolves.toMatchObject({ supported: true });
+            expect(boundary.requests).toHaveLength(1);
+            expect(boundary.requests[0]?.token).toBe(account!.credentials.token);
+            // The installed active socket admits this row locally; a scoped
+            // fallback would have to acquire saved credentials again.
+            expect(boundary.credentialRequests).toHaveLength(beforeCredentialReads);
+            expect(directRequests).toEqual([]);
+            expect(grantRequests).toEqual([]);
+            expect(routineTeardown).toHaveBeenCalledOnce();
+        } finally {
+            userRequestLeaseOwner.cancelDeferredRoutineTeardown();
+            reply.resolve(null);
+            await settled;
+        }
+    });
+
     it('cancels a queued preparation promptly without opening its predecessor dispatch fence', async () => {
         const routeReady = createDeferred<void>();
         prepareGrant = async () => { await routeReady.promise; };

@@ -50,6 +50,8 @@ import {
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
 import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
+import { runAdmittedMachineRpcRead } from './machineRpcReadAdmission';
 
 const SCOPED_MACHINE_RPC_SESSION_WRITE_METHODS = new Set<string>([
     RPC_METHODS.SPAWN_HAPPY_SESSION,
@@ -327,6 +329,7 @@ async function machineRpcWithServerTransport<R, A>(
                             onIssued: activeOnIssued,
                             ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
                             ...(params.signal ? { signal: params.signal } : {}),
+                            ...(params.readAdmission ? { readAdmission: params.readAdmission } : {}),
                         },
                     ),
                 );
@@ -356,7 +359,16 @@ async function machineRpcWithServerTransport<R, A>(
 
         const releaseRequestLease = userRequestLeaseOwner.acquire();
         let carrierCustodyTransferred = false;
+        let physicalReadOwnsCustody = false;
         const socketLifetime: { finished: boolean; client: ScopedSocketClient | null } = { finished: false, client: null };
+        const releaseCustody = async () => {
+            socketLifetime.finished = true;
+            try { socketLifetime.client?.disconnect(); }
+            finally {
+                try { if (!carrierCustodyTransferred) await context.release?.(); }
+                finally { releaseRequestLease(); }
+            }
+        };
         try {
             // Authentication/socket readiness does not depend on opening Machine content.
             // Both preparations consume the same caller deadline; no RPC is emitted until
@@ -477,7 +489,27 @@ async function machineRpcWithServerTransport<R, A>(
 
             const socket = await socketRead;
             throwIfMachineRpcAborted(params.method, params.signal);
-            return await runOperation(
+            return await runAdmittedMachineRpcRead({
+                admission: params.readAdmission,
+                signal: params.signal,
+                binding: {
+                    key: JSON.stringify([context.targetServerId, context.targetServerUrl, context.runtimeOrigin ?? null,
+                        context.carrier ?? null, context.homeCarrier?.endpointId ?? null,
+                        resolveAuthCredentialsScopeKey(credentials ?? { token: context.token }),
+                        context.readTransport?.key ?? null, machineTransport.mode,
+                        machineTransport.installationId ?? null, machineTransport.installationPublicKey ?? null]),
+                    scope: [machineTransport.readScope ?? machineTransport.context ?? context],
+                    assertCurrent: () => {
+                        if (!isMachineCurrent()) throw createRpcCallError({
+                            error: 'Machine encryption context changed before read admission', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE',
+                        });
+                    },
+                },
+                onPhysicalAcquire: () => {
+                    physicalReadOwnsCustody = true;
+                    return releaseCustody;
+                },
+                resolve: async sharedSignal => await runOperation(
                 'scoped',
                 async (timeoutMs) => {
                     try {
@@ -520,7 +552,7 @@ async function machineRpcWithServerTransport<R, A>(
                                 socketRpcAbortScope.issued = true;
                                 params.onDispatched?.();
                             },
-                            signal: params.signal,
+                            signal: sharedSignal,
                             ...(params.waitForResultOnCancel ? { waitForResultOnCancel: true } : {}),
                         });
                     } catch (error) {
@@ -537,18 +569,10 @@ async function machineRpcWithServerTransport<R, A>(
                         throw error;
                     }
                 },
-            );
+                ),
+            });
         } finally {
-            socketLifetime.finished = true;
-            try {
-                socketLifetime.client?.disconnect();
-            } finally {
-                try {
-                    if (!carrierCustodyTransferred) await context.release?.();
-                } finally {
-                    releaseRequestLease();
-                }
-            }
+            if (!physicalReadOwnsCustody) await releaseCustody();
         }
     };
 

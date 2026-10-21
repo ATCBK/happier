@@ -6,6 +6,7 @@ import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { CapturedServerReadTransport } from './capturedServerReadTransport';
 import type { AccountEncryptionObservationBinding } from '@/sync/http/accountEncryptionObservationBinding';
+import type { MachineRpcReadAdmission } from './machineRpcReadAdmission';
 
 /**
  * Default connection/setup budget for server-scoped RPC.
@@ -41,6 +42,8 @@ export type ServerScopedMachineRpcParams<A> = Readonly<{
     onIssued?: () => void;
     /** Transport dispatch hook; unlike exact-action issuance, preserves peer routing. */
     onDispatched?: () => void;
+    /** Read-only consumers may join acquisition only after per-borrower admission. */
+    readAdmission?: MachineRpcReadAdmission;
 }>;
 
 export type ActiveServerRpcContext = Readonly<{

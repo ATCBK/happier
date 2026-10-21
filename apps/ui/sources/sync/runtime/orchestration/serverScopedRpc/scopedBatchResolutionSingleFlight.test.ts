@@ -3,6 +3,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { createScopedBatchResolutionSingleFlight } from './scopedResolutionSingleFlight';
 
 describe('scoped batch pending reads', () => {
+    it('gathers matching authority paths without assigning reference ids', async () => {
+        const reads = createScopedBatchResolutionSingleFlight<string>();
+        const configuration = {};
+        const material = {};
+        const request = vi.fn(async (ids: readonly string[]) => new Map(ids.map(id => [id, id])));
+        const [left, right] = await Promise.all([
+            reads.run('details', ['a', 'b'], request, { scope: [configuration, material] }),
+            reads.run('details', ['b', 'c'], request, { scope: [configuration, material] }),
+        ]);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect([...left]).toEqual([['a', 'a'], ['b', 'b']]);
+        expect([...right]).toEqual([['b', 'b'], ['c', 'c']]);
+    });
+
     it('releases sibling waiters after a joined item fails while preserving an independent borrower', async () => {
         const reads = createScopedBatchResolutionSingleFlight<string>();
         let rejectA!: (error: Error) => void;
