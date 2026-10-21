@@ -4,12 +4,11 @@ import {
     ArtifactActionOutputSchemasV1,
     decodePlainArtifactStoredContent,
     normalizeActionsSettingsV1,
-    ExternalActionMachineBootstrapV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema,
-    MACHINE_PLAIN_DATA_KEY_MARKER,
+    ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema,
 } from '@happier-dev/protocol';
 import { act, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -203,10 +202,8 @@ describe('Artifact surface pending approvals', () => {
         const account = await captureLazyActionAccountContext(serverId);
         disposeSourceAccount = () => account.dispose();
         const sourceAction = createUiArtifactAction(account);
-        const machine = ExternalActionMachineBootstrapV1Schema.parse({ id: 'source-machine', kind: 'persistent', active: true,
-            revokedAt: null, replacedByMachineId: null, installationId: 'source-installation',
-            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
-            access: { custodian: { accountId: 'owner-1', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } });
+        const machine = { ...createPlainMachineRowFixture({ id: 'source-machine', accountId: 'owner-1' }),
+            installationId: 'source-installation' };
         machineRoute = async request => {
             if (request.method === 'POST' && request.path.startsWith('/v1/artifacts/')) {
                 const response = await artifacts.handle(request.path, { method: request.method, body: JSON.stringify(request.body) });
