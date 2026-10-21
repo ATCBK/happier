@@ -123,7 +123,7 @@ const CONTENT_CLASSIFICATION_PROBE_MAX_BYTES = DEFAULT_OPENABLE_CONTENT_MAX_BYTE
  * The canonical classifier supplies kind and MIME. Text candidates still need
  * the bounded UTF-8 probe before a plugin is promised text bytes.
  */
-function deriveContentKind(filePath: string, head?: Uint8Array, binaryContent?: boolean): OpenableContentKind {
+export function deriveWorkspaceFileOpenableContentKind(filePath: string, head?: Uint8Array, binaryContent?: boolean): OpenableContentKind {
     const normalizedPath = filePath.replaceAll('\\', '/');
     const viewer = resolveFileViewerKind({ path: normalizedPath, head, isBinaryContent: binaryContent });
     const extension = privateWorkspaceFileExtension(normalizedPath);
@@ -248,7 +248,7 @@ async function classifyWorkspaceOpenableContent(input: Readonly<{
     memo: OpenableContentClassificationMemo;
     signal?: AbortSignal;
 }>): Promise<OpenableContentKind | null> {
-    const derived = deriveContentKind(input.filePath);
+    const derived = deriveWorkspaceFileOpenableContentKind(input.filePath);
     // An empty file is valid UTF-8, so it needs no probe to be called text.
     if (derived.contentClass !== 'text' || input.sizeBytes === 0) return derived;
     const memo = input.memo.current;
@@ -271,9 +271,9 @@ async function classifyWorkspaceOpenableContent(input: Readonly<{
     // same-size ABA during this classification is not safe to memoize.
     if (revisionFromBytes(bytes) !== input.revision) return null;
 
-    const sniffed = deriveContentKind(input.filePath, bytes);
+    const sniffed = deriveWorkspaceFileOpenableContentKind(input.filePath, bytes);
     const kind = sniffed.contentClass === 'text' && classifyOpenableContentBytes(bytes) === 'binary'
-        ? deriveContentKind(input.filePath, bytes, true)
+        ? deriveWorkspaceFileOpenableContentKind(input.filePath, bytes, true)
         : sniffed;
     input.memo.current = Object.freeze({ revision: input.revision, kind });
     return kind;
@@ -407,7 +407,7 @@ export function createWorkspaceFileOpenableContentBinding(input: Readonly<{
             // not decide is therefore delivered as the text or binary it
             // actually is, instead of being refused as `unsupported` because a
             // filename promised text.
-            const derived = deriveContentKind(filePath, bytes);
+            const derived = deriveWorkspaceFileOpenableContentKind(filePath, bytes);
             const text = derived.contentClass === 'text' ? decodeStrictUtf8(bytes) : null;
             const content: OpenableContentBodyV1 = text !== null && !isBinaryContent(text)
                 ? { kind: 'utf8', text }
