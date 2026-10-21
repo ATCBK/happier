@@ -25,9 +25,11 @@ export function presentSessionProviderBinding(input: Readonly<{
         displayName: snapshot.connectionName, role: snapshot.connectionRole,
         displayNameMode: snapshot.connectionDisplayNameMode }).sourceLabel;
     const common = { providerName: snapshot.providerName, connectionName: snapshot.connectionName };
-    if (input.error) {
+    const error = input.error ?? (input.status && 'error' in input.status && input.status.error.action === 'retry'
+        ? input.status.error : null);
+    if (error) {
         return { launchLabel, banner: { kind: 'status-error', action: 'retry', ...common,
-            errorPresentation: presentProviderError(input.error) } };
+            errorPresentation: presentProviderError(error) } };
     }
     switch (input.status?.status) {
         case undefined:

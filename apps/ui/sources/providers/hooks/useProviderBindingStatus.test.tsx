@@ -84,6 +84,17 @@ describe('useProviderBindingStatus', () => {
             : { status: { status: 'current' }, error: null, loading: false, banner: null });
     });
 
+    it('offers Retry for a settled catalog failure and clears it after a current binding read', async () => {
+        const failure = createProviderErrorV1('provider_catalog_unavailable', { connectionId: 'pc_launch', machineId: 'machine-a' });
+        describeProviderBindingStatus.mockResolvedValueOnce({ status: 'incompatible', error: failure })
+            .mockResolvedValueOnce({ status: 'current' });
+        const rendered = await renderHook(useBindingPresentation);
+        expect(rendered.getCurrent()).toMatchObject({ status: { status: 'incompatible', error: failure }, loading: false,
+            banner: { kind: 'status-error', action: 'retry' } });
+        await act(async () => { await rendered.getCurrent().refresh(); });
+        expect(rendered.getCurrent()).toMatchObject({ status: { status: 'current' }, error: null, loading: false, banner: null });
+    });
+
     it('clears a successful binding status immediately when its machine scope changes', async () => {
         let resolveB!: (value: unknown) => void;
         describeProviderBindingStatus
