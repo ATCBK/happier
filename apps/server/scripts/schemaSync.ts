@@ -107,6 +107,9 @@ function generateProviderSchemaFromPostgres(
     }
 
     if (opts.provider === "mysql") {
+        // Publication documents follow the admitted transport/query size, not VARCHAR or TEXT limits.
+        body = body.replace(/^model\s+AccountPublicProfile\s+\{[\s\S]*?^\}/gm,
+            model => model.replace(/@db\.Text\b/g, "@db.LongText"));
         // Preserve the String API and full Account/key identity index. Column
         // collation is enforced by the MySQL migration, not expressible in Prisma.
         body = body.replace(/^model\s+UserKVStore\s+\{[\s\S]*?^\}/gm,

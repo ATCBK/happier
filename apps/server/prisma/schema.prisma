@@ -91,8 +91,11 @@ model Account {
     firstName String?
     lastName  String?
     username  String? @unique
+    /// Provider presentation may fill/clear only while no manual choice or release has occurred.
+    usernameAutoFillEnabled Boolean @default(true)
     /// [ImageRef]
     avatar    Json?
+    publicProfile AccountPublicProfile?
 
     Session                Session[]
     responsibleSessions    Session[]                  @relation("SessionResponsibleAccount")
@@ -940,6 +943,29 @@ model TeamInvitation {
     acceptedByAccount Account? @relation("TeamInvitationAccepter", fields: [acceptedByAccountId], references: [id], onDelete: SetNull)
 
     @@index([teamId, createdAt, id])
+}
+
+/// Explicit release holds deny every claimant; no Account attribution survives here.
+model AccountPublicProfile {
+    accountId String @id
+    account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+    state String @default("draft")
+    policyJson String? @db.Text
+    metadataJson String? @db.Text
+    queryJson String? @db.Text
+    snapshotJson String? @db.Text
+    layoutJson String? @db.Text
+    appearanceJson String? @db.Text
+    updatedAt DateTime @updatedAt
+    publishedAt DateTime?
+    removedAt DateTime?
+    removedByAccountId String?
+    removalReason String? @db.Text
+}
+
+model ReleasedUsername {
+    username String @id
+    expiresAt DateTime
 }
 
 model AccountHomeDirectoryEntry {
