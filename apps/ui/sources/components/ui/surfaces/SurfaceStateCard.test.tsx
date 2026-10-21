@@ -1,8 +1,10 @@
 import * as React from 'react';
+import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferred, renderScreen } from '@/dev/testkit';
+import { collectUnexpectedRawTextNodes, createDeferred, renderScreen } from '@/dev/testkit';
+import { resolveBrowseProjectionFailureCopy } from '@/components/sessions/external/browse/browseProjectionFailureCopy';
 import { lightTheme } from '@/theme';
 import { SurfaceStateCard } from './SurfaceStateCard';
 
@@ -36,6 +38,22 @@ vi.mock('react-native', async () => {
  * only).
  */
 describe('SurfaceStateCard', () => {
+    it('renders the Browse projection failure without raw text under a View', async () => {
+        const copy = resolveBrowseProjectionFailureCopy({
+            phase: 'error', failureReason: 'timeout', machineName: 'Devin box',
+        });
+        const screen = await renderScreen(<SurfaceStateCard
+            testID="browse-failed" kind="error" iconName="link-break"
+            accessibilitySemantics="alert" title={copy.title} reason={copy.reason}
+            diagnosticCode={copy.diagnosticCode}
+            action={{ label: 'Retry', onPress: () => {} }}
+            secondaryAction={{ label: 'Close', onPress: () => {} }}
+        />);
+        expect(collectUnexpectedRawTextNodes(screen.tree.toJSON())).toEqual([]);
+        expect(screen.tree.findAll((node) => node.type === View)
+            .flatMap((node) => React.Children.toArray(node.props.children))
+            .filter((child) => typeof child === 'string')).toEqual([]);
+    });
     it('keeps a failed line one block: the cause and its recovery, no disclosure under it (final-acceptance 10)', async () => {
         const screen = await renderScreen(<SurfaceStateCard testID="vitals" size="line" kind="error" title="Couldn't read this machine"
             diagnosticCode="machine_rpc_failed" action={{ testID: 'retry', label: 'Retry', onPress: () => {} }} />);
