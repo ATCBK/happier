@@ -623,7 +623,9 @@ describe('startSessionHookServer', () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toBe('');
+    expect(result.stderr).toContain('403');
+    expect(result.stderr).not.toContain('session-forwarder-secret');
+    expect(result.stderr).not.toContain('sess_rejected_forwarder');
   });
 
   it.each(['SubagentStop', 'UserPromptSubmit'])('keeps %s non-controlling when the hook server connection is refused', async hookEventName => {
@@ -646,7 +648,8 @@ describe('startSessionHookServer', () => {
 
     expect(result.code).toBe(0);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toBe('');
+    expect(result.stderr).toContain('ECONNREFUSED');
+    expect(result.stderr).not.toContain('sess_unreachable_forwarder');
   });
 
   it('uses one attempt and exits successfully within the 500 ms total deadline when delivery hangs', async () => {
