@@ -8753,7 +8753,7 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PREFIX_REMAINDER = Object.freeze(defineActio
     description: 'Send a user message to the AI coding assistant inside the specified session.',
     safety: 'safe',
     placements: ['voice_panel'],
-    prompting: { voiceHotPath: true },
+    // Its full routing schema is discovered on demand, then used by action_execute.
     bindings: { voiceClientToolName: 'sendSessionMessage', mcpToolName: 'session_message_send' },
     examples: {
       voice: { argsExample: '{"sessionId":"{{sessionId}}","message":"Please inspect the latest changes."}' },
@@ -9047,14 +9047,14 @@ const ACTION_SPECS_WITHOUT_APPROVAL_PENDING: readonly PreNormalizedActionSpec[] 
   },
   {
     id: 'session.pending.dismiss', approval: { result: 'required' }, title: 'Dismiss uncertain pending delivery',
-    description: 'Archive the exact uncertain Pending input without claiming it was accepted or sending it again.',
+    description: 'Set aside a pending message that may not have been delivered, without sending it again.',
     safety: 'danger', sideEffectClass: 'danger', executionPlacement: 'account',
     approvalPolicy: { rpcConfirmation: true }, placements: ['pending_messages'],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     bindings: { mcpToolName: 'session_pending_dismiss', rpcMethod: 'session.pending.dismiss' },
     serverTransport: { method: 'POST', path: '/v2/sessions/:sessionId/pending/:localId/delivery/dismiss' },
     cli: { acceptsServerId: true, commands: [{ path: ['session', 'pending', 'dismiss'], visibility: 'canonical' }] },
-    inputHints: { description: 'Dismiss an uncertain delivery while retaining its archived custody.', fields: [
+    inputHints: { description: 'Set aside a message that may not have been delivered, keeping a record of it.', fields: [
       { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
       { path: 'localId', title: 'Pending message id', widget: 'text', required: true }] },
     inputSchema: SessionPendingDeliveryRecoveryInputV1Schema, outputSchema: SessionPendingDeliveryRecoveryResultV1Schema,
