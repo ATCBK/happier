@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyAutonomousExchangeAcceptedTurnV1,
   applyAutonomousExchangeControlV1,
+  createAutonomousExchangeStateV1,
   readAutonomousExchangeAdmissionV1,
   type AutonomousExchangeStateV1,
 } from './autonomousExchangeV1.js';
@@ -12,6 +13,15 @@ const initial: AutonomousExchangeStateV1 = {
 };
 
 describe('autonomous exchange from the original input', () => {
+  it('uses the originating Discussion choice, preserving Never pause rather than falling back to the Account', () => {
+    const never = createAutonomousExchangeStateV1(5, { afterTurns: null });
+    expect(readAutonomousExchangeAdmissionV1({ ...never, observedStarts: 5 })).toBe('allow');
+    const ownWindow = createAutonomousExchangeStateV1(5, { afterTurns: 12 });
+    expect(readAutonomousExchangeAdmissionV1({ ...ownWindow, observedStarts: 5 })).toBe('allow');
+    expect(readAutonomousExchangeAdmissionV1({ ...ownWindow, observedStarts: 12 })).toBe('check_in');
+    expect(readAutonomousExchangeAdmissionV1({ ...createAutonomousExchangeStateV1(5), observedStarts: 5 })).toBe('check_in');
+  });
+
   it('checks in after five distinct agent-caused accepted turn starts, including a starting follow-up', () => {
     let state = initial;
     for (const [turnId, deliveryKind] of [

@@ -35,9 +35,18 @@ export const AutonomousExchangeStatusV1Schema = lazyZodSchema(() => z.strictObje
   observedRevision: AutonomousExchangeObservedRevisionV1Schema,
 }));
 
-export function createAutonomousExchangeStateV1(afterTurns: number | null): AutonomousExchangeStateV1 {
+/** The override object distinguishes explicit Never pause from inheritance. */
+export function resolveAutonomousExchangeAfterTurnsV1(accountAfterTurns: number | null,
+  discussionOverride?: Readonly<{ afterTurns: number | null }>): number | null {
+  return AutonomousExchangeStateV1Schema.shape.afterTurns.parse(discussionOverride === undefined
+    ? accountAfterTurns : discussionOverride.afterTurns);
+}
+
+export function createAutonomousExchangeStateV1(afterTurns: number | null,
+  discussionOverride?: Readonly<{ afterTurns: number | null }>): AutonomousExchangeStateV1 {
   return AutonomousExchangeStateV1Schema.parse({
-    v: 1, observedStarts: 0, pauseAtStarts: null, stopped: false, afterTurns,
+    v: 1, observedStarts: 0, pauseAtStarts: null, stopped: false,
+    afterTurns: resolveAutonomousExchangeAfterTurnsV1(afterTurns, discussionOverride),
   });
 }
 
