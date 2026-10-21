@@ -23,7 +23,7 @@ import {
 } from './pdfCanvasViewer';
 import { buildPdfPageCss } from './pdfPageCss';
 import { createPdfViewPosition } from './pdfViewPosition';
-import { resolvePdfScale } from './pdfZoom';
+import { readPdfViewport, resolvePdfScale } from './pdfZoom';
 import { usePdfFind } from './usePdfFind';
 import {
   PdfPagePill,
@@ -124,8 +124,7 @@ function PdfViewerBody(props: PdfViewerProps & Readonly<{ onRetry(): void }>) {
     return resolvePdfScale(latest.current.zoom, {
       pageWidth: page.width,
       pageHeight: page.height,
-      viewportWidth: node.clientWidth,
-      viewportHeight: node.clientHeight,
+      ...readPdfViewport(node),
     });
   }, []);
   const applyScale = React.useCallback((next: number) => {

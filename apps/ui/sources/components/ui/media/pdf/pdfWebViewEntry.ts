@@ -3,7 +3,7 @@ import { createPdfSliceAssembler } from './pdfNativeBridge';
 import { createPdfDocumentLoader } from './pdfDocumentLoader';
 import { createPdfCanvasViewer, type PdfTextLayerFactory } from './pdfCanvasViewer';
 import { createPdfFindModel } from './pdfFindModel';
-import { resolvePdfScale, type PdfZoom } from './pdfZoom';
+import { readPdfViewport, resolvePdfScale, type PdfZoom } from './pdfZoom';
 import type { PdfWebViewMessage } from './pdfNativeBridge';
 import { createPdfViewPosition, type PdfViewPosition } from './pdfViewPosition';
 
@@ -58,7 +58,7 @@ const container = () => {
 };
 const scaleFor = () => {
     const element = container();
-    return resolvePdfScale(zoom, { pageWidth: firstPageWidth, pageHeight: firstPageHeight, viewportWidth: element.clientWidth, viewportHeight: element.clientHeight });
+    return resolvePdfScale(zoom, { pageWidth: firstPageWidth, pageHeight: firstPageHeight, ...readPdfViewport(element) });
 };
 const loader = createPdfDocumentLoader({
     getDocument: bytes => pdfjs.getDocument({ data: bytes, useWorkerFetch: false, useWasm: false }),

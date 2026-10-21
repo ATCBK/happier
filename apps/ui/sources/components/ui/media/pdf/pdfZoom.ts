@@ -13,6 +13,22 @@ export function resolvePdfScale(zoom: PdfZoom, geometry: Geometry): number {
     return zoom === 'fit-width' ? widthScale : Math.min(widthScale, geometry.viewportHeight / geometry.pageHeight);
 }
 
+type PdfScrollColumn = Readonly<{
+    clientWidth: number;
+    clientHeight: number;
+    ownerDocument?: Readonly<{ defaultView?: Readonly<{ getComputedStyle: (element: never) => Readonly<Record<'paddingLeft' | 'paddingRight' | 'paddingTop' | 'paddingBottom', string>> }> | null }> | null;
+}>;
+
+/** The room pages have in the scroll column: its client box minus the padding that shows the well around them. */
+export function readPdfViewport(column: PdfScrollColumn): Readonly<{ viewportWidth: number; viewportHeight: number }> {
+    const style = column.ownerDocument?.defaultView?.getComputedStyle(column as never);
+    const px = (value: string | undefined) => Number.parseFloat(value ?? '') || 0;
+    return {
+        viewportWidth: Math.max(1, column.clientWidth - px(style?.paddingLeft) - px(style?.paddingRight)),
+        viewportHeight: Math.max(1, column.clientHeight - px(style?.paddingTop) - px(style?.paddingBottom)),
+    };
+}
+
 export function resolvePdfCanvasSize(input: Readonly<{ width: number; height: number; devicePixelRatio: number }>) {
     const outputScale = Math.min(PDF_CANVAS_MAX_DPR, input.devicePixelRatio, PDF_CANVAS_MAX_SIDE / Math.max(input.width, input.height));
     return { width: Math.max(1, Math.floor(input.width * outputScale)), height: Math.max(1, Math.floor(input.height * outputScale)), outputScale };
