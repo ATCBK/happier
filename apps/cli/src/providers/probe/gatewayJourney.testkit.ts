@@ -28,6 +28,14 @@ import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/a
 import { createKeyedStreamedTranscriptBridge } from '@/api/session/createKeyedStreamedTranscriptBridge';
 import { createRuntimeTranscriptProjector, type RuntimeTranscriptProjectionSession } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
 import { waitForProcessExit } from '@/testkit/process/spawn';
+import { createLifecycleParams } from '@/agent/runtime/session/loop/lifecycle.testkit';
+import { runSessionLoopLifecycle } from '@/agent/runtime/session/loop/lifecycle';
+import { createNativeAgentSessionInteractionOperations } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession';
+import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
+import { createPublicAcpRuntimeProtocols } from '@/agent/acp/runtime/publicSession/createPublicAcpRuntimeProtocols';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { createCodexAppServerRuntime, waitForCodexAppServerRuntimeTurnCompletion } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/runtime';
 import { createCodexNativeAppServerSessionRuntime } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/native';
 import type { DisposableCodexAppServerClient } from '../../../../../packages/plugins/codex/src/agent/runtime/appServer/client';
@@ -117,6 +125,7 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
   const stored = new Map<string, Body>();
   const events: AgentSessionRuntimeEventV1[] = [];
   const sends: string[] = [];
+  const interrupts: unknown[] = [];
   const failures: string[] = [];
   const jobs: Promise<void>[] = [];
   const requests = new Map<string, AbortController>();
@@ -139,7 +148,14 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
       if (method === 'account/read') return { account: null };
       if (method === 'account/rateLimits/read') return { rateLimits: null };
       if (method === 'turn/interrupt') {
-        for (const controller of requests.values()) controller.abort();
+        interrupts.push(params);
+        if (!params || typeof params !== 'object' || !('threadId' in params)
+          || params.threadId !== sessionId || !('turnId' in params) || typeof params.turnId !== 'string') {
+          throw new Error('Interrupt must identify the exact native thread and turn');
+        }
+        const controller = requests.get(params.turnId);
+        if (!controller) throw new Error('Interrupt targeted an inactive native turn');
+        controller.abort();
         return {};
       }
       if (method !== 'turn/start') throw new Error(`Unexpected native request ${method}`);
@@ -208,7 +224,64 @@ function createJourneyCodex(sessionId: string, endpoint: Readonly<{ endpointUrl:
   native.watch(event => { events.push(event); projection = projection.then(async () => {
     await project({ session, provider: 'codex', runtimeMessageDeltaBridge: bridge, event });
   }); });
-  return { native, events, stored, sends, failures,
+  return { native, events, stored, sends, interrupts, failures,
+    async stopThroughHost(text: string, waitForStream: () => Promise<void>, assertStreamClosed: () => Promise<void>) {
+      const base = createLifecycleParams();
+      Object.assign(base.session, { sessionId });
+      const permission = new ProviderEnforcedPermissionHandler(base.session, { logPrefix: '[Gateway Stop]' });
+      let releaseWrite!: () => void;
+      const writeReleased = new Promise<void>(resolve => { releaseWrite = resolve; });
+      let holdWrites = false;
+      const updateAgentState = base.session.updateAgentState.bind(base.session);
+      // Replace only Home persistence. Real permission withdrawal, host turn
+      // ownership, Codex adapter and streamed Gateway transport remain composed.
+      const writer = vi.spyOn(base.session, 'updateAgentState').mockImplementation(async updater => {
+        if (holdWrites) await writeReleased;
+        await updateAgentState(updater);
+      });
+      const declaration = readAgentCatalogSnapshot().agentDefinitionsById.get('codex');
+      if (!declaration?.richDefinition || !declaration.pluginId) throw new Error('Missing Codex declaration');
+      const lifetime = new AbortController();
+      const services = createUnavailablePluginServices();
+      const context = createAcpSessionRuntimeContextFixture({
+        agent: declaration.richDefinition.definition, pluginId: declaration.pluginId,
+        sessionId, directory: '/fixture', signal: lifetime.signal,
+        session: base.session, permissionHandler: permission, services,
+        protocols: createPublicAcpRuntimeProtocols({ pluginId: declaration.pluginId, agentId: declaration.id,
+          signal: lifetime.signal, isCurrent: () => !lifetime.signal.aborted, services }),
+      });
+      const operations = createNativeAgentSessionInteractionOperations({ session: native, sessionId,
+        cwd: '/fixture', context: context.context, capabilities: { open: ['create'], delivery: ['newTurn'], cancel: true } });
+      let abort: (() => void | Promise<void>) | null = null;
+      try {
+        await runSessionLoopLifecycle({ ...base, runtime: operations, hookRuntime: operations,
+          permissionHandler: permission,
+          setAbortRequestedCallback: callback => { abort = callback; },
+          deps: { ...base.deps, runPermissionModePromptLoopFn: async () => {
+            await operations.sendTurnPrompt(text, { localId: `${sessionId}-${sends.length}`, turnId: `host-${sends.length}` });
+            await waitForStream();
+            holdWrites = true;
+            const stopping = abort?.();
+            void Promise.resolve(stopping).catch(() => undefined);
+            try {
+              await vi.waitFor(() => expect(events.some(event => event.kind === 'turn-cancelled')).toBe(true));
+              await assertStreamClosed();
+            } finally {
+              holdWrites = false;
+              releaseWrite();
+              await stopping;
+            }
+          } },
+        });
+      } finally {
+        holdWrites = false;
+        releaseWrite();
+        writer.mockRestore();
+        lifetime.abort();
+        await context.dispose();
+      }
+      await projection;
+    },
     async send(text: string) {
       const terminals = events.filter(event => ['turn-complete', 'turn-cancelled', 'turn-failed'].includes(event.kind)).length;
       const admitted = await native.send({ inputIds: [`${sessionId}-${sends.length}`], input: { text }, delivery: { kind: 'newTurn', turnId: `host-${sends.length}` } });
@@ -354,10 +427,13 @@ export async function exerciseGatewayStreamJourney(input: Readonly<{
     expect([...peer.stored.values()]).toContainEqual({ type: 'message', message: 'SENTINEL:tool:peer' });
     expect((await readFile(join(gateway.directory, 'gateway-starts'), 'utf8')).trim().split('\n')).toEqual(baselineStarts);
 
-    const cancelled = await first.native.send('hold:cancel');
-    await vi.waitFor(() => expect(upstream.held.has('hold:cancel')).toBe(true));
-    if (!first.native.native.cancel) throw new Error('Expected native cancellation support');
-    await first.native.native.cancel({ turnId: 'host-1', reason: 'user' }); await cancelled();
+    await first.native.stopThroughHost('hold:cancel',
+      async () => { await vi.waitFor(() => expect(upstream.held.has('hold:cancel')).toBe(true)); },
+      async () => { await vi.waitFor(() => expect(upstream.held.has('hold:cancel')).toBe(false)); });
+    expect(first.native.interrupts).toEqual([{ threadId: 'main-one', turnId: 'native-2' }]);
+    // The upstream never finishes this response: only native cancellation can
+    // close it through the consumer, broker and shared Gateway stream owners.
+    await vi.waitFor(() => expect(upstream.held.has('hold:cancel')).toBe(false));
     expect(first.native.events.filter(event => event.kind === 'turn-cancelled')).toHaveLength(1);
     await (await survivor.native.send('after-cancel'))();
     expect([...survivor.native.stored.values()]).toContainEqual({ type: 'message', message: 'SENTINEL:after-cancel' });
