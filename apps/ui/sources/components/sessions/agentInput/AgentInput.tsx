@@ -18,7 +18,6 @@ import {
     type NativeSyntheticEvent,
 } from 'react-native';
 import { layout } from '@/components/ui/layout/layout';
-import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { STAGE_SPOTLIGHT_TARGET_IDS } from '@/components/onboarding/tour/stage/stageSpotlightTargetIds';
 import {
     useSpotlightTarget,
@@ -242,7 +241,6 @@ import type { AddWebAttachmentsOptions } from '@/sync/domains/attachments/attach
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 import { groupWebDroppedEntries } from '@/components/sessions/attachments/droppedAttachmentSources';
-import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import type {
     AgentInputAttachmentsRowItem,
     AgentInputComposerDecoration,
@@ -915,25 +913,7 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         color: theme.colors.state.warning.foreground,
         ...Typography.variant('meta', 'semiBold'),
     },
-    composerDecorationFeedback: {
-        alignSelf: 'flex-start',
-        borderRadius: 6,
-        borderWidth: 1,
-        borderColor: theme.colors.border.default,
-        backgroundColor: theme.colors.surface.base,
-        paddingHorizontal: theme.space.s6,
-        paddingVertical: 3,
-    },
-    composerDecorationFeedbackInteractive: {
-        // An interactive decoration keeps the compact chip padding and reaches
-        // the platform touch minimum through layout. A hit-slop floor would
-        // expand each chip past the row gap and into its stacked neighbour.
-        minWidth: resolveMinimumInteractiveTargetSize(Platform.OS),
-        minHeight: resolveMinimumInteractiveTargetSize(Platform.OS),
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    composerDecorationFeedbackText: {
+    readOnlyReferenceText: {
         ...Typography.variant('meta'),
     },
     nativeKeyboardFooterSection: {
@@ -3234,76 +3214,21 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         })))
     ), [props.composerDecorations]);
     const composerPresentationFeedback = React.useMemo(() => {
-        const decorations = Platform.OS === 'web' ? [] : props.composerDecorations ?? [];
         const inputLock = props.composerInputLock ?? null;
-        if (decorations.length === 0 && inputLock === null) return null;
+        if (inputLock === null) return null;
 
         return (
             <View testID="agent-input-composer-presentation-effects" style={styles.composerPresentationEffects}>
-                {inputLock ? (
-                    <View testID="agent-input-composer-lock" style={styles.composerInputLockFeedback}>
-                        <Text style={styles.composerInputLockFeedbackText}>{inputLock.reasons.join(' · ')}</Text>
-                    </View>
-                ) : null}
-                {decorations.flatMap((decoration) => decoration.decorations.ranges.map((entry, index) => {
-                    const selectedText = props.value.slice(entry.range.start, entry.range.end).trim();
-                    const label = entry.label ?? (selectedText || decoration.key);
-                    const treatment = entry.treatment;
-                    const color = treatment === 'warning'
-                        ? theme.colors.state.warning.foreground
-                        : treatment === 'success'
-                            ? theme.colors.state.success.foreground
-                            : treatment === 'muted'
-                                ? theme.colors.text.secondary
-                                : theme.colors.accent.blue;
-                    const textStyle = [
-                        styles.composerDecorationFeedbackText,
-                        { color },
-                        treatment === 'code' ? Typography.mono() : null,
-                    ];
-                    const text = <Text style={textStyle}>{label}</Text>;
-                    const testID = `agent-input-composer-decoration:${decoration.id}:${index}`;
-                    if (typeof treatment === 'object' && treatment.kind === 'link') {
-                        return (
-                            <Pressable
-                                key={testID}
-                                testID={testID}
-                                accessibilityRole="link"
-                                accessibilityLabel={label}
-                                style={[
-                                    styles.composerDecorationFeedback,
-                                    styles.composerDecorationFeedbackInteractive,
-                                ]}
-                                onPress={() => {
-                                    void openExternalUrl(treatment.url, { platformOS: Platform.OS });
-                                }}
-                            >
-                                {text}
-                            </Pressable>
-                        );
-                    }
-                    return (
-                        <View key={testID} testID={testID} style={styles.composerDecorationFeedback}>
-                            {text}
-                        </View>
-                    );
-                }))}
+                <View testID="agent-input-composer-lock" style={styles.composerInputLockFeedback}>
+                    <Text style={styles.composerInputLockFeedbackText}>{inputLock.reasons.join(' · ')}</Text>
+                </View>
             </View>
         );
     }, [
-        props.composerDecorations,
         props.composerInputLock,
-        props.value,
-        styles.composerDecorationFeedback,
-        styles.composerDecorationFeedbackInteractive,
-        styles.composerDecorationFeedbackText,
         styles.composerInputLockFeedback,
         styles.composerInputLockFeedbackText,
         styles.composerPresentationEffects,
-        theme.colors.accent.blue,
-        theme.colors.state.success.foreground,
-        theme.colors.state.warning.foreground,
-        theme.colors.text.secondary,
     ]);
     const hasVariableContentBeforeInput = attachmentRowItems.length > 0 || composerPresentationFeedback !== null;
     React.useEffect(() => {
@@ -3783,7 +3708,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                             <AgentInputReadOnlyText value={props.value} accessibilityLabel={props.inputAccessibilityLabel} clamp={documentPanel}
                                 style={[isConversation ? styles.sessionInputText : styles.newSessionInputText, styles.readOnlyText]} />
                             {references.map((reference) => (
-                                <Text key={`${reference.start}:${reference.ref}`} selectable style={styles.composerDecorationFeedbackText}>{reference.label ?? reference.token}</Text>
+                                <Text key={`${reference.start}:${reference.ref}`} selectable style={styles.readOnlyReferenceText}>{reference.label ?? reference.token}</Text>
                             ))}
                         </View>
                         {readOnlyEngineNodes.length > 0 || renderedExtraChipNodes.length > 0 ? (

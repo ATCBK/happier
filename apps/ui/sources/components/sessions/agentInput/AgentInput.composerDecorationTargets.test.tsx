@@ -1,13 +1,13 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
-import { MultiTextInput } from '@/components/ui/forms/MultiTextInput';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import type { AgentInputComposerDecoration } from './agentInputContracts';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
 installAgentInputCommonModuleMocks();
 const runtime = installSessionPaneRuntimeTestHarness();
+afterEach(async () => { (await import('react-native')).Platform.OS = 'web'; });
 
 function flattenStyle(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -83,14 +83,18 @@ describe('AgentInput composer decoration interactive targets', () => {
     const paint = surface.findAll((node) => typeof node.type === 'string' && node.props.dataSet?.happyGlassBackdrop === 'true')[0]!;
     expect(String(flattenStyle(paint.props.style).backgroundColor)).toContain('--happier-glass-card-opacity');
   });
-  it('places scoped decorations in the input while preserving the input lock feedback', async () => {
+  it.each(['web', 'ios', 'android'] as const)('places scoped decorations only in the %s input while preserving the input lock feedback', async (platform) => {
+    const { Platform } = await import('react-native');
+    Platform.OS = platform;
+    const { MultiTextInput } = await import('@/components/ui/forms/MultiTextInput');
     const screen = await renderComposerWithDecorations();
+    expect((await import('react-native')).Platform.OS).toBe(platform);
     const input = screen.findAll((node) => node.type === MultiTextInput)[0]!;
     expect(input.props.decorations).toEqual(decorations[0].decorations.ranges.map((entry) => ({
       ...entry.range, treatment: entry.treatment, label: entry.label,
     })));
     expect(screen.findAll((node) => typeof node.props.testID === 'string'
-      && node.props.testID.startsWith('agent-input-composer-decoration:'))).toEqual([]);
+      && node.props.testID.startsWith('agent-input-composer-decoration:')).length).toBe(0);
     expect(input.props.editable).toBe(false);
     expect(screen.getTextContent()).toContain('Review required');
   });
