@@ -1382,6 +1382,14 @@ edit may post, and owner/admin may manage. Mentions confer no access. Self-leave
 present person's direct grant; inherited access may remain, and an owner must transfer ownership
 or archive. Named-discussion absence and denial do not become an existence oracle.
 
+For an existing Discussion's invitations and prospective grants, physical deletion
+of the anchored Session/original message is not an admission failure: no original
+source content or source grant is supplied. Live source existence is distinguished
+from denied access, unavailable keys and mode mismatch; those live-source cases
+retain their current refusal/disclosure checks. Current Discussion access and target
+Session admission are unchanged. Fresh source-quoted creation and source-active
+operations do not consume this narrow missing-source exception.
+
 In development source, Task anchors and reply targets share `{ kind: 'task', entry }`,
 composing `TriageEntryRefV1Schema` from `@happier-dev/protocol/tasks/entryRefV1`.
 Task access, configured-source selection and navigation remain Tasks-owned; a private

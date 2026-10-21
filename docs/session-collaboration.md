@@ -337,6 +337,16 @@ carries no passage or grants. The Session People pane is an anchored-list consum
 same Discussion owner. Archiving or deleting a source does not archive or delete the
 Discussion. The Doc owner still admits quoted-source reads independently.
 
+In development source, deleting a Session anchor or its exact original message does
+not prevent inviting a person or existing Session into the surviving Discussion.
+The invitation owner checks physical source identity separately from access/key
+readiness: a missing original needs no source disclosure or automatic source grant.
+A live original still requires the existing source-access, key and complete-audience
+checks, including when the inviter can manage the Discussion but cannot read that
+source. Discussion grants, target Session control and Discussion-to-Session disclosure
+remain required. This invitation exception does not loosen fresh quoted-source
+creation or the separate source-active post/read checks.
+
 Protocol owns the contract under `packages/protocol/src/discussions/**`; the server owns
 transactions under `apps/server/sources/app/discussions/**`. Human invitations are direct
 resource grants, with explicit Team/Group grants evaluated through the same shared grant
