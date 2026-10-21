@@ -4,6 +4,7 @@ import type { PromptLibraryCatalogKeyV1, PromptLibraryRecordV1, PromptLibraryRow
 import { createPromptFolderV1, renamePromptFolderV1, movePromptFolderV1, removePromptFolderV1,
   placeArtifactInPromptFolderV1, type PromptFoldersV1 } from './promptFoldersV1.js';
 import type { ArtifactFolderActionIdV1 } from './artifactFolderActionIdsV1.js';
+import { throwIfAborted } from '../../abortSignal.js';
 
 import {
   ARTIFACT_FOLDER_ACTION_INPUT_SCHEMAS_V1,
@@ -51,7 +52,7 @@ export type ArtifactFolderActionPortV1 = Readonly<{
 type FolderReadV1 = Readonly<{ status: 'ready'; value: PromptFoldersV1; revision: number | 'absent'; sourceSettingsVersion?: number }>
   | Readonly<{ status: 'unavailable'; reason: string }>;
 function assertCurrent(port: ArtifactFolderActionPortV1, signal?: AbortSignal): void {
-  signal?.throwIfAborted(); port.assertCurrent();
+  throwIfAborted(signal); port.assertCurrent();
 }
 export async function readArtifactFolderCatalogV1(input: Readonly<{ port: ArtifactFolderActionPortV1; signal?: AbortSignal }>): Promise<FolderReadV1> {
   assertCurrent(input.port, input.signal);
