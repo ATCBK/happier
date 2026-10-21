@@ -1277,10 +1277,18 @@ class ApiSocket {
             return;
         }
 
+        const transport = this.socketTransport;
+        const config = this.config;
         this.updateStatus('connecting');
-        void this.socketTransport.connect().catch((error) => {
+        void transport.connect().catch((error) => {
+            if (this.socketTransport !== transport || this.config !== config
+                || config?.isCurrent?.() === false || this.currentConnectionState.phase !== 'online') return;
             this.setError(error instanceof Error ? error : new Error(String(error)));
             this.updateStatus('error');
+            // A dial failure settles the adapter's connect promise before a
+            // connected transport can emit onError. Re-enter the same Home
+            // revalidation path so its fresh online verdict can dial again.
+            this.invalidateReachabilityAfterSocketTransportFailure(error);
         });
     }
 

@@ -30,6 +30,43 @@ afterEach(async () => {
 });
 
 describe('apiSocket reachability supervision', () => {
+    it('reconnects after reachability returns online even when the recovery socket dial fails', async () => {
+        const boundary = createSocketIoBoundaryStub({ autoConnect: false });
+        vi.doMock('socket.io-client', () => ({ io: () => boundary.socket }));
+        const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+        const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
+        const pool = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+        setRuntimeFetch(async () => new Response(null, { status: 200 }));
+        await upsertAndActivateServer({ serverUrl: 'https://recovery.example.test' });
+        const { apiSocket } = await import('./apiSocket');
+        vi.useFakeTimers();
+        try {
+            apiSocket.initialize({ endpoint: 'https://recovery.example.test', token: 'recovery-token' }, null);
+            await vi.advanceTimersByTimeAsync(0);
+            boundary.trigger('connect');
+            await vi.advanceTimersByTimeAsync(0);
+            expect(boundary.socket.connected).toBe(true);
+
+            pool.reportServerRestarting('https://recovery.example.test', 1_000, 'recovery-token');
+            await vi.advanceTimersByTimeAsync(0);
+            expect(boundary.socket.connected).toBe(false);
+            // Socket.IO is the network boundary. A refused recovery dial must
+            // return to the existing Home revalidation path, not remain stranded.
+            boundary.socket.connect.mockImplementationOnce(() => {
+                boundary.socket.active = false;
+                boundary.trigger('connect_error', new Error('Recovery dial refused'));
+            });
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(pool.peekServerReachabilityState('https://recovery.example.test', 'recovery-token')?.phase).toBe('online');
+            expect(boundary.socket.active).toBe(true);
+            boundary.trigger('connect');
+            expect(boundary.socket.connected).toBe(true);
+        } finally {
+            apiSocket.disconnect();
+            resetRuntimeFetch();
+        }
+    });
+
     it.each(['loopback', 'semantic'] as const)('does not import an ambient %s Home carrier into an exact HTTPS target', async kind => {
         const runtime = await import('@/sync/domains/server/serverRuntime');
         const pool = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
