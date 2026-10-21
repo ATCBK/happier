@@ -7,6 +7,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { previewUnavailableCard, resolvePreviewUnavailable } from './previewUnavailable';
 import type { ImageBackground } from '@/sync/domains/settings/registry/local/localSettingDefinitions.files';
 import {
   useLocalSetting,
@@ -179,13 +180,19 @@ function ImageWellPicture(
       ? preview.uri
       : null;
   if (preview.status === 'error' || failed) {
+    // A picture that failed to decode is an unfinished read too: Retry draws it again.
+    const card = previewUnavailableCard(preview.status === 'error'
+      ? resolvePreviewUnavailable({ error: preview.error, errorCode: preview.errorCode, sizeBytes: props.source.sizeBytes })
+      : { kind: 'loadFailed', error: failed! }, props.title);
     return (
       <SurfaceStateCard
-        kind="error"
+        kind={card.kind}
         size="pane"
-        title={t('files.viewer.loadFailed', { name: props.title })}
-        diagnosticCode={preview.error ?? failed}
-        action={{ label: t('common.retry'), onPress: props.onRetry }}
+        title={card.title}
+        {...(card.reason ? { reason: card.reason } : {})}
+        {...(card.iconName ? { iconName: card.iconName } : {})}
+        {...(card.diagnosticCode ? { diagnosticCode: card.diagnosticCode } : {})}
+        {...(card.retryable ? { action: { label: t('common.retry'), onPress: props.onRetry } } : {})}
       />
     );
   }

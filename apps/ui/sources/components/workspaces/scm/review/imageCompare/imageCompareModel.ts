@@ -1,3 +1,5 @@
+import { resolvePreviewUnavailable, type PreviewUnavailable } from '@/components/ui/media/previewUnavailable';
+
 export type ImageComparePreview =
     | Readonly<{ status: 'loaded'; uri: string; sizeBytes?: number | null }>
     | Readonly<{ status: 'empty' }>
@@ -25,13 +27,9 @@ export function projectImageComparePreview(preview: Readonly<{
 export type ImageCompareSide =
     | Readonly<{ kind: 'present'; uri: string; sizeBytes: number | null }>
     | Readonly<{ kind: 'added' | 'deleted' }>
-    /** The file is not in this version (`missing`) or its bytes did not verify: reading it again cannot help. */
-    | Readonly<{ kind: 'unreadable'; cause: 'missing' | 'unverified'; reason: string }>
-    /** The read or its transfer did not finish (an interrupted connection, a busy Machine): it can be tried again. */
-    | Readonly<{ kind: 'loadFailed'; error: string }>
-    /** Over the preview budget: its size when the listing knows it. */
-    | Readonly<{ kind: 'noPreview'; reason: 'too_large'; sizeBytes: number | null }>
-    | Readonly<{ kind: 'noPreview'; reason: 'disabled' | 'loading' | 'empty' | 'unsupported' }>;
+    /** The read gave no picture, and why (too large, unsupported, missing, unverified, or a read that did not finish). */
+    | Readonly<{ kind: 'unavailable'; reason: PreviewUnavailable }>
+    | Readonly<{ kind: 'noPreview'; reason: 'disabled' | 'loading' | 'empty' }>;
 
 export type ImageCompareModel<StageItem> = Readonly<{
     before: ImageCompareSide;
@@ -41,13 +39,7 @@ export type ImageCompareModel<StageItem> = Readonly<{
 
 function previewSide(preview: ImageComparePreview): ImageCompareSide {
     if (preview.status === 'empty') return { kind: 'noPreview', reason: 'empty' };
-    if (preview.status === 'error') {
-        if (preview.errorCode === 'too_large') return { kind: 'noPreview', reason: 'too_large', sizeBytes: preview.sizeBytes ?? null };
-        if (preview.errorCode === 'unsupported') return { kind: 'noPreview', reason: 'unsupported' };
-        if (preview.errorCode === 'not_found') return { kind: 'unreadable', cause: 'missing', reason: preview.error };
-        if (preview.errorCode === 'blob_unavailable') return { kind: 'unreadable', cause: 'unverified', reason: preview.error };
-        return { kind: 'loadFailed', error: preview.error };
-    }
+    if (preview.status === 'error') return { kind: 'unavailable', reason: resolvePreviewUnavailable(preview) };
     if (preview.status !== 'loaded') return { kind: 'noPreview', reason: preview.status };
     if (preview.sizeBytes === 0 || !preview.uri) return { kind: 'noPreview', reason: 'empty' };
     return { kind: 'present', uri: preview.uri, sizeBytes: preview.sizeBytes ?? null };

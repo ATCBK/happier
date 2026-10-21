@@ -6,7 +6,6 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
 
 import {
   ImageWell,
@@ -17,13 +16,14 @@ import {
   type MediaPictureSize,
 } from '@/components/ui/media/MediaPicture';
 import type { UseFilePreviewSourceInput } from '@/components/ui/media/useFilePreviewSource';
+import { previewUnavailableCard } from '@/components/ui/media/previewUnavailable';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Slider } from '@/components/ui/forms/Slider';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { getPreferredLanguage, t } from '@/text';
+import { t } from '@/text';
 import type { ImageCompareSide } from './imageCompareModel';
 
 type Mode = 'sideBySide' | 'swipe' | 'onion';
@@ -56,18 +56,9 @@ function formatBytesDelta(
   return `${delta < 0 ? '−' : '+'}${kb} KB`;
 }
 
-/** Why a side shows no picture, in one quiet line; none of these can be fixed by reading again. */
-function sideReason(side: ImageCompareSide): Readonly<{ title: string; reason?: string }> | null {
-  if (side.kind === 'unreadable')
-    return { title: side.cause === 'missing' ? t('hunkReview.imageMissing') : t('hunkReview.imageUnreadable') };
+function sideReason(side: ImageCompareSide): string | null {
   if (side.kind !== 'noPreview') return null;
-  switch (side.reason) {
-    case 'loading': return { title: t('hunkReview.imageLoading') };
-    case 'too_large': return { title: t('hunkReview.imageTooLarge'),
-      ...(side.sizeBytes !== null ? { reason: formatHappierDataBytes(side.sizeBytes, { kind: 'storage', locale: getPreferredLanguage() }) } : {}) };
-    case 'unsupported': return { title: t('hunkReview.imageUnsupported') };
-    default: return { title: t('hunkReview.imageNoPreview') };
-  }
+  return side.reason === 'loading' ? t('hunkReview.imageLoading') : t('hunkReview.imageNoPreview');
 }
 
 /**
@@ -118,16 +109,19 @@ export function ImageCompare(props: ImageCompareProps) {
 
   const well = (side: 'before' | 'after') => {
     const state = side === 'before' ? props.before : props.after;
-    if (state.kind === 'loadFailed') {
-      // The same failure the image body shows: what failed, the cause behind Details, and Retry.
+    if (state.kind === 'unavailable') {
+      // The same reason and copy the image body and stage show. A read that did not finish is the
+      // only one with Retry (and its cause behind Details); the others are one quiet line.
+      const card = previewUnavailableCard(state.reason, props.filePath.split('/').pop() || props.filePath);
       return (
         <SurfaceStateCard
           testID={`image-compare-${side}-state`}
-          kind="error"
-          size="details"
-          title={t('files.viewer.loadFailed', { name: props.filePath.split('/').pop() || props.filePath })}
-          diagnosticCode={state.error}
-          {...(props.onRetry
+          kind={card.kind}
+          size={card.retryable ? 'details' : 'line'}
+          title={card.title}
+          {...(card.reason ? { reason: card.reason } : {})}
+          {...(card.diagnosticCode ? { diagnosticCode: card.diagnosticCode } : {})}
+          {...(card.retryable && props.onRetry
             ? { action: { label: t('common.retry'), onPress: () => props.onRetry?.(side), testID: `image-compare-${side}-retry` } }
             : {})}
         />
@@ -138,12 +132,9 @@ export function ImageCompare(props: ImageCompareProps) {
       return (
         <SurfaceStateCard
           testID={`image-compare-${side}-state`}
-          // Only bytes that failed to verify are a failure; a side that is not there, too big or in an
-          // unsupported format is a fact about the file, so it stays quiet.
-          kind={state.kind === 'unreadable' && state.cause === 'unverified' ? 'error' : 'empty'}
+          kind="empty"
           size="line"
-          title={reason.title}
-          {...(reason.reason ? { reason: reason.reason } : {})}
+          title={reason}
         />
       );
     }

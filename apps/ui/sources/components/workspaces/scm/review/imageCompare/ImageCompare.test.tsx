@@ -50,8 +50,8 @@ describe('ImageCompare dimension reporting', () => {
         const preview = { enabled: false, source: { kind: 'uri' as const, uri: '' } };
         const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
             <ImageCompare filePath="assets/logo.svg" kind="svg" alphaCapable
-                before={{ kind: 'unreadable', cause: 'unverified', reason: 'The revision bytes do not match their content hash.' }}
-                after={{ kind: 'loadFailed', error: interrupted }}
+                before={{ kind: 'unavailable', reason: { kind: 'unverified', error: 'The revision bytes do not match their content hash.' } }}
+                after={{ kind: 'unavailable', reason: { kind: 'loadFailed', error: interrupted } }}
                 beforePreviewInput={preview} afterPreviewInput={preview} onRetry={onRetry} />
         </InjectedAuthProvider>);
         try {
@@ -66,15 +66,15 @@ describe('ImageCompare dimension reporting', () => {
     });
 
     it.each([
-        { name: 'over budget', side: { kind: 'noPreview', reason: 'too_large', sizeBytes: 40_000_000 }, says: ['Too large to preview', '40'] },
-        { name: 'unsupported', side: { kind: 'noPreview', reason: 'unsupported' }, says: ["Can't preview this format"] },
-        { name: 'missing', side: { kind: 'unreadable', cause: 'missing', reason: 'not found' }, says: ['Missing from this version'] },
+        { name: 'over budget', side: { kind: 'unavailable', reason: { kind: 'tooLarge', sizeBytes: 40_000_000 } }, says: ['Too large to preview', '40'] },
+        { name: 'unsupported', side: { kind: 'unavailable', reason: { kind: 'unsupported' } }, says: ["Can't preview this format"] },
+        { name: 'missing', side: { kind: 'unavailable', reason: { kind: 'missing' } }, says: ['File not found'] },
     ] as const)('says why a side is $name and offers no retry', async ({ side, says }) => {
         const onRetry = vi.fn();
         const preview = { enabled: false, source: { kind: 'uri' as const, uri: '' } };
         const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
             <ImageCompare filePath="assets/hero.png" kind="image" alphaCapable={false}
-                before={side} after={{ kind: 'loadFailed', error: 'interrupted' }}
+                before={side} after={{ kind: 'unavailable', reason: { kind: 'loadFailed', error: 'interrupted' } }}
                 beforePreviewInput={preview} afterPreviewInput={preview} onRetry={onRetry} />
         </InjectedAuthProvider>);
         try {

@@ -28,6 +28,7 @@ import {
 import { rectFlipFrame } from '@/components/ui/motion/rectFlipGeometry';
 import { measureInWindow } from '@/components/ui/popover/measure';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { previewUnavailableCard, resolvePreviewUnavailable } from '../previewUnavailable';
 import { Text } from '@/components/ui/text/Text';
 import { hapticsLight } from '@/components/ui/theme/haptics';
 import { Typography } from '@/constants/Typography';
@@ -176,6 +177,12 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
     const [size, setSize] = React.useState<MediaPictureSize | null>(null);
     const [failed, setFailed] = React.useState<string | null>(null);
     const [fullResolution, setFullResolution] = React.useState(false);
+    // The image body's reason and copy; the stage offers Open file instead of Retry.
+    const unavailable = preview.status === 'error' || failed
+      ? previewUnavailableCard(preview.status === 'error'
+        ? resolvePreviewUnavailable({ error: preview.error, errorCode: preview.errorCode, sizeBytes: item.sizeBytes ?? item.source.sizeBytes })
+        : { kind: 'loadFailed', error: failed! }, item.title)
+      : null;
     const viewportSize = React.useMemo(
       () => ({ width: props.viewport.width, height: props.viewport.height }),
       [props.viewport.width, props.viewport.height],
@@ -400,12 +407,14 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                         testID="media-stage-image"
                       />
                     </Animated.View>
-                  ) : preview.status === 'error' || failed ? (
+                  ) : unavailable ? (
                     <SurfaceStateCard
-                      kind="error"
+                      kind={unavailable.kind}
                       size="pane"
-                      title={t('files.viewer.loadFailed', { name: item.title })}
-                      diagnosticCode={preview.error ?? failed}
+                      title={unavailable.title}
+                      {...(unavailable.reason ? { reason: unavailable.reason } : {})}
+        {...(unavailable.iconName ? { iconName: unavailable.iconName } : {})}
+                      {...(unavailable.diagnosticCode ? { diagnosticCode: unavailable.diagnosticCode } : {})}
                       {...(item.openFile
                         ? {
                             action: {

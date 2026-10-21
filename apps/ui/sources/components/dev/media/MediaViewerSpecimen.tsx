@@ -123,10 +123,13 @@ export function MediaViewerSpecimen() {
   );
   const textStyle = { color: theme.colors.text.secondary };
   // RV1 wells when a side's read did not finish (Retry reads it again) beside one that cannot be read.
-  const [afterRead, setAfterRead] = React.useState<ImageCompareSide>({
+  const [afterRead, setAfterRead] = React.useState<ImageCompareSide>({ kind: 'unavailable', reason: {
     kind: 'loadFailed',
     error: 'The direct machine connection was interrupted. Retry the transfer.',
-  });
+  } });
+  // A Markdown or stage image larger than the preview budget: the well says so and offers no Retry.
+  const oversized = React.useMemo(() => ({ enabled: true, mimeType: 'image/jpeg', sizeBytes: 18_000_000, maxBytes: 16 * 1024 * 1024,
+    source: { kind: 'bytes' as const, bytes: new Uint8Array(18_000_000), name: 'merced-river.jpg' } }), []);
   const planetDark = uriSource(assetUri(SAMPLES.planetDark));
   const planetLight = uriSource(assetUri(SAMPLES.planetLight));
   return (
@@ -194,6 +197,18 @@ export function MediaViewerSpecimen() {
         />
       </View>
 
+      <Text variant="heading" style={{ color: theme.colors.text.primary }}>Image body · over the preview budget</Text>
+      <View style={[styles.compare, { borderColor: theme.colors.border.default }]}>
+        <ImageWell
+          kind="image"
+          title="merced-river.jpg"
+          source={oversized}
+          alphaCapable={false}
+          layout="inline"
+          testID="dev-media-well-too-large"
+        />
+      </View>
+
       <Text variant="heading" style={{ color: theme.colors.text.primary }}>Image compare · a read that did not finish</Text>
       <View style={[styles.compare, { borderColor: theme.colors.border.default }]}>
         <ImageCompare
@@ -216,7 +231,7 @@ export function MediaViewerSpecimen() {
           filePath="assets/planet.jpg"
           kind="image"
           alphaCapable={false}
-          before={{ kind: 'unreadable', cause: 'unverified', reason: 'The revision bytes do not match their content hash.' }}
+          before={{ kind: 'unavailable', reason: { kind: 'unverified', error: 'The revision bytes do not match their content hash.' } }}
           after={{ kind: 'present', uri: assetUri(SAMPLES.planetLight), sizeBytes: null }}
           beforePreviewInput={planetDark}
           afterPreviewInput={planetLight}
@@ -233,7 +248,7 @@ export function MediaViewerSpecimen() {
           kind="image"
           alphaCapable={false}
           before={{ kind: 'present', uri: assetUri(SAMPLES.planetDark), sizeBytes: null }}
-          after={{ kind: 'noPreview', reason: 'too_large', sizeBytes: 40_265_318 }}
+          after={{ kind: 'unavailable', reason: { kind: 'tooLarge', sizeBytes: 40_265_318 } }}
           beforePreviewInput={planetDark}
           afterPreviewInput={planetLight}
           beforeLabel="HEAD"
@@ -247,8 +262,8 @@ export function MediaViewerSpecimen() {
           filePath="assets/icon.heic"
           kind="image"
           alphaCapable={false}
-          before={{ kind: 'unreadable', cause: 'missing', reason: 'not_found' }}
-          after={{ kind: 'noPreview', reason: 'unsupported' }}
+          before={{ kind: 'unavailable', reason: { kind: 'missing' } }}
+          after={{ kind: 'unavailable', reason: { kind: 'unsupported' } }}
           beforePreviewInput={planetDark}
           afterPreviewInput={planetLight}
           beforeLabel="turn 4"
