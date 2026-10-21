@@ -371,6 +371,9 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
   });
 
   it('carries exact Workflow invocation services only through the local detached start', async () => {
+    const actionCaller = { kind: 'workflowRun' as const, runId: 'workflow-1', authorization: {
+      admittedPermissionCeiling: 'default' as const, principal: { kind: 'host' as const },
+    } };
     const permissionStore = {
       publishRequest: vi.fn(),
       publishRequestAndWait: vi.fn(async () => undefined),
@@ -419,6 +422,8 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       executionRunWorkflowObservationSink: workflowObservationSink,
       callerPermissionMode: 'default',
       causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' },
+      actionCaller,
+      actionRequestId: 'workflow-input-v2:exact:execution-run-start',
       agentStartContext: {
         caller: { kind: 'originless', runId: 'workflow-1', runDepth: 2 },
         baseline: { machineId: 'machine-1', directory: '/workspace' },
@@ -432,7 +437,8 @@ describe('createCliActionDeps execution-run plugin bindings', () => {
       expect.objectContaining({
         executionRunPermissionRequestStore: permissionStore,
         executionRunWorkflowObservationSink: workflowObservationSink,
-        localActionContext: expect.objectContaining({ agentStartWorkDepth: 3 }),
+        localActionContext: expect.objectContaining({ agentStartWorkDepth: 3, actionCaller,
+          actionRequestId: 'workflow-input-v2:exact:execution-run-start' }),
       }),
     );
     expect(callMachineRpc).not.toHaveBeenCalled();

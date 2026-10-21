@@ -2508,6 +2508,8 @@ export function createCliActionDeps(params: Readonly<{
   type ExecutionRunActionTransportOptions = Readonly<{
     surface?: ActionExecutorContext['surface'];
     authority?: ActionExecutorContext['authority'];
+    actionCaller?: ActionExecutorContext['actionCaller'];
+    actionRequestId?: ActionExecutorContext['actionRequestId'];
     workDepth?: number;
     workspaceWrites?: 'allow' | 'deny';
     agentStartContext?: ActionExecutorContext['agentStartContext'];
@@ -2619,6 +2621,8 @@ export function createCliActionDeps(params: Readonly<{
           localActionContext: {
             ...(opts?.surface ? { surface: opts.surface } : {}),
             ...(opts?.authority ? { authority: opts.authority } : {}),
+            ...(opts?.actionCaller ? { actionCaller: opts.actionCaller } : {}),
+            ...(opts?.actionRequestId ? { actionRequestId: opts.actionRequestId } : {}),
             ...(opts?.workDepth === undefined ? {} : {
               surface: 'agent' as const,
               authority: 'account_automation' as const,

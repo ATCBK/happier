@@ -206,6 +206,9 @@ export function buildActionExecutorContextForRpc(
         ...(localActionContext?.actionRequestId
             ? { actionRequestId: localActionContext.actionRequestId }
             : {}),
+        ...(localActionContext?.actionCaller
+            ? { actionCaller: localActionContext.actionCaller }
+            : {}),
         ...(hasLocalCallerPermissionMode
             ? { callerPermissionMode: localActionContext?.callerPermissionMode ?? null }
             : {}),
