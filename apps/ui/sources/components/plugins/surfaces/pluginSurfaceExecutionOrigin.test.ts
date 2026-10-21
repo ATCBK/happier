@@ -232,9 +232,9 @@ describe('plugin surface execution requirement', () => {
                 expect(readMachineInventoryRowReadiness(storage.getState().machines[machineId]!)).toBe('pending');
                 expect(getMachineContributionRegistryProjectionRevision(revisionScope)).toBe(revisionBefore);
                 expect(targetHook.getCurrent().origin.selection.canExecute).toBe(false);
-                expect(targetHook.getCurrent().origin.selection.state).toMatchObject({ kind: 'unavailable', reasons: ['unknown'] });
-                expect(targetHook.getCurrent().origin.selectedSupply).toBeNull();
-                expect(targetSignals[0]?.aborted).toBe(true);
+                expect(targetHook.getCurrent().origin.selection.state).toMatchObject({ kind: 'selected' });
+                expect(targetHook.getCurrent().origin.selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a' });
+                expect(targetSignals[0]?.aborted).toBe(false);
                 const openedMachine = { ...pendingMachine, metadataVersion: pendingMachine.keyBasis.metadataVersion,
                     daemonStateVersion: pendingMachine.keyBasis.daemonStateVersion };
                 await act(async () => storage.getState().applyMachines([openedMachine], false,
@@ -244,8 +244,8 @@ describe('plugin surface execution requirement', () => {
                 expect(getMachineContributionRegistryProjectionRevision(revisionScope)).toBe(revisionBefore);
                 expect(targetHook.getCurrent().origin.selection.canExecute).toBe(true);
                 expect(targetHook.getCurrent().origin.selectedSupply).toMatchObject({ occurrenceId: 'occurrence-a' });
-                expect(targetSignals).toHaveLength(2);
-                expect(targetSignals[1]?.aborted).toBe(false);
+                expect(targetSignals).toHaveLength(1);
+                expect(targetSignals[0]?.aborted).toBe(false);
                 targetedReply.resolve(DaemonPluginUiTargetedContributionsReadResponseSchema.parse({ status: 'current',
                     targetedContributions: { target: { pluginId, occurrenceId: 'occurrence-a', sourceCustody }, points: [] },
                     targetedSurfaceMounts: [] }));

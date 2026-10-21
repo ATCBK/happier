@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as platformCrypto from 'rn-encryption';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 
 import { createDeferred, createMachineFixture } from '@/dev/testkit';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
-import { readLiveMachineInventoryRows, resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { hasCurrentMachineContent, readLiveMachineInventoryRows, resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { resolveAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/machineInventorySnapshots';
 import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
@@ -43,6 +44,35 @@ function createInventory() {
 }
 
 describe('Machine-list settlement through sync and the real store', () => {
+    it('retains already opened eligibility when list hydration catches up behind a newer same-key hint', async () => {
+        const inventory = createInventory();
+        const row = { ...createPlainMachineRowFixture({ id: 'opening', accountId: 'account-1' }),
+            keyBasis: { dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, metadataVersion: 1, daemonStateVersion: 1 } };
+        const params = { ...inventory.callbacks, credentials, expectedAccountMode: 'plain' as const,
+            encryption: null, machineDataKeys: new Map(),
+            applyMachineDisplayEntries: (machines: Parameters<typeof initialState.replaceMachineDisplays>[0], options: Parameters<typeof initialState.replaceMachineDisplays>[1]) =>
+                storage.getState().replaceMachineDisplays(machines, { ...options, sourceServerId: inventory.serverId }),
+        };
+        await fetchAndApplyMachines({ ...params, request: async () => Response.json([row]) });
+        expect(storage.getState().machines.opening?.availability).toEqual({ kind: 'available' });
+        const entered = createDeferred<void>(), release = createDeferred<void>();
+        const pending = fetchAndApplyMachines({ ...params, request: async () => {
+            entered.resolve(); await release.promise; return Response.json([row]);
+        } });
+        try {
+            await entered.promise;
+            const opened = storage.getState().machines.opening!;
+            storage.getState().applyMachines([{ ...opened,
+                keyBasis: { ...row.keyBasis, daemonStateVersion: 2 },
+            }], false, { sourceServerId: inventory.serverId });
+            release.resolve(); await pending;
+            const retained = storage.getState().machines.opening!;
+            expect(retained).toMatchObject({ metadata: opened.metadata, availability: { kind: 'available' },
+                daemonStateVersion: 1, keyBasis: { daemonStateVersion: 2 } });
+            expect(hasCurrentMachineContent(retained)).toBe(false);
+        } finally { release.resolve(); await pending; }
+    });
+
     it.each(['same-key', 'newer-content-hint', 'different-owner-key'] as const)('hydrates a presence shell while socket hints advance during the list read: %s', async (hint) => {
         const inventory = createInventory();
         const secret = new Uint8Array(32).fill(17);

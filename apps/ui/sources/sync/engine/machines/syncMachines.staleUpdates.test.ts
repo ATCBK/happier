@@ -5,7 +5,8 @@ import { buildUpdatedMachineFromSocketUpdate } from './syncMachines'
 import { Encryption } from '@/sync/encryption/encryption'
 import * as platformCrypto from 'rn-encryption'
 import { createDeferred, createMachineFixture } from '@/dev/testkit'
-import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent'
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent'
+import { hasCurrentMachineContent } from '@/sync/domains/machines/resolveServerScopedMachines'
 
 type MachineUpdate = {
     machineId: string
@@ -40,6 +41,26 @@ function buildMachine(overrides: Partial<Machine> = {}): Machine {
 }
 
 describe('buildUpdatedMachineFromSocketUpdate stale guards', () => {
+    it.each((['plain', 'e2ee'] as const).flatMap(storageMode =>
+        (['opened', 'unopened', 'locked', 'key-replaced'] as const).map(admission => ({ storageMode, admission })),
+    ))('preserves only admitted same-key presentation during a pending $storageMode socket update: $admission', async ({ storageMode, admission }) => {
+        // No cipher is available at this boundary; key envelopes stay opaque.
+        const dataEncryptionKey = storageMode === 'plain' ? MACHINE_PLAIN_DATA_KEY_MARKER : 'existing-envelope'
+        const existing = createMachineFixture({ storageMode, dataEncryptionKey,
+            keyBasis: { dataEncryptionKey, metadataVersion: 1, daemonStateVersion: 1 },
+            availability: admission === 'unopened' ? undefined : admission === 'locked'
+                ? { kind: 'locked', reason: 'decryption_failed' } : { kind: 'available' } })
+        const updated = await buildUpdatedMachineFromSocketUpdate({ existingMachine: existing,
+            machineUpdate: { machineId: existing.id }, updateSeq: 2, updateCreatedAt: 2,
+            keyBasis: { ...existing.keyBasis!, metadataVersion: 2,
+                dataEncryptionKey: admission === 'key-replaced' ? 'replacement-envelope' : dataEncryptionKey },
+            getMachineEncryption: () => null,
+        })
+        expect(updated?.availability).toEqual(admission === 'opened' ? { kind: 'available' }
+            : admission === 'locked' ? existing.availability : undefined)
+        expect(hasCurrentMachineContent(updated!)).toBe(false)
+    })
+
     it('projects the admitted child fact independently of rewritten metadata and clears a retired fact', async () => {
         const projection = { relation: { managedMachineId: 'managed-child', managedMachineKind: 'devcontainer' as const,
             parentMachineId: 'physical-parent' }, observation: { nativeResourceId: 'native-child', user: 'custom-user',

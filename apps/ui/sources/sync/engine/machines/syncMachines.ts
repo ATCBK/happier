@@ -280,7 +280,12 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
     };
     const qualifyOpenedContent = () => {
         if (updatedMachine.metadata && updatedMachine.availability?.kind !== 'locked') {
-            updatedMachine.availability = hasCurrentMachineContent(updatedMachine) ? { kind: 'available' } : undefined;
+            // Availability retains opened presentation; the inventory owner's
+            // current-content check separately admits fresh execution.
+            const retainedAdmission = existingMachine?.availability?.kind === 'available'
+                && existingMachine.keyBasis?.dataEncryptionKey === updatedMachine.keyBasis?.dataEncryptionKey;
+            updatedMachine.availability = hasCurrentMachineContent(updatedMachine) || retainedAdmission
+                ? { kind: 'available' } : undefined;
         }
     };
 
@@ -334,6 +339,7 @@ export async function buildUpdatedMachineFromSocketUpdate(params: {
     const machineEncryption = getMachineEncryption(machineId);
     if (!machineEncryption) {
         if (!machineUpdate.metadata) projectChildFact();
+        qualifyOpenedContent();
         return updatedMachine;
     }
 

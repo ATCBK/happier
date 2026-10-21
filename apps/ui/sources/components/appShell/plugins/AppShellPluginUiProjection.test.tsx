@@ -3131,10 +3131,15 @@ describe('AppShellPluginUiProjectionProvider', () => {
         await act(async () => {
             const current = persistentStorage.getState().machines[machineId]!;
             if (!current.keyBasis) throw new Error('The admitted fixture lost its published basis');
-            persistentStorage.getState().applyMachines([{ ...current,
+            const { buildUpdatedMachineFromSocketUpdate } = await import('@/sync/engine/machines/syncMachines');
+            const updated = publication === 'pending' ? await buildUpdatedMachineFromSocketUpdate({
+                existingMachine: current, machineUpdate: { machineId }, updateSeq: 2,
+                updateCreatedAt: current.updatedAt + 1,
                 keyBasis: { ...current.keyBasis, daemonStateVersion: 3 },
-                ...(publication === 'opened' ? { daemonStateVersion: 3 } : {}),
-            }], false, { sourceServerId: storageState.activeServer.serverId });
+                getMachineEncryption: () => null,
+            }) : { ...current, keyBasis: { ...current.keyBasis, daemonStateVersion: 3 }, daemonStateVersion: 3 };
+            if (!updated) throw new Error('The current socket publication was discarded');
+            persistentStorage.getState().applyMachines([updated], false, { sourceServerId: storageState.activeServer.serverId });
         });
         await flushHookEffects();
         // Fresh execution remains closed, but an un-opened same-key hint is
@@ -3171,6 +3176,19 @@ describe('AppShellPluginUiProjectionProvider', () => {
                 expect.soft(refusal.kind === 'error' ? refusal.payload.diagnostics : [])
                     .not.toContain('plugin_mounted_caller_unavailable');
             } finally { controller.dispose(); }
+            // Opening that same publication does not replace the origin or
+            // occurrence. Its original read must survive the whole transition.
+            await act(async () => {
+                const current = persistentStorage.getState().machines[machineId]!;
+                persistentStorage.getState().applyMachines([{ ...current, daemonStateVersion: 3 }], false,
+                    { sourceServerId: storageState.activeServer.serverId });
+            });
+            await flushHookEffects();
+            expect(read().execution.selection.canExecute).toBe(true);
+            expect.soft(read().execution.selectedSupply?.occurrenceId).toBe(admitted?.occurrenceId);
+            expect.soft(callerSignal.aborted).toBe(false);
+            expect.soft(signals).toHaveLength(1);
+            expect.soft(signals[0]!.aborted).toBe(false);
         }
         await act(async () => { pending.resolve(targetedResponse); });
         await flushHookEffects();
