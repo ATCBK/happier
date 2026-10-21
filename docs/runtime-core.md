@@ -420,7 +420,9 @@ and cleanup. Missing admission, an unreadable binding or a different Account
 returns `inactive_agent_launch_scope_unavailable` before native execution;
 there is no fallback to the daemon's native account home. Bundled and installed
 Agents consume the same host boundary. This is development-source behavior;
-loaded-daemon replay remains separate verification.
+loaded-daemon replay remains separate verification. A managed Provider whose
+final endpoint scope requires a running Session is refused until that scope can
+be admitted; inactive controls never substitute native-account defaults.
 
 Session-owned bounded Runs whose Agent declares new-turn delivery keep the native
 Session available until the host's bounded loop settles. A first native turn can

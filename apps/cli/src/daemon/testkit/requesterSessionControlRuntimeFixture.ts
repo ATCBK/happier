@@ -56,7 +56,7 @@ export async function createRequesterSessionControlRuntimeFixture(input: Readonl
     serversDir: join(input.happyHomeDir, 'servers'),
     privateKeyFile: join(input.activeServerDir, 'access.key'),
     daemonStateFile: join(input.activeServerDir, 'daemon.state.json'),
-    installationIdentityFile: join(input.happyHomeDir, 'installation.json'),
+    installationIdentityFile: join(input.happyHomeDir, 'installation-identity.json'),
   });
   const mutationCustody = createDaemonSessionMutationCustody({ credentials: input.credentials });
   let runtime: Awaited<ReturnType<typeof startDaemonSessionControlRuntime>> | null = null;

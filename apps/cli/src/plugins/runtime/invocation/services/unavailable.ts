@@ -230,6 +230,7 @@ export type PluginInvocationServicesFactoryParams = Readonly<{
         resolvePath: Parameters<typeof createStablePluginExecService>[0]['resolvePath'];
         environment?: Readonly<Record<string, string>>;
         prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
+        assertLaunchCurrent?: (signal: AbortSignal) => Promise<void>;
         agentCli?: Parameters<typeof createStablePluginExecService>[0]['agentCli'];
         systemTools?: ExecSystemToolServiceV1;
         systemToolsForPlugin?: (
@@ -1022,6 +1023,7 @@ export function createPluginInvocationServicesFromDescriptors(
             ...(systemTools ? { systemTools } : {}),
             ...(params.exec!.environment ? { environment: params.exec!.environment } : {}),
             ...(params.exec!.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: params.exec!.prepareAgentNativeLaunch } : {}),
+            ...(params.exec!.assertLaunchCurrent ? { assertLaunchCurrent: params.exec!.assertLaunchCurrent } : {}),
             ...(params.recordRuntimeLimitMeasurement
                 ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
                 : {}),

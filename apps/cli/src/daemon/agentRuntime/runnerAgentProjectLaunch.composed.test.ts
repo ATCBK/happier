@@ -34,6 +34,8 @@ import { bindRequesterSessionRuntimeMachineAdmissionCurrentness } from '@/daemon
 import { MachineAdmissionVerifyResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { performance } from 'node:perf_hooks';
 import { logger } from '@/utils/logger';
+import { createProductionPluginInvocationServiceOwners } from '@/plugins/runtime/invocation/services/production';
+import { createNativeAgentExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/nativeAgentExecutionRun';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -376,8 +378,6 @@ it('prepares a fresh zero-step native Project through installed Session custody 
 });
 
 it('prepares a detached Run through its production invocation services and issued native launch qualifier', async () => {
-  const { createProductionPluginInvocationServiceOwners } = await import('@/plugins/runtime/invocation/services/production');
-  const { createNativeAgentExecutionRunHostRuntime } = await import('@/agent/runtime/bridges/executionRun/nativeAgentExecutionRun');
   const h = await harness();
   const executable = { kind: 'systemTool' as const, id: 'fixture.agent' };
   const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} },

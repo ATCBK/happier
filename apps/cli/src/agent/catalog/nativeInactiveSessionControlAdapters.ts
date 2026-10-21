@@ -11,6 +11,8 @@ import {
   type AgentSessionUsageLimitRecoveryResult,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { resolveInactiveSessionControlLaunchScope, type ResolveInactiveSessionControlLaunchScope,
+  type InactiveSessionControlLaunchScope } from '@/daemon/spawn/inactiveSessionControlLaunchScope';
 import type { WorkStatePublisher } from '@happier-dev/plugin-sdk/sessions/work-state';
 import { readSessionWorkStateV1FromMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { SessionGoalControlFailureV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
@@ -64,6 +66,7 @@ type NativeInvocationResolution =
       factory: AgentSessionRuntimeFactory;
       metadata: () => Record<string, unknown>;
       goalSource: WorkStatePublisher | null;
+      assertCurrent(): Promise<void>;
       isCurrent(): boolean;
       goalSet: Readonly<{
         fields: readonly ('objective' | 'status' | 'tokenBudget')[];
@@ -74,6 +77,7 @@ type NativeInvocationResolution =
 
 export type NativeInactiveSessionControlDependencies = Readonly<{
   acquireRuntimeRegistryLease?: () => Promise<RuntimeRegistryLease>;
+  resolveLaunchScope?: ResolveInactiveSessionControlLaunchScope;
 }>;
 
 function readString(value: unknown): string | null {
@@ -179,6 +183,7 @@ async function buildControlContext(params: Readonly<{
   lease: AgentRuntimeRegistrationLease;
   adapterParams: InactiveControlAdapterParams;
   signal: AbortSignal;
+  launchScope: InactiveSessionControlLaunchScope;
 }>): Promise<Readonly<{
   context: AgentSessionControlContext;
   metadata: () => Record<string, unknown>;
@@ -194,6 +199,17 @@ async function buildControlContext(params: Readonly<{
     occurrenceId: params.lease.occurrenceId,
     correlationId: randomUUID(),
     cwd,
+    environment: params.launchScope.environment,
+    assertLaunchCurrent: async launchSignal => {
+      launchSignal.throwIfAborted();
+      await params.launchScope.assertCurrent();
+      launchSignal.throwIfAborted();
+    },
+    ...(params.launchScope.agentCliLaunch ? { agentCliLaunch: params.launchScope.agentCliLaunch } : {}),
+    providerBindingActive: params.launchScope.providerBindingActive === true,
+    ...(params.launchScope.connectedAccountsOwner ? { connectedAccountsOwner: params.launchScope.connectedAccountsOwner } : {}),
+    ...(params.launchScope.exactPurposeBindingSubjectId
+      ? { exactPurposeBindingSubjectId: params.launchScope.exactPurposeBindingSubjectId } : {}),
     signal,
     isOccurrenceCurrent: params.lease.isCurrent,
   });
@@ -261,7 +277,7 @@ async function buildControlContext(params: Readonly<{
       cwd,
       activity: 'inactive' as const,
       ...(providerSessionId ? { providerSessionId } : {}),
-      connectedAccounts: Object.freeze([]),
+      connectedAccounts: params.launchScope.connectedAccounts,
     }),
   }) satisfies AgentSessionControlContext;
   return Object.freeze({
@@ -289,9 +305,11 @@ async function resolveNativeInvocation(params: Readonly<{
     params.dependencies?.acquireRuntimeRegistryLease
       ?? acquireAuthoritativePluginRuntimeRegistryLease
   )();
+  let launchScope: InactiveSessionControlLaunchScope | null = null;
   const release = async () => {
     operationAbort.abort();
-    await runtimeRegistryLease.release();
+    try { await launchScope?.dispose(); }
+    finally { await runtimeRegistryLease.release(); }
   };
   try {
     signal.throwIfAborted();
@@ -330,11 +348,20 @@ async function resolveNativeInvocation(params: Readonly<{
         release,
       };
     }
+    try {
+      launchScope = await (params.dependencies?.resolveLaunchScope ?? resolveInactiveSessionControlLaunchScope)({
+        agentId: params.agentId, runtimeRegistryLease, adapterParams: params.adapterParams, signal,
+      });
+    } catch {
+      signal.throwIfAborted();
+      return { resolution: { kind: 'unavailable', code: 'inactive_agent_launch_scope_unavailable' }, release };
+    }
     const built = await buildControlContext({
       registry,
       lease,
       adapterParams: params.adapterParams,
       signal,
+      launchScope,
     });
     signal.throwIfAborted();
     const sessionCapabilities = readAgentSessionCapabilities(
@@ -352,6 +379,7 @@ async function resolveNativeInvocation(params: Readonly<{
         factory,
         metadata: built.metadata,
         goalSource: goalSourceId ? built.workState.publisher(goalSourceId) : null,
+        assertCurrent: launchScope.assertCurrent,
         isCurrent: lease.isCurrent,
         goalSet,
       },
@@ -386,6 +414,7 @@ async function invokeNative<T>(params: Readonly<{
       return params.unavailable(resolved.resolution.code);
     }
     resolved.resolution.context.signal.throwIfAborted();
+    await resolved.resolution.assertCurrent();
     const result = await params.invoke(resolved.resolution);
     return resolved.resolution.isCurrent()
       ? result

@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveSpawnChildEnvironment } from '@/daemon/spawn/resolveSpawnChildEnvironment';
+import { bindInactiveSessionControlLaunchScope } from '@/daemon/spawn/inactiveSessionControlLaunchScope';
+import { createCodexNativeSessionControls } from '../../../../../packages/plugins/codex/src/agent/runtime/controls';
 import { SessionWorkStateGetResponseV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import { SessionWorkStateV1Schema, writeSessionWorkStateV1ToMetadata } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateV1';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -8,7 +11,9 @@ import type { Metadata } from '@/api/types';
 import type { RpcHandler } from '@/api/rpc/types';
 import { registerSessionControlHandlers } from '@/rpc/handlers/sessionControls';
 
-import { buildTestAgentRuntimeDescriptorV1, buildTestCodexRuntimeDescriptorV1 as buildCodexAgentRuntimeDescriptorV1 } from '@/testkit/runtimeDescriptorFixtures';
+import { buildTestAgentRuntimeDescriptorV1 } from '@/testkit/runtimeDescriptorFixtures';
+import { rawSession, metadata, commonRouteParams } from './nativeInactiveSessionControlAdapters.testkit';
+import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import {
   type AgentRuntime,
   type AgentSessionGoalMutationResult,
@@ -21,7 +26,6 @@ import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/
 import { resolveContributedAgentRoutingId } from '@/plugins/projection/registry/agentRoutingIdentity';
 import { routeSessionCatalogControl } from '@/session/catalogControls/sessionCatalogControlRouter';
 import { routeSessionGoalControl } from '@/session/goalControls/sessionGoalControlRouter';
-import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { routeSessionUsageLimitRecoveryCheckNow } from '@/session/usageLimitRecoveryControls/sessionUsageLimitRecoveryControlRouter';
 
 import {
@@ -30,29 +34,43 @@ import {
   createNativeInactiveUsageAdapter,
 } from './nativeInactiveSessionControlAdapters';
 
-function rawSession(id: string): RawSessionRecord {
-  return {
-    id,
-    active: false,
-    path: '/repo',
-    machineId: 'machine-local',
-    metadata: '{}',
-    metadataVersion: 1,
-    encryptionMode: 'plain',
-  } as unknown as RawSessionRecord;
-}
+let releaseLaunchScope: (() => void) | undefined;
+beforeEach(() => {
+  releaseLaunchScope = bindInactiveSessionControlLaunchScope(async input => {
+    // These synthetic plugin registries carry no Account selection. Keep the
+    // ordinary native environment owner real for their unbound fixture scope.
+    const result = await resolveSpawnChildEnvironment({ options: { directory: input.adapterParams.cwd ?? '/repo' },
+      profileEnvironmentVariables: {}, processEnv: {}, daemonSpawnHooks: null,
+      logDebug() {}, logInfo() {}, logWarn() {} });
+    if (!result.ok) throw new Error('Native fixture scope unavailable');
+    return { environment: result.extraEnvForChild, connectedAccounts: [], async assertCurrent() {}, async dispose() {} };
+  });
+});
+afterEach(() => releaseLaunchScope?.());
 
-function metadata() {
-  return {
-    path: '/repo',
-    host: 'host-local',
-    machineId: 'machine-local',
-    nativeResumeIdentityV1: { v: 1, vendorResumeId: 'thread-1' },
-    agentRuntimeDescriptorV1: buildCodexAgentRuntimeDescriptorV1({
-      backendMode: 'appServer',
-    }),
-  };
-}
+it('refuses all inactive native facets when the admitted launch owner is unavailable', async () => {
+  releaseLaunchScope?.();
+  const controls = createCodexNativeSessionControls();
+  const fixture = runtimeRegistryFixture({ agent: { pluginId: 'acme.controls', localId: 'native' },
+    sessions: { ...controls, async open() { throw new Error('No native process is admitted'); } } });
+  const dependencies = { acquireRuntimeRegistryLease: fixture.acquire };
+  const input = { ...commonRouteParams('unadmitted'), cwd: '/repo', sessionMachineId: 'machine-local' };
+  const goal = createNativeInactiveGoalAdapter({ agentId: fixture.agentId,
+    native: { get: true, set: true, clear: true }, dependencies });
+  const failure = { ok: false, errorCode: 'inactive_agent_launch_scope_unavailable' };
+  await expect(goal.getGoal!(input)).resolves.toMatchObject(failure);
+  await expect(goal.setGoal!({ ...input, request: { objective: 'Must not enter native state' } })).resolves.toMatchObject(failure);
+  await expect(goal.clearGoal!(input)).resolves.toMatchObject(failure);
+  const catalog = createNativeInactiveCatalogAdapter({ agentId: fixture.agentId,
+    native: { vendorPlugins: true, skills: true }, dependencies });
+  await expect(catalog.listVendorPlugins!(input)).resolves.toMatchObject({ unsupported: true, diagnostic: failure.errorCode });
+  await expect(catalog.listSkills!(input)).resolves.toMatchObject({ unsupported: true, diagnostic: failure.errorCode });
+  const usage = createNativeInactiveUsageAdapter({ agentId: fixture.agentId,
+    native: { checkNow: true, consumeResetCredit: true }, dependencies });
+  await expect(usage.checkNow!(input)).resolves.toMatchObject(failure);
+  await expect(usage.consumeResetCredit!(input)).resolves.toMatchObject(failure);
+});
+
 
 function runtimeRegistryFixture(params: Readonly<{
   sessions: AgentSessionRuntimeFactory;
@@ -60,7 +78,7 @@ function runtimeRegistryFixture(params: Readonly<{
   isCurrent?: () => boolean;
   runtime?: AgentRuntime;
   createRuntime?: (options: Readonly<{ signal: AbortSignal }>) => Promise<AgentRuntime>;
-  createServices?: (options: Readonly<{ signal: AbortSignal }>) => Promise<ReturnType<typeof createUnavailablePluginServices>>;
+  createServices?: (options: Readonly<{ signal: AbortSignal; environment?: Readonly<Record<string, string>> }>) => Promise<ReturnType<typeof createUnavailablePluginServices>>;
   activate?: () => Promise<readonly []>;
   release?: () => Promise<void>;
   includeRuntimeLease?: boolean;
@@ -104,7 +122,7 @@ function runtimeRegistryFixture(params: Readonly<{
               source: 'goals',
             },
             catalog: { inactive: ['vendorPlugins', 'skills'] },
-            usageLimitRecovery: { inactive: ['checkNow'] },
+            usageLimitRecovery: { inactive: ['checkNow', 'consumeResetCredit'] },
             workStateSources: [{ id: 'goals', itemKinds: ['goal'] }],
           },
         },
@@ -143,20 +161,6 @@ function runtimeRegistryFixture(params: Readonly<{
   };
 }
 
-function commonRouteParams(sessionId: string) {
-  return {
-    token: 'token',
-    sessionId,
-    rawSession: rawSession(sessionId),
-    metadata: metadata(),
-    currentMachineId: 'machine-local',
-    ctx: null,
-    mode: 'plain' as const,
-    callLiveSessionRpc: vi.fn(),
-    // The daemon's durable mutation queue is a persistence boundary.
-    stageWorkStateMutation: vi.fn(async () => undefined),
-  };
-}
 
 function claudeResumeGoalHarness() {
   const sessionId = 'claude-native-goal-resume';

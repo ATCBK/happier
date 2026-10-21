@@ -152,6 +152,8 @@ type PluginOperationServicesInput = Readonly<{
     notificationCategories?: readonly NotificationCategoryDeclaration[];
     managedProviderRuntime?: ManagedProviderRuntimeOperationBinding;
     exactPurposeBindingSubjectId?: string;
+    connectedAccountsOwner?: StablePluginConnectedAccountsOwner;
+    assertLaunchCurrent?: (signal: AbortSignal) => Promise<void>;
     resolveExecutable?: ResolvePluginExecutable;
     hostAccessRequests: readonly Readonly<{
         request: import('@happier-dev/protocol').PluginHostAccessRequestV2;
@@ -490,8 +492,8 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
     const notificationsOwner = params?.notifications
         ? createStablePluginNotificationsOwner(params.notifications)
         : null;
-    const connectedAccountsHost = params?.connectedAccounts
-        ? createStablePluginConnectedAccountsHost(params.connectedAccounts, {
+    const createConnectedAccountsHost = (owner: StablePluginConnectedAccountsOwner) =>
+        createStablePluginConnectedAccountsHost(owner, {
             registerRawForRedaction(seed, value) {
                 secretRedactor.registerRaw({
                     pluginId: seed.plugin.id,
@@ -506,8 +508,8 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                     correlationId: seed.correlationId,
                 }, value);
             },
-        })
-        : null;
+        });
+    const connectedAccountsHost = params?.connectedAccounts ? createConnectedAccountsHost(params.connectedAccounts) : null;
     const createServicesFactory = createPluginInvocationServicesFactory({
         loggerSink,
         resolveLogger: resolveInvocationLogger,
@@ -580,8 +582,10 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             managedProviderRuntime?:
                 ManagedProviderRuntimeOperationBinding;
             exactPurposeBindingSubjectId?: string;
+            connectedAccountsOwner?: StablePluginConnectedAccountsOwner;
             resolveExecutable?: ResolvePluginExecutable;
             prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
+            assertLaunchCurrent?: (signal: AbortSignal) => Promise<void>;
         }>,
     ) => {
         const operationEvents =
@@ -663,24 +667,28 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                     },
                 })
                 : notificationsOwner;
+        const admittedConnectedAccountsHost = overrides?.connectedAccountsOwner
+            ? createConnectedAccountsHost(overrides.connectedAccountsOwner) : connectedAccountsHost;
         const operationConnectedAccountsHost =
-            overrides?.exactPurposeBindingSubjectId
-            && connectedAccountsHost
+            admittedConnectedAccountsHost && (overrides?.exactPurposeBindingSubjectId || overrides?.connectedAccountsOwner)
                 ? Object.freeze({
                     bind(
                         seed: PluginInvocationServicesSeed,
                         scopes: Parameters<
-                            typeof connectedAccountsHost.bind
+                            typeof admittedConnectedAccountsHost.bind
                         >[1],
                     ) {
-                        return connectedAccountsHost.bind(seed, scopes, {
+                        if (overrides?.connectedAccountsOwner) {
+                            seed.signal.addEventListener('abort', () => admittedConnectedAccountsHost.retire(), { once: true });
+                        }
+                        return admittedConnectedAccountsHost.bind(seed, scopes, {
                             exactPurposeBindingSubjectId:
                                 overrides.exactPurposeBindingSubjectId,
                         });
                     },
-                    retire: connectedAccountsHost.retire,
+                    retire: admittedConnectedAccountsHost.retire,
                 })
-                : connectedAccountsHost;
+                : admittedConnectedAccountsHost;
         return createPluginInvocationServicesFactory({
             loggerSink,
             resolveLogger: resolveInvocationLogger,
@@ -707,6 +715,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                     resolvePath: async (path) => resolvePluginPathWithinRoots(roots, path),
                     environment,
                     ...(overrides?.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: overrides.prepareAgentNativeLaunch } : {}),
+                    ...(overrides?.assertLaunchCurrent ? { assertLaunchCurrent: overrides.assertLaunchCurrent } : {}),
                 },
             } : {}),
             ...(recordRuntimeLimitMeasurement ? { recordRuntimeLimitMeasurement } : {}),
@@ -857,6 +866,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
     );
     const createTargetServiceBindingForRoots = (
         roots: PluginFileSystemRoots | undefined,
+        connectedAccountsAvailable = connectedAccountsHost !== null,
     ): CreatePluginInvocationServiceBinding => (
         occurrenceId,
         id,
@@ -898,7 +908,7 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
             contributionQualifiedId,
             resolved,
         );
-        const hostAvailable = connectedAccountsHost
+        const hostAvailable = connectedAccountsAvailable
             ? addConnectedAccountsAvailablePluginInvocationServiceBinding(
                 publicFilesystemBinding,
             )
@@ -943,7 +953,10 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
         const currentSeed = attachCurrentPluginCallerResolvers(seed);
         const baseBinding = createPluginInvocationHostPolicyResolver({
             ...(params?.resolveOptionalAccess ? { resolveOptionalAccess: params.resolveOptionalAccess } : {}),
-            createServiceBinding: createTargetServiceBindingForRoots(operation.filesystemRoots),
+            createServiceBinding: createTargetServiceBindingForRoots(
+                operation.filesystemRoots,
+                operation.connectedAccountsOwner !== undefined || connectedAccountsHost !== null,
+            ),
             sessionServiceAvailable: params?.sessions !== undefined,
         })({
             pluginId: currentSeed.plugin.id,
@@ -990,7 +1003,9 @@ export function createProductionPluginInvocationServiceOwners(params?: Readonly<
                 operation.environment ?? Object.freeze({}),
                 operation.systemTools,
                 {
+                    ...(operation.connectedAccountsOwner ? { connectedAccountsOwner: operation.connectedAccountsOwner } : {}),
                     ...(operation.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: operation.prepareAgentNativeLaunch } : {}),
+                    ...(operation.assertLaunchCurrent ? { assertLaunchCurrent: operation.assertLaunchCurrent } : {}),
                     ...(operation.settingsDeclarations
                         ? { settingsDeclarations: operation.settingsDeclarations }
                         : {}),

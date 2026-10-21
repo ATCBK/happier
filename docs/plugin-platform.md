@@ -3921,7 +3921,11 @@ trusted plugin-local file through the incumbent Session attachment upload
 owner. It requires admitted Session write access and a locally hosted Session;
 the host derives the destination from that Session's workspace, not the plugin
 filesystem scope. The daemon binds this upload and composer-media staging to
-its host-private local Machine RPC entrypoint. The peer-mediation adapter
+the host-local carrier returned by the same upload lifecycle. It retains the
+filesystem owner's transfer store and handlers independently of the public
+Machine method table, whose chunk/finalize/abort methods accept prepared-transfer
+envelopes after daemon startup. Composer-stage release still uses its existing
+Machine handler. The peer-mediation adapter
 requires a verified peer Account grant and cannot carry these host-local calls.
 Materialization returns the path and exact source bytes. It does not transfer provider-local paths
 across machines. Channels' declared `channel-file` attachment consumes this

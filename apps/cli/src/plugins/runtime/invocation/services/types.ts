@@ -272,10 +272,14 @@ export type CreateAgentInvocationServices = (
         correlationId: string;
         /** Exact preflight operation's existing Connected Account custody. */
         exactPurposeBindingSubjectId?: string;
+        /** Account owner admitted by the host for this exact operation. */
+        connectedAccountsOwner?: import('./connectedAccounts').StablePluginConnectedAccountsOwner;
         cwd: string;
         environment?: Readonly<Record<string, string>>;
         /** Captured host preparation; generic Exec stays nonactivating. */
         prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
+        /** Captured host authority, rechecked by the physical Exec owner before launch. */
+        assertLaunchCurrent?: (signal: AbortSignal) => Promise<void>;
         projectSetupOperation?: import('@/workspaces/projectSetup/projectSetupExecution').ProjectSetupOperationContext;
         /** Host-private exact managed launch; plugin code never receives this binding. */
         agentCliLaunch?: import('@/packagedRuntime/managedTools/agentCliLaunchSpec').BoundAgentCliLaunchSpec;

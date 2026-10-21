@@ -13,6 +13,7 @@ import {
     accountSettingsParse,
     ingestPluginManifestV2,
     redactBugReportSensitiveText,
+    createActionExecutor,
 } from '@happier-dev/protocol';
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type {
@@ -48,6 +49,48 @@ import {
     setActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { HostRuntimeLimitMeasurementSample } from '@/agent/runtime/state/runtimeLimitMeasurement';
+import { createForegroundPurposeOwnerFixture } from '@/daemon/agentRuntime/prepareForegroundAdmission.connectedServices.testkit';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { createHostContributedActionInvoker } from '../actions/hostContributedActionInvoker';
+
+it.each([true, false])('binds an inactive control to its admitted Account purpose owner (daemon owner: %s)', async hasDaemonOwner => {
+    const consumer = { pluginId: 'acme.alpha', localId: 'run' };
+    const service = { pluginId: 'acme.alpha', localId: 'account' };
+    const outsideBoundary = async (): Promise<never> => { throw new Error('Binding reads do not materialize credentials'); };
+    const custodian = createForegroundPurposeOwnerFixture({ consumer, service, accountId: 'custodian', materializeAccount: outsideBoundary });
+    const requester = createForegroundPurposeOwnerFixture({ consumer, service, accountId: 'requester', materializeAccount: outsideBoundary });
+    const lease = requester.owner.activatePurposeBindings({
+        subject: { kind: 'operation', operationId: 'inactive-control', consumer, isCurrent: () => true },
+        purposes: [requester.purpose], bindings: [requester.binding],
+    });
+    const controller = new AbortController();
+    const owners = createProductionPluginInvocationServiceOwners(hasDaemonOwner ? { connectedAccounts: custodian.owner } : {});
+    try {
+        const operation = {
+            filesystemRoots: { pluginData: '/tmp/unused-control-data', workspace: '/tmp/unused-control-workspace', projects: new Map<string, string>() },
+            connectedAccountsOwner: requester.owner,
+            exactPurposeBindingSubjectId: lease.subjectId,
+            hostAccessRequests: [{ required: true, request: {
+                id: 'primary', capability: 'connectedAccounts' as const, reason: 'Use the Session selection',
+                scope: { serviceRefs: ['account'], operations: ['use' as const] },
+            } }],
+        };
+        const services = owners.createOperationServices({
+            plugin: { id: consumer.pluginId, version: '1.0.0' }, contribution: { id: consumer.localId, qualifiedId: 'acme.alpha/actions/run' },
+            occurrenceId: '7', correlationId: 'inactive-owner', surface: 'agent', signal: controller.signal, isOccurrenceCurrent: () => true,
+        }, operation);
+        await expect(services.connectedAccounts.getBinding('primary')).resolves.toMatchObject({ account: { accountId: 'requester' } });
+        const denied = owners.createOperationServices({
+            plugin: { id: consumer.pluginId, version: '1.0.0' }, contribution: { id: consumer.localId, qualifiedId: 'acme.alpha/actions/run' },
+            occurrenceId: '7', correlationId: 'inactive-owner-denied', surface: 'agent', signal: controller.signal, isOccurrenceCurrent: () => true,
+        }, { ...operation, hostAccessRequests: operation.hostAccessRequests.map(entry => ({ ...entry, required: false })) });
+        expect(denied.availability('connectedAccounts').status).toBe('denied');
+    } finally {
+        controller.abort();
+        await lease.dispose();
+        owners.retireConnectedAccountConsumers();
+    }
+});
 
 const action = Object.freeze({
     qualifiedId: 'acme.alpha/actions/run',
@@ -227,7 +270,19 @@ describe('production invocation service owners', () => {
         }));
         const owners = createProductionPluginInvocationServiceOwners({
             loggerSink: { write: () => {} },
-            actionExecutor: { execute: vi.fn() },
+            actionExecutor: createActionExecutor({
+                ...createUnavailableActionTransportDeps(),
+                isActionApprovalRequired: () => false,
+                invokeContributedAction: createHostContributedActionInvoker({
+                    invokeContributedAction,
+                    revalidatePluginActionCallerOccurrence: async () => true,
+                    revalidatePluginActionCallerMaterialization: async reference => (
+                        reference.pluginId === currentMaterialization.pluginId
+                        && reference.machineId === currentMaterialization.machineId
+                        && reference.materializationId === currentMaterialization.materializationId
+                    ),
+                }),
+            }),
             invokeContributedAction,
             resolveCurrentPluginMaterializationRef: (pluginId) => (
                 pluginId === 'acme.beta' ? currentMaterialization : null
@@ -300,15 +355,26 @@ describe('production invocation service owners', () => {
     });
 
     it('fails closed for nested contributed Actions after the host materialization retires', async () => {
+        let current = true;
+        const materialization = createPluginActionCallerMaterializationFixture('acme.beta').materialization;
         const invokeContributedAction = vi.fn(async () => ({
             status: 'executed' as const,
             value: { accepted: true },
         }));
         const owners = createProductionPluginInvocationServiceOwners({
             loggerSink: { write: () => {} },
-            actionExecutor: { execute: vi.fn() },
+            actionExecutor: createActionExecutor({
+                ...createUnavailableActionTransportDeps(),
+                isActionApprovalRequired: () => false,
+                invokeContributedAction: createHostContributedActionInvoker({
+                    invokeContributedAction,
+                    revalidatePluginActionCallerOccurrence: async () => current,
+                    revalidatePluginActionCallerMaterialization: async reference => current
+                        && reference.materializationId === materialization.materializationId,
+                }),
+            }),
             invokeContributedAction,
-            resolveCurrentPluginMaterializationRef: () => null,
+            resolveCurrentPluginMaterializationRef: () => current ? materialization : null,
         });
         const seed = Object.freeze({
             plugin: Object.freeze({ id: 'acme.beta', version: '1.0.0' }),
@@ -317,6 +383,7 @@ describe('production invocation service owners', () => {
                 qualifiedId: 'acme.beta/actions/run',
             }),
             occurrenceId: '7',
+            sourceCustody: { kind: 'development' as const, registeredRootId: 'beta-root' },
             correlationId: 'retired-beta-to-gamma',
             surface: 'plugin' as const,
             signal: new AbortController().signal,
@@ -327,6 +394,7 @@ describe('production invocation service owners', () => {
             seed,
             owners.createOrdinaryServiceBinding('7', 'retired-beta-to-gamma-binding'),
         );
+        current = false;
 
         await expect(services.actions.execute(
             { pluginId: 'acme.gamma', localId: 'publish' },

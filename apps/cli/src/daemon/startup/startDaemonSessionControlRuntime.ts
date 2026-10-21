@@ -173,6 +173,8 @@ import { ProviderErrorV1Schema, ProviderErrorCodeV1Schema } from '@happier-dev/p
 import { projectProviderRuntimeBindingBasis } from '@/providers/spawn/runtimeBindingBasis';
 import { createAccountScopedProviderModelProjectionReader } from '@/providers/modelManagement/remoteProjection';
 import type { ExecutionRunProviderLaunchRequest } from '@/agent/runtime/bridges/executionRun/runtime/providerLaunch';
+import { bindInactiveSessionControlLaunchScope } from '../spawn/inactiveSessionControlLaunchScope';
+import { prepareInactiveSessionControlLaunchScope } from '../spawn/prepareInactiveSessionControlLaunchScope';
 import type { RunnerExecutionRunProviderPreparation } from '@/daemon/agentRuntime/runnerExecutionRunProviderLaunch';
 import type {
   AccountSettings,
@@ -2975,6 +2977,66 @@ export async function startDaemonSessionControlRuntime(
   const probeAlreadyRunningExistingSessionServiceability = async (
     input: Parameters<typeof probeSessionServiceabilityWithCredentials>[0],
   ): ReturnType<typeof probeSessionServiceabilityWithCredentials> => {
+  const releaseInactiveSessionControlLaunchScope = bindInactiveSessionControlLaunchScope(async input => {
+    const sessionId = input.adapterParams.sessionId;
+    const context = await resolveSessionAccountContext(sessionId, undefined, input.signal);
+    const lifetime = getActiveAccountSettingsSnapshotLifetimeToken();
+    const readSnapshot = () => context ? context.readAccountSettingsSnapshot() : getActiveAccountSettingsSnapshot();
+    const assertCurrent = async () => {
+      input.signal.throwIfAborted();
+      await assertSessionAccountCurrent(sessionId, context, undefined, input.signal);
+      const accountId = context?.bootstrap.attribution.accountId ?? params.externalActionAccountId
+        ?? readPreviewAccountIdFromToken(params.credentials.token);
+      if (!input.adapterParams.credentials || !accountId
+        || readPreviewAccountIdFromToken(input.adapterParams.credentials.token) !== accountId) {
+        throw new Error('inactive_agent_launch_scope_unavailable');
+      }
+      if (!context && (lifetime !== getActiveAccountSettingsSnapshotLifetimeToken()
+        || readSnapshot()?.scopeKey !== resolveForegroundAccountSettingsScopeKey(params.credentials))) {
+        throw new Error('inactive_agent_launch_scope_unavailable');
+      }
+    };
+    try {
+      const scope = await withSessionAccountHome(context, () => prepareInactiveSessionControlLaunchScope(input, {
+        credentials: context?.bootstrap.credentials ?? params.credentials,
+        api: context?.api ?? params.api,
+        processEnv: params.processEnv ?? process.env,
+        activeServerDir: context?.activeServerDir ?? configuration.activeServerDir,
+        providerRuntimeHomeDir: context?.activeServerDir,
+        connectedServicesMaterializationBaseDir: context?.connectedServicesMaterializationBaseDir ?? params.connectedServicesMaterializationBaseDir,
+        readAccountSettingsSnapshot: readSnapshot,
+        ...(context ? { requesterSessionBootstrap: context.bootstrap,
+          savedSecretOperationContext: context.bootstrap.savedSecretOperationContext,
+          readAccountLaunchProfiles: () => context.readAccountLaunchProfiles() } : {}),
+        connectedAccountsOwner: context?.connectedAccountsOwner,
+        qualifiedConnectedAccountApi: context?.qualifiedConnectedAccountApi ?? qualifiedConnectedAccountApi,
+        activatePurposeBindings: context?.activatePurposeBindings ?? params.activatePurposeBindings,
+        activateSessionPurposeBindings: context?.activateSessionPurposeBindings ?? params.activateSessionPurposeBindings,
+        connectedServiceRefreshCoordinator: context ? context.connectedServiceRefreshCoordinator : params.getConnectedServiceRefreshCoordinator(),
+        providerAccountUsageStore: context?.providerAccountUsageStore ?? providerAccountUsageStore,
+        authGroupSwitchCoordinator: context ? context.authGroupSwitchCoordinator : connectedServiceAuthGroupPreTurnSwitchCoordinator,
+        predictiveSwitchGuard: context ? context.predictiveSwitchGuard : connectedServicePredictiveSwitchGuard,
+        resolveManagedPurposeBindingIntent: context?.resolveManagedPurposeBindingIntent ?? params.resolveManagedPurposeBindingIntent,
+        connectedAccountRequestAuthRegistry,
+        connectedAccountRequestAuthHttpPort: connectedAccountRequestAuthHttpPort ?? undefined,
+        resolveProvidersFeatureEnabled: async () => resolveCliFeatureDecision({ featureId: 'providers',
+          env: params.processEnv, serverSnapshot: await fetchServerFeaturesSnapshot({ serverUrl: resolveServerHttpBaseUrl() }) }).state === 'enabled',
+        readModelProjection: createAccountScopedProviderModelProjectionReader({
+          serverUrl: context?.bootstrap.serverHttpBaseUrl ?? params.serverBaseUrl,
+          readCredentials: async () => context?.bootstrap.credentials ?? params.credentials,
+          readAccountSettingsSnapshot: async () => readSnapshot(),
+          isCurrent: async () => { await assertCurrent(); return true; },
+        }),
+        assertCurrent,
+      }));
+      return { ...scope, async dispose() {
+        try { await scope.dispose(); } finally { await releaseSessionAccountContext(context); }
+      } };
+    } catch (error) {
+      await releaseSessionAccountContext(context);
+      throw error;
+    }
+  });
     try {
       return await withSessionAccountContext(input.sessionId, async (context) =>
         await withSessionAccountHome(context, () =>
@@ -12921,6 +12983,7 @@ export async function startDaemonSessionControlRuntime(
     runtimeActionRouteProviderTarget.setComputerRoutesProvider?.(null);
     const retiringComputerRoutes = computerRoutes;
     computerRoutes = null;
+    releaseInactiveSessionControlLaunchScope();
     await retiringComputerRoutes?.dispose();
     await managedServiceEndpointReadOwner?.dispose();
     managedServiceEndpointReadOwner = null;

@@ -1023,6 +1023,8 @@ export function createStablePluginExecService(params: Readonly<{
     agentCli?: PluginAgentCliReadinessServiceForHost;
     systemTools?: ExecSystemToolServiceV1;
     prepareAgentNativeLaunch?: HostAgentNativeLaunchPreparation;
+    /** Operation-owned authority; applies to qualified and ordinary launches alike. */
+    assertLaunchCurrent?: (signal: AbortSignal) => Promise<void>;
     authorizeLaunch?(
         request: Parameters<ExecService['spawn']>[0]
             & Readonly<{ timeoutMs?: number }>,
@@ -1371,6 +1373,11 @@ export function createStablePluginExecService(params: Readonly<{
             }
             linuxProcessLaunchScope = process.platform === 'linux' && managedCustody
                 ? await prepareCgroupProcessLaunchScope() : null;
+            if (params.assertLaunchCurrent) {
+                await params.assertLaunchCurrent(options?.signal
+                    ? AbortSignal.any([lifetime?.signal ?? params.signal, options.signal])
+                    : lifetime?.signal ?? params.signal);
+            }
             guard(options?.signal, lifetime);
         } catch (error) {
             await launch.release();

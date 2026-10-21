@@ -8555,7 +8555,9 @@ export async function resolveExecutablePluginRuntimeRegistry(
                 ]),
                 ...(agentParams.environment ? { environment: agentParams.environment } : {}),
                 ...(agentParams.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: agentParams.prepareAgentNativeLaunch } : {}),
+                ...(agentParams.assertLaunchCurrent ? { assertLaunchCurrent: agentParams.assertLaunchCurrent } : {}),
                 ...(agentParams.exactPurposeBindingSubjectId ? { exactPurposeBindingSubjectId: agentParams.exactPurposeBindingSubjectId } : {}),
+                ...(agentParams.connectedAccountsOwner ? { connectedAccountsOwner: agentParams.connectedAccountsOwner } : {}),
                 ...(agentSystemTools ? { systemTools: agentSystemTools } : {}),
             });
         },

@@ -5,12 +5,44 @@ import { PluginError } from '@happier-dev/plugin-sdk';
 
 import { authorizePluginExecLaunchForHost, authorizeResolvedAgentNativeExecLaunchForHost,
     createStablePluginExecService, createStableRunnerPluginExecService, issueAgentNativeLaunchQualifierForHost,
+    installManagedProcessCustodyForHost,
     type HostAgentNativeLaunchPreparation } from './exec';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import * as linuxProcessLaunch from '@/daemon/platform/linux/buildCgroupSelfMigratingHappyCliLaunchSpec';
 
 const executable = Object.freeze({ kind: 'systemTool', id: 'fixture.node' } as const);
 
 describe('host-issued Agent native launch qualifier', () => {
+    it.skipIf(process.platform !== 'linux')('rechecks launch authority after asynchronous managed process scope preparation', async () => {
+        let current = true;
+        const release = vi.fn();
+        // The OS scope adapter is the external boundary; Exec authorization and dispatch stay real.
+        const scope = vi.spyOn(linuxProcessLaunch, 'prepareCgroupProcessLaunchScope').mockImplementation(async () => {
+            await Promise.resolve();
+            current = false;
+            return null;
+        });
+        const service = createStablePluginExecService({
+            allowedExecutables: [executable], signal: new AbortController().signal,
+            isOccurrenceCurrent: () => true,
+            resolveExecutable: async () => ({ command: process.execPath, release }),
+            resolvePath: async () => process.cwd(),
+            async assertLaunchCurrent(signal) {
+                signal.throwIfAborted();
+                if (!current) throw new PluginError({ code: 'fixture_account_retired', message: 'Account retired' });
+            },
+        });
+        const request = { executable, args: ['-e', 'process.exit(0)'] };
+        const custody = installManagedProcessCustodyForHost(service, request, null);
+        try {
+            await expect(service.spawn(request).then(async handle => {
+                try { await handle.wait(); } finally { await handle.dispose(); }
+            })).rejects.toMatchObject({ code: 'fixture_account_retired',
+                execLaunch: 'notStarted', data: { execLaunch: 'notStarted' } });
+            expect(release).toHaveBeenCalledOnce();
+        } finally { custody.dispose(); scope.mockRestore(); }
+    });
+
     it.each(['host', 'runner'] as const)('preserves typed system-tool resolution refusals from the %s authority', async kind => {
         const refusal = new PluginError({ code: 'fixture_resolution_denied', message: 'Tool resolution refused', retryable: true });
         const common = { signal: new AbortController().signal, isOccurrenceCurrent: () => true };
