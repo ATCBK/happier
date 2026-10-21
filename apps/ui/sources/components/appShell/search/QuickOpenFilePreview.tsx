@@ -14,6 +14,7 @@ import { Typography } from '@/constants/Typography';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { t } from '@/text';
 import { getFileLanguageFromPath } from '@/utils/code/fileLanguage';
+import { resolveFileViewerKind } from '@/scm/utils/filePresentation';
 
 const NO_SELECTED_LINES: Set<string> = new Set();
 const ignoreLineToggle = () => {};
@@ -33,7 +34,11 @@ export function QuickOpenFilePreview(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const file = useCodeTextFile(props.scope, props.path);
+  const viewer = resolveFileViewerKind({ path: props.path });
+  const textPreview = viewer.kind === 'code' || viewer.kind === 'markdown';
+  // Non-text kinds use this column's existing file identity. Their bytes belong
+  // to the File page's viewer, rather than the text-only contained-file reader.
+  const file = useCodeTextFile(props.scope, textPreview ? props.path : null);
   const [shown, setShown] = React.useState<Readonly<{
     path: string;
     text: string;
@@ -46,13 +51,13 @@ export function QuickOpenFilePreview(
           : { path: props.path, text: file.text },
       );
   }, [file, props.path]);
-  const visible = shown ?? null;
+  const visible = textPreview ? shown : null;
   const path = visible?.path ?? props.path;
   const name = path.slice(
     Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1,
   );
   const line = visible?.path === props.path ? (props.line ?? null) : null;
-  const syntaxHighlighting = useCodeLinesSyntaxHighlighting(path);
+  const syntaxHighlighting = useCodeLinesSyntaxHighlighting(textPreview ? path : null);
   const jumpToAnchor = React.useMemo(
     () => (line ? { kind: 'line' as const, filePath: path, line } : null),
     [line, path],
