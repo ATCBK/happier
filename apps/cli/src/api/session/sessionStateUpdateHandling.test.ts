@@ -108,6 +108,43 @@ describe('handleSessionStateUpdate', () => {
     });
   });
 
+  // @happier-platform:begin feat=pending-wake-recovery 回退版本 hint 产生唤醒（不再被去重吞掉）
+  it('wakes and adopts regressive pending-changed hints as bookkeeping corrections', () => {
+    const onMetadataUpdated = vi.fn();
+
+    const result = handleSessionStateUpdate({
+      update: {
+        id: 'u1',
+        seq: 1,
+        createdAt: Date.now(),
+        body: { t: 'pending-changed', sid: 's1', pendingCount: 1, pendingVersion: 8 },
+      } as any,
+      updateSource: 'session-scoped',
+      sessionId: 's1',
+      sessionEncryptionMode: 'e2ee',
+      metadata: null,
+      metadataVersion: 0,
+      agentState: null,
+      agentStateVersion: 0,
+      pendingWakeSeq: 0,
+      pendingQueueState: { known: true, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 10 },
+      encryptionKey: new Uint8Array(),
+      encryptionVariant: 'dataKey',
+      onMetadataUpdated,
+      onWarning: () => {},
+    } as any);
+
+    expect(result.pendingWakeSeq).toBe(1);
+    expect((result as any).pendingQueueState).toEqual({
+      known: true,
+      pendingCount: 1,
+      pendingBlockedCount: 0,
+      pendingVersion: 8,
+    });
+    expect(onMetadataUpdated).toHaveBeenCalledTimes(1);
+  });
+  // @happier-platform:end feat=pending-wake-recovery
+
   it('accepts only newer complete target Runtime Activity projections', () => {
     const current = {
       runtimeActivityState: 'active' as const,

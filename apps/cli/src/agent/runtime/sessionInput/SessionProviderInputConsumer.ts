@@ -27,6 +27,16 @@ import type {
 
 const PENDING_INPUT_SLOW_PHASE_DIAGNOSTIC_MS = 30_000;
 
+// @happier-platform:begin feat=pending-wake-recovery 消费等待静默心跳阈值（分钟级兜底自检，可经 HAPPIER_PENDING_INPUT_STALE_RECHECK_MS 覆写，0=禁用）
+const DEFAULT_PENDING_INPUT_STALE_RECHECK_MS = 15 * 60 * 1000;
+
+function resolvePendingInputStaleRecheckMs(raw: string | undefined): number {
+    if (raw === undefined || raw === '') return DEFAULT_PENDING_INPUT_STALE_RECHECK_MS;
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_PENDING_INPUT_STALE_RECHECK_MS;
+}
+// @happier-platform:end feat=pending-wake-recovery
+
 export class PendingQueueMaterializationAuthError extends Error {
   constructor() {
     super('Pending queue materialization stopped after supervisor authentication failure');
@@ -600,7 +610,46 @@ async function waitForNextInput<Mode, Message>(
         continue;
       }
 
-      const winner = await wakePromise;
+      // @happier-platform:begin feat=pending-wake-recovery 静默心跳：唤醒纯事件驱动，未知形态的唤醒丢失会让消费循环永久停摆（僵尸会话两起实证）——等待超过阈值时强制 reconcile 自检兜底（默认 15min，仅等待期生效，非忙轮询）
+      const staleRecheckMs = resolvePendingInputStaleRecheckMs(process.env.HAPPIER_PENDING_INPUT_STALE_RECHECK_MS);
+      let staleTimer: ReturnType<typeof setTimeout> | null = null;
+      let racedWinner: WakeWinner;
+      let staleRecheckFired = false;
+      try {
+        if (staleRecheckMs > 0) {
+          const staleSignal: Promise<'stale-recheck'> = new Promise((resolve) => {
+            staleTimer = setTimeout(() => resolve('stale-recheck'), staleRecheckMs);
+            staleTimer.unref?.();
+          });
+          const raced = await Promise.race([
+            wakePromise.then((wakeWinner) => ({ kind: 'wake' as const, wakeWinner })),
+            staleSignal.then((stale) => ({ kind: stale })),
+          ]);
+          if (raced.kind === 'stale-recheck') {
+            staleRecheckFired = true;
+          } else {
+            racedWinner = raced.wakeWinner;
+          }
+        } else {
+          racedWinner = await wakePromise;
+        }
+      } finally {
+        // Clear on every exit incl. wakePromise rejection (fresh-review finding #1).
+        if (staleTimer) clearTimeout(staleTimer);
+      }
+      if (staleRecheckFired) {
+        logger.infoFile('[pendingQueue] input consumer wait staleness recheck', {
+          staleRecheckMs,
+        });
+        await Promise.resolve(opts.session.reconcilePendingQueueState?.({ force: true })).catch((error: unknown) => {
+          logger.debug('[pendingQueue] staleness recheck reconciliation failed (non-fatal)', error);
+        });
+        controller.abort('sessionProviderInputConsumer-stale-recheck');
+        if (opts.abortSignal.aborted || !opts.isProviderInputAdmissionOpen()) return null;
+        continue;
+      }
+      const winner = racedWinner!;
+      // @happier-platform:end feat=pending-wake-recovery
 
       if (winner.kind === 'meta' && !winner.ok) {
         controller.abort('sessionProviderInputConsumer-meta-false');
@@ -693,6 +742,13 @@ async function materializePendingMessage<Mode, Message>(
   if (result.type === 'deferred' && result.reason === 'supervisor_auth_failed') {
     throw new PendingQueueMaterializationAuthError();
   }
+  // @happier-platform:begin feat=pending-wake-recovery deferred mismatch 有界重入：版本已从 ack 学习，短暂延迟后重试一次（与 retryable_transport 同一有界机制，非轮询）
+  if (result.type === 'deferred' && result.reason === 'pending_version_mismatch') {
+    return result.retryAfterMs
+      ?? opts.metadataWaitRetryBackoffMs
+      ?? DEFAULT_SESSION_METADATA_WAIT_RETRY_BACKOFF_MS;
+  }
+  // @happier-platform:end feat=pending-wake-recovery
   if (result.type !== 'retryable_transport') return null;
 
   // A transport retry without a server-provided delay can otherwise consume the only

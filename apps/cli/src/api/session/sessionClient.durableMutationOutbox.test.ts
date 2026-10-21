@@ -1138,8 +1138,12 @@ describe('ApiSessionClient durable mutation outbox', () => {
     it.each([
       'publisher readiness',
       'version-mismatch acknowledgement and matching hint',
+      // @happier-platform:begin feat=pending-wake-recovery believed-ahead 漂移：mismatch ack 教学被版本去重丢弃后消费循环停摆（僵尸根因回归测试）
+      'ahead-drift version mismatch without another hint',
+      // @happier-platform:end feat=pending-wake-recovery
     ] as const)('delivers Pending through the real consumer after %s without another queue mutation', async (contract) => {
-      const versionMismatch = contract === 'version-mismatch acknowledgement and matching hint';
+      const versionMismatch = contract !== 'publisher readiness';
+      const withoutSecondHint = contract === 'ahead-drift version mismatch without another hint';
       useRealSupervisor = true;
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
         features: { sharing: { pendingQueueV2: { enabled: true }, pendingDeliveryState: { enabled: true } } },
@@ -1173,7 +1177,12 @@ describe('ApiSessionClient durable mutation outbox', () => {
           if (event === 'pending-materialize-next') {
             pendingClaims += 1;
             if (versionMismatch) {
-              expect(payload).toMatchObject({ sid: 's1', expectedPendingVersion: pendingClaims === 1 ? 1 : 2 });
+              // @happier-platform:begin feat=pending-wake-recovery ahead 漂移变体：首 claim 携带 hint 教学的高版本
+              expect(payload).toMatchObject({
+                sid: 's1',
+                expectedPendingVersion: pendingClaims === 1 ? (withoutSecondHint ? 3 : 1) : 2,
+              });
+              // @happier-platform:end feat=pending-wake-recovery
             }
             if (versionMismatch && pendingClaims === 1) {
               return {
@@ -1237,7 +1246,9 @@ describe('ApiSessionClient durable mutation outbox', () => {
         }
         sessionSocketStub.trigger('update', {
           id: 'early-pending-hint', seq: 1, createdAt: 1,
-          body: { t: 'pending-changed', sid: 's1', pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 },
+          // @happier-platform:begin feat=pending-wake-recovery ahead 漂移变体的 hint 教学高版本（服务端真实版本较低）
+          body: { t: 'pending-changed', sid: 's1', pendingCount: 1, pendingBlockedCount: 0, pendingVersion: withoutSecondHint ? 3 : 1 },
+          // @happier-platform:end feat=pending-wake-recovery
         });
         const batch = consumer.waitForNextInput({ abortSignal: controller.signal });
         const received: Array<Awaited<typeof batch>> = [];
@@ -1258,12 +1269,16 @@ describe('ApiSessionClient durable mutation outbox', () => {
             && 'deferredReason' in detail && detail.deferredReason === 'pending_version_mismatch'
           )).length).toBe(1);
           expect(pendingClaims).toBeGreaterThanOrEqual(1);
-          // The ordinary hint may arrive after the ACK taught us this same projection.
-          // Deduplicating that hint must not strand the newly learned deliverable row.
-          sessionSocketStub.trigger('update', {
-            id: 'matching-pending-hint', seq: 2, createdAt: 2,
-            body: { t: 'pending-changed', sid: 's1', pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 2 },
-          });
+          // @happier-platform:begin feat=pending-wake-recovery 无第二条 hint 场景：恢复只能来自有界重入
+          if (!withoutSecondHint) {
+            // The ordinary hint may arrive after the ACK taught us this same projection.
+            // Deduplicating that hint must not strand the newly learned deliverable row.
+            sessionSocketStub.trigger('update', {
+              id: 'matching-pending-hint', seq: 2, createdAt: 2,
+              body: { t: 'pending-changed', sid: 's1', pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 2 },
+            });
+          }
+          // @happier-platform:end feat=pending-wake-recovery
         }
         await expect.poll(() => received).toEqual([expect.objectContaining({
           message: 'prompt accepted before publisher readiness',

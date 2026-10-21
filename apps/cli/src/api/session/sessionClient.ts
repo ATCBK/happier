@@ -1586,6 +1586,16 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private applyPendingQueueState(state: KnownPendingQueueState, opts?: { emit?: boolean }): boolean {
+        // @happier-platform:begin feat=pending-wake-recovery 回退版本采纳的可观测性（漂移纠正事件，排障关键信号提级 info）
+        if (this.pendingQueueState.known && state.pendingVersion < this.pendingQueueState.pendingVersion) {
+            logger.infoFile('[pendingQueue] regressive pending state adopted; local version bookkeeping corrected', {
+                sessionId: this.sessionId,
+                fromPendingVersion: this.pendingQueueState.pendingVersion,
+                toPendingVersion: state.pendingVersion,
+                pendingCount: state.pendingCount,
+            });
+        }
+        // @happier-platform:end feat=pending-wake-recovery
         const applied = applyKnownPendingQueueState(this.pendingQueueState, state);
         this.pendingQueueState = applied.state;
         if (applied.changed) {
@@ -2884,6 +2894,9 @@ export class ApiSessionClient extends EventEmitter {
             });
             if (stateUpdateResult.handled) {
                 const pendingWakeSeqBefore = this.pendingWakeSeq;
+                // @happier-platform:begin feat=pending-wake-recovery 捕获 hint 应用前的队列状态供回退纠偏日志
+                const pendingQueueStateBefore = this.pendingQueueState;
+                // @happier-platform:end feat=pending-wake-recovery
                 const shouldWithholdPendingEligibility = this.accountSettingsSyncBarrierState === 'applying';
                 const runtimeActivityWasIdle = this.runtimeActivityProjection.runtimeActivityState === 'idle'
                     && this.runtimeActivityProjection.runtimeActivityActiveCount === 0;
@@ -2895,6 +2908,20 @@ export class ApiSessionClient extends EventEmitter {
                     ? pendingWakeSeqBefore
                     : stateUpdateResult.pendingWakeSeq;
                 this.pendingQueueState = stateUpdateResult.pendingQueueState;
+                // @happier-platform:begin feat=pending-wake-recovery hint 路径的版本回退纠偏可观测性（与 applyPendingQueueState 对齐）
+                if (
+                    pendingQueueStateBefore?.known === true
+                    && stateUpdateResult.pendingQueueState.known === true
+                    && stateUpdateResult.pendingQueueState.pendingVersion < pendingQueueStateBefore.pendingVersion
+                ) {
+                    logger.infoFile('[pendingQueue] regressive pending hint adopted; local version bookkeeping corrected', {
+                        sessionId: this.sessionId,
+                        fromPendingVersion: pendingQueueStateBefore.pendingVersion,
+                        toPendingVersion: stateUpdateResult.pendingQueueState.pendingVersion,
+                        pendingCount: stateUpdateResult.pendingQueueState.pendingCount,
+                    });
+                }
+                // @happier-platform:end feat=pending-wake-recovery
                 this.applyRuntimeActivityProjectionFromServer(stateUpdateResult.runtimeActivityProjection, {
                     // handleSessionStateUpdate is the one wake-sequence owner for this envelope.
                     // The projection applier updates local Activity state without publishing a
@@ -6575,7 +6602,16 @@ export class ApiSessionClient extends EventEmitter {
                 };
             }
             if (materializeResult.deferredReason === 'pending_version_mismatch') {
-                return { didMaterialize: false, result: { type: 'deferred', reason: 'pending_version_mismatch' } };
+                // @happier-platform:begin feat=pending-wake-recovery mismatch 有界重入：ack 已携带纠正后的版本，短延迟重试一次（兜底 ack 无权威状态的旧服务端形态）
+                return {
+                    didMaterialize: false,
+                    result: {
+                        type: 'deferred',
+                        reason: 'pending_version_mismatch',
+                        retryAfterMs: materializeResult.retryAfterMs ?? 250,
+                    },
+                };
+                // @happier-platform:end feat=pending-wake-recovery
             }
             if (materializeResult.deferredReason === 'waiting_for_predecessor') {
                 return { didMaterialize: false, result: { type: 'deferred', reason: 'waiting_for_predecessor' } };
