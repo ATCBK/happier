@@ -641,6 +641,9 @@ function createPluginReactNativeHostRequestTransport(params: Readonly<{
 
 export type CanonicalPluginReactNativeHostApiAdapter = Readonly<{
     api: PluginUiHostApi;
+    /** Renderer reads the same current snapshot as public context/watchContext. */
+    getSurfaceContext: () => SurfaceContext;
+    subscribeSurfaceContext: (listener: () => void) => () => void;
     /**
      * EU-4b: deliver one live resource invalidation into the ONE subscription
      * registry this adapter already owns. `PluginSurfaceHost` connects the
@@ -815,6 +818,11 @@ function readCanonicalComposerContentInspection(value: PluginUiJsonValueV1 | und
  */
 export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<{
     surface: SurfaceContext;
+    /** The mounted host acquires owned SDK snapshots at this existing owner. */
+    prepareSurfaceContext?: (
+        source: SurfaceContext,
+        previous?: Readonly<{ surface: SurfaceContext; semanticKey: string }>,
+    ) => Readonly<{ surface: SurfaceContext; semanticKey: string }>;
     requestSurface: PluginUiSurfaceContextV1;
     requestIdPrefix: string;
     handleRequest: PluginReactNativeHostApiRequestHandler;
@@ -850,8 +858,9 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
         resolveCanonicalPluginReactNativeHostApiMethods(
             params.getAdmissionMethods?.() ?? params.getInstalledMethods?.() ?? params.installedMethods,
         );
-    let currentSurface = params.surface;
-    let currentSurfaceSemanticKey = stableJsonStringify(currentSurface);
+    const initialContext = params.prepareSurfaceContext?.(params.surface);
+    let currentSurface = initialContext?.surface ?? params.surface;
+    let currentSurfaceSemanticKey = initialContext?.semanticKey ?? stableJsonStringify(currentSurface);
     const selectedInputs = createSelectedActionInputCustody();
     const contextWatchers = new Set<(surface: SurfaceContext) => void>();
     let disposed = false;
@@ -1506,19 +1515,29 @@ export function createCanonicalPluginReactNativeHostApiAdapter(params: Readonly<
 
     return Object.freeze({
         api,
+        getSurfaceContext: () => currentSurface,
+        subscribeSurfaceContext: (listener: () => void) => {
+            if (disposed) return () => {};
+            contextWatchers.add(listener);
+            return () => { contextWatchers.delete(listener); };
+        },
         publishResourceSubscriptionEvent: (event) => transport.publishSubscriptionEvent(event),
         publishComposerSubscriptionEvent: (input) => transport.publishComposerSubscriptionEvent(input),
         pushSurfaceContext: (surface: SurfaceContext) => {
             if (disposed || surface === currentSurface) return;
-            const surfaceSemanticKey = stableJsonStringify(surface);
+            const prepared = params.prepareSurfaceContext?.(surface, {
+                surface: currentSurface,
+                semanticKey: currentSurfaceSemanticKey,
+            });
+            const surfaceSemanticKey = prepared?.semanticKey ?? stableJsonStringify(surface);
             if (surfaceSemanticKey === currentSurfaceSemanticKey) return;
-            currentSurface = surface;
+            currentSurface = prepared?.surface ?? surface;
             currentSurfaceSemanticKey = surfaceSemanticKey;
             // Serialized per push and isolated per listener: one author's
             // failure never stops the next subscriber from observing the change.
             for (const watcher of [...contextWatchers]) {
                 try {
-                    watcher(surface);
+                    watcher(currentSurface);
                 } catch {
                     // Diagnosed by the surface's own error boundary; the
                     // subscription registry stays intact.

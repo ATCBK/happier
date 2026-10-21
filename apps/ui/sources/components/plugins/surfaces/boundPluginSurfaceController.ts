@@ -91,8 +91,8 @@ import { createPluginContextualResourceWatchClient, type PluginSurfaceResourceWa
 import type { PluginSurfaceOpenableContentBinding } from './pluginSurfaceOpenableContent';
 import {
     createPluginActionInputSelectionHostApiHandler,
-    serializePluginActionInputSelectionFacts,
 } from './pluginActionInputSelectionHostApi';
+import type { PluginActionInputSelectionSnapshot } from './pluginActionInputSelectionFacts';
 import { createPluginOpenNewSessionHostApiHandler } from './pluginOpenNewSessionHostApi';
 import { createPluginContributedActionController } from '@/components/plugins/actions/pluginContributedActionController';
 import { presentActionInputForm } from '@/components/plugins/actions/presentActionInputForm';
@@ -261,6 +261,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
      * unavailable when this surface has no exact snapshot.
      */
     targetedContributions?: PluginUiTargetedContributionsV1 | null;
+    /** Source-owned caller custody, including targets with no selectable Actions. */
+    targetSourceCustody?: PluginUiTargetedContributionsV1['target']['sourceCustody'] | null;
     /**
      * The incumbent active Account lifetime captured by the mount. The
      * controller consumes its currentness but never creates or retires it.
@@ -1470,7 +1472,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
  * with the surface (§3.4) and in-flight daemon work is fenced.
  */
 export function useBoundPluginSurfaceController(input: Readonly<{
-    facts: BoundPluginSurfaceFacts;
+    facts: BoundPluginSurfaceFacts & Readonly<{ actionInputSelectionFactsKey: PluginActionInputSelectionSnapshot }>;
     binding?: BoundPluginSurfaceBinding;
 }>): BoundPluginSurfaceController {
     const facts = input.facts;
@@ -1513,18 +1515,9 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     const daemonConnectionPendingRef = React.useRef(input.facts.isDaemonConnectionPending);
     daemonConnectionPendingRef.current = input.facts.isDaemonConnectionPending;
     const isDaemonConnectionPending = React.useCallback(() => daemonConnectionPendingRef.current?.() === true, []);
-    // Projection producers replace these read-only snapshots on semantic
-    // changes. Reuse their existing complete key during unrelated host renders.
-    const actionInputTranslationsByPluginId = facts.pluginUiProjection?.translationsByPluginId;
-    const actionInputSelectionFactsKey = React.useMemo(
-        () => serializePluginActionInputSelectionFacts({
-            pluginProjectionById: facts.pluginProjectionById,
-            translationsByPluginId: actionInputTranslationsByPluginId,
-            targetedContributions: facts.targetedContributions,
-            targetPluginId: facts.pluginId,
-        }),
-        [facts.pluginProjectionById, actionInputTranslationsByPluginId, facts.targetedContributions, facts.pluginId],
-    );
+    // The mounted source publishes the current selected dependency snapshot;
+    // unrelated catalog delivery is not work or a lifetime at this reader.
+    const actionInputSelectionFactsKey = facts.actionInputSelectionFactsKey;
     const resourceFactsKey = React.useMemo(() => stableJsonStringify(Object.fromEntries(
         Object.entries(facts.pluginUiProjection?.resourcesById ?? {}).map(([key, entry]) => {
             const { hostOrigin, hostSupplies, hostCompatibility, ...resource } = entry;
@@ -1556,6 +1549,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             facts.serverId,
             facts.sessionId,
             facts.targetAuthorityKey,
+            facts.targetSourceCustody,
             facts.occurrenceId,
             stableJsonStringify(facts.accountExecutionOrigin ?? null),
             facts.readCurrentUiContext,

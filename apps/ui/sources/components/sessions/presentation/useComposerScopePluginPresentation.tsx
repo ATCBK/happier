@@ -83,7 +83,7 @@ import { getPreferredLanguage } from '@/text';
 
 export type ComposerScopeProjectionInputs = Pick<
     DaemonMergedProjectionInputs,
-    'pluginProjectionById' | 'pluginProjectionV2' | 'pluginUiProjection' | 'composerSurfaceCatalog'
+    'pluginProjectionById' | 'pluginProjectionV2' | 'pluginUiProjection' | 'composerSurfaceCatalog' | 'composerSurfaceActionInputSelectionFacts'
 >;
 
 type ComposerAttachmentPresentationRequest = Readonly<{
@@ -492,6 +492,7 @@ export function useComposerScopePluginPresentation(
                 pluginProjectionById={snapshot.pluginProjectionById}
                 pluginProjectionV2={projection}
                 pluginUiProjection={inputs.pluginUiProjection}
+                actionInputSelectionFacts={inputs.composerSurfaceActionInputSelectionFacts}
                 machineId={snapshot.host.machineId ?? null}
                 parentLifetime={surfaceLifetime}
                 transactionApplier={transactionApplier}
@@ -513,6 +514,7 @@ export function useComposerScopePluginPresentation(
         openDestinationSurface,
         params.accountLifetime,
         params.projectionInputs?.pluginProjectionV2,
+        params.projectionInputs?.composerSurfaceActionInputSelectionFacts,
         physicalTargetKey,
         surfaceLifetime,
         transactionApplier,

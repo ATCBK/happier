@@ -12,6 +12,7 @@ import type {
     PluginDiagnosticDataV1,
     DaemonContributionRegistryProjectionAutomationEligibleEventsV1,
     DaemonPluginUiComposerSurfaceCatalogEntryV1,
+    DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1,
 } from '@happier-dev/protocol';
 import { AGENT_IDS, type AgentId } from '@happier-dev/agents';
 import { normalizePluginUiProjection, resolvePluginUiProjectionPlatform, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -19,6 +20,7 @@ import { preparePluginUiProjectionOrigins } from '@/sync/domains/plugins/ui/proj
 import { readConnectedAccountDescriptorProjection, type ConnectedAccountDescriptorMachineProjection } from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { PluginUiPlatformV1 } from '@happier-dev/protocol/plugins/ui';
+import { createPluginActionInputSelectionFactsPublication, type PluginActionInputSelectionSnapshot } from '@/components/plugins/surfaces/pluginActionInputSelectionFacts';
 
 import { resolveAgentMarkAgentId } from './resolveAgentMarkAgentId';
 
@@ -52,6 +54,8 @@ export type DaemonMergedProjectionInputs = Readonly<{
     pluginUiProjectionPlatform: PluginUiPlatformV1;
     connectedAccountProjection: ConnectedAccountDescriptorMachineProjection | null;
     composerSurfaceCatalog?: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
+    composerSurfaceActionInputSelectionFacts: ReadonlyMap<DaemonPluginUiComposerSurfaceCatalogEntryV1, PluginActionInputSelectionSnapshot>;
+    automationSetupSurfaceActionInputSelectionFacts: ReadonlyMap<DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1, PluginActionInputSelectionSnapshot>;
     automationEligibleEvents?: DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
     registryDiagnostics: readonly PluginProjectionDiagnostic[];
 }>;
@@ -62,6 +66,8 @@ type OwnedProjectionInput = Readonly<{
     projection: PluginProjectionV2;
     composerSurfaceCatalog: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[] | undefined;
     automationEligibleEvents: DaemonContributionRegistryProjectionAutomationEligibleEventsV1 | undefined;
+    composerSelections: readonly Readonly<{ row: DaemonPluginUiComposerSurfaceCatalogEntryV1; publication: ReturnType<typeof createPluginActionInputSelectionFactsPublication> }>[];
+    setupSelections: readonly Readonly<{ row: DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1; publication: ReturnType<typeof createPluginActionInputSelectionFactsPublication> }>[];
 }>;
 
 function publishPluginProjectionEntries(
@@ -109,28 +115,51 @@ export function publishDaemonMergedProjectionInputs(params: Readonly<{
     // The describe/selected-read transport already used the strict V2 schema.
     // Keep its public raw identity, but never use its mutable graph as our prior
     // comparison authority or lend its aliases to ready descriptive slices.
-    const projection = projectNativeJsonValueForTransport(params.projection) as PluginProjectionV2;
+    const projectionSnapshot: unknown = projectNativeJsonValueForTransport(params.projection);
+    // Native JSON copying preserves the already schema-admitted V2 shape.
+    const projection = projectionSnapshot as PluginProjectionV2;
     const composerSurfaceCatalog = params.composerSurfaceCatalog === undefined ? undefined
-        : projectNativeJsonValueForTransport(params.composerSurfaceCatalog) as readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
+        : prior?.composerSurfaceCatalog && sameStrictJsonValue(prior.composerSurfaceCatalog, params.composerSurfaceCatalog)
+            ? prior.composerSurfaceCatalog : projectNativeJsonValueForTransport(params.composerSurfaceCatalog) as readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
     const automationEligibleEvents = params.automationEligibleEvents === undefined ? undefined
-        : projectNativeJsonValueForTransport(params.automationEligibleEvents) as DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
+        : prior?.automationEligibleEvents && sameStrictJsonValue(prior.automationEligibleEvents, params.automationEligibleEvents)
+            ? prior.automationEligibleEvents : projectNativeJsonValueForTransport(params.automationEligibleEvents) as DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
     const rawAdapted = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection);
     const adapted = projectNativeJsonValueForTransport({
         ...rawAdapted,
         pluginProjectionById: publishPluginProjectionEntries(rawAdapted.pluginProjectionById, ownedPrevious?.pluginProjectionById),
     }) as ReturnType<typeof adaptDaemonContributionRegistryProjectionToMergedProjectionInputs>;
+    const pluginUiProjection = preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform,
+        ownedPrevious?.pluginUiProjectionPlatform === platform ? ownedPrevious.pluginUiProjection : undefined));
+    const composerSelections = (composerSurfaceCatalog ?? []).map(row => ({ row,
+        publication: prior?.composerSelections.find(previous => previous.row.contribution.pluginId === row.contribution.pluginId
+            && previous.row.contribution.localId === row.contribution.localId && previous.row.occurrenceId === row.occurrenceId
+            && previous.row.role === row.role)?.publication ?? createPluginActionInputSelectionFactsPublication(),
+    }));
+    const setupSelections = (automationEligibleEvents ?? []).flatMap(event => event.setupSurface ? [{ row: event.setupSurface,
+        publication: prior?.setupSelections.find(previous => previous.row.contribution.pluginId === event.setupSurface?.contribution.pluginId
+            && previous.row.contribution.localId === event.setupSurface?.contribution.localId
+            && previous.row.occurrenceId === event.setupSurface?.occurrenceId)?.publication ?? createPluginActionInputSelectionFactsPublication(),
+    }] : []);
+    const selection = (row: DaemonPluginUiComposerSurfaceCatalogEntryV1 | DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1,
+        publication: ReturnType<typeof createPluginActionInputSelectionFactsPublication>) => publication.publish({
+        pluginProjectionById: adapted.pluginProjectionById, translationsByPluginId: pluginUiProjection.translationsByPluginId,
+        targetedContributions: row.contributorTargetedContributions, targetPluginId: row.contribution.pluginId,
+    });
     const published: DaemonMergedProjectionInputs = {
         ...adapted,
         discoveredBackendIds: Object.freeze(Object.keys(adapted.mergedBackendProjectionById)),
         pluginProjectionV2: params.projection,
         pluginUiProjectionPlatform: platform,
-        pluginUiProjection: preparePluginUiProjectionOrigins(normalizePluginUiProjection(projection, platform,
-            ownedPrevious?.pluginUiProjectionPlatform === platform ? ownedPrevious.pluginUiProjection : undefined)),
+        pluginUiProjection,
         connectedAccountProjection: readConnectedAccountDescriptorProjection(projection),
+        composerSurfaceActionInputSelectionFacts: new Map(composerSelections.map(({ row, publication }) => [row, selection(row, publication)])),
+        automationSetupSurfaceActionInputSelectionFacts: new Map(setupSelections.map(({ row, publication }) => [row, selection(row, publication)])),
         ...(composerSurfaceCatalog === undefined ? {} : { composerSurfaceCatalog }),
         ...(automationEligibleEvents === undefined ? {} : { automationEligibleEvents }),
     };
-    Object.defineProperty(published, ownedProjectionInput, { value: Object.freeze({ owner: published, projection, composerSurfaceCatalog, automationEligibleEvents }) });
+    Object.defineProperty(published, ownedProjectionInput, { value: Object.freeze({ owner: published, projection, composerSurfaceCatalog, automationEligibleEvents,
+        composerSelections, setupSelections }) });
     return Object.freeze(published);
 }
 

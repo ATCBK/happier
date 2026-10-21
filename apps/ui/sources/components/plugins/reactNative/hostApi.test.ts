@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PLUGIN_UI_OUTWARD_EFFECT_HOST_METHODS_V1 } from '@/components/plugins/hostApi/outwardEffectSettlement';
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
-import { createPluginSurfaceContext } from '@/components/plugins/surfaces/pluginSurfaceContext';
+import { createPluginSurfaceContext, preparePluginSurfaceContext } from '@/components/plugins/surfaces/pluginSurfaceContext';
 import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import {
     createPluginSurfaceHostApi,
@@ -2416,6 +2416,55 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
 
         expect(contexts).toEqual([]);
         await expect(adapter.api.context()).resolves.toBe(canonicalSurface);
+    });
+
+    it('publishes one owned host context to renderer and public watchers while reacquiring new mutable input', async () => {
+        const translations = { title: 'Original' };
+        const raw = createPluginSurfaceContextFixture({
+            mount: canonicalRightPaneMount,
+            target: { kind: 'session', sessionId: 'session-1', agentId: undefined },
+            translations,
+        });
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface: raw,
+            prepareSurfaceContext: preparePluginSurfaceContext,
+            requestSurface: surface,
+            requestIdPrefix: 'rn-owned-context',
+            installedMethods: [],
+            handleRequest: async () => null,
+        });
+        const initial = adapter.getSurfaceContext();
+        expect(initial).not.toBe(raw);
+        expect(initial.translations).not.toBe(translations);
+        expect(Object.isFrozen(initial.translations)).toBe(true);
+        expect(Object.isFrozen(translations)).toBe(false);
+        expect(Object.hasOwn(initial.target, 'agentId')).toBe(true);
+        await expect(adapter.api.context()).resolves.toBe(initial);
+        const events: SurfaceContext[] = [];
+        const watch = await adapter.api.watchContext(context => events.push(context));
+        let rendererChanges = 0;
+        const detach = adapter.subscribeSurfaceContext(() => { rendererChanges += 1; });
+        adapter.pushSurfaceContext({ ...raw, translations: { title: 'Original' } });
+        expect(adapter.getSurfaceContext()).toBe(initial);
+        expect(events).toEqual([]);
+        translations.title = 'Changed';
+        expect(initial.translations.title).toBe('Original');
+        // A newly supplied raw entry is acquired even when its caller reused
+        // the mutable source reference; no shallow-freeze/ref trust is used.
+        adapter.pushSurfaceContext(raw);
+        const changed = adapter.getSurfaceContext();
+        expect(changed.translations.title).toBe('Changed');
+        expect(changed.target).toBe(initial.target);
+        expect(events).toEqual([changed]);
+        expect(rendererChanges).toBe(1);
+        expect(() => adapter.pushSurfaceContext({ ...raw, textScale: -1 })).toThrow();
+        expect(adapter.getSurfaceContext()).toBe(changed);
+        detach();
+        watch.dispose();
+        adapter.dispose();
+        adapter.pushSurfaceContext({ ...raw, locale: 'de' });
+        expect(rendererChanges).toBe(1);
+        await expect(adapter.api.context()).rejects.toMatchObject({ code: 'stale_surface' });
     });
 
     it('stops delivery when the surface generation is retired', async () => {

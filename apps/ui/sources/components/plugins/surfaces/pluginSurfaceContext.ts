@@ -2,6 +2,7 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { BrowserViewTargetV1 } from '@happier-dev/protocol';
+import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import type {
     PluginSurfaceTarget,
     PluginUiPlatform,
@@ -25,6 +26,48 @@ import type { PluginSurfaceTargetKind } from '@/sync/domains/plugins/ui/surfaceP
 import type { PluginSurfaceTargetUndeclaredReason } from '@/sync/domains/plugins/ui/scope/resolveResourceScope';
 
 import { usePluginUiTheme } from './pluginUiThemeProjection';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
+
+export type PreparedPluginSurfaceContext = Readonly<{
+    surface: SurfaceContext;
+    semanticKey: string;
+}>;
+
+function freezeOwnedContext<T>(value: T): T {
+    if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+        for (const child of Object.values(value)) freezeOwnedContext(child);
+        Object.freeze(value);
+    }
+    return value;
+}
+
+/** Acquire a new host context at the existing adapter's publication boundary. */
+export function preparePluginSurfaceContext(
+    source: SurfaceContext,
+    previous?: PreparedPluginSurfaceContext,
+): PreparedPluginSurfaceContext {
+    // The SDK grammar owns the copy (including optional undefined presence).
+    // Only its newly allocated graph is frozen; caller-owned aliases stay free.
+    const parsed = PluginUiHostApiSurfaceContextV1Schema.parse(source);
+    const semanticKey = stableJsonStringify(parsed);
+    if (previous?.semanticKey === semanticKey) return previous;
+    if (previous) {
+        const owned = parsed as Record<string, unknown>;
+        const incumbent = previous.surface as Readonly<Record<string, unknown>>;
+        // Preserve exact unchanged public sub-snapshots through availability,
+        // locale, or theme updates. Compare only the newly acquired SDK copy,
+        // never a retained mutable source alias.
+        for (const key of Object.keys(owned)) {
+            const value = owned[key];
+            if (value !== null && typeof value === 'object'
+                && Object.hasOwn(incumbent, key)
+                && stableJsonStringify(value) === stableJsonStringify(incumbent[key])) {
+                owned[key] = incumbent[key];
+            }
+        }
+    }
+    return Object.freeze({ surface: freezeOwnedContext(parsed), semanticKey });
+}
 
 /**
  * The single owner of the public `SurfaceContext` snapshot (§3.2, UI-D11).

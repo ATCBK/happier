@@ -139,7 +139,6 @@ import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
     createPluginUiProjectedActionResolver,
-    normalizePluginUiProjection,
 } from '@/sync/domains/plugins/ui/projection';
 import type {
     PluginUiHostedWebProjection,
@@ -152,7 +151,6 @@ import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContri
 import {
     readPluginUiContributionOrigin,
     readPluginUiProjectionEntryExecutionOrigin,
-    mergeInstalledPluginUiProjections,
 } from '@/sync/domains/plugins/ui/projectionUnion';
 import {
     createPluginUiHostedWebArtifactRequestFactsKey,
@@ -176,6 +174,7 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { useActivePluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/projection';
 import type { PluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
+import { readPluginActionInputSelectionPresenceSnapshot, type PluginActionInputSelectionSnapshot } from './pluginActionInputSelectionFacts';
 import {
     useMountedTargetedContributions,
     type MountedTargetedContributionsState,
@@ -198,6 +197,7 @@ import {
 } from './boundPluginSurfaceController';
 import {
     createPluginSurfaceContext,
+    preparePluginSurfaceContext,
     getPluginSurfaceTargetAuthorityKey,
     resolvePluginSurfaceTarget,
     usePluginSurfaceAccountEncryptionMode,
@@ -725,10 +725,6 @@ function DeclarativePluginSurfaceWithDocumentSource(
         props.surfaceTranslations,
         props.targetedContributions,
     ]);
-    const presentationEnvironment = React.useMemo(
-        () => projectHappierUiEnvironment(surface),
-        [surface],
-    );
     // Environment snapshots update independently of the Resource store. Keep
     // the adapter/store lifetime bound to the controller identity and push the
     // latest public context into the existing adapter rather than reopening a
@@ -744,6 +740,7 @@ function DeclarativePluginSurfaceWithDocumentSource(
         if (!adapterKey) return null;
         return createCanonicalPluginReactNativeHostApiAdapter({
             surface: surfaceRef.current,
+            prepareSurfaceContext: preparePluginSurfaceContext,
             requestSurface: props.controller.surfaceContext,
             requestIdPrefix: `declarative-document:${adapterKey}`,
             handleRequest: props.controller.hostApi.handleRequest,
@@ -756,9 +753,28 @@ function DeclarativePluginSurfaceWithDocumentSource(
         // Resource-store lifetime boundary.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [adapterKey, props.controller]);
-    React.useEffect(() => {
-        hostApiAdapter?.pushSurfaceContext(surface);
+    const committedSurfaceSource = React.useRef({ adapter: hostApiAdapter, source: surface });
+    React.useLayoutEffect(() => {
+        if (committedSurfaceSource.current.adapter === hostApiAdapter
+            && committedSurfaceSource.current.source !== surface) {
+            hostApiAdapter?.pushSurfaceContext(surface);
+        }
+        committedSurfaceSource.current = { adapter: hostApiAdapter, source: surface };
     }, [hostApiAdapter, surface]);
+    const readPublishedSurface = React.useCallback(
+        () => hostApiAdapter?.getSurfaceContext() ?? surface,
+        [hostApiAdapter, surface],
+    );
+    const subscribePublishedSurface = React.useCallback((listener: () => void) => (
+        hostApiAdapter?.subscribeSurfaceContext(listener) ?? (() => {})
+    ), [hostApiAdapter]);
+    const publishedSurface = React.useSyncExternalStore(
+        subscribePublishedSurface, readPublishedSurface, readPublishedSurface,
+    );
+    const presentationEnvironment = React.useMemo(
+        () => projectHappierUiEnvironment(publishedSurface),
+        [publishedSurface],
+    );
     React.useEffect(() => {
         if (!hostApiAdapter) return;
         return props.controller.subscribeResourceInvalidations((event) => {
@@ -1457,6 +1473,27 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     // plugin's translation bundle all come from `pluginSurfaceContext.ts`, the
     // same module the hosted-web mount consumes.
     const environment = usePluginSurfaceEnvironment(canonicalIdentity.platform);
+    const surfaceSource = React.useMemo(() => createPluginSurfaceContext({
+        mount: canonicalIdentity.mount,
+        target: canonicalIdentity.target,
+        accountEncryptionMode: canonicalIdentity.accountEncryptionMode,
+        environment,
+        translations: canonicalIdentity.translations,
+        targetedContributions: canonicalIdentity.targetedContributions,
+        pendingApproval: canonicalIdentity.pendingApproval,
+        machineConnectionPending: canonicalIdentity.machineConnectionPending,
+        machineExecutionReady: canonicalIdentity.machineExecutionReady,
+    }), [
+        canonicalIdentity.mount,
+        canonicalIdentity.target,
+        canonicalIdentity.accountEncryptionMode,
+        canonicalIdentity.translations,
+        canonicalIdentity.targetedContributions,
+        canonicalIdentity.pendingApproval,
+        canonicalIdentity.machineConnectionPending,
+        canonicalIdentity.machineExecutionReady,
+        environment,
+    ]);
     const canonicalRenderIdentity = React.useMemo(() => {
         return Object.freeze({
             pluginId: canonicalIdentity.pluginId,
@@ -1471,17 +1508,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
             brand: canonicalIdentity.brand,
             targetedContributions: canonicalIdentity.targetedContributions,
             executionOrigin: canonicalIdentity.executionOrigin,
-            surface: createPluginSurfaceContext({
-                mount: canonicalIdentity.mount,
-                target: canonicalIdentity.target,
-                accountEncryptionMode: canonicalIdentity.accountEncryptionMode,
-                environment,
-                translations: canonicalIdentity.translations,
-                targetedContributions: canonicalIdentity.targetedContributions,
-                pendingApproval: canonicalIdentity.pendingApproval,
-                machineConnectionPending: canonicalIdentity.machineConnectionPending,
-                machineExecutionReady: canonicalIdentity.machineExecutionReady,
-            }),
+            surface: surfaceSource,
         });
     }, [
         canonicalIdentity.occurrenceId,
@@ -1500,7 +1527,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         canonicalIdentity.brand,
         canonicalIdentity.accountEncryptionMode,
         canonicalIdentity.executionOrigin,
-        environment,
+        surfaceSource,
     ]);
 
     // UI-D03: the adapter's lifetime is the MOUNT's, not the surface snapshot's.
@@ -1536,6 +1563,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         const surface = canonicalSurfaceRef.current;
         return createCanonicalPluginReactNativeHostApiAdapter({
             surface,
+            prepareSurfaceContext: preparePluginSurfaceContext,
             requestSurface: props.requestSurface,
             requestIdPrefix: `rn-v2:${canonicalAdapterKey}`,
             handleRequest: props.hostApi.handleRequest,
@@ -1550,9 +1578,25 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
     // The context producer (UI-D03). Every established `watchContext` subscriber
     // observes the new facts; an identical snapshot is not republished, so the
     // mount push at establishment time is not a spurious event.
-    React.useEffect(() => {
+    const committedSurfaceSource = React.useRef({
+        adapter: canonicalHostApiAdapter,
+        source: surfaceSource,
+    });
+    React.useLayoutEffect(() => {
+        // Initial acquisition belongs to the constructor, not a second push.
+        if (committedSurfaceSource.current.adapter !== canonicalHostApiAdapter
+            || committedSurfaceSource.current.source === surfaceSource) {
+            committedSurfaceSource.current = { adapter: canonicalHostApiAdapter, source: surfaceSource };
+            return;
+        }
         canonicalHostApiAdapter.pushSurfaceContext(canonicalRenderIdentity.surface);
-    }, [canonicalHostApiAdapter, canonicalRenderIdentity.surface]);
+        committedSurfaceSource.current = { adapter: canonicalHostApiAdapter, source: surfaceSource };
+    }, [canonicalHostApiAdapter, canonicalRenderIdentity.surface, surfaceSource]);
+    const publishedSurface = React.useSyncExternalStore(
+        canonicalHostApiAdapter.subscribeSurfaceContext,
+        canonicalHostApiAdapter.getSurfaceContext,
+        canonicalHostApiAdapter.getSurfaceContext,
+    );
     // EU-4b: the mount's one invalidation sink reaches the adapter's existing
     // subscription registry. No second registry, and nothing else publishes.
     const subscribeResourceInvalidations = props.subscribeResourceInvalidations;
@@ -1793,7 +1837,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         const identity = canonicalRenderIdentity;
         const context = {
             plugin: Object.freeze({ id: identity.pluginId, version: identity.pluginVersion }),
-            surface: identity.surface,
+            surface: publishedSurface,
             hostApi: canonicalHostApiAdapter.api,
             signal,
             activity: Object.freeze({
@@ -1813,6 +1857,7 @@ function PluginReactNativeSurfaceHost(props: Readonly<{
         signal,
         canonicalHostApiAdapter,
         canonicalRenderIdentity,
+        publishedSurface,
         rendererMount.isCurrent,
         presented,
         props.interactionEnabled,
@@ -2109,7 +2154,10 @@ export type PluginSurfaceTargetedMountProps = Readonly<{
     /** Exact response-local V2 package/translation facts for B presentation. */
     pluginProjectionV2?: PluginProjectionV2 | null;
     /** Already composed and normalized by this target's acquisition publication. */
-    pluginUiProjection?: PluginUiProjectionModel | null;
+    pluginUiProjection: PluginUiProjectionModel | null;
+    actionInputSelectionFactsKey: PluginActionInputSelectionSnapshot;
+    /** Only the admitted runtime catalog lends Composer attachment authority. */
+    runtimeComposerAttachmentsById?: PluginUiProjectionModel['composerAttachmentsById'];
     /**
      * The response-local daemon authority is ready. Retained exact target facts
      * may keep B presented during revalidation, but daemon mutations remain
@@ -2139,6 +2187,7 @@ export type PluginSurfaceComposerMountProps = Readonly<{
     /** Exact current V2 projection for translations/package presentation. */
     pluginProjectionV2?: PluginProjectionV2 | null;
     pluginUiProjection: PluginUiProjectionModel;
+    actionInputSelectionFactsKey: PluginActionInputSelectionSnapshot;
     /** Mutation admission remains closed until this current response is ready. */
     daemonProjectionReady: boolean;
     /** Canonical Composer badge shown if the selected renderer cannot mount. */
@@ -2164,6 +2213,7 @@ export type PluginSurfaceEphemeralMountProps = Readonly<{
     pluginProjectionById?: Readonly<Record<string, PluginProjectionEntry>> | null;
     pluginProjectionV2?: PluginProjectionV2 | null;
     pluginUiProjection: PluginUiProjectionModel;
+    actionInputSelectionFactsKey: PluginActionInputSelectionSnapshot;
     daemonProjectionReady: boolean;
     fallback?: React.ReactNode;
     binding?: BoundPluginSurfaceBinding;
@@ -2444,18 +2494,15 @@ function PluginSurfaceHostMount(props: Readonly<(
             : ephemeralBinding
                 ? ephemeralBinding.surface.projectionGeneration
         : origin ? origin.generation : accountUnionMount ? null : props.pluginUiProjection?.generation;
-    const mountedAccountUiProjection = accountExecutionOrigin ? availabilityReader?.readAccountUiProjection() ?? null : null;
-    const mountedPluginUiProjection = React.useMemo(() => (
+    const mountedPluginUiProjection = (
         targetedBinding
-            ? accountExecutionOrigin ? mergeInstalledPluginUiProjections(mountedAccountUiProjection ? [mountedAccountUiProjection] : [],
-                targetedMount?.pluginProjectionV2 ? normalizePluginUiProjection(targetedMount.pluginProjectionV2) : null)
-                : normalizePluginUiProjection(targetedMount?.pluginProjectionV2 ?? null)
+            ? targetedMount?.pluginUiProjection ?? null
             : composerBinding
                 ? composerMount?.pluginUiProjection ?? null
                 : ephemeralBinding
                     ? ephemeralMount?.pluginUiProjection ?? null
                 : props.pluginUiProjection ?? null
-    ), [accountExecutionOrigin, composerBinding, composerMount?.pluginUiProjection, ephemeralBinding, ephemeralMount?.pluginUiProjection, mountedAccountUiProjection, props.pluginUiProjection, targetedBinding, targetedMount?.pluginProjectionV2]);
+    );
     const installedPackagesById = mountedPluginUiProjection?.installedPackagesById;
     // The raw V2 Action map is the sole target source for the bound surface.
     // This closure is an exact lookup over that producer-owned snapshot, not a
@@ -2579,12 +2626,16 @@ function PluginSurfaceHostMount(props: Readonly<(
     const mountedTargetedContributions = pointlessTargetedContributions
         ?? currentMountedTargetRead?.targetedContributions
         ?? null;
+    // Action and SurfaceContext text belong to this exact mounted source,
+    // independently of another replica's aggregate presentation declarations.
+    const mountedPresentationUiProjection = currentMountedTargetRead
+        ? currentMountedTargetRead.pluginUiProjection : mountedPluginUiProjection;
     // Daemon-owned interaction needs only the current target slice: a page is
     // never gated on the whole-machine describe. Machine projection inputs
     // (actions, composer attachments, child mounts) are used when present and
     // retained through a refresh.
     const mountedMachineInputs = mountedTargetedContributions !== null
-        ? mountedMachineProjection.inputs
+        ? pointlessTargetedContributions !== null ? mountedMachineProjection.inputs : currentMountedTargetRead?.projectionInputs ?? null
         : null;
     const mountedTargetReady = mountedTargetedContributions !== null
         && (pointlessTargetedContributions !== null || mountedTargetRead.phase === 'ready');
@@ -2714,9 +2765,10 @@ function PluginSurfaceHostMount(props: Readonly<(
         ? getPluginSurfaceTargetAuthorityKey(resolvedSurfaceTarget.target)
         : null;
     const surfaceLocale = getPreferredLanguage();
+    const surfaceTranslationSources = mountedPresentationUiProjection?.translationsByPluginId ?? EMPTY_PLUGIN_UI_PROJECTION.translationsByPluginId;
     const surfaceTranslations = React.useMemo(() => Object.freeze({
         ...resolvePluginUiTranslationBundle({
-            projection: mountedPluginUiProjection,
+            projection: { translationsByPluginId: surfaceTranslationSources },
             pluginId: mountedPluginId,
             locale: surfaceLocale,
             contributorPluginIds: targetedContributions?.points.flatMap((point) => (
@@ -2728,7 +2780,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         // Framework-owned chrome is projected after author strings so a plugin
         // cannot replace a fixed host action by declaring the same key.
         ...resolvePluginUiFrameworkTranslations(),
-    }), [mountedPluginId, mountedPluginUiProjection, surfaceLocale, targetedContributions]);
+    }), [mountedPluginId, surfaceTranslationSources, surfaceLocale, targetedContributions]);
     const surfacePlatform = props.platform ?? 'web';
     const surfaceEnvironment = usePluginSurfaceEnvironment(surfacePlatform);
     const declarativePresentationEnvironment = React.useMemo(
@@ -2987,7 +3039,7 @@ function PluginSurfaceHostMount(props: Readonly<(
             resourceCapability,
             ...(ordinaryResourceContext ? { resourceContext: ordinaryResourceContext } : {}),
             pluginProjectionById: mountedMachineInputs?.pluginProjectionById ?? null,
-            pluginUiProjection: mountedPluginUiProjection,
+            pluginUiProjection: mountedPresentationUiProjection,
             targetedContributions,
             accountLifetime,
             mountInstanceKey: mountedInstanceKey,
@@ -2997,8 +3049,23 @@ function PluginSurfaceHostMount(props: Readonly<(
                 && surfacePlatformSupported
                 && mountedTargetReady,
         });
+    const publishedActionSelection = targetedMount?.actionInputSelectionFactsKey
+        ?? composerMount?.actionInputSelectionFactsKey
+        ?? ephemeralMount?.actionInputSelectionFactsKey
+        ?? currentMountedTargetRead?.actionInputSelectionFactsKey;
+    const matchingSelectionTarget = baseControllerFacts.targetedContributions?.target.pluginId === baseControllerFacts.pluginId;
+    const hasSelectionProjection = baseControllerFacts.pluginProjectionById !== undefined && baseControllerFacts.pluginProjectionById !== null;
+    if (!publishedActionSelection && hasSelectionProjection && matchingSelectionTarget
+        && baseControllerFacts.targetedContributions!.points.length > 0) {
+        throw new Error('Mounted Action selection facts were not published by their source');
+    }
+    const actionInputSelectionFactsKey = publishedActionSelection ?? readPluginActionInputSelectionPresenceSnapshot({
+        hasPluginProjection: hasSelectionProjection, hasTargetedContributions: matchingSelectionTarget,
+    });
     const controllerFacts = Object.freeze({
         ...baseControllerFacts,
+        actionInputSelectionFactsKey,
+        targetSourceCustody: baseControllerFacts.targetedContributions?.target.sourceCustody ?? mountedTargetSourceCustody,
         executionOriginSelectionKind: needsMachineExecution ? pluginExecution.selection.state.kind : undefined,
         ...(executionSelectionState?.kind === 'unavailable' && executionSelectionState.candidates.length > 0
             ? { executionOriginRefusal: Object.freeze({
@@ -3019,29 +3086,11 @@ function PluginSurfaceHostMount(props: Readonly<(
     // canonical document registry. The target-scoped projection is the only
     // attachment authority source here: the broad app union deliberately does
     // not become a second Composer catalog.
-    const mountedComposerProjectionSource = targetedBinding
-        ? targetedMount?.pluginProjectionV2 ?? null
+    const mountedComposerAttachmentsById = targetedBinding
+        ? targetedMount?.runtimeComposerAttachmentsById ?? EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById
         : ephemeralBinding
-            ? ephemeralMount?.pluginProjectionV2 ?? null
-        : mountedMachineInputs?.pluginProjectionV2 ?? null;
-    // A daemon refresh rebuilds the exact V2 object graph even when Composer
-    // attachment authority is unchanged. This semantic key belongs at the
-    // mounted handler boundary: it preserves the controller/observer lifetime
-    // for an equivalent map while still replacing it for an authority change.
-    const mountedRawComposerAttachments = mountedComposerProjectionSource?.familiesById.composerAttachments?.entriesById;
-    const mountedComposerAttachmentsKey = React.useMemo(
-        () => stableJsonStringify(mountedRawComposerAttachments ?? {}),
-        [mountedRawComposerAttachments],
-    );
-    const mountedComposerAttachmentsById = React.useMemo(() => (
-        mountedComposerProjectionSource
-            ? normalizePluginUiProjection(mountedComposerProjectionSource).composerAttachmentsById
-            : EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById
-        // `mountedComposerAttachmentsKey` is the complete semantic input to
-        // this handler-owned authority map; raw response identity is not a
-        // mount-currentness fact.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    ), [mountedComposerAttachmentsKey]);
+            ? ephemeralMount?.pluginUiProjection.composerAttachmentsById ?? EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById
+        : mountedMachineInputs?.pluginUiProjection.composerAttachmentsById ?? EMPTY_PLUGIN_UI_PROJECTION.composerAttachmentsById;
     const mountedComposerOwnerPluginId = targetedBinding
         ? targetedBinding.mount.contributor.pluginId
         : !composerBinding && mountedTarget && mountedMachineInputs
@@ -3587,9 +3636,12 @@ function PluginSurfaceHostMount(props: Readonly<(
                     request,
                     physicalTarget: resolvedSurfaceTarget.target,
                     parentLifetime: controller,
-                    projectionGeneration: mountedMachineInputs?.pluginProjectionV2?.generation,
-                    pluginProjectionById: mountedMachineInputs?.pluginProjectionById,
-                    pluginProjectionV2: mountedMachineInputs?.pluginProjectionV2,
+                    projectionGeneration: currentMountedTargetRead?.projectionInputs?.pluginProjectionV2?.generation,
+                    pluginProjectionById: currentMountedTargetRead?.projectionInputs?.pluginProjectionById,
+                    pluginProjectionV2: currentMountedTargetRead?.projectionInputs?.pluginProjectionV2,
+                    pluginUiProjection: currentMountedTargetRead?.pluginUiProjection ?? null,
+                    actionInputSelectionFactsKey: request.mount.mount.actionInputSelectionFactsKey!,
+                    runtimeComposerAttachmentsById: currentMountedTargetRead?.projectionInputs?.pluginUiProjection.composerAttachmentsById,
                     daemonProjectionReady: machineExecutionReady,
                     ...(needsMachineExecution && request.mount.mount.accountExecutionOrigin
                         ? { isExecutionOriginCurrent: pluginExecution.isExecutionOriginCurrent } : {}),
@@ -3609,6 +3661,7 @@ function PluginSurfaceHostMount(props: Readonly<(
         );
     }, [
         controller,
+        currentMountedTargetRead,
         localControllerInteractionEnabled,
         machineExecutionReady,
         machineId,

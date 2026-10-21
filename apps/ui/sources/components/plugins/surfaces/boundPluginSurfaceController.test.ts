@@ -9,7 +9,7 @@ import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, create
 import type { HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
-import { createPluginActionInputSelectionFactsPublication, serializePluginActionInputSelectionFacts } from './pluginActionInputSelectionFacts';
+import { createPluginActionInputSelectionFactsPublication } from './pluginActionInputSelectionFacts';
 import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
 import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/contributions/ui';
@@ -112,7 +112,7 @@ function resolveUnavailableClientTargetAction(
 }
 
 const FACTS = {
-    actionInputSelectionFactsKey: serializePluginActionInputSelectionFacts({ targetPluginId: 'acme.browser' }),
+    actionInputSelectionFactsKey: createPluginActionInputSelectionFactsPublication().publish({ targetPluginId: 'acme.browser' }),
     pluginId: 'acme.browser',
     contributionId: 'panel',
     surfaceId: 'surfacePlacement:acme.browser:panel',
@@ -998,6 +998,9 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
     it('keeps one controller for equivalent daemon target snapshots and retires it for semantic projection or target-generation replacement', async () => {
         let projectionTraversals = 0;
         const selectedBundleInput = { en: { 'action.title': 'Configure browser' } };
+        const objectKeys = vi.spyOn(Object, 'keys');
+        const objectDescriptors = vi.spyOn(Object, 'getOwnPropertyDescriptors');
+        onTestFinished(() => { objectKeys.mockRestore(); objectDescriptors.mockRestore(); });
         const selectedBundles = projectNativeJsonValueForTransport(selectedBundleInput) as typeof selectedBundleInput;
         const unrelatedBundleInput = { en: Object.fromEntries(
             Array.from({ length: 1024 }, (_, index) => [`unrelated.${index}`, 'Unrelated catalog text '.repeat(8)]),
@@ -1020,23 +1023,21 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                 },
             }),
         });
+        // One real boundary preparation is necessary; no renderer/selector
+        // may rewalk that prepared bundle. Both spies delegate unchanged.
+        const selectedTranslationTraversals = () => objectKeys.mock.calls.filter(([value]) => value === selectedBundles).length
+            + objectDescriptors.mock.calls.filter(([value]) => value === selectedBundleInput).length;
+        const unrelatedTranslationTraversals = () => objectKeys.mock.calls.filter(([value]) => value === unrelatedBundles).length;
         const sourcePublication = createPluginActionInputSelectionFactsPublication();
         const publishFacts = (facts: Readonly<{
             targetedContributions: PluginUiTargetedContributionsV1;
             pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
             pluginUiProjection: PluginUiProjectionModel;
         }>) => ({ ...facts, actionInputSelectionFactsKey: sourcePublication.publish({
-            targetPluginId: FACTS.pluginId,
-            targetedContributions: facts.targetedContributions,
+            targetPluginId: FACTS.pluginId, targetedContributions: facts.targetedContributions,
             pluginProjectionById: facts.pluginProjectionById,
             translationsByPluginId: facts.pluginUiProjection.translationsByPluginId,
         }) });
-        // Observe the real serializer's traversal of Protocol-owned immutable
-        // input. The spy delegates unchanged; no parser/selector is mocked.
-        const objectKeys = vi.spyOn(Object, 'keys');
-        onTestFinished(() => objectKeys.mockRestore());
-        const selectedTranslationTraversals = () => objectKeys.mock.calls.filter(([value]) => value === selectedBundles).length;
-        const unrelatedTranslationTraversals = () => objectKeys.mock.calls.filter(([value]) => value === unrelatedBundles).length;
         const daemonFactsFor = (input: Readonly<{
             targetGeneration: string;
             actionTitle: string;
@@ -1248,15 +1249,48 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(uiProjectionReplacement).toBe(targetReplacement);
         expect(targetReplacement.isCurrent()).toBe(true);
         expect(uiProjectionReplacement.isCurrent()).toBe(true);
-        const translatedProjection = await hook.rerender(publishFacts({
+        const translatedFacts = publishFacts({
             ...targetReplacementFacts,
             pluginUiProjection: { ...pluginUiProjection, translationsByPluginId: {
                 'acme.browser': { id: 'translations:acme.browser', pluginId: 'acme.browser',
                     contributionKind: 'translations', locales: ['en'], bundles: { en: { 'action.title': 'Configure revised browser' } } },
             } },
-        }));
+        });
+        const translatedProjection = await hook.rerender(translatedFacts);
         expect(translatedProjection).not.toBe(targetReplacement);
         expect(targetReplacement.isCurrent()).toBe(false);
+        const selectedPlugin = translatedFacts.pluginProjectionById[FACTS.pluginId]!;
+        const changedHints = await hook.rerender(publishFacts({ ...translatedFacts, pluginProjectionById: {
+            ...translatedFacts.pluginProjectionById,
+            [FACTS.pluginId]: { ...selectedPlugin, actions: selectedPlugin.actions.map(action => ({ ...action,
+                inputHints: { fields: [{ path: 'repository', title: 'Repository', widget: 'text', required: true }] },
+            })) },
+        } }));
+        expect(changedHints).not.toBe(translatedProjection);
+        expect(translatedProjection.isCurrent()).toBe(false);
+        expect(changedHints.isCurrent()).toBe(true);
+        await hook.unmount();
+    });
+
+    it('retires a no-operation controller when caller custody changes under the same origin and occurrence', async () => {
+        const sourceCustody = { kind: 'development' as const, registeredRootId: 'caller-root-a' };
+        const targetedContributions = { target: { pluginId: FACTS.pluginId, occurrenceId: FACTS.occurrenceId,
+            sourceCustody }, points: [] };
+        const source = { ...FACTS, targetedContributions, targetSourceCustody: sourceCustody,
+            actionInputSelectionFactsKey: createPluginActionInputSelectionFactsPublication().publishEmpty({
+                hasPluginProjection: true, hasTargetedContributions: true,
+            }) };
+        const hook = await renderHook((facts: typeof source) => useBoundPluginSurfaceController({ facts }), { initialProps: source });
+        const initial = hook.getCurrent();
+        const unchanged = await hook.rerender({ ...source });
+        expect(unchanged).toBe(initial);
+        const replacementCustody = { kind: 'development' as const, registeredRootId: 'caller-root-b' };
+        const changed = await hook.rerender({ ...source, targetSourceCustody: replacementCustody,
+            targetedContributions: { ...targetedContributions, target: { ...targetedContributions.target, sourceCustody: replacementCustody } } });
+        expect(changed).not.toBe(initial);
+        expect(initial.isCurrent()).toBe(false);
+        expect(changed.isCurrent()).toBe(true);
+        expect(changed.surfaceContext).toEqual(initial.surfaceContext);
         await hook.unmount();
     });
 

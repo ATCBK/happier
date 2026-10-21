@@ -1,7 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { PluginProjectionV2Schema, type PluginProjectedSettingsV2, type PluginProjectionV2 } from '@happier-dev/protocol';
 import { createProjectedAgentLocalAuthPlugin } from '@/agents/catalog/localAuth/createProjectedAgentLocalAuthPlugin';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
+import * as projectionNormalizer from '@/sync/domains/plugins/ui/projection';
+import * as descriptorProjection from '@/sync/domains/connectedServices/connectedAccountDescriptorProjection';
 
 import {
     adaptDaemonContributionRegistryProjectionToMergedProjectionInputs,
@@ -11,6 +14,42 @@ import {
 } from './daemonContributionRegistryProjectionAdapters';
 
 describe('daemon contribution registry projection adapters', () => {
+    it('reuses ready models without deriving again for equivalent newly decoded full replies', () => {
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 19 });
+        const first = publishDaemonMergedProjectionInputs({ projection });
+        const replies = Array.from({ length: 100 }, () => structuredClone(projection));
+        const normalize = vi.spyOn(projectionNormalizer, 'normalizePluginUiProjection');
+        const parseDescriptors = vi.spyOn(descriptorProjection, 'readConnectedAccountDescriptorProjection');
+        try {
+            for (const reply of replies) expect(publishDaemonMergedProjectionInputs({ projection: reply }, first)).toBe(first);
+            expect(normalize).not.toHaveBeenCalled();
+            expect(parseDescriptors).not.toHaveBeenCalled();
+        } finally {
+            normalize.mockRestore();
+            parseDescriptors.mockRestore();
+        }
+    });
+
+    it('publishes changed translation bundles with canonical immutable ownership for unchanged selected reads', () => {
+        const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 20,
+            familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                'translations:acme.review': { id: 'translations:acme.review', pluginId: 'acme.review', occurrenceId: 'review-current',
+                    contributionKind: 'translations', locales: ['en'], bundles: { en: { title: 'Review' } } },
+            } } },
+        });
+        const first = publishDaemonMergedProjectionInputs({ projection });
+        const changed = publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({
+            ...projection, familiesById: { pluginUi: { family: 'pluginUi', entriesById: {
+                ...projection.familiesById.pluginUi?.entriesById,
+                'translations:acme.review': { ...projection.familiesById.pluginUi?.entriesById['translations:acme.review'],
+                    bundles: { en: { title: 'Changed' } } },
+            } } },
+        }) }, first);
+        const bundles = changed.pluginUiProjection.translationsByPluginId['acme.review']?.bundles;
+        expect(bundles).toEqual({ en: { title: 'Changed' } });
+        expect(projectNativeJsonValueForTransport(bundles)).toBe(bundles);
+    });
+
     it('retains unchanged ready maps when a projection without pluginUi changes only delivery generation', () => {
         const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 20,
             actionsById: { 'acme.review/refresh': { id: 'refresh', pluginId: 'acme.review', occurrenceId: 'review-current',

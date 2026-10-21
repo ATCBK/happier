@@ -186,9 +186,8 @@ function projectionInputs(
     event: DaemonContributionRegistryProjectionAutomationEligibleEventV1,
 ): DaemonMergedProjectionInputs {
     return {
-        ...publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({ v: 2, generation: 0 }) }),
+        ...publishDaemonMergedProjectionInputs({ projection: PluginProjectionV2Schema.parse({ v: 2, generation: 0 }), automationEligibleEvents: [event] }),
         pluginProjectionV2: null,
-        automationEligibleEvents: [event],
         registryDiagnostics: [],
     };
 }

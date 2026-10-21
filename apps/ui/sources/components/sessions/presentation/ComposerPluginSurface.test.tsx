@@ -84,10 +84,23 @@ const lifetime = {
 describe('ComposerPluginSurface', () => {
     it('reuses the one PluginSurfaceHost composer arm with the supplied truthful target', async () => {
         const { ComposerPluginSurface } = await import('./ComposerPluginSurface');
-        const catalogEntry = createCatalogEntry();
+        const baseCatalogEntry = createCatalogEntry();
+        const protocol = { id: 'review', version: 1 };
+        const contributor = { pluginId: 'acme.compose', contributionId: 'review', occurrenceId: 'generation-1',
+            sourceCustody: { kind: 'development', registeredRootId: 'compose-root' } };
+        const rawCatalogEntry = DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse({
+            ...baseCatalogEntry,
+            contributorTargetedContributions: { ...baseCatalogEntry.contributorTargetedContributions,
+                points: [{ pointId: 'review', protocols: [{ protocol, contributions: [{ contributor, protocol, surfaces: [],
+                    operations: [{ point: { pointId: 'review', protocol }, contributor, role: 'setup',
+                        action: { pluginId: 'acme.compose', localId: 'configure' } }],
+                }] }] }],
+            },
+        });
         const fallback = React.createElement('FallbackBadge', { testID: 'canonical-composer-badge' });
         const projection = createProjection(7);
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const inputs = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [rawCatalogEntry] });
+        const catalogEntry = inputs.composerSurfaceCatalog![0]!;
 
         await renderScreen(<ComposerPluginSurface
             request={{
@@ -107,7 +120,8 @@ describe('ComposerPluginSurface', () => {
             catalogEntries={[catalogEntry]}
             pluginProjectionById={{}}
             pluginProjectionV2={projection}
-            pluginUiProjection={pluginUiProjection}
+            pluginUiProjection={inputs.pluginUiProjection}
+            actionInputSelectionFacts={inputs.composerSurfaceActionInputSelectionFacts}
             machineId="machine-1"
             serverId="server-1"
             parentLifetime={lifetime}
@@ -121,6 +135,7 @@ describe('ComposerPluginSurface', () => {
             composerMount: expect.objectContaining({
                 fallback,
                 physicalTarget: { kind: 'app' },
+                actionInputSelectionFactsKey: inputs.composerSurfaceActionInputSelectionFacts.get(catalogEntry),
                 mount: expect.objectContaining({
                     kind: 'composer',
                     mount: expect.objectContaining({
@@ -150,8 +165,7 @@ describe('ComposerPluginSurface', () => {
         const { ComposerPluginSurface } = await import('./ComposerPluginSurface');
         const renderComposer = (occurrenceId: string, projectionGeneration: number) => {
             const projection = createProjection(projectionGeneration);
-            const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
-            const catalogEntry = DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse({
+            const rawCatalogEntry = DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse({
                 ...createCatalogEntry(),
                 occurrenceId,
                 projectionGeneration,
@@ -164,6 +178,8 @@ describe('ComposerPluginSurface', () => {
                     points: [],
                 },
             });
+            const inputs = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [rawCatalogEntry] });
+            const catalogEntry = inputs.composerSurfaceCatalog![0]!;
             return (
                 <ComposerPluginSurface
                     request={{
@@ -183,7 +199,8 @@ describe('ComposerPluginSurface', () => {
                     catalogEntries={[catalogEntry]}
                     pluginProjectionById={{}}
                     pluginProjectionV2={projection}
-                    pluginUiProjection={pluginUiProjection}
+                    pluginUiProjection={inputs.pluginUiProjection}
+                    actionInputSelectionFacts={inputs.composerSurfaceActionInputSelectionFacts}
                     machineId="machine-1"
                     serverId="server-1"
                     parentLifetime={lifetime}
@@ -215,9 +232,10 @@ describe('ComposerPluginSurface', () => {
     // native desktop Artifact path or the sandboxed browser iframe.
     it('classifies the desktop shell as desktop and a plain browser tab as web', async () => {
         const { ComposerPluginSurface } = await import('./ComposerPluginSurface');
-        const catalogEntry = createCatalogEntry();
+        const rawCatalogEntry = createCatalogEntry();
         const projection = createProjection(7);
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const inputs = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [rawCatalogEntry] });
+        const catalogEntry = inputs.composerSurfaceCatalog![0]!;
         const renderComposerSurface = () => renderScreen(<ComposerPluginSurface
             request={{
                 contribution: catalogEntry.contribution,
@@ -236,7 +254,8 @@ describe('ComposerPluginSurface', () => {
             catalogEntries={[catalogEntry]}
             pluginProjectionById={{}}
             pluginProjectionV2={projection}
-            pluginUiProjection={pluginUiProjection}
+            pluginUiProjection={inputs.pluginUiProjection}
+            actionInputSelectionFacts={inputs.composerSurfaceActionInputSelectionFacts}
             machineId="machine-1"
             serverId="server-1"
             parentLifetime={lifetime}

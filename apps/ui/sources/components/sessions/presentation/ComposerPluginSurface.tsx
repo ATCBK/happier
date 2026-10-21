@@ -25,6 +25,7 @@ import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/service
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
+import type { DaemonMergedProjectionInputs } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 
 export type ComposerPluginSurfaceMountRequest = Readonly<{
     contribution: PluginContributionIdentityV1;
@@ -83,6 +84,7 @@ export type ComposerPluginSurfaceProps = Readonly<{
     pluginProjectionById: Readonly<Record<string, PluginProjectionEntry>>;
     pluginProjectionV2: PluginProjectionV2;
     pluginUiProjection: PluginUiProjectionModel;
+    actionInputSelectionFacts: DaemonMergedProjectionInputs['composerSurfaceActionInputSelectionFacts'];
     machineId: string | null;
     parentLifetime: BoundPluginSurfaceMountLifetime;
     transactionApplier: ComposerPresentationTransactionApplier;
@@ -197,6 +199,11 @@ export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.
     }, []);
 
     if (!mount || !props.parentLifetime.isCurrent()) return null;
+    // The retained physical binding can outlive an equivalent catalog delivery;
+    // the dependency snapshot belongs to the currently acquired exact row.
+    const actionInputSelectionFactsKey = requestedCatalogEntry
+        ? props.actionInputSelectionFacts.get(requestedCatalogEntry) : undefined;
+    if (!actionInputSelectionFactsKey) throw new Error('composer_action_input_selection_facts_missing');
     const sessionId = props.physicalTarget.kind === 'session'
         ? props.physicalTarget.sessionId
         : undefined;
@@ -213,6 +220,7 @@ export function ComposerPluginSurface(props: ComposerPluginSurfaceProps): React.
                 pluginProjectionById: props.pluginProjectionById,
                 pluginProjectionV2: props.pluginProjectionV2,
                 pluginUiProjection: props.pluginUiProjection,
+                actionInputSelectionFactsKey,
                 daemonProjectionReady: true,
                 fallback: props.fallback,
                 ...(binding === undefined ? {} : { binding }),

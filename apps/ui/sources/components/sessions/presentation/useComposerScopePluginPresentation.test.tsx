@@ -356,7 +356,7 @@ describe('useComposerScopePluginPresentation', () => {
                 },
             },
         });
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const { pluginUiProjection, composerSurfaceCatalog, composerSurfaceActionInputSelectionFacts } = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [] });
         const presentationRef: { current: ComposerScopePluginPresentation | null } = { current: null };
         let tree!: ReturnType<typeof create>;
         function Harness(): null {
@@ -371,7 +371,8 @@ describe('useComposerScopePluginPresentation', () => {
                     pluginProjectionById: {},
                     pluginProjectionV2: projection,
                     pluginUiProjection,
-                    composerSurfaceCatalog: [],
+                    composerSurfaceCatalog,
+                    composerSurfaceActionInputSelectionFacts,
                 },
                 accountLifetime: null,
                 isScopeCurrent: () => true,
@@ -404,7 +405,7 @@ describe('useComposerScopePluginPresentation', () => {
     it.each(scopeCases)('mounts a region for $label through the shared host seam', async (scope) => {
         pluginSurfaceHostSpy.mockClear();
         const projection = createProjection();
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const { pluginUiProjection, composerSurfaceCatalog, composerSurfaceActionInputSelectionFacts } = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [createCatalogEntry()] });
         const hook = await renderHook(() => useComposerScopePluginPresentation({
             composer: scope.composer,
             physicalTarget: scope.physicalTarget,
@@ -416,7 +417,8 @@ describe('useComposerScopePluginPresentation', () => {
                 pluginProjectionById: {},
                 pluginProjectionV2: projection,
                 pluginUiProjection,
-                composerSurfaceCatalog: [createCatalogEntry()],
+                composerSurfaceCatalog,
+                composerSurfaceActionInputSelectionFacts,
             },
             accountLifetime: null,
             isScopeCurrent: () => true,
@@ -461,7 +463,7 @@ describe('useComposerScopePluginPresentation', () => {
             registerOwner: () => () => {},
         });
         const projection = createProjection();
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const { pluginUiProjection, composerSurfaceCatalog, composerSurfaceActionInputSelectionFacts } = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [createCatalogEntry()] });
         const hook = await renderHook(() => useComposerScopePluginPresentation({
             composer: { kind: 'session', sessionId: 'session-1' },
             physicalTarget: { kind: 'session', sessionId: 'session-1' },
@@ -473,7 +475,8 @@ describe('useComposerScopePluginPresentation', () => {
                 pluginProjectionById: {},
                 pluginProjectionV2: projection,
                 pluginUiProjection,
-                composerSurfaceCatalog: [createCatalogEntry()],
+                composerSurfaceCatalog,
+                composerSurfaceActionInputSelectionFacts,
             },
             accountLifetime: null,
             isScopeCurrent: () => true,
@@ -503,7 +506,7 @@ describe('useComposerScopePluginPresentation', () => {
     it('installs no openSurface binding when the scope has no enclosing destination owner', async () => {
         pluginSurfaceHostSpy.mockClear();
         const projection = createProjection();
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const { pluginUiProjection, composerSurfaceCatalog, composerSurfaceActionInputSelectionFacts } = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [createCatalogEntry()] });
         const hook = await renderHook(() => useComposerScopePluginPresentation({
             composer: { kind: 'session', sessionId: 'session-1' },
             physicalTarget: { kind: 'session', sessionId: 'session-1' },
@@ -515,7 +518,8 @@ describe('useComposerScopePluginPresentation', () => {
                 pluginProjectionById: {},
                 pluginProjectionV2: projection,
                 pluginUiProjection,
-                composerSurfaceCatalog: [createCatalogEntry()],
+                composerSurfaceCatalog,
+                composerSurfaceActionInputSelectionFacts,
             },
             accountLifetime: null,
             isScopeCurrent: () => true,
@@ -536,7 +540,7 @@ describe('useComposerScopePluginPresentation', () => {
 
     it('withdraws existing-Session controls and regions when its owner retires the scope', async () => {
         const projection = createProjection();
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const { pluginUiProjection, composerSurfaceCatalog, composerSurfaceActionInputSelectionFacts } = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [createCatalogEntry()] });
         const hook = await renderHook(({ current }: Readonly<{ current: boolean }>) => {
             const isScopeCurrent = React.useCallback(() => current, [current]);
             return useComposerScopePluginPresentation({
@@ -550,7 +554,8 @@ describe('useComposerScopePluginPresentation', () => {
                     pluginProjectionById: {},
                     pluginProjectionV2: projection,
                     pluginUiProjection,
-                    composerSurfaceCatalog: [createCatalogEntry()],
+                    composerSurfaceCatalog,
+                    composerSurfaceActionInputSelectionFacts,
                 },
                 accountLifetime: null,
                 isScopeCurrent,
@@ -673,7 +678,7 @@ describe('useComposerScopePluginPresentation', () => {
     it('keeps the existing-Session action adapter on the shared current scope', async () => {
         const projection = createProjection();
         const pluginProjectionById = createPluginProjectionById();
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const { pluginUiProjection, composerSurfaceCatalog, composerSurfaceActionInputSelectionFacts } = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [createCatalogEntry()] });
         const hook = await renderHook(({ current }: Readonly<{ current: boolean }>) => {
             const isScopeCurrent = React.useCallback(() => current, [current]);
             return useComposerScopePluginPresentation({
@@ -687,7 +692,8 @@ describe('useComposerScopePluginPresentation', () => {
                     pluginProjectionById,
                     pluginProjectionV2: projection,
                     pluginUiProjection,
-                    composerSurfaceCatalog: [createCatalogEntry()],
+                    composerSurfaceCatalog,
+                    composerSurfaceActionInputSelectionFacts,
                 },
                 accountLifetime: null,
                 isScopeCurrent,
@@ -729,7 +735,7 @@ describe('useComposerScopePluginPresentation', () => {
     // the row; the mounted child owns only body-level failure content.
     it('installs no nested attachment-row fallback on a custom attachment display mount', async () => {
         const projection = createProjection();
-        const { pluginUiProjection } = publishDaemonMergedProjectionInputs({ projection });
+        const { pluginUiProjection, composerSurfaceCatalog, composerSurfaceActionInputSelectionFacts } = publishDaemonMergedProjectionInputs({ projection, composerSurfaceCatalog: [createCatalogEntry()] });
         const hook = await renderHook(() => useComposerScopePluginPresentation({
             composer: { kind: 'session', sessionId: 'session-1' },
             physicalTarget: { kind: 'session', sessionId: 'session-1' },
@@ -741,7 +747,8 @@ describe('useComposerScopePluginPresentation', () => {
                 pluginProjectionById: {},
                 pluginProjectionV2: projection,
                 pluginUiProjection,
-                composerSurfaceCatalog: [createCatalogEntry()],
+                composerSurfaceCatalog,
+                composerSurfaceActionInputSelectionFacts,
             },
             accountLifetime: null,
             isScopeCurrent: () => true,

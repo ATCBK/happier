@@ -34,7 +34,7 @@ import {
 import type { PluginSurfaceContributedActionDescriptorResolver } from './pluginSurfaceActionDispatch';
 import { ReviewStartInputSchema } from '@happier-dev/protocol/reviews/reviewStart';
 import { projectPluginActionInputSelectionFacts } from './pluginActionInputSelectionFacts';
-export { projectPluginActionInputSelectionFacts, serializePluginActionInputSelectionFacts } from './pluginActionInputSelectionFacts';
+export { projectPluginActionInputSelectionFacts } from './pluginActionInputSelectionFacts';
 
 function errorPayload(
     code: PluginUiHostApiErrorCodeV1,

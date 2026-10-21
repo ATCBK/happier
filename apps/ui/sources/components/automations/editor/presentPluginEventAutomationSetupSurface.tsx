@@ -124,6 +124,8 @@ function PluginEventAutomationSetupSurfaceModal(
     }, []);
 
     if (!mount || !setupSurface) return null;
+    const actionInputSelectionFactsKey = props.projection.automationSetupSurfaceActionInputSelectionFacts.get(setupSurface);
+    if (!actionInputSelectionFactsKey) throw new Error('automation_setup_action_input_selection_facts_missing');
     const ephemeralMount: PluginSurfaceEphemeralMountProps = Object.freeze({
         mount,
         boundaryResetKey: [
@@ -137,6 +139,7 @@ function PluginEventAutomationSetupSurfaceModal(
         pluginProjectionById: props.projection.pluginProjectionById,
         pluginProjectionV2: props.projection.pluginProjectionV2,
         pluginUiProjection: props.projection.pluginUiProjection,
+        actionInputSelectionFactsKey,
         daemonProjectionReady: true,
         fallback: null,
         binding,
