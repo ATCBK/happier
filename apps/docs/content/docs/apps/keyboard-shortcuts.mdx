@@ -3,7 +3,7 @@ title: Keyboard shortcuts
 description: Every rebindable shortcut and Search, with the defaults for web and native.
 ---
 
-Happier has 74 keyboard commands. Every one can be rebound, and the defaults
+Happier has 86 keyboard commands. Every one can be rebound, and the defaults
 differ between the web client and the native apps where the platform already
 claims a key.
 
@@ -23,6 +23,12 @@ built-in commands, sessions, projects, settings pages, messages, workspace
 files and commits in one grouped list.
 
 `Alt+K` (web) · `Mod+K` (everywhere else)
+
+In unreleased 0.3 development source, file quick open uses this same Search
+surface, scoped to the workspace. Its registered shortcut is
+`Mod+P` (desktop) · `Mod+P` (everywhere else); the general shortcut registry must be enabled.
+The browser or operating system may claim a binding before Happier receives it.
+See [Files and the editor](/code/files-and-editor) for the file workflow.
 
 ## Shortcuts
 
@@ -77,6 +83,14 @@ files and commits in one grouped list.
 | Send the selection to another session | `Alt+Shift+S` |
 | Cancel the selection | `Escape` |
 
+### Files
+
+| Action | Default |
+| --- | --- |
+| Open a workspace file | `Mod+P` (desktop) · `Mod+P` (everywhere else) |
+| Find a symbol in the open file | `Mod+Shift+O` |
+| Search text in workspace files | `Mod+Shift+F` |
+
 ### Everything else
 
 | Action | Default |
@@ -89,14 +103,20 @@ files and commits in one grouped list.
 
 | Command | Default |
 | --- | --- |
-| `inbox.item.next` | `ArrowDown` · `j` · `ArrowUp` · `k` · `Enter` · `Escape` |
+| `code.goToDefinition` | `F12` |
+| `code.findReferences` | `Shift+F12` |
+| `code.problem.next` | `F8` |
+| `code.problem.previous` | `Shift+F8` |
+| `code.rename` | `F2` |
+| `code.quickFix` | `Alt+Enter` · `Mod+B` (everywhere else) · `Mod+B` (desktop) · `Alt+B` (browser) · `Mod+Alt+B` (everywhere else) · `Mod+Alt+B` (desktop) · `Alt+Shift+B` (browser) · `Mod+Shift+E` (everywhere else) · `Mod+Shift+E` (desktop) · `Alt+Shift+E` (browser) · `Mod+Alt+E` (everywhere else) · `Mod+Alt+E` (desktop) · `Alt+Shift+L` (browser) · `F6` (everywhere else) · `Ctrl+F6` (everywhere else) · `F6` (desktop) · `Alt+F6` (browser) · `Shift+F6` (everywhere else) · `Ctrl+Shift+F6` (everywhere else) · `Shift+F6` (desktop) · `Alt+Shift+F6` (browser) · `j` · `k` · `r` · `d` · `/` · `Shift+j` · `Shift+k` · `Mod+z` · `Alt+i` (browser) · `Mod+i` (desktop) · `Mod+i` (everywhere else) · `ArrowDown` · `j` · `ArrowUp` · `k` · `Enter` · `Escape` |
 | `appearance.theme.toggle` | `Mod+Shift+L` (desktop) · `Mod+Shift+L` (everywhere else) |
 | `browser.address.focus` | `Alt+L` (web) · `Mod+L` (everywhere else) |
 | `browser.back` | `Alt+[` (web) · `Mod+[` (everywhere else) |
 | `browser.forward` | `Alt+]` (web) · `Mod+]` (everywhere else) |
 | `browser.reload` | `Alt+R` (web) · `Mod+R` (everywhere else) |
 | `composer.prompts.open` | `Ctrl+R` (browser and native) · `Ctrl+R` (desktop and native) |
-| `search.textInFiles` | `Mod+Shift+F` |
+| `search.replaceInFiles` | `Mod+Shift+H` (desktop) · `Alt+Shift+H` (browser) · `Mod+Shift+H` (everywhere else) |
+| `search.replace.apply` | `Mod+Alt+Enter` |
 | `find.open` | `Mod+F` |
 | `find.next` | `Mod+G` · `Enter` |
 | `find.previous` | `Mod+Shift+G` · `Shift+Enter` |
@@ -127,7 +147,10 @@ files and commits in one grouped list.
 | `workspace.splitDown` | `Alt+Shift+Backslash` (web) · `Mod+Shift+Backslash` (everywhere else) |
 | `workspace.splitRight` | `Alt+Backslash` (web) · `Mod+Backslash` (everywhere else) |
 | `workspace.toggleMaximize` | `Alt+M` |
+| `files.editor.change.next` | `Alt+F5` |
+| `files.editor.change.previous` | `Alt+Shift+F5` |
 | `workflow.save` | `Alt+S` (web) · `Mod+S` (everywhere else) |
+| `files.editor.save` | `Alt+S` (browser) · `Mod+S` (desktop) · `Mod+S` (everywhere else) |
 | `workflow.run` | `Mod+Enter` |
 
 The development-only 0.3 workspace adds tab shortcuts for the focused pane.
@@ -147,6 +170,19 @@ a kept workspace tab, like Alt-click or middle-click, even during selection.
 Shortcuts respect focus. Most do nothing while you are typing in the composer,
 which is why sending has its own explicitly editable-safe binding rather than
 relying on you leaving the field first.
+
+## Inline chip editing (0.3 development)
+
+The unreleased 0.3 composer treats each reference chip as one item. Left and
+Right Arrow step across the whole chip. Backspace immediately after a chip
+selects it; a second Backspace removes it. Delete immediately before a chip
+removes it whole. Undo restores a deleted chip. Removing an attachment from
+the tray also removes its chips; undo does not bring the removed attachment
+back.
+
+Copy and cut write readable reference markers. Pasting text keeps it plain,
+so it cannot recreate a chip. Deleting an image chip keeps the image in the
+tray. See [Attachments and image previews](/apps/attachments).
 
 ## Changing them
 
