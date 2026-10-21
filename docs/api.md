@@ -212,8 +212,8 @@ role and do not register Account presence or Machine RPC handlers.
 
 In 0.3 development, ApiSocket disconnects the focused socket while the canonical
 Home supervisor is not online and reconnects it on a fresh online observation.
-A refused recovery dial re-enters the existing Home revalidation path, so a
-reachable Home does not leave that socket stranded. Retired configuration or
+A refused recovery dial re-enters the existing Home revalidation path; its
+fresh online observation can dial the socket again. Retired configuration or
 transport callbacks cannot revalidate a replacement connection.
 
 ### Home authentication entry (0.3 development source)
@@ -2243,7 +2243,10 @@ Artifact bytes and grants. See the
   rows readable by the caller, including grants, independently of the current page.
   The page and witness share one read snapshot; a true witness stays conservative
   while classification or access changes, and the fallback scan rechecks access.
-  A true flag makes clients restart with the full inventory.
+  A true flag makes predecessor-family inventories restart with the full inventory.
+  Widget layout, definition and saved-group inventories stay filtered: these
+  families originate in 0.3 and their writers supply the kind. Existing pre-cut
+  development widget hints need the canonical inventory writer's repair first.
   Omitting `kind` preserves the array response. Rows expose nullable plaintext
   `kind`; clients still open and validate their private header before using content.
 - `GET /v1/artifacts?limit=...&cursor=...` lists Artifact headers in
