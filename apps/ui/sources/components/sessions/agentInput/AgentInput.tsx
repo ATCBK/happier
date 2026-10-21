@@ -2215,7 +2215,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         publish(recent);
         return withRecent(await props.autocompleteSuggestions(query, signal, (rows, status) => publish(withRecent(rows), status)));
     }, [composerDropScope, props.autocompleteKinds, props.autocompleteSuggestions, props.composerFileScope, props.sessionId, props.attachmentRowItems]);
-    const [suggestions, selected, moveUp, moveDown, selectionPending, suggestionsSettledEmpty, selectionForKind] = useActiveSuggestions(activeSuggestionQuery, resolveSuggestions, { wrapAround: true });
+    // Folder/attachment refreshes only affect bare-@ recents, not an in-flight native catalog query.
+    const activeSuggestionsHandler = activeSuggestionQuery === '@' ? resolveSuggestions : props.autocompleteSuggestions;
+    const [suggestions, selected, moveUp, moveDown, selectionPending, suggestionsSettledEmpty, selectionForKind] = useActiveSuggestions(activeSuggestionQuery, activeSuggestionsHandler, { wrapAround: true });
     // Lab P1–P3: a reference trigger (@, $) gets the reference picker — kind tabs, a held frame and its
     // own empty state. Commands keep the plain list.
     const activeTrigger = activeWord?.charAt(0) ?? null;
