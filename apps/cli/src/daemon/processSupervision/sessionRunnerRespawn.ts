@@ -597,7 +597,6 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
       };
     },
     handleUnexpectedExit: (trackedSession: TrackedSession, exit: DaemonChildExit, options) => {
-      if (!params.enabled && options?.forceRestart !== true) return 'ignored';
       if (trackedSession.startedBy !== 'daemon') return 'ignored';
       const sessionId = normalizeSessionId(trackedSession.happySessionId);
       if (!sessionId) return 'ignored';
@@ -630,6 +629,8 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         })();
         return 'terminal';
       }
+
+      if (!params.enabled && !forceRestart) return 'ignored';
 
       if (exit.code === SESSION_RUNNER_EXIT_CODES.TERMINAL_FOLLOW_ADMISSION_FAILED) {
         endRespawnCycle(sessionId);

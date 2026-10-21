@@ -192,13 +192,16 @@ it.each([
   }
 }), 120_000);
 
-it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'continuation-stale',
-  'continuation-unavailable', 'continuation-replaced', 'continuation-wrong-target'] as const)(
-  'settles only the exact current pending activation after a post-webhook %s startup exit', async disposition => {
+it.each((['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'continuation-stale',
+  'continuation-unavailable', 'continuation-replaced', 'continuation-wrong-target', 'continuation-stopped'] as const)
+  .flatMap(disposition => (disposition.startsWith('continuation') ? [true, false] : [true])
+    .map(respawnEnabled => ({ disposition, respawnEnabled }))))(
+  'settles only the exact current pending activation after a post-webhook $disposition startup exit (respawn=$respawnEnabled)', async ({ disposition, respawnEnabled }) => {
     const resolveOrigin = createCurrentMachineExecutionOriginContextResolver({ serverUrl: 'https://session-home.test',
       resolveCurrentMachineId: () => 'machine' });
     const h = await createInstalledProjectAgentDaemonFixture(() => boundary.control, undefined, false, undefined, undefined, {
       resolveCurrentMachineExecutionOriginContext: resolveOrigin,
+      processEnv: { HAPPIER_DAEMON_SESSION_RESPAWN_ENABLED: String(respawnEnabled) },
     });
     const originalFetch = globalThis.fetch;
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => String(input) === 'https://session-home.test/v1/features'
@@ -208,7 +211,7 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'c
     const warnings = vi.spyOn(logger, 'warn');
     const diagnostics = vi.spyOn(logger, 'debug');
     // A retry may prepare normally, but this test never launches a physical child.
-    vi.spyOn(cliProcess, 'spawnHappyCLI').mockImplementation(() => { throw new Error('Native launch unavailable in fixture'); });
+    const spawn = vi.spyOn(cliProcess, 'spawnHappyCLI').mockImplementation(() => { throw new Error('Native launch unavailable in fixture'); });
     const requestId = 'original-pending';
     const requestedAt = 10;
     h.tracked.spawnOptions!.executionAuthorization = { provenance: 'user_request', requestId, requestedAt };
@@ -224,8 +227,14 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'c
       requestedAt, status: 'waiting' as const, admittedTarget: { homeId: 'srv_requester_home',
         accountId: 'requester', sessionId: h.sessionId, machineId: 'machine',
         installationId: disposition.endsWith('wrong-target') ? 'replacement-installation' : h.f.installation.installationId } };
+    const originalContent = { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'original Pending input' } } } as const;
+    const pending = [{ localId: requestId, messageRole: 'user', content: originalContent,
+      requestedAction: { v: 1, kind: 'enqueue' }, deliveryStatus: { status: 'queued' } }];
     const get = vi.mocked(axios.get).getMockImplementation()!;
     vi.mocked(axios.get).mockImplementation(async (url, ...args) => {
+      if (new URL(String(url)).pathname === `/v2/sessions/${h.sessionId}/pending`) {
+        return { status: 200, data: { pending } };
+      }
       if (new URL(String(url)).pathname === `/v2/sessions/${h.sessionId}`) {
         if (disposition === 'continuation-unavailable') throw Object.assign(new Error('private-response'), { code: 'ECONNREFUSED' });
         return { status: 200, data: {
@@ -236,9 +245,12 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'c
       return get(url, ...args);
     });
     const reports: unknown[] = [];
+    const pendingWrites: string[] = [];
     const post = vi.mocked(axios.post).getMockImplementation()!;
     vi.mocked(axios.post).mockImplementation(async (url, data, config) => {
-      if (new URL(String(url)).pathname === `/v2/sessions/${h.sessionId}/pending/activation/fail`) {
+      const path = new URL(String(url)).pathname;
+      if (path.startsWith(`/v2/sessions/${h.sessionId}/pending`)) pendingWrites.push(path);
+      if (path === `/v2/sessions/${h.sessionId}/pending/activation/fail`) {
         expect(new URL(String(url)).origin).toBe('https://session-home.test');
         expect(config?.headers?.Authorization).toBe(`Bearer ${h.requester.bootstrap.credentials.token}`);
         reports.push({ body: PendingActivationFailureRequestV1Schema.parse(data),
@@ -249,6 +261,11 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'c
     });
     // The Home Machine terminal transport is unavailable; that does not invent a publisher or block supervision.
     vi.spyOn(h.machine, 'captureMachineSessionTerminal').mockRejectedValue(new Error('Home terminal transport unavailable'));
+    if (disposition === 'continuation-stopped') {
+      // These are the explicit process Stop owner's stamps before the OS exit.
+      h.tracked.stopRequestedAtMs = Date.now();
+      h.tracked.stopRequestedReason = 'user_process_kill';
+    }
     await h.daemon.onChildExited(h.tracked.pid, { reason: 'process-exit', code: continuation ? 78 : 1, signal: null });
     if (disposition === 'definite' || disposition === 'continuation') {
       await expect.poll(() => reports, { timeout: 10_000 }).toEqual([{ body: { requestId, requestedAt,
@@ -257,7 +274,7 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'c
       await expect.poll(() => diagnostics.mock.calls.some(([message]) => String(message)
         .startsWith(`[DAEMON RUN] Respawning runner for session ${h.sessionId}`)), { timeout: 10_000 }).toBe(true);
     }
-    if (disposition !== 'transient') {
+    if (disposition !== 'transient' && disposition !== 'continuation-stopped') {
       await expect.poll(() => warnings.mock.calls.some(([message]) => String(message)
         .includes(`Respawn suppressed for session ${h.sessionId} (${continuation
           ? 'continuation unreachable' : 'startup dependency: profile_missing'})`)), { timeout: 10_000 }).toBe(true);
@@ -265,7 +282,19 @@ it.each(['definite', 'transient', 'replaced', 'wrong-target', 'continuation', 'c
       // it. Join the canonical PID queue before removing the fixture's Home.
       await clearSessionMarkerConnectedServiceRestartIntent(h.tracked.pid);
     }
+    if (continuation) {
+      // Repeated exit notification cannot settle the original activation twice.
+      await h.daemon.onChildExited(h.tracked.pid, { reason: 'process-exit', code: 78, signal: null });
+      expect(spawn).not.toHaveBeenCalled();
+    }
     if (disposition !== 'definite' && disposition !== 'continuation') expect(reports).toEqual([]);
+    const failsActivation = disposition === 'definite' || disposition === 'continuation';
+    expect(pendingWrites).toEqual(failsActivation ? [`/v2/sessions/${h.sessionId}/pending/activation/fail`] : []);
+    // Home keeps the original queue row: supervision may report failure, never
+    // consume, rewrite or replace the input that a person can retry later.
+    expect((await axios.get(`https://session-home.test/v2/sessions/${h.sessionId}/pending`)).data.pending)
+      .toEqual([{ localId: requestId, messageRole: 'user', content: originalContent,
+        requestedAction: { v: 1, kind: 'enqueue' }, deliveryStatus: { status: 'queued' } }]);
     if (disposition === 'continuation-unavailable') {
       expect(diagnostics).toHaveBeenCalledWith('[DAEMON RUN] Continuation failure observation unavailable',
         expect.objectContaining({ phase: 'pending_activation_failure', exitCode: 78,
