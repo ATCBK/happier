@@ -34,23 +34,25 @@ export function QuickOpenFilePreview(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const viewer = resolveFileViewerKind({ path: props.path });
+  const pathViewer = resolveFileViewerKind({ path: props.path });
+  const candidateText = pathViewer.kind === 'code' || pathViewer.kind === 'markdown';
+  // Known media needs no text read. Ambiguous paths use the existing read's
+  // byte evidence before choosing whether this column can show a text body.
+  const file = useCodeTextFile(props.scope, candidateText ? props.path : null);
+  const viewer = file.kind === 'ready' ? file.viewer : pathViewer;
   const textPreview = viewer.kind === 'code' || viewer.kind === 'markdown';
-  // Non-text kinds use this column's existing file identity. Their bytes belong
-  // to the File page's viewer, rather than the text-only contained-file reader.
-  const file = useCodeTextFile(props.scope, textPreview ? props.path : null);
   const [shown, setShown] = React.useState<Readonly<{
     path: string;
     text: string;
   }> | null>(null);
   React.useEffect(() => {
-    if (file.kind === 'ready')
+    if (file.kind === 'ready' && textPreview)
       setShown((current) =>
         current?.path === props.path && current.text === file.text
           ? current
           : { path: props.path, text: file.text },
       );
-  }, [file, props.path]);
+  }, [file, props.path, textPreview]);
   const visible = textPreview ? shown : null;
   const path = visible?.path ?? props.path;
   const name = path.slice(

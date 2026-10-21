@@ -1,6 +1,7 @@
 import * as React from 'react';
 
-import { decodeUtf8Base64 } from '@/scm/diff/fallbackUnifiedDiff';
+import { decodeBase64 } from '@/encryption/base64';
+import { isBinaryContent, resolveFileViewerKind, type FileViewerClass } from '@/scm/utils/filePresentation';
 import { workspaceReadFile } from '@/sync/ops/workspaceFileSystem/fileReadWrite';
 import { tryBuildWorkspaceCacheKey, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { t } from '@/text';
@@ -8,7 +9,7 @@ import { t } from '@/text';
 export type CodeTextFileState =
     | Readonly<{ kind: 'idle' }>
     | Readonly<{ kind: 'loading' }>
-    | Readonly<{ kind: 'ready'; text: string }>
+    | Readonly<{ kind: 'ready'; text: string; viewer: FileViewerClass }>
     | Readonly<{ kind: 'error'; error: string }>;
 
 const IDLE: CodeTextFileState = { kind: 'idle' };
@@ -29,11 +30,15 @@ export function useCodeTextFile(scope: WorkspaceScopeBase, path: string | null, 
         setState((current) => (current.key === key && current.value.kind === 'ready' ? current : { key, value: { kind: 'loading' } }));
         void workspaceReadFile(scope, path, { signal: controller.signal }).then((result) => {
             if (controller.signal.aborted) return;
+            if (!result.success) {
+                setState({ key, value: { kind: 'error', error: result.error } });
+                return;
+            }
+            const bytes = decodeBase64(result.content);
+            const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
             setState({
                 key,
-                value: result.success
-                    ? { kind: 'ready', text: decodeUtf8Base64(result.content) }
-                    : { kind: 'error', error: result.error },
+                value: { kind: 'ready', text, viewer: resolveFileViewerKind({ path, head: bytes, isBinaryContent: isBinaryContent(text) }) },
             });
         }).catch((error: unknown) => {
             if (controller.signal.aborted) return;
