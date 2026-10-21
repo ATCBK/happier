@@ -469,7 +469,7 @@ const SYMBOL_DEPTH_INDENT_PX = 20;
 
 /** Symbol kinds drawn in the app's one icon family (ink, no colour); kinds without their own glyph share one. */
 const SYMBOL_KIND_ICONS: Readonly<Record<string, IconName>> = {
-    function: 'code', method: 'code', constructor: 'code' satisfies IconName, operator: 'code', event: 'code',
+    function: 'code', method: 'code', constructor: 'code' as const satisfies IconName, operator: 'code', event: 'code',
     class: 'cube', struct: 'cube', object: 'cube',
     interface: 'diamond', type: 'diamond', typeParameter: 'diamond',
     enum: 'list-bullets', enumMember: 'circle',
