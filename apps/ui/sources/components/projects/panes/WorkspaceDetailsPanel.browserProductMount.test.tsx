@@ -5,9 +5,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 
 const openDetailsTabSpy = vi.hoisted(() => vi.fn());
+const closeDetailsSpy = vi.hoisted(() => vi.fn());
 const detailsSplitWorkspaceSpy = vi.hoisted(() => vi.fn((props: {
+    renderStripActions?: (() => React.ReactNode) | null;
     renderHeaderActions?: (() => React.ReactNode) | null;
-}) => React.createElement(React.Fragment, null, props.renderHeaderActions?.())));
+}) => React.createElement(React.Fragment, null, props.renderStripActions?.(), props.renderHeaderActions?.())));
 
 vi.mock('@/components/appShell/panes/details/workspace/DetailsSplitWorkspace', () => ({
     DetailsSplitWorkspace: (props: Parameters<typeof detailsSplitWorkspaceSpy>[0]) => detailsSplitWorkspaceSpy(props),
@@ -52,7 +54,7 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
                 tabState: {},
             },
         },
-        closeDetails: vi.fn(),
+        closeDetails: closeDetailsSpy,
         openDetailsTab: openDetailsTabSpy,
         closeDetailsTab: vi.fn(),
         pinDetailsTab: vi.fn(),
@@ -121,7 +123,8 @@ describe('WorkspaceDetailsPanel browser product mount', () => {
             />,
         );
 
-        const headerActions = detailsSplitWorkspaceSpy.mock.calls.at(-1)?.[0].renderHeaderActions?.();
+        // The Browser launcher rides on the strip; the single tab's header keeps only the pane's close.
+        const headerActions = detailsSplitWorkspaceSpy.mock.calls.at(-1)?.[0].renderStripActions?.();
         expect(headerActions).toBeTruthy();
         const headerScreen = await renderScreen(<>{headerActions}</>);
 
@@ -138,5 +141,13 @@ describe('WorkspaceDetailsPanel browser product mount', () => {
             }),
             { intent: 'pinned' },
         );
+        expect(headerScreen.findAllHostsByTestId('workspace-details-close')).toHaveLength(0);
+
+        // The pane's own control is what a single tab's header borrows: the drawer closes there.
+        const paneControls = detailsSplitWorkspaceSpy.mock.calls.at(-1)?.[0].renderHeaderActions?.();
+        const paneScreen = await renderScreen(<>{paneControls}</>);
+        expect(paneScreen.findAllHostsByTestId('workspace-details-open-browser')).toHaveLength(0);
+        await paneScreen.pressByTestIdAsync('workspace-details-close');
+        expect(closeDetailsSpy).toHaveBeenCalledTimes(1);
     });
 });

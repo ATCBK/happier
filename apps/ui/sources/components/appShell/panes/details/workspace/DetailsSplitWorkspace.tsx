@@ -7,6 +7,7 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceStateSizeProvider, useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
+import { useDeviceType } from '@/utils/platform/responsive';
 import { SplitCanvasHost } from '@/components/appShell/splitCanvas/components/SplitCanvasHost';
 import {
     ModalPaneBoundaryView,
@@ -212,6 +213,8 @@ function getDetailsView(pane: AppPaneScopeApi): PaneDetailsStateView {
 
 export const DetailsSplitWorkspace = React.memo((props: DetailsSplitWorkspaceProps) => {
     const enclosingStateSize = useSurfaceStateSize();
+    // On a phone the details workspace is the whole screen (the shell pushes it), whichever host mounts it.
+    const phone = useDeviceType() === 'phone';
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
@@ -441,7 +444,7 @@ export const DetailsSplitWorkspace = React.memo((props: DetailsSplitWorkspacePro
 
     return (
         // Pane-states lab 0: states in a details tab take the details step; a phone host keeps its own.
-        <SurfaceStateSizeProvider size={enclosingStateSize === 'phone' ? 'phone' : 'details'}>
+        <SurfaceStateSizeProvider size={phone || enclosingStateSize === 'phone' ? 'phone' : 'details'}>
         <View testID={props.testIds?.root} style={[styles.root, { backgroundColor }]}>
             <ModalPaneBoundaryView
                 ref={detailsModalBoundary.setUnderlayFocusRef}

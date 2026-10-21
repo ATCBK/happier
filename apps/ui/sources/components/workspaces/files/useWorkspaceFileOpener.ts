@@ -8,7 +8,9 @@ import { useRouter, type Href } from 'expo-router';
 import { resolveHref } from 'expo-router/build/link/href';
 import type { FocusReturnRef } from '@/keyboard/focusReturn';
 import { setTranscriptJumpHighlight, type TranscriptJumpHighlightRowIdentity } from '@/components/sessions/transcript/navigation/transcriptJumpHighlightStore';
-import { useOptionalPaneFocusReturnOwner } from '@/components/appShell/panes/AppPaneContext';
+import { useOptionalAppPaneContext, useOptionalPaneFocusReturnOwner } from '@/components/appShell/panes/AppPaneContext';
+import { usePaneRegion } from '@/components/appShell/panes/paneRegion';
+import { buildProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
 import { DestinationInstanceContext } from '@/components/appShell/workspace/destinationInstanceContext';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { areSessionAddressesEqual, normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -37,6 +39,10 @@ export function useWorkspaceFileOpener() {
     const instance = React.useContext(DestinationInstanceContext);
     const instanceKey = instance?.tabId ?? null;
     const destinationNavigation = instance?.navigation;
+    // The route carries the file into Details without the column it was opened from, so the opener
+    // names it first; the pane layout keeps Details off that column (details lab opener rule).
+    const paneRegion = usePaneRegion();
+    const paneDispatch = useOptionalAppPaneContext()?.dispatch;
     const openApproval = React.useCallback((href: Href) => {
         if (destinationNavigation) destinationNavigation.push(href);
         else fireAndForget(openWorkspaceHrefOrElse(resolveHref(href), () => router.push(href)), { tag: 'useWorkspaceFileOpener.openApproval' });
@@ -44,6 +50,12 @@ export function useWorkspaceFileOpener() {
     const open = React.useCallback(async (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions): Promise<boolean> => {
         if (!canOpen || options?.signal?.aborted) return false;
         const { path, ...address } = target;
+        if (paneDispatch && options?.present !== false && (paneRegion === 'main' || paneRegion === 'side')) {
+            const scopeId = target.kind === 'project'
+                ? buildProjectPaneScopeId(target.workspaceRefId, target.serverId, instanceKey)
+                : createSessionPaneScopeId(target.sessionId, target.serverId, instanceKey);
+            paneDispatch({ type: 'recordDetailsOpener', scopeId, origin: paneRegion });
+        }
         const result = await executeWorkspaceUiAction({ actionId: 'workspace.tabs.open', input: {
             file: { target: address, path,
                 ...(options?.anchor ? { anchor: options.anchor } : {}),
@@ -71,6 +83,6 @@ export function useWorkspaceFileOpener() {
             }, phone ? 'route' : 'pane');
         }
         return result.ok;
-    }, [canOpen, focusReturnOwner, instanceKey, openApproval, phone]);
+    }, [canOpen, focusReturnOwner, instanceKey, openApproval, paneDispatch, paneRegion, phone]);
     return React.useMemo(() => ({ open, canOpen }), [open, canOpen]);
 }

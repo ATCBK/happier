@@ -346,7 +346,10 @@ function PaneColumn(props: Readonly<{
             importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
             style={docked ? {
                 position: 'relative',
-                flex: props.flexible ? 1 : undefined,
+                // Longhands only: the flexible column (Editor first) grows from a zero basis, others keep
+                // their width; mixing `flex` with `flexShrink` warns when the arrangement swaps.
+                flexGrow: props.flexible ? 1 : 0,
+                flexBasis: props.flexible ? 0 : 'auto',
                 minWidth: 0,
                 width: props.progress.interpolate({ inputRange: [0, 1], outputRange: [0, props.widthPx] }),
                 overflow: 'hidden',

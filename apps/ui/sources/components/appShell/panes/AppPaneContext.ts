@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 
 import type { PaneDriver, PaneScopeId } from './types';
+import { readResourcePaneScopeId } from './paneScopeIdentity';
 import type { AppPaneAction, AppPaneState } from './model/appPaneReducer';
 import type { PaneOverlayFocusReturnOwner } from './paneOverlayFocusReturn';
 import type { FileFindSeedHandoff } from './fileFindSeedHandoff';
@@ -31,6 +32,11 @@ export const AppPaneDriverContext = createContext<AppPaneContextValue['getDriver
 type FileTabFrontSubscription = Readonly<{
     subscribe: (listener: () => void) => () => void;
     read: (scopeId: string, path: string) => boolean;
+    /**
+     * Whether the active pane scope is this resource's (any window instance of it) and its Details pane is
+     * open; a phone presents that Details as the full page.
+     */
+    readActiveDetailsOpen: (resourceScopeId: string) => boolean;
 }>;
 
 export const AppPaneFileFrontContext = createContext<FileTabFrontSubscription | null>(null);
@@ -47,6 +53,12 @@ export function createFileTabFrontSubscription(readState: () => AppPaneState): F
             const details = readState().scopes[scopeId]?.details;
             return details?.isOpen === true && details.focusedGroupId !== null
                 && details.groupsById[details.focusedGroupId]?.activeTabKey === `file:${path}`;
+        },
+        readActiveDetailsOpen(resourceScopeId) {
+            const state = readState();
+            const active = state.activeScopeId;
+            return active !== null && readResourcePaneScopeId(active) === resourceScopeId
+                && state.scopes[active]?.details.isOpen === true;
         },
         notify() {
             for (const listener of listeners) listener();

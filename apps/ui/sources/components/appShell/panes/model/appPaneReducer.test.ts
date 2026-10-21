@@ -909,4 +909,28 @@ describe('appPaneReduce', () => {
         state = appPaneReduce(state, { type: 'openDetailsTab', scopeId: 'session:1', tab: createFileTab('c.txt'), openAs: 'pinned', origin: 'main' });
         expect(state.scopes['session:1']?.details.openedFrom).toBe('main');
     });
+
+    it('records where a file was opened from when the open travels through the route (the shared opener)', () => {
+        let state = createAppPaneState({ maxScopesInMemory: 3 });
+        state = appPaneReduce(state, { type: 'activateScope', scopeId: 'project:1' });
+        state = appPaneReduce(state, { type: 'recordDetailsOpener', scopeId: 'project:1', origin: 'main' });
+        // The route admission opens the tab without a region; the recorded opener stands.
+        state = appPaneReduce(state, { type: 'openDetailsTab', scopeId: 'project:1', tab: createFileTab('a.ts'), openAs: 'preview' });
+        expect(state.scopes['project:1']?.details.openedFrom).toBe('main');
+        // A scope that is not mounted is not created by a stray record.
+        const unchanged = appPaneReduce(state, { type: 'recordDetailsOpener', scopeId: 'project:other', origin: 'side' });
+        expect(unchanged).toBe(state);
+    });
+
+    it('unfolds the side column when it is opened after Details opened from main (Find references)', () => {
+        let state = createAppPaneState({ maxScopesInMemory: 3 });
+        state = appPaneReduce(state, { type: 'activateScope', scopeId: 'project:1' });
+        state = appPaneReduce(state, { type: 'openRight', scopeId: 'project:1', tabId: 'references' });
+        state = appPaneReduce(state, { type: 'openDetailsTab', scopeId: 'project:1', tab: createFileTab('a.ts'), openAs: 'pinned', origin: 'main' });
+        expect(state.scopes['project:1']?.details.openedFrom).toBe('main');
+        // Already open on that tab but folded to its rail: asking for it again shows it.
+        state = appPaneReduce(state, { type: 'openRight', scopeId: 'project:1', tabId: 'references' });
+        expect(state.scopes['project:1']?.details.openedFrom).toBeUndefined();
+        expect(Object.keys(state.scopes['project:1']?.details.tabsByKey ?? {})).toEqual(['file:a.ts']);
+    });
 });

@@ -191,6 +191,8 @@ export type PaneHeaderProps = PaneHeaderContent & Readonly<{
      * screen's large title over the same live line, below the navigation bar.
      */
     size?: 'band' | 'large';
+    /** Reports the title row's own width (mark and name, unshrunk), so a host can leave the name its room. */
+    onTitleNaturalWidth?: (width: number) => void;
     testID?: string;
 }>;
 
@@ -227,6 +229,13 @@ export const PaneHeader = React.memo(function PaneHeader(props: PaneHeaderProps)
                     {props.title}
                 </Text>
                 )}
+                {props.onTitleNaturalWidth && !props.titleControl ? (
+                    <View testID={`${testID}.titleMeasure`} aria-hidden pointerEvents="none" style={[styles.titleRow, styles.titleMeasure]}
+                        onLayout={(event) => props.onTitleNaturalWidth?.(Math.ceil(event.nativeEvent.layout.width))}>
+                        {props.leading ? <View style={styles.identityMark}>{props.leading}</View> : null}
+                        <Text numberOfLines={1} style={[large ? styles.largeTitle : styles.title, props.titleTextStyle]}>{props.title}</Text>
+                    </View>
+                ) : null}
                 </View> : null}
                 {(line && (line.segments.length > 0 || line.leading)) || props.lineTrailing ? (
                     <PaneHeaderLineView
@@ -280,6 +289,8 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     titleRow: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0 },
     titleText: { flexShrink: 1, minWidth: 0 },
+    // The title row at its natural width, out of flow and unseen (`onTitleNaturalWidth`).
+    titleMeasure: { position: 'absolute', left: 0, top: 0, opacity: 0 },
     identityMark: { flexShrink: 0, alignSelf: 'flex-start', marginTop: theme.space.s2 },
     lineTrailing: { flexShrink: 0, marginLeft: 'auto' },
     largeTitle: {

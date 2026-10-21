@@ -13,6 +13,14 @@ export function useFileTabFront(scopeId: string, path: string): boolean {
     return React.useSyncExternalStore(projection?.subscribe ?? subscribeToNothing, read, read);
 }
 
+/** Bottom chrome observes only whether the active page of this resource has Details open, not every pane edit. */
+export function useActiveDetailsPaneOpen(resourceScopeId: string | null): boolean {
+    const projection = React.useContext(AppPaneFileFrontContext);
+    const read = React.useCallback(() => (resourceScopeId ? projection?.readActiveDetailsOpen(resourceScopeId) ?? false : false),
+        [projection, resourceScopeId]);
+    return React.useSyncExternalStore(projection?.subscribe ?? subscribeToNothing, read, read);
+}
+
 /**
  * A transcript chip's answer: is this file the front tab of the Session pane the opener would open it in?
  * The scope is derived exactly as `useWorkspaceFileOpener` derives it (Session + retained instance).

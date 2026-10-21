@@ -3,7 +3,7 @@ import { PaneRegionProvider } from './paneRegion';
 import * as React from 'react';
 import { Platform, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 
 import { MultiPaneHostWithBottom } from '@/components/ui/panels/MultiPaneHostWithBottom';
 import { resolvePaneLayout, type ResolvePaneLayoutInput, type ResolvedPaneLayout, type PaneArrangement } from '@/components/ui/panels/paneBreakpoints';
@@ -85,7 +85,6 @@ const EMPTY_EDITOR = <></>;
 export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneColumnsHostProps) {
     const styles = stylesheet;
     const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver();
     const deviceType = useDeviceType();
     const multiPaneDeviceType = resolveMultiPaneDeviceType({ platform: Platform.OS, deviceType });
     const { width: windowWidthPx, height: windowHeightPx } = useWindowDimensions();
@@ -533,7 +532,9 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                 onCloseMain={onCloseMain}
                 rightPane={regionRightPane}
                 detailsPane={regionDetailsPane}
-                detailsScrim={!mirrored && props.detailsOpenedFrom === 'side' ? 'soft' : 'standard'}
+                // A drawer beside the docked side column only quiets main (lab FB1), however Details was opened
+                // (the side list, a cold file link); a drawer alone over main shades it.
+                detailsScrim={!mirrored && resolvedLayout.right === 'docked' ? 'soft' : 'standard'}
                 layout={resolvedLayout}
                 rightDockWidthPx={effectivePaneSizing.rightWidthPx}
                 detailsDockWidthPx={effectivePaneSizing.detailsWidthPx}
@@ -564,9 +565,13 @@ export const PaneColumnsHost = React.memo(function PaneColumnsHost(props: PaneCo
                     ref={railColumnRef}
                     testID="pane-action-rail-column"
                     onLayout={reportRailRect}
-                    style={[styles.railColumn, { backgroundColor: materialColor(theme.colors.surface.base, 'transparent') }]}
+                    style={styles.railColumn}
                 >
-                    <PaneRegionProvider region="main">{props.actionRail}</PaneRegionProvider>
+                    {/* The rail and its side column are one surface (OR-2): it takes the column's material, so a page's
+                        atmosphere (a Project's planet and band) stays on the page and never shows through the rail. */}
+                    <GlassSurface surfaceGroup="content" solidColor={theme.colors.surface.base} finishRole={null} nested style={styles.railSurface}>
+                        <PaneRegionProvider region="main">{props.actionRail}</PaneRegionProvider>
+                    </GlassSurface>
                 </View>
             ) : null}
         </>
@@ -613,6 +618,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         overflow: 'hidden',
         flexShrink: 0,
         alignSelf: 'stretch',
-        backgroundColor: theme.colors.surface.base,
     },
+    railSurface: { flex: 1, minHeight: 0 },
 }));

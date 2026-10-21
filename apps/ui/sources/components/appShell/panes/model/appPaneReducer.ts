@@ -81,6 +81,8 @@ export type AppPaneAction =
     /** The page that owned the active scope left the screen: no page's panes are active until one is. */
     | { type: 'releaseScope'; scopeId: string }
     | { type: 'setMainHidden'; scopeId: string; hidden: boolean }
+    /** An open that reaches Details through the route (the shared file opener) names its region first. */
+    | { type: 'recordDetailsOpener'; scopeId: string; origin: DetailsOpenerRegion }
     | { type: 'openRight'; scopeId: string; tabId?: string }
     | { type: 'closeRight'; scopeId: string }
     | { type: 'setRightTab'; scopeId: string; tabId: string }
@@ -258,6 +260,17 @@ function updateScopeDetails(
     });
 }
 
+/**
+ * Details opened from main folds a side column that cannot fit to its rail (`resolvePaneLayout`). Asking
+ * for the side column again (its rail, Find references) is the newer intent: it unfolds, and Details
+ * becomes the drawer beside it.
+ */
+function unfoldSideColumn(details: PaneDetailsState): PaneDetailsState {
+    if (details.openedFrom !== 'main') return details;
+    const { openedFrom: _folded, ...rest } = details;
+    return rest;
+}
+
 export function appPaneReduce(state: AppPaneState, action: AppPaneAction): AppPaneState {
     switch (action.type) {
         case 'mergePersistedScopes': {
@@ -305,6 +318,11 @@ export function appPaneReduce(state: AppPaneState, action: AppPaneAction): AppPa
         case 'setMainHidden':
             return upsertScope(state, action.scopeId, (scope) => scope.mainHidden === action.hidden
                 ? scope : { ...scope, mainHidden: action.hidden });
+        case 'recordDetailsOpener': {
+            const prev = state.scopes[action.scopeId];
+            if (!prev || prev.details.openedFrom === action.origin) return state;
+            return upsertScope(state, action.scopeId, () => ({ ...prev, details: { ...prev.details, openedFrom: action.origin } }));
+        }
         case 'openRight': {
             const prev = state.scopes[action.scopeId] ?? createEmptyScopeState();
             const nextTabId = action.tabId ?? prev.right.activeTabId;
@@ -315,11 +333,13 @@ export function appPaneReduce(state: AppPaneState, action: AppPaneAction): AppPa
                 prev.right.isOpen === true
                 && prev.right.activeTabId === nextTabId
                 && areSelectedPaneDestinationsEqual(prev.right.selectedDestination, nextDestination)
+                && prev.details.openedFrom !== 'main'
             ) {
                 return state;
             }
             return upsertScope(state, action.scopeId, () => ({
                 ...prev,
+                details: unfoldSideColumn(prev.details),
                 right: {
                     ...prev.right,
                     isOpen: true,
@@ -365,11 +385,13 @@ export function appPaneReduce(state: AppPaneState, action: AppPaneAction): AppPa
                 prev.right.isOpen === true
                 && prev.right.activeTabId === nextActiveTabId
                 && areSelectedPaneDestinationsEqual(prev.right.selectedDestination, action.destination)
+                && prev.details.openedFrom !== 'main'
             ) {
                 return state;
             }
             return upsertScope(state, action.scopeId, () => ({
                 ...prev,
+                details: unfoldSideColumn(prev.details),
                 right: {
                     ...prev.right,
                     isOpen: true,

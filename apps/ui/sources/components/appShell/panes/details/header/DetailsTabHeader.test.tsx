@@ -173,6 +173,29 @@ describe('DetailsTabHeader', () => {
         expect(inBand()).toBe(true);
     });
 
+    it('leaves the actions beside a short name that keeps its whole width, and moves them for a long one', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 40 } } });
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="retry.ts" actions={<Text testID="icons">icons</Text>} />,
+        );
+        const inBand = () => (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === 'icons').length ?? 0) > 0;
+        const measure = async (titleWidth: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(520));
+                screen.findHostByTestId('hdr.icons')!.props.onLayout(layout(300));
+                screen.findHostByTestId('hdr.titleMeasure')!.props.onLayout(layout(titleWidth));
+            });
+        };
+        // The actions take more than half the band, but "retry.ts" still reads whole beside them (lab ED1).
+        await measure(90);
+        expect(inBand()).toBe(true);
+        // A name that would be cut keeps the old rule: the actions take the row beneath.
+        await measure(260);
+        expect(inBand()).toBe(false);
+    });
+
     it('counts the room taken by `⋯` and the pane controls before leaving the actions beside the title', async () => {
         const { act } = await import('react-test-renderer');
         const { Text } = await import('@/components/ui/text/Text');

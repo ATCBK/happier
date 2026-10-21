@@ -24,6 +24,7 @@ import { readProjectSelectionPreference, resolveProjectSelectionPreferenceKeys }
 import { resolveProjectCheckoutWorkspaceRef } from '@/sync/domains/workspaces/workspaceRefs';
 import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { buildProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
+import { useActiveDetailsPaneOpen } from '@/components/appShell/panes/details/useFileTabFront';
 import { resolveProjectTerminalScope } from '@/components/projects/detail/projectTerminalScope';
 import {
     isOverlaySurfaceRoutePathname,
@@ -168,6 +169,10 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
     const projectTerminalTabAvailable = React.useMemo(() => projectRef !== null && projectCheckout !== null
         && resolveProjectTerminalScope(buildProjectPaneScopeId(projectRef.id, projectRef.serverId), workspaceAddressFromRefV1(projectCheckout)) !== null,
     [projectCheckout, projectRef, projectRowsStatus, projectViewerScope]);
+    // A phone presents the Project's Details as the full page (the File page, a review): that page's own
+    // bottom toolbar owns the bottom edge then, so the cockpit bar steps aside instead of covering it.
+    const projectDetailsOpen = useActiveDetailsPaneOpen(routeWorkspaceRefId
+        ? buildProjectPaneScopeId(routeWorkspaceRefId, projectRef?.serverId ?? routeServerId) : null);
     const { sidebarTabAvailable: sessionTerminalTabAvailable } = useSessionTerminalAvailability(routeServerId);
     const sessionLastMobileSurface = useSessionLastMobileSurface(routeSessionId, routeServerId);
     const projectLastMobileSurface = useProjectLastMobileSurface(routeWorkspaceRefId, routeServerId);
@@ -417,6 +422,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
 
         if (
             model.kind === 'projectCockpit'
+            && !projectDetailsOpen
             && isMobileWorkspaceCockpitEnabled({
                 deviceType,
                 mobileWorkspaceExperience,
@@ -484,6 +490,7 @@ export const MobileBottomChromeHost = React.memo(function MobileBottomChromeHost
         projectRef?.serverId,
         projectViewerScope?.accountId,
         projectTerminalTabAvailable,
+        projectDetailsOpen,
         projectCheckout,
         visibleMainTab,
         sessionTerminalTabAvailable,

@@ -852,6 +852,42 @@ describe('MobileBottomChromeHost', () => {
         expect(bar.props.activeSurface).toBe('changes');
     });
 
+    it('steps the project cockpit bar aside while the phone presents the Project Details page', async () => {
+        pathState.pathname = '/projects/wr_1/code';
+        authState.isAuthenticated = true;
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+        settingsState.sessionLastMobileSurfaceBySessionId = null;
+        settingsState.projectLastMobileSurfaceByWorkspaceRefId = null;
+        deviceTypeState.value = 'phone';
+        searchParamsState.mobileSurface = undefined;
+        searchParamsState.worktreeId = undefined;
+
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const { AppPaneFileFrontContext, createFileTabFrontSubscription } = await import('@/components/appShell/panes/AppPaneContext');
+        const { appPaneReduce, createAppPaneState } = await import('@/components/appShell/panes/model/appPaneReducer');
+        let paneState = createAppPaneState({ maxScopesInMemory: 3 });
+        const projection = createFileTabFrontSubscription(() => paneState);
+        const screen = await renderScreen(
+            <AppPaneFileFrontContext.Provider value={projection}><MobileBottomChromeHost /></AppPaneFileFrontContext.Provider>,
+        );
+        expect(screen.tree.findAllByType('ProjectCockpitTabBar' as never)).toHaveLength(1);
+
+        await act(async () => {
+            // The page's scope is window-instance qualified; the bar follows the active Project page.
+            paneState = appPaneReduce(paneState, { type: 'activateScope', scopeId: 'workspace:pane:tab-1:project:wr_1' });
+            paneState = appPaneReduce(paneState, {
+                type: 'openDetailsTab', scopeId: 'workspace:pane:tab-1:project:wr_1', openAs: 'preview',
+                tab: { key: 'file:src/retry.ts', kind: 'file', title: 'retry.ts', resource: { path: 'src/retry.ts' } },
+            });
+            projection.notify();
+        });
+        expect(paneState.scopes['workspace:pane:tab-1:project:wr_1']?.details.isOpen).toBe(true);
+        act(() => {
+            animatedTimingState.timings.at(-1)?.finish();
+        });
+        expect(screen.tree.findAllByType('ProjectCockpitTabBar' as never)).toHaveLength(0);
+    });
+
     it('keeps main app bottom chrome mounted while the software keyboard is visible on phone', async () => {
         pathState.pathname = '/';
         authState.isAuthenticated = true;

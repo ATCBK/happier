@@ -13,6 +13,7 @@ const openDetailsTabSpy = vi.hoisted(() => vi.fn());
 const detailsSplitWorkspaceSpy = vi.hoisted(() => vi.fn((props: any) => React.createElement(
     React.Fragment,
     null,
+    props.renderStripActions?.(),
     props.renderHeaderActions?.(),
 )));
 

@@ -2,6 +2,9 @@ import { useProjectSurfaceActions } from '@/components/projects/detail/useProjec
 import { useProjectSurfaceController } from '@/components/projects/detail/useProjectSurfaceController';
 import * as React from 'react';
 import { Pressable, View } from 'react-native';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { DETAILS_TAB_STRIP_METRICS } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
+import { useOptionalAppPaneScopeLayout } from '@/components/appShell/panes/hooks/useAppPaneScopeLayout';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -458,7 +461,9 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
 
     const newSession = useProjectNewSessionAction({ workspaceRef: props.workspaceRef,
         activeRootPath: effectiveRootPath, scopeId: props.scopeId });
-    const renderHeaderActions = React.useCallback(() => {
+    // Launchers for another tab ride on the strip; a single tab's own header keeps only the pane's
+    // controls (the Session pane's rule, lab session-D / files FB1: the drawer closes from its header).
+    const renderStripActions = React.useCallback(() => {
         return (
             <>
                 {props.renderHeaderActionsPrefix ? props.renderHeaderActionsPrefix({ iconButtonStyle, iconColor: theme.colors.text.secondary }) : null}
@@ -492,16 +497,6 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
                         <Icon name="terminal" size={16} color={theme.colors.text.secondary} />
                     </Pressable>
                 ) : null}
-                {props.onRequestClose && deviceType !== 'phone' ? (
-                    <Pressable
-                        onPress={requestClose}
-                        style={iconButtonStyle}
-                        accessibilityRole="button"
-                        accessibilityLabel={t('common.close')}
-                    >
-                        <Icon name="caret-right" size={16} color={theme.colors.text.secondary} />
-                    </Pressable>
-                ) : null}
             </>
         );
     }, [
@@ -521,6 +516,33 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
         newSession.open,
         newSession.approvalNotice,
     ]);
+
+    // The pane's own control: the docked column or drawer closes here (Editor first keeps its editor column).
+    const editorArrangement = useOptionalAppPaneScopeLayout()?.arrangement === 'editor';
+    const renderHeaderActions = React.useCallback(() => {
+        if (deviceType === 'phone') return null;
+        if (props.onRequestClose) return (
+            <Pressable
+                onPress={requestClose}
+                style={iconButtonStyle}
+                accessibilityRole="button"
+                accessibilityLabel={t('common.close')}
+            >
+                <Icon name="caret-right" size={16} color={theme.colors.text.secondary} />
+            </Pressable>
+        );
+        if (editorArrangement || props.forceOverviewMode) return null;
+        return (
+            <IconButton
+                variant="plain"
+                size={DETAILS_TAB_STRIP_METRICS.actionSizePx}
+                onPress={requestClose}
+                testID="workspace-details-close"
+                accessibilityLabel={t('common.close')}
+                icon={<Icon name="x" size={DETAILS_TAB_STRIP_METRICS.actionGlyphPx} color={theme.colors.text.secondary} />}
+            />
+        );
+    }, [deviceType, editorArrangement, iconButtonStyle, props.forceOverviewMode, props.onRequestClose, requestClose, theme.colors.text.secondary]);
 
     const resolveTabHref = React.useCallback((tab: DetailsTabState) => {
         const details = parseSessionPaneUrlState(buildActiveDetailsRouteParams([tab], tab.key))?.details;
@@ -549,6 +571,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
             resolveTabPresentation={resolveTabPresentation}
             renderTabContent={renderTabContent}
             renderOverlay={renderOverlay}
+            renderStripActions={renderStripActions}
             renderHeaderActions={renderHeaderActions}
             renderEmptyState={renderEmptyState}
         />

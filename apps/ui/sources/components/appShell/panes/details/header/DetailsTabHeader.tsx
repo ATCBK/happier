@@ -141,8 +141,11 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
     const roomBesideTitle = rowRoom - (band.trailing - (band.trailingMenu ? menuSlot : 0));
     const bandRoom = roomBesideTitle - (menuForced ? menuSlot : 0);
     // The actions keep their place beside the title while they leave it at least as much room as they
-    // take; in a narrower pane they would cut the name to a few letters, so they move to the row beneath.
-    const besideFits = (width: number, room: number) => width > 0 && room - width >= width;
+    // take, or the whole name when it is shorter; otherwise they would cut the name to a few letters, so they
+    // move to the row beneath.
+    // A short name needs only its own width (lab ED1: "retry.ts · Editing · Find · Done" on one row).
+    const [titleNeed, setTitleNeed] = React.useState(0);
+    const besideFits = (width: number, room: number) => width > 0 && room - width >= (titleNeed > 0 ? Math.min(width, titleNeed) : width);
     // The quieter buttons (first to last; never the last, never a primary) move into `⋯` until the rest `fits`.
     const foldQuietButtons = (fits: (visible: readonly DetailsTabHeaderAction[]) => boolean): ReadonlySet<string> => {
         const folded = new Set<string>();
@@ -273,6 +276,7 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                 titleControl={props.titleControl}
                 titleTextStyle={props.titleTextStyle}
                 titleNumberOfLines={phone ? null : 1}
+                onTitleNaturalWidth={phone ? undefined : setTitleNeed}
                 lineTrailing={!phone && !controlsBelow ? controls : undefined}
                 lineEnd={props.metaTrailing}
                 line={segments.length > 0 || props.metaLeading ? {
