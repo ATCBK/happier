@@ -300,10 +300,8 @@ function pushProjectGroupsToList(params: Readonly<{
                 }),
                 machine: group.machine,
                 ...(workspace ? { workspace } : {}),
-                // A machine missing from the inventory has no name to show; its id is the only identity.
-                subtitle: params.machines[group.machine.id]
-                    ? machineNames.get(group.machine.id) ?? getMachineDisplayName(group.machine)
-                    : group.machine.id,
+                // A machine missing from the inventory is named by the shared owner as unlisted, with its short id as the telling suffix.
+                subtitle: machineNames.get(group.machine.id) ?? getMachineDisplayName(group.machine),
             },
             sessions: group.sessions,
             workspacesBySessionId: new Map(workspace ? group.sessions.map(session => [session.id, workspace]) : []),

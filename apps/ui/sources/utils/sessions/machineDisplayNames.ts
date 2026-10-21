@@ -171,6 +171,7 @@ export function resolveMachineDisplayNameParts(machines: readonly MachineNameSou
     return resolvePublishedMachineNameParts(machines.map(machine => ({
         id: machine.id, name: getMachineDisplayName(machine),
         host: machine.absence || isMachineLocked(machine) ? null : machine.metadata?.host,
-        disambiguate: !isMachineDisplayHydrating(machine),
+        // An absent machine's null metadata is final, not hydrating: it is told apart by its short id.
+        disambiguate: Boolean(machine.absence) || !isMachineDisplayHydrating(machine),
     })));
 }
