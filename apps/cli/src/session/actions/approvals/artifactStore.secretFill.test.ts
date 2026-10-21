@@ -170,6 +170,19 @@ describe('confidential continuation Artifact custody', () => {
                 verifyExecutionAuthorization: async () => true, resolveTarget: async ({ target }) => target ?? null,
               } } });
           } else registerApprovalRpcHandlers({ rpcHandlerManager: rpc });
+          const beforeForeign = { ...record };
+          http.get.mockClear();
+          http.post.mockClear();
+          const foreign = await rpc.handleRequest({ method: `machine:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`,
+            callerAuthority: 'present_user', machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
+              machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' },
+            params: { v: 1, artifactId: 'approval', requestId: 'request', actionId: 'computer.secret.fill', request: reviewedRequest,
+              choice: { kind: 'once', value }, accountEncryptionMode: 'plain', submit: false } });
+          expect(foreign).toEqual({ status: 'refused', code: 'target_unavailable' });
+          expect(http.get.mock.calls.filter(([url]) => String(url).includes('/v1/artifacts/'))).toEqual([]);
+          expect(http.post.mock.calls.filter(([url]) => String(url).includes('/v1/artifacts/'))).toEqual([]);
+          expect(record).toEqual(beforeForeign);
+          expect(effects).toBe(0);
           const settlement = await rpc.handleRequest({ method: `machine:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`,
             callerAuthority: 'present_user', machineAdmission: { actorAccountId: 'alice', custodianAccountId: 'alice',
               machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
@@ -283,7 +296,7 @@ describe('confidential continuation Artifact custody', () => {
       expect(ApprovalRequestV2Schema.parse(stored).executionOriginV1).toEqual(approval.executionOriginV1);
     } finally { uninstall(); }
   });
-  it('rechecks the deciding shared human admission after preparation through the real relay handler', async () => {
+  it('rechecks the deciding custodian human admission after preparation through the real relay handler', async () => {
     let created: ApprovalRequest | null = null;
     const creator = createActionExecutor({ ...createUnavailableActionTransportDeps(), approvalsCreate: async ({ request }) => {
       created = request; return { artifactId: 'approval' };
@@ -312,7 +325,7 @@ describe('confidential continuation Artifact custody', () => {
     let effects = 0;
     const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...store, isApprovalExecutionOriginCurrent: async () => true,
       // This port is the physical OS delivery boundary. Its awaited preparation
-      // retires Bob's Home grant; the original requester's origin remains current.
+      // retires the deciding human's Home grant; the stored origin remains current.
       confidentialSecretFill: async ({ isCurrent }) => {
         await Promise.resolve();
         decidingHumanCurrent = false;
@@ -320,8 +333,8 @@ describe('confidential continuation Artifact custody', () => {
         effects += 1;
         return { status: 'filled', code: 'filled' };
       } });
-    const machineAdmission = { actorAccountId: 'bob', custodianAccountId: 'alice', machineId: 'machine',
-      installationId: 'installation', role: 'use' as const, encryptionMode: 'plain' as const };
+    const machineAdmission = { actorAccountId: 'alice', custodianAccountId: 'alice', machineId: 'machine',
+      installationId: 'installation', role: 'manage' as const, encryptionMode: 'plain' as const };
     const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {},
       authorizeRequest: input => authorizeMachineRpcRequest(input, {
         machineId: 'machine', resolveCustodianAccountId: async () => 'alice', resolveInstallationId: () => 'installation',

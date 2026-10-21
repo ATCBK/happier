@@ -13,6 +13,7 @@ import { PrivateSecretContinuationV1Schema } from '@happier-dev/protocol/approva
 import { SecretFillSettlementV1Schema } from '@happier-dev/protocol/computer/v1';
 import type { ActionExecutorContext, ActionExecuteResult } from '@happier-dev/protocol';
 import { ACTION_ID_FAMILIES_V1 } from '@happier-dev/protocol/actions/actionIds';
+import { canUseCustodianAccountForMachineRequest } from '@/daemon/lifecycle/requesterWorkAttribution';
 
 type ApprovalActionId = typeof ACTION_ID_FAMILIES_V1.approvals[number];
 
@@ -68,6 +69,15 @@ export function registerApprovalRpcHandlers(params: Readonly<{
   rpcHandlerManager: RpcRegistrar;
   actionExecutor?: ApprovalRpcActionExecutor;
 }>): void {
+  const resolveAccountExecutor = async (context?: RpcHandlerContext): Promise<ApprovalRpcActionExecutor | null> => {
+    const requester = context?.callerInputAuthorization?.requesterAccountExecutor;
+    if (requester) return requester;
+    // Machine access is not private Account custody. Ingress binds this
+    // custodian to the current Home/installation; only its own admitted caller
+    // may borrow the daemon's fallback reader. Prepared requester custody wins.
+    if (!await canUseCustodianAccountForMachineRequest(context)) return null;
+    return params.actionExecutor ?? await resolveProductionActionExecutor();
+  };
   registerActionSpecRpcHandlers<ApprovalActionId>({
     rpcHandlerManager: params.rpcHandlerManager,
     actionExecutor: params.actionExecutor,
@@ -89,8 +99,8 @@ export function registerApprovalRpcHandlers(params: Readonly<{
       // The admitted requester executor is produced by this same daemon's
       // ingress owner. It supplies Account custody; replay still loads and
       // validates the Artifact's immutable original execution origin.
-      const executor = context?.callerInputAuthorization?.requesterAccountExecutor
-        ?? params.actionExecutor ?? await resolveProductionActionExecutor();
+      const executor = await resolveAccountExecutor(context);
+      if (!executor) return { ok: false, errorCode: 'requester_account_material_unavailable', error: 'requester_account_material_unavailable' };
       if (!executor.replayApprovedApprovalRequest) {
         return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:approvals' };
       }
@@ -106,7 +116,8 @@ export function registerApprovalRpcHandlers(params: Readonly<{
     const parsed = PrivateSecretContinuationV1Schema.safeParse(input);
     if (!parsed.success) return { status: 'refused', code: 'approval_changed' };
     try {
-      const executor = params.actionExecutor ?? await resolveProductionActionExecutor();
+      const executor = await resolveAccountExecutor(context);
+      if (!executor) return { status: 'refused', code: 'target_unavailable' };
       if (!executor.continueConfidentialApprovalRequest) return { status: 'refused', code: 'target_unavailable' };
       const result = await executor.continueConfidentialApprovalRequest(parsed.data, {
         authority: context.callerAuthority, surface: 'rpc', serverId: parsed.data.request.serverId,
