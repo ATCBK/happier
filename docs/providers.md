@@ -439,6 +439,8 @@ Endpoint validation rejects credentials in URLs, unsafe metadata destinations, a
 A catalog probe is bounded end to end, not per hop: one wall budget covers pre-dispatch resolution, request establishment and the complete response body across every redirect, and one idle budget bounds the gap between body chunks. Both apply identically to a public endpoint and to a Provider the daemon supervises — a managed probe reaches its service through that service's own supervised request handle, so a response that returns headers and never finishes its body cannot hold a Provider probe slot.
 In 0.3 development, binding-status reads use that same canonical wall budget and carry the RPC caller's cancellation through Home/catalog reads, registry activation, DNS, Gateway purpose resolution and runtime catalog observation. A read that cannot finish returns the existing retryable `provider_catalog_unavailable`; the Session banner offers Retry rather than asserting model incompatibility. The existing daemon RPC completion log identifies the stage where a saved probe or binding-status read expires or is cancelled (`failedPhase`, `causeCode`, `phaseDurationsMs`, `phaseTimingsMs`). Stages cover catalog admission, registry, DNS, purpose/group/account lookup, pre-effect revalidation, managed establishment and catalog dispatch, without logging request or credential contents.
 
+Before the handler runs, shared RPC admission verifies the caller's current Home/Machine access. This phase uses the forwarded request lifetime, including its deadline, relayed cancellation and target disconnect; cancelling a reader waiting on shared Account identity does not cancel the other readers. A Home verification refusal retains its typed error code, and both refusal and cancellation produce the existing `[RPC] Request completed` record with `failedPhase: authorize_request`. A missing completion alone does not establish that the daemon never received the request. These diagnostics and cancellation semantics apply to every RPC using the shared admission owner, including binding status.
+
 In 0.3 development, native broker inference does not use the catalog-response
 byte ceiling. Its ingress retains the request bytes for policy parsing. The
 managed-service carrier owns its complete-message size boundary and reports
@@ -616,6 +618,17 @@ Each consumer receives opaque access bound to its exact Connected Account
 request-auth capability and qualified purposes. A physical management bearer
 cannot authorize inference. Releasing one consumer withdraws only its access;
 the final consumer and its in-flight requests must settle before idle stop.
+
+Connected Account/Pool Team sources have no Provider Connection gateway binding.
+In development source, they use the same consumer-access document and process
+supervisor under their exact admitted broker operation, not a fabricated
+connection or connection-wide sharing scope. Operation retirement withdraws
+that access and settles its process without affecting another operation.
+Managed source-acquisition refusals record the closed broker reason and,
+when available, the existing Provider error code in the daemon file log;
+coordinator start failures also retain their existing closed phase code.
+These diagnostics never record the caught message, source credentials or
+response body.
 
 In development source, a gateway's request-auth lookup follows the containing
 native request's deadline and cancellation. It adds no shorter transport-phase
