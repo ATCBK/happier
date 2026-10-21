@@ -9,9 +9,9 @@ import { FileCodeSkeleton, FilePartialFooter, FileReadingLine, FileTooLargeState
 import type { FileDisplayMode } from '@/components/workspaces/files/file/filePageModel';
 import { resolveFileMenuItems, type FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
 import { useFilePageCodeIntelligence } from '@/components/workspaces/files/intelligence/useFilePageCodeIntelligence';
-import { useWorkspaceFileShareActions } from '@/components/workspaces/files/file/useWorkspaceFileShareActions';
+import { useFilePageSharing } from '@/components/workspaces/files/file/useFilePageSharing';
+import { useFilePageDetailsActions } from '@/components/workspaces/files/file/useFilePageDetailsActions';
 import { reconstructWorkspaceFileTextBytes } from '@/sync/ops/workspaceFileSystem/workspaceFileTextDecoding';
-import { SaveFileAsArtifactDialog } from '@/components/workspaces/files/file/SaveFileAsArtifactDialog';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { retryMachineReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { desktopHostKind } from '@/utils/platform/desktopHost';
@@ -24,10 +24,16 @@ import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/
 import { FileContentPanel, resolveFileCodeGeometry } from '@/components/workspaces/files/file/FileContentPanel';
 import { FileChangesSection, type FileChangesDiffSurface } from '@/components/workspaces/files/file/changes/FileChangesRegions';
 import { useFileChangesReview } from '@/components/workspaces/files/file/changes/useFileChangesReview';
+import { useFileChangesRollback } from '@/components/workspaces/files/file/changes/useFileChangesActions';
+import { createSessionCommitDetailsTab } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
+import { createProjectCommitDetailsTab } from '@/components/projects/detail/projectDetailsTabBuilders';
+import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import type { FileChangesScope } from '@happier-dev/protocol/scm';
 import { FileViewerFindSurface } from './FileViewerFindSurface';
 import { useFindSurfaceRuntime } from '@/keyboard/KeyboardShortcutProvider';
-import { FileEditorPanel } from '@/components/workspaces/files/file/editor/FileEditorPanel';
+import { FileEditorPanel, type FileEditorPanelProps } from '@/components/workspaces/files/file/editor/FileEditorPanel';
 import { FileEditorAskControls } from '@/components/workspaces/files/file/editor/FileEditorAskControls';
 import { FileReadAskControls } from '@/components/workspaces/files/file/FileReadAskControls';
 import { FileEditorNoticeLine } from '@/components/workspaces/files/file/editor/FileEditorNoticeLine';
@@ -120,7 +126,7 @@ import {
     usePluginDetailsDestinationLaunchStaging,
     type PluginDetailsViewerChoiceModel,
 } from '@/components/appShell/panes/details/surfaces/pluginDetailsDestination';
-import { createWorkspaceFileOpenableContentBinding, type PluginSurfaceOpenableContentBinding } from '@/components/plugins/surfaces/pluginSurfaceOpenableContent';
+import { createWorkspaceFileOpenableContentBinding, deriveWorkspaceFileOpenableContentKind, type PluginSurfaceOpenableContentBinding } from '@/components/plugins/surfaces/pluginSurfaceOpenableContent';
 import { resolvePluginSurfaceDestinationLabel } from '@/components/plugins/surfaces/pluginSurfaceDestinations';
 import type { PluginSurfaceScopedLaunchFacts } from '@/components/plugins/surfaces/pluginSurfaceLaunchAuthority';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -169,6 +175,9 @@ export type WorkspaceFileDetailsViewProps = Readonly<{
     findSeed?: FileFindSeed | null;
     onFindSeedConsumed?: () => void;
     sessionIdForAugmentation?: string | null;
+    workspaceRefId?: string | null;
+    /** The real host owns link/publication identity; augmentation never selects it. */
+    targetKind?: 'session' | 'project';
     presentation?: 'screen' | 'panel';
     /** The host names the repository (the Code page): its root leads the header's breadcrumb. */
     breadcrumbRoot?: string | null;
@@ -206,15 +215,6 @@ function resolveFileStatusLabel(kind: ScmEntryKind): string {
     }
 }
 
-function countTextLines(text: string): number {
-    if (text.length === 0) return 0;
-    let lines = 1;
-    for (let index = 0; index < text.length; index += 1) {
-        if (text.charCodeAt(index) === 10) lines += 1;
-    }
-    return text.endsWith('\n') ? lines - 1 : lines;
-}
-
 function unavailableViewerChoiceId(choice: Extract<WorkspaceFileViewerChoice, { kind: 'unavailable' }>): string {
     return `unavailable:${choice.preference.pluginId}:${choice.preference.contributionLocalId}`;
 }
@@ -225,6 +225,7 @@ function findWorkspaceFileViewerChoice(
 ): WorkspaceFileViewerChoice | null {
     for (const choice of model.choices) {
         if (choice.kind === 'builtin' && candidateId === 'builtin') return choice;
+        if (choice.kind === 'text' && candidateId === 'text') return choice;
         if (choice.kind === 'plugin' && candidateId === choice.candidate.candidate.entry.id) return choice;
         if (choice.kind === 'unavailable' && candidateId === unavailableViewerChoiceId(choice)) return choice;
     }
@@ -247,13 +248,16 @@ function createWorkspaceFileViewerChoiceChromeModel(input: Readonly<{
     return Object.freeze({
         candidates: Object.freeze(input.model.choices.map((choice) => {
             if (choice.kind === 'builtin') {
-                const selected = input.selectedPluginViewerId === null;
+                const selected = input.selectedPluginViewerId === null && input.model.selected.kind !== 'text';
                 return Object.freeze({
                     id: 'builtin',
                     label: t('common.default'),
                     selected,
                     ...(input.canSelect || selected ? {} : { disabled: true }),
                 });
+            }
+            if (choice.kind === 'text') {
+                return Object.freeze({ id: 'text', label: t('files.viewer.openAsText'), selected: input.model.selected.kind === 'text' });
             }
             if (choice.kind === 'plugin') {
                 const selected = choice.candidate.candidate.entry.id === input.selectedPluginViewerId;
@@ -344,11 +348,16 @@ function stageWorkspaceFilePluginViewer(input: Readonly<{
 function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
     scope: WorkspaceScopeBase | null;
     filePath: string;
+    sessionId?: string | null;
+    workspaceRefId?: string | null;
     host: WorkspaceFileOpenableContentViewerHost | undefined;
     /** The built-in editor holds the body (or is about to): the selected plugin viewer waits until it is done. */
     builtinBodyRequired?: boolean;
     /** Ask the built-in tab to open straight into its editor (Edit in the plugin viewer's header). */
     requestEdit?: () => void;
+    builtinViewer?: 'default' | 'text';
+    isBinaryContent?: boolean;
+    selectBuiltinViewer: (viewer: 'default' | 'text') => void;
     onRevealInFilesTree?: (path: string) => void;
 }>): React.ReactElement | null {
     const settings = useSettingsSelector((settings) => ({
@@ -407,14 +416,13 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
     }, [binding]);
 
     const choiceModel = React.useMemo(() => (
-        stat?.status === 'ready'
-            ? resolveWorkspaceFileViewerChoiceModel({
-                metadata: stat,
+            resolveWorkspaceFileViewerChoiceModel({
+                metadata: stat?.status === 'ready' ? stat : deriveWorkspaceFileOpenableContentKind(props.filePath, undefined, props.isBinaryContent),
                 preferences,
-                availablePluginViewers: candidates,
+                availablePluginViewers: stat?.status === 'ready' ? candidates : [],
+                builtinViewer: props.builtinViewer,
             })
-            : null
-    ), [candidates, preferences, stat]);
+    ), [candidates, preferences, props.builtinViewer, props.filePath, props.isBinaryContent, stat]);
     const originalBuiltinTabState = host?.details.tab ?? null;
     const originalBuiltinTab = React.useMemo(() => (
         originalBuiltinTabState ? toBuiltinDetailsTab(originalBuiltinTabState) : null
@@ -425,18 +433,30 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
     const { requestEdit, onRevealInFilesTree, filePath } = props;
     const header = React.useCallback((context: Readonly<{ details: DetailsSurfaceRenderInputV1 }>) => (scope ? (
         <FilePagePluginViewerHeader scope={scope} filePath={filePath} sizeBytes={sizeBytes}
+            sessionId={props.sessionId} workspaceRefId={props.workspaceRefId} targetKind={host?.targetKind}
             onRevealInFilesTree={onRevealInFilesTree}
             onEdit={textContent && requestEdit && originalBuiltinTab && originalBuiltinTabState ? () => {
                 requestEdit();
                 context.details.callbacks.replaceTab?.(context.details.tab.key, originalBuiltinTab,
                     { intent: detailsTabIntent(originalBuiltinTabState) });
             } : undefined} />
-    ) : null), [scope, filePath, sizeBytes, textContent, requestEdit, onRevealInFilesTree, originalBuiltinTab, originalBuiltinTabState]);
+    ) : null), [scope, filePath, sizeBytes, textContent, requestEdit, onRevealInFilesTree, originalBuiltinTab, originalBuiltinTabState,
+        props.sessionId, props.workspaceRefId, host?.targetKind]);
 
     const selectCandidate = React.useCallback(async (
         candidateId: string,
         currentDetails: DetailsSurfaceRenderInputV1,
     ) => {
+        if (candidateId === 'text') {
+            props.selectBuiltinViewer('text');
+            if (originalBuiltinTab && originalBuiltinTabState) currentDetails.callbacks.replaceTab?.(currentDetails.tab.key, originalBuiltinTab,
+                    { intent: detailsTabIntent(originalBuiltinTabState) });
+            return;
+        }
+        if (candidateId === 'builtin' && (!hasViewerDemand || stat?.status !== 'ready')) {
+            props.selectBuiltinViewer('default');
+            return;
+        }
         if (!host || !binding || !stat || stat.status !== 'ready' || !originalBuiltinTab || !originalBuiltinTabState) return;
         const currentSettingsState = storage.getState();
         if (currentSettingsState.settingsVersion === null || currentSettingsState.settingsScope === null) return;
@@ -448,7 +468,7 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
             availablePluginViewers: candidates,
         });
         const choice = findWorkspaceFileViewerChoice(currentChoiceModel, candidateId);
-        if (!choice || choice.kind === 'unavailable') return;
+        if (!choice || choice.kind === 'unavailable' || choice.kind === 'text') return;
         const viewer = choice.kind === 'builtin'
             ? { kind: 'builtin' as const }
             : {
@@ -477,6 +497,7 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
         }
 
         if (choice.kind === 'builtin') {
+            props.selectBuiltinViewer('default');
             currentDetails.callbacks.replaceTab?.(
                 currentDetails.tab.key,
                 originalBuiltinTab,
@@ -484,6 +505,7 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
             );
             return;
         }
+        props.selectBuiltinViewer('default');
         stageWorkspaceFilePluginViewer({
             stage,
             host,
@@ -508,6 +530,8 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
         originalBuiltinTabState,
         stage,
         stat,
+        hasViewerDemand,
+        props.selectBuiltinViewer,
     ]);
 
     React.useEffect(() => {
@@ -550,7 +574,7 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
         stage,
     ]);
 
-    if (!host || !choiceModel || choiceModel.selected.kind !== 'builtin') return null;
+    if (!host || !choiceModel || choiceModel.selected.kind === 'plugin') return null;
     const viewerChoice = createWorkspaceFileViewerChoiceChromeModel({
         model: choiceModel,
         selectedPluginViewerId: null,
@@ -657,14 +681,15 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const snapshotSignature = React.useMemo(() => scmSnapshot ? buildScmDiffSnapshotSignature(scmSnapshot) : null, [scmSnapshot]);
 
     const [displayMode, setDisplayMode] = React.useState<FileDisplayMode>(() => (
-        persistedDraft?.isEditingFile ? 'file' : fileView.mode ?? (deepLinkAnchor?.source === 'file' ? 'file'
+        fileView.mode === 'edit' || (fileView.mode === undefined && persistedDraft?.isEditingFile) ? 'file' : fileView.mode ?? (deepLinkAnchor?.source === 'file' ? 'file'
             : fileEntry ? 'diff' : resolveFileViewerKind({ path: filePath }).kind === 'markdown' ? 'markdown' : 'file')
     ));
     const requestedDisplayMode = fileView.mode ?? null;
-    const onDisplayMode = React.useCallback((mode: FileDisplayMode) => {
-        patchFileView({ mode });
-        setDisplayMode(mode);
+    const selectBuiltinViewer = React.useCallback((viewer: 'default' | 'text') => {
+        patchFileView({ viewer, mode: 'file' });
+        setDisplayMode('file');
     }, [patchFileView]);
+    const openAsText = React.useCallback(() => selectBuiltinViewer('text'), [selectBuiltinViewer]);
     const [diffMode, setDiffMode] = useFileDetailsDiffMode({
         fileKey: `${scope?.serverId}:${scope?.machineId}:${scope?.rootPath}:${filePath}`,
         snapshot: scmSnapshot,
@@ -711,8 +736,10 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         isBinaryContent: fileEntry?.stats.isBinary,
         fileHasIncludedDelta: fileEntry?.hasIncludedDelta,
         previewSlice: fileView.previewSlice,
+        readAsText: fileView.viewer === 'text',
         maxImagePreviewBytes: typeof filesImagePreviewMaxBytes === 'number' ? filesImagePreviewMaxBytes : null,
-        // Changes reads the diff; so does editing a changed file, for its gutter marks (P4-R9).
+        // The shared data owner also acquires current after-text for Changes' document holder.
+        // Editing a changed file reads the diff for its gutter marks (P4-R9).
         includeDiff: (displayMode === 'diff' && (scmSnapshot == null || fileEntry != null)) || (diffWhileEditing && fileEntry != null),
         includeFile: displayMode !== 'diff',
         snapshotSignature,
@@ -916,6 +943,16 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const { editorSurfaceEnabled, isEditingFile, editorResetKey, editorSeedText, editorHandleRef,
         onEditorChange, editorDirty, saveFileEdits, cancelEditingFile, startEditingFile,
         liveValue, initialLine, onEditorReady } = editorState;
+    const isEditorSelected = isEditingFile && (fileView.mode === 'edit' || fileView.mode === undefined);
+    const onDisplayMode = React.useCallback(async (mode: FileDisplayMode) => {
+        if (isEditingFile) {
+            await editorHandleRef.current?.flushPendingChange();
+            if (!mountedRef.current || !editorState.readSnapshot().isEditingFile) return false;
+        }
+        patchFileView({ mode });
+        setDisplayMode(mode);
+        return true;
+    }, [editorHandleRef, editorState.readSnapshot, isEditingFile, mountedRef, patchFileView]);
     React.useEffect(() => { setDiffWhileEditing(isEditingFile); }, [isEditingFile]);
     // Ask reads the mounted editor's selection; the handle exists once the engine reports ready.
     const [readyEditorHandle, setReadyEditorHandle] = React.useState<typeof editorHandleRef.current>(null);
@@ -961,8 +998,9 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         const requested = typeof at?.line === 'number' ? at : undefined;
         const reading = requested ?? (displayMode === 'file' ? readCodeViewReadingLine(readBodyRef.current) ?? undefined
             : displayMode === 'diff' && changesEditLineRef.current !== null ? { line: changesEditLineRef.current } : undefined);
-        onDisplayMode('file'); props.onStartEditingFile?.(); startEditingFile(reading);
-    }, [displayMode, onDisplayMode, props.onStartEditingFile, startEditingFile]);
+        patchFileView({ mode: 'edit' }); setDisplayMode('file');
+        props.onStartEditingFile?.(); startEditingFile(reading);
+    }, [displayMode, patchFileView, props.onStartEditingFile, startEditingFile]);
     // Edit from a plugin viewer's header lands here with a one-shot request: open the built-in editor once the
     // text is held (the request is cleared first, so a reload never re-enters editing by itself).
     const requestEditFromViewer = React.useCallback(() => patchFileView({ startEditing: true }), [patchFileView]);
@@ -970,13 +1008,14 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     React.useEffect(() => {
         if (!editRequested || !fileContent || fileContent.isBinary) return;
         patchFileView({ startEditing: undefined });
-        if (!isEditingFile) handleStartEditingFile();
-    }, [editRequested, fileContent, isEditingFile, handleStartEditingFile, patchFileView]);
+        handleStartEditingFile();
+    }, [editRequested, fileContent, handleStartEditingFile, patchFileView]);
     const focusedGroup = pane.scopeState?.details?.groups?.find(group => group.id === pane.scopeState?.details?.focusedGroupId);
     const editorHeader = useWorkspaceFileEditorCommands({
         editor: editorState, tabKey, onStart: handleStartEditingFile,
+        file: scope ? { scope, path: filePath } : undefined,
         serverId: scope?.serverId ?? null, accountId: editorAccountScope?.accountId ?? null,
-        focused: isActive && (presentation === 'screen' || focusedGroup?.activeTabKey === tabKey),
+        focused: isActive && isEditorSelected && (presentation === 'screen' || focusedGroup?.activeTabKey === tabKey),
     });
 
     const surfaceSize = useSurfaceStateSize();
@@ -989,7 +1028,6 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
             onPress: editorHeader.onSave,
         },
     } : null, [editorHeader.status, editorHeader.refusal, editorHeader.onSave, surfaceSize]);
-    const editorPeek = React.useMemo(() => ({ dirty: editorDirty, attribution: editorAttribution.agentName }), [editorDirty, editorAttribution.agentName]);
     // Changes is offered from the moment the tree / SCM knows the file changed (its diff may still be on the way,
     // so the segment never appears late), and for changed images whose Changes is the visual compare (P5 U8).
     const changesOffered = hasRenderableDiff || (fileEntry !== null
@@ -1009,17 +1047,17 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     fileViewActionOwner.current = {
         tabId: tabKey, active: isActive, serverId: scope?.serverId ?? null,
         accountId: editorAccountScope?.accountId ?? null,
-        mode: isEditingFile ? 'edit' : headerModel.modes.find(option => option.displayMode === displayMode)?.id ?? 'view',
+        mode: isEditorSelected ? 'edit' : headerModel.modes.find(option => option.displayMode === displayMode)?.id ?? 'view',
         changesScope: fileView.changesScope, blame: fileView.blame ?? false,
         availableModes: [...headerModel.modes.map(option => option.id), ...(headerModel.editUnavailableReason === null ? ['edit' as const] : [])],
         blameAvailable: scmSnapshot?.capabilities?.readBlame === true,
         changesScopeAvailable: scope !== null,
-        set: patch => {
+        set: async patch => {
             if (patch.mode === 'edit') handleStartEditingFile();
             else if (patch.mode) {
                 const option = headerModel.modes.find(option => option.id === patch.mode);
                 if (!option) return false;
-                onDisplayMode(option.displayMode);
+                if (!await onDisplayMode(option.displayMode)) return false;
             }
             const { mode: _mode, ...viewPatch } = patch;
             if (Object.keys(viewPatch).length > 0) patchFileView(viewPatch);
@@ -1040,12 +1078,23 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         // References name file coordinates; Markdown/SVG therefore open their Source mode.
         const mode = requested.view === 'view' && !owner.availableModes.includes('view')
             ? headerModel.modes.find(option => option.displayMode === 'file')?.id ?? headerModel.modes[0]?.id : requested.view;
-        if (!appliedInitialView.current.view && mode && owner.availableModes.includes(mode)) {
-            appliedInitialView.current.view = owner.mode === mode || owner.set({ mode });
-        }
-        if (!appliedInitialView.current.blame && requested.blame !== undefined && (owner.blameAvailable || requested.blame === false)) {
-            appliedInitialView.current.blame = owner.blame === requested.blame || owner.set({ blame: requested.blame });
-        }
+        let current = true;
+        void (async () => {
+            try {
+                if (!appliedInitialView.current.view && mode && owner.availableModes.includes(mode)) {
+                    const applied = owner.mode === mode || await owner.set({ mode });
+                    if (!current) return;
+                    appliedInitialView.current.view = applied;
+                }
+                if (!appliedInitialView.current.blame && requested.blame !== undefined && (owner.blameAvailable || requested.blame === false)) {
+                    const applied = owner.blame === requested.blame || await owner.set({ blame: requested.blame });
+                    if (current) appliedInitialView.current.blame = applied;
+                }
+            } catch (error) {
+                if (current) Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.operationFailed'));
+            }
+        })();
+        return () => { current = false; };
     }, [initialViewKey, isActive, fileContent, hasRenderableDiff, persistedDraft?.isEditingFile,
         headerModel.editUnavailableReason, scmSnapshot?.capabilities?.readBlame]);
 
@@ -1156,69 +1205,66 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
             complete: !fileContent.isBinary && !fileContent.partial, encoding: fileContent.encoding });
         return bytes ? { bytes, fileName, mimeType: fileContent.binaryMime ?? fileViewer.mimeType ?? 'text/plain' } : null;
     }, [fileContent, fileName, fileViewer.mimeType, machineReachable]);
-    const share = useWorkspaceFileShareActions({
-        workspaceScope: scope,
-        path: filePath,
-        actionScope: editorAccountScope,
-        linkInput: sessionId ? { target: { kind: 'session', sessionId, ...(scope?.serverId ? { serverId: scope.serverId } : {}) }, path: filePath } : undefined,
+    const share = useFilePageSharing({
+        scope, filePath, accountScope: editorAccountScope, sessionId,
+        workspaceRefId: props.workspaceRefId, targetKind: props.targetKind ?? props.openableContentViewer?.targetKind,
         machineReachable,
         unavailableReason,
         cachedContent,
-        onSaveAsArtifact: editorAccountScope && scope ? () => {
-            Modal.show({
-                component: SaveFileAsArtifactDialog,
-                props: {
-                    source: {
-                        scope: editorAccountScope,
-                        sourceSessionId: sessionId || null,
-                        // A project page has no Session: the workspace itself is the source (amendment A2).
-                        sourceWorkspace: sessionId ? null : { machineId: scope.machineId, rootPath: scope.rootPath },
-                        filePath,
-                    },
-                    sourceFacts: [filePathDir.split('/').filter(Boolean).join(' › '),
-                        typeof fileContent?.binarySizeBytes === 'number' ? formatFilePageBytes(fileContent.binarySizeBytes) : null,
-                        checkoutReachability.machineName ? t('files.pane.page.fromMachine', { machine: checkoutReachability.machineName }) : null,
-                    ].filter(Boolean).join(' · '),
-                },
-            });
-        } : undefined,
+        sourceFacts: [filePathDir.split('/').filter(Boolean).join(' › '),
+            typeof fileContent?.binarySizeBytes === 'number' ? formatFilePageBytes(fileContent.binarySizeBytes) : null,
+            checkoutReachability.machineName ? t('files.pane.page.fromMachine', { machine: checkoutReachability.machineName }) : null,
+        ].filter(Boolean).join(' · '),
     });
+    const fileDetails = useFilePageDetailsActions({ path: filePath, kind: fileViewer.kind, language, content: fileContent });
     const effectiveWrapLines = fileView.wrap ?? wrapLinesInDiffs;
     const isBinaryContent = fileContent?.isBinary === true;
     const onChangesScopeChange = React.useCallback((changesScope: FileChangesScope) => patchFileView({ changesScope }), [patchFileView]);
+    const offerWholeTurnRollback = useFileChangesRollback(isActive && fileView.changesScope?.kind === 'turn' ? sessionAddress : null, scope.rootPath);
     // P5's Changes owner, once per page: the Changes body draws it, and its comparison arm is the only
     // whole-file Discard / Restore (View, Changes and the deleted tab alike; no HEAD-arm fallback, RV-B M8).
     const changesReview = useFileChangesReview({
         scope, sessionId: sessionId || null, filePath,
         liveDiff: diffContent, refreshLiveDiff: onRefresh, view: fileView, onChangesScopeChange,
+        contentHash: fileContent?.contentHash ?? null,
         active: isActive && (displayMode === 'diff' || Boolean(fileEntry)),
         agentName: editorAttribution.agentName,
         hasUnsavedEdits: () => editorDirty,
         onReplacedUnsavedEdits: cancelEditingFile,
+        offerWholeTurnRollback,
     });
+    const editorPeek = React.useMemo<FileEditorPanelProps['peek']>(() => ({
+        dirty: editorDirty,
+        attribution: editorAttribution.agentName,
+        resolveChangeActions: (marker, context) => changesReview.controller.changeActionsForKey(marker.key,
+            context.dirty ? { discardInDraft: () => context.revertInDraft(marker) } : undefined),
+    }), [editorDirty, editorAttribution.agentName, changesReview.controller.changeActionsForKey]);
     // P7: one controller per File page; regions handed to this page (header fact, note, card, ⋯ commands).
     const codeIntelligence = useFilePageCodeIntelligence({
         scopeId: props.scopeId, scope, filePath, language,
         enabled: fileViewer.kind === 'code' && !fileContent?.isBinary && !fileContent?.partial && fileEntry?.kind !== 'deleted' && Boolean(fileContent),
+        outlineEnabled: (fileViewer.kind === 'code' || fileViewer.kind === 'markdown') && !fileContent?.isBinary
+            && !fileContent?.partial && fileEntry?.kind !== 'deleted' && Boolean(fileContent),
         active: isActive, liveValue, getUnsaved: () => editorState.readSnapshot().dirty, editorHandleRef,
         sessionId: sessionId || null, accountId: editorAccountScope?.accountId ?? null,
         machineName: checkoutReachability.machineName, machineUnreachable: checkoutReachability.unreachable,
-        agentName: editorAttribution.agentName, saveFileEdits,
-        readSavedText: () => ({ savedText: fileContent?.isBinary ? '' : fileContent?.content ?? '', unsaved: editorState.readSnapshot().dirty }),
+        agentName: editorAttribution.agentName,
         revealLine: (line) => setJumpToAnchor(line === null ? null : { kind: 'line', filePath, line }),
     });
     bindCodeIntelligenceEditor.current = codeIntelligence.bindEditor;
     // Gutter marks come from the diff of the Changes scope the person selected (this turn, the session or
     // uncommitted), the same one the Changes body shows, seeded once per saved version and scope; the engine
     // then carries them through the person's edits (P4-R9).
-    const changeMarkerSeedKey = JSON.stringify([fileContent?.contentHash ?? null, changesReview.scopeKind, diffMode, editorResetKey]);
+    const changeMarkerSeedKey = JSON.stringify([fileContent?.contentHash ?? null, changesReview.changesScope, diffMode, editorResetKey]);
     const changeMarkerDiff = isEditingFile && typeof changesReview.unifiedDiff === 'string' && changesReview.unifiedDiff.length > 0
         ? changesReview.unifiedDiff : null;
     const changeMarkerDiffRef = React.useRef(changeMarkerDiff);
     changeMarkerDiffRef.current = changeMarkerDiff;
+    const changeMarkerUnitsRef = React.useRef(changesReview.reviewUnits);
+    changeMarkerUnitsRef.current = changesReview.reviewUnits;
     // Seeded per saved version: a refreshed diff for the same version does not move marks under the caret.
     const changeMarkers = React.useMemo(() => changeMarkerDiffRef.current
-        ? { key: changeMarkerSeedKey, items: buildEditorChangeMarkers(filePath, null, changeMarkerDiffRef.current) } : undefined,
+        ? { key: changeMarkerSeedKey, items: buildEditorChangeMarkers(filePath, null, changeMarkerDiffRef.current, changeMarkerUnitsRef.current) } : undefined,
     [changeMarkerSeedKey, changeMarkerDiff !== null, filePath]);
     const changesFocusHunk = changesReview.controller.currentHunk;
     changesEditLineRef.current = changesFocusHunk ? (changesFocusHunk.rangeSide === 'new' ? changesFocusHunk.rangeStart : changesFocusHunk.newStart) : null;
@@ -1231,6 +1277,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         blame: fileView.blame === true,
         readBlame: scmSnapshot?.capabilities?.readBlame === true,
         toggleWrap: !isBinaryContent && displayMode !== 'markdown' ? () => patchFileView({ wrap: !effectiveWrapLines }) : undefined,
+        showInfo: fileDetails.showInfo,
+        chooseBackground: fileDetails.chooseBackground,
         copyContents: heldText !== null ? () => { void copyFileContent(); } : undefined,
         selectLines: scmWriteEnabled && (includeExcludeEnabled || virtualSelectionEnabled) && (lineSelectionCanStart || lineSelectionEnabled) && !commitSelectionModeActive
             ? () => onStartLineSelection() : undefined,
@@ -1239,7 +1287,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         discardEdits: isEditingFile && editorDirty ? cancelEditingFile : undefined,
         toggleBlame: scmSnapshot?.capabilities?.readBlame === true ? () => patchFileView({ blame: !(fileView.blame === true) }) : undefined,
         changes: fileEntry?.kind === 'deleted' ? undefined : changesReview.menuChanges,
-        copyPath: share.copyPath ? () => share.copyPath?.() : undefined,
+        copyPath: share.copyPath ? intent => share.copyPath?.({ absolute: intent?.altKey === true }) : undefined,
+        copyAbsolutePath: share.copyAbsolutePath,
         copyLink: share.copyLink,
         attachToMessage: share.attachToMessage,
         saveAsArtifact: share.saveAsArtifact,
@@ -1257,11 +1306,11 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         ...(item.id === 'wrap' ? { checked: effectiveWrapLines } : {}),
         ...(typeof item.state === 'object' ? { disabled: true, subtitle: item.state.disabledReason } : {}),
         ...(item.id === 'download' && share.busy ? { loading: true } : {}),
-        onSelect: () => item.run(),
+        onSelect: (intent?: import('../file/fileMenus').FileMenuIntent) => item.run(intent),
     }));
     const pageEditControl = resolveFilePageEditControl({
         fileEditorEnabled: editorSurfaceEnabled && !isBinaryContent && fileEntry?.kind !== 'deleted' && headerModel.editUnavailableReason === null,
-        isEditingFile: isEditingFile && displayMode === 'file',
+        isEditingFile: isEditorSelected,
         editor: editorHeader,
         onStart: () => handleStartEditingFile(),
         onSave: saveFileEdits,
@@ -1271,7 +1320,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     });
     // The phone's bottom toolbar steps aside while something else holds the bottom edge: the editor's key row
     // (ED1p) or the review bar in Changes (rvp P1). The header then carries the view choice and Done itself.
-    const phoneToolbar = phonePage && !(isEditingFile && displayMode === 'file')
+    const phoneToolbar = phonePage && !isEditorSelected
         && !(displayMode === 'diff' && changesReview.controller.strip.total > 0);
     const pageFind = (displayMode === 'diff' ? typeof diffContent === 'string' : typeof fileContent?.content === 'string' && !isBinaryContent)
         && headerModel.findAvailable !== false ? { onOpen: () => findRuntime.open(findSurfaceId) } : null;
@@ -1307,9 +1356,23 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     [fileContent]);
     const blameRegion = useFileBlameRegion({
         scope: blameScope, path: filePath, content: blameContent,
-        enabled: fileView.blame === true && isActive && !isEditingFile,
+        enabled: fileView.blame === true && isActive,
         readBlame: scmSnapshot?.capabilities?.readBlame === true,
         sessionAddress, compact: phonePage,
+        revision: scmSnapshot?.branch.headOid ?? scmSnapshot?.fetchedAt ?? null,
+        refreshContent: refreshAll,
+        editor: isEditingFile ? readyEditorHandle : null,
+        onOpenCommit: (sha) => {
+            const tab = sessionAddress ? createSessionCommitDetailsTab(sha) : createProjectCommitDetailsTab(sha);
+            if (tab) pane.openDetailsTab(tab, { intent: 'pinned' });
+        },
+        onOpenTurn: sessionAddress ? (turn) => {
+            if (turn.sessionId !== sessionAddress.sessionId) return;
+            const session = selectHomeQualifiedSession(storage.getState(), turn.sessionId, sessionAddress.serverId, getActiveServerSnapshot().serverId);
+            const seq = session?.sessionTurns?.turns.find((entry) => entry.turnId === turn.turnId)?.transcriptAnchors?.startUserMessageSeq;
+            if (typeof seq !== 'number') return;
+            approvalRouter.pushRetainingCurrent(buildScopedSessionRouteHref({ sessionId: turn.sessionId, serverId: sessionAddress.serverId, query: { jumpSeq: seq } }));
+        } : undefined,
     });
 
 
@@ -1342,7 +1405,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         : mediaFacts ? mediaFacts
         : !fileEntry && !hasPendingDelta && !hasIncludedDelta && typeof fileContent?.content === 'string' && !isBinaryFile
             // "No changes" only once source control has answered; until then the line says only what is known.
-            ? [...(scmSnapshot ? [t('detailsSurface.file.noChanges')] : []), t('detailsSurface.file.lines', { count: countTextLines(fileContent.content) }), ...plainTextFact]
+            ? [...(scmSnapshot ? [t('detailsSurface.file.noChanges')] : []), t('detailsSurface.file.lines', { count: fileDetails.info.lineCount ?? 0 }), ...plainTextFact]
             : null;
     // Offline or behind: the content we hold stays at full strength under one line (FV1o, OR-1); editing
     // is never blocked. One cause, one line: a page above that already says it is not repeated here.
@@ -1379,6 +1442,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         findSeed={props.findSeed} onFindSeedConsumed={props.onFindSeedConsumed}>
                     {(find) => (
                     <FileContentPanel
+                        workspaceScope={scope}
                         find={find}
                         liveMoment={displayMode === 'file' ? liveMoment : null}
                         intelligence={displayMode === 'file' || displayMode === 'diff' ? codeIntelligence.viewBinding : null}
@@ -1450,6 +1514,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     find={pageFind}
                     edit={pageEditControl}
                     menuActions={menuActions}
+                    fileDetails={fileDetails}
                     toolbarBelow={phoneToolbar}
                     displayMode={displayMode}
                     onDisplayMode={onDisplayMode}
@@ -1477,7 +1542,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     onStartRangeSelection={onStartRangeSelection}
                     onToggleCommentMode={onToggleReviewCommentMode}
                     fileEditorEnabled={editorSurfaceEnabled && !isBinaryFile && !deleted}
-                    isEditingFile={isEditingFile}
+                    isEditingFile={isEditorSelected}
                     editor={editorHeader}
                     onStartEditingFile={handleStartEditingFile}
                     onCancelEditingFile={cancelEditingFile}
@@ -1491,7 +1556,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                             {freshnessLine}
                             {errorLine}
                             {codeIntelligence.notice}
-                            <FileEditorNoticeLine editor={editorHeader} editing={isEditingFile && displayMode === 'file' && !editorState.comparison}
+                            <FileEditorNoticeLine editor={editorHeader} editing={isEditorSelected && !editorState.comparison}
                                 reachability={checkoutReachability} agentName={editorAttribution.agentName}
                                 onOpenApproval={openEditorApproval} />
                         </>
@@ -1499,9 +1564,13 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                 />
                 {props.openableContentViewer && openableContentViewerEligible ? (
                     <WorkspaceFileOpenableContentViewerControls
+                        sessionId={sessionId} workspaceRefId={props.workspaceRefId}
                         scope={scope}
                         filePath={filePath}
                         host={props.openableContentViewer}
+                        builtinViewer={fileView.viewer}
+                        isBinaryContent={fileContent?.isBinary ?? fileEntry?.stats.isBinary}
+                        selectBuiltinViewer={selectBuiltinViewer}
                         builtinBodyRequired={isEditingFile || fileView.startEditing === true}
                         requestEdit={requestEditFromViewer}
                         onRevealInFilesTree={props.onRevealInFilesTree}
@@ -1540,19 +1609,20 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                                 <FileCodeSkeleton active={isActive} />
                             </View>
                         ) : <FileLoadingState filePath={filePath} />
-                ) : displayMode === 'file' && isEditingFile && isMarkdownFile ? (
+                ) : displayMode === 'file' && isEditorSelected && isMarkdownFile ? (
                     <MarkdownCodeEditorField
                         {...codeGeometry}
                         value={editorSeedText} resetKey={String(editorResetKey)} filePath={filePath} language={language}
                         onChange={onEditorChange} editorRef={editorHandleRef} liveValue={liveValue}
                         findSurfaceId={findSurfaceId} active={isActive} focusRootRef={findFocusRoot}
                         findSeed={props.findSeed} onFindSeedConsumed={props.onFindSeedConsumed}
+                        changeMarkers={changeMarkers}
                         wrapLines={effectiveWrapLines} showLineNumbers={showLineNumbers}
                         changeDebounceMs={typeof filesEditorChangeDebounceMs === 'number' ? filesEditorChangeDebounceMs : undefined}
                         bridgeMaxChunkBytes={typeof filesEditorBridgeMaxChunkBytes === 'number' ? filesEditorBridgeMaxChunkBytes : undefined}
                         onReady={onEditorReady} initialLine={initialLine}
                     />
-                ) : displayMode === 'file' && isEditingFile ? (
+                ) : displayMode === 'file' && isEditorSelected ? (
                     <>
                     <FileEditorPanel
                         {...codeGeometry}
@@ -1593,6 +1663,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         isActive={isActive}
                         findSurfaceId={findSurfaceId}
                         onDownload={() => { void share.download(); }}
+                        onOpenAsText={openAsText}
                         {...(share.openInDefaultApp ? { onOpenInDefaultApp: share.openInDefaultApp } : {})}
                         onImageInfo={onImageInfo}
                         testID="file-viewer-body"
@@ -1616,7 +1687,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                     </View>
                 )}
 
-                {displayMode === 'file' && isEditingFile && editorState.comparison ? (
+                {displayMode === 'file' && isEditorSelected && editorState.comparison ? (
                     // Compare covers the editor without unmounting it, so the engine keeps its buffer, caret and undo.
                     <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
                         <FileEditorCompareBody comparison={editorState.comparison} agentName={editorAttribution.agentName}
@@ -1626,7 +1697,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                             onBackToEditing={editorState.backToEditing} />
                     </View>
                 ) : null}
-                {displayMode === 'file' && isEditingFile ? null : (
+                {isEditorSelected ? null : (
                     <>
                         <ScrollEdgeFades color={theme.colors.surface.base} size={18} edges={scrollFades.visibility} />
                         <ScrollEdgeIndicators

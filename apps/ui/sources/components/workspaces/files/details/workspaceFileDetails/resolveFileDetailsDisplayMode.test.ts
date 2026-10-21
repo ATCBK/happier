@@ -58,6 +58,11 @@ it('honors the user selection ahead of restored or linked file intent', () => {
     })).toBe('diff');
 });
 
+it('maps selected Edit to the source body without changing the reading-mode enum', () => {
+    expect(resolveFileDetailsDisplayMode({ requestedMode: 'edit', persistedEditing: true, deepLinkSource: null,
+        hasRenderableDiff: true, hasFileContent: true, markdownPreviewAvailable: true })).toBe('file');
+});
+
 it('waits in View, not Changes, while an unchanged file loads or is too large to hold', () => {
     const waiting = { persistedEditing: false, deepLinkSource: null, hasRenderableDiff: false, hasFileContent: false,
         markdownPreviewAvailable: false } as const;

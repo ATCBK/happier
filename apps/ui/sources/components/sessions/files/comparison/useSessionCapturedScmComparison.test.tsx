@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { ScmComparisonSchema, ScmDiffSummaryResultSchema } from '@happier-dev/protocol/scm';
@@ -85,6 +86,61 @@ const changedFile = { path: 'src/changed.ts', changeKind: 'modified', binary: fa
     evidence: { state: 'available', unifiedDiff: 'diff --git a/src/changed.ts b/src/changed.ts\n--- a/src/changed.ts\n+++ b/src/changed.ts\n@@ -1 +1 @@\n-old\n+new\n' }, occurrences: [] } as const;
 
 describe('Files reads the canonical captured comparison through authenticated RPC', () => {
+    it('reviews captured files with one keyboard cursor, numbering and content-key marks', async () => {
+        const mounted = await mount({ kind: 'session' });
+        await mounted.unmount();
+        const sessionId = 'capture-session';
+        const serverId = getStorage().getState().sessions[sessionId]!.serverId!;
+        const { buildReviewUnits } = await import('@happier-dev/protocol/scm/comparisonOccurrences');
+        const { createScmReviewedMarksRecordPort } = await import('@happier-dev/protocol/scm/reviewedMarks');
+        const { CapturedComparisonFilesView } = await import('./CapturedComparisonFilesView');
+        const { DiffViewer } = await import('@/components/ui/code/diff/DiffViewer');
+        const { KeyboardShortcutProvider } = await import('@/keyboard/KeyboardShortcutProvider');
+        const comparison = ScmComparisonSchema.parse({ id: 'a'.repeat(64), source: { kind: 'session', sessionId },
+            repository: { rootPath: '/repo/exact' }, endpoints: {}, inventory: { state: 'complete', reasons: [],
+                files: ['a.ts', 'b.ts'].map(path => ({ ...changedFile, path, occurrences: [{
+                    id: `capture:${path}`, alias: path, path, position: 0,
+                    before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 },
+                }] })) } });
+        const diff = changedFile.evidence.unifiedDiff;
+        const keys = ['a.ts', 'b.ts'].flatMap(path => buildReviewUnits(path, undefined, diff).map(unit => unit.key));
+        let value: unknown = null;
+        let version = -1;
+        const port = createScmReviewedMarksRecordPort({ source: { repositoryRootPath: '/repo/exact',
+            source: { kind: 'session', sessionId }, changeKeys: keys }, transport: {
+            read: async () => ({ value, version }),
+            compareAndSet: async next => { value = next; version += 1; return { success: true, version }; },
+        } });
+        getStorage().setState({ settings: { ...getStorage().getState().settings, keyboardShortcutsV2Enabled: true,
+            keyboardSingleKeyShortcutsEnabled: true, keyboardShortcutOverridesV1: {}, keyboardShortcutDisabledCommandIdsV1: [] } });
+        function Review() {
+            const [record, setRecord] = React.useState<import('@happier-dev/protocol/scm/reviewedMarks').ScmReviewedMarksRecord | null>(null);
+            return <CapturedComparisonFilesView comparison={comparison} sessionId={sessionId}
+                workspaceScope={{ serverId, machineId: `machine:${sessionId}`, rootPath: '/repo/exact' }}
+                marks={{ record, unavailableReason: null, setReviewed: () => {}, clear: () => {},
+                    setReviewedKeys: (selected, reviewed) => { void port.setReviewedKeys(selected, reviewed).then(result => {
+                        if (result.success) setRecord(result.record);
+                    }); } }} maxFiles={10} maxChangedLines={100} />;
+        }
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}><Review /></KeyboardShortcutProvider>);
+        const rows = () => screen.findAllByType(DiffViewer);
+        await vi.waitFor(() => expect(rows()).toHaveLength(1));
+        expect(rows()[0]!.props.hunks.numberTotal).toBe(2);
+        await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', bubbles: true })); });
+        // The recycler boundary has no viewport: report the rows revealed by the navigation scroll.
+        const { DiffFilesListView } = await import('@/components/ui/code/diff/DiffFilesListView');
+        await act(async () => screen.findByType(DiffFilesListView).props.onViewableItemsChanged({
+            viewableItems: [0, 1].map(index => ({ index, isViewable: true, key: `${index}` })),
+            changed: [],
+        }));
+        await vi.waitFor(() => expect(rows()).toHaveLength(2));
+        expect(rows().map(row => row.props.hunks.numberOffset)).toEqual([0, 1]);
+        expect(rows().map(row => row.props.hunks.currentIndex)).toEqual([null, 0]);
+        await act(async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r', code: 'KeyR', bubbles: true })); });
+        await vi.waitFor(() => expect(value).toMatchObject({ reviewedChangeKeys: [keys[1]] }));
+        const info = (await import('@/components/ui/code/diff/hunks/buildDiffHunkTable')).buildDiffHunkTable({ mode: 'unified', filePath: 'b.ts', unifiedDiff: diff }).hunks[0]!;
+        expect(rows()[1]!.props.hunks.stateOf(info)).toBe('kept');
+    });
     const messages = { moved_on: 'moved', update_required: 'update', unsupported: 'unsupported', unavailable: 'unavailable', unknown: 'unknown',
         discarded: 'discarded', restored: 'restored', kept_edited: 'edited', undone: 'undone', undo_conflict: 'conflict', undo: 'undo',
         note_failed: 'note failed', undo_unavailable: 'undo unavailable' } satisfies DiscardChangeMessages;
@@ -340,7 +396,9 @@ describe('Files reads the canonical captured comparison through authenticated RP
         const comparison = ScmComparisonSchema.parse({ id: 'captured-ui', source, repository: { rootPath: '/repo/exact' },
             endpoints: { before: 'base-oid', after: 'head-oid' }, freshness: 'unknown', inventory: { state: 'incomplete', reasons: ['page_failed'], files: [
                 { path: 'new.ts', previousPath: 'old.ts', changeKind: 'renamed', binary: false, generated: false, lockfile: false,
-                    evidence: { state: 'available', unifiedDiff: 'diff --git a/old.ts b/new.ts\n--- a/old.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-old\n+new\n' }, occurrences: [] },
+                    evidence: { state: 'available', unifiedDiff: 'diff --git a/old.ts b/new.ts\n--- a/old.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-old\n+new\n' },
+                    occurrences: [{ id: 'capture:new', alias: 'new', path: 'new.ts', position: 0,
+                        before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 } }] },
                 { path: 'missing.png', changeKind: 'added', binary: null, generated: false, lockfile: false,
                     evidence: { state: 'unavailable', reason: 'patch_unavailable' }, occurrences: [] },
                 { path: 'captured-image.png', changeKind: 'added', binary: true, generated: false, lockfile: false,
@@ -388,7 +446,10 @@ describe('Files reads the canonical captured comparison through authenticated RP
     it('keeps captured Files readable and disables review with a reason when its Machine goes offline', async () => {
         const source = { kind: 'commit' as const, commit: 'old-ref' };
         const comparison = ScmComparisonSchema.parse({ id: 'offline-comparison', source, repository: { rootPath: '/repo/exact' }, endpoints: {},
-            inventory: { state: 'complete', files: [changedFile], reasons: [] } });
+            inventory: { state: 'complete', files: [{ ...changedFile, occurrences: [{
+                id: 'offline:changed', alias: 'changed', path: changedFile.path, position: 0,
+                before: { startLine: 1, lineCount: 1 }, after: { startLine: 1, lineCount: 1 },
+            }] }], reasons: [] } });
         boundary.response = { success: true, comparison, metadata: { sourceKey: comparison.id, source } };
         const hook = await mount(source);
         await hook.unmount();

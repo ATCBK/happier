@@ -40,7 +40,7 @@ export type WorkspaceFileViewerMatch = Readonly<{
     match: OpenableContentViewerMatchV1;
 }>;
 
-export type WorkspaceFileViewerSelection = Readonly<{ kind: 'builtin' }> | Readonly<{
+export type WorkspaceFileViewerSelection = Readonly<{ kind: 'builtin' }> | Readonly<{ kind: 'text' }> | Readonly<{
     kind: 'plugin';
     candidate: WorkspaceFileViewerMatch;
 }>;
@@ -65,7 +65,7 @@ export function isWorkspaceFileOpenableContentViewerEligible(input: Readonly<{
     return !input.isEditingFile && !input.hasPersistedEditingDraft;
 }
 
-export type WorkspaceFileViewerChoice = Readonly<{ kind: 'builtin' }> | Readonly<{
+export type WorkspaceFileViewerChoice = Readonly<{ kind: 'builtin' }> | Readonly<{ kind: 'text' }> | Readonly<{
     kind: 'plugin';
     candidate: WorkspaceFileViewerMatch;
 }> | Readonly<{
@@ -141,6 +141,7 @@ export function resolveWorkspaceFileViewer(input: Readonly<{
     metadata: OpenableContentMetadataV1;
     preferences: WorkspaceFileViewerPreferencesV1;
     availablePluginViewers: readonly WorkspaceFileViewerCandidate[];
+    builtinViewer?: 'default' | 'text';
 }>): WorkspaceFileViewerSelection {
     return resolveWorkspaceFileViewerChoiceModel(input).selected;
 }
@@ -149,6 +150,7 @@ export function resolveWorkspaceFileViewerChoiceModel(input: Readonly<{
     metadata: OpenableContentMetadataV1;
     preferences: WorkspaceFileViewerPreferencesV1;
     availablePluginViewers: readonly WorkspaceFileViewerCandidate[];
+    builtinViewer?: 'default' | 'text';
 }>): WorkspaceFileViewerChoiceModel {
     const matchingCandidates = input.availablePluginViewers
         .flatMap<WorkspaceFileViewerMatch>((candidate) => {
@@ -176,6 +178,8 @@ export function resolveWorkspaceFileViewerChoiceModel(input: Readonly<{
         selected,
         ...(unavailablePreference === undefined ? {} : { unavailablePreference }),
     });
+
+    if (input.builtinViewer === 'text') return createModel({ kind: 'text' });
 
     for (const selector of preferenceSelectors) {
         const preferred = input.preferences.selections[serializeOpenableContentPreferenceSelectorV1(selector)];
@@ -213,7 +217,7 @@ function buildWorkspaceFileViewerChoices(input: Readonly<{
     selected: WorkspaceFileViewerSelection;
     unavailablePreference?: WorkspaceFileViewerUnavailablePreference;
 }>): readonly WorkspaceFileViewerChoice[] {
-    const choices: WorkspaceFileViewerChoice[] = [{ kind: 'builtin' }];
+    const choices: WorkspaceFileViewerChoice[] = [{ kind: 'builtin' }, { kind: 'text' }];
     if (input.unavailablePreference) {
         choices.push({ kind: 'unavailable', preference: input.unavailablePreference });
     }

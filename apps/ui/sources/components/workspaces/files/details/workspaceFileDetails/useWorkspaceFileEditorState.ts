@@ -54,7 +54,7 @@ export type WorkspaceFileEditorState = Readonly<{
     resolveConflict(choice: 'useMine' | 'useTheirs'): Promise<void>; undoSetAside(): Promise<void>;
     isComparing: boolean; startComparison(): void; backToEditing(): void;
     rebaseMergedDraft(text: string, shown?: Omit<EditorComparisonResolution, 'text'>): void;
-    readSnapshot(): Readonly<{ isEditingFile: boolean; hash: string | null; encoding?: Encoding; dirty: boolean; conflict: WorkspaceFileEditorConflict | null }>;
+    readSnapshot(): Readonly<{ isEditingFile: boolean; savedText: string | null; hash: string | null; encoding?: Encoding; dirty: boolean; conflict: WorkspaceFileEditorConflict | null }>;
 }> & Pick<WorkspaceFileEditorComparisonController, 'comparison' | 'usePlaceMine' | 'usePlaceTheirs' | 'useAllMine' | 'useAllTheirs'>;
 
 export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorState {
@@ -203,7 +203,13 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         const line = at && Number.isFinite(at.line) ? Math.max(1, Math.trunc(at.line)) : undefined;
         const top = line !== undefined && at?.top && Number.isFinite(at.top.line) && Number.isFinite(at.top.offset) ? at.top : undefined;
         retireUndo(); if (line !== undefined) { setInitialLine(line); initialTop.current = top; }
-        if (editing.current) { if (line !== undefined) editorHandleRef.current?.revealLine?.(line, { focus: true, ...(top ? { top } : {}) }); return; }
+        if (editing.current) {
+            // View and Changes may unmount the engine while the draft stays open.
+            // A returning engine must start from that retained draft, not the old seed.
+            setEditorSeedText(text.current);
+            if (line !== undefined) editorHandleRef.current?.revealLine?.(line, { focus: true, ...(top ? { top } : {}) });
+            return;
+        }
         if (latest.current.fileText === null || latest.current.displayMode !== 'file') { setPendingStart(true); return; }
         updateBase({ text: latest.current.fileText, hash: latest.current.fileHash, encoding: latest.current.encoding });
         editing.current = true; setIsEditingFile(true); reseed(latest.current.fileText); setEditorDirty(false); setPendingStart(false);
@@ -389,6 +395,7 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
         })();
     }, [autoSave, comparisonController.startComparison, isCurrentOwner, retireUndo]);
     const readSnapshot = React.useCallback(() => ({ isEditingFile: isCurrentOwner() && editing.current,
+        savedText: isCurrentOwner() ? baseRef.current.text : null,
         hash: isCurrentOwner() ? baseRef.current.hash : null, encoding: isCurrentOwner() ? baseRef.current.encoding : undefined,
         dirty: isCurrentOwner() && editing.current && text.current !== baseRef.current.text,
         conflict: isCurrentOwner() ? conflictNow() : null }), [conflictNow, isCurrentOwner]);

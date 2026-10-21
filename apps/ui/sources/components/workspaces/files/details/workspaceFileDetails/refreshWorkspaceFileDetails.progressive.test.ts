@@ -84,10 +84,14 @@ describe('file details independent acquisition', () => {
             expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
         },
     );
-    it('does not download editor text for a diff-only request with a useful patch', async () => {
+    it('acquires current full text for a cold Changes page even when a useful patch arrives', async () => {
         const result = await refreshWorkspaceFileDetails({ ...input, includeFile: false });
-        expect(result).toMatchObject({ status: 'ready', diffContent: patch, fileContent: null });
-        expect(transport.stat).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ status: 'ready', diffContent: patch, fileContent: { content: 'new\n', isBinary: false } });
+        expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(1);
+    });
+    it('has no current text holder for a deleted Changes file', async () => {
+        const result = await refreshWorkspaceFileDetails({ ...input, includeFile: false, fileEntryKind: 'deleted' });
+        expect(result).toMatchObject({ status: 'ready', diffContent: patch, fileContent: null, error: null });
         expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
     });
     it('still reads bounded text for an added-file fallback on a diff-only request', async () => {

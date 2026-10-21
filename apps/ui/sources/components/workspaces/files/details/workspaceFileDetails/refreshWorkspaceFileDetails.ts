@@ -62,6 +62,8 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
     diffMode: FileDiffMode;
     fileEntryKind?: ScmEntryKind | null;
     isBinaryContent?: boolean;
+    /** Explicit built-in alternative; display bytes without making them an editable buffer. */
+    readAsText?: boolean;
     fileHasIncludedDelta?: boolean;
     maxImagePreviewBytes?: number | null;
     previewSlice?: 'head' | 'tail';
@@ -74,8 +76,8 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
     signal?: AbortSignal;
 }>): Promise<WorkspaceFileDetailsRefreshResult> {
     const viewer = resolveFileViewerKind({ path: input.filePath, isBinaryContent: input.isBinaryContent });
-    const textReadable = viewer.kind === 'code' || viewer.kind === 'markdown' || viewer.kind === 'svg';
-    const includeDiff = input.includeDiff !== false && textReadable && !input.previewSlice && !input.reuseFile?.fileContent.partial;
+    const textReadable = input.readAsText === true || viewer.kind === 'code' || viewer.kind === 'markdown' || viewer.kind === 'svg';
+    const includeDiff = input.readAsText !== true && input.includeDiff !== false && textReadable && !input.previewSlice && !input.reuseFile?.fileContent.partial;
     // A saved file can be refreshed before the next SCM snapshot advances.
     if (input.forceRefresh && !includeDiff) {
         invalidateWorkspaceUnifiedDiffPath({ scope: input.scope, path: input.filePath });
@@ -95,10 +97,10 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
         fileTask = (async (): Promise<WorkspaceFileDetailsRefreshResult> => {
             try {
                 if (input.signal?.aborted) throw new Error(t('files.fileReadFailed'));
-                const videoPreview = viewer.kind === 'video';
-                const wantsBinaryPreview = viewer.previewable && viewer.kind !== 'svg';
+                const videoPreview = input.readAsText !== true && viewer.kind === 'video';
+                const wantsBinaryPreview = input.readAsText !== true && viewer.previewable && viewer.kind !== 'svg';
                 // Opaque binary classification performs no inline read and consumes no text budget.
-                if (viewer.kind === 'binary') {
+                if (viewer.kind === 'binary' && !input.readAsText) {
                     return {
                         status: 'ready', error: null, diffContent,
                         fileContent: { content: '', isBinary: true, contentHash: null, binaryMime: viewer.mimeType },
@@ -182,7 +184,7 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                     const bytes = decodeBase64(encodedContent);
                     const totalBytes = readResponse.sizeBytes ?? previewRead.totalBytes;
                     const content = decodeFilePreviewSlice(bytes, { offset: previewRead.range.offset, totalBytes });
-                    const binary = isBinaryContent(content);
+                    const binary = !input.readAsText && isBinaryContent(content);
                     return {
                         status: 'ready', error: null, diffContent, fileWriteSupported: false,
                         fileContent: { content: binary ? '' : content, isBinary: binary, contentHash: null,
@@ -192,7 +194,7 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                 }
 
                 const decodedContent = await decodeWorkspaceFileText(encodedContent);
-                if (decodedContent.kind === 'binary') {
+                if (decodedContent.kind === 'binary' && !input.readAsText) {
                     fileContent = { content: '', isBinary: true, contentHash: null, binaryMime: resolveFileViewerKind({ path: input.filePath, isBinaryContent: true }).mimeType, binarySizeBytes: statSizeBytes };
                     return {
                         status: 'ready',
@@ -211,9 +213,9 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                     else lf += 1;
                 }
                 fileContent = {
-                    content, isBinary: false, contentHash: decodedContent.hash,
+                    content, isBinary: false, contentHash: input.readAsText ? null : decodedContent.kind === 'binary' ? null : decodedContent.hash,
                     encoding: { hasBom: decodedContent.kind === 'text' && decodedContent.hasBom,
-                        editable: decodedContent.kind === 'text',
+                        editable: !input.readAsText && decodedContent.kind === 'text',
                         ...(decodedContent.kind === 'notUtf8' ? { reason: 'notUtf8' as const } : {}),
                         eol: crlf > lf ? 'crlf' : 'lf', mixedEol: crlf > 0 && lf > 0 },
                     binaryMime: viewer.mimeType, binarySizeBytes: statSizeBytes, binaryPreviewRevision,
@@ -240,7 +242,10 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
         })();
         return fileTask;
     };
-    if (input.includeFile !== false || viewer.previewable || viewer.kind === 'binary') {
+    // Changes has the same current-document holder as View/Edit. A patch is
+    // display data, never the full after-text used by language queries or Ask.
+    const needsCurrentText = includeDiff && input.fileEntryKind !== 'deleted';
+    if (input.includeFile !== false || needsCurrentText || viewer.previewable || viewer.kind === 'binary') {
         void loadFile();
     }
     let diffError: string | null = null;

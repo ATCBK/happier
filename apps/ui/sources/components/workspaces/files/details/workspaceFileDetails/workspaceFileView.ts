@@ -5,7 +5,10 @@ import type { FileDisplayMode } from '@/components/workspaces/files/file/filePag
 export type WorkspaceFileView = Readonly<{
     /** One-shot: open straight into the built-in editor (Edit from a plugin viewer's header). */
     startEditing?: boolean;
-    mode?: FileDisplayMode;
+    /** Selected page mode, independent of whether a draft session remains open. */
+    mode?: FileDisplayMode | 'edit';
+    /** Built-in read-only text inspection, independent of the preferred plugin viewer. */
+    viewer?: 'default' | 'text';
     changesScope?: FileChangesScope;
     blame?: boolean;
     scrollLine?: number;
@@ -23,7 +26,8 @@ export function readWorkspaceFileView(tabState: unknown): WorkspaceFileView {
     const view = record(record(tabState).view);
     const changesScope = readFileChangesScope(view.changesScope);
     return {
-        ...(view.mode === 'file' || view.mode === 'diff' || view.mode === 'markdown' ? { mode: view.mode } : {}),
+        ...(view.mode === 'file' || view.mode === 'diff' || view.mode === 'markdown' || view.mode === 'edit' ? { mode: view.mode } : {}),
+        ...(view.viewer === 'default' || view.viewer === 'text' ? { viewer: view.viewer } : {}),
         ...(changesScope ? { changesScope } : {}),
         ...(typeof view.blame === 'boolean' ? { blame: view.blame } : {}),
         ...(typeof view.scrollLine === 'number' && Number.isSafeInteger(view.scrollLine) && view.scrollLine > 0 ? { scrollLine: view.scrollLine } : {}),

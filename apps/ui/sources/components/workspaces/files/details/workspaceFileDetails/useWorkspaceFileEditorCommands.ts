@@ -4,7 +4,8 @@ import { useKeyboardShortcutHandlers } from '@/keyboard/KeyboardShortcutProvider
 import { useKeyboardShortcutLabel } from '@/keyboard/shortcutLabels';
 import { useActiveUnsavedChangesGuard } from '@/utils/navigation/useActiveUnsavedChangesGuard';
 import { promptUnsavedChangesAlert } from '@/utils/ui/promptUnsavedChangesAlert';
-import { registerFileEditorActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import { notifyFileEditorActionOwnersChanged, registerFileEditorActionOwner } from '@/sync/ops/actions/scopeActionFamily';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import type { ActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
@@ -17,6 +18,7 @@ export function useWorkspaceFileEditorCommands(input: Readonly<{
     tabKey: string;
     serverId: string | null;
     accountId: string | null;
+    file?: Readonly<{ scope: WorkspaceScopeBase; path: string }>;
     focused: boolean;
     onStart(at?: WorkspaceFileEditStart): void;
 }>): WorkspaceFileEditorHeaderModel {
@@ -31,11 +33,16 @@ export function useWorkspaceFileEditorCommands(input: Readonly<{
         ? { 'files.editor.save': save } : {}, [input.focused, input.editor.isEditingFile, input.editor.isSavingEdits, save]);
     useKeyboardShortcutHandlers(handlers);
     React.useEffect(() => {
-        if (!input.editor.isEditingFile) return;
+        if (!input.editor.isEditingFile && !input.file) return;
         return registerFileEditorActionOwner(() => ({
             tabId: input.tabKey,
             serverId: input.serverId,
             accountId: input.accountId,
+            editing: latest.current.editor.isEditingFile,
+            ...(input.file ? { file: { ...input.file, read: () => {
+                const snapshot = latest.current.editor.readSnapshot();
+                return { savedText: snapshot.savedText, unsaved: snapshot.dirty };
+            } } } : {}),
             save: async () => {
                 const editor = latest.current.editor;
                 if (!editor.isEditingFile) return { status: 'unavailable' };
@@ -61,7 +68,9 @@ export function useWorkspaceFileEditorCommands(input: Readonly<{
                 return { status: 'resolved', ...(snapshot.hash ? { hash: snapshot.hash } : {}) };
             },
         }));
-    }, [input.editor.isEditingFile, input.tabKey, input.serverId, input.accountId, latest]);
+    }, [input.editor.isEditingFile, input.tabKey, input.serverId, input.accountId,
+        input.file?.scope.serverId, input.file?.scope.machineId, input.file?.scope.rootPath, input.file?.path, latest]);
+    React.useEffect(notifyFileEditorActionOwnersChanged, [input.editor.editorDirty, input.editor.editorOriginalHash]);
     const guard = React.useMemo<ActiveUnsavedChangesGuard>(() => ({
         tag: 'workspace-file-editor', isDirtyRef: dirty,
         prepareGuard: async () => {

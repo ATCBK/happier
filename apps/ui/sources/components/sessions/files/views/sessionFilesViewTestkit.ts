@@ -116,6 +116,7 @@ export async function createSessionFilesViewFixture(input: Readonly<{
     const { transferMachine, transferFeatures, installTransferProjection } = await import('../sessionFileTransferTestkit');
     const { storage } = await import('@/sync/domains/state/storage');
     const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { resolveServerProfileScopeId } = await import('@/sync/domains/server/serverProfiles');
     const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
     const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
     const requests: FileViewRpcRequest[] = [];
@@ -124,7 +125,8 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         requests.push(request);
         return input.rpc?.(request) ?? { success: false, error: 'RPC method not available', errorCode: 'METHOD_NOT_AVAILABLE' };
     };
-    const features = createRootLayoutFeaturesResponse({ features: { machines: transferFeatures().features.machines } });
+    const features = createRootLayoutFeaturesResponse({ features: { machines: transferFeatures().features.machines },
+        capabilities: { serverIdentity: { serverIdentityId: input.serverIdentityId ?? null } } });
     const authoringMemory = createAuthoringMemoryHttpBoundary();
     const machine = input.machine === null ? null
         : { ...(input.machine ?? transferMachine({ id: input.machineId ?? 'm1', storageMode: 'plain' })), active: true, activeAt: Date.now() };
@@ -178,12 +180,12 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         if (requestUrl.pathname === '/v1/auth/ping') return Response.json({});
         return addressed.http(url, init);
     });
-    const scope = { serverId: connection.home.id, machineId: input.machineId ?? 'm1', rootPath: input.rootPath ?? '/workspace' };
+    const scope = { serverId: resolveServerProfileScopeId(connection.home), machineId: input.machineId ?? 'm1', rootPath: input.rootPath ?? '/workspace' };
     const session = createSessionFixture({ id: input.sessionId ?? 's1', serverId: scope.serverId, active: true, metadata: { path: scope.rootPath, machineId: scope.machineId, host: 'tester.local' } });
     installTransferProjection({ serverId: scope.serverId, session, machine, features });
     await vi.waitFor(() => {
         const accountScope = getActiveServerAccountScope();
-        if (accountScope?.serverId !== connection.home.id || accountScope.accountId !== 'alice') {
+        if (accountScope?.serverId !== scope.serverId || accountScope.accountId !== 'alice') {
             throw new Error('File-view fixture is waiting for its admitted Account/Home');
         }
     });

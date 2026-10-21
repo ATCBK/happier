@@ -10,12 +10,12 @@ type Input = Omit<Parameters<typeof refreshWorkspaceFileDetails>[0], 'scope' | '
 /** Owns retained details state and publication for the currently active request. */
 export function useWorkspaceFileDetailsLoading(input: Input) {
     const { scope, filePath, diffMode, fileEntryKind, fileHasIncludedDelta, isBinaryContent,
-        maxImagePreviewBytes, previewSlice, includeDiff, includeFile, snapshotSignature, isActive, refreshFingerprint } = input;
+        maxImagePreviewBytes, previewSlice, readAsText, includeDiff, includeFile, snapshotSignature, isActive, refreshFingerprint } = input;
     // Explicit callers own their captured Account; only legacy unscoped callers may capture the matching active Home.
     const accountId = input.accountId === undefined
         ? selectActiveServerAccountScopeForServer(getActiveServerAccountScope(), scope?.serverId ?? null)?.accountId ?? null
         : input.accountId;
-    const wantsDiff = includeDiff !== false && !previewSlice;
+    const wantsDiff = includeDiff !== false && !previewSlice && !readAsText;
     const [fileContent, setFileContent] = React.useState<WorkspaceFileDetailsFileContent | null>(null);
     const [diffContent, setDiffContent] = React.useState<string | null>(null);
     const [isDiffLoading, setIsDiffLoading] = React.useState(wantsDiff);
@@ -31,7 +31,7 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
     const request = React.useRef<object | null>(null);
     const transferAbort = React.useRef<AbortController | null>(null);
     const reusableFile = React.useRef<{ key: string; diffMode: Input['diffMode']; includeDiff: Input['includeDiff']; value: NonNullable<Input['reuseFile']> } | null>(null);
-    const resourceKey = JSON.stringify([scope?.serverId, accountId, scope?.machineId, scope?.rootPath, filePath]);
+    const resourceKey = JSON.stringify([scope?.serverId, accountId, scope?.machineId, scope?.rootPath, filePath, readAsText === true]);
     const activeResource = React.useRef(resourceKey);
     activeResource.current = resourceKey;
     const [contentResource, setContentResource] = React.useState(resourceKey);
@@ -77,7 +77,7 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
         try {
             const result = await refreshWorkspaceFileDetails({
                 scope, filePath, diffMode, fileEntryKind, fileHasIncludedDelta, isBinaryContent,
-                maxImagePreviewBytes, previewSlice, includeDiff: wantsDiff, includeFile, snapshotSignature,
+                maxImagePreviewBytes, previewSlice, readAsText, includeDiff: wantsDiff, includeFile, snapshotSignature,
                 signal: abort.signal,
                 forceRefresh: options?.allowFileReuse !== true,
                 reuseFile: options?.allowFileReuse && reusableFile.current?.key === fileKey
@@ -120,7 +120,7 @@ export function useWorkspaceFileDetailsLoading(input: Input) {
             setStaleSince(next.staleSince);
             setIsLoading(false);
         }
-    }, [scope, filePath, diffMode, fileEntryKind, fileHasIncludedDelta, isBinaryContent, maxImagePreviewBytes, previewSlice, includeDiff, wantsDiff, includeFile, snapshotSignature, isActive, fileKey]);
+    }, [scope, filePath, diffMode, fileEntryKind, fileHasIncludedDelta, isBinaryContent, maxImagePreviewBytes, previewSlice, readAsText, includeDiff, wantsDiff, includeFile, snapshotSignature, isActive, fileKey]);
     React.useEffect(() => {
         void refreshAll({ allowFileReuse: true });
         return () => {

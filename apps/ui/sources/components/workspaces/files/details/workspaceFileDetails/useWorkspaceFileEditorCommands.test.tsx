@@ -25,7 +25,7 @@ installWorkspaceFileDetailsActionBoundary();
 const { storage, useActiveServerAccountScope } = await import('@/sync/domains/state/storage');
 const { publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { KeyboardShortcutProvider } = await import('@/keyboard/KeyboardShortcutProvider');
-const { invokeScopeAction } = await import('@/sync/ops/actions/scopeActionFamily');
+const { invokeScopeAction, readWorkspaceFileEditorHolder } = await import('@/sync/ops/actions/scopeActionFamily');
 const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
 const { useWorkspaceFileEditorCommands } = await import('./useWorkspaceFileEditorCommands');
 const { Platform } = await import('react-native');
@@ -60,6 +60,7 @@ function RetainedEditor({ id, focused }: Readonly<{ id: FileId; focused: boolean
         filesEditorAutoSave: false, filesEditorChangeDebounceMs: 100, mountedRef, refreshAll,
     });
     const header = useWorkspaceFileEditorCommands({ editor, tabKey: `file:src/${id}.ts`,
+        file: { scope, path: `src/${id}.ts` },
         serverId: scope.serverId, accountId: account?.accountId ?? null, focused, onStart: editor.startEditingFile });
     editors.set(id, editor);
     headers.set(id, header);
@@ -108,6 +109,10 @@ describe('mounted file editor commands through the real editor, keyboard and Act
     it('saves only the focused retained editor by keyboard, saves an addressed background tab with its current hash, and retires Account custody', async () => {
         const screen = await renderScreen(<RetainedEditors focused="a" />);
         expect(storage.getState().profileScope).toEqual({ serverId: scope.serverId, accountId: 'account-a' });
+        expect(readWorkspaceFileEditorHolder(scope, 'account-a', 'src/a.ts')?.file?.read()).toEqual({ savedText: 'base a', unsaved: false });
+        expect(readWorkspaceFileEditorHolder(scope, 'account-b', 'src/a.ts')).toBeNull();
+        expect(readWorkspaceFileEditorHolder({ ...scope, rootPath: '/repo2' }, 'account-a', 'src/a.ts')).toBeNull();
+        expect(readWorkspaceFileEditorHolder({ ...scope, machineId: 'another-machine' }, 'account-a', 'src/a.ts')).toBeNull();
         await act(async () => { editorFor('a').startEditingFile(); editorFor('b').startEditingFile(); });
         await act(async () => { editorFor('a').onEditorChange('Alice a'); editorFor('b').onEditorChange('Alice b'); });
         // Home hydration owns initial settings; enable keyboard shortcuts after it settles.
@@ -118,6 +123,7 @@ describe('mounted file editor commands through the real editor, keyboard and Act
         expect(Platform.OS).toBe('web');
         expect(editorFor('a').readSnapshot()).toMatchObject({ isEditingFile: true, dirty: true });
         expect(editorFor('b').readSnapshot()).toMatchObject({ isEditingFile: true, dirty: true });
+        expect(readWorkspaceFileEditorHolder(scope, 'account-a', 'src/b.ts')?.file?.read()).toEqual({ savedText: 'base b', unsaved: true });
         expect({ enabled: storage.getState().settings.keyboardShortcutsV2Enabled,
             disabled: storage.getState().settings.keyboardShortcutDisabledCommandIdsV1,
             overrides: storage.getState().settings.keyboardShortcutOverridesV1 }).toEqual({ enabled: true, disabled: [], overrides: {} });
@@ -156,6 +162,7 @@ describe('mounted file editor commands through the real editor, keyboard and Act
                 { serverId: scope.serverId, runtimeAccountId: 'account-a' });
             // This assertion runs before React commits the new header snapshot.
             expect(ScopeActionOutputSchemas['file.editor.save'].parse(saved)).toEqual({ status: 'saved', hash: 'saved-background-a' });
+            expect(readWorkspaceFileEditorHolder(scope, 'account-a', 'src/a.ts')?.file?.read()).toEqual({ savedText: 'Alice a again', unsaved: false });
         });
         expect(writtenRequests()[2]).toEqual({ path: '/repo/src/a.ts', content: 'Alice a again', expectedHash: 'saved-a' });
 
@@ -175,6 +182,8 @@ describe('mounted file editor commands through the real editor, keyboard and Act
             expect(await pendingAction).toEqual({ status: 'unavailable' });
         });
         expect(editorFor('a').readSnapshot()).toMatchObject({ isEditingFile: false, dirty: false, hash: 'base-a' });
+        expect(readWorkspaceFileEditorHolder(scope, 'account-a', 'src/a.ts')).toBeNull();
+        expect(readWorkspaceFileEditorHolder(scope, 'account-b', 'src/a.ts')?.file?.read()).toEqual({ savedText: 'base a', unsaved: false });
         await act(async () => { editorFor('a').startEditingFile(); });
         await act(async () => { editorFor('a').onEditorChange('Bob private draft'); });
         const writesBeforeStaleCalls = writtenRequests();

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fileHashVectors from '../../../../../../../../packages/protocol/src/actions/__fixtures__/fileHashVectors.json';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import {
     cleanupWorkspaceFileDetailsActionBoundary,
@@ -37,6 +38,8 @@ vi.mock('@/config', () => ({
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
 const workspaceFileDetailsActionBoundary = getWorkspaceFileDetailsActionBoundary();
+// Load the real graph during collection; per-test Account restoration should not own module compilation.
+await loadSyncSingletonForTests();
 
 describe('refreshWorkspaceFileDetails (fallback diff)', () => {
     let serverId: string;
@@ -50,6 +53,19 @@ describe('refreshWorkspaceFileDetails (fallback diff)', () => {
     afterEach(async () => {
         vi.useRealTimers();
         await cleanupWorkspaceFileDetailsActionBoundary();
+    });
+
+    it.each(['hello\n', 'hello\u0000world', '\uFFFDlegacy'])('opens opaque bytes as read-only text through the existing read owner: %s', async (text) => {
+        const bytes = text.startsWith('\uFFFD') ? Buffer.from([0xff, 0x6c, 0x65, 0x67, 0x61, 0x63, 0x79]) : Buffer.from(text);
+        workspaceFileDetailsActionBoundary.read.mockResolvedValue({ success: true, content: bytes.toString('base64') });
+        const { refreshWorkspaceFileDetails } = await import('./refreshWorkspaceFileDetails');
+        const result = await refreshWorkspaceFileDetails({
+            scope: { serverId, machineId: 'm1', rootPath: '/repo' }, filePath: 'opaque.bin',
+            diffMode: 'pending', isBinaryContent: true, readAsText: true,
+        });
+        expect(result.fileContent).toMatchObject({ content: text, isBinary: false, contentHash: null, encoding: { editable: false } });
+        expect(result.diffContent).toBe(null);
+        expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalled();
     });
 
     it('returns a synthesized diff for untracked/added files when backend returns empty diff', async () => {

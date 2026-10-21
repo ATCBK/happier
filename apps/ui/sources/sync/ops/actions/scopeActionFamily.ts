@@ -7,6 +7,7 @@ import { resolveSessionListFilterScopeAvailability } from '@/components/sessions
 import type { WorkflowLibraryViewController } from '@/components/workflows/library/useWorkflowLibraryView';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
 export type SessionListScopeActionController = Pick<SessionListViewFilterController,
   'filters' | 'updateFilters' | 'resetFilters' | 'viewContext' | 'viewContextKey' | 'corpusStorage'
@@ -66,17 +67,41 @@ export type FileEditorActionOwner = Readonly<{
   tabId: string;
   serverId: string | null;
   accountId: string | null;
+  editing?: boolean;
+  file?: Readonly<{
+    scope: WorkspaceScopeBase;
+    path: string;
+    read(): Readonly<{ savedText: string | null; unsaved: boolean }>;
+  }>;
   save(): Promise<ScopeActionOutputById['file.editor.save']>;
   resolve(resolution: ScopeActionInputById['file.editor.resolve']['resolution']): Promise<ScopeActionOutputById['file.editor.resolve']>;
 }>;
 const fileEditorOwners = new Set<Readonly<{ read: () => FileEditorActionOwner }>>();
+const fileEditorOwnerListeners = new Set<() => void>();
 
-/** The registration carries commands only; the mounted file hook remains the buffer and write owner. */
+export function notifyFileEditorActionOwnersChanged(): void {
+  for (const listener of fileEditorOwnerListeners) listener();
+}
+
+export function subscribeFileEditorActionOwners(listener: () => void): () => void {
+  fileEditorOwnerListeners.add(listener);
+  return () => { fileEditorOwnerListeners.delete(listener); };
+}
+
+/** Resolve commands and text from the mounted P4 owner; no copied document store. */
+export function readWorkspaceFileEditorHolder(scope: WorkspaceScopeBase, accountId: string, path: string): FileEditorActionOwner | null {
+  return [...fileEditorOwners].map(owner => owner.read()).filter(owner => owner.accountId === accountId
+    && owner.serverId === scope.serverId && owner.file?.scope.machineId === scope.machineId
+    && owner.file.scope.rootPath === scope.rootPath && owner.file.path === path).at(-1) ?? null;
+}
+
+/** The registration exposes commands/readers only; the mounted hook owns the buffer and writes. */
 export function registerFileEditorActionOwner(read: () => FileEditorActionOwner): () => void {
   // Tab ids are scope-local; the token gives each mounted registration its exact cleanup.
   const owner = { read };
   fileEditorOwners.add(owner);
-  return () => { fileEditorOwners.delete(owner); };
+  notifyFileEditorActionOwnersChanged();
+  return () => { fileEditorOwners.delete(owner); notifyFileEditorActionOwnersChanged(); };
 }
 
 export type FileViewActionOwner = Readonly<{
@@ -90,7 +115,7 @@ export type FileViewActionOwner = Readonly<{
   availableModes: readonly FileViewMode[];
   blameAvailable: boolean;
   changesScopeAvailable: boolean;
-  set(patch: Omit<ScopeActionInputById['file.view.set'], 'tabId'>): boolean;
+  set(patch: Omit<ScopeActionInputById['file.view.set'], 'tabId'>): boolean | Promise<boolean>;
 }>;
 const fileViewOwners = new Map<string, () => FileViewActionOwner>();
 
@@ -155,7 +180,7 @@ export async function invokeScopeAction(actionId: ScopeActionId, rawInput: unkno
   if (actionId === 'file.editor.save' || actionId === 'file.editor.resolve') {
     const input = ScopeActionInputSchemas[actionId].parse(rawInput);
     const owners = [...fileEditorOwners].map(owner => owner.read()).filter(owner =>
-      (!input.tabId || owner.tabId === input.tabId)
+      owner.editing !== false && (!input.tabId || owner.tabId === input.tabId)
       && (!context?.serverId || owner.serverId === context.serverId)
       && (!context?.runtimeAccountId || owner.accountId === context.runtimeAccountId));
     const owner = owners.at(-1);
@@ -173,7 +198,7 @@ export async function invokeScopeAction(actionId: ScopeActionId, rawInput: unkno
     if ((patch.mode !== undefined && !owner.availableModes.includes(patch.mode))
       || (patch.blame !== undefined && !owner.blameAvailable)
       || (patch.changesScope !== undefined && !owner.changesScopeAvailable)) return unavailable('client_control_unavailable');
-    return owner.set(patch) ? { ok: true } : unavailable('client_control_unavailable');
+    return await owner.set(patch) ? { ok: true } : unavailable('client_control_unavailable');
   }
   if (actionId === 'workflow.library.view.get' || actionId === 'workflow.library.view.set' || actionId === 'workflow.library.view.reset') {
     const controller = readLibraryOwner?.();

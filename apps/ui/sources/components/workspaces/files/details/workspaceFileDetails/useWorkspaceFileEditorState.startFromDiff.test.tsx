@@ -11,10 +11,17 @@ import {
 import { readWorkspaceFileEditorDraft, type WorkspaceFileEditorDraft } from './workspaceFileEditorDraft';
 import { applyMoveDetailsTabToGroup, applyOpenDetailsTab, applySetDetailsTabState, applySplitDetailsGroup, createEmptyPaneDetailsState } from '@/components/appShell/panes/details/workspace/detailsWorkspaceReducer';
 import { migrateLegacyDetailsWorkspaceState, serializeDetailsWorkspaceState } from '@/components/appShell/panes/details/workspace/migrateLegacyDetailsWorkspaceState';
+import { ScmChangeDiscardResponseSchema } from '@happier-dev/protocol/scm';
+
+const discardBoundary = vi.hoisted(() => vi.fn());
+// Remote transport is the boundary; Action admission, the discard facade and dirty-editor owner stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: discardBoundary }));
 
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
 const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
+const { useFileChangesActions } = await import('@/components/workspaces/files/file/changes/useFileChangesActions');
+const { Modal } = await import('@/modal');
 const actionBoundary = getWorkspaceFileDetailsActionBoundary();
 
 type Inputs = Readonly<{
@@ -78,6 +85,40 @@ describe('file editor entry and persisted restoration', () => {
         const save = hook.getCurrent().saveFileEdits;
         await hook.rerender({ ...inputs });
         expect(hook.getCurrent().saveFileEdits).toBe(save);
+    });
+
+    it.each([
+        { status: 'kept_edited', expectedText: 'unfinished draft', dirty: true },
+        { status: 'restored', expectedText: 'saved edit', dirty: false },
+    ] as const)('preserves the draft unless discard replaced saved bytes ($status)', async ({ status, expectedText, dirty }) => {
+        vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
+        discardBoundary.mockResolvedValue(ScmChangeDiscardResponseSchema.parse({ success: true, entries: [{ path: 'src/a.ts', status,
+            hashBefore: 'a'.repeat(64), hashAfter: 'a'.repeat(64) }] }));
+        const hook = await renderHook(() => {
+            const editor = useWorkspaceFileEditorState({
+                accountId: 'alice', scope: { serverId, machineId: 'm1', rootPath: '/repo' }, filePath: 'src/a.ts',
+                displayMode: 'file', fileText: 'saved edit', fileHash: 'a'.repeat(64),
+                fileWriteSupported: true, setFileWriteSupported: () => {},
+                fileEditorFeatureEnabled: true, filesEditorWebMonacoEnabled: true, filesEditorNativeCodeMirrorEnabled: true,
+                filesEditorAutoSave: false, filesEditorChangeDebounceMs: 10, mountedRef: { current: true },
+                refreshAll: async () => {},
+            });
+            const actions = useFileChangesActions({
+                target: { serverId, machineId: 'm1', rootPath: '/repo' }, filePath: 'src/a.ts',
+                selector: { kind: 'workingTree' }, comparison: null, expectedHash: 'a'.repeat(64),
+                messages: { moved_on: '', update_required: '', unsupported: '', unavailable: '', unknown: '', discarded: '',
+                    restored: '', kept_edited: '', undone: '', undo_conflict: '', undo: '', note_failed: '', undo_unavailable: '' },
+                readCurrentText: async () => 'saved edit', refresh: async () => {},
+                hasUnsavedEdits: () => editor.readSnapshot().dirty, onReplacedUnsavedEdits: editor.cancelEditingFile,
+                confirmUnsaved: { title: 'Replace edits' },
+            });
+            return { editor, actions };
+        });
+        await act(async () => { hook.getCurrent().editor.startEditingFile(); hook.getCurrent().editor.onEditorChange('unfinished draft'); });
+        await act(async () => { await hook.getCurrent().actions.changes.discardAll?.(); });
+        expect(hook.getCurrent().editor.getEditorText()).toBe(expectedText);
+        expect(hook.getCurrent().editor.readSnapshot().dirty).toBe(dirty);
+        expect(hook.getCurrent().actions.result).toMatchObject({ ok: true, entry: { status } });
     });
 
     it('reads current text before the existing debounced subscription publishes it', async () => {

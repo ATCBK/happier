@@ -7,6 +7,7 @@ import { invokeScopeAction, registerShellColumnActionOwner } from '@/sync/ops/ac
 import { RightSidebarActionsContext, openRightSidebarBuiltinTab, toggleRightSidebarTab, usePublishRightSidebarActions, type RightSidebarActions } from './rightSidebarActions';
 import { getRightSidebarBuiltinTab } from './rightSidebarTabRegistry';
 import { appPaneReduce, createAppPaneState } from '@/components/appShell/panes/model/appPaneReducer';
+import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
 
 afterEach(standardCleanup);
 
@@ -39,7 +40,7 @@ describe('catalog-directed tab opening', () => {
     } });
     const details = state.scopes[scopeId]!.details;
     toggleRightSidebarTab({
-      scopeState: state.scopes[scopeId]!,
+      scopeState: { ...state.scopes[scopeId]!, details: buildDetailsWorkspaceStateView(details) },
       closeRight: () => { state = appPaneReduce(state, { type: 'closeRight', scopeId }); },
       closeDetails: () => { state = appPaneReduce(state, { type: 'closeDetails', scopeId }); },
     }, 'agents', 'agents', tabId => { state = appPaneReduce(state, { type: 'openRight', scopeId, tabId }); }, true, 'main');

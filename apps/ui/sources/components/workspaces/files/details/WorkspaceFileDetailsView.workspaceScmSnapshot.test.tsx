@@ -916,7 +916,7 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
             status: 'ready' as const,
             error: null,
             diffContent: 'diff --git a/src/a.txt b/src/a.txt\n@@ -1 +1 @@\n-old\n+new\n',
-            fileContent: { content: 'new', isBinary: false },
+            fileContent: { content: 'new', isBinary: false, contentHash: 'a'.repeat(64) },
             fileWriteSupported: true,
         } as any);
         const { WorkspaceFileDetailsView } = await import('./WorkspaceFileDetailsView');
@@ -938,7 +938,7 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         expect(machineScmChangeDiscardMock).toHaveBeenCalledTimes(1);
         const request = machineScmChangeDiscardMock.mock.calls[0]?.[1] as { entries: unknown[] };
         expect(request.entries).toEqual([expect.objectContaining({
-            kind: 'comparison', path: 'src/a.txt', against: { source: { kind: 'workingTree' } },
+            kind: 'comparison', path: 'src/a.txt', against: { source: { kind: 'workingTree' } }, expectedHash: 'a'.repeat(64),
         })]);
     });
 });

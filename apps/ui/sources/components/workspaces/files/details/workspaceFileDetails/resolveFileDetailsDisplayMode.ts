@@ -2,7 +2,7 @@ import type { FileDisplayMode } from '@/components/workspaces/files/file/filePag
 import type { ReviewCommentSource } from '@/sync/domains/input/reviewComments/reviewCommentTypes';
 
 export function resolveFileDetailsDisplayMode(input: Readonly<{
-    requestedMode?: FileDisplayMode | null;
+    requestedMode?: FileDisplayMode | 'edit' | null;
     persistedEditing: boolean;
     deepLinkSource: ReviewCommentSource | null;
     hasRenderableDiff: boolean;
@@ -13,7 +13,7 @@ export function resolveFileDetailsDisplayMode(input: Readonly<{
     /** A Markdown file: it waits on its Preview, so the segment doesn't jump when the text arrives. */
     previewKind?: boolean;
 }>): FileDisplayMode {
-    if (input.requestedMode) return input.requestedMode;
+    if (input.requestedMode) return input.requestedMode === 'edit' ? 'file' : input.requestedMode;
     if (input.deepLinkSource === 'file') return 'file';
     if (input.deepLinkSource === 'diff' && input.hasRenderableDiff) return 'diff';
     if (input.persistedEditing) return 'file';

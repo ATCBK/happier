@@ -2,6 +2,7 @@ import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { acknowledgeWorkspaceFileWrites } from '@/sync/domains/workspaces/files/workspaceFileAcknowledgements';
+import { resolveWorkspaceFileViewerChoiceModel } from './resolveWorkspaceFileViewer';
 import {
     cleanupWorkspaceFileDetailsActionBoundary,
     installWorkspaceFileDetailsActionBoundary,
@@ -34,6 +35,38 @@ beforeEach(async () => {
     workspaceFileDetailsActionBoundary.read.mockReset().mockResolvedValue({ success: true, content: 'bmV3Cg==' });
 });
 afterEach(cleanupWorkspaceFileDetailsActionBoundary);
+it('retains the same full after-text across a cold Changes open and View/Changes transitions', async () => {
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...input} includeDiff includeFile={false} />); });
+    const afterText = current.fileContent;
+    expect(afterText).toMatchObject({ content: 'new\n', isBinary: false });
+    expect(current.diffContent).toBe(patch('new'));
+    await act(async () => { tree.update(<Harness {...input} includeDiff={false} includeFile />); });
+    expect(current.fileContent).toBe(afterText);
+    await act(async () => { tree.update(<Harness {...input} includeDiff includeFile={false} />); });
+    expect(current.fileContent).toBe(afterText);
+    expect(current.diffContent).toBe(patch('new'));
+    await act(async () => { tree.unmount(); });
+});
+it('switches the viewer read identity without reusing opaque binary bytes or publishing a late text read', async () => {
+    const selection = resolveWorkspaceFileViewerChoiceModel({ metadata: { contentClass: 'binary' },
+        preferences: { v: 1, selections: {} }, availablePluginViewers: [], builtinViewer: 'text' }).selected;
+    const props = { ...input, filePath: 'opaque.bin', isBinaryContent: true, includeDiff: false, includeFile: true };
+    let tree!: renderer.ReactTestRenderer;
+    await act(async () => { tree = renderer.create(<Harness {...props} />); });
+    expect(current.fileContent?.isBinary).toBe(true);
+    expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
+    let finish!: (value: { success: true; content: string }) => void;
+    workspaceFileDetailsActionBoundary.read.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    await act(async () => { tree.update(<Harness {...props} readAsText={selection.kind === 'text'} />); });
+    expect(workspaceFileDetailsActionBoundary.read).toHaveBeenCalledTimes(1);
+    await act(async () => { tree.update(<Harness {...props} />); });
+    await act(async () => { finish({ success: true, content: Buffer.from('late text').toString('base64') }); });
+    expect(current.fileContent).toMatchObject({ isBinary: true, content: '' });
+    await act(async () => { tree.update(<Harness {...props} readAsText />); });
+    expect(current.fileContent).toMatchObject({ isBinary: false, content: 'new\n', encoding: { editable: false } });
+    await act(async () => { tree.unmount(); });
+});
 it('rereads acknowledged saved bytes without a snapshot change and rejects pre-write publication', async () => {
     let tree!: renderer.ReactTestRenderer;
     await act(async () => { tree = renderer.create(<Harness {...input} includeDiff={false} includeFile />); });

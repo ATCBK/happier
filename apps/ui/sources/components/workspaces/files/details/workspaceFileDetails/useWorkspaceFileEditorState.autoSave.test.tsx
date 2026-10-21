@@ -79,7 +79,8 @@ async function createHarness(options: Readonly<{
         options.persistDraft?.(draft);
         if (activeAccount) persisted.set(activeAccount, draft);
     });
-    const disk = { text: options.fileText ?? 'hello', hash: options.fileHash ?? 'h1', unreachable: options.unreachable ?? false, encoding: options.encoding };
+    const disk = { text: options.fileText ?? 'hello', hash: options.fileHash ?? 'h1', unreachable: options.unreachable ?? false, encoding: options.encoding,
+        displayMode: 'file' as 'file' | 'diff' | 'markdown' };
     const accountIdRef = { current: options.accountId === undefined ? 'alice' : options.accountId };
     const hook = await renderHook(() => {
         const selectedAccount = useActiveServerAccountScope(scope.serverId);
@@ -88,7 +89,7 @@ async function createHarness(options: Readonly<{
         scope,
         accountId: activeAccount,
         filePath: 'src/a.ts',
-        displayMode: 'file',
+        displayMode: disk.displayMode,
         fileText: disk.text,
         fileHash: disk.hash,
         encoding: disk.encoding,
@@ -136,6 +137,21 @@ function executedWriteApproval(artifactId: string, input: unknown, hash: string)
 }
 
 describe('useWorkspaceFileEditorState autosave', () => {
+    it('retains a dirty draft across View and Changes and seeds the editor from it on return', async () => {
+        const hook = await createHarness({ autoSave: false });
+        await act(async () => hook.getCurrent().onEditorChange('my unsaved draft'));
+        for (const mode of ['file', 'diff', 'file'] as const) {
+            hook.disk.displayMode = mode;
+            await hook.rerender();
+            expect(hook.getCurrent().isEditingFile).toBe(true);
+            expect(hook.getCurrent().getEditorText()).toBe('my unsaved draft');
+            expect(hook.getCurrent().editorDirty).toBe(true);
+        }
+        await act(async () => hook.getCurrent().startEditingFile());
+        expect(hook.getCurrent().editorSeedText).toBe('my unsaved draft');
+        expect(writeRpcSpy).not.toHaveBeenCalled();
+    });
+
     beforeEach(async () => {
         scope.serverId = await prepareWorkspaceFileDetailsActionBoundary();
         writeRpcSpy.mockReset();

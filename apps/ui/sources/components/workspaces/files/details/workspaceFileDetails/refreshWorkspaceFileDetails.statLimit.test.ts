@@ -28,6 +28,18 @@ const input = () => ({ scope: { serverId, machineId: 'm1', rootPath: '/repo' }, 
     diffMode: 'pending' as const, includeDiff: false });
 
 describe('refreshWorkspaceFileDetails (preview budget)', () => {
+    it('uses the same text budget and partial owner for an explicit binary text alternative', async () => {
+        const result = await refreshWorkspaceFileDetails({ ...input(), filePath: 'opaque.bin', isBinaryContent: true, readAsText: true });
+        expect(result.tooLarge).toEqual({ sizeBytes: 14, maxPreviewBytes: 10 });
+        expect(rpc.read).not.toHaveBeenCalled();
+        rpc.read.mockResolvedValue({ success: true, content: Buffer.from('a\u0000bcdefghi').toString('base64'), sizeBytes: 14, eof: false });
+        const slice = await refreshWorkspaceFileDetails({ ...input(), filePath: 'opaque.bin', isBinaryContent: true,
+            readAsText: true, previewSlice: 'head' });
+        expect(slice.fileContent).toMatchObject({ content: 'a\u0000bcdefghi', isBinary: false, contentHash: null,
+            partial: { slice: 'head', offset: 0, length: 10, totalBytes: 14 } });
+        expect(slice.fileWriteSupported).toBe(false);
+        expect(slice.diffContent).toBe(null);
+    });
     it('offers the existing head/tail budget without reading or reporting a failed read', async () => {
         const result = await refreshWorkspaceFileDetails(input());
         expect(result.error).toBeNull();
