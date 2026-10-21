@@ -119,6 +119,31 @@ const authorized = {
 } as const;
 
 describe('ConnectedAccountPurposeBindingOwner', () => {
+  it.each(['subject_absent', 'subject_retired', 'purpose_unauthorized', 'scope_unauthorized', 'target_unavailable', 'unselected'] as const)(
+    'classifies a required native-home binding read as %s without falling back to durable defaults', async reasonCode => {
+      const { owner, store } = createOwner({ resolveAvailable: () => reasonCode !== 'target_unavailable' });
+      await store.update(() => ({ v: 1, bindings: [{ purpose, target: { kind: 'account', account: { service, accountId: 'durable' } } }] }));
+      const lease = owner.activatePurposeBindings({
+        subject: { kind: 'execution_run', runId: 'native-home-run', runnerPid: 123, agentId: 'codex',
+          isCurrent: () => reasonCode !== 'subject_retired' },
+        purposes: reasonCode === 'purpose_unauthorized' ? [] : [purpose],
+        bindings: reasonCode === 'purpose_unauthorized' || reasonCode === 'unselected' ? [] : [{ purpose,
+          target: { kind: 'account', account: { service, accountId: 'captured' } } }],
+      });
+      const request = { ...authorized, exactPurposeBindingSubjectId: reasonCode === 'subject_absent' ? 'absent-subject' : lease.subjectId,
+        ...(reasonCode === 'scope_unauthorized' ? { serviceRefs: [otherService] } : {}), signal: new AbortController().signal };
+      try {
+        // Ordinary plugin reads retain their null contract. A native-home read
+        // needs a classified refusal, not a claim that the rollout disappeared.
+        await expect(owner.getBinding(request)).resolves.toBeNull();
+        await expect(owner.getBinding({ ...request, requireSelected: true })).rejects.toMatchObject({
+          code: 'plugin_connected_account_binding_unavailable', details: { reasonCode },
+        });
+        expect(store.current().bindings[0]?.target).toMatchObject({ account: { accountId: 'durable' } });
+      } finally { lease.dispose(); }
+    },
+  );
+
   it('records the actual personal credential use only after exact operation materialization succeeds', async () => {
     let finish!: () => void;
     const { owner, materializeAccount } = createOwner({

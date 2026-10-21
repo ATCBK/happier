@@ -1085,6 +1085,10 @@ export function createExecutionRunConnectedServicesBridge(
                             modelId: error.modelId, errorMessage: error.message };
                     }
                     if (error instanceof ConnectedServiceSpawnResumeUnreachableError) {
+                        logger.warn('[DAEMON RUN] Execution-run resume verification refused', {
+                            runId: input.runId, agentId,
+                            reason: boundConnectedServiceMaterializationDiagnosticValue(error.reason),
+                        });
                         return { ok: false, errorCode: CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.resumeUnavailable,
                             errorMessage: 'The retained Agent conversation is unavailable in its prepared home. Restore its native state or start a new conversation from the saved result.' };
                     }

@@ -23,6 +23,7 @@ import type {
 } from '@happier-dev/plugin-sdk';
 import { isPluginError, PluginError, type Disposable } from '@happier-dev/plugin-sdk';
 import { runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
+import { runConnectedAccountBindingStage, withConnectedAccountBindingDiagnostic } from '@/daemon/connectedServices/purposeBindings/bindingDiagnostics';
 import type {
     PluginConnectedAccountBindingScope,
     PluginInvocationServicesSeed,
@@ -55,6 +56,8 @@ export type StablePluginConnectedAccountsOwner = Readonly<{
         input: StablePluginConnectedAccountsAuthorizedPurpose & Readonly<{
             exactPurposeBindingSubjectId?: string;
             sessionId?: string;
+            /** Host launch reads require a classified refusal; SDK reads keep their null contract. */
+            requireSelected?: true;
             signal: AbortSignal;
         }>,
     ): Promise<PluginConnectedAccountBindingSummary | null>;
@@ -658,25 +661,30 @@ export function createStablePluginConnectedAccountsHost(
             const exactPurposeBindingSubjectId =
                 bindOptions?.exactPurposeBindingSubjectId?.trim() || null;
             return Object.freeze<ConnectedAccountsService>({
-                async getBinding(purpose, options = {}) {
-                    assertCurrent(seed);
-                    const scope = resolveScope(scopes, purpose, 'use');
-                    const signals = combineSignals(seed.signal, options.signal);
-                    assertCurrent(seed);
-                    try {
-                        const summary = await owner.getBinding({
-                            ...authorizedPurpose(seed, scope),
-                            ...(exactPurposeBindingSubjectId
-                                ? { exactPurposeBindingSubjectId }
-                                : {}),
-                            ...(seed.session ? { sessionId: seed.session.id } : {}),
-                            signal: signals.signal,
-                        });
+                getBinding(purpose, options = {}) {
+                    return withConnectedAccountBindingDiagnostic({
+                        correlationId: seed.correlationId, ...(seed.session ? { sessionId: seed.session.id } : {}),
+                        pluginId: seed.plugin.id, localId: seed.contribution.id, purpose,
+                    }, () => runConnectedAccountBindingStage('binding_read', async () => {
                         assertCurrent(seed);
-                        return summary === null ? null : assertAuthorizedSummary(scope, summary);
-                    } finally {
-                        signals.dispose();
-                    }
+                        const scope = resolveScope(scopes, purpose, 'use');
+                        const signals = combineSignals(seed.signal, options.signal);
+                        assertCurrent(seed);
+                        try {
+                            const summary = await owner.getBinding({
+                                ...authorizedPurpose(seed, scope),
+                                ...(exactPurposeBindingSubjectId
+                                    ? { exactPurposeBindingSubjectId }
+                                    : {}),
+                                ...(seed.session ? { sessionId: seed.session.id } : {}),
+                                signal: signals.signal,
+                            });
+                            assertCurrent(seed);
+                            return summary === null ? null : assertAuthorizedSummary(scope, summary);
+                        } finally {
+                            signals.dispose();
+                        }
+                    }));
                 },
                 async requestSelection(input, options = {}) {
                     assertCurrent(seed);

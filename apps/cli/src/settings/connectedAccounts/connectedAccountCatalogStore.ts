@@ -23,6 +23,7 @@ import { normalizeCliAccountSettingsHistoryAfterTransfer } from '@/settings/acco
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
 import { resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn } from '@/daemon/connectedServices/requestAuth/agentPurposeDeclarations';
+import { runConnectedAccountBindingStage } from '@/daemon/connectedServices/purposeBindings/bindingDiagnostics';
 
 type CatalogWrite = Readonly<{ record: ConnectedAccountCatalogRecordV1; expectedRevision: number | 'absent';
   sourceSettingsVersion?: number; settingsMutation?: ConnectedAccountCatalogRowMutationV1['settingsMutation'] }>;
@@ -78,9 +79,9 @@ export function createCliConnectedAccountCatalogStore(input: Readonly<{
   const readStorageContext = async () => {
     await verifyCurrent();
     assertCurrent();
-    const storage = await resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
+    const storage = await runConnectedAccountBindingStage('account_currentness', () => resolveCliAccountStorageContext({ credentials: input.credentials, serverBaseUrl: base,
       signal: input.signal, shouldContinue: () => { assertCurrent(); return true; },
-      authorizationHeaders: headersFor({ method: 'GET', path: '/v1/account/encryption/currentness' }) });
+      authorizationHeaders: headersFor({ method: 'GET', path: '/v1/account/encryption/currentness' }) }));
     await verifyCurrent();
     assertCurrent();
     return storage;

@@ -56,6 +56,7 @@ export async function materializeQualifiedConnectedAccountLaunchUses(input: Read
     const binding = await input.connectedAccountsOwner.getBinding({
       purpose,
       serviceRefs,
+      requireSelected: true,
       ...(input.exactPurposeBindingSubjectId
         ? { exactPurposeBindingSubjectId: input.exactPurposeBindingSubjectId }
         : {}),

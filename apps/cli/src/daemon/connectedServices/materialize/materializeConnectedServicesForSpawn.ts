@@ -307,6 +307,7 @@ async function materializeQualifiedConnectedAccountLaunchForSpawn(params: Readon
         const binding = await observeConnectedServiceMaterializationPhase(params, 'binding_read', () => readRequesterHomeWithinActionLifetime(() => connectedAccountsOwner.getBinding({
           purpose: scope.purpose,
           serviceRefs: scope.serviceRefs,
+          requireSelected: true,
           ...(params.exactPurposeBindingSubjectId
             ? { exactPurposeBindingSubjectId: params.exactPurposeBindingSubjectId } : {}),
           ...(params.purposeBindingSessionId ? { sessionId: params.purposeBindingSessionId } : {}),

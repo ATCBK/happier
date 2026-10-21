@@ -12,6 +12,7 @@ import type { ConnectedAccountCatalogKeyV1 } from '@happier-dev/protocol/connect
 
 import type { StoredCredentials } from '@/persistence';
 import { logger } from '@/ui/logger';
+import { runConnectedAccountBindingStage } from '@/daemon/connectedServices/purposeBindings/bindingDiagnostics';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { replaceSavedSecretCatalogInSnapshot, withdrawSavedSecretCatalogInSnapshot, type ActiveAccountSettingsSnapshot, replaceSavedSecretLegacyImportInSnapshot, replaceProfileCatalogInSnapshot, replaceProviderConnectionsCatalogInSnapshot, preserveAccountCatalogsInSnapshot, preserveConnectedAccountCatalogCleanup, replaceNotificationChannelCatalogInSnapshot } from "@/settings/accountSettings/activeAccountSettingsSnapshot";
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -98,7 +99,7 @@ export function createInvocationSavedSecretOperationContextV1(input: Readonly<{
     if (!readSnapshot()) return false;
     // A failed observation grants no access, but also proves no revocation.
     // Preserve its typed cause and allow the same captured custody to recover.
-    const current = await input.isCurrent(signal);
+    const current = await runConnectedAccountBindingStage('account_currentness', () => input.isCurrent(signal));
     // Canceling this reader is not evidence that the shared custody retired.
     signal?.throwIfAborted();
     if (!current && snapshot) retire();

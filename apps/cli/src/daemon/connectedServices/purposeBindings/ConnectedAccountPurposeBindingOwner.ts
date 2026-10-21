@@ -53,6 +53,7 @@ import {
 import {
   parseHttpHeadersRequestAuthBearer,
 } from '../requestAuth/parseHttpHeadersRequestAuthBearer';
+import { runConnectedAccountBindingStage, withConnectedAccountBindingDiagnostic } from './bindingDiagnostics';
 
 export type ConnectedAccountPurposeBindingStore = Readonly<{
   read(signal?: AbortSignal): Promise<QualifiedConnectedAccountPurposeBindingsV1>;
@@ -607,6 +608,18 @@ function bindingOutOfScope(): PluginError {
   });
 }
 
+type BindingUnavailableReason = 'subject_absent' | 'subject_retired' | 'purpose_unauthorized'
+  | 'scope_unauthorized' | 'target_unavailable' | 'unselected';
+
+function unavailableBinding(input: Readonly<{ requireSelected?: true }>, reasonCode: BindingUnavailableReason): null {
+  if (input.requireSelected) throw new PluginError({
+    code: 'plugin_connected_account_binding_unavailable',
+    message: 'Connected Account binding is unavailable',
+    details: { reasonCode },
+  });
+  return null;
+}
+
 /**
  * Automatic pruning can defer an unavailable boundary or an uncertain effect.
  * Explicit user mutations still surface both outcomes through the store.
@@ -789,6 +802,7 @@ export function createConnectedAccountPurposeBindingOwner(
     covered: boolean;
     binding: QualifiedConnectedAccountPurposeBindingV1 | null;
     directMaterialOrigin: ActiveConnectedAccountTeamDirectMaterialOrigin | null;
+    unavailableReason?: BindingUnavailableReason;
   }> => {
     if (input.exactPurposeBindingSubjectId) {
       const state = purposeBindingsBySubjectId.get(
@@ -803,6 +817,9 @@ export function createConnectedAccountPurposeBindingOwner(
       }
       return {
         covered: true,
+        ...(!state ? { unavailableReason: 'subject_absent' as const }
+          : !current ? { unavailableReason: 'subject_retired' as const }
+          : !state.coveredPurposeKeys.has(purposeKey) ? { unavailableReason: 'purpose_unauthorized' as const } : {}),
         binding: current && state?.coveredPurposeKeys.has(purposeKey)
           ? state.bindingByPurposeKey.get(purposeKey) ?? null
           : null,
@@ -856,7 +873,7 @@ export function createConnectedAccountPurposeBindingOwner(
     consumerKeysLike: readonly string[],
     operation: () => Promise<T>,
   ): Promise<T> => {
-    const release = await acquireSerializedConsumerMutations(consumerKeysLike);
+    const release = await runConnectedAccountBindingStage('consumer_lock', () => acquireSerializedConsumerMutations(consumerKeysLike));
     try {
       return await operation();
     } finally {
@@ -1159,6 +1176,7 @@ export function createConnectedAccountPurposeBindingOwner(
     purpose: QualifiedConnectedAccountPurposeV1;
     serviceRefs: readonly PluginContributionRef[];
     exactPurposeBindingSubjectId?: string;
+    requireSelected?: true;
     sessionId?: string;
     signal: AbortSignal;
   }>): Promise<Readonly<{
@@ -1168,7 +1186,7 @@ export function createConnectedAccountPurposeBindingOwner(
   }> | null> => {
     input.signal.throwIfAborted();
     const purpose = QualifiedConnectedAccountPurposeV1Schema.parse(input.purpose);
-    const sessionBinding = readSessionPurposeBinding({
+    const sessionBinding = await runConnectedAccountBindingStage('retained_binding', () => readSessionPurposeBinding({
       ...(input.exactPurposeBindingSubjectId
         ? {
             exactPurposeBindingSubjectId:
@@ -1177,15 +1195,15 @@ export function createConnectedAccountPurposeBindingOwner(
         : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       purpose,
-    });
+    }));
     if (sessionBinding.covered) {
       const target = sessionBinding.binding?.target ?? null;
-      if (!target) return null;
+      if (!target) return unavailableBinding(input, sessionBinding.unavailableReason ?? 'unselected');
       try {
         assertTargetAuthorized(target, input.serviceRefs, Boolean(input.exactPurposeBindingSubjectId
           && purposeBindingsBySubjectId.get(input.exactPurposeBindingSubjectId)?.hostMcpRequestAuth));
       } catch {
-        return null;
+        return unavailableBinding(input, 'scope_unauthorized');
       }
       if (sessionBinding.directMaterialOrigin) {
         return {
@@ -1197,13 +1215,13 @@ export function createConnectedAccountPurposeBindingOwner(
           directMaterialOrigin: sessionBinding.directMaterialOrigin,
         };
       }
-      const resolved = await dependencies.resolveTarget(target, input.signal);
+      const resolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(target, input.signal));
       input.signal.throwIfAborted();
-      if (!resolved) return null;
+      if (!resolved) return unavailableBinding(input, 'target_unavailable');
       assertResolvedTargetMatchesIntent(target, resolved);
       return { target, resolved, directMaterialOrigin: null };
     }
-    const durable = await dependencies.store.read(input.signal);
+    const durable = await runConnectedAccountBindingStage('account_purpose_read', () => dependencies.store.read(input.signal));
     input.signal.throwIfAborted();
     const target = readPurposeBinding(durable, purpose);
     if (!target) {
@@ -1211,37 +1229,37 @@ export function createConnectedAccountPurposeBindingOwner(
       // Home is its currentness authority: outside a Session it is refused
       // with a type, never resolved against the personal inventory or erased.
       if (readPurposeTeamResourceSelection(durable, purpose)) throw teamResourceUnavailable();
-      return null;
+      return unavailableBinding(input, 'unselected');
     }
     try {
       assertTargetAuthorized(target, input.serviceRefs);
     } catch {
       // Scope controls disclosure, not user intent. Erasing an explicit selection here
       // would let a later request silently substitute a native credential.
-      return null;
+      return unavailableBinding(input, 'scope_unauthorized');
     }
-    const resolved = await dependencies.resolveTarget(target, input.signal);
+    const resolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(target, input.signal));
     input.signal.throwIfAborted();
     if (!resolved) {
       const revalidatedTarget = readPurposeBinding(
-        await dependencies.store.read(input.signal),
+        await runConnectedAccountBindingStage('account_purpose_read', () => dependencies.store.read(input.signal)),
         purpose,
       );
       input.signal.throwIfAborted();
       if (!revalidatedTarget || targetKey(revalidatedTarget) !== targetKey(target)) {
-        return null;
+        return unavailableBinding(input, 'target_unavailable');
       }
-      const revalidatedResolved = await dependencies.resolveTarget(
+      const revalidatedResolved = await runConnectedAccountBindingStage('target_resolution', () => dependencies.resolveTarget(
         revalidatedTarget,
         input.signal,
-      );
+      ));
       input.signal.throwIfAborted();
       if (revalidatedResolved) {
         assertResolvedTargetMatchesIntent(revalidatedTarget, revalidatedResolved);
         return { target: revalidatedTarget, resolved: revalidatedResolved, directMaterialOrigin: null };
       }
       // Unavailable credential truth does not clear the user's standing selection.
-      return null;
+      return unavailableBinding(input, 'target_unavailable');
     }
     assertResolvedTargetMatchesIntent(target, resolved);
     return { target, resolved, directMaterialOrigin: null };
@@ -1250,6 +1268,7 @@ export function createConnectedAccountPurposeBindingOwner(
     purpose: QualifiedConnectedAccountPurposeV1;
     serviceRefs: readonly PluginContributionRef[];
     exactPurposeBindingSubjectId?: string;
+    requireSelected?: true;
     sessionId?: string;
     signal: AbortSignal;
   }>): Promise<Readonly<{
@@ -1925,9 +1944,14 @@ export function createConnectedAccountPurposeBindingOwner(
         release();
       }
     },
-    async getBinding(input) {
-      const resolved = await readAuthorizedResolved(input);
-      return resolved ? summary(input.purpose, resolved.target, resolved.resolved) : null;
+    getBinding(input) {
+      return withConnectedAccountBindingDiagnostic({
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        pluginId: input.purpose.consumer.pluginId, localId: input.purpose.consumer.localId, purpose: input.purpose.purpose,
+      }, async () => {
+        const resolved = await runConnectedAccountBindingStage('binding_read', () => readAuthorizedResolved(input));
+        return resolved ? summary(input.purpose, resolved.target, resolved.resolved) : null;
+      });
     },
     async requestSelection(input) {
       input.signal.throwIfAborted();
@@ -1976,7 +2000,10 @@ export function createConnectedAccountPurposeBindingOwner(
       QualifiedConnectedAccountPurposeV1Schema.parse(input.purpose);
       let disposed = false;
       const controller = new AbortController();
-      const read = async () => {
+      const read = () => withConnectedAccountBindingDiagnostic({
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        pluginId: input.purpose.consumer.pluginId, localId: input.purpose.consumer.localId, purpose: input.purpose.purpose,
+      }, async () => {
         try {
           const resolved = await readAuthorizedResolved({ ...input, signal: controller.signal });
           const profile = resolved?.resolved.observation?.profiles.find(profile => (
@@ -1995,7 +2022,7 @@ export function createConnectedAccountPurposeBindingOwner(
           // A failed read cannot establish unchanged authority. Preserve fail-closed delivery.
           return { ok: false as const };
         }
-      };
+      });
       let observation = read();
       const notify = (): Promise<void> => {
         const next = observation.then(async previous => {

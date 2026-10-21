@@ -26,6 +26,31 @@ beforeAll(async () => {
 });
 afterAll(async () => { await runtime?.dispose(); });
 
+it('preserves a retired exact-subject refusal through real native-home materialization', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'happier-retired-native-home-'));
+  const agentId = 'antigravity';
+  const declaration = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId, contributions: runtime.registry.contributes })!;
+  const scope = declaration.fileMaterializationPurposes[0]!;
+  const binding = { purpose: scope.purpose, target: { kind: 'account' as const,
+    account: { service: scope.serviceRefs[0]!, accountId: 'selected-account' } } };
+  const unexpected = async (): Promise<never> => { throw new Error('Retired launch must not read another selection or credential'); };
+  const owner = createConnectedAccountPurposeBindingOwner({
+    store: { read: unexpected, update: unexpected, subscribe: () => ({ dispose() {} }) },
+    selectTarget: unexpected, resolveTarget: unexpected, projectTargetAccounts: unexpected,
+    assertTargetAccountMaterializable: unexpected, materializeAccount: unexpected,
+  });
+  const lease = owner.activatePurposeBindings({ subject: { kind: 'execution_run', runId: 'retired-run', runnerPid: 123,
+    agentId, isCurrent: () => false }, purposes: declaration.purposes, bindings: [binding] });
+  try {
+    await expect(materializeConnectedServicesForSpawn({ agentId, materializationKey: 'retired-run',
+      activeServerDir: join(root, 'server'), baseDir: join(root, 'materialized'), recordsByServiceId: new Map(),
+      exactPurposeBindingSubjectId: lease.subjectId, connectedAccountsOwner: owner,
+      connectedAccountMaterializationAuthority: { kind: 'qualified', purposeBindings: [binding], requestAuthPurposeBindings: [] },
+      qualifiedPurposeBindingSnapshot: { ...declaration, bindings: [binding] },
+    })).rejects.toMatchObject({ code: 'plugin_connected_account_binding_unavailable', details: { reasonCode: 'subject_retired' } });
+  } finally { lease.dispose(); await rm(root, { recursive: true, force: true }); }
+});
+
 it('prepares selected Antigravity account homes and preserves copied config and isolated history through restart and sharing', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-selected-account-home-'));
   const leases: Array<{ dispose(): void }> = [];

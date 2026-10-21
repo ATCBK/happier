@@ -1,0 +1,180 @@
+import axios from 'axios';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { emptyConnectedAccountCatalogRecordV1, sealConnectedAccountCatalogContentV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { prepareRunnerDaemonPluginServices } from '@/agent/runtime/session/process/runnerDaemonPluginServices';
+import { RunnerDaemonPluginServiceOperationV1Schema, decodeRunnerDaemonPluginServiceWireValueV1 } from '@/agent/runtime/session/process/agentRuntimeDaemonPluginServicesProtocol';
+import { createStablePluginConnectedAccountsHost } from '@/plugins/runtime/invocation/services/connectedAccounts';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { logger } from '@/ui/logger';
+import { createActiveAccountSettingsConnectedAccountPurposeBindingStore, createConnectedAccountPurposeBindingOwner } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { createRunnerDaemonPluginServicesHost } from './runnerDaemonPluginServicesHost';
+
+const purposes = ['model-one', 'model-two', 'model-three', 'model-four'];
+const consumer = { pluginId: 'acme.external-agent', localId: 'agent' };
+const service = { pluginId: 'acme.accounts', localId: 'api' };
+
+function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => { resolve = done; });
+    return { promise, resolve };
+}
+
+async function fixture(authorizedPurposes: readonly string[] = purposes) {
+    const credentials = { token: 'binding-fixture', encryption: null };
+    setActiveAccountSettingsSnapshot({ source: 'network', scopeKey: resolveAccountSettingsScopeKey(credentials),
+        settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [] });
+    const unreachable = async (): Promise<never> => { throw new Error('Unbound purposes must not select or materialize a target'); };
+    // Only the Home HTTP boundary is replaced below. Catalog, binding ownership,
+    // SDK scope enforcement, runner proxy and strict wire codec all remain real.
+    const owner = createConnectedAccountPurposeBindingOwner({
+        store: createActiveAccountSettingsConnectedAccountPurposeBindingStore({ credentials }),
+        selectTarget: unreachable, resolveTarget: unreachable, materializeAccount: unreachable,
+        projectTargetAccounts: unreachable, assertTargetAccountMaterializable: unreachable,
+    });
+    const controller = new AbortController();
+    const connectedHost = createStablePluginConnectedAccountsHost(owner);
+    const connectedAccounts = connectedHost.bind({
+        plugin: { id: consumer.pluginId, version: '1.0.0' },
+        contribution: { id: consumer.localId, qualifiedId: `${consumer.pluginId}/agents/${consumer.localId}` },
+        occurrenceId: 'binding-occurrence', correlationId: 'binding-callback', surface: 'cli',
+        session: { id: 'binding-session' }, signal: controller.signal, isOccurrenceCurrent: () => !controller.signal.aborted,
+    }, authorizedPurposes.map(purpose => ({ purpose, serviceRefs: [service], operations: ['use'], materializationKinds: [] })));
+    const unavailable = createUnavailablePluginServices();
+    const services = { ...unavailable, connectedAccounts, availability: (id: Parameters<typeof unavailable.availability>[0]) =>
+        id === 'connectedAccounts' ? { status: 'available' as const } : unavailable.availability(id) };
+    const host = createRunnerDaemonPluginServicesHost({ createInvocation: async () => ({
+        services, resourceDescriptors: {},
+        subscriptionCapabilities: { settingsWatch: false, eventSubscriptions: [], resourceWatches: [], notificationPreferencesWatch: false },
+        dispose() { connectedHost.retire(); }, authorizeOperation: () => true,
+        executeCurrentGlobalAction: services.actions.execute, currentGlobalMcp: services.mcp, currentGlobalExternalSessions: services.sessions.external,
+    }) });
+    const binding = createAgentSessionRunnerFactoryBinding({
+        v: 1, pluginId: consumer.pluginId, pluginVersion: '1.0.0', agentId: 'acme.external-agent/agent', localAgentId: consumer.localId,
+        sourceCustody: { kind: 'managed', immutableGenerationId: 'binding-generation', installSource: 'localPath' },
+        locator: { module: './agent.js', export: 'createRuntime', runtimeApiVersion: 1 },
+        normalizedModulePath: '/plugins/acme/agent.js', loadMode: 'immutable-js',
+    });
+    const requests: Array<{ kind: string; requestId: string; purpose?: string }> = [];
+    const runnerServices = await prepareRunnerDaemonPluginServices({
+        invocationId: 'binding-invocation', signal: controller.signal,
+        dispatch: async (input, options) => {
+            const operation = RunnerDaemonPluginServiceOperationV1Schema.parse(input);
+            requests.push({ kind: operation.kind, requestId: operation.requestId, ...('purpose' in operation ? { purpose: operation.purpose } : {}) });
+            const result = await host.dispatch({ sessionId: 'binding-session',
+                runner: { pid: 123, processStartTimeMs: 1, processCommandHash: '4'.repeat(64), snapshotIdentity: 'binding-snapshot' },
+                retainedAgent: binding, operation, signal: options?.signal });
+            return decodeRunnerDaemonPluginServiceWireValueV1(result.value);
+        },
+        local: { availability: unavailable.availability, logger: unavailable.logger, sessions: unavailable.sessions,
+            managedServices: unavailable.managedServices, machineProvisioners: unavailable.machineProvisioners,
+            exec: unavailable.exec, interactions: unavailable.interactions, targetedContributions: unavailable.targetedContributions,
+            composerContent: unavailable.composerContent },
+    });
+    return { accounts: runnerServices.connectedAccounts, requests, async dispose() { controller.abort(); await host.dispose(); } };
+}
+
+function home(readCurrentness: () => Promise<void> = async () => {}) {
+    const record = emptyConnectedAccountCatalogRecordV1('purposes');
+    const content = sealConnectedAccountCatalogContentV1({ mode: 'plain', material: null, record });
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+        const path = new URL(String(input)).pathname;
+        if (path.endsWith('/currentness')) {
+            await readCurrentness();
+            return { status: 200, data: { mode: 'plain', version: 1, settingsVersion: 7,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+        }
+        if (path.endsWith('/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path.endsWith('/connected-accounts/purposes')) return { status: 200, data: { status: 'present', revision: 4, content } };
+        if (path === '/v2/account/settings') return { status: 200, data: { version: 7, content: { t: 'plain', v: {} } } };
+        return { status: 404, data: { error: 'unsupported' } };
+    });
+    vi.spyOn(axios, 'post').mockRejectedValue(new Error('Binding reads cannot write Home'));
+}
+
+describe('runner qualified-purpose cold preparation through the real binding owner', () => {
+    afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+
+    it.each(['slow', 'failed'] as const)('settles four watches and concurrent reads after a %s Home currentness read', async variant => {
+        const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+        const entered = deferred();
+        const release = deferred();
+        let failing = variant === 'failed';
+        home(async () => {
+            entered.resolve();
+            await release.promise;
+            if (failing) throw Object.assign(new Error('private Home body must not be logged'), { code: 'ECONNRESET' });
+        });
+        const f = await fixture();
+        const initial = purposes.map(() => deferred());
+        const subscriptions = purposes.map((purpose, index) => f.accounts.watch(purpose, () => initial[index].resolve()));
+        try {
+            await entered.promise;
+            // Initial delivery is not held behind the owner's pending Home read.
+            await Promise.all(initial.map(item => item.promise));
+            const pending = Promise.allSettled(purposes.map(purpose => f.accounts.getBinding(purpose)));
+            await vi.waitFor(() => {
+                const requests = f.requests.filter(request => request.kind === 'plugin_connected_accounts.get_binding_v1');
+                expect(requests).toHaveLength(4);
+                for (const request of requests) expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]',
+                    expect.objectContaining({ sessionId: 'binding-session', requestId: request.requestId, purpose: request.purpose,
+                        stage: 'consumer_lock', event: 'begin' })]);
+            });
+            release.resolve();
+            const results = await pending;
+            if (variant === 'slow') expect(results).toEqual(purposes.map(() => ({ status: 'fulfilled', value: null })));
+            else {
+                expect(results.every(result => result.status === 'rejected')).toBe(true);
+                for (const result of results) if (result.status === 'rejected') expect(result.reason).toMatchObject({ code: 'plugin_connected_account_settings_unavailable' });
+            }
+            // A failed Home observation releases ownership; the same invocation recovers.
+            failing = false;
+            expect(await Promise.all(purposes.map(purpose => f.accounts.getBinding(purpose)))).toEqual([null, null, null, null]);
+            for (const request of f.requests.filter(request => request.kind === 'plugin_connected_accounts.get_binding_v1').slice(-4)) {
+                expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({
+                    requestId: request.requestId, purpose: request.purpose, stage: 'dispatch', event: 'end', durationMs: expect.any(Number),
+                })]);
+            }
+        } finally { release.resolve(); subscriptions.forEach(subscription => subscription.dispose()); await f.dispose(); }
+    });
+
+    it('correlates pending and failed owner stages to the runner request without private error content', async () => {
+        const entered = deferred();
+        const release = deferred();
+        const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+        home(async () => { entered.resolve(); await release.promise;
+            throw Object.assign(new Error('private Home body'), { code: 'ECONNRESET', credentials: 'private-credential' }); });
+        const f = await fixture();
+        const pending = f.accounts.getBinding(purposes[0]).then(value => value, (error: unknown) => error);
+        try {
+            await entered.promise;
+            const request = f.requests.find(request => request.kind === 'plugin_connected_accounts.get_binding_v1')!;
+            const identity = { sessionId: 'binding-session', invocationId: 'binding-invocation', requestId: request.requestId, purpose: purposes[0] };
+            expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, stage: 'account_currentness', event: 'begin' })]);
+            release.resolve();
+            expect(await pending).toMatchObject({ code: 'plugin_connected_account_settings_unavailable' });
+            for (const stage of ['authorization', 'consumer_lock', 'retained_binding', 'account_purpose_read']) {
+                expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, stage, event: 'begin' })]);
+            }
+            expect(log.mock.calls).toContainEqual(['[connected-account-binding-stage]', expect.objectContaining({ ...identity, stage: 'account_currentness', event: 'failure', errorCode: 'account_encryption_currentness_unavailable', durationMs: expect.any(Number) })]);
+            expect(JSON.stringify(log.mock.calls)).not.toMatch(/private Home body|private-credential|binding-fixture/);
+        } finally { release.resolve(); await pending; await f.dispose(); }
+    });
+
+    it('round-trips declared purposes and refuses a missing external-plugin registration before reading Home', async () => {
+        home();
+        const complete = await fixture();
+        try {
+            expect(await Promise.all(purposes.map(purpose => complete.accounts.getBinding(purpose)))).toEqual([null, null, null, null]);
+        } finally { await complete.dispose(); }
+        vi.mocked(axios.get).mockClear();
+        const f = await fixture(purposes.slice(0, 3));
+        try {
+            await expect(f.accounts.getBinding(purposes[3])).rejects.toMatchObject({ code: 'plugin_connected_account_purpose_undeclared' });
+            expect(axios.get).not.toHaveBeenCalled();
+        } finally { await f.dispose(); }
+    });
+});

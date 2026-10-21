@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { runConnectedAccountBindingStage, withConnectedAccountBindingDiagnostic } from '../connectedServices/purposeBindings/bindingDiagnostics';
 
 import {
     isPluginError,
@@ -815,7 +816,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
         return await invocation.disposal;
     };
 
-    const dispatch = async (
+    const dispatchOperation = async (
         dispatchInput: Readonly<{
             sessionId: string;
             executionRunSnapshotId?: string;
@@ -1111,7 +1112,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
             const witness = 'witness' in operation
                 ? operation.witness
                 : undefined;
-            const authorized = operation.kind
+            const authorized = await runConnectedAccountBindingStage('authorization', async () => operation.kind
                 === 'plugin_services.managed_provider.materialize_agent_binding_v1'
                 ? await invocation
                     .authorizeManagedProviderMaterialization()
@@ -1119,7 +1120,7 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
                     requireActiveTurn:
                         operation.kind
                             === 'plugin_actions.execute_v1',
-                });
+                }));
             if (!authorized) {
                 if (
                     operation.kind
@@ -2789,7 +2790,20 @@ export function createRunnerDaemonPluginServicesHost(input: Readonly<{
 
     return Object.freeze({
         readManagedProviderSupervisionAuthority,
-        dispatch,
+        dispatch(input: Parameters<typeof dispatchOperation>[0]) {
+            const operation = input.operation;
+            if (operation.kind !== 'plugin_connected_accounts.get_binding_v1'
+                && operation.kind !== 'plugin_connected_accounts.watch.open_v1'
+                && operation.kind !== 'plugin_connected_accounts.watch.next_v1') return dispatchOperation(input);
+            return withConnectedAccountBindingDiagnostic({
+                sessionId: input.sessionId, invocationId: operation.invocationId, requestId: operation.requestId,
+                pluginId: input.retainedAgent.pluginId, localId: input.retainedAgent.localAgentId,
+                operation: operation.kind === 'plugin_connected_accounts.get_binding_v1' ? 'get_binding'
+                    : operation.kind === 'plugin_connected_accounts.watch.open_v1' ? 'watch_open' : 'watch_next',
+                ...('purpose' in operation ? { purpose: operation.purpose } : {}),
+                ...('subscriptionId' in operation ? { subscriptionId: operation.subscriptionId } : {}),
+            }, () => runConnectedAccountBindingStage('dispatch', () => dispatchOperation(input)));
+        },
         dispose() {
             disposal ??= (async () => {
                 disposed = true;
