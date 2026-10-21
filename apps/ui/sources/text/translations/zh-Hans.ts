@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.zh-Hans';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations } from '../_types';
+import { defineTranslations, type WidenTranslationValues } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/zh-Hans';
 
@@ -15625,6 +15625,21 @@ settingsSession: {
           charts: {
             ...usageChartInputTranslations['zh-Hans'],
             // usage-board:charts
+            shippedUnavailableTitle: "已合并的拉取请求不可用",
+            collaborationNotRecorded: "此期间尚未记录智能体之间的协作；每颗星球是一个智能体，大小对应其占比。",
+            coveragePartial: "部分 · 部分来源不完整",
+            coverageUnknown: "覆盖情况未知",
+            daylightCaptionNightOnly: ({ share }: { share: string }) => `${share} 的忙碌时间落在你的夜间时段内（在夜班中设置）。`,
+            metricNotRecordedReason: ({ metric }: { metric: string }) => `此期间的${metric}尚未记录。读取其中的会话后就会显示。`,
+            dayTitle: "智能体的一天",
+            shareOf: ({ metric }: { metric: string }) => `${metric}占比`,
+            runSubtitle: "每个智能体完成的回合",
+            constellationSubtitle: "智能体如何协作",
+            scoreSubtitle: ({ week }: { week: string }) => `${week} 这一周`,
+            coverageMeasured: "已计量 · 已读取的来源完整",
+            coverageMeasuredShort: "已计量",
+            coveragePartialShort: "部分",
+            coverageUnknownShort: "未知",
             showValues: "精确数值",
             hideValues: "隐藏数值",
             metric_tokens: "Token",
@@ -15682,6 +15697,8 @@ settingsSession: {
             daylightCaptionNight: ({ hour, share }: { hour: string; share: string }) => `大约 ${hour} 最忙碌。${share} 的忙碌时间落在你的夜间时段内（在夜班中设置）。`,
             dayA11y: ({ day, count }: { day: string; count: string | number }) => `智能体的一天，${day}：每个智能体完成的回合以及等待你的时间；最多同时 ${count} 个回合`,
             dayEmptyTitle: "这一天没有记录的工作",
+            daylightCaptionNoPeak: "每一列是一天中的一小时；越高越忙碌。",
+            peakOnlyCaption: "仅提供此期间的峰值；不包含各轮次的具体时间。",
             dayEmptyReason: "任意机器上的回合完成后会显示在这里。",
             atOnce: "同时",
             turns: "回合",
@@ -15693,7 +15710,7 @@ settingsSession: {
             scoreA11y: ({ week }: { week: string }) => `乐谱：${week} 这一周，每个智能体一条线，每个忙碌小时一个点`,
             scoreLight: "1–15 分钟",
             scoreMedium: "15–40 分钟",
-            scoreStrong: "该小时忙碌 40–60 分钟",
+            scoreStrong: "该小时智能体时间 40 分钟及以上",
             scorePresence: "该小时忙碌",
             scorePresenceNote: "只按小时，不显示分钟",
             orbitA11y: ({ metric }: { metric: string }) => `轨道：按${metric}占比排列的智能体；最内侧的轨道贡献最多`,
@@ -15747,8 +15764,8 @@ settingsSession: {
             tickTenMinutes: "10 分钟",
             tickHour: "1 小时",
             tickFourHours: "4 小时",
-            runCaption: "每个完成的回合一个点。粗线是中位数，细线是第 90 百分位。从开始到结束的时长，包含等待权限的时间。",
-            runCaptionOpen: ({ count }: { count: string | number }) => `每个完成的回合一个点。粗线是中位数，细线是第 90 百分位。从开始到结束的时长，包含等待权限的时间。还有 ${count} 个仍在运行，未计入。`,
+            runCaption: "每个点代表该智能体已完成回合中相等的一份。粗线是中位数，细线是第 90 百分位。从开始到结束的时长，包含等待权限的时间。",
+            runCaptionOpen: ({ count }: { count: string | number }) => `每个点代表该智能体已完成回合中相等的一份。粗线是中位数，细线是第 90 百分位。从开始到结束的时长，包含等待权限的时间。 还有 ${count} 个仍在运行，未计入。`,
             median: "中位数",
             p90: "第 90 百分位",
             closedTurns: "已完成的回合",
@@ -18066,4 +18083,4 @@ settingsSession: {
   },} as const;
 
 
-export const zhHans = defineTranslations(zhHansValues);
+export const zhHans: WidenTranslationValues<typeof zhHansValues> = defineTranslations(zhHansValues);

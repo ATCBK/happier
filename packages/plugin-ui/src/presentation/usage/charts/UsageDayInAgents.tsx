@@ -111,12 +111,15 @@ function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
   const ink = resolveUsageChartInk(props.theme, props.paint);
   const svgText = useUsageChartSvgText(props.theme);
   const { width, phone, model } = props;
-  const label = phone ? 64 : 76;
-  const figures = phone ? 72 : 84;
+  // A phone recomposes: each lane takes the full width with its name and figure on a line above it, and the
+  // "At once" label sits above the curve, so nothing narrows the day to a sliver between two text columns.
+  const label = phone ? 0 : 76;
+  const figures = phone ? 0 : 84;
+  const nameRow = phone ? 16 : 0;
   const plot = width - label - figures;
   const x = (hour: number) => label + (hour / 24) * plot;
-  const curveHeight = 54, laneHeight = phone ? 12 : 14, gap = phone ? 8 : 9, top = 18;
-  const height = top + curveHeight + props.lanes.length * (laneHeight + gap) + 22;
+  const curveHeight = 54, laneHeight = phone ? 12 : 14, gap = phone ? 8 : 9, top = phone ? 30 : 18;
+  const height = top + curveHeight + props.lanes.length * (nameRow + laneHeight + gap) + 22;
   const scale = Math.max(2, Math.ceil(model.peak.count / 2) * 2);
   const cy = (count: number) => top + curveHeight - (count / scale) * (curveHeight - 10);
   const bins = model.atOnce.length || 1;
@@ -136,26 +139,26 @@ function DayLanes(props: DayDrawProps & Readonly<{ phone: boolean }>) {
       </Defs>
       {[2, 4, 6, 8].filter((count) => count <= scale).map((count) => <G key={`g${count}`}>
         <Path d={`M${label},${r1(cy(count))}H${r1(label + plot)}`} stroke={ink.grid} strokeWidth={1} />
-        {svgText.draw({ x: label - 6, y: cy(count) + 3, anchor: 'end', text: String(count) })}
+        {svgText.draw(phone ? { x: width, y: cy(count) - 3, anchor: 'end', text: String(count) } : { x: label - 6, y: cy(count) + 3, anchor: 'end', text: String(count) })}
       </G>)}
       {curve ? <Path d={`${curve}L${r1(x(24))},${r1(cy(0))}L${r1(x(0))},${r1(cy(0))}Z`} fill={props.paint.accent} fillOpacity={0.14} /> : null}
       {curve ? <Path d={curve} fill="none" stroke={props.paint.accent} strokeWidth={1.3} /> : null}
-      {svgText.draw({ x: 0, y: top + 12, text: props.labels.atOnce, tone: 'strong', size: 'body' }, 'at-once')}
-      {svgText.draw({ x: 0, y: top + 27, text: props.labels.turns }, 'turns')}
+      {svgText.draw({ x: 0, y: phone ? 14 : top + 12, text: phone ? `${props.labels.atOnce} · ${props.labels.turns}` : props.labels.atOnce, tone: 'strong', size: 'body' }, 'at-once')}
+      {!phone ? svgText.draw({ x: 0, y: top + 27, text: props.labels.turns }, 'turns') : null}
       {model.peak.count > 0 ? <Circle cx={r1(px)} cy={r1(py)} r={3.2} fill={props.paint.accent} /> : null}
       {model.peak.count > 0 ? svgText.draw({ x: right ? px - 8 : px + 8, y: py - 6, anchor: right ? 'end' : 'start', tone: 'strong', size: 'body', halo: props.paint.paper,
         text: props.labels.peak(model.peak.count, model.peak.atHour) }, 'peak') : null}
-      {svgText.draw({ x: width, y: top + curveHeight + 2, anchor: 'end', text: props.labels.agentTime }, 'agent-time')}
+      {!phone ? svgText.draw({ x: width, y: top + curveHeight + 2, anchor: 'end', text: props.labels.agentTime }, 'agent-time') : null}
       {props.lanes.map((lane, index) => {
-        const y = top + curveHeight + 10 + index * (laneHeight + gap);
+        const y = top + curveHeight + 10 + index * (nameRow + laneHeight + gap) + nameRow;
         return <G key={JSON.stringify(lane.agentId)}>
-          {svgText.draw({ x: 0, y: y + laneHeight - 3, text: props.name(lane.agentId), tone: 'secondary', size: 'body' })}
+          {svgText.draw({ x: 0, y: phone ? y - 4 : y + laneHeight - 3, text: props.name(lane.agentId), tone: 'secondary', size: 'body' })}
           <Rect x={label} y={y} width={r1(plot)} height={laneHeight} rx={laneHeight / 2} fill={ink.track} />
           {lane.spans.map((span, spanIndex) => <G key={spanIndex}>
             <Rect x={r1(x(span.fromHour))} y={y + 2} width={r1(Math.max(3, x(span.toHour) - x(span.fromHour)))} height={laneHeight - 4} rx={(laneHeight - 4) / 2} fill={colour(lane.agentId)} />
             {span.waits.map(([from, to], waitIndex) => <Rect key={waitIndex} x={r1(x(from))} y={y + 2} width={r1(Math.max(2.5, x(to) - x(from)))} height={laneHeight - 4} fill={`url(#${hatch})`} />)}
           </G>)}
-          {svgText.draw({ x: width, y: y + laneHeight - 3, anchor: 'end', tone: 'strong', size: 'body', text: props.labels.duration(lane.agentTimeMs) })}
+          {svgText.draw({ x: width, y: phone ? y - 4 : y + laneHeight - 3, anchor: 'end', tone: 'strong', size: 'body', text: props.labels.duration(lane.agentTimeMs) })}
         </G>;
       })}
       {[0, 6, 12, 18].map((hour) => svgText.draw({ x: x(hour), y: height - 4, text: props.labels.clock(hour) }, `t${hour}`))}

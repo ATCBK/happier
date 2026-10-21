@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.ru';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations } from '../_types';
+import { defineTranslations, type WidenTranslationValues } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/ru';
 
@@ -15934,6 +15934,21 @@ settingsSession: {
           charts: {
             ...usageChartInputTranslations.ru,
             // usage-board:charts
+            shippedUnavailableTitle: "Слитые пул-реквесты недоступны",
+            collaborationNotRecorded: "Совместная работа агентов за этот период пока не записана; каждая планета — агент, по размеру его доли.",
+            coveragePartial: "Частично · некоторые источники неполные",
+            coverageUnknown: "Покрытие неизвестно",
+            daylightCaptionNightOnly: ({ share }: { share: string }) => `${share} активного времени пришлось на ваше ночное окно, заданное в «Ночной смене».`,
+            metricNotRecordedReason: ({ metric }: { metric: string }) => `Показатель «${metric}» за этот период пока не записан. Он появится, когда сеансы будут прочитаны.`,
+            dayTitle: "День агентов",
+            shareOf: ({ metric }: { metric: string }) => `доля показателя «${metric}»`,
+            runSubtitle: "завершённые ходы по агентам",
+            constellationSubtitle: "как агенты работали вместе",
+            scoreSubtitle: ({ week }: { week: string }) => `неделя с ${week}`,
+            coverageMeasured: "Измерено · полностью по прочитанным источникам",
+            coverageMeasuredShort: "Измерено",
+            coveragePartialShort: "Частично",
+            coverageUnknownShort: "Неизвестно",
             showValues: "Точные значения",
             hideValues: "Скрыть значения",
             metric_tokens: "Токены",
@@ -15991,6 +16006,8 @@ settingsSession: {
             daylightCaptionNight: ({ hour, share }: { hour: string; share: string }) => `Пик около ${hour}. ${share} активного времени пришлось на ваше ночное окно, заданное в «Ночной смене».`,
             dayA11y: ({ day, count }: { day: string; count: string | number }) => `День агентов, ${day}: завершённые ходы каждого агента и ожидание вас; до ${count} ходов одновременно`,
             dayEmptyTitle: "В этот день работа не записана",
+            daylightCaptionNoPeak: "Каждый столбец — час дня; выше значит активнее.",
+            peakOnlyCaption: "Доступен только пик за период; время отдельных ходов не включено.",
             dayEmptyReason: "Ходы на любой машине появятся здесь после завершения.",
             atOnce: "Одновременно",
             turns: "ходы",
@@ -16002,7 +16019,7 @@ settingsSession: {
             scoreA11y: ({ week }: { week: string }) => `Партитура: неделя с ${week}, по линии на агента, точка за каждый активный час`,
             scoreLight: "1–15 мин",
             scoreMedium: "15–40 мин",
-            scoreStrong: "40–60 мин активности в час",
+            scoreStrong: "40 мин и больше времени агента за час",
             scorePresence: "Активен в этот час",
             scorePresenceNote: "Только часы, без минут",
             orbitA11y: ({ metric }: { metric: string }) => `Орбита: агенты по доле показателя «${metric}»; ближайшая орбита сделала больше всех`,
@@ -16056,8 +16073,8 @@ settingsSession: {
             tickTenMinutes: "10 мин",
             tickHour: "1 ч",
             tickFourHours: "4 ч",
-            runCaption: "Одна точка — один завершённый ход. Жирная — медиана, тонкая — 90-й процентиль. Время от начала до конца, включая ожидание разрешений.",
-            runCaptionOpen: ({ count }: { count: string | number }) => `Одна точка — один завершённый ход. Жирная — медиана, тонкая — 90-й процентиль. Время от начала до конца, включая ожидание разрешений. Ещё выполняются и не учтены: ${count}.`,
+            runCaption: "Каждая точка — равная доля завершённых ходов агента. Жирная — медиана, тонкая — 90-й процентиль. Время от начала до конца, включая ожидание разрешений.",
+            runCaptionOpen: ({ count }: { count: string | number }) => `Каждая точка — равная доля завершённых ходов агента. Жирная — медиана, тонкая — 90-й процентиль. Время от начала до конца, включая ожидание разрешений. Ещё выполняются и не учтены: ${count}.`,
             median: "Медиана",
             p90: "90-й процентиль",
             closedTurns: "Завершённые ходы",
@@ -18405,7 +18422,7 @@ settingsSession: {
   },} as const;
 
 
-export const ru = defineTranslations(ruValues);
+export const ru: WidenTranslationValues<typeof ruValues> = defineTranslations(ruValues);
 
 
 export type TranslationsRu = typeof ru;

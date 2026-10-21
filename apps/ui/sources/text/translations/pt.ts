@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.pt';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations } from '../_types';
+import { defineTranslations, type WidenTranslationValues } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/pt';
 
@@ -16105,6 +16105,21 @@ settingsSession: {
           charts: {
             ...usageChartInputTranslations.pt,
             // usage-board:charts
+            shippedUnavailableTitle: "Pull requests mescladas não estão disponíveis",
+            collaborationNotRecorded: "A colaboração entre agentes ainda não foi registrada neste período; cada planeta é um agente, do tamanho da sua participação.",
+            coveragePartial: "Parcial · algumas fontes estão incompletas",
+            coverageUnknown: "Cobertura desconhecida",
+            daylightCaptionNightOnly: ({ share }: { share: string }) => `${share} do tempo ativo caiu na sua janela noturna, definida em Turno da noite.`,
+            metricNotRecordedReason: ({ metric }: { metric: string }) => `${metric} ainda não está registrado neste período. Aparece quando as sessões dele forem lidas.`,
+            dayTitle: "Um dia de agentes",
+            shareOf: ({ metric }: { metric: string }) => `participação em ${metric}`,
+            runSubtitle: "turnos concluídos por agente",
+            constellationSubtitle: "como os agentes trabalharam juntos",
+            scoreSubtitle: ({ week }: { week: string }) => `a semana de ${week}`,
+            coverageMeasured: "Medido · completo para as fontes lidas",
+            coverageMeasuredShort: "Medido",
+            coveragePartialShort: "Parcial",
+            coverageUnknownShort: "Desconhecida",
             showValues: "Valores exatos",
             hideValues: "Ocultar valores",
             metric_tokens: "Tokens",
@@ -16162,6 +16177,8 @@ settingsSession: {
             daylightCaptionNight: ({ hour, share }: { hour: string; share: string }) => `Mais movimentado por volta das ${hour}. ${share} do tempo ativo caiu na sua janela noturna, definida em Turno da noite.`,
             dayA11y: ({ day, count }: { day: string; count: string | number }) => `Um dia de agentes, ${day}: os turnos concluídos de cada agente e as esperas por você; até ${count} turnos ao mesmo tempo`,
             dayEmptyTitle: "Nenhum trabalho registrado neste dia",
+            daylightCaptionNoPeak: "Cada coluna é uma hora do dia; mais alta é mais movimentada.",
+            peakOnlyCaption: "Só o pico do período está disponível; os horários de cada turno não estão incluídos.",
             dayEmptyReason: "Turnos de qualquer máquina aparecem aqui quando terminam.",
             atOnce: "Ao mesmo tempo",
             turns: "turnos",
@@ -16173,7 +16190,7 @@ settingsSession: {
             scoreA11y: ({ week }: { week: string }) => `Partitura: a semana de ${week}, uma linha por agente, um ponto para cada hora ativa`,
             scoreLight: "1–15 min",
             scoreMedium: "15–40 min",
-            scoreStrong: "40–60 min ativos na hora",
+            scoreStrong: "40 min ou mais de tempo de agente na hora",
             scorePresence: "Ativo naquela hora",
             scorePresenceNote: "Só horas, nunca minutos",
             orbitA11y: ({ metric }: { metric: string }) => `Órbita: agentes pela participação em ${metric}; a órbita mais próxima fez mais`,
@@ -16227,8 +16244,8 @@ settingsSession: {
             tickTenMinutes: "10 min",
             tickHour: "1 h",
             tickFourHours: "4 h",
-            runCaption: "Um ponto por turno concluído. Em negrito a mediana, fino o percentil 90. Tempo do início ao fim, esperas de permissão incluídas.",
-            runCaptionOpen: ({ count }: { count: string | number }) => `Um ponto por turno concluído. Em negrito a mediana, fino o percentil 90. Tempo do início ao fim, esperas de permissão incluídas. ${count} ainda em andamento, não contados.`,
+            runCaption: "Cada ponto é uma parte igual dos turnos concluídos desse agente. Em negrito a mediana, fino o percentil 90. Tempo do início ao fim, esperas de permissão incluídas.",
+            runCaptionOpen: ({ count }: { count: string | number }) => `Cada ponto é uma parte igual dos turnos concluídos desse agente. Em negrito a mediana, fino o percentil 90. Tempo do início ao fim, esperas de permissão incluídas. ${count} ainda em andamento, não contados.`,
             median: "Mediana",
             p90: "Percentil 90",
             closedTurns: "Turnos concluídos",
@@ -18576,7 +18593,7 @@ settingsSession: {
   },} as const;
 
 
-export const pt = defineTranslations(ptValues);
+export const pt: WidenTranslationValues<typeof ptValues> = defineTranslations(ptValues);
 
 
 export type TranslationsPt = typeof pt;

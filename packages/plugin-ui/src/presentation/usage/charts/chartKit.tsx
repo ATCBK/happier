@@ -84,7 +84,7 @@ export function usageSmoothPath(points: readonly (readonly [number, number])[]):
 
 export type UsageChartSvgLabel = Readonly<{
   x: number; y: number; text: string; anchor?: 'start' | 'middle' | 'end';
-  tone?: 'muted' | 'secondary' | 'text' | 'strong'; size?: 'caption' | 'body';
+  tone?: 'muted' | 'secondary' | 'text' | 'strong' | 'onMark'; size?: 'caption' | 'body';
   /** Paper behind a label that sits over drawn marks. */
   halo?: string;
 }>;
@@ -94,14 +94,14 @@ export function useUsageChartSvgText(theme: HappierUiTheme) {
   const text = useHappierDataTextStyles(theme);
   const draw = (label: UsageChartSvgLabel, key?: string | number) => {
     const role = label.size === 'body' ? text.body : text.caption;
-    const strong = label.tone === 'strong';
+    const strong = label.tone === 'strong' || label.tone === 'onMark';
     const face = strong ? (label.size === 'body' ? text.strong : text.captionStrong) : role;
     const common = { x: label.x, y: label.y, textAnchor: label.anchor ?? 'start', fontSize: role.fontSize,
       fontFamily: face.fontFamily as string | undefined, fontWeight: (face.fontWeight as string | undefined) ?? (strong ? '600' : '400') } as const;
     // A label over drawn data sits on a paper halo (a stroked copy behind it), never on the marks.
     return <G key={key}>
       {label.halo ? <SvgText {...common} fill={label.halo} stroke={label.halo} strokeWidth={3} strokeLinejoin="round">{label.text}</SvgText> : null}
-      <SvgText {...common} fill={label.tone === 'muted' || label.tone === undefined ? theme.colors.mutedText : label.tone === 'secondary' ? theme.colors.secondaryText : theme.colors.text}>{label.text}</SvgText>
+      <SvgText {...common} fill={label.tone === 'muted' || label.tone === undefined ? theme.colors.mutedText : label.tone === 'secondary' ? theme.colors.secondaryText : label.tone === 'onMark' ? theme.colors.onAccent : theme.colors.text}>{label.text}</SvgText>
     </G>;
   };
   return { styles: text, draw, fontSize: text.caption.fontSize ?? theme.typography.body.fontSize };

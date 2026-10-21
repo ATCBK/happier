@@ -112,7 +112,7 @@ export function UsageOrbit(props: AgentsProps & Readonly<{ model: readonly Usage
       {width !== null ? (() => {
         const cx = width / 2, cy = height / 2 - 8;
         const orbits = Math.max(2, known.length);
-        const outer = Math.max(60, Math.min(width / 2 - 96, 240));
+        const outer = Math.max(60, Math.min(width / 2 - 72, 260));
         const aspect = Math.min(0.75, Math.max(0.42, (height / 2 - 24) / outer));
         const rx0 = Math.min(width * 0.17, 74), step = (outer - rx0) / (orbits - 1);
         const angles = [-0.12, 3.0, 0.42, 3.62, -0.62, 2.4, 0.95];
@@ -147,7 +147,7 @@ export function UsageCrew(props: AgentsProps & Readonly<{ model: readonly UsageA
   const ink = resolveUsageChartInk(props.theme, props.paint);
   const svgText = useUsageChartSvgText(props.theme);
   const text = svgText.styles;
-  const compact = width !== null && width < 480;
+  const compact = width !== null && width < 380;
   const showDays = props.model.some((entry) => entry.activeDays !== undefined);
   return <View testID={props.testID} onLayout={onLayout} accessibilityLabel={props.label} style={{ minWidth: 0 }}>
     {props.model.map((entry, index) => {
@@ -211,14 +211,22 @@ export function UsageAgentRiver(props: AgentsProps & Readonly<{ model: UsageRive
             const bottom = band.low.map((value, index) => [x(index), mid - value] as const).reverse();
             return <Path key={band.id} d={`${usageSmoothPath(top)}L${r1(bottom[0]![0])},${r1(bottom[0]![1])}${usageSmoothPath(bottom).replace(/^M[^C]*/u, '')}Z`} fill={colour(band.id)} fillOpacity={0.9} />;
           })}
-          {leaders.map((id, rank) => {
-            const index = Math.round(weeks.length * (rank === 0 ? 0.33 : 0.72));
-            const band = bands.find((entry) => entry.id === id);
-            const week = weeks[Math.min(index, weeks.length - 1)];
-            if (!band || !week || band.high[index]! - band.low[index]! < 16) return null;
-            const y = mid - (band.low[index]! + band.high[index]!) / 2;
-            return <G key={`l${id}`}>{svgText.draw({ x: x(index), y: y + 4, anchor: 'middle', tone: 'strong', size: 'body', text: props.labels.inline(shortName(props.agents, id), week.shares[id] ?? 0) })}</G>;
-          })}
+          {(() => {
+            // Each leading Agent is named where its band is thickest (never the same week twice), kept inside the plot.
+            const used = new Set<number>();
+            return leaders.map((id) => {
+              const band = bands.find((entry) => entry.id === id);
+              if (!band) return null;
+              let index = -1;
+              for (let at = 0; at < weeks.length; at++) if (!used.has(at) && (index < 0 || band.high[at]! - band.low[at]! > band.high[index]! - band.low[index]!)) index = at;
+              if (index < 0 || band.high[index]! - band.low[index]! < 16) return null;
+              used.add(index);
+              const text = props.labels.inline(shortName(props.agents, id), weeks[index]!.shares[id] ?? 0);
+              const half = (text.length * (svgText.styles.strong.fontSize ?? 13) * 0.6) / 2;
+              const y = mid - (band.low[index]! + band.high[index]!) / 2;
+              return <G key={`l${id}`}>{svgText.draw({ x: Math.min(width - half - 4, Math.max(half + 4, x(index))), y: y + 4, anchor: 'middle', tone: 'onMark', size: 'body', text })}</G>;
+            });
+          })()}
           {weeks.map((week, index) => index % 3 === 0 || index === weeks.length - 1 ? svgText.draw({ x: x(index), y: height - 3,
             anchor: index === weeks.length - 1 ? 'end' : index === 0 ? 'start' : 'middle', text: props.labels.week(week.start) }, `w${index}`) : null)}
         </Svg>;
@@ -371,7 +379,7 @@ export function UsageConstellation(props: AgentsProps & Readonly<{ model: UsageC
         </>;
       })() : null}
     </View>
-    {props.model.edges ? <UsageChartKey theme={props.theme} items={keyItems} note={props.labels.arrowNote} /> : <UsageChartCaption theme={props.theme}>{props.labels.nodesOnly}</UsageChartCaption>}
+    {props.model.edges?.length ? <UsageChartKey theme={props.theme} items={keyItems} note={props.labels.arrowNote} /> : <UsageChartCaption theme={props.theme}>{props.labels.nodesOnly}</UsageChartCaption>}
     {props.model.edges && props.model.unknownStarts !== null && props.model.unknownStarts > 0 ? <UsageChartCaption theme={props.theme}>{props.labels.unknownStarts(props.model.unknownStarts)}</UsageChartCaption> : null}
   </UsageChartColumn>;
 }

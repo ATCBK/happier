@@ -62,7 +62,7 @@ export function projectUsageSkyModel(calendar: UsageAgentCalendar, metric: Usage
   });
   // Streak lengths come from the shared day-streak owner; their positions are the matching runs of active days.
   const streaks = resolveUsageDayStreaks({ referenceMs, timeZoneOffsetMinutes: calendar.timeZoneOffsetMinutes,
-    range: calendar.period, days: dates.map((date) => ({ date, eventCount: byDate.get(date)?.totals.eventCount ?? 0 })) });
+    range: calendar.period, days: dates.map((date) => { const bucket = byDate.get(date); return { date, eventCount: bucket ? bucket.totals.eventCount : 0 }; }) });
   const runs: { startDate: string; endDate: string; days: number }[] = [];
   let start: number | null = null;
   dates.forEach((date, index) => {

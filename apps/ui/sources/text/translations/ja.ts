@@ -27,7 +27,7 @@ import { publicIdentity } from './features/publicIdentity.ja';
 import { terminalWorkspaceKeyboardTranslations } from './terminalWorkspaceTranslations.shared';
 
 
-import { defineTranslations } from '../_types';
+import { defineTranslations, type WidenTranslationValues } from '../_types';
 
 import { promptPickerTranslations as feature_promptPickerTranslations } from './features/ja';
 
@@ -16267,6 +16267,21 @@ settingsSession: {
           charts: {
             ...usageChartInputTranslations.ja,
             // usage-board:charts
+            shippedUnavailableTitle: "マージ済みのプルリクエストを取得できません",
+            collaborationNotRecorded: "この期間のエージェント間の協力はまだ記録されていません。各惑星はエージェントで、割合に応じた大きさです。",
+            coveragePartial: "一部 · 不完全なソースがあります",
+            coverageUnknown: "カバレッジ不明",
+            daylightCaptionNightOnly: ({ share }: { share: string }) => `稼働時間の${share}は夜間枠（夜勤で設定）に入りました。`,
+            metricNotRecordedReason: ({ metric }: { metric: string }) => `この期間の${metric}はまだ記録されていません。セッションを読み込むと表示されます。`,
+            dayTitle: "エージェントの1日",
+            shareOf: ({ metric }: { metric: string }) => `${metric}の割合`,
+            runSubtitle: "エージェントごとの完了したターン",
+            constellationSubtitle: "エージェントがどう協力したか",
+            scoreSubtitle: ({ week }: { week: string }) => `${week}の週`,
+            coverageMeasured: "計測済み · 読み込んだソースについて完全",
+            coverageMeasuredShort: "計測済み",
+            coveragePartialShort: "一部",
+            coverageUnknownShort: "不明",
             showValues: "正確な値",
             hideValues: "値を隠す",
             metric_tokens: "トークン",
@@ -16324,6 +16339,8 @@ settingsSession: {
             daylightCaptionNight: ({ hour, share }: { hour: string; share: string }) => `${hour}ごろが最も活発です。稼働時間の${share}は夜間枠（夜勤で設定）に入りました。`,
             dayA11y: ({ day, count }: { day: string; count: string | number }) => `エージェントの1日、${day}：各エージェントの完了したターンとあなた待ちの時間。最大で同時に${count}ターン`,
             dayEmptyTitle: "この日の作業記録はありません",
+            daylightCaptionNoPeak: "各列は1日の1時間で、高いほど活発です。",
+            peakOnlyCaption: "この期間のピークのみ表示できます。個々のターンの時刻は含まれません。",
             dayEmptyReason: "どのマシンのターンも、完了するとここに表示されます。",
             atOnce: "同時",
             turns: "ターン",
@@ -16335,7 +16352,7 @@ settingsSession: {
             scoreA11y: ({ week }: { week: string }) => `スコア：${week}の週、エージェントごとに1本の線、稼働した各時間に1つの点`,
             scoreLight: "1〜15分",
             scoreMedium: "15〜40分",
-            scoreStrong: "その時間に40〜60分稼働",
+            scoreStrong: "その時間にエージェント時間40分以上",
             scorePresence: "その時間に稼働",
             scorePresenceNote: "時間単位のみ、分は表示しません",
             orbitA11y: ({ metric }: { metric: string }) => `軌道：${metric}の割合によるエージェント。最も内側の軌道が最も多く担当`,
@@ -16389,8 +16406,8 @@ settingsSession: {
             tickTenMinutes: "10分",
             tickHour: "1時間",
             tickFourHours: "4時間",
-            runCaption: "完了したターンごとに1つの点。太線は中央値、細線は90パーセンタイル。開始から終了までの時間で、許可待ちを含みます。",
-            runCaptionOpen: ({ count }: { count: string | number }) => `完了したターンごとに1つの点。太線は中央値、細線は90パーセンタイル。開始から終了までの時間で、許可待ちを含みます。実行中の${count}件は数えていません。`,
+            runCaption: "各点はそのエージェントの完了したターンの等しい割合を表します。太線は中央値、細線は90パーセンタイル。開始から終了までの時間で、許可待ちを含みます。",
+            runCaptionOpen: ({ count }: { count: string | number }) => `各点はそのエージェントの完了したターンの等しい割合を表します。太線は中央値、細線は90パーセンタイル。開始から終了までの時間で、許可待ちを含みます。 実行中の${count}件は数えていません。`,
             median: "中央値",
             p90: "90パーセンタイル",
             closedTurns: "完了したターン",
@@ -18369,4 +18386,4 @@ settingsSession: {
   },} as const;
 
 
-export const ja = defineTranslations(jaValues);
+export const ja: WidenTranslationValues<typeof jaValues> = defineTranslations(jaValues);

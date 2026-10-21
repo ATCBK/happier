@@ -3,7 +3,7 @@ import { Circle, G, Path, Rect, Svg } from 'react-native-svg';
 
 import { HappierText } from '../../text/Text.js';
 import {
-  UsageChartCaption, UsageChartColumn, UsageChartValues, resolveUsageChartInk, usageChartRound as r1, usageSmoothPath,
+  UsageChartCaption, UsageChartColumn, UsageChartValues, resolveUsageChartInk, usageChartMix, usageChartRound as r1, usageSmoothPath,
   useUsageChartSvgText, useUsageChartWidth, type UsageChartAgent, type UsageChartBaseProps, type UsageChartValuesLabels,
 } from './chartKit.js';
 import type { UsagePlanetSlot } from './usagePlanetSlot.js';
@@ -122,7 +122,7 @@ export function UsageSteeringTide(props: UsageChartBaseProps & Readonly<{ agents
   const plot = chartWidth - axis;
   const night = props.model.night;
   const nightSpans = !night ? [] : night.fromHour > night.toHour ? [[0, night.toHour], [night.fromHour, 24]] : [[night.fromHour, night.toHour]];
-  const wash = ink.track;
+  const wash = usageChartMix(props.theme.colors.text, props.paint.paper, 0.04);
   const maxRate = Math.max(1, ...rows.map((row) => row.perBusyHour ?? 0));
   return <UsageChartColumn testID={props.testID} onLayout={onLayout}>
     <View style={{ flexDirection: 'row', gap: 24 }}>
@@ -195,6 +195,8 @@ const RUN_MIN_MS = 20_000;
 const RUN_MAX_MS = 4 * 3_600_000;
 /** Dots sit in columns of this width; a busier column stacks its dots outward from the row's centre line. */
 const RUN_COLUMN_PX = 4.2;
+/** A row shows its distribution as this many equal-share dots (the lab's 1 in 40); fewer turns show one dot each. */
+const RUN_DOTS_PER_ROW = 40;
 
 export function UsageRunLength(props: UsageChartBaseProps & Readonly<{ agents: readonly UsageChartAgent[]; model: UsageRunLengthModel; labels: UsageRunLengthLabels }>) {
   const [width, onLayout] = useUsageChartWidth(props.width);
@@ -224,8 +226,12 @@ export function UsageRunLength(props: UsageChartBaseProps & Readonly<{ agents: r
           {rows.map((row, index) => {
             const cy = index * rowHeight + rowHeight / 2 + (phone ? 8 : 2);
             const stacks = new Map<number, number>();
-            // Every actual observation is drawn: no sample cap. Columns stack outward so dense rows read as a distribution.
-            const dots = row.durationsMs.map((ms, dotIndex) => {
+            // Each dot is an equal share of this Agent's closed turns (its quantiles), so a heavy row reads as a distribution
+            // rather than a solid block. Every observation counts toward them; none is dropped.
+            const sorted = [...row.durationsMs].sort((a, b) => a - b);
+            const count = Math.min(sorted.length, RUN_DOTS_PER_ROW);
+            const quantiles = Array.from({ length: count }, (_, at) => sorted[Math.min(sorted.length - 1, Math.floor(((at + 0.5) / count) * sorted.length))]!);
+            const dots = quantiles.map((ms, dotIndex) => {
               const cx = r1(x(ms)), column = Math.round(cx / RUN_COLUMN_PX), depth = stacks.get(column) ?? 0;
               stacks.set(column, depth + 1);
               const offset = (depth % 2 ? 1 : -1) * Math.ceil(depth / 2) * Math.min(4.4, (rowHeight / 2 - 3) / Math.max(1, Math.ceil(depth / 2)));
