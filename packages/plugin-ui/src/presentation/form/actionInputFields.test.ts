@@ -47,9 +47,13 @@ describe('shared Action form semantics', () => {
     expect(sized).toMatchObject({ kind: 'text', value: '4', keyboardType: 'numeric' });
     expect(sized.kind === 'text' && sized.parseText('8')).toBe(8 * GIB);
     expect(sized.kind === 'text' && sized.parseText('')).toBeUndefined();
+    // A fractional GiB entry is admitted and lands on whole bytes, so a shown value can be typed back.
+    expect(sized.kind === 'text' && sized.parseText('1.5')).toBe(1.5 * GIB);
+    expect(sized.kind === 'text' && sized.parseText('0.3')).toBe(Math.round(0.3 * GIB));
     // Partial or inadmissible entry stays as typed text and is shown as typed.
-    expect(sized.kind === 'text' && sized.parseText('1.5')).toBe('1.5');
-    expect(resolveHappierActionFieldPresentation({ widget: 'integer', unit: 'bytes' }, '1.5')).toMatchObject({ value: '1.5' });
+    expect(sized.kind === 'text' && sized.parseText('1.')).toBe('1.');
+    expect(sized.kind === 'text' && sized.parseText('4G')).toBe('4G');
+    expect(resolveHappierActionFieldPresentation({ widget: 'integer', unit: 'bytes' }, '1.')).toMatchObject({ value: '1.' });
     // A stored value that is not a whole GiB is shown exactly, never rounded.
     expect(resolveHappierActionFieldPresentation({ widget: 'integer', unit: 'bytes' }, GIB * 1.5)).toMatchObject({ value: '1.5' });
     const raw = resolveHappierActionFieldPresentation({ widget: 'integer' }, 4 * GIB);

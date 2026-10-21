@@ -87,7 +87,7 @@ function parseNumericDraft(widget: 'number' | 'integer', text: string): number |
   return Number.isFinite(parsed) ? parsed : text;
 }
 
-/** A byte-size integer (`unit: 'bytes'`) is entered in whole GiB; this is the one place the value converts. */
+/** A byte-size integer (`unit: 'bytes'`) is entered in GiB; this is the one place the value converts. */
 export const HAPPIER_BYTES_PER_GIB = 1024 ** 3;
 
 function displayBytesAsGib(value: unknown): string {
@@ -98,7 +98,8 @@ function displayBytesAsGib(value: unknown): string {
 function parseGibDraft(text: string): number | string | undefined {
   const trimmed = text.trim();
   if (trimmed === '') return undefined;
-  const bytes = /^\d+$/.test(trimmed) ? Number(trimmed) * HAPPIER_BYTES_PER_GIB : NaN;
+  // Fractional GiB land on whole bytes, so any value this field displays can be typed back.
+  const bytes = /^\d+(\.\d+)?$/.test(trimmed) ? Math.round(Number(trimmed) * HAPPIER_BYTES_PER_GIB) : NaN;
   return Number.isSafeInteger(bytes) ? bytes : text;
 }
 
