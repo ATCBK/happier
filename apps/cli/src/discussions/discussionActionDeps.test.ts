@@ -851,12 +851,27 @@ describe('Home Discussion resource transport', () => {
     expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST')).toBe(false);
   });
 
-  it('distinguishes pre-dispatch cancellation from an unknown in-flight write', async () => {
+  it('distinguishes preparation read failure and cancellation from an unknown in-flight write', async () => {
     const controller = new AbortController(); controller.abort();
     expect(await action()({ actionId: 'discussion.list', input: {}, context, signal: controller.signal }))
       .toMatchObject({ ok: false, errorCode: 'cancelled' });
     expect(axiosRequest).not.toHaveBeenCalled();
+    const original = axiosRequest.getMockImplementation()!;
     axiosRequest.mockRejectedValueOnce(new Error('Disconnected'));
+    expect(await action()({ actionId: 'discussion.post', input: { discussionId: 'discussion-1', localId: 'retry', content }, context }))
+      .toMatchObject({ ok: false, errorCode: 'discussions_unavailable' });
+    expect(axiosRequest.mock.calls.some(([request]) => request.method === 'POST')).toBe(false);
+    axiosRequest.mockResolvedValueOnce({ status: 500, data: { error: 'Internal server error' } });
+    expect(await action()({ actionId: 'discussion.post', input: { discussionId: 'discussion-1', localId: 'retry', content }, context }))
+      .toMatchObject({ ok: false, errorCode: 'discussions_unavailable' });
+    const duringRead = new AbortController();
+    axiosRequest.mockImplementationOnce(async () => { duringRead.abort(); throw new Error('Read cancelled'); });
+    expect(await action()({ actionId: 'discussion.post', input: { discussionId: 'discussion-1', localId: 'retry', content },
+      context, signal: duringRead.signal })).toMatchObject({ ok: false, errorCode: 'cancelled' });
+    axiosRequest.mockImplementation(async (request: { url: string; method: string; data?: string }) => {
+      if (request.method === 'POST') throw new Error('Response lost after dispatch');
+      return original(request);
+    });
     expect(await action()({ actionId: 'discussion.post', input: { discussionId: 'discussion-1', localId: 'retry', content }, context }))
       .toMatchObject({ ok: false, errorCode: 'outcome_unknown' });
   });

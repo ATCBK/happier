@@ -160,14 +160,21 @@ export function createDiscussionActionDeps(options: Readonly<{
           headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), ...authorization.headers, 'Content-Type': 'application/json' },
           timeout: configuration.sessionControlHttpTimeoutMs, validateStatus: () => true, signal,
         });
-      } catch { throw new DiscussionRequestError('outcome_unknown'); }
+      } catch {
+        // A lost preparation read cannot have published a message. Mutations
+        // still retain uncertainty when their acknowledgement is unavailable.
+        throw new DiscussionRequestError(method === 'GET'
+          ? signal?.aborted ? 'cancelled' : 'discussions_unavailable'
+          : 'outcome_unknown');
+      }
     }
     async function request(bound: ReturnType<typeof bindDiscussionActionHttpRequestV1>, body = bound.body): Promise<unknown> {
       const response = await rawRequest(bound.method, bound.path, body);
       if (response.status !== 200) {
         const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
         const error = DiscussionErrorResponseV1Schema.safeParse(response.data);
-        throw new DiscussionRequestError(rollback?.code ?? (error.success ? error.data.error : 'outcome_unknown'));
+        throw new DiscussionRequestError(rollback?.code ?? (error.success ? error.data.error
+          : bound.method === 'GET' ? 'discussions_unavailable' : 'outcome_unknown'));
       }
       return response.data;
     }
