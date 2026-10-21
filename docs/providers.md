@@ -603,6 +603,12 @@ matching Team source acquisition. The hub revalidates the source before returnin
 endpoint metadata or forwarding inference; a source refusal returns typed HTTP
 failure. Closing the stream cancels acquisition and releases its joined access;
 explicit retirement still ends only the exact signed consumer claim.
+Recipient currentness, Team catalog and experimental-consent reads finish before
+the native connection is acquired. Endpoint discovery then sends the first stream
+without another Home read in between: native's pre-application custody window
+owns connections that have not sent any application stream. Both adapters retain
+their post-discovery revalidation before publishing a binding. A refused
+pre-connection check acquires no tunnel or source claim.
 In development source,
 `providerBrokerEndpointDiscovery.ts` owns endpoint acquisition and failure
 classification for both Account connections and Team credentials. Its file-only

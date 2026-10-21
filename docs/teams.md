@@ -93,14 +93,22 @@ Account remembered choice; an explicit native or Account model selection clears
 the Team source before applying the new selection.
 
 Team and Account broker consumers share the endpoint-discovery owner described
-in [Providers](providers.md). For a failed Team launch, read the recipient's
+in [Providers](providers.md). In development source, the recipient revalidates
+the Team catalog and its own compatibility consent before acquiring the native
+connection, sends endpoint discovery as its first stream, then revalidates before
+publishing the binding. Slow Home reads therefore do not hold an unused
+connection past native's pre-application custody window.
+For a failed Team launch, read the recipient's
 `[ProviderBroker] Endpoint discovery refused` record for the closed cause,
 discovery duration and grant-refresh outcome, then the custodian's
 `[ProviderBroker] Machine stream admission refused` record for the admission
 class. `broker_refresh_refused` identifies a Home refresh refusal before native
 can reduce it to a socket close. A socket close with an accepted refresh still
 needs hub/transport evidence; a long daemon-service request alone does not
-identify the layer that waited. These diagnostics describe development source,
+identify the layer that waited. A close with `refreshOutcome: not_requested`
+occurred before the fresh-grant callback and needs recipient transport evidence;
+it does not establish a custodian admission refusal.
+These diagnostics describe development source,
 not proof that a particular loaded daemon or cross-Account live replay passed.
 
 ## Identity
