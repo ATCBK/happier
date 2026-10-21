@@ -514,7 +514,7 @@ describe('sessions domain: modelMode normalization', () => {
         });
     });
 
-    it('fences layout downgrade independently from Agent and later metadata revision progress', () => {
+    it('fences layout downgrade for the whole tuple while admitting later same-layout metadata progress', () => {
         const { get, domain } = createHarness();
         domain.applySessions([createRevisionedSession({
             seq: 10,
@@ -551,8 +551,8 @@ describe('sessions domain: modelMode normalization', () => {
             metadataVersion: 2,
             metadata: { summary: { text: 'layout one', updatedAt: 10 } },
             ownerMetadataView: { path: '/owner/layout-one' },
-            agentStateVersion: 3,
-            agentState: { controlledByUser: false },
+            agentStateVersion: 2,
+            agentState: { controlledByUser: true },
         });
 
         domain.applySessions([createRevisionedSession({
@@ -576,8 +576,8 @@ describe('sessions domain: modelMode normalization', () => {
             metadataLayoutVersion: 1,
             metadataVersion: 4,
             ownerMetadataView: { path: '/owner/current' },
-            agentStateVersion: 3,
-            agentState: { controlledByUser: false },
+            agentStateVersion: 2,
+            agentState: { controlledByUser: true },
         });
     });
 
