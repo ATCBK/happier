@@ -14676,6 +14676,7 @@ const zhHant: WorkflowTriggersCopy = {
         notifyMe: '通知我',
         runWorkflow: '執行工作流程',
         sendPromptDescription: '此工作階段的代理會在此工作階段中收到這則提示。它不會打斷你的回合。',
+        nextPending: '待定',
         promptLabel: '提示',
         promptPlaceholder: '代理應該做什麼？',
         message: '訊息',

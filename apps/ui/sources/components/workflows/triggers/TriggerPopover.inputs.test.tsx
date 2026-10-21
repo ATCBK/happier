@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { act } from 'react-test-renderer';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -394,6 +394,49 @@ describe('Run a workflow trigger inputs', () => {
 });
 
 describe('a workflow trigger in its popover (07 S4)', () => {
+    it.each(['account', 'session'] as const)('does not submit a retired prompt destination from the %s editor, but keeps an unloaded destination', async (scope) => {
+        const { buildTriggerTarget, createDefaultWhen, readTriggerThen } = await import('./sessionTriggerForm');
+        const { TriggerTargetV1Schema } = await import('@happier-dev/protocol/workflows/triggers/triggerTargetV1');
+        const { resolveWorkflowStepSelectionV1 } = await import('@happier-dev/protocol/workflows/workflowStepSelectionV1');
+        const original = TriggerTargetV1Schema.parse(buildTriggerTarget({ kind: 'sendPrompt', prompt: 'Summarize the night',
+            runsIn: { kind: 'session', sessionId: 'destination', machineId: 'machine-1' } }, 'account'));
+        const submit = vi.fn<ExistingTriggerSubmit>(async () => {});
+        getStorage().setState({ isDataReady: true, sessions: {}, deletedSessionIds: {} });
+        const screen = await renderScreen(<TriggerPopover testID="retired-target" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={scope === 'account' ? null : 'scope-session'}
+            serverId={serverId} machineId="machine-1"
+            initial={{ when: createDefaultWhen('schedule'), enabled: true, then: readTriggerThen(original) }}
+            workflowOptions={[]} onSubmit={submit} />);
+        // Absence from the hydrated list does not mean deletion: archived and unloaded targets stay valid.
+        expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(false);
+        const session = createSessionFixture({ id: 'destination', serverId, metadata: {
+            ...createSessionFixture().metadata!, machineId: 'machine-1', path: '/repo',
+            flavor: 'claude', claudeSessionId: 'resume-destination', claudeTranscriptPath: '/tmp/destination.jsonl',
+        } });
+        const replacement = createSessionFixture({ id: 'replacement', serverId, metadata: {
+            ...session.metadata!, claudeSessionId: 'resume-replacement', claudeTranscriptPath: '/tmp/replacement.jsonl',
+        } });
+        await act(async () => { getStorage().setState({ sessions: { [session.id]: session, [replacement.id]: replacement } }); });
+        await act(async () => { getStorage().getState().deleteSession(session.id, 'other-home'); });
+        expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(false);
+        await act(async () => { getStorage().getState().deleteSession(session.id, serverId); });
+        expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(true);
+        await screen.pressByTestIdAsync('retired-target-submit');
+        expect(submit).not.toHaveBeenCalled();
+        if (scope === 'account') {
+            const sessions = screen.findAllByType(DropdownMenu).find(menu => menu.props.testID === 'retired-target-runs-in-session');
+            if (!sessions) throw new Error('Expected the destination picker');
+            await act(async () => { sessions.props.onSelect(replacement.id); });
+            expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(false);
+            await screen.pressByTestIdAsync('retired-target-submit');
+            const target = TriggerTargetV1Schema.parse(submit.mock.calls[0]?.[1].target);
+            if (target.kind !== 'inline') throw new Error('Expected an inline prompt');
+            const step = target.definition.blocks[0];
+            expect(resolveWorkflowStepSelectionV1({ defaults: target.definition.defaults,
+                step: step?.kind === 'step' ? step.execution : undefined, purpose: 'authoring' }).selection.conversation)
+                .toEqual({ kind: 'existing_session', sessionId: replacement.id, machineId: 'machine-1' });
+        }
+    });
     it('chooses where an Account prompt runs from one select whose unavailable choice keeps its reason', async () => {
         const { createDefaultWhen } = await import('./sessionTriggerForm');
         const submit = vi.fn<ExistingTriggerSubmit>(async () => {});

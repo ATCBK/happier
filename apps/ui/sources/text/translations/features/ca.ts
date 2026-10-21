@@ -14716,6 +14716,7 @@ const ca: WorkflowTriggersCopy = {
         notifyMe: "Avisa'm",
         runWorkflow: 'Executa un flux',
         sendPromptDescription: "L'agent d'aquesta sessió rep aquest prompt en aquesta sessió. Mai no interromp el teu torn.",
+        nextPending: 'Pendent',
         promptLabel: 'Prompt',
         promptPlaceholder: "Què ha de fer l'agent?",
         message: 'Missatge',

@@ -14743,6 +14743,7 @@ const es: WorkflowTriggersCopy = {
         notifyMe: 'Notificarme',
         runWorkflow: 'Ejecutar un flujo',
         sendPromptDescription: 'El agente de esta sesión recibe este prompt en esta sesión. Nunca interrumpe tu turno.',
+        nextPending: 'Pendiente',
         promptLabel: 'Prompt',
         promptPlaceholder: '¿Qué debe hacer el agente?',
         message: 'Mensaje',

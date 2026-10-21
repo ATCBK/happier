@@ -14680,6 +14680,7 @@ const ja: WorkflowTriggersCopy = {
         notifyMe: '通知する',
         runWorkflow: 'ワークフローを実行',
         sendPromptDescription: 'このセッションのエージェントがこのセッションでプロンプトを受け取ります。あなたのターンを中断することはありません。',
+        nextPending: '保留中',
         promptLabel: 'プロンプト',
         promptPlaceholder: 'エージェントに何をさせますか?',
         message: 'メッセージ',

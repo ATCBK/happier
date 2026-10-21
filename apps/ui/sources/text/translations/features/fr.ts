@@ -14740,6 +14740,7 @@ const fr: WorkflowTriggersCopy = {
         notifyMe: 'Me notifier',
         runWorkflow: 'Lancer un workflow',
         sendPromptDescription: "L'agent de cette session reçoit ce prompt dans cette session. Il n'interrompt jamais ton tour.",
+        nextPending: 'En attente',
         promptLabel: 'Prompt',
         promptPlaceholder: "Que doit faire l'agent ?",
         message: 'Message',

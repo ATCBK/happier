@@ -60,6 +60,7 @@ export const en = {
         nextMinutes: ({ count }: Count) => `in ${count} min`,
         nextHours: ({ count }: Count) => `in ${count} h`,
         nextDays: ({ count }: Count) => count === 1 ? 'tomorrow' : `in ${count} days`,
+        nextPending: 'Pending',
         steps: ({ count }: Count) => (count === 1 ? `${count} step` : `${count} steps`),
         off: 'Off',
         running: 'Running',

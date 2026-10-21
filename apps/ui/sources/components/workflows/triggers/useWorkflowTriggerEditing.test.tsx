@@ -5,7 +5,7 @@ import { WorkflowTriggerSetV1Schema, AutomationDefinitionCreateRequestSchema, Au
     AutomationDefinitionListResponseSchema, AutomationDefinitionReconcileRequestSchema, AutomationStoredWorkflowDefinitionRecipeV2Schema,
     AutomationStoredWorkflowDefinitionV2Schema,
     ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, WorkflowDefinitionArtifactHeaderV1Schema,
-    WorkflowDefinitionArtifactBodyV1Schema, AutomationTriggerIdSchema, type AutomationDefinitionDetail,
+    WorkflowDefinitionArtifactBodyV1Schema, AutomationTriggerIdSchema, AutomationTriggerDetailSchema, type AutomationDefinitionDetail,
     type AutomationTriggerDefinitionInput, type WorkflowTriggerSetV1 } from '@happier-dev/protocol';
 import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -72,8 +72,12 @@ function listRows() {
     })), nextCursor: null });
 }
 function persistedTrigger(id: string, value: AutomationTriggerDefinitionInput, revision = 1): AutomationDefinitionDetail['triggers'][number] {
-    if (value.kind !== 'schedule') throw new Error('Creation fixture supports schedules only');
-    return { ...value, id: AutomationTriggerIdSchema.parse(id), revision, createdAt: 1, updatedAt: 1, nextRunAt: null, triggerDefinitionEnvelope: null };
+    const base = { ...value, id: AutomationTriggerIdSchema.parse(id), revision, createdAt: 1, updatedAt: 1, triggerDefinitionEnvelope: null };
+    if (value.kind === 'schedule') return AutomationTriggerDetailSchema.parse({ ...base, nextRunAt: null });
+    if (value.kind === 'sessionLifecycle') return AutomationTriggerDetailSchema.parse({ ...base,
+        remainingOccurrences: value.policy.kind === 'everyMatch' ? null : value.policy.kind === 'nextMatches' ? value.policy.count : 1,
+        status: { state: 'waiting', runId: null } });
+    throw new Error('Creation fixture supports schedules and Session lifecycle only');
 }
 function installRow(id: string) {
     const path = `/v3/automations/${id}`;
@@ -97,7 +101,9 @@ function installRow(id: string) {
                 if (value.kind === 'new') return persistedTrigger(value.triggerId, value.trigger);
                 const trigger = current.triggers.find(candidate => candidate.id === value.triggerId);
                 if (!trigger) throw new Error('Missing retained trigger');
-                return { ...trigger, ...(value.trigger ?? {}), ...(value.enabled === undefined ? {} : { enabled: value.enabled }),
+                const updated = value.trigger ? persistedTrigger(trigger.id,
+                    { ...value.trigger, enabled: value.enabled ?? trigger.enabled }, trigger.revision + 1) : trigger;
+                return { ...updated, ...(value.enabled === undefined ? {} : { enabled: value.enabled }),
                     revision: trigger.revision + (value.trigger || value.enabled !== undefined ? 1 : 0) };
             }) });
         rows = rows.map(value => value.id === id ? row : value);
@@ -387,9 +393,11 @@ describe('workflow trigger editing lifetime', () => {
         expect(screen.findByTestId('session-work-trigger:set-1:t1-switch')?.props.disabled).not.toBe(true);
         await screen.pressByTestIdAsync('session-work-trigger:set-1:t1');
         await waitForHomeGovernance(() => expect(screen.findByTestId('session-work-trigger-popover-submit')).not.toBeNull());
+        expect.soft(screen.findByTestId('session-work-trigger-popover-runs-in') !== null).toBe(scopeSessionId === null);
         const clock = screen.findAll(node => typeof node.props.onCommit === 'function' && node.props.testID === 'session-work-trigger-popover-at')[0];
         expect(clock).toBeDefined();
         await act(async () => { clock!.props.onCommit('10:30'); });
+        expect(screen.findByTestId('session-work-trigger-popover-submit')?.props.disabled).toBe(false);
         await screen.pressByTestIdAsync('session-work-trigger-popover-submit');
         await waitForHomeGovernance(() => expect(rows[0]?.triggers[0]).toMatchObject({ schedule: { scheduleExpr: '30 10 * * *' } }));
         expect(rows[0]?.scopeSessionId).toBe(scopeSessionId);
@@ -407,7 +415,22 @@ describe('workflow trigger editing lifetime', () => {
         expect(admission).toMatchObject({ ok: true, snapshot: { materializedLeaves: [{ selection: {
             conversation: { kind: 'existing_session', sessionId: 'session-a', machineId: 'm1' },
         } }] } });
-        await act(async () => { await hook.getCurrent().update({ triggerId: AutomationTriggerIdSchema.parse('t1'), expectedRevision: 2, patch: { enabled: false } }); });
+        if (scopeSessionId === null) {
+            await screen.pressByTestIdAsync('session-work-trigger:set-1:t1');
+            const whenPicker = screen.findAll(node => node.props.testID === 'session-work-trigger-popover-when'
+                && typeof node.props.onSelect === 'function')[0];
+            expect(whenPicker).toBeDefined();
+            await act(async () => { whenPicker!.props.onSelect('turnEnds'); });
+            expect(screen.findByTestId('session-work-trigger-popover-submit')?.props.disabled).toBe(false);
+            await screen.pressByTestIdAsync('session-work-trigger-popover-submit');
+            await waitForHomeGovernance(() => expect(rows[0]?.triggers[0]).toMatchObject({
+                kind: 'sessionLifecycle', sourceSessionId: 'session-a',
+            }));
+            expect(rows[0]?.scopeSessionId).toBeNull();
+            expect(hook.getCurrent().sets[0]?.target).toEqual(originalTarget);
+        }
+        await act(async () => { await hook.getCurrent().update({ triggerId: AutomationTriggerIdSchema.parse('t1'),
+            expectedRevision: rows[0]!.templateVersion, patch: { enabled: false } }); });
         expect(hook.getCurrent().sets[0]?.triggers[0]?.enabled).toBe(false);
         expect(rows[0]?.scopeSessionId).toBe(scopeSessionId);
         await act(async () => { await hook.getCurrent().remove('t1'); });

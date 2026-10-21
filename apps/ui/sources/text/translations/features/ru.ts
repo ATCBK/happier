@@ -14724,6 +14724,7 @@ const ru: WorkflowTriggersCopy = {
         notifyMe: 'Уведомить меня',
         runWorkflow: 'Запустить процесс',
         sendPromptDescription: 'Агент этой сессии получит этот запрос в этой сессии. Он никогда не прерывает ваш ход.',
+        nextPending: 'Ожидается',
         promptLabel: 'Запрос',
         promptPlaceholder: 'Что должен сделать агент?',
         message: 'Сообщение',

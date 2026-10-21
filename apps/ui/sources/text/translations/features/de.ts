@@ -14186,6 +14186,7 @@ const de: WorkflowTriggersCopy = {
         notifyMe: 'Benachrichtige mich',
         runWorkflow: 'Workflow ausführen',
         sendPromptDescription: 'Der Agent dieser Sitzung erhält diesen Prompt in dieser Sitzung. Er unterbricht nie deinen Zug.',
+        nextPending: 'Ausstehend',
         promptLabel: 'Prompt',
         promptPlaceholder: 'Was soll der Agent tun?',
         message: 'Nachricht',

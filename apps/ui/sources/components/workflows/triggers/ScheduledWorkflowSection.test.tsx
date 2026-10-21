@@ -52,7 +52,8 @@ describe('Scheduled Work rows', () => {
         expect(screen.getTextContent()).toContain('nextMinutes(count=1)');
         expect(vi.getTimerCount()).toBe(1);
         await act(async () => { vi.advanceTimersByTime(90_000); });
-        expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toBe('automations.list.nextRunPending');
+        // The trailing column says one word; the spoken label keeps the whole sentence.
+        expect(screen.findByTestId('scheduled-workflow:habit:timer-next')?.props.children).toBe('workflows.triggers.row.nextPending');
         expect(screen.findByTestId('scheduled-workflow:habit:timer')?.props.accessibilityLabel).toContain('automations.list.nextRunPending');
         expect(screen.findByTestId('scheduled-workflow:habit:timer')?.props.accessibilityLabel).not.toContain('workflows.triggers.row.nextRun(');
         expect(vi.getTimerCount()).toBe(0);

@@ -344,6 +344,7 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
     const row = popover?.row ?? null;
     const editedSet = row ? read.sets.find(set => set.automationId === row.automationId) : undefined;
     const editorSessionId = editedSet?.scopeSessionId ?? props.sessionId;
+    const editorScope = editedSet && !editedSet.scopeSessionId ? 'account' : 'session';
 
     // "When this turn finishes…" (04 §5.5): the deep link carries the exact turn; the section opens
     // its popover once with When a turn ends bound to that turn (the existing exact-turn owner parses it).
@@ -439,6 +440,7 @@ function SessionTriggersContent(props: Readonly<{ sessionId: string; serverId?: 
                     whenKinds={[...SESSION_TRIGGER_WHEN_KINDS, 'pluginEvent']}
                     unavailableKinds={Object.fromEntries(Object.entries(SESSION_UNAVAILABLE_KINDS).map(([kind, key]) => [kind, t(key)]))}
                     sessionId={editorSessionId}
+                    scope={editorScope}
                     {...(Array.isArray(read.pullRequestLinks) ? { pullRequestLinks: read.pullRequestLinks } : {})}
                     initial={initial}
                     {...(row === null && boundWhen !== undefined ? { initialWhen: boundWhen } : {})}

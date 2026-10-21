@@ -14676,6 +14676,7 @@ const zhHans: WorkflowTriggersCopy = {
         notifyMe: '通知我',
         runWorkflow: '运行工作流',
         sendPromptDescription: '此会话的代理会在此会话中收到这条提示。它不会打断你的回合。',
+        nextPending: '待定',
         promptLabel: '提示',
         promptPlaceholder: '代理应该做什么？',
         message: '消息',

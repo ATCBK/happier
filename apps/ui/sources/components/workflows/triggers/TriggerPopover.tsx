@@ -19,7 +19,7 @@ import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
 import { Text } from '@/components/ui/text/Text';
 import { formatWorkflowProblemMessage } from '@/components/workflows/presentation/workflowProblemPresentation';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useSessionReferenceTarget } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { ActionInputFields } from '@/components/sessions/actions/ActionInputFields';
@@ -70,8 +70,10 @@ type TriggerPopoverBaseProps = Readonly<{
     /** The kinds **When** offers, in order; an entry in `unavailableKinds` is listed with its reason. */
     whenKinds: readonly SessionTriggerWhenKind[];
     unavailableKinds?: TriggerKindAvailability;
-    /** The session a lifecycle kind listens to; `null` for an Account trigger. */
+    /** The contextual Session a new lifecycle kind listens to; placement can remain Account-scoped. */
     sessionId: string | null;
+    /** The trigger set's placement, independent of its lifecycle source Session. Defaults to the context. */
+    scope?: 'session' | 'account';
     pullRequestLinks?: readonly Readonly<{ repository: string; number: number }>[];
     /** `null` adds a new trigger. */
     initial: TriggerFormValue | null;
@@ -317,11 +319,15 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
     const trigger = props.manual || props.creatingSession ? null : buildTriggerDefinition({ when, enabled, sessionId: props.sessionId });
     const initialTrigger = props.creatingSession ? buildInitialTriggerDefinition({ when, enabled }) : null;
     const displayedTrigger = props.creatingSession ? initialTrigger : trigger;
-    const sessionScoped = props.creatingSession || props.sessionId !== null;
+    const triggerScope = props.creatingSession ? 'session' : props.scope ?? (props.sessionId !== null ? 'session' : 'account');
+    const sessionScoped = triggerScope === 'session';
     const showThen = props.showThen ?? true;
-    const target = showThen ? buildTriggerTarget(then, sessionScoped ? 'session' : 'account') : null;
+    const target = showThen ? buildTriggerTarget(then, triggerScope) : null;
+    const promptDestination = useSessionReferenceTarget(
+        then.kind === 'sendPrompt' && then.runsIn?.kind === 'session' ? then.runsIn.sessionId : '', originServerId,
+    );
     const unavailableWhen = props.unavailableKinds?.[when.kind];
-    const complete = (props.manual || displayedTrigger !== null) && (!showThen || target !== null) && unavailableWhen === undefined
+    const complete = (props.manual || displayedTrigger !== null) && (!showThen || (target !== null && !promptDestination.deleted)) && unavailableWhen === undefined
         && props.hostComplete !== false && (!showThen || then.kind !== 'runWorkflow'
             || (workflow.status === 'ready' && !inputFields.some((field) => field.blocking)))
         && (inlineDefinition === null || !inputFields.some((field) => field.blocking));
@@ -509,7 +515,7 @@ export function TriggerPopover(props: TriggerPopoverProps): React.ReactElement {
                                         then={then}
                                         onChange={changeThen}
                                         workflowOptions={props.workflowOptions}
-                                        scope={sessionScoped ? 'session' : 'account'}
+                                        scope={triggerScope}
                                         machineId={props.machineId ?? null}
                                         serverId={props.serverId ?? null}
                                         directory={props.directory ?? null}

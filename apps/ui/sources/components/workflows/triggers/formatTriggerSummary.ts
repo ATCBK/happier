@@ -21,12 +21,13 @@ export function formatNextScheduledRun(nextRunAt: number | null, enabled = true,
 
 /**
  * The same occurrence as a bare time ("in 3 h", "tomorrow"), for a trailing meta column whose
- * position already says "next"; without an occurrence it is the same pending/none sentence.
+ * position already says "next": a due or unscheduled occurrence is the one word "Pending" (the
+ * sentence form would crowd the title it qualifies), and a disabled one says it has none.
  */
 export function formatNextScheduledRunTime(nextRunAt: number | null, enabled = true, nowMs = Date.now()): string {
     // A retained occurrence is not a future promise once it is due. Only the scheduler can
     // publish its successor; elapsed-age wording would describe a different fact (a past Run).
-    if (nextRunAt === null || nextRunAt <= nowMs) return t(enabled ? 'automations.list.nextRunPending' : 'automations.list.noNextRun');
+    if (nextRunAt === null || nextRunAt <= nowMs) return t(enabled ? 'workflows.triggers.row.nextPending' : 'automations.list.noNextRun');
     const { days, minutes } = scheduledRunTimeUnits(nextRunAt, nowMs);
     return days > 0
         ? t('workflows.triggers.row.nextDays', { count: days })
