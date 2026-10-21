@@ -7730,6 +7730,7 @@ settingsSession: {
             conversationModeSubtitle: '直接寫入工作階段，或使用中介並顯式提交',
             conversation: {
                 handsFree: {
+                    pushToTalkTitle: '按鍵說話',
                     pushToTalkSubtitle: '此提供商會轉寫完成的錄音，再次點按麥克風即可傳送。如需免持操作，請選擇裝置或本機神經語音辨識。',
                 },
             },

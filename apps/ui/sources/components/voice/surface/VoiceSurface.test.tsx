@@ -691,6 +691,11 @@ describe('VoiceSurface', () => {
     const texts = screen.getTextContent();
     expect(texts).toContain('voiceSurface.errors.sendFailed');
     expect(texts).toContain('session is offline');
+    for (const text of ['voiceSurface.errors.sendFailed', 'session is offline']) {
+      expect(screen.root.findAllByProps({ children: text }).some(node =>
+        node.props.selectable === true && node.props.numberOfLines === undefined,
+      )).toBe(true);
+    }
   });
 
   it('keeps a local voice error visible after the call ended so the user can act on it', async () => {

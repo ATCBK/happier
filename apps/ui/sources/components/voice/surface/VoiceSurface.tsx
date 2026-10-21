@@ -337,13 +337,13 @@ export function VoiceSurface(props: Readonly<{ variant: VoiceSurfaceVariant; ses
               <Text
                 accessibilityRole="alert"
                 style={[styles.targetText, { color: theme.colors.status.error }]}
-                numberOfLines={3}
+                selectable
               >
                 {voiceError.message}
               </Text>
             ) : null}
             {voiceError?.detail ? (
-              <Text style={[styles.targetText, { color: theme.colors.text.secondary }]} numberOfLines={2}>
+              <Text style={[styles.targetText, { color: theme.colors.text.secondary }]} selectable>
                 {voiceError.detail}
               </Text>
             ) : null}
