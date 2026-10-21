@@ -221,7 +221,7 @@ import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendi
 import { projectSessionAttachmentInputV1 } from '@/session/attachments/projectRawIngressSessionAttachmentsV1';
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
-import { readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
+import { freezeWorkflowActionContractV1, readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import { resolveActionAgentStartContextV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { requestDaemonSignedRootActionExecution, recordDaemonSkillUse } from '@/daemon/controlClient';
@@ -1996,9 +1996,7 @@ export function createCliActionDeps(params: Readonly<{
             return result.result;
           },
         });
-        const inputSchema = StrictJsonValueSchema.safeParse(action.inputSchema);
-        const outputSchema = StrictJsonValueSchema.safeParse(action.outputSchema);
-        return inputSchema.success && outputSchema.success ? { inputSchema: inputSchema.data, outputSchema: outputSchema.data } : null;
+        return freezeWorkflowActionContractV1(action);
       },
       readWorkflowDefinition: (ref, signal) => resolveWorkflowDefinitionRefV1(formatWorkflowDefinitionRefV1(ref), {
         readPluginWorkflows: workflowDefinitions.readPluginWorkflows,

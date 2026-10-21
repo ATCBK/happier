@@ -21,9 +21,8 @@ import { measureExternalActionResultResponseEnvelopeUtf8BytesV1 } from '../exter
 import { REVIEW_AND_CONVERGE_WORKFLOW_V1 } from '../../workflows/builtins/reviewAndConverge.js';
 import { PLAN_WITH_A_PANEL_WORKFLOW_V1 } from '../../workflows/builtins/planWithAPanel.js';
 import { getActionSpec } from '../actionSpecs.js';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '../actionCatalog.js';
 import { ActionIdSchema } from '../actionIds.js';
-import { zodSchemaToJsonSchemaObject } from '../actionInputJsonSchema.js';
-import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
 import { resolveActionCurrentSessionScopeFailure } from './sessionListAccess.js';
 import type { ActionExecutorContext, ActionExecutorDeps } from './types.js';
 import { markSessionListQueryResultV1 } from '../../sessions/awareness/action.js';
@@ -215,8 +214,7 @@ describe('shared Account workflow run owner', () => {
       resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true,
         readActionContract: async actionId => {
           const spec = getActionSpec(ActionIdSchema.parse(actionId));
-          return { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema)),
-            outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.outputSchema!)) };
+          return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
         } } }),
       // Authorized Discussion transport is the genuine resource boundary.
       resolveDiscussionOrigin: async () => {
@@ -491,9 +489,7 @@ describe('shared Account workflow run owner', () => {
           const parsed = ActionIdSchema.safeParse(id);
           if (!parsed.success) return null;
           const spec = getActionSpec(parsed.data);
-          const output = spec.completion?.terminalOutputSchema ?? spec.outputSchema;
-          return output ? { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-            outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(output, { target: 'draft-7' })) } : null;
+          return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
         },
       } }),
     });
@@ -812,9 +808,7 @@ describe('shared Account workflow run owner', () => {
             const parsed = ActionIdSchema.safeParse(id);
             if (!parsed.success) return null;
             const spec = getActionSpec(parsed.data);
-            const output = spec.completion?.terminalOutputSchema ?? spec.outputSchema;
-            return output ? { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-              outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(output, { target: 'draft-7' })) } : null;
+            return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
           } },
       }),
     });

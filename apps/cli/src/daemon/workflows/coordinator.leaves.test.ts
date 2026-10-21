@@ -3,10 +3,9 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createActionExecutor, freezeActionCompletionContractV1, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
+import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
-import { ActionIdSchema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, ExecutionRunResultContractV1Schema, PluginJsonValueV2Schema, ResolvedRoleV1Schema, withExecutionRunStartFailureDetails } from '@happier-dev/protocol';
+import { ActionIdSchema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, ExecutionRunResultContractV1Schema, ResolvedRoleV1Schema, withExecutionRunStartFailureDetails } from '@happier-dev/protocol';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends';
 import { validateExecutionRunProfileResult } from '@happier-dev/protocol/execution/runs/resultContract';
 import type { WorkflowActionLeafV1, WorkflowDefinitionV1, WorkflowMaterializedLeafV1 } from '@happier-dev/protocol/workflows';
@@ -17,6 +16,7 @@ import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/wor
 import { createDefaultWorkspaceWorkerPreferenceV1, ProjectExecutionChoiceV1Schema, resolveProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import { createCoordinatorWorkspaceResolver } from './resolveWorkflowWorkspace';
 import { createGitWorkflowWorkspaceTestDependencies } from './workflowWorkspace.testkit';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 
 const workspace = { machineId: 'machine', directory: '/repo', checkoutRootPath: '/repo' };
 const authorization = { principal: { kind: 'host' as const }, admittedPermissionCeiling: 'default' as const };
@@ -60,14 +60,10 @@ function definition(blocks: WorkflowDefinitionV1['blocks']): WorkflowDefinitionV
 }
 function frozen(leaf: WorkflowActionLeafV1): WorkflowMaterializedLeafV1 {
   const spec = getActionSpec(ActionIdSchema.parse(leaf.actionId));
-  const outputSchema = spec.completion?.terminalOutputSchema ?? spec.outputSchema;
-  if (!outputSchema) throw new Error('action_fixture_requires_output_schema');
+  const actionContract = freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
+  if (!actionContract) throw new Error('action_fixture_requires_output_schema');
   return { authoredWorkspace: { kind: 'inherit' as const }, sourceKey: '$root', blockId: leaf.id, kind: 'action', selection: {}, executionTarget,
-    actionId: leaf.actionId, actionContract: {
-      inputSchema: PluginJsonValueV2Schema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-      outputSchema: PluginJsonValueV2Schema.parse(zodSchemaToJsonSchemaObject(outputSchema, { target: 'draft-7' })),
-      ...(spec.completion ? { completion: freezeActionCompletionContractV1(spec.completion) } : {}),
-    } };
+    actionId: leaf.actionId, actionContract };
 }
 const goal: WorkflowActionLeafV1 = { kind: 'action', id: 'goal', actionId: 'session.goal.set',
   input: { sessionId: { kind: 'origin_session_id' }, status: { kind: 'literal', value: 'complete' } } };

@@ -22,6 +22,9 @@ import {
   type ActionDefinitionV1,
 } from './actionDefinitionV1.js';
 import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject, type JsonSchemaObject } from './actionInputJsonSchema.js';
+import { freezeActionCompletionContractV1, ActionCompletionContractV1Schema } from './actionCompletion.js';
+import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import type { WorkflowMaterializedLeafV1 } from '../workflows/workflowDefinitionV1.js';
 
 export { readCompleteActionSpecV1 } from './actionSpecSections.js';
 
@@ -221,7 +224,23 @@ export function actionSpecToActionDefinitionV1(
     kindVersion: 1,
     ...serializeActionSpec(spec, params),
     inputSchema: zodSchemaToJsonSchemaObject(projection.inputSchema, { target: 'draft-7', reused: 'ref' }),
+    ...(spec.completion ? { completion: freezeActionCompletionContractV1(spec.completion) } : {}),
   };
+}
+
+/** One projection for native and contributed Workflow Action admission. */
+export function freezeWorkflowActionContractV1(
+  definition: Readonly<{ inputSchema?: unknown; outputSchema?: unknown; completion?: unknown }>,
+): NonNullable<WorkflowMaterializedLeafV1['actionContract']> | null {
+  const input = StrictJsonValueSchema.safeParse(definition.inputSchema ?? {});
+  const completion = definition.completion === undefined ? undefined
+    : ActionCompletionContractV1Schema.safeParse(definition.completion);
+  if (!input.success || completion && !completion.success) return null;
+  const output = StrictJsonValueSchema.safeParse(completion?.success
+    ? completion.data.terminalOutputSchema : definition.outputSchema);
+  if (!output.success) return null;
+  return { inputSchema: input.data, outputSchema: output.data,
+    ...(completion?.success ? { completion: StrictJsonValueSchema.parse(completion.data) } : {}) };
 }
 
 function projectActionDiscoveryExamples(examples: ActionDefinitionSummaryV1['examples']) {
@@ -335,6 +354,7 @@ export function projectActionDefinitionForExternalDiscovery(
     ...projectActionDefinitionSummaryForExternalDiscovery(definition),
     kindVersion: definition.kindVersion,
     inputSchema: definition.inputSchema,
+    ...(definition.completion === undefined ? {} : { completion: definition.completion }),
     ...(definition.compatibility === undefined ? {} : { compatibility: definition.compatibility }),
   });
 }

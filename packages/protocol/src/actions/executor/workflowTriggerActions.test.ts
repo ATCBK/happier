@@ -21,8 +21,7 @@ import { openAutomationTriggerDefinitionStoredEnvelopeV1, sealAutomationTriggerD
 import { markSessionListQueryResultV1 } from '../../sessions/awareness/action.js';
 import { ActionIdSchema } from '../actionIds.js';
 import { getActionSpec } from '../actionSpecs.js';
-import { zodSchemaToJsonSchemaObject } from '../actionInputJsonSchema.js';
-import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '../actionCatalog.js';
 
 const definition = WorkflowDefinitionV1Schema.parse({ version: 1,
   defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
@@ -400,11 +399,7 @@ describe('workflow trigger Automation composition', () => {
         effects: { resolveTargetAvailability: async () => true,
           readActionContract: async (actionId) => {
             const spec = getActionSpec(ActionIdSchema.parse(actionId));
-            if (!spec.outputSchema) throw new Error('Inherited workflow requires its canonical Action result contract');
-            return {
-              inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-              outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' })),
-            };
+            return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
           },
         },
       }) });

@@ -76,6 +76,8 @@ import { logger } from '@/ui/logger';
 import { createDeferred } from '@/testkit/async/deferred';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 import { DEFAULT_SESSION_AUTO_FOLLOW_PREFERENCES_V1, DEFAULT_SESSION_FOLLOW_CREATION_POLICIES_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { createWorkflowCoordinator } from '@/daemon/workflows/coordinator';
+import { createInMemoryWorkflowCoordinatorStore } from '@/daemon/workflows/workflowCoordinator.testkit';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 afterAll(async () => {
@@ -108,10 +110,11 @@ describe('createCliActionDeps workflow boundary', () => {
     expect(WorkflowActionFailureV1Schema.parse(result)).toMatchObject({ ok: false, errorCode: 'storage_unavailable' });
   });
   it.each([
-    { surface: 'ui', authority: 'present_user' },
-    { surface: 'cli', authority: 'account_automation' },
-    { surface: 'voice', authority: 'account_automation' },
-  ] as const)('inherits the authorized origin Session selection for a $surface Panel without inventing an Agent caller', async ({ surface, authority }) => {
+    { surface: 'ui', authority: 'present_user', originless: false },
+    { surface: 'cli', authority: 'account_automation', originless: false },
+    { surface: 'voice', authority: 'account_automation', originless: false },
+    { surface: 'cli', authority: 'account_automation', originless: true },
+  ] as const)('freezes completion and origin selection for a $surface Panel (originless: $originless)', async ({ surface, authority, originless }) => {
     const lease = await pluginReloadController.acquireRuntimeRegistry({
       resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({}) }),
     });
@@ -145,13 +148,20 @@ describe('createCliActionDeps workflow boundary', () => {
           protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { codex: {
             id: 'codex', identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
             capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+          }, opencode: {
+            id: 'opencode', identity: { pluginId: 'happier.agent.opencode', localId: 'opencode' },
+            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
           } } },
         };
         if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 1, results: {
           'cli.codex': { ok: true, data: { installed: true, version: '1', latestVersion: null,
             update: { supported: false, command: null }, signIn: { status: 'signedOut', loginSupport: 'unsupported' },
             platform: { supported: true }, install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] } },
-          'tool.executionRuns': { ok: true, data: { available: true, features: { detachedScope: true }, backends: { codex: { available: true } } } },
+          'cli.opencode': { ok: true, data: { installed: true, version: '1', latestVersion: null,
+            update: { supported: false, command: null }, signIn: { status: 'signedOut', loginSupport: 'unsupported' },
+            platform: { supported: true }, install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] } },
+          'tool.executionRuns': { ok: true, data: { available: true, features: { detachedScope: true },
+            backends: { codex: { available: true }, opencode: { available: true } } } },
         } };
         throw new Error(`Unexpected Panel Machine RPC ${method}`);
       } },
@@ -160,8 +170,9 @@ describe('createCliActionDeps workflow boundary', () => {
     signedRootAction.mockImplementation(async request => executor.execute(request.actionId, request.input, { surface: 'cli' }));
     const result = await executor.execute('workflow.run.start', {
       runId: '77777777-7777-4777-8777-777777777778', source: { kind: 'catalog', workflow: 'builtin:plan-with-a-panel' },
-      inputs: { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex'] }, roleOverrides: [],
-    }, { surface, authority, serverId: 'profile', defaultSessionId: sessionId,
+      inputs: { request: 'Plan the change', engines: ['agent:happier.agent.codex/codex', 'agent:happier.agent.opencode/opencode'] },
+      roleOverrides: originless ? [{ roleId: 'planner', engine: { agentTargetKey: 'agent:happier.agent.codex/codex' } }] : [],
+    }, { surface, authority, serverId: 'profile', ...(originless ? {} : { defaultSessionId: sessionId }),
       externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: tmpdir() } } });
     expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { admission: 'created' } });
     const admission = http.post.mock.calls.find(([, body]) => body.operation === 'admit')?.[1];
@@ -172,13 +183,81 @@ describe('createCliActionDeps workflow boundary', () => {
     });
     expect(accepted.kind).toBe('available');
     if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
+    expect(accepted.content.materializedLeaves.find(leaf => leaf.actionId === 'subagents.plan.start')?.actionContract)
+      .toMatchObject({ completion: { awaits: 'execution_runs' },
+        outputSchema: expect.objectContaining({ required: expect.arrayContaining(['plans', 'perEngineOutcome']) }) });
     const synthesis = accepted.content.materializedLeaves.find(leaf => leaf.blockId === 'synthesis');
     expect(synthesis?.kind).toBe('step');
     if (synthesis?.kind !== 'step') throw new Error('synthesis_step_unavailable');
-    expect(synthesis.selection).toMatchObject({
+    if (!originless) expect(synthesis.selection).toMatchObject({
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
       modelSelection: { ref: { modelId: 'parent-model' } }, connectedServices,
     });
+    if (!originless) return;
+    expect(accepted.content.origin).toEqual({ kind: 'direct' });
+    // Native start/terminal observation and Agent execution are process boundaries.
+    // CLI admission, discovery, materialization, completion and input binding stay real.
+    for (const missingCompletion of [false, true]) {
+      const store = createInMemoryWorkflowCoordinatorStore();
+      const terminal = createDeferred<void>();
+      const observing = createDeferred<void>();
+      const synthesisInputs: unknown[] = [];
+      let nativeStarts = 0;
+      const nativeExecutor = createActionExecutor({
+        executionRunCheckProtocolV2: async () => ({ ok: true }),
+        executionRunStart: async () => ({ runId: `native-${++nativeStarts}`, callId: 'native-call', sidechainId: 'native-call' }),
+      });
+      const coordinator = createWorkflowCoordinator({ store,
+        isAcceptedAuthorizationCurrent: async () => true,
+        resolveWorkspace: async () => ({ ok: true, workspace: accepted.content.workspaceTarget.project }),
+        executeStep: async step => {
+          synthesisInputs.push(step.input);
+          return { kind: 'completed', result: { document: 'Synthesized terminal evidence' } };
+        },
+        action: { executor: nativeExecutor,
+          buildContext: async () => ({ surface: 'cli', authority: 'account_automation', bypassApprovals: true,
+            externalActionTarget: { kind: 'machine', machineId: 'machine-1', project: { machineId: 'machine-1', directory: tmpdir() } } }),
+          observeRun: async run => {
+            observing.resolve();
+            await terminal.promise;
+            return run.runId === 'native-1' ? { kind: 'failed', code: 'native_plan_failed' }
+              : { kind: 'completed', result: { plan: 'terminal plan' } };
+          } },
+      });
+      const materializedLeaves = accepted.content.materializedLeaves.map(leaf => {
+        if (!missingCompletion || !leaf.actionContract) return leaf;
+        const { completion: _completion, ...contract } = leaf.actionContract;
+        // The old projection paired the missing declaration with the immediate
+        // Start schema (unconstrained JSON), rather than the terminal schema.
+        return { ...leaf, actionContract: { ...contract, outputSchema: {} } };
+      });
+      const running = coordinator.run({ ...accepted.content, materializedLeaves, runId: admission.runId });
+      try {
+        if (missingCompletion) {
+          // Removing only the frozen completion wiring admits Start replies as
+          // results. The positive assertion below distinguishes that regression.
+          await vi.waitFor(() => expect(synthesisInputs).toHaveLength(1));
+          expect(JSON.stringify(synthesisInputs)).not.toContain('perEngineOutcome');
+        } else {
+          await Promise.race([observing.promise, running.then(outcome => {
+            throw new Error(`Panel settled before observing native completion: ${JSON.stringify({ outcome,
+              leaves: store.list().filter(row => row.blockId === 'plan') })}`);
+          })]);
+          expect(synthesisInputs).toEqual([]);
+        }
+      } finally { terminal.resolve(); }
+      expect(await running).toMatchObject({ state: 'waiting_for_review' });
+      if (!missingCompletion) {
+        expect(JSON.stringify(synthesisInputs)).toContain('terminal plan');
+        expect(JSON.stringify(synthesisInputs)).toContain('native_plan_failed');
+        expect(store.list().filter(row => row.blockId === 'plan').map(row => row.result))
+          .toEqual(expect.arrayContaining([
+            expect.objectContaining({ plans: [], perEngineOutcome: [expect.objectContaining({ outcome: 'failed', errorCode: 'native_plan_failed' })] }),
+            expect.objectContaining({ plans: [expect.objectContaining({ value: { plan: 'terminal plan' } })],
+              perEngineOutcome: [expect.objectContaining({ outcome: 'completed' })] }),
+          ]));
+      }
+    }
   });
   it.each([false, true])('keeps fresh Workflow materialization in the admitted Account holder (maintenance pending: %s)', async pendingMaintenance => {
     // Real daemon publication with no SCM plugin: a plain directory is valid.

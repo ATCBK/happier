@@ -16,6 +16,7 @@ import { ActionOperationDeclarationV1Schema } from './operations/v1.js';
 import { ActionContextualDefaultsSchema } from './contextualDefaults.js';
 import { ActionSessionTargetDeclarationV1Schema } from './sessionTargetV1.js';
 import { PluginLooseJsonObjectSchema, PluginOptionalStringSchema } from '../plugins/_shared.js';
+import { ActionCompletionContractV1Schema } from './actionCompletion.js';
 
 const LooseJsonObjectSchema = PluginLooseJsonObjectSchema;
 const OptionalStringSchema = PluginOptionalStringSchema;
@@ -116,6 +117,7 @@ export type ActionDefinitionSummaryV1 = z.infer<typeof ActionDefinitionSummaryV1
 export const ActionDefinitionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.extend(ActionDefinitionSummaryV1Schema, {
   kindVersion: z._default(z.literal(1), 1),
   inputSchema: LooseJsonObjectSchema,
+  completion: z.optional(ActionCompletionContractV1Schema),
   compatibility: z.optional(LooseJsonObjectSchema),
 })));
 export type ActionDefinitionV1 = z.infer<typeof ActionDefinitionV1Schema>;
@@ -175,6 +177,7 @@ export type ActionDiscoveryDefinitionSummaryV1 = z.infer<typeof ActionDiscoveryD
 export const ActionDiscoveryDefinitionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ActionDiscoveryDefinitionSummaryV1Schema, {
   kindVersion: z._default(z.literal(1), 1),
   inputSchema: LooseJsonObjectSchema,
+  completion: z.optional(ActionCompletionContractV1Schema),
   compatibility: z.optional(LooseJsonObjectSchema),
 })));
 export type ActionDiscoveryDefinitionV1 = z.infer<typeof ActionDiscoveryDefinitionV1Schema>;

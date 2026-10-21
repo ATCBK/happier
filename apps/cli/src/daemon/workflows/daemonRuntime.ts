@@ -10,17 +10,14 @@ import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugi
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
 import { SessionInputCancelExactTurnResultV1Schema } from '@happier-dev/protocol/sessions/control/exactTurnCancellationV1';
-import { readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
-import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
+import { freezeWorkflowActionContractV1, readCompleteActionSpecV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { ActionOperationListV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 import { admitAgentStartV1 } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { formatWorkflowDefinitionRefV1 } from '@happier-dev/protocol/workflows/workflowDefinitionRefV1';
 import { readWorkflowRunLeafStartRequestV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
-import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { freezeActionCompletionContractV1, readActionCompletionRunObservationV1 } from '@happier-dev/protocol/actions/actionCompletion';
+import { readActionCompletionRunObservationV1 } from '@happier-dev/protocol/actions/actionCompletion';
 import type { ActionCompletionOperation } from '@happier-dev/protocol/actions/actionCompletion';
 import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2, ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
-import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ExecutionRunWaitResultSchema, ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import {
   CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1,
@@ -386,15 +383,7 @@ export function createProductionDaemonWorkflowRuntime(params: Readonly<{
               return result.result;
             },
           });
-          if (spec.outputSchema === undefined) return null;
-          const id = ActionIdSchema.safeParse(actionId);
-          // This is the exact run machine's host catalog. Executable completion
-          // functions stay host-private; only their frozen schema is sealed.
-          const declaration = id.success ? getActionSpec(id.data).completion : undefined;
-          const completion = declaration ? freezeActionCompletionContractV1(declaration) : undefined;
-          return { inputSchema: StrictJsonValueSchema.parse(spec.inputSchema),
-            outputSchema: StrictJsonValueSchema.parse(completion?.terminalOutputSchema ?? spec.outputSchema),
-            ...(completion ? { completion } : {}) };
+          return freezeWorkflowActionContractV1(spec);
         },
       });
       const resolveMaterializationHost: NonNullable<Parameters<typeof createProductionWorkflowRunCoordinator>[0]['resolveMaterializationHost']> = async (claim) => {

@@ -1,9 +1,32 @@
 import { describe, expect, it, vi } from 'vitest';
-import { actionSpecToActionDefinitionV1, projectActionDefinitionForExternalDiscovery } from './actionCatalog.js';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1, projectActionDefinitionForExternalDiscovery } from './actionCatalog.js';
 import { getActionSpec, listActionSpecs } from './actionSpecs.js';
 import { projectActionSpecSchemaSections, readCompleteActionSpecV1 } from './actionSpecSections.js';
+import { freezeActionCompletionContractV1 } from './actionCompletion.js';
 
 describe('Action schema sections', () => {
+  it('carries native completion contracts through full sectioned discovery', async () => {
+    const spec = getActionSpec('subagents.plan.start');
+    const full = projectActionDefinitionForExternalDiscovery(actionSpecToActionDefinitionV1(spec));
+    const discovered = await readCompleteActionSpecV1({ actionId: spec.id,
+      read: async input => projectActionSpecSchemaSections(full, input.schemaPath) });
+    expect(discovered).toHaveProperty('completion', freezeActionCompletionContractV1(spec.completion!));
+    expect(freezeWorkflowActionContractV1(discovered)).toEqual({ inputSchema: discovered.inputSchema,
+      outputSchema: freezeActionCompletionContractV1(spec.completion!).terminalOutputSchema,
+      completion: freezeActionCompletionContractV1(spec.completion!) });
+  });
+
+  it('uses the supplied declaration for qualified Actions and keeps ordinary contributed outputs immediate', () => {
+    const completion = freezeActionCompletionContractV1(getActionSpec('subagents.plan.start').completion!);
+    const definition = projectActionDefinitionForExternalDiscovery({ ...actionSpecToActionDefinitionV1(getActionSpec('action.spec.get')),
+      id: 'external.workflow-test/check', inputSchema: { type: 'object' }, outputSchema: { type: 'string' }, completion });
+    expect(freezeWorkflowActionContractV1(definition)).toMatchObject({ completion, outputSchema: completion.terminalOutputSchema });
+    expect(freezeWorkflowActionContractV1({ outputSchema: { type: 'string' } }))
+      .toEqual({ inputSchema: {}, outputSchema: { type: 'string' } });
+    expect(freezeWorkflowActionContractV1({ outputSchema: {} , completion: { awaits: 'unknown' } })).toBeNull();
+    expect(freezeWorkflowActionContractV1({ inputSchema: {} })).toBeNull();
+  });
+
   it('retrieves independent input and output sections while another section is pending', async () => {
     const base = actionSpecToActionDefinitionV1(getActionSpec('action.spec.get'), { includeOutputSchema: true });
     const definition = projectActionDefinitionForExternalDiscovery({ ...base, id: 'external.workflow-test/check',

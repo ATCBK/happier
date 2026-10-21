@@ -4,9 +4,7 @@ import { createWorkflowCoordinator, workflowInvocationKey, type WorkflowCoordina
 import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { freezeActionCompletionContractV1 } from '@happier-dev/protocol/actions/actionCompletion';
-import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
-import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import type { WorkflowJsonValue } from './input';
 import { shouldPublishWorkflowSharedConversation } from './workflowConversation';
 import { materializeWorkflowContainerResult } from './workflowContainerResult';
@@ -32,10 +30,7 @@ export function createTestWorkflowCoordinator(deps: Parameters<typeof createWork
       admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true,
         readActionContract: async (id) => {
           const spec = getActionSpec(ActionIdSchema.parse(id));
-          if (!spec.outputSchema) return null;
-          return { inputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-            outputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' })),
-            ...(spec.completion ? { completion: freezeActionCompletionContractV1(spec.completion) } : {}) };
+          return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
         } } });
     if (!accepted.ok) throw new Error(`workflow_fixture_not_materialized:${accepted.error.code}`);
     return coordinator.run({ ...accepted.snapshot, ...input,

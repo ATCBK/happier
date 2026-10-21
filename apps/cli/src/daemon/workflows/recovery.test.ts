@@ -31,11 +31,10 @@ import {
 
 import { createWorkflowRunRecoveryReader, createWorkflowInvocationRecoveryFactWriter } from './recovery';
 import { createWorkflowInvocationRecoveryObserver } from './daemonRuntime';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { createPlainWorkflowRunKeyCensusFixture, createWorkflowRunStorageTestkit, type WorkflowRunStorageTestkitOperation } from './workflowRunStorage.testkit';
 import type { AvailableAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
 import type { WaitForSessionInputReplyResult } from '@/session/services/sendSessionMessage';
-import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
-import { normalizePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { buildAcpAgentMessageEnvelope } from '@/api/session/acpMessageEnvelope';
 import { WORKFLOW_STEP_INPUT_EVENT_MESSAGE } from '@/session/shared/sessionTurnLifecycle';
@@ -74,11 +73,7 @@ it.each(['retained', 'observed'] as const)('retains Project consent custody (%s)
   const kit = createWorkflowRunStorageTestkit({ accountId, runId, machineId, now, origin: { kind: 'direct' },
     acceptedEnvelope: directAcceptedEnvelope({ definition, materializedLeaves: [{ sourceKey: '$root', blockId: 'prepare',
       kind: 'action', actionId: 'projects.prepare', selection: {}, executionTarget: { kind: 'session' }, authoredWorkspace: { kind: 'inherit' },
-      actionInput: input, actionContract: {
-        inputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-        outputSchema: normalizePluginJsonSchema(zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' })),
-        completion: freezeActionCompletionContractV1(spec.completion),
-      } }] }) });
+      actionInput: input, actionContract: freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec))! }] }) });
   const seal = (id: string, root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
     binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: id,
       sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },

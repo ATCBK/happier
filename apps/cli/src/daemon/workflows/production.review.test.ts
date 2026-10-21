@@ -15,8 +15,9 @@ import {
   resolveBuiltinWorkflowDefinitionV1,
   createWorkflowAccountRunActionOwner,
   WorkflowResultContractSchema,
-  ActionIdSchema, getActionSpec, freezeActionCompletionContractV1, zodSchemaToJsonSchemaObject, StrictJsonValueSchema,
+  ActionIdSchema, getActionSpec,
 } from '@happier-dev/protocol';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { decodeExecutionRunResultObservation } from '@happier-dev/protocol/execution/runs/resultContract';
 import { DurableWorkflowCoordinatorStore, createProductionWorkflowRunCoordinator } from './production';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
@@ -64,11 +65,7 @@ describe('durable review coordinator', () => {
     admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true,
       readActionContract: async id => {
         const spec = getActionSpec(ActionIdSchema.parse(id));
-        const outputSchema = spec.completion?.terminalOutputSchema ?? spec.outputSchema;
-        if (!outputSchema) return null;
-        return { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-          outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(outputSchema, { target: 'draft-7' })),
-          ...(spec.completion ? { completion: freezeActionCompletionContractV1(spec.completion) } : {}) };
+        return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
       } } });
     if (!accepted.ok) throw new Error(JSON.stringify(accepted.error));
     const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',

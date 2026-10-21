@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import axios from 'axios';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import {
   admitAgentStartV1,
   createAccountScopedCryptoMaterialSnapshotV1,
@@ -21,8 +22,6 @@ import {
   ActionIdSchema,
   AcpConfigOptionOverridesV1Schema,
   ConnectedServiceBindingsV2IngressSchema,
-  StrictJsonValueSchema,
-  zodSchemaToJsonSchemaObject,
   deriveAutomationOccurrenceKeyV1,
   WorkflowProgressEnvelopeV1Schema,
   WorkflowRunSummaryV1Schema,
@@ -408,9 +407,7 @@ function workflowDaemonProcess(input: Readonly<{
           const parsed = ActionIdSchema.safeParse(actionId);
           if (!parsed.success) return null;
           const spec = getActionSpec(parsed.data);
-          if (!spec.outputSchema) return null;
-          return { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-            outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' })) };
+          return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
         } },
       admitLeaf: async (leaf, facts) => admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
         { kind: 'workflow_run_leaf', leaf }, {

@@ -2,7 +2,7 @@ import { createTestWorkflowCoordinator as createWorkflowCoordinator } from './wo
 import { describe, expect, it } from 'vitest';
 import {
   ActionIdSchema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, buildBackendTargetKeyV2,
-  createActionExecutor, freezeActionCompletionContractV1, type ActionExecutorDeps,
+  createActionExecutor, type ActionExecutorDeps,
   type ActionExecutorContext, type JsonValue, StrictJsonValueSchema, ActionsSettingsV1Schema, type ActionsSettingsV1,
   isApprovalRequiredByActionsSettings,
   ReviewCommentV1Schema, type ReviewCommentV1,
@@ -10,7 +10,7 @@ import {
   REVIEW_FINDINGS_VERIFY_AND_FIX_INSTRUCTIONS_V1, REVIEW_FINDINGS_VERIFY_ONLY_INSTRUCTIONS_V1,
 } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
-import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
+import { actionSpecToActionDefinitionV1, freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 import { withExecutionRunStartFailureDetails } from '@happier-dev/protocol';
 import {
   getWorkflowStarterExamplesV1, materializeWorkflowAcceptedSnapshotV1,
@@ -74,11 +74,7 @@ async function accepted(definition: WorkflowDefinitionV1, evidence: Record<strin
       const parsed = ActionIdSchema.safeParse(id);
       if (!parsed.success) return null;
       const spec = getActionSpec(parsed.data);
-      const output = spec.completion?.terminalOutputSchema ?? spec.outputSchema;
-      if (!output) return null;
-      return { inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
-        outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(output, { target: 'draft-7' })),
-        ...(spec.completion ? { completion: StrictJsonValueSchema.parse(freezeActionCompletionContractV1(spec.completion)) } : {}) };
+      return freezeWorkflowActionContractV1(actionSpecToActionDefinitionV1(spec));
     },
   } });
   if (!result.ok) throw new Error(JSON.stringify(result.error));

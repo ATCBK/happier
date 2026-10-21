@@ -23,6 +23,7 @@ import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSa
 import { ActionSessionAddressV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import type { WorkflowSessionConversation } from '@/daemon/workflows/sessionStepExecutor';
+import { freezeWorkflowActionContractV1 } from '@happier-dev/protocol/actions/actionCatalog';
 
 type Materialization = Pick<Parameters<typeof materializeWorkflowAcceptedSnapshotV1>[0], 'roleSelection' | 'effects'>;
 type RoleSelection = NonNullable<Materialization['roleSelection']>;
@@ -150,10 +151,7 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
         });
         target.signal?.throwIfAborted();
         const schemas = DaemonPluginActionSchemasReadResponseSchema.safeParse(response);
-        return schemas.success && schemas.data.ok && schemas.data.outputSchema !== undefined
-          // Frozen workflow contracts describe canonical JSON values, not the
-          // plugin invocation ABI's omitted-input grammar.
-          ? { inputSchema: schemas.data.inputSchema ?? {}, outputSchema: schemas.data.outputSchema } : null;
+        return schemas.success && schemas.data.ok ? freezeWorkflowActionContractV1(schemas.data) : null;
       } catch {
         target.signal?.throwIfAborted();
         return null;
