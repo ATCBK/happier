@@ -5,6 +5,9 @@ import {
     WorkflowRunSummariesRequestV1Schema,
     WorkflowRunSourceSummariesResultV1Schema,
     type WorkflowRunSourceSummariesResultV1,
+    WorkflowRunAutomationSummariesRequestV1Schema,
+    WorkflowRunAutomationSummariesResultV1Schema,
+    type WorkflowRunAutomationSummariesResultV1,
     type WorkflowRunAcceptedContextV1,
     type WorkflowRunGetResultV1,
 } from '@happier-dev/protocol/workflows/actionsV1';
@@ -179,6 +182,19 @@ export async function summarizeWorkflowRuns(params: Readonly<{
         actionId: 'workflow.run.summaries',
         input: WorkflowRunSummariesRequestV1Schema.parse({ sourceArtifactIds: params.sourceArtifactIds, recent: params.recent }),
         parseResult: (value) => WorkflowRunSourceSummariesResultV1Schema.parse(value),
+        fallbackMessage: 'Workflow run summaries request failed',
+        ...(params.signal ? { signal: params.signal } : {}),
+    });
+}
+
+/** Public latest-status facts for demanded Automations; never acquires private Run content. */
+export async function summarizeWorkflowAutomationRuns(params: Readonly<{
+    automationIds: readonly string[]; signal?: AbortSignal;
+}>): Promise<WorkflowRunAutomationSummariesResultV1> {
+    return await callWorkflowAction({
+        actionId: 'workflow.run.summaries',
+        input: WorkflowRunAutomationSummariesRequestV1Schema.parse({ automationIds: params.automationIds }),
+        parseResult: (value) => WorkflowRunAutomationSummariesResultV1Schema.parse(value),
         fallbackMessage: 'Workflow run summaries request failed',
         ...(params.signal ? { signal: params.signal } : {}),
     });

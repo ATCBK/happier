@@ -19,7 +19,7 @@ const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { resetWorkflowLibraryReadsForTests } = await import('./workflowLibraryReads');
-const { useWorkflowLibrarySummaries } = await import('./useWorkflowLibrarySummaries');
+const { useWorkflowLibrarySummaries, useWorkflowAutomationSummaries } = await import('./useWorkflowLibrarySummaries');
 const { useSessionTriggerLastRuns } = await import('../triggers/useSessionTriggerLastRuns');
 
 // These declarations script HTTP storage responses, never the Action executor.
@@ -63,7 +63,7 @@ describe('workflow library run summaries', () => {
     const reply = { ok: true, result: { summaries: [item], remainingSourceArtifactIds: [] } };
 
     it('batches trigger-only latest statuses without acquiring full Runs or private content', async () => {
-        const automationIds = ['habit-a', 'habit-b', 'habit-empty'];
+        const automationIds = ['habit-b', 'habit-a', 'habit-empty'];
         const succeeded = { id: 'run-a', state: 'succeeded', workflowCustodyState: null, attentionRequired: false, createdAt: '2026-10-21T03:00:00.000Z' };
         const blocked = { id: 'run-b', state: 'running', workflowCustodyState: null, attentionRequired: true, createdAt: '2026-10-21T02:00:00.000Z' };
         executeMock.mockResolvedValue({ ok: true, result: { automationSummaries: [
@@ -72,13 +72,13 @@ describe('workflow library run summaries', () => {
         ], remainingAutomationIds: [] } });
         const hook = await renderHook(() => useSessionTriggerLastRuns(automationIds));
         await waitForHomeGovernance(() => expect(home.requestsFor('/v3/automations/runs/workflow-storage').length).toBeGreaterThan(0));
-        expect(home.requestsFor('/v3/automations/runs/workflow-storage').map(({ input }) => input)).toEqual([
+        expect(home.requestsFor('/v3/automations/runs/workflow-storage').map(({ input }) => input)).toMatchObject([
             { operation: 'summaries', request: { automationIds } },
         ]);
         expect(executeMock.mock.calls.map(([, input]) => input)).toEqual([{ automationIds }]);
         await waitForHomeGovernance(() => expect(hook.getCurrent().lastRunsByAutomationId).toEqual({ 'habit-a': succeeded, 'habit-b': blocked }));
         expect(hook.getCurrent().failed).toBe(false);
-        expect(home.requestsFor('/v3/automations/runs/workflow-storage').map(({ input }) => input)).toEqual([
+        expect(home.requestsFor('/v3/automations/runs/workflow-storage').map(({ input }) => input)).toMatchObject([
             { operation: 'summaries', request: { automationIds } },
         ]);
         expect(storage.getState().workflowRunsById).toEqual({});
@@ -168,6 +168,20 @@ describe('workflow library run summaries', () => {
         await act(async () => { hook.getCurrent().retry(); });
         await waitForHomeGovernance(() => expect(hook.getCurrent().failed).toBe(false));
         expect(hook.getCurrent().lastRunsByAutomationId).toEqual({ 'habit-b': lastRun });
+    });
+
+    it('reports a non-progressing empty page as unavailable and distinguishes an answered null', async () => {
+        executeMock.mockResolvedValueOnce({ ok: true, result: { automationSummaries: [], remainingAutomationIds: ['habit-a'] } });
+        const hook = await renderHook(() => useWorkflowAutomationSummaries(['habit-a']));
+        await waitForHomeGovernance(() => expect(hook.getCurrent().failed).toBe(true));
+        expect(hook.getCurrent().summaries).toBeNull();
+        executeMock.mockResolvedValueOnce({ ok: true, result: { automationSummaries: [{ automationId: 'habit-a', lastRun: null }], remainingAutomationIds: [] } });
+        await act(async () => { hook.getCurrent().retry(); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().summaries?.has('habit-a')).toBe(true));
+        expect(hook.getCurrent().failed).toBe(false);
+        expect(hook.getCurrent().summaries?.get('habit-a')?.lastRun).toBeNull();
+        await renderHook(() => useWorkflowAutomationSummaries(['habit-a']));
+        expect(executeMock.mock.calls).toHaveLength(2);
     });
 
     it('renews mounted demand and wakes after the same Account becomes available again', async () => {

@@ -102,7 +102,7 @@ export function describeLegacyTriggerSet(set: WorkflowTriggerSetV1, resolveMachi
 export function projectSessionTriggerGroups(params: Readonly<{
     sets: readonly WorkflowTriggerSetV1[];
     lastRunAtByAutomationId: Readonly<Record<string, number | null>>;
-    lastRunsByAutomationId?: Readonly<Record<string, WorkflowRunSummaryV1>>;
+    lastRunsByAutomationId?: Readonly<Record<string, Pick<WorkflowRunSummaryV1, 'state' | 'workflowCustodyState' | 'attentionRequired'>>>;
     resolveWorkflowTitle: (ref: string) => string | null;
     resolveMachineTitle?: (id: string) => string | null;
     formatAge: (at: number) => string;
