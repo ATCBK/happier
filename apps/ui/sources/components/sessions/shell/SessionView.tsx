@@ -1224,13 +1224,13 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
     const attachmentsUploadsFeatureEnabled = useFeatureEnabled('attachments.uploads');
     const attachmentsUploadsTransferAvailable = useSessionFileUploadAvailability(acceptedSessionId, currentSessionRouteServerId, 'attachment');
     const attachmentsUploadsEnabled = attachmentsUploadsFeatureEnabled
-        && attachmentsUploadsTransferAvailable
         && resolveEmbeddedComposerControls(embedded)?.attachments !== false;
+    const attachmentsUploadsAvailable = attachmentsUploadsEnabled && attachmentsUploadsTransferAvailable;
     const sessionBrowserContextRuntime = useSessionBrowserContextRuntime({
         enabled: browserContextFeatureEnabled && isSurfaceFocused && session != null,
         scopeKey: acceptedSessionId,
         sessionId: acceptedSessionId,
-        attachmentsUploadsEnabled,
+        attachmentsUploadsEnabled: attachmentsUploadsAvailable,
         nowMs: nowServerMs,
         onAttachUnavailable: React.useCallback(() => {
             Modal.alert(t('common.error'), t('browserContext.composer.contextUnavailable'));
@@ -1894,6 +1894,7 @@ const SessionViewFocusedSurfaceContentBody = React.memo((props: SessionViewFocus
                            paneUrlState={props.paneUrlState ?? null}
                            initialAttachmentDrafts={props.initialAttachmentDrafts ?? null}
                            attachmentsUploadsEnabled={attachmentsUploadsEnabled}
+                           attachmentsUploadsAvailable={attachmentsUploadsAvailable}
                            browserContextStateForComposer={browserContextStateForComposer}
                            browserContextComposerContext={browserContextComposerContext}
                            paneScopeId={paneScopeId}
@@ -1990,6 +1991,7 @@ function SessionViewLoadedContent({
     paneUrlState,
     initialAttachmentDrafts,
     attachmentsUploadsEnabled,
+    attachmentsUploadsAvailable,
     browserContextStateForComposer,
     browserContextComposerContext,
     paneScopeId,
@@ -2048,6 +2050,7 @@ function SessionViewLoadedContent({
     paneUrlState: SessionPaneUrlState | null;
     initialAttachmentDrafts: readonly AttachmentDraft[] | null;
     attachmentsUploadsEnabled: boolean;
+    attachmentsUploadsAvailable: boolean;
     browserContextStateForComposer: BrowserContextState | null;
     browserContextComposerContext: SessionBrowserContextRuntime['composerContext'] | null;
     paneScopeId: string;
@@ -2138,6 +2141,7 @@ function SessionViewLoadedContent({
         approvalRequests,
         initialAttachmentDrafts,
         attachmentsUploadsEnabled,
+        attachmentsUploadsAvailable,
         browserContextStateForComposer,
         browserContextComposerContext,
         pendingMessages,

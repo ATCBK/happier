@@ -16,6 +16,7 @@ function buildAttachmentRootStep(params: Readonly<{
     onPickFile: () => void;
     onPickImage: () => void;
     onPasteImage?: () => void;
+    disabled?: boolean;
 }>): SelectionListStep {
     return {
         id: 'attachments-add-root',
@@ -29,17 +30,20 @@ function buildAttachmentRootStep(params: Readonly<{
                         ? [{
                             id: 'paste-image',
                             label: t('common.pasteImage'),
+                            disabled: params.disabled,
                             onSelect: () => params.onPasteImage?.(),
                         }]
                         : []),
                     {
                         id: 'add-image',
                         label: t('common.addImage'),
+                        disabled: params.disabled,
                         onSelect: () => params.onPickImage(),
                     },
                     {
                         id: 'add-file',
                         label: t('common.addFile'),
+                        disabled: params.disabled,
                         onSelect: () => params.onPickFile(),
                     },
                 ],
@@ -94,6 +98,7 @@ export function createAttachmentActionChip(params: Readonly<{
                     onPickFile: params.onPickFile,
                     onPickImage: params.onPickImage,
                     onPasteImage: params.onPasteImage,
+                    disabled: params.disabled,
                 }),
                 onSelect: () => {
                     // List-mode option actions live on SelectionListOption.onSelect.
@@ -105,6 +110,7 @@ export function createAttachmentActionChip(params: Readonly<{
             collapsedAction: ({ tint, dismiss, blurInput }) => ({
                 id: 'attachments',
                 label: t('common.attach'),
+                disabled: params.disabled,
                 icon: normalizeNodeForView(<Icon name="paperclip" size={AGENT_INPUT_MENU_ICON_SIZE_PX} color={tint} />),
                 onPress: () => {
                     blurInput();

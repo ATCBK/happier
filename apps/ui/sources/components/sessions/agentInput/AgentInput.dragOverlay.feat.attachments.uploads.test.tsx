@@ -12,7 +12,7 @@ import { useAttachmentDraftManager } from '@/components/sessions/attachments/use
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import type { MultiTextInputHandle } from '@/components/ui/forms/MultiTextInput';
 import type { ComposerStructuredInputMention } from './structuredInputMentions';
-import { scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { formatInlineReferenceTokenV1, scanInlineReferenceTokensV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { AttachmentFilePicker } from '@/components/sessions/attachments/AttachmentFilePicker.web';
 import { createEphemeralComposerDocumentOwner } from '@/components/sessions/composer/composerDocumentOwner';
@@ -25,7 +25,17 @@ import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // jsdom has no browser hit-test API. A point outside the editor falls back to its caret.
 Object.defineProperty(document, 'elementFromPoint', { configurable: true, value: () => null });
-afterAll(() => { Reflect.deleteProperty(document, 'elementFromPoint'); });
+const originalRangeGeometry = ['getClientRects', 'getBoundingClientRect'].map(key => [key, Object.getOwnPropertyDescriptor(Range.prototype, key)] as const);
+// jsdom has selection but no layout geometry for ProseMirror's focus/typing scroll.
+Object.defineProperty(Range.prototype, 'getClientRects', { configurable: true, value: () => [] });
+Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, value: () => new DOMRect(0, 0, 0, 18) });
+afterAll(() => {
+    Reflect.deleteProperty(document, 'elementFromPoint');
+    for (const [key, descriptor] of originalRangeGeometry) {
+        if (descriptor) Object.defineProperty(Range.prototype, key, descriptor);
+        else Reflect.deleteProperty(Range.prototype, key);
+    }
+});
 
 type HostProps = Readonly<{
     children?: React.ReactNode;
@@ -130,6 +140,7 @@ function PickerComposerHarness({ inputRef, onDrafts }: Readonly<{
             return result;
         },
         openAttachmentPicker: () => { attachments.filePickerRef.current?.openFiles(); return true; },
+        focusComposer: () => { inputRef.current?.focus(); },
     }), [attachments.filePickerRef, owner]);
     return <>
         <button data-testid="pick-attachments" onClick={() => attachments.filePickerRef.current?.openFiles()}>Attach</button>
@@ -203,6 +214,21 @@ async function renderAgentInput(onAttachmentsAdded: NonNullable<React.ComponentP
 }
 
 describe('AgentInput (attachments drag overlay)', () => {
+    it('shows a queued picture as ready and dims it only during upload', async () => {
+        const tokenText = formatInlineReferenceTokenV1({ ref: 'attachment:picture', label: 'screen.png' });
+        const transfer = { key: 'picture', label: 'screen.png', preview: { kind: 'image' as const, uri: 'blob:screen' }, onRemove: () => {} };
+        const rendered = await renderAgentInput(() => {}, { value: tokenText,
+            structuredInputMentions: [{ kind: 'attachment', ref: 'attachment:picture', tokenText, start: 0, end: tokenText.length }],
+            attachmentRowItems: projectAgentInputAttachmentRowItems({ transferAttachments: [{ ...transfer, status: 'pending' }] }),
+        });
+        const chip = () => rendered.container.querySelector('[data-composer-chip-view]');
+        expect(chip()?.getAttribute('data-state')).toBe('ready');
+        await rendered.update({ attachmentRowItems: projectAgentInputAttachmentRowItems({ transferAttachments: [{ ...transfer, status: 'uploading' }] }) });
+        expect(chip()?.getAttribute('data-state')).toBe('pending');
+        await rendered.update({ attachmentRowItems: projectAgentInputAttachmentRowItems({ transferAttachments: [{ ...transfer, status: 'uploaded' }] }) });
+        expect(chip()?.getAttribute('data-state')).toBe('ready');
+    });
+
     it.each(['attach', 'action'] as const)('inserts two picked images at the middle caret through %s with their actual tray ids', async entry => {
         const priorScope = storage.getState().profileScope;
         const priorRuntime = getAppliedActiveServerSnapshot();
@@ -238,6 +264,8 @@ describe('AgentInput (attachments drag overlay)', () => {
                 }
             });
             expect(opened).toBe(true);
+            // The OS chooser takes focus away from the contenteditable input.
+            await act(async () => { inputRef.current?.blur(); });
             const files = [new File(['one'], 'one.png', { type: 'image/png' }), new File(['two'], 'two.png', { type: 'image/png' })];
             Object.defineProperty(picker, 'files', { configurable: true, value: files });
             await act(async () => { picker.dispatchEvent(new Event('change', { bubbles: true })); });
@@ -248,6 +276,15 @@ describe('AgentInput (attachments drag overlay)', () => {
             expect(tokens[0]?.start).toBe(7);
             expect(text.slice(tokens[1]!.end)).toBe(' after');
             expect(Array.from(container.querySelectorAll('[data-happier-ref-label]'), node => node.textContent)).toEqual(['Image #1', 'Image #2']);
+            expect(document.activeElement).toBe(container.querySelector('[data-happier-text-input]'));
+            const selection = window.getSelection()!;
+            const typed = document.createTextNode('continue ');
+            await act(async () => {
+                selection.getRangeAt(0).insertNode(typed);
+                selection.collapse(typed, typed.length);
+                document.activeElement?.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'continue ' }));
+            });
+            expect(inputRef.current?.getText()).toContain('continue after');
         } finally {
             await act(async () => { mounted.at(-1)?.root.unmount(); });
             storage.setState({ profileScope: priorScope });

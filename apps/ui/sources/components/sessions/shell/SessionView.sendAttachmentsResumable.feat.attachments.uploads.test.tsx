@@ -7,6 +7,7 @@ import { configureConnectedServerSocketBoundary, installDisconnectedServerSocket
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createExistingSessionDirectoryPreflightResult, createPlainSessionByIdResponseFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -26,6 +27,7 @@ import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { SessionDraftDocumentV1Schema } from '@happier-dev/protocol';
 import type { MessageAckResponse } from '@happier-dev/protocol/updates';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
+import { V2SessionByIdResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { SessionPendingMessageComposerAdmissionPrepareRequestV1Schema,
     SessionPendingMessageComposerAdmissionPrepareResponseV1Schema,
@@ -628,6 +630,7 @@ async function renderScreen(element: Parameters<typeof renderTestkitScreen>[0]) 
     }).finally(() => { readingRouteAdmission = false; });
     expect(admission.kind, JSON.stringify({
         phase: 'initial-route-admission',
+        admission,
         resumeReasonsDuringAdmission: resumeSyncSpy.mock.calls.slice(resumesBeforeAdmission).map(([reason]) => reason),
     })).toBe('available');
     const { clearDaemonMergedProjectionCacheForTests, loadDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
@@ -788,7 +791,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
             }
             return wireSession;
         }
-        const requestHttp = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const requestHttp = createSessionReadBatchFetchBoundary(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
             const url = new URL(String(input));
             if (url.origin === 'http://127.0.0.1:48123') {
                 if (url.pathname.includes('/chunks/')) return Response.json({ success: true });
@@ -877,8 +880,9 @@ describe('SessionView (attachments.uploads resumable send)', () => {
             }
             if (path === '/v2/sessions/s1') {
                 if (!readingRouteAdmission) await canonicalRefreshRespondAfter;
-                return Response.json({ session: { ...readWireSession(), active: sessionState.session.active,
-                    pendingCount: serverPendingRows.size, pendingVersion: serverPendingVersion } });
+                return Response.json(V2SessionByIdResponseSchema.parse({ session: { ...createPlainSessionByIdResponseFixture(sessionState.session).session,
+                    ...readWireSession(), active: sessionState.session.active,
+                    pendingCount: serverPendingRows.size, pendingVersion: serverPendingVersion } }));
             }
             if (path === '/v1/sessions/s1/messages') {
                 await canonicalRefreshRespondAfter;
@@ -911,7 +915,7 @@ describe('SessionView (attachments.uploads resumable send)', () => {
                 return Response.json({ pending: [...serverPendingRows.values()].filter((row) => JSON.stringify(row.recipient) === JSON.stringify(recipient)) });
             }
             return createEmptyAccountBootstrapHttpResponse(path, init) ?? await accountHttp.request(input, init);
-        };
+        });
         accountConnection = await restoreServerAccountForTest({
             serverUrl: 'https://server-1',
             accountId: TEST_SERVER_ACCOUNT_SCOPE.accountId,
@@ -941,6 +945,47 @@ describe('SessionView (attachments.uploads resumable send)', () => {
     afterEach(async () => {
         await accountConnection?.dispose();
         accountConnection = undefined;
+    });
+
+    it('keeps attachment custody visible and refuses send during a transfer outage, then recovers', async () => {
+        const screen = await renderScreen(<AppPaneProvider><SessionView id="s1" /></AppPaneProvider>);
+        try {
+            const readInput = () => findTestInstanceByTypeWithProps(screen.tree, 'AgentInput', {})!;
+            await act(async () => {
+                invokeTestInstanceHandler(readInput(), 'onChangeText', 'Describe this image', 'AgentInput');
+                invokeTestInstanceHandler(readInput(), 'onAttachmentsAdded', [
+                    { name: 'screen.png', size: 1, type: 'image/png', slice: () => new Blob([new Uint8Array([1])]) },
+                ], 'AgentInput');
+            });
+            const { storage } = originalStorageModule;
+            const machine = storage.getState().machines.m1;
+            expect(machine).toBeDefined();
+            await act(async () => { storage.getState().applyMachines([{ ...machine, active: false }], true, { sourceServerId: 'server-1' }); });
+            await vi.waitFor(() => expect(readInput().props.onAttachmentsAdded).toBeUndefined());
+            expect(readInput().props.attachmentRowItems).toEqual([expect.objectContaining({ label: 'screen.png', status: 'pending' })]);
+            expect(readInput().props.hasSendableAttachments).toBe(true);
+            expect(readInput().props.extraActionChips.some((chip: { key: string }) => chip.key === 'attachments-add')).toBe(true);
+            const attachmentChip = readInput().props.extraActionChips.find((chip: { key: string }) => chip.key === 'attachments-add');
+            if (attachmentChip.collapsedAction) {
+                expect(attachmentChip.collapsedAction({ tint: 'currentColor', dismiss: () => {}, blurInput: () => {} }).disabled).toBe(true);
+            } else {
+                expect(attachmentChip.collapsedOptionsPopover.rootStep.sections[0].options.every((option: { disabled?: boolean }) => option.disabled)).toBe(true);
+            }
+            sendMessageSpy.mockClear(); uploadSpy.mockClear(); modalAlertSpy.mockClear();
+            await act(async () => { invokeTestInstanceHandler(readInput(), 'onSend', undefined, 'AgentInput'); });
+            await Promise.allSettled(pendingFireAndForget);
+            expect(sendMessageSpy).not.toHaveBeenCalled();
+            expect(uploadSpy).not.toHaveBeenCalled();
+            const { describeUploadFailure } = await import('@/components/transfers/describeUploadFailure');
+            const { t } = await import('@/text');
+            expect(modalAlertSpy).toHaveBeenCalledWith(t('common.error'), describeUploadFailure('unreachable', t('common.machine')));
+            expect(readInput().props.value).toBe('Describe this image');
+            await act(async () => { storage.getState().applyMachines([machine], true, { sourceServerId: 'server-1' }); });
+            await vi.waitFor(() => expect(readInput().props.onAttachmentsAdded).toBeTypeOf('function'));
+            expect(readInput().props.attachmentRowItems).toEqual([expect.objectContaining({ label: 'screen.png', status: 'pending' })]);
+        } finally {
+            await screen.unmount();
+        }
     });
 
     it('preserves unsent attachment drafts when the composer moves to a sheet or the session input remounts', async () => {

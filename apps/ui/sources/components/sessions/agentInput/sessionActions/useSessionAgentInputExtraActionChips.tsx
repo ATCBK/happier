@@ -28,6 +28,7 @@ export function useSessionAgentInputExtraActionChips(params: Readonly<{
     accountScope: ServerAccountScope | null;
     accountScopeIsCurrent?: (() => boolean) | null;
     attachmentsUploadsEnabled: boolean;
+    attachmentsUploadsAvailable?: boolean;
     isReadOnly: boolean;
     isUploadingAttachments: boolean;
     onPickAttachmentFile: () => void;
@@ -66,7 +67,7 @@ export function useSessionAgentInputExtraActionChips(params: Readonly<{
                 onPickFile: params.onPickAttachmentFile,
                 onPickImage: params.onPickAttachmentImage,
                 onPasteImage: params.onPasteAttachmentImage,
-                disabled: params.isUploadingAttachments,
+                disabled: params.isUploadingAttachments || params.attachmentsUploadsAvailable === false,
             }));
         }
 
@@ -146,6 +147,7 @@ export function useSessionAgentInputExtraActionChips(params: Readonly<{
         openFile,
         params.sessionAccess,
         params.attachmentsUploadsEnabled,
+        params.attachmentsUploadsAvailable,
         params.defaultBackendId,
         params.defaultBackendTarget,
         params.readInstructionsText,

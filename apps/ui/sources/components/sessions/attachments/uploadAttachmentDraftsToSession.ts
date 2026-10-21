@@ -5,12 +5,13 @@ import { buildUploadedAttachment, type UploadedAttachment } from '@happier-dev/p
 import type { AttachmentsUploadConfig } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
 import { sessionAttachmentsUploadFile } from '@/sync/domains/transfers/ops/uploadSessionAttachment';
 import type { AttachmentUploadSource } from '@/sync/domains/attachments/attachmentsUploadFileSource';
-import { RpcError } from '@/sync/runtime/rpcErrors';
+import { readRpcErrorCode, RpcError } from '@/sync/runtime/rpcErrors';
 import { randomUUID } from '@/platform/randomUUID';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
 import { describeUploadFailure } from '@/components/transfers/describeUploadFailure';
 import { classifyTransferFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { readTransferFailureCode } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferFailureCode';
 import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { SessionAttachmentsUploadFinalizeResponse, SessionAttachmentTransferContext } from '@/sync/domains/transfers/runtime/transferRuntime/families/sessionAttachmentTransfers';
 
@@ -67,11 +68,14 @@ export function describeAttachmentUploadSource(source: AttachmentUploadSource): 
 }
 
 function createAttachmentUploadFailureError(input: Readonly<{
-    error: string;
     errorCode?: string | null;
+    thrown?: unknown;
 }>): Error {
     const normalizedCode = typeof input.errorCode === 'string' ? input.errorCode.trim() : '';
-    return normalizedCode ? new RpcError(input.error, normalizedCode) : new Error(input.error);
+    const message = describeUploadFailure(classifyTransferFailure({
+        ...(normalizedCode ? { errorCode: normalizedCode } : {}), thrown: input.thrown,
+    }), t('common.machine'));
+    return normalizedCode ? new RpcError(message, normalizedCode) : new Error(message);
 }
 
 type DraftUploadArguments = Parameters<typeof uploadAttachmentDraftsToSession>[0];
@@ -168,17 +172,16 @@ export async function uploadAttachmentDraftsToSession(args: Readonly<{
         try {
             uploadRes = await uploadAndRecoverDraft(args, stillPresent, messageLocalId);
         } catch (error) {
-            if (stillPresent.source.kind === 'folder' && !args.signal?.aborted) {
-                args.applyDraftPatch(stillPresent.id, { status: 'error',
-                    error: describeUploadFailure(classifyTransferFailure({ thrown: error }), t('common.machine')) });
-            }
-            throw error;
+            if (args.signal?.aborted) throw error;
+            const failure = createAttachmentUploadFailureError({ errorCode: readRpcErrorCode(error) ?? readTransferFailureCode(error), thrown: error });
+            args.applyDraftPatch(stillPresent.id, { status: 'error', error: failure.message });
+            throw failure;
         }
         args.signal?.throwIfAborted();
         if (!uploadRes.success) {
-            args.applyDraftPatch(stillPresent.id, { status: 'error', error: stillPresent.source.kind === 'folder'
-                ? describeUploadFailure(classifyTransferFailure(uploadRes), t('common.machine')) : uploadRes.error });
-            throw createAttachmentUploadFailureError(uploadRes);
+            const failure = createAttachmentUploadFailureError(uploadRes);
+            args.applyDraftPatch(stillPresent.id, { status: 'error', error: failure.message });
+            throw failure;
         }
 
         const uploadedPatch = {

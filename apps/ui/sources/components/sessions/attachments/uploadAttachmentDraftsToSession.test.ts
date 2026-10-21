@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { uploadAttachmentDraftsToSession } from './uploadAttachmentDraftsToSession';
+import { describeUploadFailure } from '@/components/transfers/describeUploadFailure';
+import { t } from '@/text';
 
 const sessionAttachmentsUploadFileSpy = vi.hoisted(() => vi.fn());
 const runTransferFinalizeRecoveryMock = vi.hoisted(() => vi.fn());
@@ -16,6 +19,23 @@ describe('uploadAttachmentDraftsToSession', () => {
     beforeEach(() => {
         sessionAttachmentsUploadFileSpy.mockReset();
         runTransferFinalizeRecoveryMock.mockReset();
+    });
+
+    it.each(['response', 'throw'] as const)('classifies a raw transfer %s for the tray and send caller', async mode => {
+        const raw = 'listen EADDRINUSE: address already in use 127.0.0.1:46001';
+        if (mode === 'response') sessionAttachmentsUploadFileSpy.mockResolvedValue({ success: false, error: raw, errorCode: 'EADDRINUSE' });
+        else sessionAttachmentsUploadFileSpy.mockRejectedValue(Object.assign(new Error(raw), { errorCode: 'EADDRINUSE' }));
+        const applyDraftPatch = vi.fn();
+        const failure = await uploadAttachmentDraftsToSession({ sessionId: 's1', messageLocalId: 'm1',
+            drafts: [{ id: 'image', status: 'pending', source: { kind: 'memory', name: 'screen.png', bytes: new Uint8Array([1]), mimeType: 'image/png' } }],
+            config: { uploadLocation: 'workspace', workspaceRelativeDir: '.happier/attachments', vcsIgnoreStrategy: 'none',
+                vcsIgnoreWritesEnabled: false, maxFileBytes: 1024 }, applyDraftPatch,
+        }).catch((error: unknown) => error);
+        const humanReason = describeUploadFailure('other', t('common.machine'));
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as Error).message).toBe(humanReason);
+        expect(failure).toMatchObject({ rpcErrorCode: 'EADDRINUSE' });
+        expect(applyDraftPatch).toHaveBeenLastCalledWith('image', { status: 'error', error: humanReason });
     });
 
     it('retains the issued attachment handle in message metadata and on uploaded-draft retry', async () => {
@@ -278,7 +298,7 @@ describe('uploadAttachmentDraftsToSession', () => {
             },
             applyDraftPatch: () => {},
         })).rejects.toMatchObject({
-            message: 'Machine target not available for session',
+            message: describeUploadFailure('other', t('common.machine')),
             rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE,
         });
     });

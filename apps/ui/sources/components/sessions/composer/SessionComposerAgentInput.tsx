@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { AgentInput } from '@/components/sessions/agentInput/AgentInput';
+import { AgentInput } from '@/components/sessions/agentInput';
 import { useComposerTextValue, type ComposerTextStore } from '@/components/sessions/agentInput/composerTextStore';
 import {
     useSessionComposerStructuredInputMentions,

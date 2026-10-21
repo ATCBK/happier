@@ -212,6 +212,9 @@ import { useAttachmentDraftManager } from "@/components/sessions/attachments/use
 import { sendableAttachmentDrafts } from "@/components/sessions/attachments/attachmentDraftModel";
 import { clearSessionAttachmentDrafts, readSessionAttachmentDrafts, type SessionAttachmentDraftScope, writeSessionAttachmentDrafts } from "@/components/sessions/attachments/sessionAttachmentDraftStore";
 import { buildAttachmentMessageMeta, uploadAttachmentDraftsToSession } from "@/components/sessions/attachments/uploadAttachmentDraftsToSession";
+import { describeUploadFailure } from '@/components/transfers/describeUploadFailure';
+import { classifyTransferFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 import { captureSessionMessageAttachmentDrafts, isAttachmentTargetUploadCheckpointFor, recordAttachmentTargetUploadCheckpoint } from "@/components/sessions/attachments/uploadSessionMessageAttachmentDrafts";
 import { describeAttachmentUploadSource } from "@/components/sessions/attachments/uploadAttachmentDraftsToSession";
 import { formatAttachmentSelectionSummary } from "@happier-dev/protocol/messages/structured/sessionAttachmentsInputV1";
@@ -585,6 +588,7 @@ export type SessionComposerControllerOptions = Readonly<{
     approvalRequests: ReadonlyArray<OpenApprovalArtifactForSession>;
     initialAttachmentDrafts: readonly AttachmentDraft[] | null;
     attachmentsUploadsEnabled: boolean;
+    attachmentsUploadsAvailable: boolean;
     browserContextStateForComposer: BrowserContextState | null;
     browserContextComposerContext: SessionBrowserContextRuntime['composerContext'] | null;
     pendingMessages: readonly PendingMessage[];
@@ -621,6 +625,7 @@ export function useSessionComposerController({
     approvalRequests,
     initialAttachmentDrafts,
     attachmentsUploadsEnabled,
+    attachmentsUploadsAvailable,
     browserContextStateForComposer,
     browserContextComposerContext,
     pendingMessages,
@@ -2892,7 +2897,7 @@ export function useSessionComposerController({
     }, [initialAttachmentDrafts, readMainAttachmentDrafts]);
 
     const attachmentDraftManager = useAttachmentDraftManager({
-        enabled: attachmentsUploadsEnabled,
+        enabled: attachmentsUploadsAvailable,
         maxFileBytes: attachmentsUploadConfig.maxFileBytes,
         initialDrafts: initialSessionAttachmentDrafts,
         eagerUpload: { sessionId, config: attachmentsUploadConfig },
@@ -2920,14 +2925,13 @@ export function useSessionComposerController({
     const activeAttachmentDraftScopeRef = React.useRef(mainAttachmentDraftScope);
 
     React.useEffect(() => {
-        if (!attachmentsUploadsEnabled) return;
         // A SessionView can be retained while its qualified route changes. Do
         // not project the previous Home's still-rendered drafts into the new
         // scope during that transition; the following effect hydrates the
         // manager from the new owner first.
         if (activeAttachmentDraftScopeRef.current !== mainAttachmentDraftScope) return;
         writeMainAttachmentDrafts(attachmentDrafts);
-    }, [attachmentsUploadsEnabled, attachmentDrafts, mainAttachmentDraftScope, writeMainAttachmentDrafts]);
+    }, [attachmentDrafts, mainAttachmentDraftScope, writeMainAttachmentDrafts]);
     React.useEffect(() => {
         if (activeAttachmentDraftScopeRef.current === mainAttachmentDraftScope) return;
         activeAttachmentDraftScopeRef.current = mainAttachmentDraftScope;
@@ -4873,7 +4877,7 @@ export function useSessionComposerController({
         openActionChip: requestComposerActionChipOpen,
         openPromptPicker: () => promptPickerOpenRequestRef.current?.() ?? false,
         openAttachmentPicker: () => {
-            if (!attachmentsUploadsEnabled || isUploadingAttachments || activeComposerRefRef.current.kind !== 'session' || !filePickerRef.current) return false;
+            if (!attachmentsUploadsAvailable || isUploadingAttachments || activeComposerRefRef.current.kind !== 'session' || !filePickerRef.current) return false;
             openAttachmentFilePickerFiles(filePickerRef.current);
             return true;
         },
@@ -4940,7 +4944,7 @@ export function useSessionComposerController({
         openPromptPicker: () => activeComposerRefRef.current.kind === 'session'
             && (promptPickerOpenRequestRef.current?.() ?? false),
         openAttachmentPicker: () => {
-            if (!attachmentsUploadsEnabled || isUploadingAttachments || activeComposerRefRef.current.kind !== 'session' || !filePickerRef.current) return false;
+            if (!attachmentsUploadsAvailable || isUploadingAttachments || activeComposerRefRef.current.kind !== 'session' || !filePickerRef.current) return false;
             openAttachmentFilePickerFiles(filePickerRef.current);
             return true;
         },
@@ -5071,6 +5075,7 @@ export function useSessionComposerController({
             // Collaboration is a primary-presentation entry; an embedded composer has none.
             sessionAccess: embedded ? null : sessionAccessChip,
             attachmentsUploadsEnabled,
+            attachmentsUploadsAvailable,
             isReadOnly,
             isUploadingAttachments,
             onPickAttachmentFile: () => {
@@ -5165,11 +5170,10 @@ export function useSessionComposerController({
                     ...(pendingComposerDocument ? [] : sessionExtraActionPresentation.attachmentRowItems),
                     ...composerAttachmentRowItems,
                 ],
-                transferAttachments: attachmentsUploadsEnabled && !pendingComposerDocument ? agentInputAttachments : undefined,
+                transferAttachments: !pendingComposerDocument ? agentInputAttachments : undefined,
             })
         ), [
             agentInputAttachments,
-            attachmentsUploadsEnabled,
             composerAttachmentRowItems,
             pendingComposerDocument,
             sessionExtraActionPresentation.attachmentRowItems,
@@ -6230,10 +6234,10 @@ export function useSessionComposerController({
                 } : {})}
                 onAgentPickerVisibilityChange={onAgentPickerVisibilityChange}
                 agentPickerSelectedOptionId={inSessionAgentPicker.agentPickerSelectedOptionId}
-                onAttachmentsAdded={attachmentsUploadsEnabled && !pendingComposerDocument ? addAttachments : undefined}
+                onAttachmentsAdded={attachmentsUploadsAvailable && !pendingComposerDocument ? addAttachments : undefined}
                 hasSendableAttachments={
                     (!pendingComposerDocument && hasIncludedReviewCommentDrafts)
-                    || (!pendingComposerDocument && attachmentsUploadsEnabled && sendableAttachmentDrafts(attachmentDrafts).length > 0)
+                    || (!pendingComposerDocument && sendableAttachmentDrafts(attachmentDrafts).length > 0)
                     || composerAttachmentViews.some((attachment) => attachment.availability.status === 'ready')
                 }
                 permissionRequests={pendingPermissionRequests}
@@ -6549,6 +6553,12 @@ export function useSessionComposerController({
                         // The canonical draft owner later clears only this exact value/revision snapshot.
                         const semanticDraftSnapshot = captureComposerSemanticDraftCurrentnessSnapshot();
                         const submittedAttachmentDrafts = sendableAttachmentDrafts(getAttachmentDraftsSnapshot());
+                        if (submittedAttachmentDrafts.length > 0 && !attachmentsUploadsAvailable) {
+                            Modal.alert(t('common.error'), describeUploadFailure(
+                                classifyTransferFailure({ errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE }), t('common.machine'),
+                            ));
+                            return;
+                        }
                         const sourceComposerSubmissionSnapshot = readSessionComposerSubmissionSnapshot(composerTextBeforeSend);
                         const composerSubmissionSnapshot = prepareComposerSubmissionSnapshot(
                             sourceComposerSubmissionSnapshot, submittedAttachmentDrafts.map(draft => draft.id),
@@ -6648,7 +6658,7 @@ export function useSessionComposerController({
                             );
 
                         const shouldSendReviewComments = hasIncludedReviewCommentDrafts;
-                        const hasAttachments = attachmentsUploadsEnabled && submittedAttachmentDrafts.length > 0;
+                        const hasAttachments = submittedAttachmentDrafts.length > 0;
                         const participantRecipient = recipientState.recipient;
                         const sessionMessaging = readSessionComposerMessageIntent(composerSubmissionSnapshot,
                             sendIntent?.sessionMessage ?? recipientState.sessionMessage ?? undefined);

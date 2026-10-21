@@ -2260,7 +2260,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                 ...mentions.filter(item => item.end <= range.start || item.start >= range.end)
                     .map(item => item.start >= range.end ? { ...item, start: item.start + shift, end: item.end + shift } : item),
                 mention,
-            ];
+            ].sort((left, right) => left.start - right.start);
             cursor = range.start + edit.text.length;
             selection = { start: cursor, end: cursor };
             at = { kind: 'offset', offset: cursor };
@@ -3195,7 +3195,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     accessibilityLabel: t('composerReferences.attachmentRemoved'), readableMarker: label };
             }
             const number = imageNumbers.get(parsed.opaque);
-            const state = attachment.status === 'pending' || attachment.status === 'uploading'
+            const state = attachment.status === 'uploading' || (attachment.attachmentType === 'folder' && attachment.status === 'pending')
                 ? 'pending' : attachment.availability && attachment.availability !== 'ready' ? 'unavailable' : 'ready';
             const thumbnail = attachment.kind === 'media' && attachment.media === 'image'
                 ? attachment.renderedPreview ?? (attachment.preview?.kind === 'image'
