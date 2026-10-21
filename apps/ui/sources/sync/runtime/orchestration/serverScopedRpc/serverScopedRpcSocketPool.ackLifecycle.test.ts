@@ -98,8 +98,12 @@ it('settles a pending physical connection when the pool stops before the handsha
     }
 });
 
-it('redials after the last connection waiter expires even while an older stream retains the socket', async () => {
-    const http = createServer();
+it('redials through real Home reachability after a disconnect and expired reconnect while an older stream retains the socket', async () => {
+    const http = createServer((request, response) => {
+        const accepted = request.url === '/v1/auth/ping' && request.headers.authorization === 'Bearer synthetic-token';
+        response.writeHead(accepted ? 200 : 404, { 'Content-Type': 'application/json' });
+        response.end('{}');
+    });
     const server = new Server(http, { path: '/v1/updates/' });
     let handshakeCount = 0;
     let stalledHandshake!: () => void;
@@ -120,11 +124,6 @@ it('redials after the last connection waiter expires even while an older stream 
             socket.io.timeout(false);
             sockets.push(socket);
             return socket;
-        },
-        // The real Socket.IO handshake is the failure boundary; the Home stays reachable.
-        reachability: {
-            startReachability: async () => {}, waitForReachable: async () => {},
-            reportUnreachable: () => {}, subscribeNetworkAllowed: () => () => {},
         },
         readIdleDisconnectMs: () => 0,
     });

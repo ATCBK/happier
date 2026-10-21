@@ -16,6 +16,7 @@ import {
     type CapabilitiesInvokeResponse,
 } from '../api/capabilities/capabilitiesProtocol';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
+import { ScopedRpcSocketConnectionTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool';
 import { ServerFetchAbortedForServerSwitchError } from '@/sync/http/client';
 import { isDemoModeActive } from '@/demoMode/runtime/enterExitDemoMode';
 import { readRpcRequestDisposition, type RpcRequestDisposition } from '@happier-dev/sync-client';
@@ -28,9 +29,26 @@ export type {
     CapabilitiesInvokeResponse,
 } from '../api/capabilities/capabilitiesProtocol';
 
+type CapabilityProbeError = Readonly<{
+    name?: string;
+    rpcErrorCode?: string;
+    connectionPhase?: ScopedRpcSocketConnectionTimeoutError['connectionPhase'];
+}>;
+
+function describeCapabilityProbeError(error: unknown): CapabilityProbeError {
+    const rpcErrorCode = readRpcErrorCode(error);
+    // Retain classification without transport messages, request configuration,
+    // credentials or stacks. The pool alone identifies its connection phase.
+    return {
+        ...(error instanceof Error ? { name: error.name } : {}),
+        ...(rpcErrorCode ? { rpcErrorCode } : {}),
+        ...(error instanceof ScopedRpcSocketConnectionTimeoutError ? { connectionPhase: error.connectionPhase } : {}),
+    };
+}
+
 export type MachineCapabilitiesDescribeResult =
     | { supported: true; response: CapabilitiesDescribeResponse }
-    | { supported: false; reason: 'not-supported' | 'error' };
+    | { supported: false; reason: 'not-supported' | 'error'; error?: CapabilityProbeError };
 
 export async function machineCapabilitiesDescribe(
     machineId: string,
@@ -49,15 +67,15 @@ export async function machineCapabilitiesDescribe(
         const parsed = parseCapabilitiesDescribeResponse(result);
         if (!parsed) return { supported: false, reason: 'error' };
         return { supported: true, response: parsed };
-    } catch {
-        return { supported: false, reason: 'error' };
+    } catch (error) {
+        return { supported: false, reason: 'error', error: describeCapabilityProbeError(error) };
     }
 }
 
 export type MachineCapabilitiesDetectResult =
     | { supported: true; response: CapabilitiesDetectResponse }
     | { supported: false; reason: 'not-supported' | 'error' | 'server-switch-abort';
-        error?: Readonly<{ name?: string; rpcErrorCode?: string }> };
+        error?: CapabilityProbeError };
 
 export async function machineCapabilitiesDetect(
     machineId: string,
@@ -92,13 +110,7 @@ export async function machineCapabilitiesDetect(
         if (error instanceof ServerFetchAbortedForServerSwitchError) {
             return { supported: false, reason: 'server-switch-abort' };
         }
-        const rpcErrorCode = readRpcErrorCode(error);
-        // Retain classification evidence without retaining a transport's
-        // message, request configuration, credentials or stack.
-        return { supported: false, reason: 'error', error: {
-            ...(error instanceof Error ? { name: error.name } : {}),
-            ...(rpcErrorCode ? { rpcErrorCode } : {}),
-        } };
+        return { supported: false, reason: 'error', error: describeCapabilityProbeError(error) };
     }
 }
 

@@ -63,6 +63,17 @@ type Deps = Readonly<{
     readIdleDisconnectMs: () => number;
 }>;
 
+type ScopedRpcSocketConnectionPhase = 'reachability-start' | 'reachability-wait' | 'socket-connect';
+
+export class ScopedRpcSocketConnectionTimeoutError extends Error {
+    readonly code = MACHINE_RPC_TIMEOUT_ERROR_CODE;
+    readonly rpcErrorCode = this.code;
+
+    constructor(readonly connectionPhase: ScopedRpcSocketConnectionPhase) {
+        super('Scoped RPC socket connection timeout');
+    }
+}
+
 type PoolEntry = {
     key: string;
     serverUrl: string;
@@ -73,7 +84,7 @@ type PoolEntry = {
     homeCarrier: HomeCarrier | null;
     socket: SocketLike;
     inUseCount: number;
-    connectInFlight: { result: Promise<void>; controller: AbortController; waiters: number } | null;
+    connectInFlight: { result: Promise<void>; controller: AbortController; waiters: number; progress: { phase: ScopedRpcSocketConnectionPhase } } | null;
     intentionalDisconnect: boolean;
     idleDisconnectTimer: ReturnType<typeof setTimeout> | null;
     reachabilityRelease: (() => Promise<void>) | null;
@@ -345,11 +356,11 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
     };
 
     const ensureConnected = async (entry: PoolEntry, deadlineAt: number): Promise<void> => {
-        const timeoutError = () => Object.assign(new Error('Scoped RPC socket connection timeout'), { code: MACHINE_RPC_TIMEOUT_ERROR_CODE });
-        if (deadlineAt <= deps.now()) throw timeoutError();
+        if (deadlineAt <= deps.now()) throw new ScopedRpcSocketConnectionTimeoutError('reachability-start');
         if (entry.socket.connected) return;
         if (!entry.connectInFlight) {
             const controller = new AbortController();
+            const progress: { phase: ScopedRpcSocketConnectionPhase } = { phase: 'reachability-start' };
             const run = (async () => {
                 if (!entry.reachabilityRelease && deps.reachability.acquireReachability) {
                     const lease = await deps.reachability.acquireReachability({
@@ -368,6 +379,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                     await deps.reachability.startReachability({ serverUrl: entry.reachabilityServerUrl, token: entry.token });
                 }
                 if (controller.signal.aborted) throw controller.signal.reason;
+                progress.phase = 'reachability-wait';
                 await deps.reachability.waitForReachable({
                     serverUrl: entry.reachabilityServerUrl,
                     token: entry.token,
@@ -375,13 +387,14 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                     ...(entry.homeIdentityId ? { homeIdentityId: entry.homeIdentityId } : {}),
                     homeCarrier: entry.homeCarrier,
                 });
+                progress.phase = 'socket-connect';
                 await connectSocket(entry.socket, controller.signal);
             })();
             const result = run.finally(() => {
                 if (entry.connectInFlight !== flight) return;
                 entry.connectInFlight = null;
             });
-            const flight = { result, controller, waiters: 0 };
+            const flight = { result, controller, waiters: 0, progress };
             entry.connectInFlight = flight;
         }
         // Dialing belongs to the retained entry. One logical waiter's expiry
@@ -401,7 +414,8 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                     else resolve();
                 };
                 const onAbort = () => settle(signal.reason);
-                const cancelTimer = armDeadlineTimer(Date.now() + Math.max(0, deadlineAt - deps.now()), () => settle(timeoutError()));
+                const cancelTimer = armDeadlineTimer(Date.now() + Math.max(0, deadlineAt - deps.now()),
+                    () => settle(new ScopedRpcSocketConnectionTimeoutError(connection.progress.phase)));
                 signal.addEventListener('abort', onAbort, { once: true });
                 if (signal.aborted) onAbort();
                 void connection.result.then(() => settle(), (error: unknown) => settle(error));
@@ -414,7 +428,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 // every later RPC. Reset through this same pool connection owner;
                 // keep the carrier and logical holders for the next acquisition.
                 entry.connectInFlight = null;
-                connection.controller.abort(timeoutError());
+                connection.controller.abort(new ScopedRpcSocketConnectionTimeoutError(connection.progress.phase));
                 disconnectEntrySocket(entry);
             }
         }
