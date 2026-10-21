@@ -124,8 +124,8 @@ export async function createQualifiedQuotaTestHarness(options: Readonly<{
         [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.connectedAccounts]: { serverIdentityId: account.home.serverIdentityId!, machineId: 'machine-selected' },
     } }, 1);
     storage.getState().applyMachines([
-        createMachineFixture({ id: 'machine-first', activeAt: Date.now() }),
-        createMachineFixture({ id: 'machine-selected', activeAt: Date.now() }),
+        createMachineFixture({ id: 'machine-first', activeAt: Date.now(), isShared: false }),
+        createMachineFixture({ id: 'machine-selected', activeAt: Date.now(), isShared: false }),
     ], true, { sourceServerId: active.serverId });
     storage.setState({ isDataReady: true });
     const socket = vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async <R, A>(machineId: string, method: string, payload: A,

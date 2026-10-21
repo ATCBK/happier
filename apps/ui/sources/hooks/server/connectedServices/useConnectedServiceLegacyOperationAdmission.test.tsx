@@ -49,7 +49,7 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
         });
         connection = await restoreServerAccountForTest({ serverUrl: 'https://account-admission.test', accountId: 'account-a', request: homes.request });
         const { storage } = await import('@/sync/domains/state/storage');
-        storage.getState().applyMachines([createMachineFixture({ id: 'machine-a', activeAt: Date.now() })], true, { sourceServerId: serverId });
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-a', activeAt: Date.now(), isShared: false })], true, { sourceServerId: serverId });
         clearMachineRequestReachabilityForTest();
         runControlMock.mockReset();
     });
@@ -90,8 +90,8 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const { useConnectedServiceLegacyOperationAdmission } = await import('./useConnectedServiceLegacyOperationAdmission');
         storage.getState().applyMachines([
-            createMachineFixture({ id: 'machine-a', activeAt: Date.now() }),
-            createMachineFixture({ id: 'machine-b', activeAt: Date.now() }),
+            createMachineFixture({ id: 'machine-a', activeAt: Date.now(), isShared: false }),
+            createMachineFixture({ id: 'machine-b', activeAt: Date.now(), isShared: false }),
         ], true, { sourceServerId: serverId });
         const hook = await renderHook(() => useConnectedServiceLegacyOperationAdmission());
         await act(async () => { recordMachineRequestFailed({ serverId, accountId: 'account-a', machineId: 'machine-a' }); });
@@ -103,6 +103,35 @@ describe('useConnectedServiceLegacyOperationAdmission', () => {
         await act(async () => { recordMachineRequestSucceeded({ serverId, accountId: 'account-a', machineId: 'machine-a' }); });
         await hook.getCurrent()('github', 'quota_read');
         expect(runControlMock.mock.calls.at(-1)?.[0].params.machineId).toBe('machine-a');
+    });
+
+    it('keeps Account operation discovery on an owned Machine and refuses shared or unproven custody', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const { useConnectedServiceLegacyOperationAdmission } = await import('./useConnectedServiceLegacyOperationAdmission');
+        const shared = createMachineFixture({ id: 'machine-a', activeAt: Date.now(), isShared: true,
+            access: { custodian: { accountId: 'account-c', displayName: 'Custodian' },
+                role: 'use', resourceMode: 'plain', accessState: 'ready' } });
+        const own = createMachineFixture({ id: 'machine-b', activeAt: Date.now(), isShared: false });
+        storage.getState().applyMachines([shared, own], true, { sourceServerId: serverId });
+        runControlMock.mockResolvedValue(described(github, { kind: 'legacy', peerClass: 'revisioned_v2_v3', serviceId: 'github' }));
+        const hook = await renderHook(() => useConnectedServiceLegacyOperationAdmission());
+
+        await expect(hook.getCurrent()('github', 'quota_read')).resolves.toBeUndefined();
+        expect(runControlMock.mock.calls.at(-1)?.[0]).toMatchObject({
+            method: 'machine-b:daemon.connectedAccounts.control.command',
+            params: { machineId: 'machine-b', command: { operation: 'describeService', requiredOperation: 'quota_read' } },
+        });
+
+        await act(async () => {
+            storage.getState().applyMachines([shared,
+                createMachineFixture({ id: 'machine-unproven', activeAt: Date.now() }),
+            ], true, { sourceServerId: serverId });
+        });
+        runControlMock.mockClear();
+        await expect(hook.getCurrent()('github', 'quota_read')).rejects.toMatchObject({
+            code: 'connected_account_service_identity_unsupported',
+        });
+        expect(runControlMock).not.toHaveBeenCalled();
     });
 
     it('carries the qualified identity and requested operation to daemon admission', async () => {

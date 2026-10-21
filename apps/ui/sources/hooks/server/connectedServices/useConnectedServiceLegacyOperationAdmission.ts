@@ -39,7 +39,10 @@ export function useConnectedAccountOperationAdmission(): (
     const serverId = String(activeServer.serverId ?? '').trim();
     const activeServerGeneration = activeServer.generation;
     const membership = useMachinePresenceMembership(serverId);
-    const selectableMachines = machines.filter(candidate => membership.selectableMachineIds.includes(candidate.id));
+    // This control endpoint reads the daemon Account's service/configuration
+    // state. Machine Use or Manage does not grant the caller that custody.
+    const selectableMachines = machines.filter(candidate => candidate.isShared === false
+        && membership.selectableMachineIds.includes(candidate.id));
     const machine = selectableMachines.find(
         (candidate) => candidate.active === true,
     ) ?? selectableMachines[0] ?? null;
