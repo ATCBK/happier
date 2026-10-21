@@ -513,6 +513,7 @@ export function createDeviceSttController(deps: CreateDeviceSttControllerDeps): 
     };
 
     const markSpeechCandidateStarted = () => {
+      endpointController.signalSpeechActivity({ sessionId: sessionKey });
       if (nextHandle.speechCandidateActive) return;
       nextHandle.speechCandidateActive = true;
       safelyNotifyObserver(() => deps.onSpeechCandidateStart?.({

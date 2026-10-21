@@ -374,7 +374,7 @@ describe('createDeviceSttController', () => {
       const onEndpointSignal = vi.fn();
       const { createDeviceSttController } = await import('./DeviceSttController');
       const controller = createDeviceSttController({
-        getSettings: () => baseSettings(true, { silenceMs: 450, minSpeechMs: 0 }),
+        getSettings: () => baseSettings(true, { silenceMs: 600, minSpeechMs: 0 }),
         onEndpointSignal,
       });
       await controller.start({ micSession: createMicSession(), sink: createSink() });
@@ -385,11 +385,11 @@ describe('createDeviceSttController', () => {
       } else {
         listeners.result?.({ results: [{ transcript: 'more words' }], isFinal: false });
       }
-      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(500);
       expect(onEndpointSignal).not.toHaveBeenCalled();
 
       listeners.result?.({ results: [{ transcript: 'more words' }], isFinal: true });
-      await vi.advanceTimersByTimeAsync(449);
+      await vi.advanceTimersByTimeAsync(599);
       expect(onEndpointSignal).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       expect(onEndpointSignal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({

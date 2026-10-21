@@ -995,9 +995,10 @@ describe('createLocalVoiceCaptureOwner', () => {
         await start;
         expect(onCaptureStarted).toHaveBeenCalledWith('session-daemon-start');
         await vi.advanceTimersByTimeAsync(25);
+        expect(owner.isCaptureActive('session-daemon-start')).toBe(false);
+        await owner.stopSession();
         expect(onCaptureError).toHaveBeenCalledWith({ controlSessionId: 'session-daemon-start',
             kind: 'mic_plateau', reason: 'mic_audio_plateau' });
-        await owner.stopSession();
         expect(nativeAudio.capture.getSnapshot().subscriberCount).toBe(0);
     });
 
@@ -1032,9 +1033,10 @@ describe('createLocalVoiceCaptureOwner', () => {
         await vi.advanceTimersByTimeAsync(24);
         expect(onCaptureError).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
+        expect(owner.isCaptureActive('muted-capture')).toBe(false);
+        await owner.stopSession();
         expect(onCaptureError).toHaveBeenCalledExactlyOnceWith({ controlSessionId: 'muted-capture',
             kind: 'mic_plateau', reason: 'mic_audio_plateau' });
-        expect(owner.isCaptureActive('muted-capture')).toBe(false);
     });
 
     it('does not restart the silent-mic watchdog when unmuting a capture handed off for a turn', async () => {
@@ -1138,6 +1140,9 @@ describe('createLocalVoiceCaptureOwner', () => {
     });
 
     it('composes native Silero over the shared local-neural PCM capture for candidate, false-alarm, and one confirmed endpoint', async () => {
+        // A recognizer may segment after a shorter pause than the saved VAD policy,
+        // or retain its endpoint while the VAD is still confirming resumed speech.
+        sdk.sherpaPush.mockResolvedValue({ text: 'interrupt that', isEndpoint: true });
         const pcm = createSharedNativePcmHarness();
         const createVadDetector = vi.fn(async () => {});
         const cancelVadDetector = vi.fn(async () => {});
@@ -1213,7 +1218,12 @@ describe('createLocalVoiceCaptureOwner', () => {
             getLatestPartialTranscript: () => latestPartial,
         });
         owner = createLocalVoiceCaptureOwner({
-            getSettings: () => neuralSettings,
+            getSettings: () => ({ voice: { ...neuralSettings.voice, providers: {
+                local_conversation: { schemaVersion: 1, config: {
+                    ...neuralSettings.voice.providers.local_conversation.config,
+                    handsFree: { enabled: true, endpointing: { silenceMs: 6_000, minSpeechMs: 800 } },
+                } },
+            } } }),
             onCaptureStarted: vi.fn(),
             onCaptureError: vi.fn(),
             onEndpointSignal,
@@ -1239,6 +1249,10 @@ describe('createLocalVoiceCaptureOwner', () => {
         });
         expect(pcm.nativeStart).toHaveBeenCalledTimes(1);
         expect(pcm.platformApply).toHaveBeenCalledTimes(1);
+        expect(createVadDetector).toHaveBeenCalledWith(expect.objectContaining({
+            minSpeechMs: 800,
+            redemptionMs: 6_000,
+        }));
 
         clock = 0;
         pcm.emitFrame('AAE=');
@@ -1277,6 +1291,37 @@ describe('createLocalVoiceCaptureOwner', () => {
         expect(pcm.nativeStop).toHaveBeenCalledTimes(1);
         expect(pcm.coordinator.getSnapshot().leaseCount).toBe(0);
         expect(pcm.capture.getSnapshot().subscriberCount).toBe(0);
+    });
+
+    it('preserves streaming endpoint fallback when the active native VAD terminates', async () => {
+        const onEndpointSignal = vi.fn();
+        let terminateVad: (error: unknown) => void = () => {};
+        const nativeVadController = createNativeVadController({
+            bridge: {
+                startSession: ({ onTerminal }) => {
+                    terminateVad = onTerminal ?? (() => {});
+                    return { stop: () => {} };
+                },
+            },
+            onEndpointSignal,
+        });
+        const owner = createLocalVoiceCaptureOwner({
+            getSettings: () => neuralSettings,
+            onCaptureStarted() {}, onCaptureError() {}, onEndpointSignal,
+        }, { nativeVadController });
+        sdk.sherpaPush.mockResolvedValue({ text: 'keep listening', isEndpoint: true });
+        await owner.startCapture({ handsFree: true, provider: 'local_neural', sessionId: 'vad-fallback' });
+        nativeAudio.emit();
+        await nativeAudio.capture.waitForDrain();
+        expect(onEndpointSignal).not.toHaveBeenCalled();
+
+        terminateVad(new Error('native detector stopped'));
+        nativeAudio.emit();
+        await nativeAudio.capture.waitForDrain();
+        expect(onEndpointSignal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+            sessionId: 'vad-fallback', source: 'native_stream', transcript: 'keep listening',
+        }));
+        await owner.stopSession();
     });
 
     it('releases the native VAD subscriber when local-neural startup is aborted', async () => {

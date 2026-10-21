@@ -57,6 +57,7 @@ type TurnEndpointControllerDeps = Readonly<{
 
 export type TurnEndpointController = Readonly<{
     clearSession: (sessionId?: string | null) => void;
+    signalSpeechActivity: (args: Readonly<{ sessionId: string }>) => void;
     signalEndpointDetected: (args: Readonly<{
         sessionId: string;
         source: Exclude<TurnEndpointSignalSource, 'heuristic'>;
@@ -151,6 +152,11 @@ export function createTurnEndpointController(deps: TurnEndpointControllerDeps): 
             }
 
             replaceActiveSession(null);
+        },
+        signalSpeechActivity: ({ sessionId }) => {
+            const normalizedSessionId = normalizeSessionId(sessionId);
+            if (!activeSession || !normalizedSessionId || activeSession.sessionId !== normalizedSessionId) return;
+            replaceActiveSession({ ...activeSession, token: nextToken++, timer: null });
         },
         signalHeuristicTranscriptFinalized: ({ sessionId, transcript, policy }) => {
             const normalizedSessionId = normalizeSessionId(sessionId);
