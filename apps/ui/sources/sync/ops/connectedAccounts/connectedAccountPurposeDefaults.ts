@@ -3,14 +3,14 @@ import { areAccountSettingsJsonValuesEqual } from '@/sync/domains/settings/accou
 import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { readAccountSettingsBaseline } from '@/sync/engine/settings/accountSettingsBaseline';
 import { requireOneShotAccountSettingsMutationApplied, syncSettings } from '@/sync/engine/settings/syncSettings';
-import { ConnectedAccountCatalogOperationError, readConnectedAccountCatalogInContext,
+import { ConnectedAccountCatalogOperationError, readConnectedAccountCatalogForMutationInContext,
     requireUpdatedConnectedAccountCatalogMutation, writeConnectedAccountCatalogRecordAndPublishInContext,
     type ConnectedAccountCatalogAccountContext } from '@/sync/api/account/apiConnectedAccountCatalog';
 
 /** Purpose defaults and actual predecessor-carrier retirement share one acknowledged transaction. */
 export async function mutateConnectedAccountPurposeDefaultsInContext(context: ConnectedAccountCatalogAccountContext,
     mutate: ConnectedAccountPurposeMutationIntentV1, signal?: AbortSignal): Promise<void> {
-    const catalog = await readConnectedAccountCatalogInContext(context, 'purposes', signal);
+    const catalog = await readConnectedAccountCatalogForMutationInContext(context, 'purposes', signal);
     context.assertCurrent();
     signal?.throwIfAborted();
     if (catalog.status !== 'ready' || catalog.record.key !== 'purposes') {

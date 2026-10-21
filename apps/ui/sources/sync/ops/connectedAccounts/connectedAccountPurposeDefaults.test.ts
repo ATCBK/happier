@@ -1,13 +1,69 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { writeAgentDefaultChoice } from '@happier-dev/protocol/connect/agentDefaultChoices';
 import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createDeferred } from '@/dev/testkit';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 
 installDisconnectedServerSocketBoundary();
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 const { mutateConnectedAccountPurposeDefaultsInContext } = await import('./connectedAccountPurposeDefaults');
+
+it('acknowledges a choice in an active purpose catalog without waiting for settings-history maintenance', async () => {
+    const bridge = await loadSyncSingletonForTests();
+    const http = createHomeHubArtifactHttpBoundary('purpose-maintenance');
+    const maintenance = createDeferred<void>();
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const agent = { agentId: 'codex', title: 'Codex', identity: { pluginId: service.pluginId, localId: 'codex' },
+        connectedAccounts: [{ purpose: 'primary', service }] };
+    let purposeBindings: ConnectedPurposeCatalogV1 = { v: 1, bindings: [] };
+    let revision = 3;
+    let historyBeforeWrite = false;
+    const path = '/v1/account/entity-rows/connected-accounts/purposes';
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://purpose-maintenance.test',
+        accountId: 'purpose-maintenance', configureSocket: configureConnectedServerSocketBoundary, request: async (input, init) => {
+            const requested = new URL(String(input)).pathname;
+            if (requested === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 1 }));
+            if (requested === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
+            if (requested.startsWith('/v2/account/settings/history')) {
+                if (revision === 3) historyBeforeWrite = true;
+                await maintenance.promise;
+                return Response.json({ snapshots: [] });
+            }
+            if (requested !== path) return http.request(input, init);
+            if (init?.method !== 'POST') return Response.json({ status: 'present', revision,
+                content: { t: 'plain', v: { key: 'purposes', value: purposeBindings } } });
+            const mutation = ConnectedAccountCatalogRowMutationV1Schema.parse(JSON.parse(String(init.body)));
+            expect(mutation.expectedRevision).toBe(revision);
+            if (mutation.content?.t !== 'plain' || mutation.content.v.key !== 'purposes') throw new Error('Expected plain purpose envelope');
+            purposeBindings = mutation.content.v.value;
+            return Response.json({ status: 'updated', revision: ++revision, cursor: revision });
+        } });
+    const account = await captureLazyActionAccountContext(connection.home.id);
+    let mutation: Promise<void> | undefined;
+    try {
+        mutation = mutateConnectedAccountPurposeDefaultsInContext(account, (current, settings) => {
+            const written = writeAgentDefaultChoice({ agents: [agent], purposeBindings: current, settings,
+                target: { kind: 'account', account: { service, accountId: 'work' } }, agentId: 'codex', makeDefault: true });
+            if (!written) throw new Error('Expected declared Codex purpose');
+            const { connectedAccountPurposeBindingsV1, ...legacySettingsDelta } = written;
+            return { purposeBindings: connectedAccountPurposeBindingsV1, legacySettingsDelta };
+        });
+        void mutation.catch(() => {});
+        await vi.waitFor(() => expect(purposeBindings.bindings).toEqual([{
+            purpose: { consumer: agent.identity, purpose: 'primary' }, target: { kind: 'account', account: { service, accountId: 'work' } },
+        }]));
+        await mutation;
+        expect(historyBeforeWrite).toBe(false);
+    } finally {
+        maintenance.resolve();
+        await mutation?.catch(() => {});
+        account.dispose(); await connection.dispose(); bridge.dispose();
+    }
+});
 
 it('retires a genuine legacy default only with the purpose row acknowledgement, preserving Team and unrelated Settings', async () => {
     const bridge = await loadSyncSingletonForTests();
@@ -31,7 +87,7 @@ it('retires a genuine legacy default only with the purpose row acknowledgement, 
     const dispatched = new Promise<void>(resolve => { issued = resolve; });
     // HTTP persistence is the substituted boundary; canonical migration, Settings
     // preparation, envelope codecs and the captured Account remain real.
-    const connection = await restoreServerAccountForTest({ serverUrl: 'https://purpose-paired.test', accountId: 'purpose-paired', request: async (input, init) => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://purpose-paired.test', accountId: 'purpose-paired', configureSocket: configureConnectedServerSocketBoundary, request: async (input, init) => {
         const path = new URL(String(input)).pathname;
         if (path === '/v2/account/settings') {
             if (init?.method === 'POST') throw new Error('purpose_edit_must_not_write_settings_separately');

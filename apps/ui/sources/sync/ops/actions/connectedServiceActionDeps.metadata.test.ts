@@ -57,7 +57,9 @@ describe('Connected metadata raw read ownership', () => {
             } finally { rejected.resolve(); }
             expect((await results).map(result => result.status)).toEqual(['rejected', 'rejected']);
             home.answer(serverId, `GET ${CONNECTED_PRESENTATION_ROWS_ROUTE_V1}`, { body: { status: 'deleted', revision: 4 } });
-            await expect(apiReadConnectedPresentationRow(neutral)).resolves.toEqual({ status: 'deleted', revision: 4 });
+            const native = new AbortController();
+            Object.defineProperty(native.signal, 'throwIfAborted', { value: undefined });
+            await expect(apiReadConnectedPresentationRow(neutral, native.signal)).resolves.toEqual({ status: 'deleted', revision: 4 });
             expect(home.requestsFor(CONNECTED_PRESENTATION_ROWS_ROUTE_V1)).toHaveLength(4);
         } finally {
             held.resolve(); await Promise.allSettled(opaque); account.dispose(); await home.reset();

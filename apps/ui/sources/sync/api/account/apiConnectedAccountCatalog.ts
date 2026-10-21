@@ -150,6 +150,13 @@ export function readConnectedAccountCatalogInContext(context: ConnectedAccountCa
     sourceAdmission?: ConnectedAccountCatalogSourceAdmission): Promise<ConnectedAccountCatalogSnapshotV1> {
     return readConnectedAccountCatalogWithAdmissionInContext(context, key, signal, publication ?? {}, sourceAdmission);
 }
+/** Active-row edits await current authority, not retained-source/history maintenance. */
+export async function readConnectedAccountCatalogForMutationInContext(context: ConnectedAccountCatalogAccountContext,
+    key: ConnectedAccountCatalogKeyV1, signal?: AbortSignal): Promise<ConnectedAccountCatalogSnapshotV1> {
+    const admitted = await readAdmittedConnectedAccountCatalogInContext(context, key, signal);
+    return admitted.status === 'unavailable' && admitted.reason === 'authority-not-confirmed'
+        ? readConnectedAccountCatalogInContext(context, key, signal) : admitted;
+}
 export async function readConnectedAccountCatalog(scope: ServerAccountScope, key: ConnectedAccountCatalogKeyV1,
     signal?: AbortSignal, assertCapturedAccountCurrent?: () => void,
     publication?: ConnectedAccountCatalogReadPublication,
@@ -247,11 +254,7 @@ export function createUiConnectedServiceConfigurationCatalogHost(context: Connec
     resolveMode: ConnectedServiceConfigurationCatalogHostV1['resolveMode'], signal?: AbortSignal): ConnectedServiceConfigurationCatalogHostV1 {
     return {
         resolveMode, createRevision: randomUUID,
-        read: async () => {
-            const admitted = await readAdmittedConnectedAccountCatalogInContext(context, 'configurations', signal);
-            return admitted.status === 'unavailable' && admitted.reason === 'authority-not-confirmed'
-                ? readConnectedAccountCatalogInContext(context, 'configurations', signal) : admitted;
-        },
+        read: () => readConnectedAccountCatalogForMutationInContext(context, 'configurations', signal),
         hasSecret: async reference => {
             await captureSavedSecretReferenceRevisionsInContext(context, { references: [reference], signal });
             return true;

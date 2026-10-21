@@ -6,7 +6,7 @@ import { CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD } from '@happier-dev/protoc
 import { createUiConnectedServiceAction } from './connectedServiceActionDeps';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -16,7 +16,7 @@ import { ConnectedPresentationRowMutationV1Schema, type ConnectedPresentationRec
 
 vi.mock('socket.io-client', async (importOriginal) =>
   (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-installDisconnectedServerSocketBoundary();
+installDisconnectedServerSocketBoundary(configureConnectedServerSocketBoundary);
 afterEach(() => { vi.restoreAllMocks(); });
 
 it.each(['ready', 'first-row'] as const)('sets and clears a monthly subscription price through the captured keyless Account transport from %s', async initial => {
