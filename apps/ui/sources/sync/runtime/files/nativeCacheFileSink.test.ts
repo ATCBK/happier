@@ -6,6 +6,18 @@ describe('createNativeCacheFileSink', () => {
         vi.clearAllMocks();
     });
 
+    it('reports an iOS activity-sheet dismissal as cancellation', async () => {
+        const share = vi.fn(async () => ({ action: 'dismissedAction' }));
+        vi.doMock('react-native', async () => ({
+            ...(await (await import('@/dev/testkit/mocks/reactNative')).createReactNativeNativeMock({ platformOS: 'ios' })),
+            Share: { share, sharedAction: 'sharedAction', dismissedAction: 'dismissedAction' },
+        }));
+        vi.doMock('expo-sharing', () => ({ isAvailableAsync: async () => true, shareAsync: async () => {} }));
+        const { shareNativeCacheFile } = await import('./nativeCacheFileSink');
+        expect(await shareNativeCacheFile({ fileUri: 'file:///cache/recap.png', name: 'recap.png', mimeType: 'image/png' }))
+            .toEqual({ status: 'canceled' });
+    });
+
     it('offers a local PDF to the iOS share sheet and reports unavailable sharing', async () => {
         const { Platform } = await import('react-native');
         const previous = Platform.OS;
