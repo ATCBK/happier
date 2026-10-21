@@ -282,6 +282,7 @@ export type DiscussionSessionDraftPatch = Readonly<{
     mentions?: readonly StrictJsonValue[];
     passage?: DocPassageRefV1 | null;
     submission?: DiscussionDraftSubmittedContentV2 | null;
+    recipients?: readonly DiscussionInitialParticipantV1[];
     /** New-discussion only; renaming an existing discussion is an Action. */
     title?: string;
 }>;
@@ -451,6 +452,7 @@ function isIntrinsicDraftFieldDefault(path: DraftFieldPathV1, value: StrictJsonV
     }
     if (path.kind === 'title') return typeof value === 'string' && value.trim().length === 0;
     if (path.kind === 'passage' || path.kind === 'submission') return value === null;
+    if (path.kind === 'recipients') return Array.isArray(value) && value.length === 0;
     if (path.kind === 'composer') return Array.isArray(value) && value.length === 0;
     if (path.kind === 'routing') return value === null;
     return false;
@@ -532,6 +534,7 @@ function pathKey(path: DraftFieldPathV1): string {
     if (path.kind === 'title') return 'title';
     if (path.kind === 'passage') return 'passage';
     if (path.kind === 'submission') return 'submission';
+    if (path.kind === 'recipients') return 'recipients';
     if (path.kind === 'projectOpen') return path.field;
     if (path.kind === 'authoring') return `target.authoring.${path.fieldId}`;
     return `extensions.${path.pluginId}.${path.fieldId}`;
@@ -549,7 +552,7 @@ function setField(
         return parsed.success ? parsed.data : next;
     }
     if (path.kind === 'projectOpen') return next;
-    if (path.kind === 'passage' || path.kind === 'submission') {
+    if (path.kind === 'passage' || path.kind === 'submission' || path.kind === 'recipients') {
         if (!isDiscussionDocument(next)) return next;
         if (!field) { delete next[path.kind]; return next; }
         return DiscussionDraftDocumentV2Schema.parse({ ...next, [path.kind]: field });
@@ -628,6 +631,7 @@ function listFieldPaths(document: SessionDraftDocumentV2): DraftFieldPathV1[] {
         if (document.title) paths.push({ kind: 'title' });
         if (document.passage) paths.push({ kind: 'passage' });
         if (document.submission) paths.push({ kind: 'submission' });
+        if (document.recipients) paths.push({ kind: 'recipients' });
         return paths;
     }
     if (document.target.kind === 'session') {
@@ -700,6 +704,7 @@ function hasMeaningfulContent(
     if (typeof text === 'string' && text.trim().length > 0) return true;
     if (isNonEmptyArray(value({ kind: 'composer', field: 'mentions' })) || isNonEmptyArray(value({ kind: 'composer', field: 'attachments' }))) return true;
     if (targetKind === 'discussion' || targetKind === 'newDiscussion') {
+        if (isNonEmptyArray(value({ kind: 'recipients' }))) return true;
         if (value({ kind: 'passage' }) !== null || value({ kind: 'submission' }) !== null) return true;
         const title = value({ kind: 'title' });
         return typeof title === 'string' && title.trim().length > 0;
@@ -1491,6 +1496,7 @@ export class SessionDraftRepository {
         materializationIntent?: SessionDraftMaterializationIntent;
     }>): void {
         const writes: Array<{ path: DraftFieldPathV1; value: StrictJsonValue }> = [];
+        if (params.patch.recipients !== undefined) writes.push({ path: { kind: 'recipients' }, value: DiscussionInitialParticipantsV1Schema.parse(params.patch.recipients) });
         if (params.patch.passage !== undefined) {
             const passage = params.patch.passage === null ? null : DocPassageRefV1Schema.parse(params.patch.passage);
             if (passage !== null && passage.ref.serverId !== params.scope.serverId) {

@@ -11,6 +11,10 @@ import { DiscussionInviteButton } from '@/components/discussions/DiscussionInvit
 import { createSessionListQuerySourceHarness, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { presentExecutableParticipantPicker } from './ExecutableParticipantPickerModal';
+import { useExecutableParticipantSections } from '@/components/discussions/useExecutableParticipantSections';
+import { SessionServerStartSpawnDraftV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 
 vi.mock('socket.io-client', async (importOriginal) => (
   await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -20,10 +24,13 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
   Platform: { OS: 'android', select: <T,>(options: { android?: T; default?: T; native?: T }) => options.android ?? options.native ?? options.default },
 }));
 
-const { ModalProvider } = await import('@/modal');
+const { Modal, ModalProvider } = await import('@/modal');
 let boundary: SessionListQuerySourceHarness;
-beforeEach(async () => { boundary = await createSessionListQuerySourceHarness(); });
-afterEach(async () => { standardCleanup(); await boundary.dispose(); });
+beforeEach(async () => {
+  boundary = await createSessionListQuerySourceHarness();
+  setRuntimeFetch(createSessionReadBatchFetchBoundary(boundary.http.request));
+});
+afterEach(async () => { await act(async () => Modal.hideAll()); await standardCleanup(); await boundary.dispose(); });
 
 async function captureHome() {
   const home = boundary.serverIds[1]!;
@@ -34,6 +41,29 @@ async function captureHome() {
 }
 
 describe('host participant controller using the public picker', () => {
+  it('withdraws a model setup result when its actual captured Account retires before selection', async () => {
+    const accountLifetime = await captureHome();
+    const serverId = accountLifetime.scope.serverId;
+    storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'late-model', active: false, activeAt: 0 })] } });
+    const choose = vi.fn();
+    const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
+      sessionsContext: 'Reviewer', onChoose: choose }));
+    const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
+    const option = hook.getCurrent().sections.flatMap(section => section.options).find(option => option.id === 'model:late-model');
+    expect(option).toBeDefined();
+    await act(async () => option!.onSelect?.());
+    const { SessionServerStartDraftComposerModal } = await import('@/components/sessions/new/SessionServerStartDraftComposerModal');
+    await vi.waitFor(() => expect(screen.findAllByType(SessionServerStartDraftComposerModal)).toHaveLength(1));
+    const complete = screen.findByType(SessionServerStartDraftComposerModal).props.onResolve;
+    await act(async () => { await boundary.http.switchAccount(serverId, 'replacement-account'); });
+    await vi.waitFor(() => expect(accountLifetime.isCurrent()).toBe(false));
+    const draft = SessionServerStartSpawnDraftV1Schema.parse({ executionTarget: { serverId, machineId: 'late-model' },
+      directory: { kind: 'path', path: '/work' },
+      agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } });
+    await act(async () => complete(draft));
+    expect(choose).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
   it('demands an existing Session from the real Discussion participant sheet', async () => {
     const accountLifetime = await captureHome();
     const home = accountLifetime.scope.serverId;

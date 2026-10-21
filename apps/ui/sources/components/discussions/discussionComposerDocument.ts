@@ -8,6 +8,8 @@ import type { DocPassageRefV1 } from '@happier-dev/protocol/artifacts/artifactCo
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 import { DiscussionIdSchema, type DiscussionParticipantRefV1 } from '@happier-dev/protocol/discussions/references';
 import type { DiscussionModelParticipantV1 } from '@happier-dev/protocol/discussions/participants';
+import { DiscussionInitialParticipantsV1Schema } from '@happier-dev/protocol/discussions/participants';
+import type { DiscussionReplyTargetV1 } from '@happier-dev/protocol/discussions/replyTargets';
 import {
     MENTION_KIND_V1,
     buildMentionRefV1,
@@ -28,6 +30,27 @@ export function prepareDiscussionContentForPassage(input: Readonly<{
 }>): DiscussionMessageContentV1 {
     return input.passage ? { kind: 'doc_passage_comment', passage: input.passage,
         content: DiscussionTextMessageContentV1Schema.parse(input.content) } : input.content;
+}
+
+/** Chip defaults become the same strict mention parts as the structured @ owner. */
+export function prepareDiscussionContentForRecipients(input: Readonly<{
+    content: DiscussionMessageContentV1;
+    recipients: readonly DiscussionParticipantRefV1[];
+    replyTarget?: DiscussionReplyTargetV1;
+}>): DiscussionMessageContentV1 {
+    if (input.replyTarget || input.recipients.length === 0) return input.content;
+    const content = 'kind' in input.content
+        ? input.content.kind === 'doc_passage_comment' ? input.content.content : null
+        : input.content;
+    if (!content || content.parts.some(part => part.t === 'mention')) return input.content;
+    const addressed = DiscussionTextMessageContentV1Schema.parse({ v: 1, parts: [
+        ...DiscussionInitialParticipantsV1Schema.parse(input.recipients).flatMap(participant => [
+            { t: 'mention' as const, participant }, { t: 'text' as const, text: ' ' },
+        ]),
+        ...content.parts,
+    ] });
+    return 'kind' in input.content && input.content.kind === 'doc_passage_comment'
+        ? { ...input.content, content: addressed } : addressed;
 }
 
 /** Reads the immutable passage basis from already opened Discussion content. */

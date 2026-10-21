@@ -477,7 +477,7 @@ function DiscussionInviteSheetWithAgents(
     (selection: ExecutableParticipantSelectionV1) => { void inviteExecutable(selection); },
     [inviteExecutable],
   );
-  const agentSections = useExecutableParticipantSections({
+  const { sections: agentSections } = useExecutableParticipantSections({
     accountLifetime: props.accountLifetime,
     roster: props.roster,
     busy: operation.kind === 'working',

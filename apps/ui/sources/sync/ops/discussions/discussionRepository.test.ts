@@ -99,6 +99,8 @@ function client(overrides: Partial<DiscussionRepositoryClient> = {}): Discussion
         restore: vi.fn<DiscussionRepositoryClient['restore']>().mockResolvedValue({ kind: 'failed', errorCode: 'not_implemented' }),
         readState: vi.fn<DiscussionRepositoryClient['readState']>().mockResolvedValue({ kind: 'failed', errorCode: 'not_implemented' }),
         participants: async () => ({ kind: 'failed', errorCode: 'not_implemented' }),
+        getSettings: async () => ({ kind: 'failed', errorCode: 'not_implemented' }),
+        setSettings: async () => ({ kind: 'failed', errorCode: 'not_implemented' }),
         setParticipantPolicy: async () => ({ kind: 'failed', errorCode: 'not_implemented' }),
         invite: async () => ({ kind: 'failed', errorCode: 'not_implemented' }),
         inviteExecutableParticipant: async () => ({ kind: 'failed', errorCode: 'not_implemented' }),

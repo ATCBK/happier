@@ -137,6 +137,8 @@ function installNetwork(rows: () => readonly DiscussionOpenedMessageV1[], lastRe
     const post = vi.fn<DiscussionRepositoryClient['post']>(async () => ({ kind: 'failed', errorCode: 'discussion_invalid_mention' }));
     const client: DiscussionRepositoryClient = {
         attention: async () => ({ kind: 'failed', errorCode: 'unexpected-test-read' }),
+        getSettings: async () => ({ kind: 'failed', errorCode: 'unexpected-test-read' }),
+        setSettings: async () => ({ kind: 'failed', errorCode: 'unexpected-test-write' }),
         participants: vi.fn<DiscussionRepositoryClient['participants']>(async () => ({ kind: 'succeeded', value: DiscussionParticipantsListResponseV1Schema.parse({ discussionId: 'discussion-a', ownerAccountId: 'viewer', access: 'owner', grants: [], participants: [] }) })),
         invite: vi.fn<DiscussionRepositoryClient['invite']>(async () => ({ kind: 'failed', errorCode: 'unexpected-test-write' })),
         setParticipantPolicy: vi.fn<DiscussionRepositoryClient['setParticipantPolicy']>(async () => ({ kind: 'failed', errorCode: 'unexpected-test-write' })),

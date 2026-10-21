@@ -616,6 +616,16 @@ describe('V2 private payload correspondence', () => {
 });
 
 describe('human discussion draft document', () => {
+  it('retains concrete multi-recipient selection through the canonical private payload and closes nested routing refs', () => {
+    const recipients = [{ kind: 'account', accountId: 'same-id' }, { kind: 'session', sessionId: 'same-id' }];
+    const document = { ...discussionDocument('discussion'), recipients: field(recipients) };
+    expect(SessionDraftPrivatePayloadV2Schema.parse({ v: 2, address: { kind: 'discussion', discussionId: 'd1' }, document }))
+      .toMatchObject({ document: { recipients: { value: recipients } } });
+    for (const value of [[recipients[0], recipients[0]], [{ kind: 'session', sessionId: 'same-id', label: 'not identity' }], [{ kind: 'model', participantSlotId: 'unbound' }]]) {
+      expect(DiscussionDraftDocumentV2Schema.safeParse({ ...document, recipients: field(value) }).success).toBe(false);
+    }
+    expect(DiscussionDraftDocumentV2Schema.safeParse(discussionDocument('discussion')).success).toBe(true);
+  });
   it('keeps a revision-qualified passage inside the same private draft payload', () => {
     const passage = { ref: { kind: 'doc', artifactId: 'notes', serverId: 'home-a' },
       revision: { headerVersion: 2, bodyVersion: 4 }, range: { start: 12, end: 18 }, quote: 'second' };

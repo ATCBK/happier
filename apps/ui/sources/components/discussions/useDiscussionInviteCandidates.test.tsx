@@ -100,13 +100,13 @@ describe('Discussion Invite source composition', () => {
         const choose = vi.fn();
         const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
             modelOptions: [selected], sessionsContext: 'Answers with its own setup', onChoose: choose }));
-        const option = hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+        const option = hook.getCurrent().sections.flatMap(section => section.kind === 'static' ? section.options : [])
             .find(option => option.id === 'model:offline-target');
         expect(option).toMatchObject({ readiness: { status: 'offline', machineId: 'offline-target' }, repair: null });
         // Listed and selectable, with its one cause instead of the usual hint; never hidden.
         expect(option?.subtitle).toBe(t('session.collaboration.readiness.cause.machineOffline'));
         expect(option?.disabled).toBe(false);
-        const configured = hook.getCurrent().flatMap(section => section.options).find(option => option.label === selected.label)!;
+        const configured = hook.getCurrent().sections.flatMap(section => section.options).find(option => option.label === selected.label)!;
         expect(configured.readiness).toBe(selected.readiness);
         expect(configured.repair).toBe(selected.repair);
         configured.onSelect?.();
@@ -120,7 +120,7 @@ describe('Discussion Invite source composition', () => {
         const choose = vi.fn();
         const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
             sessionsContext: 'Answers with its own setup', onChoose: choose }));
-        await vi.waitFor(() => expect(hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+        await vi.waitFor(() => expect(hook.getCurrent().sections.flatMap(section => section.kind === 'static' ? section.options : [])
             .some(option => option.id === 'session:same-id')).toBe(true));
         const session = createSessionFixture({ id: 'same-id', serverId: home, encryptionMode: 'e2ee', metadataLayoutVersion: 1,
             metadata: parseDecryptedSessionMetadata({ v: 1, agentPresentation: { agentId: 'codex' } }, 1),
@@ -132,7 +132,7 @@ describe('Discussion Invite source composition', () => {
             sessionListRowsByServerId: { ...state.sessionListRowsByServerId,
                 [home]: { ...state.sessionListRowsByServerId[home], 'same-id': row } },
         })); });
-        const option = hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+        const option = hook.getCurrent().sections.flatMap(section => section.kind === 'static' ? section.options : [])
             .find(option => option.id === 'session:same-id')!;
         expect(option.label).toBe(getSessionName(row, home));
         expect(option.label).toBe('Release review');
@@ -153,7 +153,7 @@ describe('Discussion Invite source composition', () => {
         await act(async () => { storage.setState(state => ({ sessionListRowsByServerId: {
             ...state.sessionListRowsByServerId, [home]: { ...state.sessionListRowsByServerId[home], 'same-id': unnamedRow },
         } })); });
-        const unnamedOption = hook.getCurrent().flatMap(section => section.kind === 'static' ? section.options : [])
+        const unnamedOption = hook.getCurrent().sections.flatMap(section => section.kind === 'static' ? section.options : [])
             .find(option => option.id === 'session:same-id')!;
         expect(unnamedOption.subtitle).toContain(formatAsOfTime(activityAt));
         expect(unnamedOption.subtitle).not.toContain('review-box');

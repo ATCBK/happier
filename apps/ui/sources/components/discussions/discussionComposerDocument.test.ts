@@ -10,7 +10,9 @@ import {
     buildDiscussionContentFromPendingText,
     buildDiscussionModelSlotMentionPayload,
     resolveDiscussionCreationTitle,
+    prepareDiscussionContentForRecipients,
 } from './discussionComposerDocument';
+import { projectDiscussionMessageReferences } from './discussionTimelineProjection';
 
 function mention(payload: Readonly<{ kind: string; ref: string; label: string }>, start = 0): ComposerStructuredInputMention {
     const tokenText = formatInlineReferenceTokenV1(payload);
@@ -18,6 +20,32 @@ function mention(payload: Readonly<{ kind: string; ref: string; label: string }>
 }
 
 describe('discussion composer document', () => {
+    it('separates default recipient mentions from each other and the unchanged authored message', () => {
+        const authored = buildDiscussionContent('Review this', []);
+        const recipients = [{ kind: 'session' as const, sessionId: 'reviewer' }, { kind: 'account' as const, accountId: 'person' }];
+        const content = prepareDiscussionContentForRecipients({ content: authored, recipients });
+        expect(projectDiscussionMessageReferences(content, { session: () => 'Reviewer', account: () => 'Person' }).readableText)
+            .toBe('@Reviewer @Person Review this');
+        expect(readDiscussionMentionedParticipantIdsV1(content)).toEqual({ mentionedAccountIds: ['person'], mentionedSessionIds: ['reviewer'] });
+        expect('parts' in content && content.parts.slice(-authored.parts.length)).toEqual(authored.parts);
+    });
+    it('uses chip defaults only without a typed mention or any explicit reply target', () => {
+        const recipients = [{ kind: 'session' as const, sessionId: 'reviewer' }];
+        const text = buildDiscussionContent('Please review', []);
+        expect(prepareDiscussionContentForRecipients({ content: text, recipients })).toEqual({ v: 1, parts: [
+            { t: 'mention', participant: recipients[0] }, { t: 'text', text: ' ' }, ...text.parts,
+        ] });
+        for (const ref of [buildDiscussionAccountMentionPayload('person', 'Same label'),
+            { kind: 'happier.session', ref: 'session:explicit-reviewer', label: 'Same label' }]) {
+            const token = mention(ref);
+            const content = buildDiscussionContent(token.tokenText, [token]);
+            expect(prepareDiscussionContentForRecipients({ content, recipients })).toBe(content);
+        }
+        const target = { kind: 'doc_passage' as const, doc: { ref: { kind: 'doc' as const, artifactId: 'notes', serverId: 'home' },
+            revision: { headerVersion: 1, bodyVersion: 1 } } };
+        expect(prepareDiscussionContentForRecipients({ content: text, recipients, replyTarget: target })).toBe(text);
+        expect(() => prepareDiscussionContentForRecipients({ content: text, recipients: [recipients[0]!, recipients[0]!] })).toThrow();
+    });
     it('submits inline Account and Session ranges directly as unchanged participant parts', () => {
         const account = mention(buildDiscussionAccountMentionPayload('same-id', 'Alex'));
         const session = mention({ kind: 'happier.session', ref: 'session:same-id', label: 'Alex' }, account.end + 1);

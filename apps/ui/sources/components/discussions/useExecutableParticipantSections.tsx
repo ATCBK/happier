@@ -79,7 +79,7 @@ export function useExecutableParticipantSections(
     sessionsContext: string;
     onChoose: (selection: ExecutableParticipantSelectionV1) => void;
   }>,
-): readonly ExecutableParticipantSection[] {
+) {
   const { theme } = useUnistyles();
   const serverId = input.accountLifetime.scope.serverId;
   const candidates = useDiscussionInviteCandidates({
@@ -94,7 +94,7 @@ export function useExecutableParticipantSections(
   const { onChoose, sessionsContext, onReadinessSessionChange } = input;
   const busy = input.busy === true;
   const query = input.query ?? '';
-  return React.useMemo(() => {
+  const sections = React.useMemo<readonly ExecutableParticipantSection[]>(() => {
     if (!input.enabled) return [];
     // A session leads with its Agent's own mark (identity marks always stay); the catalog decides
     // whether one exists, and a session without a recorded Agent keeps the neutral glyph.
@@ -204,6 +204,7 @@ export function useExecutableParticipantSections(
               seed: {},
               target: { serverId, machineId: machine.id },
             }).result.catch(() => null);
+            if (!input.accountLifetime.isCurrent()) return;
             const draft =
               SessionServerStartSpawnDraftV1Schema.safeParse(drafted);
             if (!draft.success) return;
@@ -252,4 +253,5 @@ export function useExecutableParticipantSections(
     theme.colors.text.secondary,
     theme.colors.text.tertiary,
   ]);
+  return React.useMemo(() => ({ sections, sessions: candidates.sessions }), [sections, candidates.sessions]);
 }

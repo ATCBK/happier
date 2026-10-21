@@ -33,6 +33,8 @@ import { projectDiscussionSecondOpinionPreviewInputV1 } from '@happier-dev/proto
 import { DiscussionCandidatesListInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { DiscussionAttentionResponseV1Schema, type DiscussionAttentionQueryV1 } from '@happier-dev/protocol/discussions/api';
 import { DiscussionAttentionResultV1Schema, type DiscussionAttentionResultV1 } from '@happier-dev/protocol/discussions/actions';
+import { DISCUSSION_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/discussions/actions';
+import { DiscussionSettingsResponseV1Schema, type DiscussionSettingsV1 } from '@happier-dev/protocol/discussions/settings';
 
 type DiscussionAction = NonNullable<ActionExecutorDeps['discussionAction']>;
 type DiscussionActionResult<T extends DiscussionActionIdV1> = z.infer<(typeof DISCUSSION_ACTION_OUTPUT_SCHEMAS_V1)[T]>;
@@ -221,6 +223,12 @@ export function createDiscussionActionAdapter(options: AdapterOptions): Discussi
             dispatched = true;
             const payload = await readJson(options, actionId, input, signal, body);
             const envelope = { v: 1 as const, serverId: options.scope.serverId };
+            if (actionId === 'discussion.settings.get' || actionId === 'discussion.settings.set') {
+                const args = DISCUSSION_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
+                const value = DiscussionSettingsResponseV1Schema.parse(payload);
+                if (value.discussionId !== args.discussionId) throw refusal('discussion_not_found');
+                return value;
+            }
             if (actionId === 'discussion.list') {
                 const value = DiscussionListResponseV1Schema.parse(payload);
                 const discussions = await Promise.all(value.discussions.map(row => openSummary(options, row, context)));
@@ -391,6 +399,8 @@ export function createDiscussionClient(options: Readonly<{ scope: ServerAccountS
         list: (input: DiscussionActionInputV1ById['discussion.list'] = {}, signal?: AbortSignal) => run('discussion.list', input, signal),
         listCandidates: (input: DiscussionActionInputV1ById['discussion.candidates.list'], signal?: AbortSignal) => run('discussion.candidates.list', input, signal),
         get: (discussionId: string, signal?: AbortSignal) => run('discussion.get', { discussionId }, signal),
+        getSettings: (discussionId: string, signal?: AbortSignal) => run('discussion.settings.get', { discussionId }, signal),
+        setSettings: (discussionId: string, settings: DiscussionSettingsV1, signal?: AbortSignal) => run('discussion.settings.set', { discussionId, settings }, signal),
         read: (discussionId: string, input: Omit<DiscussionActionInputV1ById['discussion.read'], 'discussionId'> = {}, signal?: AbortSignal) => run('discussion.read', { discussionId, ...input }, signal),
         create: async (input: Omit<DiscussionActionInputV1ById['discussion.create'], 'firstMessage' | 'participants'> & {
             messageLocalId: string; content: DiscussionActionInputV1ById['discussion.post']['content']; mentionedAccountIds?: readonly string[]; mentionedSessionIds?: readonly string[];

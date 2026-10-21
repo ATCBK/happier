@@ -25,7 +25,7 @@ import type { DiscussionAttentionQueryV1 } from '@happier-dev/protocol/discussio
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 
 export type DiscussionRepositoryClient = Readonly<Pick<ReturnType<typeof createDiscussionClient>,
-    'participants' | 'setParticipantPolicy' | 'invite' | 'inviteExecutableParticipant' | 'removeParticipant' | 'leave' | 'transferOwner' | 'listGrants' | 'setGrant' | 'removeGrant'> & {
+    'participants' | 'setParticipantPolicy' | 'invite' | 'inviteExecutableParticipant' | 'removeParticipant' | 'leave' | 'transferOwner' | 'listGrants' | 'setGrant' | 'removeGrant' | 'getSettings' | 'setSettings'> & {
     attention(input?: DiscussionAttentionQueryV1, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionAttentionResultV1>>;
     list(input?: DiscussionListInputV1, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionListResultV1>>;
     get(discussionId: string, signal?: AbortSignal): Promise<DiscussionClientOutcome<DiscussionDetailsResultV1>>;
@@ -1068,14 +1068,15 @@ export function createDiscussionRepository(options: Readonly<{
         return outcome;
     };
 
-    const applyAccessOutcome = async <TOutcome extends DiscussionClientOutcome<Readonly<{ access: string | null }>>
-        | Readonly<{ kind: 'checking'; value?: Readonly<{ access: string | null }> }>>(discussionId: string,
+    const applyAccessOutcome = async <TOutcome extends DiscussionClientOutcome<unknown>
+        | Readonly<{ kind: 'checking'; value?: unknown }>>(discussionId: string,
         operation: () => Promise<TOutcome>, signal?: AbortSignal, refresh = true): Promise<TOutcome | Readonly<{ kind: 'failed'; errorCode: string }>> => {
         const epoch = captureOperation(discussionId);
         const outcome = await operation();
         if (!isCurrentOperation(epoch)) return { kind: 'failed', errorCode: 'discussion_read_denied' };
         if ((outcome.kind === 'succeeded' || outcome.kind === 'checking') && outcome.value !== undefined) {
-            if (outcome.value.access === null) purgeDiscussion(discussionId, 'discussion_read_denied');
+            if (outcome.value !== null && typeof outcome.value === 'object' && 'access' in outcome.value
+                && outcome.value.access === null) purgeDiscussion(discussionId, 'discussion_read_denied');
             else if (refresh) {
                 await refreshDiscussion(discussionId, signal);
                 if (!isCurrentOperation(epoch)) return { kind: 'failed', errorCode: 'discussion_read_denied' };
@@ -1161,6 +1162,7 @@ export function createDiscussionRepository(options: Readonly<{
     };
 
     return {
+        scope: options.scope,
         getSnapshot: () => snapshot,
         getListSnapshot,
         getDocListSnapshot: (artifactId: string) => getListSnapshot({ anchorDocArtifactId: artifactId }).lists.active,
@@ -1234,6 +1236,8 @@ export function createDiscussionRepository(options: Readonly<{
             return applyLifecycleOutcome(discussionId, await client.restore(discussionId, signal), operationEpoch);
         },
         participants: (discussionId: string, signal?: AbortSignal) => applyAccessOutcome(discussionId, () => client.participants(discussionId, signal), signal, false),
+        getSettings: (discussionId: string, signal?: AbortSignal) => applyAccessOutcome(discussionId, () => client.getSettings(discussionId, signal), signal, false),
+        setSettings: (discussionId: string, settings: Parameters<DiscussionRepositoryClient['setSettings']>[1], signal?: AbortSignal) => applyAccessOutcome(discussionId, () => client.setSettings(discussionId, settings, signal), signal, false),
         setParticipantPolicy: (input: Parameters<DiscussionRepositoryClient['setParticipantPolicy']>[0], signal?: AbortSignal) => applyAccessOutcome(input.discussionId, () => client.setParticipantPolicy(input, signal), signal),
         listGrants: (discussionId: string, signal?: AbortSignal) => applyAccessOutcome(discussionId, () => client.listGrants(discussionId, signal), signal, false),
         invite: (input: Parameters<DiscussionRepositoryClient['invite']>[0], signal?: AbortSignal) => applyAccessOutcome(input.discussionId, () => client.invite(input, signal), signal),

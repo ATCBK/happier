@@ -67,7 +67,7 @@ function ExecutableParticipantPicker(
     },
     [multiple, onResolve],
   );
-  const sections = useExecutableParticipantSections({
+  const { sections } = useExecutableParticipantSections({
     accountLifetime: props.accountLifetime,
     enabled: true,
     readinessSessionId,

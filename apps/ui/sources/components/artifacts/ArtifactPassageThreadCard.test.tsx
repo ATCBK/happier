@@ -49,6 +49,21 @@ async function mount(input: Readonly<{ thread: DocPassageMarginThread<Discussion
 const id = 'artifact:passage-thread:thread-1';
 
 describe('ArtifactPassageThreadCard re-attachment', () => {
+  it('renders typed Discussion mentions through the shared chips beside the Doc passage', async () => {
+    const source = thread({ state: 'exact', range: { start: 0, end: 11 } });
+    const view = await mount({ thread: { ...source, root: { ...source.root, content: {
+      v: 1,
+      parts: [
+        { t: 'text', text: 'Ask ' },
+        { t: 'mention', participant: { kind: 'account', accountId: 'alice' } },
+        { t: 'text', text: ' about this passage' },
+      ],
+    } } } });
+    const run = view.screen.findAllByType('EnrichedMarkdownText')[0];
+    expect(run?.props.markdown).toBe('Ask [artifacts.browser.passage.you](happier-ref:account:alice) about this passage');
+    expect(run?.props.selectable).toBe(true);
+  });
+
   it('offers to attach a changed passage to new text, beside its revision, and asks for the selection while attaching', async () => {
     const view = await mount({ thread: thread({ state: 'detached' }) });
     expect(view.screen.findByTestId(`${id}.compare`)).not.toBeNull();

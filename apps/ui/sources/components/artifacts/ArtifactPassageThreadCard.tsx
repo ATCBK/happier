@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { HappierThreadMessage } from '@happier-dev/plugin-ui/components';
 import type { DiscussionOpenedMessageV1 } from '@happier-dev/protocol/discussions/actions';
 
-import { renderDiscussionMessageContent } from '@/components/discussions/DiscussionDetailsView';
+import { DiscussionMessageContent } from '@/components/discussions/DiscussionMessageContent';
 import { resolveDiscussionMessageAuthorLabel } from '@/components/discussions/discussionTimelineProjection';
 import { Avatar } from '@/components/ui/avatar/Avatar';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -192,13 +192,8 @@ export function ArtifactPassageThreadCard(
           </>
         }
       >
-        <Text style={styles.text}>
-          {renderDiscussionMessageContent(
-            root,
-            resolveAccountLabel,
-            NO_SESSION_LABEL,
-          )}
-        </Text>
+        <DiscussionMessageContent message={root} serverId={root.messageRef.discussion.serverId}
+          resolveAccountLabel={resolveAccountLabel} resolveSessionLabel={NO_SESSION_LABEL} textStyle={styles.text} />
       </HappierThreadMessage>
       </Pressable>
       {latestReply ? (

@@ -4,6 +4,7 @@ import { ProjectOpenDraftDocumentV2Schema } from '../projects/openProjectDraftV1
 import { DocPassageRefV1Schema } from '../artifacts/artifactCollaborationV1.js';
 import { DiscussionMessageContentV1Schema } from '../discussions/content.js';
 import { DiscussionLocalIdSchema } from '../discussions/references.js';
+import { DiscussionInitialParticipantsV1Schema } from '../discussions/participants.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
@@ -191,6 +192,8 @@ export const DiscussionDraftDocumentV2Schema = z.strictObject({
     attachments: DiscussionDraftFieldSchema(z.array(z.never()).check(z.maxLength(0))),
   }),
   title: z.optional(DiscussionDraftFieldSchema(z.string())),
+  /** Explicit composer defaults, retained when submitted text is cleared. Never membership authority. */
+  recipients: z.optional(DiscussionDraftFieldSchema(DiscussionInitialParticipantsV1Schema)),
   /** The source basis is private draft content, never local-only retry metadata. */
   passage: z.optional(DiscussionDraftFieldSchema(z.nullable(DocPassageRefV1Schema.check(
     z.refine(value => value.ref.serverId !== undefined, 'A retained passage requires its captured Home'),

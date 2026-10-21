@@ -14,6 +14,7 @@ import {
 import type { DiscussionDraftSubmission } from '@/sync/ops/discussions/discussionRepository';
 
 import { seedDiscussionDraft, useDiscussionDraft } from './useDiscussionDraft';
+import { buildDiscussionContent } from './discussionComposerDocument';
 
 function mention(kind: string, ref: string, label: string, start: number) {
     const tokenText = formatInlineReferenceTokenV1({ ref, label });
@@ -37,6 +38,37 @@ afterEach(() => {
 });
 
 describe('useDiscussionDraft', () => {
+    it('keeps multiple recipients in the qualified draft through remount and accepted send clearing, while explicit mentions and Reply override them', async () => {
+        const recipients = [{ kind: 'session' as const, sessionId: 'reviewer-a' }, { kind: 'account' as const, accountId: 'person-b' }];
+        writeDiscussionSessionDraft({ scope, address: existingAddress, patch: { text: 'Review this', recipients } });
+        const first = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        const plain = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Review this' }] };
+        const addressed = { v: 1, parts: [
+            { t: 'mention', participant: recipients[0] }, { t: 'text', text: ' ' },
+            { t: 'mention', participant: recipients[1] }, { t: 'text', text: ' ' }, ...plain.parts,
+        ] };
+        expect(first.getCurrent().prepareContent(plain)).toEqual(addressed);
+        let submission: DiscussionDraftSubmission | undefined;
+        act(() => { submission = first.getCurrent().captureSubmittedCurrentness({ kind: 'post', discussionId: existingAddress.discussionId, localId: 'recipient-send' }); });
+        await first.unmount();
+        const restored = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
+        expect(restored.getCurrent().recipients).toEqual(recipients);
+        expect(restored.getCurrent().submitted?.content).toEqual(addressed);
+        expect(restored.getCurrent().prepareContent(plain, { replyTarget: { kind: 'message', messageId: 'reply-id' } })).toEqual(plain);
+        const explicit = buildDiscussionContent(ana, [mention('happier.account', 'account:ana', 'Ana', 0)]);
+        expect(restored.getCurrent().prepareContent(explicit)).toEqual(explicit);
+        act(() => restored.getCurrent().setRecipients([{ kind: 'session', sessionId: 'next-reviewer' }]));
+        await act(async () => { await restored.getCurrent().clearAfterObservedSuccess(submission!); });
+        expect(restored.getCurrent().text).toBe('');
+        expect(restored.getCurrent().recipients).toEqual([{ kind: 'session', sessionId: 'next-reviewer' }]);
+        await restored.unmount();
+        const otherHome = await renderHook(() => useDiscussionDraft({ scope: { ...scope, serverId: 'different-home' }, address: existingAddress }));
+        expect(otherHome.getCurrent().recipients).toEqual([]);
+        await otherHome.unmount();
+        const otherAccount = await renderHook(() => useDiscussionDraft({ scope: { ...scope, accountId: 'different-account' }, address: existingAddress }));
+        expect(otherAccount.getCurrent().recipients).toEqual([]);
+        await otherAccount.unmount();
+    });
     it('retains only the selected model slot identity across editing and remount before any Send', async () => {
         writeDiscussionSessionDraft({ scope, address: existingAddress, patch: {
             text: model, mentions: [mention('happier.discussionParticipant', 'discussion-participant:saved-model-slot', 'Model', 0)],

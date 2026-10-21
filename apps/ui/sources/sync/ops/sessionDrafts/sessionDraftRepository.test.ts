@@ -122,13 +122,15 @@ describe('sessionDraftRepository', () => {
         const submission = { attemptLocalId: 'original-attempt', title: 'Review', content: {
             kind: 'doc_passage_comment' as const, passage, content: { v: 1 as const, parts: [{ t: 'text' as const, text: 'Review this' }] },
         } };
-        first.writeDiscussionSessionDraft({ scope, address, patch: { text: 'Review this', passage, submission } });
+        const recipients = [{ kind: 'session' as const, sessionId: 'private-reviewer' }, { kind: 'account' as const, accountId: 'private-person' }];
+        first.writeDiscussionSessionDraft({ scope, address, patch: { text: 'Review this', passage, submission, recipients } });
         await first.flushSessionDraft({ scope, address });
         expect(remote.readCurrent()?.content?.t).toBe('encrypted');
         expect(JSON.stringify(remote.readCurrent())).not.toContain(passage.quote);
+        expect(JSON.stringify(remote.readCurrent())).not.toContain('private-reviewer');
         const restored = createSessionDraftRepository({ storage: createMemoryStorage(), cipher, transport: remote.transport, syncEnabled: true });
         await restored.materializeExact(scope, address);
-        expect(restored.getSessionDraftSnapshot(scope, address)?.document).toMatchObject({ passage: { value: passage }, submission: { value: submission } });
+        expect(restored.getSessionDraftSnapshot(scope, address)?.document).toMatchObject({ passage: { value: passage }, submission: { value: submission }, recipients: { value: recipients } });
         await restored.purgeSessionDraftPresentation({ scope, address, fieldIds: ['passage', 'submission'] });
         await restored.materializeExact(scope, address);
         const afterRefusal = createSessionDraftRepository({ storage: createMemoryStorage(), cipher, transport: remote.transport, syncEnabled: true });
@@ -136,6 +138,7 @@ describe('sessionDraftRepository', () => {
         const afterRead = afterRefusal.getSessionDraftSnapshot(scope, address)?.document;
         expect(afterRead).not.toHaveProperty('passage');
         expect(afterRead).not.toHaveProperty('submission');
+        expect(afterRead).toMatchObject({ recipients: { value: recipients } });
         expect(afterRefusal.getSessionComposerDraftSnapshot(scope, address)?.composer.text.value).toBe('Review this');
     });
 
