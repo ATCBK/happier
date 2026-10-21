@@ -27,13 +27,14 @@ import {
 import type { DiscussionDraftSubmission } from '@/sync/ops/discussions/discussionRepository';
 
 import {
-    parseDiscussionMentionSpans,
     prepareDiscussionContentForPassage,
     buildDiscussionContent,
     resolveDiscussionCreationTitle,
-    reconcileDiscussionMentionSpans,
-    type DiscussionMentionSpan,
 } from './discussionComposerDocument';
+
+import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
+import { reconcileStructuredInputMentionsWithText, type ComposerStructuredInputMention } from '@/components/sessions/agentInput/structuredInputMentions';
+import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type DiscussionDraftAddress = Extract<
     SessionDraftAddressV2,
@@ -43,7 +44,7 @@ export type DiscussionDraftAddress = Extract<
 export type DiscussionDraft = Readonly<{
     title: string;
     text: string;
-    mentions: readonly DiscussionMentionSpan[];
+    mentions: readonly ComposerStructuredInputMention[];
     passage: DocPassageRefV1 | null;
     submitted: DiscussionDraftSubmittedContentV2 | null;
     setPassage(passage: DocPassageRefV1 | null): void;
@@ -52,10 +53,10 @@ export type DiscussionDraft = Readonly<{
     conflict: SessionDraftConflict | null;
     setTitle(title: string): void;
     setText(text: string): void;
-    setMentions(mentions: readonly DiscussionMentionSpan[]): void;
+    setMentions(mentions: readonly ComposerStructuredInputMention[]): void;
     setComposer(value: Readonly<{
         text: string;
-        mentions: readonly DiscussionMentionSpan[];
+        mentions: readonly ComposerStructuredInputMention[];
     }>): void;
     pendingMutationAttempt: SessionDiscussionDraftMutationAttempt | null;
     captureSubmittedCurrentness(attempt?: SessionDiscussionDraftMutationAttemptInput,
@@ -84,7 +85,7 @@ function readDiscussionDraftFields(
 ): Readonly<{
     title: string;
     text: string;
-    mentions: readonly DiscussionMentionSpan[];
+    mentions: readonly ComposerStructuredInputMention[];
     passage: DocPassageRefV1 | null;
     submitted: DiscussionDraftSubmittedContentV2 | null;
 }> {
@@ -102,19 +103,14 @@ function readDiscussionDraftFields(
             ? document.title.value
             : '',
         text,
-        mentions: parseDiscussionMentionSpans(snapshot?.composer.mentions.value, text),
+        mentions: parseComposerStructuredInputMentionsForText(snapshot?.composer.mentions.value, text).mentions,
         passage: document?.passage?.value ?? null,
         submitted: document?.submission?.value ?? null,
     };
 }
 
-function mentionValues(mentions: readonly DiscussionMentionSpan[]): readonly StrictJsonValue[] {
-    return mentions.map((mention) => ({
-        start: mention.start,
-        end: mention.end,
-        ...(typeof mention.accountId === 'string' ? { accountId: mention.accountId }
-            : typeof mention.sessionId === 'string' ? { sessionId: mention.sessionId } : { participantSlotId: mention.participantSlotId }),
-    }));
+function mentionValues(mentions: readonly ComposerStructuredInputMention[]): readonly StrictJsonValue[] {
+    return mentions.map(mention => StrictJsonValueSchema.parse(mention));
 }
 
 function sameAddress(left: DiscussionDraftAddress, right: DiscussionDraftAddress): boolean {
@@ -135,7 +131,7 @@ export function seedDiscussionDraft(input: Readonly<{
     address?: DiscussionDraftAddress;
     title?: string;
     text: string;
-    mentions: readonly DiscussionMentionSpan[];
+    mentions: readonly ComposerStructuredInputMention[];
 }>): boolean {
     const address: DiscussionDraftAddress = input.address ?? { kind: 'newDiscussion' };
     const current = readDiscussionDraftFields(input.scope, address);
@@ -144,7 +140,7 @@ export function seedDiscussionDraft(input: Readonly<{
         scope: input.scope,
         address,
         patch: { ...(address.kind === 'newDiscussion' && input.title !== undefined ? { title: input.title } : {}),
-            text: input.text, mentions: mentionValues(parseDiscussionMentionSpans(input.mentions, input.text)) },
+            text: input.text, mentions: mentionValues(parseComposerStructuredInputMentionsForText(input.mentions, input.text).mentions) },
     });
     return true;
 }
@@ -176,7 +172,7 @@ export function useDiscussionDraft(params: Readonly<{
     const fields = readDiscussionDraftFields(scope, address);
     const text = fields.text;
     const mentions = React.useMemo(
-        () => parseDiscussionMentionSpans(snapshot?.composer.mentions.value, text),
+        () => parseComposerStructuredInputMentionsForText(snapshot?.composer.mentions.value, text).mentions,
         [snapshot?.composer.mentions.value, text],
     );
     const title = fields.title;
@@ -194,14 +190,14 @@ export function useDiscussionDraft(params: Readonly<{
 
     const setComposer = React.useCallback((value: Readonly<{
         text: string;
-        mentions: readonly DiscussionMentionSpan[];
+        mentions: readonly ComposerStructuredInputMention[];
     }>) => {
         writeDiscussionSessionDraft({
             scope,
             address,
             patch: {
                 text: value.text,
-                mentions: mentionValues(parseDiscussionMentionSpans(value.mentions, value.text)),
+                mentions: mentionValues(parseComposerStructuredInputMentionsForText(value.mentions, value.text).mentions),
             },
         });
     }, [address, scope]);
@@ -213,7 +209,7 @@ export function useDiscussionDraft(params: Readonly<{
             address,
             patch: {
                 text: nextText,
-                mentions: mentionValues(reconcileDiscussionMentionSpans({
+                mentions: mentionValues(reconcileStructuredInputMentionsWithText({
                     previousText: current.text,
                     nextText,
                     mentions: current.mentions,
@@ -222,12 +218,12 @@ export function useDiscussionDraft(params: Readonly<{
         });
     }, [address, scope]);
 
-    const setMentions = React.useCallback((nextMentions: readonly DiscussionMentionSpan[]) => {
+    const setMentions = React.useCallback((nextMentions: readonly ComposerStructuredInputMention[]) => {
         const currentText = readDiscussionDraftFields(scope, address).text;
         writeDiscussionSessionDraft({
             scope,
             address,
-            patch: { mentions: mentionValues(parseDiscussionMentionSpans(nextMentions, currentText)) },
+            patch: { mentions: mentionValues(parseComposerStructuredInputMentionsForText(nextMentions, currentText).mentions) },
         });
     }, [address, scope]);
 

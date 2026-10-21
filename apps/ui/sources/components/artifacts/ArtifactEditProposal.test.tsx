@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DocEditProposalV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 
@@ -234,8 +235,10 @@ describe('ArtifactEditProposal', () => {
     expect(getSessionComposerDraftSnapshot(scope, address)).toBeNull();
     await act(async () => { await screen.pressByTestIdAsync('proposal.askRedo'); });
     const draft = getSessionComposerDraftSnapshot(scope, address);
-    expect(draft?.composer.text.value).toMatch(/^@Support runbook /);
-    expect(draft?.composer.mentions.value).toEqual([{ start: 0, end: 16, sessionId: 'runbook-session' }]);
+    const token = formatInlineReferenceTokenV1({ label: 'Support runbook', ref: 'session:runbook-session' });
+    expect(draft?.composer.text.value).toContain(`${token} `);
+    expect(draft?.composer.mentions.value).toEqual([{ kind: 'happier.session', ref: 'session:runbook-session',
+      label: 'Support runbook', start: 0, end: token.length, tokenText: token }]);
     expect(navigation.push).toHaveBeenCalledWith(expect.stringContaining('messageId=m1'));
     // Nothing is posted for the person: only the Doc read ran.
     expect(door.calls.map((call) => call.actionId)).toEqual(['doc.read']);

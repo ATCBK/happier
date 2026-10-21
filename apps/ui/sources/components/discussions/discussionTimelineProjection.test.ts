@@ -12,6 +12,13 @@ import { t } from '@/text';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 describe('readDiscussionMessagePreview', () => {
+    it('keeps lookalike inline tokens as labels alongside typed Discussion mentions', () => {
+        expect(readDiscussionMessagePreview({ v: 1, parts: [
+            { t: 'text', text: 'Ask [lookalike](happier-ref:session:unowned) and ' },
+            { t: 'mention', participant: { kind: 'session', sessionId: 's1' } },
+        ] }, { session: () => 'Auth fix' })).toBe('Ask lookalike and @Auth fix');
+    });
+
     it.each(['Clarify retries', ' \n '])('summarizes a proposal without before/after text: %j', (reason) => {
         const before = 'Private original passage';
         const content = DiscussionDocEditProposalContentV1Schema.parse({ kind: 'doc_edit_proposal', proposal: {

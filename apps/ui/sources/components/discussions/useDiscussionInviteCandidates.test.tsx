@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
-import { renderHook, standardCleanup, createDeferred, createMachineFixture } from '@/dev/testkit';
+import { renderHook, standardCleanup, createDeferred, createMachineFixture, createSessionAccessFixture } from '@/dev/testkit';
 import { createSessionListQuerySourceHarness, type SessionListQuerySourceHarness } from '@/dev/testkit/harness/sessionListQuerySourceHarness';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { teamMembershipFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
@@ -46,7 +46,11 @@ describe('Discussion Invite source composition', () => {
             encryptedContentAvailability: 'ready', metadata: parseDecryptedSessionMetadata({ v: 1 }, 1),
             ownerMetadataView: { name: 'Cached private review', host: 'review-box', path: '/release' } });
         const locked = { ...readable, id: 'same-id', encryptedContentAvailability: 'encrypted_access_pending' as const,
-            ownerMetadataView: { ...readable.ownerMetadataView!, name: 'Do not disclose this cached title' } };
+            // A recipient remains visible but has no Account-owned title view to open.
+            // An owner with an unavailable envelope is deliberately not a list candidate:
+            // its private hidden-system classification cannot be established.
+            access: createSessionAccessFixture('edit'), accessLevel: 'edit' as const,
+            metadata: null, ownerMetadataView: null };
         await act(async () => { storage.setState(state => ({
             sessions: { ...state.sessions, 'same-id': createSessionFixture({ id: 'same-id', serverId: focusedHome,
                 encryptionMode: 'plain', metadata: { name: 'Readable other Home', host: 'other', path: '/other' } }) },
@@ -72,7 +76,7 @@ describe('Discussion Invite source composition', () => {
         await act(async () => { storage.setState(state => ({ sessionListRowsByServerId: {
             ...state.sessionListRowsByServerId, [home]: { ...state.sessionListRowsByServerId[home],
                 'same-id': buildSessionListRenderableFromSession({ ...locked, encryptedContentAvailability: 'ready',
-                    ownerMetadataView: { ...locked.ownerMetadataView, name: lockedLabel } }),
+                    metadata: parseDecryptedSessionMetadata({ v: 1, summary: { text: lockedLabel, updatedAt: 1 } }, 1) }),
             },
         } })); });
         // A readable title may deliberately have the same words as the locked label.

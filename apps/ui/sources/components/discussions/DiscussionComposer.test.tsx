@@ -23,6 +23,8 @@ import { applyDiscussionParticipantReference, createDiscussionParticipantQuestio
 import { DiscussionPostInputV1Schema } from '@happier-dev/protocol/discussions/actions';
 import { DISCUSSION_MODEL_SLOT_MENTION_KIND } from './discussionComposerDocument';
 
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+
 import { DiscussionComposer, type DiscussionComposerValue } from '@/components/discussions/DiscussionComposer';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -345,10 +347,11 @@ describe('DiscussionComposer (the one composer with the discussion adapter)', ()
             composerInput(screen).props.onKeyPress?.({ nativeEvent: { key: 'Enter' }, preventDefault: () => undefined });
         });
         await settle();
-        expect(composerInput(screen).props.value).toBe('@Alice Ng ');
+        const token = formatInlineReferenceTokenV1({ label: 'Alice Ng', ref: 'account:account-alice' });
+        expect(composerInput(screen).props.value).toBe(`${token} `);
 
         await act(async () => {
-            changeTextTestInstance(composerInput(screen), '@Alice Ng can you look?');
+            changeTextTestInstance(composerInput(screen), `${token} can you look?`);
         });
         await act(async () => {
             await screen.root.findAll((node) => node.props.testID === 'new-session-composer-send' && typeof node.props.onPress === 'function')[0]!.props.onPress();
@@ -527,17 +530,22 @@ describe('DiscussionComposer (the one composer with the discussion adapter)', ()
     });
 
     it('restores a drafted mention into the composer bound to its visible token', async () => {
-        await render(<Harness initial={{ text: 'Hi @bob', mentions: [{ start: 3, end: 7, accountId: 'account-bob' }] }} />);
+        const token = formatInlineReferenceTokenV1({ label: 'bob', ref: 'account:account-bob' });
+        const mention = { kind: 'happier.account', ref: 'account:account-bob', tokenText: token, start: 3, end: 3 + token.length };
+        await render(<Harness initial={{ text: `Hi ${token}`, mentions: [mention] }} />);
 
-        expect(composer().value).toBe('Hi @bob');
+        expect(composer().value).toBe(`Hi ${token}`);
         expect(composer().structuredInputMentions).toEqual([
-            { kind: 'happier.account', ref: 'account:account-bob', tokenText: '@bob', start: 3, end: 7 },
+            mention,
         ]);
     });
 
     it('uses the flushed text for person attention when a pending edit breaks the selected mention boundary', async () => {
         const onSend = vi.fn();
-        await render(<Harness initial={{ text: 'Hi @bob', mentions: [{ start: 3, end: 7, accountId: 'account-bob' }] }} onSend={onSend} />);
+        const token = formatInlineReferenceTokenV1({ label: 'bob', ref: 'account:account-bob' });
+        await render(<Harness initial={{ text: `Hi ${token}`, mentions: [
+            { kind: 'happier.account', ref: 'account:account-bob', tokenText: token, start: 3, end: 3 + token.length },
+        ] }} onSend={onSend} />);
 
         await act(async () => composer().onSend?.({ inputTextOverride: 'Hi @bob2' }));
 

@@ -14,6 +14,9 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { DocEditProposalV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
 import type { DocEditProposalDispositionV1 } from '@happier-dev/protocol/discussions/models';
 import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { buildMentionRefForKindV1, MENTION_KIND_V1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { buildDiscussionAccountMentionPayload } from '@/components/discussions/discussionComposerDocument';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -196,11 +199,14 @@ export function ArtifactEditProposal(
   // Ask to redo prepares an addressed reply in this thread; the person still reads and sends it.
   const askToRedo = React.useCallback(() => {
     if (!proposalRef || !proposer) return;
-    const mention = `@${proposer.label}`;
+    const reference = 'accountId' in proposer.mention
+      ? buildDiscussionAccountMentionPayload(proposer.mention.accountId, proposer.label)
+      : { kind: MENTION_KIND_V1.session, ref: buildMentionRefForKindV1(MENTION_KIND_V1.session, proposer.mention.sessionId), label: proposer.label };
+    const mention = formatInlineReferenceTokenV1(reference);
     router.push(client.beginProposalReply({
       proposalRef,
       text: `${mention} ${t('artifacts.browser.proposal.redoRequest')}`,
-      mentions: [{ start: 0, end: mention.length, ...proposer.mention }],
+      mentions: [{ ...reference, start: 0, end: mention.length, tokenText: mention }],
     }) as never);
   }, [client, proposalRef, proposer, router]);
 

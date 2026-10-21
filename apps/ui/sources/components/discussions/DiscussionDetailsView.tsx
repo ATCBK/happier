@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { projectDiscussionMessageReferences } from './discussionTimelineProjection';
 import { canonicalSessionDraftAddressV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
 import { deriveDocCommentDiscussionCreationLocalIdV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
 import { prepareDiscussionContentForPassage, readDiscussionContentPassage } from './discussionComposerDocument';
@@ -230,18 +231,7 @@ function textOf(
     resolveSessionLabel: (sessionId: string) => string | null = () => null,
 ): string {
     if (!content) return t('session.collaboration.discussion.contentUnavailable');
-    return readDiscussionMessagePartsV1(content).map((part) => part.t === 'text'
-        ? part.text
-        : discussionMentionText(part, resolveAccountLabel, resolveSessionLabel)
-    ).join('');
-}
-
-function discussionMentionText(part: Extract<DiscussionMessagePartV1, { t: 'mention' }>, resolveAccountLabel: (accountId: string) => string | null, resolveSessionLabel: (sessionId: string) => string | null): string {
-    const sessionLabel = part.participant.kind === 'session' ? resolveSessionLabel(part.participant.sessionId) : null;
-    return part.participant.kind === 'account'
-        ? `@${resolveAccountLabel(part.participant.accountId) ?? t('session.collaboration.discussion.collaborator')}`
-        // An unnamed Session is still a mention, worded as the list preview words it, never "Message unavailable".
-        : `@${sessionLabel ?? t('session.collaboration.discussion.heldParticipant')}`;
+    return projectDiscussionMessageReferences(content, { account: resolveAccountLabel, session: resolveSessionLabel }).readableText;
 }
 
 /**
@@ -255,15 +245,15 @@ export function renderDiscussionMessageContent(
 ): React.ReactNode {
     const content = message.content;
     if (!content) return textOf(content, resolveAccountLabel, resolveSessionLabel);
-    const parts = readDiscussionMessagePartsV1(content);
-    if (!parts.some((part) => part.t !== 'text')) return textOf(content, resolveAccountLabel, resolveSessionLabel);
-    return parts.map((part, index) => part.t === 'text'
-        ? part.text
+    const { parts, inline, readableText } = projectDiscussionMessageReferences(content, { account: resolveAccountLabel, session: resolveSessionLabel });
+    if (inline.size === 0) return readableText;
+    return parts.map((part, index) => typeof part === 'string'
+        ? part
         : <Text
             key={index}
             testID={`session-discussion-mention-${message.id}-${index}`}
             style={styles.mention}
-        >{discussionMentionText(part, resolveAccountLabel, resolveSessionLabel)}</Text>);
+        >{part.marker}</Text>);
 }
 
 function discussionMessageProducerClass(message: DiscussionDisplayMessage): string {

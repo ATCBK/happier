@@ -7,6 +7,47 @@ import type { SessionSubagent } from '@/sync/domains/session/subagents/types';
 import { formatAccountDisplayName, resolveViewerAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { t } from '@/text';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { buildMentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
+import type { InlineMessageReference } from '@/components/sessions/transcript/references/messageStructuredReferences';
+
+type DiscussionMessageReference = InlineMessageReference & Readonly<{
+    participant: Extract<ReturnType<typeof readDiscussionMessagePartsV1>[number], { t: 'mention' }>['participant'];
+}>;
+
+/** Typed Discussion parts feed the same Markdown inline seam as Session references. */
+export function projectDiscussionMessageReferences(
+    content: NonNullable<DiscussionOpenedMessageV1['content']>,
+    labels: Readonly<{ account?: (id: string) => string | null; session?: (id: string) => string | null }> = {},
+    mode?: Parameters<typeof readDiscussionMessagePartsV1>[1],
+): Readonly<{
+    text: string;
+    readableText: string;
+    inline: ReadonlyMap<string, DiscussionMessageReference>;
+    parts: readonly (string | DiscussionMessageReference)[];
+}> {
+    const inline = new Map<string, DiscussionMessageReference>();
+    const parts = readDiscussionMessagePartsV1(content, mode).map((part): string | DiscussionMessageReference => {
+        if (part.t === 'text') return readableMessageText(part.text);
+        const account = part.participant.kind === 'account';
+        const id = part.participant.kind === 'account' ? part.participant.accountId : part.participant.sessionId;
+        const label = (account ? labels.account?.(id) : labels.session?.(id))
+            ?? t(account ? 'session.collaboration.discussion.collaborator' : 'session.collaboration.discussion.heldParticipant');
+        const reference: DiscussionMessageReference = {
+            ref: buildMentionRefV1(account ? 'account' : 'session', id), kind: account ? 'happier.account' : 'happier.session',
+            label, marker: `@${label}`, glyph: account ? 'assigned' : 'conversations', participant: part.participant,
+            ...(!account ? { sessionId: id } : {}),
+        };
+        inline.set(reference.ref, reference);
+        return reference;
+    });
+    return {
+        parts, inline,
+        text: parts.map(part => typeof part === 'string' ? part : formatInlineReferenceTokenV1(part)).join(''),
+        readableText: parts.map(part => typeof part === 'string' ? part : part.marker).join(''),
+    };
+}
 
 /** Readable message content as one preview line; unknown mentions never expose raw ids. */
 export function readDiscussionMessagePreview(
@@ -17,11 +58,7 @@ export function readDiscussionMessagePreview(
     }> = {},
 ): string | null {
     if (!content) return null;
-    const text = readDiscussionMessagePartsV1(content, 'preview').map(part => part.t === 'text' ? part.text
-        : part.participant.kind === 'account'
-            ? `@${labels.account?.(part.participant.accountId) ?? t('session.collaboration.discussion.collaborator')}`
-            : `@${labels.session?.(part.participant.sessionId) ?? t('session.collaboration.discussion.heldParticipant')}`)
-        .join('').replace(/\s+/g, ' ').trim();
+    const text = projectDiscussionMessageReferences(content, labels, 'preview').readableText.replace(/\s+/g, ' ').trim();
     if (isDiscussionDocEditProposalContentV1(content)) {
         const title = t('artifacts.browser.proposal.title');
         return text ? `${title} · ${text}` : title;

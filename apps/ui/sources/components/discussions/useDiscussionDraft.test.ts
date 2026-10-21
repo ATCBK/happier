@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import type { ComposerStructuredInputMention } from '@/components/sessions/agentInput/structuredInputMentions';
 
 import { renderHook } from '@/dev/testkit';
 import {
@@ -13,6 +14,16 @@ import {
 import type { DiscussionDraftSubmission } from '@/sync/ops/discussions/discussionRepository';
 
 import { seedDiscussionDraft, useDiscussionDraft } from './useDiscussionDraft';
+
+function mention(kind: string, ref: string, label: string, start: number) {
+    const tokenText = formatInlineReferenceTokenV1({ ref, label });
+    return { kind, ref, label, tokenText, start, end: start + tokenText.length } satisfies ComposerStructuredInputMention;
+}
+const alex = formatInlineReferenceTokenV1({ label: 'Alex', ref: 'account:account-alex' });
+const sessionAlex = formatInlineReferenceTokenV1({ label: 'Alex', ref: 'session:session-alex' });
+const bob = formatInlineReferenceTokenV1({ label: 'Bob', ref: 'account:account-bob' });
+const model = formatInlineReferenceTokenV1({ label: 'Model', ref: 'discussion-participant:saved-model-slot' });
+const ana = formatInlineReferenceTokenV1({ label: 'Ana', ref: 'account:ana' });
 
 const scope = { serverId: 'discussion-draft-home', accountId: 'discussion-draft-account' } as const;
 const newAddress = { kind: 'newDiscussion' } as const;
@@ -28,16 +39,16 @@ afterEach(() => {
 describe('useDiscussionDraft', () => {
     it('retains only the selected model slot identity across editing and remount before any Send', async () => {
         writeDiscussionSessionDraft({ scope, address: existingAddress, patch: {
-            text: '@Model', mentions: [{ start: 0, end: 6, participantSlotId: 'saved-model-slot' }],
+            text: model, mentions: [mention('happier.discussionParticipant', 'discussion-participant:saved-model-slot', 'Model', 0)],
         } });
         const first = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
-        expect(first.getCurrent().mentions).toEqual([{ start: 0, end: 6, participantSlotId: 'saved-model-slot' }]);
-        act(() => first.getCurrent().setText('Ask @Model'));
+        expect(first.getCurrent().mentions).toEqual([mention('happier.discussionParticipant', 'discussion-participant:saved-model-slot', 'Model', 0)]);
+        act(() => first.getCurrent().setText(`Ask ${model}`));
         await first.unmount();
         const restored = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
-        expect(restored.getCurrent().mentions).toEqual([{ start: 4, end: 10, participantSlotId: 'saved-model-slot' }]);
+        expect(restored.getCurrent().mentions).toEqual([mention('happier.discussionParticipant', 'discussion-participant:saved-model-slot', 'Model', 4)]);
         expect(getSessionComposerDraftSnapshot(scope, existingAddress)?.composer.mentions.value)
-            .toEqual([{ start: 4, end: 10, participantSlotId: 'saved-model-slot' }]);
+            .toEqual([mention('happier.discussionParticipant', 'discussion-participant:saved-model-slot', 'Model', 4)]);
         expect(restored.getCurrent().pendingMutationAttempt).toBeNull();
         await restored.unmount();
     });
@@ -104,24 +115,24 @@ describe('useDiscussionDraft', () => {
     });
 
     it('preserves typed participant identities after restoring and synchronizing a draft, then editing it', async () => {
-        const spans: JsonValue[] = [
-            { start: 0, end: 5, accountId: 'account-alex' },
-            { start: 6, end: 11, sessionId: 'session-alex' },
+        const mentions = [
+            mention('happier.account', 'account:account-alex', 'Alex', 0),
+            mention('happier.session', 'session:session-alex', 'Alex', alex.length + 1),
         ];
-        writeDiscussionSessionDraft({ scope, address: existingAddress, patch: { text: '@Alex @Alex', mentions: spans } });
+        writeDiscussionSessionDraft({ scope, address: existingAddress, patch: { text: `${alex} ${sessionAlex}`, mentions } });
         const first = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
-        expect(first.getCurrent().mentions).toEqual(spans);
+        expect(first.getCurrent().mentions).toEqual(mentions);
         await first.unmount();
         const restored = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
-        expect(restored.getCurrent().mentions).toEqual(spans);
+        expect(restored.getCurrent().mentions).toEqual(mentions);
         act(() => writeDiscussionSessionDraft({ scope, address: existingAddress, patch: {
-            text: 'Ask @Alex', mentions: [{ start: 4, end: 9, sessionId: 'session-alex' }],
+            text: `Ask ${sessionAlex}`, mentions: [mention('happier.session', 'session:session-alex', 'Alex', 4)],
         } }));
-        await vi.waitFor(() => expect(restored.getCurrent().text).toBe('Ask @Alex'));
-        act(() => restored.getCurrent().setText('Please Ask @Alex'));
-        expect(restored.getCurrent().mentions).toEqual([{ start: 11, end: 16, sessionId: 'session-alex' }]);
+        await vi.waitFor(() => expect(restored.getCurrent().text).toBe(`Ask ${sessionAlex}`));
+        act(() => restored.getCurrent().setText(`Please Ask ${sessionAlex}`));
+        expect(restored.getCurrent().mentions).toEqual([mention('happier.session', 'session:session-alex', 'Alex', 11)]);
         expect(getSessionComposerDraftSnapshot(scope, existingAddress)?.composer.mentions.value).toEqual([
-            { start: 11, end: 16, sessionId: 'session-alex' },
+            mention('happier.session', 'session:session-alex', 'Alex', 11),
         ]);
         await restored.unmount();
     });
@@ -132,10 +143,10 @@ describe('useDiscussionDraft', () => {
             address: newAddress,
             patch: {
                 title: 'Release review',
-                text: 'Ask @Alex',
+                text: `Ask ${alex}`,
                 mentions: [
-                    { start: 4, end: 9, accountId: 'account-alex' },
-                    { start: 40, end: 50, accountId: 'forged-outside' },
+                    mention('happier.account', 'account:account-alex', 'Alex', 4),
+                    mention('happier.account', 'account:forged-outside', 'Outside', 999),
                 ],
             },
         });
@@ -143,8 +154,8 @@ describe('useDiscussionDraft', () => {
         const rendered = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
         expect(rendered.getCurrent()).toMatchObject({
             title: 'Release review',
-            text: 'Ask @Alex',
-            mentions: [{ start: 4, end: 9, accountId: 'account-alex' }],
+            text: `Ask ${alex}`,
+            mentions: [mention('happier.account', 'account:account-alex', 'Alex', 4)],
             status: 'clean',
             conflict: null,
         });
@@ -152,10 +163,10 @@ describe('useDiscussionDraft', () => {
         const draftBeforeWrite = rendered.getCurrent();
         act(() => {
             draftBeforeWrite.setComposer({
-                text: 'Ask @Alex and @Bob',
+                text: `Ask ${alex} and ${bob}`,
                 mentions: [
-                    { start: 4, end: 9, accountId: 'account-alex' },
-                    { start: 14, end: 18, accountId: 'account-bob' },
+                    mention('happier.account', 'account:account-alex', 'Alex', 4),
+                    mention('happier.account', 'account:account-bob', 'Bob', alex.length + 9),
                 ],
             });
         });
@@ -164,13 +175,13 @@ describe('useDiscussionDraft', () => {
             address: newAddress,
             currentness: { address: newAddress },
         });
-        await vi.waitFor(() => expect(rendered.getCurrent().text).toBe('Ask @Alex and @Bob'));
+        await vi.waitFor(() => expect(rendered.getCurrent().text).toBe(`Ask ${alex} and ${bob}`));
         expect(rendered.getCurrent().mentions).toHaveLength(2);
 
-        act(() => rendered.getCurrent().setText('Ask @Bert and @Bob'));
-        await vi.waitFor(() => expect(rendered.getCurrent().text).toBe('Ask @Bert and @Bob'));
+        act(() => rendered.getCurrent().setText(`Ask @Bert and ${bob}`));
+        await vi.waitFor(() => expect(rendered.getCurrent().text).toBe(`Ask @Bert and ${bob}`));
         expect(rendered.getCurrent().mentions).toEqual([
-            { start: 14, end: 18, accountId: 'account-bob' },
+            mention('happier.account', 'account:account-bob', 'Bob', 14),
         ]);
         await rendered.unmount();
     });
@@ -180,8 +191,8 @@ describe('useDiscussionDraft', () => {
             scope,
             address: existingAddress,
             patch: {
-                text: 'Captured @Alex',
-                mentions: [{ start: 9, end: 14, accountId: 'account-alex' }],
+                text: `Captured ${alex}`,
+                mentions: [mention('happier.account', 'account:account-alex', 'Alex', 9)],
             },
         });
         const rendered = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
@@ -189,8 +200,8 @@ describe('useDiscussionDraft', () => {
 
         act(() => {
             rendered.getCurrent().setComposer({
-                text: 'Newer @Alex edit',
-                mentions: [{ start: 6, end: 11, accountId: 'account-alex' }],
+                text: `Newer ${alex} edit`,
+                mentions: [mention('happier.account', 'account:account-alex', 'Alex', 6)],
             });
         });
         await act(async () => {
@@ -198,8 +209,8 @@ describe('useDiscussionDraft', () => {
         });
 
         expect(getSessionComposerDraftSnapshot(scope, existingAddress)?.composer).toMatchObject({
-            text: { value: 'Newer @Alex edit' },
-            mentions: { value: [{ start: 6, end: 11, accountId: 'account-alex' }] },
+            text: { value: `Newer ${alex} edit` },
+            mentions: { value: [mention('happier.account', 'account:account-alex', 'Alex', 6)] },
         });
         await rendered.unmount();
     });
@@ -264,21 +275,21 @@ describe('useDiscussionDraft', () => {
         writeDiscussionSessionDraft({
             scope,
             address: existingAddress,
-            patch: { text: 'Captured @Alex', mentions: [] },
+            patch: { text: `Captured ${alex}`, mentions: [] },
         });
         const rendered = await renderHook(() => useDiscussionDraft({ scope, address: existingAddress }));
         const submitted = rendered.getCurrent().captureSubmittedCurrentness();
 
         act(() => {
-            rendered.getCurrent().setMentions([{ start: 9, end: 14, accountId: 'account-alex' }]);
+            rendered.getCurrent().setMentions([mention('happier.account', 'account:account-alex', 'Alex', 9)]);
         });
         await act(async () => {
             await rendered.getCurrent().clearAfterObservedSuccess(submitted);
         });
 
         expect(getSessionComposerDraftSnapshot(scope, existingAddress)?.composer).toMatchObject({
-            text: { value: 'Captured @Alex' },
-            mentions: { value: [{ start: 9, end: 14, accountId: 'account-alex' }] },
+            text: { value: `Captured ${alex}` },
+            mentions: { value: [mention('happier.account', 'account:account-alex', 'Alex', 9)] },
         });
         await rendered.unmount();
     });
@@ -310,14 +321,14 @@ describe('useDiscussionDraft', () => {
         writeDiscussionSessionDraft({
             scope,
             address: newAddress,
-            patch: { title: 'Accepted title', text: 'Captured @Alex', mentions: [] },
+            patch: { title: 'Accepted title', text: `Captured ${alex}`, mentions: [] },
         });
         const rendered = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
         const submitted = rendered.getCurrent().captureSubmittedCurrentness();
 
         act(() => {
             rendered.getCurrent().setTitle('Newer title');
-            rendered.getCurrent().setMentions([{ start: 9, end: 14, accountId: 'account-alex' }]);
+            rendered.getCurrent().setMentions([mention('happier.account', 'account:account-alex', 'Alex', 9)]);
         });
         await act(async () => {
             await rendered.getCurrent().clearAfterObservedSuccess(submitted);
@@ -326,8 +337,8 @@ describe('useDiscussionDraft', () => {
         expect(getSessionDraftSnapshot(scope, newAddress)?.document).toMatchObject({
             title: { value: 'Newer title' },
             composer: {
-                text: { value: 'Captured @Alex' },
-                mentions: { value: [{ start: 9, end: 14, accountId: 'account-alex' }] },
+                text: { value: `Captured ${alex}` },
+                mentions: { value: [mention('happier.account', 'account:account-alex', 'Alex', 9)] },
             },
         });
         await rendered.unmount();
@@ -379,8 +390,8 @@ describe('useDiscussionDraft', () => {
         act(() => {
             if (kind === 'create') rendered.getCurrent().setTitle('Newer title');
             rendered.getCurrent().setComposer({
-                text: 'Newer @Alex text',
-                mentions: [{ start: 6, end: 11, accountId: 'account-alex' }],
+                text: `Newer ${alex} text`,
+                mentions: [mention('happier.account', 'account:account-alex', 'Alex', 6)],
             });
         });
         await act(async () => {
@@ -392,8 +403,8 @@ describe('useDiscussionDraft', () => {
 
         const remounted = await renderHook(() => useDiscussionDraft({ scope, address }));
         expect(remounted.getCurrent().pendingMutationAttempt).toBeNull();
-        expect(remounted.getCurrent().text).toBe('Newer @Alex text');
-        expect(remounted.getCurrent().mentions).toEqual([{ start: 6, end: 11, accountId: 'account-alex' }]);
+        expect(remounted.getCurrent().text).toBe(`Newer ${alex} text`);
+        expect(remounted.getCurrent().mentions).toEqual([mention('happier.account', 'account:account-alex', 'Alex', 6)]);
         if (kind === 'create') expect(remounted.getCurrent().title).toBe('Newer title');
         await remounted.unmount();
     });
@@ -414,8 +425,8 @@ describe('useDiscussionDraft', () => {
         await rendered.unmount();
     });
     it('seeds an empty new Discussion with an addressed request, and never replaces words already there', async () => {
-        const seed = { scope, title: 'Reading desk isn’t ready', text: '@Ana Its machine is offline.',
-            mentions: [{ start: 0, end: 4, accountId: 'ana' }] } as const;
+        const seed = { scope, title: 'Reading desk isn’t ready', text: `${ana} Its machine is offline.`,
+            mentions: [mention('happier.account', 'account:ana', 'Ana', 0)] } as const;
         expect(seedDiscussionDraft(seed)).toBe(true);
         const seeded = await renderHook(() => useDiscussionDraft({ scope, address: newAddress }));
         expect(seeded.getCurrent()).toMatchObject({ title: seed.title, text: seed.text, mentions: seed.mentions });

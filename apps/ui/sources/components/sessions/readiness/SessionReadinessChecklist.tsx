@@ -24,6 +24,8 @@ import { resolvePortableServerIdentityForRoutingId } from '@/sync/domains/server
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
 import { seedDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
+import { buildDiscussionAccountMentionPayload } from '@/components/discussions/discussionComposerDocument';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 
@@ -131,13 +133,14 @@ export const SessionReadinessChecklist = React.memo(function SessionReadinessChe
     : guidance;
   const askOwner = React.useCallback(() => {
     if (!ownerName || !owner.accountId) return;
-    const mention = `@${ownerName}`;
+    const reference = buildDiscussionAccountMentionPayload(owner.accountId, ownerName);
+    const mention = formatInlineReferenceTokenV1(reference);
     const reason = joinHappierFacts(owner.botName, cause);
     seedDiscussionDraft({
       scope: props.scope,
       title: t('session.collaboration.readiness.askTitle', { bot: owner.botName ?? t('session.collaboration.readiness.facts.agent') }),
       text: `${mention} ${t('session.collaboration.readiness.askBody', { reason })}`,
-      mentions: [{ start: 0, end: mention.length, accountId: owner.accountId }],
+      mentions: [{ ...reference, start: 0, end: mention.length, tokenText: mention }],
     });
     router.push(buildDiscussionRouteHref({
       target: { kind: 'new', address: { serverId: props.scope.serverId }, anchor: { kind: 'session', sessionId: props.sessionId } },

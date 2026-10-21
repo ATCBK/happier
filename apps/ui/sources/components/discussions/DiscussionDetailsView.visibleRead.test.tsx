@@ -8,7 +8,7 @@ import type {
 } from '@happier-dev/protocol';
 import type { SessionDiscussionDraftMutationAttempt, SessionDiscussionDraftMutationAttemptInput } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import type { DiscussionDraftSubmittedContentV2 } from '@happier-dev/protocol/drafts/sessionDraftsV2';
-import { buildDiscussionContentFromPendingText, type DiscussionMentionSpan } from './discussionComposerDocument';
+import { buildDiscussionContentFromPendingText } from './discussionComposerDocument';
 import { createDiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
 import { SessionHumanPresenceVisibleReplaceV1Schema } from '@happier-dev/protocol/sessions';
@@ -31,6 +31,12 @@ import {
  * are substituted — the Discussion HTTP client, device credentials, the
  * presence socket — plus presentation-only children unrelated to reading.
  */
+import type { ComposerStructuredInputMention } from '@/components/sessions/agentInput/structuredInputMentions';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+
+const alexToken = formatInlineReferenceTokenV1({ label: 'Alex', ref: 'account:account-alex' });
+const alexMention = { kind: 'happier.account', ref: 'account:account-alex', tokenText: alexToken, start: 0, end: alexToken.length } as const;
+
 const network = vi.hoisted(() => ({ client: null as null | Record<string, unknown> }));
 const sourceSessionReads = vi.hoisted(() => vi.fn());
 const transcriptProps = vi.hoisted(() => ({ current: null as null | Record<string, unknown> }));
@@ -44,7 +50,7 @@ const exactHomeBinding = vi.hoisted(() => ({
     onRetire: () => ({ dispose: () => undefined }),
 }));
 const draftState = vi.hoisted(() => ({
-    title: '', text: '', mentions: [] as readonly DiscussionMentionSpan[], status: 'clean' as const, conflict: null,
+    title: '', text: '', mentions: [] as readonly ComposerStructuredInputMention[], status: 'clean' as const, conflict: null,
     pendingMutationAttempt: null as SessionDiscussionDraftMutationAttempt | null,
     submitted: null as DiscussionDraftSubmittedContentV2 | null,
     setComposer: () => undefined, setTitle: () => undefined, captureSubmittedCurrentness: (attempt?: SessionDiscussionDraftMutationAttemptInput) => {
@@ -260,8 +266,8 @@ describe('DiscussionDetailsView visible read', () => {
     it.each(['create', 'post'] as const)('uses the exact pending submitted content for %s person attention', async (kind) => {
         const network = installNetwork(() => [message(1, true)]);
         draftState.title = 'Review';
-        draftState.text = '@Alex';
-        draftState.mentions = [{ start: 0, end: 5, accountId: 'account-alex' }];
+        draftState.text = alexToken;
+        draftState.mentions = [alexMention];
         const pending = buildDiscussionContentFromPendingText({ previousText: draftState.text, pendingText: '@Alex2', mentions: draftState.mentions });
         await renderScreen(<DiscussionDetailsView target={kind === 'create' ? { kind: 'new', address } : target} active standaloneSurface />);
         await vi.waitFor(() => expect(composerProps.current).not.toBeNull());
@@ -275,8 +281,8 @@ describe('DiscussionDetailsView visible read', () => {
 
     it('derives an omitted create title from the exact pending submitted content', async () => {
         const { create } = installNetwork(() => [message(1, true)]);
-        draftState.text = '@Alex';
-        draftState.mentions = [{ start: 0, end: 5, accountId: 'account-alex' }];
+        draftState.text = alexToken;
+        draftState.mentions = [alexMention];
         const pending = buildDiscussionContentFromPendingText({ previousText: draftState.text, pendingText: '@Alex2', mentions: draftState.mentions });
         await renderScreen(<DiscussionDetailsView target={{ kind: 'new', address }} active standaloneSurface />);
         await act(async () => { composerProps.current!.onSend(pending); });
@@ -301,7 +307,7 @@ describe('DiscussionDetailsView visible read', () => {
         const network = installNetwork(() => [message(1, true)]);
         draftState.title = 'Review';
         draftState.text = '@Alex2';
-        draftState.mentions = [{ start: 0, end: 5, accountId: 'account-alex' }];
+        draftState.mentions = [alexMention];
         const draftAddress = kind === 'create' ? { kind: 'newDiscussion' as const } : { kind: 'discussion' as const, discussionId: target.discussionId };
         const currentness = { address: draftAddress, mutationIds: {} };
         draftState.pendingMutationAttempt = kind === 'create'

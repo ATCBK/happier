@@ -16,6 +16,7 @@ import type { AgentInputSendOptions } from '@/components/sessions/agentInput/age
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import {
     structuredInputMentionSurvivesText,
+    reconcileStructuredInputMentionsWithText,
     type ComposerStructuredInputMention,
 } from '@/components/sessions/agentInput/structuredInputMentions';
 import type { SessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
@@ -35,24 +36,18 @@ import { readComposerSessionSuggestionDisplay } from '@/sync/domains/input/sugge
 import { getStorage } from '@/sync/domains/state/storage';
 import { resolveExecutableModelParticipantDisplay } from '@/components/sessions/authoring/useExecutableParticipantLabel';
 import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
-import { formatComposerSuggestionToken, parseComposerSuggestionQuery } from '@/components/autocomplete/composerSuggestionGrammar';
+import { parseComposerSuggestionQuery } from '@/components/autocomplete/composerSuggestionGrammar';
 
 import {
     buildDiscussionContent,
-    discussionComposerMentionsFromSpans,
-    discussionMentionSpansFromComposerMentions,
-    parseDiscussionMentionSpans,
-    type DiscussionMentionSpan,
     buildDiscussionModelSlotMentionPayload,
-    reconcileDiscussionMentionSpans,
+    readDiscussionMentionParticipant,
 } from './discussionComposerDocument';
 
-export type DiscussionComposerValue = Readonly<{
-    text: string;
-    mentions: readonly DiscussionMentionSpan[];
-}>;
+import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 
-type LatestComposerDocument = Readonly<{
+export type DiscussionComposerValue = Readonly<{
     text: string;
     mentions: readonly ComposerStructuredInputMention[];
 }>;
@@ -96,14 +91,14 @@ export function DiscussionComposer(props: Readonly<{
     const sending = React.useRef<Readonly<{ accountLifetime: ServerAccountScopeLifetime; discussionId: string | undefined }> | null>(null);
     const client = React.useMemo(() => createDiscussionClient({ scope, availability }), [availability, scope]);
     const composerMentions = React.useMemo(
-        () => discussionComposerMentionsFromSpans(props.value.text, props.value.mentions),
+        () => parseComposerStructuredInputMentionsForText(props.value.mentions, props.value.text).mentions,
         [props.value.mentions, props.value.text],
     );
 
     // The composer reports text and mentions in separate callbacks, in either order. The draft
     // admits a mention only against the text it covers, so both are written together from the
     // latest pair; an external draft replacement (another device, a clear after send) resets it.
-    const latestRef = React.useRef<LatestComposerDocument>({ text: props.value.text, mentions: composerMentions });
+    const latestRef = React.useRef<DiscussionComposerValue>({ text: props.value.text, mentions: composerMentions });
     const revisionRef = React.useRef(0);
     const observedValueRef = React.useRef(props.value);
     if (observedValueRef.current !== props.value) {
@@ -115,14 +110,12 @@ export function DiscussionComposer(props: Readonly<{
     }
     const onChangeRef = React.useRef(props.onChange);
     onChangeRef.current = props.onChange;
-    const write = React.useCallback((next: LatestComposerDocument) => {
+    const write = React.useCallback((next: DiscussionComposerValue) => {
         if (next.text !== latestRef.current.text || !pluginJsonValuesEqual(next.mentions, latestRef.current.mentions)) revisionRef.current += 1;
         latestRef.current = next;
         onChangeRef.current({
             text: next.text,
-            mentions: discussionMentionSpansFromComposerMentions(
-                next.mentions.filter((mention) => structuredInputMentionSurvivesText(next.text, mention)),
-            ),
+            mentions: parseComposerStructuredInputMentionsForText(next.mentions, next.text).mentions,
         });
     }, []);
 
@@ -225,9 +218,10 @@ export function DiscussionComposer(props: Readonly<{
                     const display = resolveExecutableModelParticipantDisplay(participant.launch, machines);
                     if (!matchesComposerSuggestionQuery(display.displayLabel, scoped.scopedQuery)) continue;
                     if (sessionCount >= limit) break;
+                    const payload = buildDiscussionModelSlotMentionPayload(participant.participant.participantSlotId, display.displayLabel);
                     suggestions.push({ kind: 'session', key: `discussion-model:${participant.participant.participantSlotId}`,
-                        text: formatComposerSuggestionToken('@', display.displayLabel), label: display.displayLabel,
-                        structuredInput: buildDiscussionModelSlotMentionPayload(participant.participant.participantSlotId, display.displayLabel),
+                        text: formatInlineReferenceTokenV1(payload), label: display.displayLabel,
+                        structuredInput: payload,
                         ...(display.agentId ? { icon: <SessionAgentCatalogIdentityIcon agentId={display.agentId}
                             machineId={participant.launch.executionTarget.machineId} serverId={scope.serverId} size={16} /> } : {}),
                     });
@@ -248,9 +242,9 @@ export function DiscussionComposer(props: Readonly<{
         if (disabled || (active?.accountLifetime === accountLifetime && active.discussionId === props.discussionId)
             || text.trim().length === 0 || !accountLifetime.isCurrent()) return;
         if (presenceTarget) stopDiscussionTyping(presenceTarget, accountLifetime);
-        const mentions = reconcileDiscussionMentionSpans({ previousText: latest.text, nextText: text,
-            mentions: parseDiscussionMentionSpans(discussionMentionSpansFromComposerMentions(latest.mentions), latest.text) });
-        if (!mentions.some(mention => typeof mention.participantSlotId === 'string')) {
+        const mentions = reconcileStructuredInputMentionsWithText({ previousText: latest.text, nextText: text,
+            mentions: parseComposerStructuredInputMentionsForText(latest.mentions, latest.text).mentions });
+        if (!mentions.some(mention => readDiscussionMentionParticipant(mention)?.kind === 'model')) {
             onSendProp(buildDiscussionContent(text, mentions));
             return;
         }

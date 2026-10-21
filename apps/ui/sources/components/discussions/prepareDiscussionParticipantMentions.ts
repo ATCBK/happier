@@ -2,7 +2,8 @@ import type { DiscussionExecutableParticipantInviteOutcome } from '@/sync/api/di
 import type { DiscussionRepository } from '@/sync/ops/discussions/discussionRepository';
 import type { DiscussionComposerValue } from './DiscussionComposer';
 import type { useDiscussionParticipantManagement } from './useDiscussionParticipantManagement';
-import { buildDiscussionContent, parseDiscussionMentionSpans } from './discussionComposerDocument';
+import { buildDiscussionContent, readDiscussionMentionParticipant } from './discussionComposerDocument';
+import { parseComposerStructuredInputMentionsForText } from '@/sync/domains/input/draftValues/sessionDraftValueTypes';
 
 type Refusal = Exclude<DiscussionExecutableParticipantInviteOutcome, Readonly<{ kind: 'succeeded' }>>;
 export type DiscussionParticipantMentionPreparation = Readonly<{ kind: 'ready'; content: ReturnType<typeof buildDiscussionContent> }>
@@ -18,8 +19,11 @@ export async function prepareDiscussionParticipantMentions(input: Readonly<{
 }>): Promise<DiscussionParticipantMentionPreparation> {
     const refuse = (errorCode: string): DiscussionParticipantMentionPreparation => ({ kind: 'refused', outcome: { kind: 'failed', errorCode } });
     if (!input.isCurrent()) return refuse('canceled');
-    const mentions = parseDiscussionMentionSpans(input.document.mentions, input.document.text);
-    const slots = [...new Set(mentions.flatMap(mention => typeof mention.participantSlotId === 'string' ? [mention.participantSlotId] : []))];
+    const mentions = parseComposerStructuredInputMentionsForText(input.document.mentions, input.document.text).mentions;
+    const slots = [...new Set(mentions.flatMap(mention => {
+        const participant = readDiscussionMentionParticipant(mention);
+        return participant?.kind === 'model' ? [participant.participantSlotId] : [];
+    }))];
     if (slots.length === 0) return { kind: 'ready', content: buildDiscussionContent(input.document.text, mentions) };
     try {
         const roster = await input.repository.participants(input.discussionId);
@@ -41,8 +45,7 @@ export async function prepareDiscussionParticipantMentions(input: Readonly<{
             if (bound?.participant.participantSlotId !== slot || !bound.sessionId) return { kind: 'refused', outcome: { kind: 'checking' } };
             sessions.set(slot, bound.sessionId);
         }
-        return { kind: 'ready', content: buildDiscussionContent(input.document.text, mentions.map(mention =>
-            typeof mention.participantSlotId === 'string' ? { start: mention.start, end: mention.end, sessionId: sessions.get(mention.participantSlotId)! } : mention)) };
+        return { kind: 'ready', content: buildDiscussionContent(input.document.text, mentions, sessions) };
     } catch {
         return input.isCurrent() ? { kind: 'refused', outcome: { kind: 'checking' } } : refuse('canceled');
     }
