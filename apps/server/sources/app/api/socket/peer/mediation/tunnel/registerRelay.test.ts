@@ -1181,6 +1181,37 @@ describe('registerPeerTcpTunnelRelaySocketHandler', () => {
         await socket.trigger('disconnect');
     });
 
+    it('delivers the daemon parent abort to its exact owner and releases the relay attachment', async () => {
+        const userSocket = createSocket();
+        const machineSocket = createSocket({ id: 'abort_machine_socket', clientType: 'machine-scoped', machineId: 'machine_1' });
+        const io = createIo();
+        const coordinator = createRelayTestCoordinator(io, 'user_1');
+        const options = { io, coordinator, serverRoutedEnabled: true, allowedPorts: [3000],
+            maxActiveTunnelsPerSocket: 1, relayAuthorizationTrustRoots };
+        registerRelayModule.registerPeerTcpTunnelRelaySocketHandler('user_1', userSocket, options);
+        registerRelayModule.registerPeerTcpTunnelRelaySocketHandler('user_1', machineSocket, options);
+        try {
+            await userSocket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope('daemon_abort'));
+            io.localRoomEmit.mockClear();
+            await machineSocket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
+                v: 1, scopeUserId: 'user_1', sender: { kind: 'machine', machineId: 'machine_1' },
+                recipient: { kind: 'user' },
+                frame: { v: 1, kind: 'abort', tunnelId: 'daemon_abort', reasonCode: 'provider_broker_application_unavailable' },
+            });
+            expect(io.localRoomEmit).toHaveBeenCalledWith(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, expect.objectContaining({
+                frame: { v: 1, kind: 'abort', tunnelId: 'daemon_abort', reasonCode: 'provider_broker_application_unavailable' },
+            }));
+            await userSocket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, createOpenEnvelope('after_daemon_abort'));
+            expect(io.roomEmit).toHaveBeenCalledWith(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, expect.objectContaining({
+                frame: expect.objectContaining({ kind: 'open', open: expect.objectContaining({ tunnelId: 'after_daemon_abort' }) }),
+            }));
+        } finally {
+            await userSocket.trigger('disconnect');
+            await machineSocket.trigger('disconnect');
+            await coordinator.close();
+        }
+    });
+
     it('releases relay tunnel keys from both participant sockets after terminal close', async () => {
         const mod = await loadRegisterRelayModule();
         const userSocket = createSocket();

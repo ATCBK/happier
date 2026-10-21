@@ -4,12 +4,12 @@ import {
 } from "@happier-dev/protocol";
 import { describe, expect, it, vi } from "vitest";
 
-import { createPeerTcpTunnelRelaySubstream } from "./peerRelayStreamTransport";
+import { createPeerTcpTunnelRelayStream } from "./peerRelayStreamTransport";
 
-describe("createPeerTcpTunnelRelaySubstream", () => {
+describe("createPeerTcpTunnelRelayStream", () => {
     it("distinguishes remote abort and parent loss from clean directional EOF", async () => {
         for (const terminal of ["abort", "parent"] as const) {
-            const substream = createPeerTcpTunnelRelaySubstream({
+            const substream = createPeerTcpTunnelRelayStream({
                 tunnelId: "tunnel-1", substreamId: "substream-1", initialWindowBytes: 1024,
                 maxFrameBytes: 64 * 1024, maxDecodedPayloadBytes: 1024, maxSendChunkBytes: 1024,
                 sendEncodedBinaryFrame() {}, onRelease() {},
@@ -30,7 +30,7 @@ describe("createPeerTcpTunnelRelaySubstream", () => {
 
     it("drains queued bytes before half-close but discards unread bytes on consumer cancellation", async () => {
         for (const terminal of ["half-close", "cancel"] as const) {
-            const substream = createPeerTcpTunnelRelaySubstream({
+            const substream = createPeerTcpTunnelRelayStream({
                 tunnelId: "tunnel-1", substreamId: "substream-1", initialWindowBytes: 1024,
                 maxFrameBytes: 64 * 1024, maxDecodedPayloadBytes: 1024, maxSendChunkBytes: 1024,
                 sendEncodedBinaryFrame() {}, onRelease() {},
@@ -54,7 +54,7 @@ describe("createPeerTcpTunnelRelaySubstream", () => {
         }
     });
     it("settles a credit-blocked write when the parent tunnel closes", async () => {
-        const substream = createPeerTcpTunnelRelaySubstream({
+        const substream = createPeerTcpTunnelRelayStream({
             tunnelId: "tunnel-1",
             substreamId: "substream-1",
             initialWindowBytes: 1,
@@ -74,7 +74,7 @@ describe("createPeerTcpTunnelRelaySubstream", () => {
     it("provides target-neutral framed byte transport while isolating the exact substream", async () => {
         const sentFrames: Uint8Array[] = [];
         const onReleased = vi.fn();
-        const substream = createPeerTcpTunnelRelaySubstream({
+        const substream = createPeerTcpTunnelRelayStream({
             tunnelId: "tunnel-1",
             substreamId: "substream-1",
             initialWindowBytes: 64 * 1024,

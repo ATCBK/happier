@@ -420,6 +420,7 @@ describe('registerPeerTcpTunnelRelayTerminator', () => {
         expect(resolveProviderBrokerApplicationTarget).toHaveBeenCalledWith({
             binding,
             relayAuthorization: authorization,
+            signal: expect.any(AbortSignal),
         });
         expect(connectTcp).toHaveBeenCalledWith({ host: '127.0.0.1', port: 47_001 });
         expect(connection.write).toHaveBeenCalledWith(Buffer.from('c'.repeat(64), 'ascii'));
@@ -436,6 +437,55 @@ describe('registerPeerTcpTunnelRelayTerminator', () => {
         });
         expect(connectTcp).toHaveBeenCalledTimes(2);
         await runtime.dispose();
+    });
+
+    it('settles a stalled Provider relay activation at its signed admission expiry', async () => {
+        const mod = await loadRelayModule();
+        if (!mod) throw new Error('Relay module unavailable');
+        vi.useFakeTimers();
+        vi.setSystemTime(2_000);
+        const socket = createSocket();
+        const connection = deferred<Awaited<ReturnType<typeof connectPeerTcpTunnelTcp>>>();
+        let connecting!: () => void;
+        const started = new Promise<void>(resolve => { connecting = resolve; });
+        const terminator = mod.registerPeerTcpTunnelRelayTerminator({
+            accountId: 'user_1', machineId: 'machine_1', socket, nowMs: Date.now,
+            relayAuthorizationTrustRoots,
+            // OS connection establishment is the unresponsive system boundary.
+            connectTcp: () => { connecting(); return connection.promise; },
+            resolveProviderBrokerApplicationTarget: async () => ({ port: 47_001, localCapability: 'c'.repeat(64) }),
+        });
+        const binding = {
+            v: 1 as const, kind: 'resource_test' as const, teamId: 'team', resourceId: 'resource',
+            requestId: 'request', actorAccountId: 'actor', expectedResourceRevision: 0,
+            application: { agentTargetKey: 'codex', implementationIdentity: { pluginId: 'happier.provider.openai', localId: 'openai' },
+                endpointTemplateId: 'responses', protocol: 'openai-responses' as const },
+            source: { v: 1 as const, kind: 'provider_connection' as const,
+                connectionId: ProviderConnectionIdSchema.parse('connection-1'),
+                connectionSecurityFingerprint: ProviderConnectionSecurityFingerprintV1Schema.parse('connection-security:v1:1'),
+                credentialSlotId: 'apiKey' },
+        };
+        const authorization = createRelayAuthorization('stalled_provider_activation', {
+            flowKind: 'provider_broker', providerBroker: binding, exp: 9_000,
+        });
+        const base = createOpenEnvelope('stalled_provider_activation', { relayAuthorization: authorization });
+        const { destination: _destination, ...open } = base.frame.open;
+        let settled = false;
+        const pending = socket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, { ...base, frame: { ...base.frame, open } })
+            .finally(() => { settled = true; });
+        try {
+            await started;
+            await vi.advanceTimersByTimeAsync(authorization.payload.exp - Date.now() + 1);
+            expect(settled).toBe(true);
+            expect(socket.emit).toHaveBeenCalledWith(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, expect.objectContaining({
+                frame: expect.objectContaining({ kind: 'abort', reasonCode: 'relay_authorization_invalid' }),
+            }));
+        } finally {
+            await terminator.dispose();
+            connection.resolve({ write() {}, onData() {}, close() {} });
+            await pending;
+            vi.useRealTimers();
+        }
     });
 
     describe('Home-backed relay disconnect fixture', () => {

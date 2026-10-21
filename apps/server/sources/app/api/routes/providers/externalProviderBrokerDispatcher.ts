@@ -15,7 +15,7 @@ import { readMachineTunnelFeatureEnv } from '@/app/features/catalog/readFeatureE
 import { resolvePeerMediationGrantSigningConfig } from '@/app/machines/peer/mediation/mintDirectRouteGrantV1';
 import { mintProviderBrokerRelayAuthorizationV2 } from '@/app/machines/peer/mediation/tunnel';
 import {
-    createPeerTcpTunnelRelaySubstream,
+    createPeerTcpTunnelRelayStream,
     type PeerTcpTunnelRelayTransportFactory,
 } from '@/app/machines/peer/mediation/tunnel/peerRelayStreamTransport';
 import type { ExternalProviderBrokerDispatch } from './registerExternalProviderApiRoutes';
@@ -108,7 +108,6 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
         }
         const transport = input.createRelayTransport({ accountId: target.custodianAccountId });
         const tunnelId = `provider_broker_${randomUUID()}`;
-        const substreamId = `provider_request_${randomUUID()}`;
         const authorization = mintProviderBrokerRelayAuthorizationV2({
             accountId: target.custodianAccountId,
             targetMachineId: target.brokerMachineId,
@@ -128,33 +127,47 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
             transport.close();
             return { ok: false, error: 'broker_unavailable' };
         }
-        let relay: ReturnType<typeof createPeerTcpTunnelRelaySubstream> | null = null;
+        let relay: ReturnType<typeof createPeerTcpTunnelRelayStream> | null = null;
+        let admissionTimer: ReturnType<typeof setTimeout> | undefined;
         const unsubscribe = transport.subscribe((envelope) => {
             if (envelope.scopeUserId !== target.custodianAccountId) return;
-            if (envelope.recipient.kind !== 'user' || envelope.recipient.socketId !== transport.relaySocketId) return;
-            if (envelope.sender.kind !== 'machine' || envelope.sender.machineId !== target.brokerMachineId) return;
+            const fromBroker = envelope.sender.kind === 'machine' && envelope.sender.machineId === target.brokerMachineId
+                && envelope.recipient.kind === 'user'
+                && (envelope.recipient.socketId === undefined || envelope.recipient.socketId === transport.relaySocketId);
             if (envelope.v === 1) {
-                if (envelope.frame.kind === 'close' || envelope.frame.kind === 'abort') relay?.closeFromTunnel();
+                const fromHome = envelope.sender.kind === 'user' && envelope.sender.socketId === transport.relaySocketId
+                    && envelope.recipient.kind === 'machine' && envelope.recipient.machineId === target.brokerMachineId;
+                if ((fromBroker || fromHome) && (envelope.frame.kind === 'close' || envelope.frame.kind === 'abort')
+                    && envelope.frame.tunnelId === tunnelId) relay?.closeFromTunnel();
                 return;
             }
+            if (!fromBroker) return;
             const decoded = decodePeerTcpTunnelBinaryFrameV2({
                 frame: envelope.frame,
                 maxHeaderBytes: config.serverRoutedMaxBinaryHeaderBytes,
                 maxPayloadBytes: config.serverRoutedMaxRawPayloadBytes,
             });
-            if (decoded.ok && decoded.header.tunnelId === tunnelId && decoded.header.substreamId === substreamId) relay?.acceptEnvelope(envelope);
+            if (decoded.ok && decoded.header.tunnelId === tunnelId && decoded.header.substreamId === undefined) {
+                // Byte credit is the existing positive evidence that the broker
+                // admitted the application stream. Response bytes prove it too.
+                // Admission expiry must not cut off an accepted long request.
+                if ((decoded.header.kind === 'ack' && decoded.header.direction === 'client_to_daemon' && (decoded.header.ack ?? 0) > 0)
+                    || (decoded.header.kind === 'data' && decoded.header.direction === 'daemon_to_client')) clearTimeout(admissionTimer);
+                relay?.acceptEnvelope(envelope);
+            }
         });
         let cleaned = false;
         function abort() { void relay?.stream.abort('request_cancelled'); }
         const cleanup = () => {
             if (cleaned) return;
             cleaned = true;
+            clearTimeout(admissionTimer);
             signal.removeEventListener('abort', abort);
             unsubscribe();
             transport.close();
         };
-        relay = createPeerTcpTunnelRelaySubstream({
-            tunnelId, substreamId,
+        relay = createPeerTcpTunnelRelayStream({
+            tunnelId,
             initialWindowBytes: PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
             maxFrameBytes: config.serverRoutedMaxFrameBytes,
             maxDecodedPayloadBytes: config.serverRoutedMaxRawPayloadBytes,
@@ -167,6 +180,16 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
             }),
             onRelease: cleanup,
         });
+        if (signal.aborted) { await relay.stream.abort('request_cancelled'); return { ok: false, error: 'request_cancelled' }; }
+        signal.addEventListener('abort', abort, { once: true });
+        // The signed relay grant already owns the admission window. A lost
+        // OPEN/reply cannot retain this request after that window expires.
+        // An ACK/data frame clears it; there is no upstream response lifetime cap.
+        admissionTimer = setTimeout(() => {
+            logger.warn({ module: 'provider-broker-carrier', stage: 'relay_admission', code: 'authorization_expired' });
+            void relay?.stream.abort('relay_authorization_invalid');
+        }, Math.max(0, authorization.relayAuthorization.payload.exp - Date.now()));
+        admissionTimer.unref?.();
         send(transport, {
             v: 1, scopeUserId: target.custodianAccountId,
             sender: { kind: 'user', socketId: transport.relaySocketId },
@@ -178,22 +201,21 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
                 selectedEncoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
             } },
         });
-        relay.open();
         const body = JSON.stringify(request);
         const wire = new TextEncoder().encode([
             `POST ${TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1} HTTP/1.1`,
             'Host: provider-broker.internal', 'Content-Type: application/json',
             `Content-Length: ${Buffer.byteLength(body)}`, 'Connection: close', '', body,
         ].join('\r\n'));
-        if (signal.aborted) { await relay.stream.abort('request_cancelled'); return { ok: false, error: 'request_cancelled' }; }
-        signal.addEventListener('abort', abort, { once: true });
         const written = await relay.stream.write(wire);
         if (!written.ok) {
             logger.warn({ module: 'provider-broker-carrier', stage: 'request_write', code: 'write_failed' });
             cleanup();
             return { ok: false, error: 'broker_unavailable' };
         }
-        await relay.stream.endWrite();
+        // Content-Length terminates the HTTP request. Keep TCP's write side
+        // open until the response completes; an early FIN can make the HTTP
+        // application close while its Provider request is still pending.
         const iterator = relay.stream.read()[Symbol.asyncIterator]();
         let buffered = Buffer.alloc(0);
         let boundary = buffered.indexOf('\r\n\r\n');
@@ -258,7 +280,8 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
                     pending = pending.subarray(size + 2);
                 }
             } finally {
-                cleanup();
+                try { await relay?.stream.close(); }
+                finally { cleanup(); }
             }
         }
         return { ok: true, statusCode, headers, body: responseBody() };

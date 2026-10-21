@@ -5,6 +5,7 @@ import {
     createPeerTcpTunnelStreamSession,
     decodePeerTcpTunnelBinaryFrameForSubstreamSession,
     encodePeerTcpTunnelBinaryFrameForSubstream,
+    encodePeerTcpTunnelBinaryFrameForSession,
 } from "@happier-dev/peer-transport/duplexFrames";
 import type { PeerTcpTunnelStreamSessionResult } from "@happier-dev/peer-transport/duplexFrames";
 
@@ -88,7 +89,7 @@ class AsyncByteQueue implements AsyncIterable<Uint8Array> {
 
 export type PeerTcpTunnelRelayByteStream = Readonly<{
     tunnelId: string;
-    substreamId: string;
+    substreamId?: string;
     write(chunk: Uint8Array): Promise<PeerTcpTunnelStreamSessionResult>;
     endWrite(): Promise<PeerTcpTunnelStreamSessionResult>;
     read(): AsyncIterable<Uint8Array>;
@@ -96,7 +97,7 @@ export type PeerTcpTunnelRelayByteStream = Readonly<{
     abort(reasonCode: string): Promise<void>;
 }>;
 
-export type PeerTcpTunnelRelaySubstream = Readonly<{
+export type PeerTcpTunnelRelayStream = Readonly<{
     stream: PeerTcpTunnelRelayByteStream;
     open(): void;
     acceptEnvelope(envelope: PeerTcpTunnelRelayEnvelope): void;
@@ -108,19 +109,19 @@ function normalizeChunk(chunk: Uint8Array): Uint8Array {
 }
 
 /**
- * Owns only the binary V2 byte-stream mechanics for one already-authorized relay substream.
+ * Owns binary V2 bytes for an already-authorized parent stream or child substream.
  * Target selection, route grants, authorization, reuse, and lifecycle remain with the caller.
  */
-export function createPeerTcpTunnelRelaySubstream(input: Readonly<{
+export function createPeerTcpTunnelRelayStream(input: Readonly<{
     tunnelId: string;
-    substreamId: string;
+    substreamId?: string;
     initialWindowBytes: number;
     maxFrameBytes: number;
     maxDecodedPayloadBytes: number;
     maxSendChunkBytes: number;
     sendEncodedBinaryFrame(frame: Uint8Array): void;
     onRelease(): void;
-}>): PeerTcpTunnelRelaySubstream {
+}>): PeerTcpTunnelRelayStream {
     const queue = new AsyncByteQueue();
     let closed = false;
 
@@ -145,10 +146,9 @@ export function createPeerTcpTunnelRelaySubstream(input: Readonly<{
             close: () => release(),
         },
         sendFrame: (frame) => {
-            input.sendEncodedBinaryFrame(encodePeerTcpTunnelBinaryFrameForSubstream({
-                frame,
-                substreamId: input.substreamId,
-            }));
+            input.sendEncodedBinaryFrame(input.substreamId === undefined
+                ? encodePeerTcpTunnelBinaryFrameForSession(frame)
+                : encodePeerTcpTunnelBinaryFrameForSubstream({ frame, substreamId: input.substreamId }));
         },
     });
 
@@ -171,6 +171,8 @@ export function createPeerTcpTunnelRelaySubstream(input: Readonly<{
     return {
         stream,
         open() {
+            // Parent admission is the signed V1 open, owned by the caller.
+            if (input.substreamId === undefined) return;
             input.sendEncodedBinaryFrame(encodePeerTcpTunnelBinaryFrameV2({
                 header: {
                     version: 2,

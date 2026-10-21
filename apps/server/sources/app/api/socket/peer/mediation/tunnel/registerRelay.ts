@@ -924,7 +924,9 @@ export function registerPeerTcpTunnelRelaySocketHandler(
             emitSocketError(socket, 'Peer tunnel relay sender does not match the authenticated socket binding');
             return;
         }
-        if (envelope.v === 1 && envelope.frame.kind !== 'open') {
+        if (envelope.v === 1 && envelope.frame.kind !== 'open'
+            && envelope.frame.kind !== 'abort'
+            && !(envelope.frame.kind === 'close' && !envelope.frame.halfClose)) {
             emitSocketError(socket, 'Peer tunnel relay session frames require binary_frame_v2');
             return;
         }

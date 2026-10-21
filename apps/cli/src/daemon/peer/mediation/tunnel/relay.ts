@@ -62,6 +62,7 @@ export type RegisterPeerTcpTunnelRelayTerminatorOptions = Readonly<{
     resolveProviderBrokerApplicationTarget?: (input: Readonly<{
         binding: ProviderBrokerRelayApplicationBindingV1;
         relayAuthorization: PeerTcpTunnelRelayAuthorizationV2;
+        signal: AbortSignal;
     }>) => Promise<Readonly<{ port: number; localCapability: string }> | null>;
     initialWindowBytes?: number;
     maxFrameBytes?: number;
@@ -198,11 +199,28 @@ function resolveSubstreamCaps(input: Readonly<{
     };
 }
 
+/** Admission may be cancelled even when an OS connect or application target ignores its signal. */
+async function awaitRelayAdmission<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+    return await new Promise<T>((resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        if (signal.aborted) abort();
+        else signal.addEventListener('abort', abort, { once: true });
+        work.then(value => {
+            signal.removeEventListener('abort', abort);
+            if (signal.aborted) reject(signal.reason);
+            else resolve(value);
+        }, error => {
+            signal.removeEventListener('abort', abort);
+            reject(error);
+        });
+    });
+}
+
 export function registerPeerTcpTunnelRelayTerminator(
     options: RegisterPeerTcpTunnelRelayTerminatorOptions,
 ): Readonly<{ dispose(): Promise<void> }> {
     const activeTunnels = new Map<string, ActiveRelayTunnel>();
-    const openingTunnels = new Set<string>();
+    const openingTunnels = new Map<string, AbortController>();
     const pendingFramesByOpeningTunnel = new Map<string, PeerTcpTunnelRelayEnvelope[]>();
     const grantConsumption = createAtomicRouteGrantConsumption({ activationFailurePolicy: 'consume' });
     const bytesByTunnelId = new Map<string, { in: number; out: number }>();
@@ -300,6 +318,7 @@ export function registerPeerTcpTunnelRelayTerminator(
         const active = activeTunnels.get(tunnelId);
         const bytes = bytesByTunnelId.get(tunnelId);
         activeTunnels.delete(tunnelId);
+        openingTunnels.get(tunnelId)?.abort(new Error('tunnel_closed'));
         openingTunnels.delete(tunnelId);
         pendingFramesByOpeningTunnel.delete(tunnelId);
         bytesByTunnelId.delete(tunnelId);
@@ -365,7 +384,13 @@ export function registerPeerTcpTunnelRelayTerminator(
 
     function queueFrameForOpeningTunnel(tunnelId: string, envelope: PeerTcpTunnelRelayEnvelope): boolean {
         if (!openingTunnels.has(tunnelId)) return false;
-        if (envelope.v === 1 && isTerminalFrame(envelope.frame as Exclude<PeerTcpTunnelFrameV1, { kind: 'open' }>)) {
+        const binary = envelope.v === 2 ? decodePeerTcpTunnelBinaryFrameHeaderV2({ frame: envelope.frame, maxHeaderBytes: maxBinaryHeaderBytes }) : null;
+        const terminal = envelope.v === 1
+            ? envelope.frame.kind === 'abort' || (envelope.frame.kind === 'close' && !envelope.frame.halfClose)
+            : binary?.ok && !binary.header.substreamId
+                && (binary.header.kind === 'abort' || (binary.header.kind === 'close' && !binary.header.halfClose));
+        if (terminal) {
+            openingTunnels.get(tunnelId)?.abort(new Error('tunnel_closed'));
             pendingFramesByOpeningTunnel.delete(tunnelId);
             return true;
         }
@@ -471,10 +496,75 @@ export function registerPeerTcpTunnelRelayTerminator(
             emitAbort(tunnelId, 'relay_cap_exceeded');
             return;
         }
-        let grantReservation: ReturnType<typeof grantConsumption.reserve> = null;
-        let providerBrokerTarget: Readonly<{ port: number; localCapability: string }> | null = null;
-        if (verification.payload.flowKind === 'provider_broker') {
-            grantReservation = grantConsumption.reserve({
+        // Signed expiry bounds NEW admission, including asynchronous target
+        // resolution and TCP activation. Once admitted, request/stream custody
+        // owns lifetime; expiry must never terminate an accepted request.
+        const admission = new AbortController();
+        const admissionTimer = setTimeout(() => admission.abort(new Error('relay_authorization_invalid')),
+            Math.max(0, verification.payload.exp - options.nowMs()));
+        admissionTimer.unref?.();
+        openingTunnels.set(tunnelId, admission);
+        try {
+            let grantReservation: ReturnType<typeof grantConsumption.reserve> = null;
+            let providerBrokerTarget: Readonly<{ port: number; localCapability: string }> | null = null;
+            if (verification.payload.flowKind === 'provider_broker') {
+                grantReservation = grantConsumption.reserve({
+                    grantId: verification.payload.grantId,
+                    expiresAt: verification.payload.exp,
+                    nowMs: options.nowMs(),
+                });
+                if (!grantReservation) {
+                    emitObservability({
+                        kind: 'flow.denied',
+                        tunnelId,
+                        reasonCode: 'relay_authorization_invalid',
+                        routeGrantId: verification.payload.grantId,
+                    });
+                    emitAbort(tunnelId, 'relay_authorization_invalid');
+                    return;
+                }
+                try {
+                    providerBrokerTarget = verification.payload.providerBroker
+                        ? await awaitRelayAdmission(Promise.resolve(options.resolveProviderBrokerApplicationTarget?.({
+                            binding: verification.payload.providerBroker,
+                            relayAuthorization,
+                            signal: admission.signal,
+                        }) ?? null), admission.signal)
+                        : null;
+                } catch {
+                    providerBrokerTarget = null;
+                }
+                if (
+                    !providerBrokerTarget
+                    || !Number.isInteger(providerBrokerTarget.port)
+                    || providerBrokerTarget.port < 1
+                    || providerBrokerTarget.port > 65_535
+                    || !isFirstBytesLocalCapability(providerBrokerTarget.localCapability)
+                ) {
+                    grantReservation.activationFailed();
+                    emitObservability({
+                        kind: 'flow.denied',
+                        tunnelId,
+                        reasonCode: admission.signal.aborted ? 'relay_authorization_invalid' : 'provider_broker_application_unavailable',
+                        routeGrantId: verification.payload.grantId,
+                    });
+                    emitAbort(tunnelId, admission.signal.aborted ? 'relay_authorization_invalid' : 'provider_broker_application_unavailable');
+                    return;
+                }
+            } else if (!open.destination || !isPeerTcpTunnelLoopbackDestinationHost(open.destination.host)) {
+                emitObservability({
+                    kind: 'policy.denied',
+                    tunnelId,
+                    reasonCode: 'destination_host_not_allowed',
+                    routeGrantId: verification.payload.grantId,
+                    metadata: open.destination
+                        ? { destinationHost: open.destination.host, destinationPort: open.destination.port }
+                        : undefined,
+                });
+                emitAbort(tunnelId, 'destination_host_not_allowed');
+                return;
+            }
+            grantReservation ??= grantConsumption.reserve({
                 grantId: verification.payload.grantId,
                 expiresAt: verification.payload.exp,
                 nowMs: options.nowMs(),
@@ -489,240 +579,193 @@ export function registerPeerTcpTunnelRelayTerminator(
                 emitAbort(tunnelId, 'relay_authorization_invalid');
                 return;
             }
-            try {
-                providerBrokerTarget = verification.payload.providerBroker
-                    ? await options.resolveProviderBrokerApplicationTarget?.({
-                        binding: verification.payload.providerBroker,
-                        relayAuthorization,
-                    }) ?? null
-                    : null;
-            } catch {
-                providerBrokerTarget = null;
-            }
-            if (
-                !providerBrokerTarget
-                || !Number.isInteger(providerBrokerTarget.port)
-                || providerBrokerTarget.port < 1
-                || providerBrokerTarget.port > 65_535
-                || !isFirstBytesLocalCapability(providerBrokerTarget.localCapability)
-            ) {
-                grantReservation.activationFailed();
-                emitObservability({
-                    kind: 'flow.denied',
-                    tunnelId,
-                    reasonCode: 'provider_broker_application_unavailable',
-                    routeGrantId: verification.payload.grantId,
-                });
-                emitAbort(tunnelId, 'provider_broker_application_unavailable');
-                return;
-            }
-        } else if (!open.destination || !isPeerTcpTunnelLoopbackDestinationHost(open.destination.host)) {
-            emitObservability({
-                kind: 'policy.denied',
-                tunnelId,
-                reasonCode: 'destination_host_not_allowed',
-                routeGrantId: verification.payload.grantId,
-                metadata: open.destination
-                    ? { destinationHost: open.destination.host, destinationPort: open.destination.port }
-                    : undefined,
-            });
-            emitAbort(tunnelId, 'destination_host_not_allowed');
-            return;
-        }
-        grantReservation ??= grantConsumption.reserve({
-            grantId: verification.payload.grantId,
-            expiresAt: verification.payload.exp,
-            nowMs: options.nowMs(),
-        });
-        if (!grantReservation) {
-            emitObservability({
-                kind: 'flow.denied',
-                tunnelId,
-                reasonCode: 'relay_authorization_invalid',
-                routeGrantId: verification.payload.grantId,
-            });
-            emitAbort(tunnelId, 'relay_authorization_invalid');
-            return;
-        }
-        const peerApplicationEncryption =
-            verification.payload.flowKind === 'voice_media' && open.relayAuthorization
-                ? {
-                    v: 1 as const,
-                    suite: 'aes-256-gcm' as const,
-                    flowKind: 'voice_media' as const,
-                    routeKind: 'server_relay' as const,
-                    authorityDigest: createPeerApplicationAuthorityDigestV1(open.relayAuthorization),
-                    accountId: verification.payload.accountId,
-                    machineId: verification.payload.targetMachineId,
-                    tunnelId: verification.payload.tunnelId,
-                    applicationKind: verification.payload.applicationKind!,
-                    applicationAttemptId: verification.payload.applicationAttemptId!,
-                    applicationAuthorityDigest: verification.payload.applicationAuthorityDigest!,
+            const peerApplicationEncryption =
+                verification.payload.flowKind === 'voice_media' && open.relayAuthorization
+                    ? {
+                        v: 1 as const,
+                        suite: 'aes-256-gcm' as const,
+                        flowKind: 'voice_media' as const,
+                        routeKind: 'server_relay' as const,
+                        authorityDigest: createPeerApplicationAuthorityDigestV1(open.relayAuthorization),
+                        accountId: verification.payload.accountId,
+                        machineId: verification.payload.targetMachineId,
+                        tunnelId: verification.payload.tunnelId,
+                        applicationKind: verification.payload.applicationKind!,
+                        applicationAttemptId: verification.payload.applicationAttemptId!,
+                        applicationAuthorityDigest: verification.payload.applicationAuthorityDigest!,
+                    }
+                    : undefined;
+            let connection: PeerTcpTunnelTcpConnection | undefined;
+            if (providerBrokerTarget) {
+                try {
+                    const connecting = options.connectTcp({
+                        host: providerBrokerTarget ? '127.0.0.1' : normalizeDestinationHost(open.destination!.host),
+                        port: providerBrokerTarget?.port ?? open.destination!.port,
+                    });
+                    void connecting.then(async late => {
+                        if (admission.signal.aborted && late !== connection) await late.close();
+                    }, () => undefined).catch(() => undefined);
+                    connection = await awaitRelayAdmission(connecting, admission.signal);
+                    if (providerBrokerTarget) {
+                        if (!connection.write) throw new Error('provider_broker_capability_write_unavailable');
+                        await awaitRelayAdmission(Promise.resolve(connection.write(Buffer.from(providerBrokerTarget.localCapability, 'ascii'))), admission.signal);
+                    }
+                } catch {
+                    // The server has already consumed this relay authorization. The
+                    // daemon store therefore retains consumption even when local TCP
+                    // activation fails, rather than making the relay grant reusable.
+                    grantReservation.activationFailed();
+                    await connection?.close();
+                    emitObservability({
+                        kind: 'flow.errored',
+                        tunnelId,
+                        reasonCode: admission.signal.aborted ? 'relay_authorization_invalid' : 'tcp_connect_failed',
+                        routeGrantId: verification.payload.grantId,
+                    });
+                    emitAbort(tunnelId, admission.signal.aborted ? 'relay_authorization_invalid' : 'tcp_connect_failed');
+                    return;
                 }
-                : undefined;
-        openingTunnels.add(tunnelId);
-        let connection: PeerTcpTunnelTcpConnection | undefined;
-        if (providerBrokerTarget) {
-            try {
-                connection = await options.connectTcp({
-                    host: providerBrokerTarget ? '127.0.0.1' : normalizeDestinationHost(open.destination!.host),
-                    port: providerBrokerTarget?.port ?? open.destination!.port,
-                });
-                if (providerBrokerTarget) {
-                    if (!connection.write) throw new Error('provider_broker_capability_write_unavailable');
-                    await connection.write(Buffer.from(providerBrokerTarget.localCapability, 'ascii'));
-                }
-            } catch {
-                // The server has already consumed this relay authorization. The
-                // daemon store therefore retains consumption even when local TCP
-                // activation fails, rather than making the relay grant reusable.
+            }
+            if (disposed || admission.signal.aborted || options.nowMs() >= verification.payload.exp) {
                 grantReservation.activationFailed();
                 await connection?.close();
-                openingTunnels.delete(tunnelId);
-                pendingFramesByOpeningTunnel.delete(tunnelId);
-                emitObservability({
-                    kind: 'flow.errored',
-                    tunnelId,
-                    reasonCode: 'tcp_connect_failed',
-                    routeGrantId: verification.payload.grantId,
-                });
-                emitAbort(tunnelId, 'tcp_connect_failed');
+                if (!disposed) emitAbort(tunnelId, 'relay_authorization_invalid');
                 return;
             }
-        }
-        if (disposed) {
-            grantReservation.activationFailed();
-            openingTunnels.delete(tunnelId);
-            pendingFramesByOpeningTunnel.delete(tunnelId);
-            await connection?.close();
-            return;
-        }
-        grantReservation.commit();
+            clearTimeout(admissionTimer);
+            grantReservation.commit();
 
-        const encoding = selectedOpenEncoding(envelope.frame);
-        const commonSessionInput = connection
-            ? {
-                tunnelId,
-                initialWindowBytes: options.initialWindowBytes ?? PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
-                maxFrameBytes,
-                maxIdleMs: verification.payload.maxIdleMs,
-                maxDurationMs: verification.payload.maxDurationMs,
-                maxTotalBytes: verification.payload.maxTotalBytes,
-                connection,
-                nowMs: options.nowMs,
-            }
-            : null;
-        const session = !commonSessionInput
-            ? undefined
-            : createPeerTcpTunnelStreamSession({
-                    ...commonSessionInput,
-                    maxDecodedPayloadBytes: maxRawPayloadBytes,
-                    maxSendChunkBytes: maxRawPayloadBytes,
-                    sendFrame: async (frame) => {
-                        if (!await recordFrameBytes(frame, verification.payload.maxTotalBytes)) return;
-                        emitBinarySessionFrame(frame);
+            const encoding = selectedOpenEncoding(envelope.frame);
+            const commonSessionInput = connection
+                ? {
+                    tunnelId,
+                    initialWindowBytes: options.initialWindowBytes ?? PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
+                    maxFrameBytes,
+                    maxIdleMs: verification.payload.maxIdleMs,
+                    maxDurationMs: verification.payload.maxDurationMs,
+                    maxTotalBytes: verification.payload.maxTotalBytes,
+                    connection,
+                    nowMs: options.nowMs,
+                }
+                : null;
+            const session = !commonSessionInput
+                ? undefined
+                : createPeerTcpTunnelStreamSession({
+                        ...commonSessionInput,
+                        maxDecodedPayloadBytes: maxRawPayloadBytes,
+                        maxSendChunkBytes: maxRawPayloadBytes,
+                        sendFrame: async (frame) => {
+                            if (!await recordFrameBytes(frame, verification.payload.maxTotalBytes)) return;
+                            emitBinarySessionFrame(frame);
+                        },
+                        onClosed: () => { void closeTunnel(tunnelId); },
+                    });
+            const resolvedSubstreamCaps = resolveSubstreamCaps({
+                configured: options.substreamCaps,
+                authorization: verification.payload,
+            });
+            const substreamMux = verification.payload.flowKind === 'tcp_tunnel'
+                && encoding === PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2
+                && open.destination
+                ? createPeerTcpTunnelSubstreamMuxSession({
+                    tunnelId,
+                    destination: {
+                        host: normalizeDestinationHost(open.destination.host),
+                        port: open.destination.port,
                     },
-                    onClosed: () => { void closeTunnel(tunnelId); },
-                });
-        const resolvedSubstreamCaps = resolveSubstreamCaps({
-            configured: options.substreamCaps,
-            authorization: verification.payload,
-        });
-        const substreamMux = verification.payload.flowKind === 'tcp_tunnel'
-            && encoding === PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2
-            && open.destination
-            ? createPeerTcpTunnelSubstreamMuxSession({
-                tunnelId,
-                destination: {
-                    host: normalizeDestinationHost(open.destination.host),
-                    port: open.destination.port,
-                },
-                initialWindowBytes: options.initialWindowBytes ?? PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
-                maxFrameBytes,
-                maxBinaryHeaderBytes,
-                maxRawPayloadBytes,
-                caps: resolvedSubstreamCaps,
-                connectTcp: options.connectTcp,
-                sendBinaryFrame: (frame) => {
-                    options.socket.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
-                        v: 2,
-                        scopeUserId: options.accountId,
-                        sender: { kind: 'machine', machineId: options.machineId },
-                        recipient: { kind: 'user' },
-                        encoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
-                        frame,
-                    });
-                },
-                nowMs: options.nowMs,
-            })
-            : undefined;
-        const applicationSubstreams = encoding === PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2
-            && verification.payload.flowKind === 'voice_media'
-            && verification.payload.applicationKind === 'speech_transcription'
-            && options.voiceBinaryAppendConsumer
-            ? createPeerTcpTunnelApplicationSubstreamSession({
-                tunnelId,
-                maxBinaryHeaderBytes,
-                maxFrameBytes: verification.payload.maxFrameBytes,
-                maxBytesPerSubstream: resolvedSubstreamCaps.maxBytesPerSubstream,
-                maxAggregateBytes: resolvedSubstreamCaps.maxAggregateBytes,
-                maxConcurrentSubstreams: resolvedSubstreamCaps.maxConcurrentSubstreams,
-                maxTotalSubstreams: resolvedSubstreamCaps.maxTotalSubstreams,
-                maxSubstreamIdleMs: resolvedSubstreamCaps.maxSubstreamIdleMs,
-                maxSessionIdleMs: resolvedSubstreamCaps.maxSessionIdleMs,
-                maxDurationMs: verification.payload.maxDurationMs,
-                sendBinaryFrame: (frame) => {
-                    options.socket.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
-                        v: 2,
-                        scopeUserId: options.accountId,
-                        sender: { kind: 'machine', machineId: options.machineId },
-                        recipient: { kind: 'user' },
-                        encoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
-                        frame,
-                    });
-                },
-                onTerminal: async ({ reasonCode, substreamIds }) => {
-                    try {
-                        await dispatchDaemonVoiceInferenceSttTerminal({
-                            consumer: options.voiceBinaryTerminalConsumer,
-                            substreamIds,
-                            reasonCode,
-                            peerApplicationEncryption,
-                            voiceMediaApplicationAuthority: peerApplicationEncryption,
+                    initialWindowBytes: options.initialWindowBytes ?? PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
+                    maxFrameBytes,
+                    maxBinaryHeaderBytes,
+                    maxRawPayloadBytes,
+                    caps: resolvedSubstreamCaps,
+                    connectTcp: options.connectTcp,
+                    sendBinaryFrame: (frame) => {
+                        options.socket.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
+                            v: 2,
+                            scopeUserId: options.accountId,
+                            sender: { kind: 'machine', machineId: options.machineId },
+                            recipient: { kind: 'user' },
+                            encoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+                            frame,
                         });
-                    } finally {
-                        await closeTunnel(tunnelId, { skipApplicationSubstreamClose: true });
-                    }
-                },
-                nowMs: options.nowMs,
-            })
-            : undefined;
-        activeTunnels.set(tunnelId, {
-            ...(session ? { session } : {}),
-            encoding,
-            flowKind: verification.payload.flowKind,
-            maxFrameBytes: verification.payload.maxFrameBytes,
-            maxTotalBytes: verification.payload.maxTotalBytes,
-            ...(peerApplicationEncryption ? { peerApplicationEncryption } : {}),
-            ...(substreamMux ? { substreamMux } : {}),
-            ...(applicationSubstreams ? { applicationSubstreams } : {}),
-        });
-        bytesByTunnelId.set(tunnelId, { in: 0, out: 0 });
-        emitObservability({
-            kind: 'flow.ready',
-            tunnelId,
-            flowKind: verification.payload.flowKind,
-            routeGrantId: verification.payload.grantId,
-            metadata: {
-                ...(open.destination ? {
-                    destinationHost: normalizeDestinationHost(open.destination.host),
-                    destinationPort: open.destination.port,
-                } : {}),
+                    },
+                    nowMs: options.nowMs,
+                })
+                : undefined;
+            const applicationSubstreams = encoding === PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2
+                && verification.payload.flowKind === 'voice_media'
+                && verification.payload.applicationKind === 'speech_transcription'
+                && options.voiceBinaryAppendConsumer
+                ? createPeerTcpTunnelApplicationSubstreamSession({
+                    tunnelId,
+                    maxBinaryHeaderBytes,
+                    maxFrameBytes: verification.payload.maxFrameBytes,
+                    maxBytesPerSubstream: resolvedSubstreamCaps.maxBytesPerSubstream,
+                    maxAggregateBytes: resolvedSubstreamCaps.maxAggregateBytes,
+                    maxConcurrentSubstreams: resolvedSubstreamCaps.maxConcurrentSubstreams,
+                    maxTotalSubstreams: resolvedSubstreamCaps.maxTotalSubstreams,
+                    maxSubstreamIdleMs: resolvedSubstreamCaps.maxSubstreamIdleMs,
+                    maxSessionIdleMs: resolvedSubstreamCaps.maxSessionIdleMs,
+                    maxDurationMs: verification.payload.maxDurationMs,
+                    sendBinaryFrame: (frame) => {
+                        options.socket.emit(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
+                            v: 2,
+                            scopeUserId: options.accountId,
+                            sender: { kind: 'machine', machineId: options.machineId },
+                            recipient: { kind: 'user' },
+                            encoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+                            frame,
+                        });
+                    },
+                    onTerminal: async ({ reasonCode, substreamIds }) => {
+                        try {
+                            await dispatchDaemonVoiceInferenceSttTerminal({
+                                consumer: options.voiceBinaryTerminalConsumer,
+                                substreamIds,
+                                reasonCode,
+                                peerApplicationEncryption,
+                                voiceMediaApplicationAuthority: peerApplicationEncryption,
+                            });
+                        } finally {
+                            await closeTunnel(tunnelId, { skipApplicationSubstreamClose: true });
+                        }
+                    },
+                    nowMs: options.nowMs,
+                })
+                : undefined;
+            activeTunnels.set(tunnelId, {
+                ...(session ? { session } : {}),
                 encoding,
-            },
-        });
-        openingTunnels.delete(tunnelId);
-        await drainFramesForOpenedTunnel(tunnelId);
+                flowKind: verification.payload.flowKind,
+                maxFrameBytes: verification.payload.maxFrameBytes,
+                maxTotalBytes: verification.payload.maxTotalBytes,
+                ...(peerApplicationEncryption ? { peerApplicationEncryption } : {}),
+                ...(substreamMux ? { substreamMux } : {}),
+                ...(applicationSubstreams ? { applicationSubstreams } : {}),
+            });
+            bytesByTunnelId.set(tunnelId, { in: 0, out: 0 });
+            emitObservability({
+                kind: 'flow.ready',
+                tunnelId,
+                flowKind: verification.payload.flowKind,
+                routeGrantId: verification.payload.grantId,
+                metadata: {
+                    ...(open.destination ? {
+                        destinationHost: normalizeDestinationHost(open.destination.host),
+                        destinationPort: open.destination.port,
+                    } : {}),
+                    encoding,
+                },
+            });
+            openingTunnels.delete(tunnelId);
+            await drainFramesForOpenedTunnel(tunnelId);
+        } finally {
+            clearTimeout(admissionTimer);
+            if (openingTunnels.get(tunnelId) === admission) {
+                openingTunnels.delete(tunnelId);
+                pendingFramesByOpeningTunnel.delete(tunnelId);
+            }
+        }
     }
 
     async function handleEnvelope(envelope: PeerTcpTunnelRelayEnvelope): Promise<void> {
@@ -972,6 +1015,7 @@ export function registerPeerTcpTunnelRelayTerminator(
         dispose: async () => {
             if (disposed) return;
             disposed = true;
+            for (const pending of openingTunnels.values()) pending.abort(new Error('tunnel_closed'));
             await Promise.all([...activeTunnels.keys()].map(async (tunnelId) => await closeTunnel(tunnelId)));
             openingTunnels.clear();
             pendingFramesByOpeningTunnel.clear();

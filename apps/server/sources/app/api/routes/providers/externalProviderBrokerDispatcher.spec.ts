@@ -36,6 +36,7 @@ describe('external Provider broker dispatcher', () => {
 
     async function dispatchWithUpstreamResponse(response: Uint8Array, options: Readonly<{
         enabled?: boolean; env?: NodeJS.ProcessEnv; relaySocketId?: string; closeOnOpen?: boolean;
+        denyOnOpen?: boolean; cancellation?: AbortController;
     }> = {}) {
         let receive: ((envelope: PeerTcpTunnelRelayEnvelope) => void) | undefined;
         let responseSent = false;
@@ -54,6 +55,14 @@ describe('external Provider broker dispatcher', () => {
                 subscribe(handler) { receive = handler; return () => {}; },
                 close() { transportCloseCount += 1; },
                 send(_event, envelope) {
+                    if (options.denyOnOpen && envelope.v === 1 && envelope.frame.kind === 'open') {
+                        // The registered Home relay sends its terminal refusal
+                        // to the owner with the original envelope participants.
+                        receive?.({ ...envelope, frame: { v: 1, kind: 'abort',
+                            tunnelId: envelope.frame.open.tunnelId, reasonCode: 'route_unavailable' } });
+                        return;
+                    }
+                    if (options.denyOnOpen) return;
                     if (options.closeOnOpen && envelope.v === 1 && envelope.frame.kind === 'open') {
                         receive?.({ ...envelope, sender: { kind: 'machine', machineId },
                             recipient: { kind: 'user', socketId: relaySocketId },
@@ -104,7 +113,7 @@ describe('external Provider broker dispatcher', () => {
             }),
         });
 
-        const cancellation = new AbortController();
+        const cancellation = options.cancellation ?? new AbortController();
         const removeAbortListener = vi.spyOn(cancellation.signal, 'removeEventListener');
         const result = await dispatch({
             target: { custodianAccountId: accountId, brokerMachineId: machineId, operationId: null, brokerPlacementFingerprint: 'a'.repeat(64) },
@@ -135,6 +144,21 @@ describe('external Provider broker dispatcher', () => {
             `HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`,
         );
     }
+
+    it('settles a Home relay admission refusal without waiting for caller cancellation', async () => {
+        const cancellation = new AbortController();
+        let settled = false;
+        const pending = dispatchWithUpstreamResponse(httpResponse('unused'), { denyOnOpen: true, cancellation })
+            .finally(() => { settled = true; });
+        const terminal = pending.catch(() => undefined);
+        try {
+            await vi.waitFor(() => expect(settled).toBe(true));
+            await expect(pending).resolves.toMatchObject({ result: { ok: false, error: 'broker_unavailable' } });
+        } finally {
+            cancellation.abort();
+            await terminal;
+        }
+    });
 
     it.each([
         [{ enabled: false }, 'feature', 'disabled'],

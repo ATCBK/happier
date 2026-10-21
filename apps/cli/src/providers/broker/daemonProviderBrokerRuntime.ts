@@ -198,6 +198,7 @@ export type DaemonProviderBrokerRuntime = Readonly<{
   resolveExternalProviderBrokerApplicationTarget(input: Readonly<{
     binding: ProviderBrokerRelayApplicationBindingV1;
     relayAuthorization?: PeerTcpTunnelRelayAuthorizationV2;
+    signal?: AbortSignal;
   }>): Promise<Readonly<{ port: number; localCapability: string }> | null>;
   close(): Promise<void>;
 }>;
@@ -806,7 +807,7 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
     async checkRunnerCredentialSelectionCurrentness(currentness, signal) {
       return await input.checkRunnerCredentialSelectionCurrentness?.({ ...currentness, signal }) ?? 'update_required';
     },
-    async resolveExternalProviderBrokerApplicationTarget({ binding, relayAuthorization }) {
+    async resolveExternalProviderBrokerApplicationTarget({ binding, relayAuthorization, signal }) {
       if (binding.kind === 'external_api_key') {
         if (!input.resolveExternalRequestPolicy || !input.admitExternalRequest || !input.recordExternalTerminalUsage) return null;
       } else if (!input.resolveResourceTestRequestPolicy || !input.admitResourceTestRequest) {
@@ -814,9 +815,9 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
       }
       if (binding.kind === 'resource_test') {
         if (relayAuthorization === undefined) return null;
-        return await application.createStreamTarget({ kind: 'external', binding, relayAuthorization });
+        return await application.createStreamTarget({ kind: 'external', binding, relayAuthorization }, signal);
       }
-      return await application.createStreamTarget({ kind: 'external', binding });
+      return await application.createStreamTarget({ kind: 'external', binding }, signal);
     },
     async resolveProviderBrokerApplicationTarget(request) {
       request.signal.throwIfAborted();

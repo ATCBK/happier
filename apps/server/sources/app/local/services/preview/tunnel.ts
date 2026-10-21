@@ -7,8 +7,8 @@ import { PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES } from '@happier-dev/proto
 import { PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, type PeerTcpTunnelRelayEnvelope } from '@happier-dev/protocol/machines/peer/mediation/tunnel/relay';
 import { type LocalServicePreviewResourceV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import {
-    createPeerTcpTunnelRelaySubstream,
-    type PeerTcpTunnelRelaySubstream,
+    createPeerTcpTunnelRelayStream,
+    type PeerTcpTunnelRelayStream,
     type PeerTcpTunnelRelayTransport,
     type PeerTcpTunnelRelayTransportFactory,
 } from "@/app/machines/peer/mediation/tunnel/peerRelayStreamTransport";
@@ -42,7 +42,7 @@ type PreviewTunnelSession = {
 
 type PreviewSubstream = {
     substreamId: string;
-    relaySubstream: PeerTcpTunnelRelaySubstream;
+    relaySubstream: PeerTcpTunnelRelayStream;
 };
 
 function normalizeAccountId(value: string | null | undefined): string | null {
@@ -253,7 +253,7 @@ export function createLocalServicePreviewTunnelOpener(
             }
         }
 
-        const relaySubstream = createPeerTcpTunnelRelaySubstream({
+        const relaySubstream = createPeerTcpTunnelRelayStream({
             tunnelId: session.tunnelId,
             substreamId,
             initialWindowBytes: PEER_TCP_TUNNEL_DEFAULT_INITIAL_WINDOW_BYTES,
