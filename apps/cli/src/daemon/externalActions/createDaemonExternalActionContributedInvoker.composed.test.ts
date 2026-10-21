@@ -990,9 +990,10 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     }
   });
 
-  it.each([{ viaMeta: false, fails: false }, { viaMeta: true, fails: false },
-    { viaMeta: false, fails: true }, { viaMeta: true, fails: true }])(
-    'withholds confidential operands from every Workflow progress fact (meta=$viaMeta, fails=$fails)', async ({ viaMeta, fails }) => {
+  it.each([{ viaMeta: false, fails: false, losesExecutionClaim: false }, { viaMeta: true, fails: false, losesExecutionClaim: false },
+    { viaMeta: false, fails: true, losesExecutionClaim: false }, { viaMeta: true, fails: true, losesExecutionClaim: false },
+    { viaMeta: false, fails: false, losesExecutionClaim: true }])(
+    'withholds confidential operands from every Workflow progress fact (meta=$viaMeta, fails=$fails, losesExecutionClaim=$losesExecutionClaim)', async ({ viaMeta, fails, losesExecutionClaim }) => {
     const secret = 'synthetic-workflow-confidential-operand';
     const workspace = { machineId: 'machine-local', directory: '/repo', checkoutRootPath: '/repo' };
     const inputSchema = { type: 'object', properties: { releaseTag: { type: 'string' }, public: { type: 'string' } }, required: ['releaseTag'] };
@@ -1026,7 +1027,14 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     const invoker = createCommittedContributedActionInvoker({ acquireRuntimeRegistryLease: async () => lease, isWorkflowRunAuthorizationCurrent: async () => true,
       requestCurrentIntent: createTargetActionCurrentIntentAdapter({
         create: async request => { stored = TargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))); return { artifactId: 'secret-workflow' }; },
-        read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
+        read: async () => {
+          if (!stored) return null;
+          // Simulate consent once; subsequent reads must observe the real claim and receipt.
+          if (stored.status === 'open') stored = TargetActionApprovalRequestV1Schema.parse({ ...stored,
+            status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } });
+          // A mis-bound reader must not authorize settlement from stale consent.
+          return losesExecutionClaim && stored.status === 'executing' ? { ...stored, status: 'approved' } : stored;
+        },
         update: async ({ request }) => { stored = TargetActionApprovalRequestV1Schema.parse(request); return { ok: true }; },
       }),
     });
@@ -1043,8 +1051,11 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     try {
       const runId = '88888888-8888-4888-8888-888888888888';
       const outcome = await coordinator.run({ ...accepted.snapshot, runId });
-      expect(outcome).toMatchObject({ state: fails ? 'failed' : 'succeeded' });
+      expect(outcome, JSON.stringify(outcome)).toMatchObject({ state: fails || losesExecutionClaim ? 'failed' : 'succeeded' });
+      if (losesExecutionClaim) expect(outcome).toMatchObject({ reason: 'approval_execution_outcome_unknown' });
       expect(effects).toBe(1);
+      expect(stored).toMatchObject({ status: losesExecutionClaim ? 'executing' : fails ? 'failed' : 'executed' });
+      if (!losesExecutionClaim) expect(stored?.execution).toMatchObject({ ok: !fails });
       expect(stored?.approvalInputCustody).toBe('live_only');
       expect(JSON.stringify(stored)).not.toContain(secret);
       expect(JSON.stringify(facts)).not.toContain(secret);
