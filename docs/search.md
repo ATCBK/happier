@@ -219,7 +219,12 @@ a promise that every concurrent append is already searchable. Happier Session
 readiness follows the queue's completed `indexed` or `empty` outcome, unless a
 transcript revision or an active transcript indexing operation is pending. Session inventory
 sequences can include non-message events; they do not reopen a completed
-transcript scan. Status reads do not create or update indexing cursors, so they
+transcript scan. A batch removes checked snapshots from its active Session set
+before yielding and removes each completed Session before reading its siblings.
+The optional `worker.sessionProgress` diagnostic separates the inventory's
+`observedSeq`, the deep lane's checked/excluded `checkedSeq`, and its transcript
+`indexedSeq`; `worker.activeOperations` projects the existing operation kinds
+and Session sets. Older daemons omit these diagnostics. Status reads do not create or update indexing cursors, so they
 can read the WAL snapshot while another connection owns the writer. Native
 error rows carry `errorCode` and an allowlisted, content-free `errorReason` from
 the bounded reader. Vendor exception text, paths and transcript content are
@@ -796,9 +801,8 @@ through `createDefaultActionExecutor` and its mounted domain adapters; there is
 no second Find, prompt or Next executor. Find, Next and the picker are exposed
 to Agents and MCP.
 
-Session-bound Find, picker, composer, current-context and conversation-search
-calls select the app viewing the addressed Session, through the same channel's
-Session-qualified method. An explicit composer Session takes precedence over
+Session-bound Find, picker and composer calls select the app viewing the addressed
+Session, through the same channel's Session-qualified method. An explicit composer Session takes precedence over
 the invoking Session. The app's current-UI owner advertises that method only
 while the Session is viewed and rechecks it before execution. No matching view
 returns the Action's unavailable result; multiple matching clients return
@@ -806,9 +810,15 @@ returns the Action's unavailable result; multiple matching clients return
 require a single answering client. They never fall back to an arbitrary app.
 Other client Actions retain their existing placement-specific routing.
 
+Account-wide Next and conversation search use the generic connected-client room
+and require one answering client, independently of the invoking Session's view.
+Availability advertisements are routing hints; the server's current registration selection decides absence
+and ambiguity, so a missed advertisement cannot by itself return `noClient`.
+Current-context reads use their dedicated mounted-current-context room.
+
 With no advertising app connected, Find and the picker return
 `{ status: 'unavailable', reason: 'noClient' }`, Next returns
-`{ status: 'unavailable' }`, and other client Actions use the typed
+`{ status: 'unavailable', reason: 'noClient' }`, and other client Actions use the typed
 `unavailable`/`noClient` failure. A connected app without a suitable mounted
 surface/composer returns `noMountedSurface`/`noEligibleComposer`. Find never
 returns corpus text; Monaco counts remain engine-owned. Approval-required
