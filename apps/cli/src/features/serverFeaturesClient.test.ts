@@ -11,6 +11,47 @@ import {
 } from './serverFeaturesClient';
 
 describe('fetchServerFeaturesSnapshot', () => {
+  it.each(['public', 'authenticated', 'fallback'] as const)('bounds a stalled %s response body by the caller deadline and recovers', async (projection) => {
+    let shouldStall = true;
+    const server = createServer((request, response) => {
+      if (projection === 'fallback' && request.url === '/v1/features/authenticated') {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { 'content-type': 'application/json' });
+      if (shouldStall) {
+        response.write('{"features":');
+      } else {
+        response.end(JSON.stringify({ features: {}, capabilities: {} }));
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Expected a TCP listener');
+      const serverUrl = `http://127.0.0.1:${address.port}`;
+      const params = { serverUrl, ...(projection !== 'public' ? { token: 'fixture-token' } : {}) };
+      const observation = observeServerFeaturesSnapshot({ ...params, timeoutMs: 1_000 });
+      let guard: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          observation,
+          new Promise<'still_waiting'>((resolve) => {
+            guard = setTimeout(() => resolve('still_waiting'), 2_000);
+          }),
+        ]);
+        expect(result).toEqual({ status: 'error', reason: 'timeout' });
+      } finally {
+        clearTimeout(guard);
+      }
+      shouldStall = false;
+      await expect(observeServerFeaturesSnapshot(params)).resolves.toMatchObject({ status: 'ready' });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
   afterEach(() => {
     resetServerFeaturesClientForTests();
     vi.unstubAllGlobals();

@@ -104,56 +104,51 @@ async function requestServerFeaturesSnapshot(
   const fetchImpl = params.fetchImpl ?? fetch;
 
   try {
-    let provenance: 'authenticated' | 'public' = projection;
-    const requestPath = projection === 'authenticated' ? authenticatedPath : publicPath;
-    const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'GET', path: requestPath });
-    if (params.resolveAuthorizationHeaders && !authorizationHeaders) {
-      return { status: 'error', reason: 'response_status' };
-    }
-    let response = await withAbortTimeout(
-      params.timeoutMs,
-      async (signal) => await fetchImpl(`${normalizeBaseUrl(params.serverUrl)}${requestPath}`, {
+    return await withAbortTimeout<CliServerFeaturesSnapshot>(params.timeoutMs, async (signal) => {
+      let provenance: 'authenticated' | 'public' = projection;
+      const requestPath = projection === 'authenticated' ? authenticatedPath : publicPath;
+      const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'GET', path: requestPath });
+      if (params.resolveAuthorizationHeaders && !authorizationHeaders) {
+        return { status: 'error', reason: 'response_status' };
+      }
+      let response = await fetchImpl(`${normalizeBaseUrl(params.serverUrl)}${requestPath}`, {
         method: 'GET',
         redirect: 'manual',
         ...(authorizationHeaders
           ? { headers: authorizationHeaders }
           : token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
         signal,
-      }),
-      params.signal,
-    );
+      });
 
-    if (projection === 'authenticated' && token && !params.resolveAuthorizationHeaders && isEndpointMissing(response.status)) {
-      provenance = 'public';
-      response = await withAbortTimeout(
-        params.timeoutMs,
-        async (signal) => await fetchImpl(`${normalizeBaseUrl(params.serverUrl)}${publicPath}`, {
+      if (projection === 'authenticated' && token && !params.resolveAuthorizationHeaders && isEndpointMissing(response.status)) {
+        provenance = 'public';
+        response = await fetchImpl(`${normalizeBaseUrl(params.serverUrl)}${publicPath}`, {
           method: 'GET',
           redirect: 'manual',
           signal,
-        }),
-        params.signal,
+        });
+      }
+
+      if (!response.ok) {
+        return isEndpointMissing(response.status)
+          ? { status: 'unsupported', reason: 'endpoint_missing' }
+          : {
+            status: 'error',
+            reason: 'response_status',
+            httpStatus: response.status,
+            ...withRetryLater(readRetryLaterHints(response.headers)),
+          };
+      }
+
+      const parsed = await decodeServerFeaturesResponseBody(
+        response.body,
+        response.headers.get('content-length'),
       );
-    }
+      signal.throwIfAborted();
+      if (!parsed) return { status: 'unsupported', reason: 'invalid_payload' };
 
-    if (!response.ok) {
-      return isEndpointMissing(response.status)
-        ? { status: 'unsupported', reason: 'endpoint_missing' }
-        : {
-          status: 'error',
-          reason: 'response_status',
-          httpStatus: response.status,
-          ...withRetryLater(readRetryLaterHints(response.headers)),
-        };
-    }
-
-    const parsed = await decodeServerFeaturesResponseBody(
-      response.body,
-      response.headers.get('content-length'),
-    );
-    if (!parsed) return { status: 'unsupported', reason: 'invalid_payload' };
-
-    return { status: 'ready', features: parsed, provenance };
+      return { status: 'ready', features: parsed, provenance };
+    }, params.signal);
   } catch (error) {
     if (params.signal?.aborted) params.signal.throwIfAborted();
     const isTimeout = error instanceof Error && error.name === 'AbortError';
