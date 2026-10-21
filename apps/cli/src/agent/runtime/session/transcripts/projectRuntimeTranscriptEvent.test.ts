@@ -15,7 +15,7 @@ import {
   createReducer,
   createTranscriptStreamSegmentAssembler,
   interpretTranscriptStreamSegment,
-  RawRecordSchema,
+  rawRecordSchema,
   reducer,
   type OrderedTranscript,
 } from '@happier-dev/session-core';
@@ -61,6 +61,7 @@ describe('projectRuntimeTranscriptEvent', () => {
     const { createRuntimeTranscriptProjector } = await import('./projectRuntimeTranscriptEvent');
     const stored = new Map<string, CommittedAgentMessageBody>();
     const live = new Map<string, CommittedAgentMessageBody>();
+    const liveErrors: unknown[] = [];
     const assembler = createTranscriptStreamSegmentAssembler();
     const rawMessageNormalizationState = createRawMessageNormalizationSequenceState();
     const reducerState = createReducer();
@@ -76,16 +77,21 @@ describe('projectRuntimeTranscriptEvent', () => {
       }),
       sendAgentMessageEphemeral: vi.fn<NonNullable<RuntimeTranscriptProjectionSession['sendAgentMessageEphemeral']>>((_provider, body, opts) => {
         live.set(opts.localId, body);
-        const normalized = interpretTranscriptStreamSegment({
+        try {
+          const normalized = interpretTranscriptStreamSegment({
           assembler,
           rawMessageNormalizationState,
           sessionId: 'codex-retry-session',
           type: 'transcript-stream-segment',
-          record: RawRecordSchema.parse(buildAcpAgentMessageEnvelope({ provider: 'codex', body, meta: opts.meta })),
+          record: rawRecordSchema.parse(buildAcpAgentMessageEnvelope({ provider: 'codex', body, meta: opts.meta })),
           message: { localId: opts.localId, createdAt: opts.createdAt },
         });
-        expect(normalized).not.toBeNull();
-        if (normalized) transcript = applyReducedMessages(transcript, reducer(reducerState, [normalized], null).messages);
+          expect(normalized).not.toBeNull();
+          if (normalized) transcript = applyReducedMessages(transcript, reducer(reducerState, [normalized], null).messages);
+        } catch (error) {
+          liveErrors.push(error);
+          throw error;
+        }
         return { accepted: true, epoch: 0 };
       }),
     };
@@ -138,6 +144,7 @@ describe('projectRuntimeTranscriptEvent', () => {
       await text('interrupted', '1. able\n2. acid\n3');
       await vi.waitFor(() => expect([...stored.values()]).toContainEqual({ type: 'message', message: '1. able\n2. acid\n3' }));
       const interruptedLocalId = [...stored.entries()].find(([, body]) => body.type === 'message' && body.message === '1. able\n2. acid\n3')![0];
+      expect(liveErrors).toEqual([]);
       expect(assembler.isTranscriptStreamSegmentAssemblyReady(session.sessionId, interruptedLocalId)).toBe(true);
       expect(renderedText()).toEqual(['Earlier complete message', '1. able\n2. acid\n3']);
       // An unrelated error and a diagnostic without a native retry must leave the active draft alone.
