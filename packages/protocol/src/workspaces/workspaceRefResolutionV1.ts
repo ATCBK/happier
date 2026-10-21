@@ -1,5 +1,6 @@
 import type { ProjectKeyV1, QualifiedProjectKeyV1, WorkspaceAddressV1, WorkspaceProjectFactsV1, WorkspaceRefV1 } from './workspaceRefV1.js';
 import { normalizeScmHostingRepositoryIdentity, sameScmHostingRepositoryIdentity } from '../scm/hostingRepositoryIdentity.js';
+import { resolveSessionWorkspaceRootForMachine } from '../sessions/metadata/sessionWorkspaceLocationV1.js';
 
 export type WorkspaceRefResolutionV1<T extends WorkspaceRefV1 = WorkspaceRefV1> =
   | Readonly<{ kind: 'resolved'; ref: T }>
@@ -83,6 +84,43 @@ export function resolveWorkspaceRefV1<T extends WorkspaceRefV1>(
 
 export function projectWorkspaceRefV1(ref: WorkspaceRefV1): QualifiedProjectKeyV1 {
   return { serverId: ref.serverId, projectKey: ref.projectKey ?? ref.id };
+}
+
+type SessionProjectAssociationUnavailableV1 = Readonly<{ kind: 'pending'; reason: 'project_association_unavailable' }>;
+type SessionProjectWorkspaceAddressV1 = Readonly<{
+  machineId: string; rootPath: string; workspaceId?: string; projectId: unknown;
+}>;
+
+/** Birth directory intent and explicit markers share one exact-checkout association rule. */
+export function readSessionProjectWorkspaceAddressV1(input: Readonly<{
+  metadata: unknown; machineId: string | null; directory?: string;
+}>): Readonly<{ kind: 'none' }> | SessionProjectAssociationUnavailableV1
+  | Readonly<{ kind: 'ready'; address: SessionProjectWorkspaceAddressV1 }> {
+  const pending = { kind: 'pending', reason: 'project_association_unavailable' } as const;
+  const metadata = input.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return { kind: 'none' };
+  const workspaceId: unknown = Reflect.get(metadata, 'workspaceId');
+  const projectId: unknown = Reflect.get(metadata, 'projectId');
+  const associated = workspaceId !== undefined || projectId !== undefined;
+  if (associated && (typeof workspaceId !== 'string' || !workspaceId.trim())) return pending;
+  const path: unknown = input.directory ?? Reflect.get(metadata, 'path');
+  if (typeof path !== 'string' || !path.trim() || !input.machineId?.trim()) return associated ? pending : { kind: 'none' };
+  const root = resolveSessionWorkspaceRootForMachine({ metadata, machineId: input.machineId, candidatePath: path });
+  return { kind: 'ready', address: { machineId: input.machineId, rootPath: root.machinePath, projectId,
+    ...(typeof workspaceId === 'string' ? { workspaceId } : {}) } };
+}
+
+/** An unavailable/ambiguous explicit association is not an absent Project. No containment inference. */
+export function resolveSessionProjectWorkspaceRefV1<T extends WorkspaceRefV1>(refs: readonly T[], input: Readonly<{
+  serverId: string; address: SessionProjectWorkspaceAddressV1;
+}>): Readonly<{ kind: 'none' }> | SessionProjectAssociationUnavailableV1 | Readonly<{ kind: 'resolved'; ref: T }> {
+  const { projectId, ...address } = input.address;
+  const resolved = resolveWorkspaceRefV1(refs, { ...address, serverId: input.serverId });
+  if (resolved.kind === 'missing' && address.workspaceId === undefined) return { kind: 'none' };
+  if (resolved.kind !== 'resolved' || projectId !== undefined && projectId !== projectWorkspaceRefV1(resolved.ref).projectKey) {
+    return { kind: 'pending', reason: 'project_association_unavailable' };
+  }
+  return resolved;
 }
 
 export function workspaceAddressFromRefV1(ref: WorkspaceRefV1): WorkspaceAddressV1 {

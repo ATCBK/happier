@@ -23,6 +23,31 @@ beforeEach(async () => { await homes.reset(); await loadSyncSingletonForTests();
 afterEach(async () => { await homes.reset(); });
 
 describe('Project context through the default Account Action host', () => {
+    it('inherits Project memory for a directory-only newborn Session at the exact checkout, never a descendant or another Machine', async () => {
+        const serverId = await homes.addHome({ name: 'Directory Birth Home', serverUrl: 'https://directory-birth.test', accountId: 'memory-owner', active: false });
+        await homes.addHome({ name: 'Focused Home', serverUrl: 'https://other-directory-birth.test', accountId: 'other-owner' });
+        const workspaceKey = { kind: 'workspace-ref' as const, serverId, id: 'checkout' };
+        const projectKey = { kind: 'project-organization' as const, serverId, projectKey: 'project' };
+        const memory = { id: 'project.memory', enabled: true, placement: 'system_append' as const,
+            ref: { kind: 'doc' as const, artifactId: 'project-memory', serverId } };
+        homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: { status: 'listed', coverage: 'complete', rows: [
+            { key: workspaceKey, revision: 1, content: { t: 'plain', v: { key: workspaceKey, value: {
+                id: 'checkout', serverId, machineId: 'birth-machine', rootPath: '/project-root', projectKey: 'project', createdAtMs: 1,
+            } } } },
+            { key: projectKey, revision: 1, content: { t: 'plain', v: { key: projectKey, value: { promptStack: [memory] } } } },
+        ] } });
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            const snapshot = { revision: 1, metadata: { machineId: 'birth-machine', path: '/project-root' } };
+            const inherited = await readUiMemoryInheritedContext(account, snapshot, { surface: 'ui' });
+            expect(inherited.projectEntries).toEqual([memory]);
+            for (const metadata of [{ machineId: 'birth-machine', path: '/project-root/child' },
+                { machineId: 'birth-machine', path: '/project-root-sibling' },
+                { machineId: 'other-machine', path: '/project-root' }]) {
+                expect((await readUiMemoryInheritedContext(account, { ...snapshot, metadata }, { surface: 'ui' })).projectEntries).toEqual([]);
+            }
+        } finally { account.dispose(); }
+    });
     it('refuses a stale workspace mapping as Session Machine authority before selecting Project memory', async () => {
         const serverId = await homes.addHome({ name: 'Machine Authority Home', serverUrl: 'https://machine-authority.test', accountId: 'memory-owner', active: false });
         await homes.addHome({ name: 'Focused Home', serverUrl: 'https://focused-machine-authority.test', accountId: 'other-owner' });

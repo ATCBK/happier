@@ -5,12 +5,16 @@ import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema, PromptLi
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { createPlainArtifactHomeFixture } from './artifactStoreBoundary';
 import { createSessionFixture, createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionReadBatchFetchBoundary } from './sessionReadBatchHttpBoundary';
 
 export async function createMemoryDecisionHomeFixture(options: Readonly<{ sessionProject?: boolean }> = {}) {
   let serverId = '';
   let sessionProjectAccess: 'writable' | 'readonly' | 'unavailable' = 'writable';
   const session = createSessionFixture({ id: 'source-session', metadata: { path: '/work/payments', host: 'qa', machineId: 'offline',
     workspaceId: 'core-payments', projectId: 'core-payments' } }, { memoryEnabled: true });
+  // The Home serves the same Session facts through single and batched snapshot transport.
+  const sessionReads = createSessionReadBatchFetchBoundary(async input => new URL(String(input)).pathname === '/v2/sessions/source-session'
+    ? Response.json(createPlainSessionByIdResponseFixture(session)) : null);
   let failAttachment = true;
   let projectCatalogUnavailable = false;
   let unknownSourceResolved = false;
@@ -44,7 +48,9 @@ export async function createMemoryDecisionHomeFixture(options: Readonly<{ sessio
       { key: { kind: 'project-organization', serverId, projectKey: 'core-payments' }, revision: 1, value: { label: 'Core payments' } },
       { key: { kind: 'project-organization', serverId, projectKey: 'payments' }, revision: 1, value: { label: 'payments' } },
     ] : [] }));
-    if (path === '/v2/sessions/source-session') return Response.json(createPlainSessionByIdResponseFixture(session));
+    if (path === '/v2/sessions/source-session' || path === '/v2/sessions/read-batch') {
+      return sessionReads(`https://decision-targets.test${path}`, init);
+    }
     if (path.startsWith('/v1/projects/sources/qa-session')) {
       if (sessionProjectAccess === 'unavailable') return Response.json({ error: 'offline' }, { status: 503 });
       if (init?.method === 'PATCH') {

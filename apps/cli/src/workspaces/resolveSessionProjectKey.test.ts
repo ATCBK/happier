@@ -6,6 +6,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { reloadConfiguration } from '@/configuration';
 import { addServerProfile, adoptServerProfileHomeConnectionDescriptor } from '@/server/serverProfiles';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
 
 const serverId = 'association-home';
 const input = { credentials: { token: 'association-token', encryption: null }, serverId, machineId: 'machine', directory: '/repo',
@@ -25,7 +26,10 @@ it('resolves the exact Account workspace reference and Project key', async () =>
 });
 it('resolves a directory-only Session through its exact Account checkout', async () => {
   readRows();
-  await expect(resolveSessionProjectKey({ ...input, metadata: { path: '/repo' } })).resolves.toMatchObject({
+  const metadata = buildCommittedLaunchMetadata({ directory: '/repo', options: { directory: '/repo', machineId: 'machine', memoryEnabled: true } });
+  expect(metadata).not.toHaveProperty('workspaceId');
+  expect(metadata).not.toHaveProperty('projectId');
+  await expect(resolveSessionProjectKey({ ...input, metadata })).resolves.toMatchObject({
     kind: 'resolved', projectKey: 'project', workspaceRef,
   });
 });

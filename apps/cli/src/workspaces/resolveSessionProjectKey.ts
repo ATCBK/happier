@@ -1,7 +1,6 @@
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import { resolveWorkspaceRefV1, projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
-import { resolveSessionWorkspaceRootForMachine } from '@happier-dev/protocol/sessions/metadata/sessionWorkspaceLocationV1';
+import { readSessionProjectWorkspaceAddressV1, resolveSessionProjectWorkspaceRefV1, projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import type { StoredCredentials } from '@/persistence';
 import { configuration } from '@/configuration';
 import { readProjectAccountRows } from './projectAccountRows';
@@ -23,16 +22,9 @@ export async function resolveSessionProjectKey(input: SessionProjectPromptStackI
   readRows: typeof readProjectAccountRows = readProjectAccountRows): Promise<SessionProjectKeyResolution> {
   input.signal?.throwIfAborted();
   const pending = { kind: 'pending', reason: 'project_association_unavailable' } as const;
-  const metadata = input.metadata;
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return { kind: 'none' };
-  const workspaceId: unknown = Reflect.get(metadata, 'workspaceId');
-  const projectId: unknown = Reflect.get(metadata, 'projectId');
-  const associated = workspaceId !== undefined || projectId !== undefined;
-  if (associated && (typeof workspaceId !== 'string' || !workspaceId.trim())) return pending;
-  const path: unknown = input.directory ?? Reflect.get(metadata, 'path');
-  if (typeof path !== 'string' || !path.trim()) return associated ? pending : { kind: 'none' };
+  const prepared = readSessionProjectWorkspaceAddressV1(input);
+  if (prepared.kind !== 'ready') return prepared;
   const serverId = input.serverId ?? input.credentials.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId;
-  const root = resolveSessionWorkspaceRootForMachine({ metadata, machineId: input.machineId, candidatePath: path });
   let snapshot: Awaited<ReturnType<typeof readProjectAccountRows>>;
   try {
     const accountId = input.operationContext ? readAccountIdFromToken(input.credentials.token) : null;
@@ -51,13 +43,9 @@ export async function resolveSessionProjectKey(input: SessionProjectPromptStackI
   }
   const homeId = await resolveServerProfileHomeIdentityId(serverId) ?? serverId;
   input.signal?.throwIfAborted();
-  const resolved = resolveWorkspaceRefV1(snapshot.workspaceRefs, {
-    serverId: homeId, ...(typeof workspaceId === 'string' ? { workspaceId } : {}), machineId: input.machineId, rootPath: root.machinePath,
-  });
-  if (resolved.kind === 'missing' && !associated) return { kind: 'none' };
-  if (resolved.kind !== 'resolved') return pending;
+  const resolved = resolveSessionProjectWorkspaceRefV1(snapshot.workspaceRefs, { serverId: homeId, address: prepared.address });
+  if (resolved.kind !== 'resolved') return resolved;
   const project = projectWorkspaceRefV1(resolved.ref);
-  if (projectId !== undefined && projectId !== project.projectKey) return pending;
   return { kind: 'resolved', projectKey: project.projectKey, workspaceRef: resolved.ref,
     // The prompt consumer uses the same captured read, never a second association census.
     promptStack: snapshot.organizations.find(row => row.key.serverId === project.serverId

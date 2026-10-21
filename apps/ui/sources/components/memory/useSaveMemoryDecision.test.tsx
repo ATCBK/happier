@@ -137,8 +137,12 @@ describe('decision sheet data through the real Action and Home boundary', () => 
     } finally { await first.unmount(); await f.home.dispose(); }
   });
 
-  it('clears an explicit Session choice and review back to the qualified Project default', async () => {
+  it.each(['explicit', 'directory-only'] as const)('clears an explicit Session choice and review back to the qualified Project default (%s association)', async association => {
     const f = await createMemoryDecisionHomeFixture({ sessionProject: true });
+    if (association === 'directory-only' && f.session.metadata) {
+      const { workspaceId: _workspaceId, projectId: _projectId, ...metadata } = f.session.metadata;
+      f.session.metadata = metadata;
+    }
     f.recover();
     const { memoryDocumentActions, readMemoryCreationReceipt } = await import('@/sync/ops/promptLibrary/memoryDocuments');
     const projectA = { scope: 'project' as const, projectRef: { serverId: f.serverId, projectKey: 'core-payments' } };

@@ -1,7 +1,6 @@
 import type { ActionExecutorContext, MemoryInheritedContextV1, MemorySessionSnapshotV1, MemoryScopeContextV1, MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import { resolveWorkspaceRefV1, projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
-import { resolveSessionWorkspaceRootForMachine } from '@happier-dev/protocol/sessions/metadata/sessionWorkspaceLocationV1';
+import { readSessionProjectWorkspaceAddressV1, resolveSessionProjectWorkspaceRefV1, projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { readPromptLibraryCatalogProjectionInContext, writePromptLibraryRecordAndPublishInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
 import { canUsePrivateProjectAccountAction, createUiProjectAccountRowsClient } from '@/sync/api/projects/projectAccountRowsClient';
 import { createUiProjectContextAction } from './projectContextAction';
@@ -23,23 +22,18 @@ function pending(reason: 'project_association_unavailable' | 'project_source_una
 export async function readUiSessionProjectPromptStack(account: LazyActionAccountContext, snapshot: MemorySessionSnapshotV1,
   context: ActionExecutorContext): Promise<readonly PromptStackEntryV1[]> {
   const metadata = snapshot.metadata;
-  if (metadata.workspaceId === undefined && metadata.projectId === undefined) return [];
-  const workspaceId = metadata.workspaceId;
-  const path = metadata.path;
   const machineId = resolveSessionMachineId(metadata);
-  if (typeof workspaceId !== 'string' || !workspaceId.trim() || typeof path !== 'string' || !path.trim() || !machineId) {
-    return pending('project_association_unavailable');
-  }
-  const root = resolveSessionWorkspaceRootForMachine({ metadata, machineId, candidatePath: path });
+  const prepared = readSessionProjectWorkspaceAddressV1({ metadata, machineId });
+  if (prepared.kind === 'none') return [];
+  if (prepared.kind === 'pending') return pending(prepared.reason);
   let rows: Awaited<ReturnType<ReturnType<typeof createUiProjectAccountRowsClient>['read']>>;
   try { rows = await createUiProjectAccountRowsClient(account).read(context.signal); }
   catch { account.assertCurrent(); context.signal?.throwIfAborted(); return pending('project_association_unavailable'); }
   account.assertCurrent();
-  const resolved = resolveWorkspaceRefV1(rows.workspaceRefs, { serverId: account.serverId, workspaceId,
-    machineId, rootPath: root.machinePath });
-  if (resolved.kind !== 'resolved') return pending('project_association_unavailable');
+  const resolved = resolveSessionProjectWorkspaceRefV1(rows.workspaceRefs, { serverId: account.serverId, address: prepared.address });
+  if (resolved.kind === 'none') return [];
+  if (resolved.kind === 'pending') return pending(resolved.reason);
   const project = projectWorkspaceRefV1(resolved.ref);
-  if (metadata.projectId !== undefined && metadata.projectId !== project.projectKey) return pending('project_association_unavailable');
   const personal = rows.organizations.find(row => row.key.serverId === account.serverId
     && row.key.projectKey === project.projectKey)?.value.promptStack ?? [];
   let shared: readonly PromptStackEntryV1[] = [];
