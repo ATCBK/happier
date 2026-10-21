@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
     REACT_NATIVE_ENRICHED_MARKDOWN_STREAMING_PATCH_REQUIRED_FILES,
@@ -280,12 +280,23 @@ test(`partial repair handles ${scenario} without certifying an incompatible depe
 
         const brokenResult = verifyReactNativeEnrichedMarkdownWebStreamingPatch({ packageDir });
         assert.equal(brokenResult.status, 'failed');
+        const observationPath = path.join(fixtureDir, 'repair-cwd.json');
+        const patchPackageWrapper = path.join(fixtureDir, 'patch-package.mjs');
+        fs.writeFileSync(patchPackageWrapper, [
+            "import fs from 'node:fs';",
+            `fs.writeFileSync(${JSON.stringify(observationPath)}, JSON.stringify({ cwd: process.cwd(), nodeModules: fs.realpathSync('node_modules') }));`,
+            `await import(${JSON.stringify(pathToFileURL(path.join(UI_DIR, '..', '..', 'node_modules', 'patch-package', 'dist', 'index.js')).href)});`,
+        ].join('\n'));
         const repairedResult = repairReactNativeEnrichedMarkdownWebStreamingPatch({
             packageDir,
             patchDir: fixturePatchDir,
-            patchPackageCliPath: path.join(UI_DIR, '..', '..', 'node_modules', 'patch-package', 'dist', 'index.js'),
+            patchPackageCliPath: patchPackageWrapper,
             label: 'test',
         });
+        const observation = JSON.parse(fs.readFileSync(observationPath, 'utf8'));
+        assert.equal(fs.realpathSync(path.dirname(observation.cwd)), fs.realpathSync(os.tmpdir()), 'repair scratch must stay outside the synchronized app root');
+        assert.equal(observation.nodeModules, fs.realpathSync(path.dirname(packageDir)));
+        assert.equal(fs.existsSync(observation.cwd), false, 'repair must clean its scratch directory');
         // --partial can restore a missing added file, but cannot rebase overlapping
         // previously patched implementation hunks. The verifier must fail closed.
         assert.equal(repairedResult.status, scenario === 'stale overlapping implementation' ? 'failed' : 'ok');

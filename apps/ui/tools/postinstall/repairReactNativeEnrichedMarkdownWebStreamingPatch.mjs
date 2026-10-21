@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -19,13 +20,12 @@ export function repairReactNativeEnrichedMarkdownWebStreamingPatch({
     const nodeModulesDir = path.dirname(packageDir);
     if (path.basename(nodeModulesDir) !== 'node_modules') return initialResult;
 
-    const appRootDir = path.dirname(nodeModulesDir);
     const patchFilePath = path.resolve(patchDir, PATCH_FILE_NAME);
     if (!fs.existsSync(patchFilePath) || !fs.existsSync(patchPackageCliPath)) return initialResult;
 
     const safeLabel = String(label).replace(/[^a-z0-9_-]+/gi, '-') || 'installed';
     const recoveryWorkingDir = fs.mkdtempSync(
-        path.join(appRootDir, `.happier-enriched-markdown-repair-${safeLabel}-`),
+        path.join(os.tmpdir(), `.happier-enriched-markdown-repair-${safeLabel}-`),
     );
     const recoveryPatchDir = path.join(recoveryWorkingDir, 'patches');
     const recoveryNodeModulesLink = path.join(recoveryWorkingDir, 'node_modules');
