@@ -8,6 +8,7 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { McpServerCatalogRowMutationV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
@@ -326,6 +327,16 @@ describe('MCP servers collection and tools', () => {
                     return Response.json({ success: true, version: accountSettingsVersion });
                 }
                 return Response.json({ version: accountSettingsVersion, content: { t: 'plain', v: accountSettings } });
+            }
+            if (parsed.pathname === '/v1/machines/read-batch') {
+                expect(init?.method).toBe('POST');
+                expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${token(accountId)}`);
+                const input = MachineReadBatchRequestV1Schema.parse(JSON.parse(String(init?.body)));
+                return Response.json(MachineReadBatchResponseV1Schema.parse({ results: input.machineIds.map(machineId =>
+                    machineId === selectedMachine.id
+                        ? { machineId, status: 'found', machine: createPlainMachineRowFixture({ id: machineId, accountId }) }
+                        : { machineId, status: 'not_found' }),
+                }));
             }
             if (parsed.pathname === `/v1/machines/${selectedMachine.id}`) return Response.json({ machine: {
                 ...selectedMachine, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
@@ -791,7 +802,7 @@ describe('MCP servers collection and tools', () => {
         expect(rpcRequests.filter(item => item.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_DETECT))).toHaveLength(2);
     });
 
-    it('uses the fresh Administration target and fails closed after it becomes unavailable', async () => {
+    it('blocks passive probes for unavailable inventory but retries the exact retained Administration target', async () => {
         await selectMachineFixture({ serverIdentityId: 'srv_mcp_collection_machine', machineId: targetMachine.id });
 
         const screen = await renderSettingsView(React.createElement(McpDetectedServersScreen));
@@ -809,10 +820,15 @@ describe('MCP servers collection and tools', () => {
             storage.getState().markMachineListUnavailable(machineHome.id);
         });
         expect(resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId: 'srv_mcp_collection_machine', machineId: targetMachine.id })).toBeNull();
+        await flushHookEffects();
+        expect(rpcRequests.filter(item => item.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_DETECT))).toEqual([]);
         await act(async () => {
             await screen.pressRow('settings.mcpServers.detect.refresh');
         });
-
-        expect(rpcRequests.filter(item => item.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_DETECT))).toEqual([]);
+        await vi.waitFor(() => expect(rpcRequests.filter(item => item.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_DETECT))).toEqual([
+            { home: machineHome.serverUrl, method: `machine-target:${RPC_METHODS.DAEMON_MCP_SERVERS_DETECT}`, input: { machineId: 'machine-target' } },
+        ]));
+        await flushHookEffects();
+        expect(rpcRequests.filter(item => item.method.includes(RPC_METHODS.DAEMON_MCP_SERVERS_DETECT))).toHaveLength(1);
     });
 });

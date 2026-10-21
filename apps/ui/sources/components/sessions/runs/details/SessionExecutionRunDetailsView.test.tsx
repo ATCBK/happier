@@ -14,6 +14,7 @@ import {
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, SocketRpcRequestIdSchema } from '@happier-dev/protocol/socketRpc';
 import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
+import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 
 import { createMachineFixture, createPendingMessageFixture, createSessionFixture, flattenTestStyle,
@@ -22,6 +23,7 @@ import { createSessionMessagesFixture, createToolCallMessageFixture } from '@/de
 import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -29,6 +31,7 @@ import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixt
 import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { disconnectActiveServerConnection, restoreConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
@@ -278,11 +281,8 @@ beforeEach(async ({ task }) => {
     httpReads.length = 0;
     sessionMetadata = createSessionMetadataHttpBoundary(() => getStorage().getState().sessions);
     approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-1', encryptionMode: 'plain' });
-    home = await serveActionHomes({
-        homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test',
-            serverIdentityId: 'srv_run_details_' + sequence, accountId: 'account-1', settings: stopPolicy,
-            currentAccount: stopFallbackPolicySuite }],
-        route(request) {
+    // Batch and single reads observe the same persisted tuple and refusal fixtures.
+    const sessionReads = createSessionReadBatchHttpBoundary(request => {
             if (stopFallbackPolicySuite) {
                 const artifactResponse = approvalArtifacts.handle(request.url.pathname + request.url.search, {
                     method: request.method, headers: request.headers, signal: request.signal,
@@ -299,13 +299,19 @@ beforeEach(async ({ task }) => {
             if (request.path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (request.path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'm1', accountId: 'account-1' })]);
             if (request.path === '/v1/machines/m1') return Response.json({ machine: createPlainMachineRowFixture({ id: 'm1', accountId: 'account-1' }) });
-            if (request.path === '/v2/sessions/s1' && !httpSessionAvailable) return new Response(null, { status: 404 });
+            if (request.path === '/v1/machines/read-batch') {
+                const { machineIds } = MachineReadBatchRequestV1Schema.parse(request.body);
+                return Response.json(MachineReadBatchResponseV1Schema.parse({ results: machineIds.map(machineId => machineId === 'm1'
+                    ? { machineId, status: 'found', machine: createPlainMachineRowFixture({ id: machineId, accountId: 'account-1' }) }
+                    : { machineId, status: 'not_found' }) }));
+            }
+            if (request.path === '/v2/sessions/s1' && !httpSessionAvailable) return Response.json({ error: 'Session not found' }, { status: 404 });
             if (request.path === '/v2/sessions/s1') {
                 // The real Session Stop first commits its explicit-stop metadata.
                 // Serve that tuple's CAS through the shared persistence boundary.
                 if (request.method === 'GET' && sessionMetadata.writes.length === 0) sessionMetadata.replaceSession('s1', {
                     ...createPlainSessionCurrentProjectionRecordFixture({ id: 's1', active: getStorage().getState().sessions.s1?.active ?? true,
-                        metadata: getStorage().getState().sessions.s1?.metadata ?? { path: '/worktree', host: 'localhost' },
+                        metadata: readSessionOwnerMetadataView(getStorage().getState().sessions.s1 ?? {}) ?? { path: '/worktree', host: 'localhost' },
                     }),
                     effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
                         capabilities: getStorage().getState().sessions.s1!.access!.capabilities },
@@ -328,7 +334,12 @@ beforeEach(async ({ task }) => {
             }
             if (request.path === '/v1/artifacts') return Response.json([]);
             return undefined;
-        },
+    });
+    home = await serveActionHomes({
+        homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test',
+            serverIdentityId: 'srv_run_details_' + sequence, accountId: 'account-1', settings: stopPolicy,
+            currentAccount: stopFallbackPolicySuite }],
+        route: request => sessionReads.handle(request),
     });
     const { resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
     if (portableIdentity) await setServerProfileIdentityForUrl(home.homes.home!.serverUrl, portableIdentity);

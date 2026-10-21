@@ -177,11 +177,12 @@ describe('comparison Discard and guarded Undo', () => {
   });
 
   it('retains File-page restore Undo on the same file until used, and retires it on file change or unmount', async () => {
+    const initialProps: { path: string; rootPath?: string } = { path: 'a.txt' };
     const hook = await renderHook(({ path, rootPath = '/repo' }: { path: string; rootPath?: string }) => useFileChangesReview({
       scope: { machineId: 'm1', rootPath, serverId }, filePath: path,
       liveDiff: '@@ -1 +1 @@\n-old\n+new\n', refreshLiveDiff: () => {}, contentHash: beforeHash,
       view: { changesScope: { kind: 'workingTree' } }, onChangesScopeChange: () => {}, active: true,
-    }), { initialProps: { path: 'a.txt' } });
+    }), { initialProps });
     const restore = async () => {
       rpc.responses.push({ success: true, entries: [{ path: 'a.txt', status: 'restored', hashBefore: beforeHash, hashAfter: afterHash,
         previous: { inlineBase64: 'b2xkCg==' } }] });

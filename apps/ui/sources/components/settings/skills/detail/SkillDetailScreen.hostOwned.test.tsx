@@ -73,7 +73,7 @@ afterEach(async () => {
 async function pluginSkillHome(origin: string, skill: Partial<SkillListItemV1> = {}) {
   const [
     { normalizePluginUiProjection },
-    { unionPluginUiProjections },
+    { createPluginUiExecutionOriginCandidatePublication, unionPluginUiProjections },
     { publishCommittedAppShellPluginUiProjection },
   ] = await Promise.all([
     import('@/sync/domains/plugins/ui/projection'),
@@ -234,7 +234,10 @@ async function pluginSkillHome(origin: string, skill: Partial<SkillListItemV1> =
       interactionEnabled: true,
     },
   ]).pluginUiProjection;
-  const stop = publishCommittedAppShellPluginUiProjection(() => union);
+  const candidates = createPluginUiExecutionOriginCandidatePublication();
+  candidates.publish(union, [], [PLUGIN_ID]);
+  const stop = publishCommittedAppShellPluginUiProjection(() => union,
+    id => candidates.getSnapshot().get(id) ?? null);
   storage.setState({
     settingsScope: scope,
     profileScope: scope,

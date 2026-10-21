@@ -1,5 +1,6 @@
+import * as React from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, createDeferred, createMachineFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { act, createDeferred, createMachineFixture, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
@@ -19,6 +20,9 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { observePromptLibraryCatalog, resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
 const { getPromptLibraryCatalogValue, resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
 const { useSkillsLibrary, readSkillsLibraryItems } = await import('./useSkillsLibrary');
+const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { EMPTY_PLUGIN_UI_PROJECTION } = await import('@/sync/domains/plugins/ui/projection');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { useSkillsFirstRun } = await import('@/components/settings/skills/firstRun/useSkillsFirstRun');
 const { useReachProjection } = await import('@/sync/domains/capabilities/reach/useReachProjection');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -29,6 +33,38 @@ afterEach(() => {
     standardCleanup();
     resetPromptLibraryCatalogEngineForTests();
     resetPromptLibraryCatalogSnapshotsForTests();
+});
+
+it('does not rerender the real library for executable-only AppShell updates', async () => {
+    const home = await createSeededSkillsHome('https://skills-declaration-subscription.test', { skills: [{ id: 'stable-skill' }] });
+    let renders = 0;
+    let library: ReturnType<typeof useSkillsLibrary> | undefined;
+    const Probe = React.memo(function LibraryProbe() {
+        renders += 1;
+        library = useSkillsLibrary();
+        return null;
+    });
+    const child = <Probe />;
+    const value = {
+        pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null,
+        phase: 'current' as const, interactionEnabled: true, machineId: null, serverId: null,
+        platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(),
+        connectedAccountProjectionRevision: 1, clientExecutableActivation: { status: 'ready' as const },
+        reloadConnectedAccountProjection() {}, reloadClientExecutables() {},
+    };
+    const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={value}>{child}</AppShellPluginUiProjectionValueProvider>);
+    try {
+        await vi.waitFor(() => expect(library?.status).toBe('ready'));
+        await flushHookEffects();
+        const settled = renders;
+        const retainedItems = library?.items;
+        const reads = home.requests.length;
+        await screen.update(<AppShellPluginUiProjectionValueProvider value={{ ...value,
+            connectedAccountProjectionRevision: 2, clientExecutableActivation: { status: 'establishing' } }}>{child}</AppShellPluginUiProjectionValueProvider>);
+        expect(renders).toBe(settled);
+        expect(library?.items).toBe(retainedItems);
+        expect(home.requests).toHaveLength(reads);
+    } finally { await screen.unmount(); await home.dispose(); }
 });
 
 it.each(['local', 'remote'] as const)('updates a mounted library after a %s reach mutation without reload', async origin => {

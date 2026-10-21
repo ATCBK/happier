@@ -308,6 +308,8 @@ function createAccountAvailabilityReader(input: Pick<
     const unavailable = createPluginAccountAvailabilityReaderStore().bind(ACCOUNT_SCOPE);
     return {
         ...input,
+        getObservationSnapshot: unavailable.getObservationSnapshot,
+        readBundledAccountDeclarationDigest: unavailable.readBundledAccountDeclarationDigest,
         readAccountUiProjection: unavailable.readAccountUiProjection,
         readCurrentAccountExecution: unavailable.readCurrentAccountExecution,
         readCurrentAccountExecutionDeclarations: unavailable.readCurrentAccountExecutionDeclarations,

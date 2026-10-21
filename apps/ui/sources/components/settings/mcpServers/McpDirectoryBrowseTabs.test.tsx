@@ -38,6 +38,10 @@ installMcpServersCommonModuleMocks({
     },
 });
 
+// Match the collection suite: transform the real Home/AppShell graph during
+// collection, leaving the existing deadline for the actual browser operation.
+const { McpDetectedServersTab } = await import('./McpDetectedServersTab');
+
 describe('MCP directory browse tabs', () => {
   beforeEach(() => {
     resetMcpServersCommonModuleMockState();
@@ -46,7 +50,6 @@ describe('MCP directory browse tabs', () => {
 
   it('opens the shared path browser from the detected directory input', async () => {
     const onChangeDirectory = vi.fn();
-    const { McpDetectedServersTab } = await import('./McpDetectedServersTab');
 
     let tree!: ReactTestRenderer;
         tree = (await renderScreen(<McpDetectedServersTab
