@@ -15,6 +15,7 @@ import type {
     RpcHandlerConfig,
     RpcHandlerActiveExecution,
     RpcHandlerContext,
+    RpcOperationDiagnostics,
 } from './types';
 import { RPC_ADMISSION_PREDICATES, type RpcAdmissionPredicate } from './types';
 import type { Socket } from 'socket.io-client';
@@ -87,9 +88,10 @@ type RequestDiagnostic = {
     acknowledgementOutcomeCode?: string;
     goalControlFailure?: SessionGoalControlFailureV1;
     failure?: Readonly<{
-        failedPhase: string;
-        cancelled: boolean;
+        failedPhase?: string;
+        cancelled?: boolean;
         phaseDurationsMs: Readonly<Record<string, number>>;
+        phaseTimingsMs?: RpcOperationDiagnostics['phaseTimingsMs'];
         causeCode?: string;
     }>;
 };
@@ -312,6 +314,11 @@ export class RpcHandlerManager {
             diagnostic.admissionPredicate = predicate;
             diagnostic.admissionDenied = true;
         }
+    }
+
+    private reportOperationDiagnostics(diagnostic: RequestDiagnostic, operation: RpcOperationDiagnostics): void {
+        diagnostic.failure = { ...diagnostic.failure, ...operation,
+            phaseDurationsMs: { ...diagnostic.failure?.phaseDurationsMs, ...operation.phaseDurationsMs } };
     }
 
     private async dispatchRequest(request: RpcRequest, diagnostic: RequestDiagnostic, requestStartedAtMs: number): Promise<unknown> {
@@ -921,6 +928,7 @@ export class RpcHandlerManager {
             );
             const result = await handler(decryptedParams, Object.freeze({
                 signal: controller.signal,
+                reportOperationDiagnostics: (operation: RpcOperationDiagnostics) => this.reportOperationDiagnostics(diagnostic, operation),
                 requestStartedAtMs,
                 ...(deadlineAtMs === null ? {} : { deadlineAtMs }),
                 reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
@@ -981,9 +989,11 @@ export class RpcHandlerManager {
             const failedPhase = phase;
             nextPhase('response');
             const causeCode = error instanceof Error && error.cause ? readOutcomeCode(error.cause, true) : 'unclassified_error';
-            diagnostic.failure = { failedPhase, cancelled: controller.signal.aborted, phaseDurationsMs,
+            diagnostic.failure = { failedPhase, cancelled: controller.signal.aborted,
                 ...(['RPC_REQUEST_TIMEOUT', 'ERR_CANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT']
-                    .includes(causeCode) ? { causeCode } : {}) };
+                    .includes(causeCode) ? { causeCode } : {}),
+                ...diagnostic.failure,
+                phaseDurationsMs: { ...phaseDurationsMs, ...diagnostic.failure?.phaseDurationsMs } };
             if (confidential) {
                 return await respond(request, { error: 'confidential_continuation_failed', errorCode: 'confidential_continuation_failed' });
             }
@@ -1070,6 +1080,7 @@ export class RpcHandlerManager {
                     ...(callerInputConstraints ? { callerInputConstraints } : {}),
                     signal,
                     requestStartedAtMs,
+                    reportOperationDiagnostics: (operation: RpcOperationDiagnostics) => this.reportOperationDiagnostics(diagnostic, operation),
                     reportAdmissionDenial: (predicate: RpcAdmissionPredicate) => this.reportAdmissionDenial(diagnostic, predicate),
                     ...((options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority)
                         ? { callerAuthority: options?.rpcContext?.callerAuthority ?? options?.verifiedPeerAuthority } : {}),

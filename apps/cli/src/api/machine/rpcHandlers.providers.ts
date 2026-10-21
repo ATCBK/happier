@@ -183,7 +183,8 @@ export function registerMachineProviderRpcHandlers(input: Readonly<{
               ? await input.services.probeDraft(request, { signal: context.signal })
               : await input.services.probeDraft(request)
             : context?.signal
-              ? await input.services.probe(request, { signal: context.signal })
+              ? await input.services.probe(request, { signal: context.signal,
+                  reportOperationDiagnostics: context.reportOperationDiagnostics })
               : await input.services.probe(request);
       return DaemonProviderProbeResponseV1Schema.parse(result);
     },

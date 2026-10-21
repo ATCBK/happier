@@ -2,7 +2,32 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { expect, it, vi } from 'vitest';
-import { awaitAbortableWithinProviderOperation, createProviderOperationLifetime } from './operationLifetime';
+import { awaitAbortableWithinProviderOperation, awaitWithinProviderOperation, createProviderOperationLifetime,
+  createProviderOperationPhaseObserver, observeProviderOperationPhase } from './operationLifetime';
+
+it.each(['deadline', 'cancelled'] as const)('retains the inner phase when an outer %s race settles before late work', async reason => {
+  vi.useFakeTimers();
+  const report = vi.fn();
+  const diagnostics = createProviderOperationPhaseObserver(report);
+  const caller = new AbortController();
+  const lifetime = { ...createProviderOperationLifetime({ signal: caller.signal, wallTimeMs: 30 }), diagnostics };
+  let release = () => {};
+  const pending = observeProviderOperationPhase(lifetime, 'managed_runtime', () => awaitWithinProviderOperation(
+    observeProviderOperationPhase(lifetime, 'pre_effect_revalidation', () => new Promise<void>(resolve => { release = resolve; })), lifetime));
+  const observed = pending.catch(error => ({ reason: error.reason, phase: error.phase }));
+  try {
+    await vi.advanceTimersByTimeAsync(reason === 'deadline' ? 30 : 10);
+    if (reason === 'cancelled') caller.abort();
+    expect(await observed).toEqual({ reason, phase: 'pre_effect_revalidation' });
+    diagnostics.finish();
+    const snapshot = report.mock.calls.at(-1)?.[0];
+    expect(snapshot).toMatchObject({ failedPhase: 'pre_effect_revalidation', causeCode: reason,
+      phaseDurationsMs: { managed_runtime: 0, pre_effect_revalidation: reason === 'deadline' ? 30 : 10 } });
+    release();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(report.mock.calls.at(-1)?.[0]).toBe(snapshot);
+  } finally { release(); vi.useRealTimers(); }
+});
 
 it.each([false, true])('keeps an uncapped containing operation cancellable after a slow admission (cancel=%s)', async cancelled => {
   vi.useFakeTimers();

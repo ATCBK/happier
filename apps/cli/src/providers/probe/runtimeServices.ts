@@ -40,6 +40,8 @@ import {
   awaitAbortableWithinProviderOperation,
   awaitWithinProviderOperation,
   createProviderOperationLifetime,
+  createProviderOperationPhaseObserver,
+  observeProviderOperationPhase,
   ProviderOperationAbandonedError,
 } from '@/providers/operationLifetime';
 import {
@@ -821,16 +823,14 @@ export function createRuntimeProviderServices(input: Readonly<{
       let purposeBindingResolution;
       try {
         purposeBindingResolution =
-          await awaitAbortableWithinProviderOperation(signal => resolveManagedProviderPurposeBindingSnapshot({
-          implementationIdentity:
-            managedDeployment.implementationIdentity,
-          connectedAccounts:
-            managedDeployment.managedRuntime.connectedAccounts ?? [],
-          purposeBindingIntents:
-            managedDeployment.purposeBindingIntents,
-          resolveBindingIntent: resolveManagedPurposeBindingIntent,
-          signal,
-        }), lifetime);
+          await observeProviderOperationPhase(lifetime, 'purpose_bindings', () =>
+            awaitAbortableWithinProviderOperation(signal => resolveManagedProviderPurposeBindingSnapshot({
+              implementationIdentity: managedDeployment.implementationIdentity,
+              connectedAccounts: managedDeployment.managedRuntime.connectedAccounts ?? [],
+              purposeBindingIntents: managedDeployment.purposeBindingIntents,
+              resolveBindingIntent: resolveManagedPurposeBindingIntent,
+              signal,
+            }), lifetime));
       } catch (error) {
         return {
           ok: false,
@@ -1279,29 +1279,35 @@ export function createRuntimeProviderServices(input: Readonly<{
     waiterLifetime?: ProviderProbeWaiterLifetime,
   ): Promise<ProviderCatalogRefreshResult> {
     if (!isProviderFeatureEnabled()) return providerFeatureDisabled(identity);
-    const scope = withOperationLifetime(undefined, waiterLifetime?.signal);
-    const unavailable = await refreshAmbientCatalog(identity, scope.lifetime);
-    if (unavailable) return { status: 'error', error: unavailable };
-    const context = await resolveConnectionContext(identity, scope);
-    if (!isProviderFeatureEnabled()) return providerFeatureDisabled(identity);
-    if (!context.ok) return { status: 'error', error: context.error };
-    const remote = await readPlacedGatewayCatalog(identity, context.value,
-      (reader, target, signal) => reader.probe(target, signal));
-    if (remote) return remote;
-    const resolved = await resolveSaved(identity, 'catalog', {
-      ...scope, registry: context.value.registry,
-      accountSettingsBasis: context.value.accountSettingsBasis,
-      dnsEvidenceByConnectionId: new Map([[identity.connectionId, context.value.dnsEvidenceByEndpointUrl]]),
-    });
-    if (!resolved.ok) return { status: 'error', error: resolved.error };
-    return runResolvedCatalogProbe({ ...resolved.value.request, operationScope: {
-      registry: resolved.value.registry,
-      ...(resolved.value.accountSettingsBasis ? { accountSettingsBasis: resolved.value.accountSettingsBasis } : {}),
-      dnsEvidenceByConnectionId: new Map([[identity.connectionId, resolved.value.dnsEvidenceByEndpointUrl]]),
-      // Shared scheduler work retains the containing deadline, independently
-      // of one waiter's cancellation interest.
-      lifetime: { wallDeadlineAtMs: scope.lifetime.wallDeadlineAtMs },
-    } }, trigger, withProviderFeatureCurrentness(waiterLifetime), scope.lifetime);
+    const diagnostics = createProviderOperationPhaseObserver(waiterLifetime?.reportOperationDiagnostics);
+    const operation = withOperationLifetime(undefined, waiterLifetime?.signal);
+    const scope = { ...operation, lifetime: { ...operation.lifetime, diagnostics } };
+    try {
+      return await observeProviderOperationPhase(scope.lifetime, 'catalog', async () => {
+        const unavailable = await refreshAmbientCatalog(identity, scope.lifetime);
+        if (unavailable) return { status: 'error', error: unavailable };
+        const context = await resolveConnectionContext(identity, scope);
+        if (!isProviderFeatureEnabled()) return providerFeatureDisabled(identity);
+        if (!context.ok) return { status: 'error', error: context.error };
+        const remote = await readPlacedGatewayCatalog(identity, context.value,
+          (reader, target, signal) => reader.probe(target, signal));
+        if (remote) return remote;
+        const resolved = await resolveSaved(identity, 'catalog', {
+          ...scope, registry: context.value.registry,
+          accountSettingsBasis: context.value.accountSettingsBasis,
+          dnsEvidenceByConnectionId: new Map([[identity.connectionId, context.value.dnsEvidenceByEndpointUrl]]),
+        });
+        if (!resolved.ok) return { status: 'error', error: resolved.error };
+        return await runResolvedCatalogProbe({ ...resolved.value.request, operationScope: {
+          registry: resolved.value.registry,
+          ...(resolved.value.accountSettingsBasis ? { accountSettingsBasis: resolved.value.accountSettingsBasis } : {}),
+          dnsEvidenceByConnectionId: new Map([[identity.connectionId, resolved.value.dnsEvidenceByEndpointUrl]]),
+          // Shared scheduler work retains the containing deadline, independently
+          // of one waiter's cancellation interest.
+          lifetime: { wallDeadlineAtMs: scope.lifetime.wallDeadlineAtMs, diagnostics },
+        } }, trigger, withProviderFeatureCurrentness(waiterLifetime), scope.lifetime);
+      });
+    } finally { diagnostics.finish(); }
   }
 
   const hasFreshExactHealthObservation = async (

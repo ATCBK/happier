@@ -19,6 +19,7 @@ import { collectProviderConnectionDnsEvidence } from '../registry/dnsEvidence';
 import {
   awaitWithinProviderOperation,
   createProviderOperationLifetime,
+  observeProviderOperationPhase,
   ProviderOperationAbandonedError,
 } from '../operationLifetime';
 import { resolveProviderConnectionForMachineFromSettingsRead } from '../registry/resolve';
@@ -405,7 +406,8 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
   const authorize = (
     request: Parameters<typeof authorizeWithDestination>[0],
     scope?: ProviderProbeOperationScope,
-  ) => authorizeWithDestination(request, undefined, scope);
+  ) => observeProviderOperationPhase(scope?.lifetime, 'pre_effect_revalidation', () =>
+    authorizeWithDestination(request, undefined, scope));
   return Object.freeze({
     authorize,
     revalidate: async (ticket, request, scope) => {
@@ -434,10 +436,10 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
           }),
         };
       }
-      const current = await authorizeWithDestination(request, {
+      const current = await observeProviderOperationPhase(scope?.lifetime, 'pre_effect_revalidation', () => authorizeWithDestination(request, {
         endpointUrl: ticket.endpointUrl,
         endpoint: destination,
-      }, scope);
+      }, scope));
       if (!current.ok) return { ok: false, error: current.error };
       const validation = revalidateProviderProbeAuthorizationTicket(ticket, current.ticket);
       if (!validation.ok) return validation;

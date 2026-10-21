@@ -1,6 +1,6 @@
 import { createProviderManagedProbeRequestFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';
 import { randomUUID } from 'node:crypto';
-import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import type { ProviderErrorV1 } from '@happier-dev/protocol';
 
 import type {
@@ -150,6 +150,11 @@ export function createProviderManagedCatalogRuntimePort(input: Readonly<{
       const signal = launchInput.signal ?? new AbortController().signal;
       const scope = createProviderLaunchResourceScope();
       let authorizationCurrent = !signal.aborted;
+      let authorizationFailure: ProviderErrorV1 | undefined;
+      const authorizationError = () => authorizationFailure ?? createProviderErrorV1(
+        'provider_authorization_changed',
+        { connectionId: ticket.connectionId, machineId: ticket.machineId },
+      );
       const isAuthorizationCurrent = (): boolean => (
         authorizationCurrent && !signal.aborted
       );
@@ -158,7 +163,10 @@ export function createProviderManagedCatalogRuntimePort(input: Readonly<{
         try {
           const validation = await launchInput.revalidateBeforeEffect();
           authorizationCurrent = validation.ok;
-        } catch {
+          if (!validation.ok) authorizationFailure = validation.error;
+        } catch (error) {
+          const typed = ProviderErrorV1Schema.safeParse(error);
+          if (typed.success) authorizationFailure = typed.data;
           authorizationCurrent = false;
         }
         return isAuthorizationCurrent();
@@ -179,10 +187,7 @@ export function createProviderManagedCatalogRuntimePort(input: Readonly<{
       };
 
       if (!await revalidateAuthorization()) {
-        return await fail(createProviderErrorV1(
-          'provider_authorization_changed',
-          { connectionId: ticket.connectionId, machineId: ticket.machineId },
-        ));
+        return await fail(authorizationError());
       }
 
       let registryLease: PluginRuntimeRegistryLease;
@@ -217,10 +222,7 @@ export function createProviderManagedCatalogRuntimePort(input: Readonly<{
         ));
       }
       if (!await revalidateAuthorization()) {
-        return await fail(createProviderErrorV1(
-          'provider_authorization_changed',
-          { connectionId: ticket.connectionId, machineId: ticket.machineId },
-        ));
+        return await fail(authorizationError());
       }
 
       let invocationServices: Awaited<ReturnType<typeof createInvocationServices>>;
@@ -270,7 +272,9 @@ export function createProviderManagedCatalogRuntimePort(input: Readonly<{
       if (!started.ok) {
         return {
           ok: false,
-          error: managedCatalogLaunchError({ ticket, code: started.code }),
+          error: started.code === 'managed_provider_authorization_changed'
+            ? authorizationError()
+            : managedCatalogLaunchError({ ticket, code: started.code }),
         };
       }
       const admittedEndpointUrl = started.access.endpointUrl(

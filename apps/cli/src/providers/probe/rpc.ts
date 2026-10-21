@@ -25,6 +25,7 @@ import type { ProviderCatalogCommandFallbackV1, ProviderCatalogProbeV1 } from '@
 
 import type { ProviderOperationLifetime } from '../operationLifetime';
 import type { ProviderProbeOperationScope } from './authorization';
+import type { RpcHandlerContext } from '@/api/rpc/types';
 
 const TriggerSchema = z.enum(PROVIDER_PROBE_REFRESH_TRIGGERS);
 const SavedProbeRequestSchema = z.strictObject({
@@ -74,7 +75,7 @@ export type ProviderSavedModelsRpcResult =
 export type ProviderProbeWaiterLifetime = Readonly<Pick<
   ProviderProbeSchedulerWaiterOptions<ProviderCatalogRefreshResult>,
   'signal' | 'isCurrent'
->>;
+> & Pick<RpcHandlerContext, 'reportOperationDiagnostics'>>;
 
 const SavedConnectionMachineRequestSchema = z.strictObject({
   connectionId: ProviderConnectionIdSchema,

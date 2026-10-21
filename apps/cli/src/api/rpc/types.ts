@@ -54,7 +54,16 @@ export type RpcLocalActionContext = Readonly<Partial<Pick<
     requesterWorkAttributionV1?: RequesterWorkAttributionV1;
 }>;
 
+/** Content-free, host-owned operation observations; never part of an RPC DTO. */
+export type RpcOperationDiagnostics = Readonly<{
+    failedPhase?: string;
+    causeCode?: string;
+    phaseDurationsMs: Readonly<Record<string, number>>;
+    phaseTimingsMs: readonly Readonly<{ phase: string; startedAtMs: number; finishedAtMs: number; durationMs: number }>[];
+}>;
+
 export type RpcHandlerContext = Readonly<{
+    reportOperationDiagnostics?: (diagnostics: RpcOperationDiagnostics) => void;
     /** Exact present-person decision admitted by the installed Session transport owner. */
     requesterApprovalDecision?: ActionExecutorContext['requesterApprovalDecision'];
     signal: AbortSignal;

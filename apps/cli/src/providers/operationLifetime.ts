@@ -1,3 +1,76 @@
+import type { RpcOperationDiagnostics } from '@/api/rpc/types';
+
+export type ProviderOperationPhase = 'catalog' | 'purpose_bindings' | 'pre_effect_revalidation' | 'managed_runtime' | 'catalog_dispatch';
+
+/** Probe-only observations share the lifetime, including nested pre-effect reads. */
+export function createProviderOperationPhaseObserver(
+  report?: (diagnostics: RpcOperationDiagnostics) => void,
+  now: () => number = Date.now,
+) {
+  const origin = now();
+  const active: Array<Readonly<{ phase: ProviderOperationPhase }>> = [];
+  const phaseDurationsMs: Record<string, number> = {};
+  const phaseTimingsMs: Array<RpcOperationDiagnostics['phaseTimingsMs'][number]> = [];
+  let startedAtMs = 0;
+  let failedPhase: ProviderOperationPhase | undefined;
+  let causeCode: 'deadline' | 'cancelled' | undefined;
+  let finished = false;
+  const publish = () => report?.({
+    ...(failedPhase ? { failedPhase, causeCode } : {}),
+    phaseDurationsMs: { ...phaseDurationsMs }, phaseTimingsMs: [...phaseTimingsMs],
+  });
+  const closeInterval = () => {
+    const finishedAtMs = Math.max(startedAtMs, now() - origin);
+    const phase = active.at(-1)?.phase;
+    if (phase) {
+      const durationMs = finishedAtMs - startedAtMs;
+      phaseDurationsMs[phase] = (phaseDurationsMs[phase] ?? 0) + durationMs;
+      phaseTimingsMs.push({ phase, startedAtMs, finishedAtMs, durationMs });
+    }
+    startedAtMs = finishedAtMs;
+  };
+  return {
+    enter(phase: ProviderOperationPhase) {
+      if (finished) return () => {};
+      closeInterval();
+      const entry = { phase };
+      active.push(entry);
+      return () => {
+        if (finished) return;
+        closeInterval();
+        active.splice(active.indexOf(entry), 1);
+      };
+    },
+    abandon(reason: 'deadline' | 'cancelled') {
+      if (!finished && !failedPhase) {
+        failedPhase = active.at(-1)?.phase;
+        causeCode = reason;
+      }
+      return failedPhase;
+    },
+    finish() {
+      if (finished) return;
+      closeInterval();
+      finished = true;
+      publish();
+    },
+  };
+}
+
+export async function observeProviderOperationPhase<T>(
+  lifetime: ProviderOperationLifetime | undefined,
+  phase: ProviderOperationPhase,
+  work: () => Promise<T>,
+): Promise<T> {
+  const finish = lifetime?.diagnostics?.enter(phase);
+  try { return await work(); }
+  finally {
+    if (lifetime && providerOperationRemainingMs(lifetime) <= 0) lifetime.diagnostics?.abandon('deadline');
+    else if (lifetime?.signal?.aborted) lifetime.diagnostics?.abandon('cancelled');
+    finish?.();
+  }
+}
+
 /**
  * One Provider operation, one wall budget.
  *
@@ -17,6 +90,7 @@ export type ProviderOperationLifetime = Readonly<{
   signal?: AbortSignal;
   /** Absolute deadline, or Infinity when the containing operation has no wall cap. */
   wallDeadlineAtMs: number;
+  diagnostics?: ReturnType<typeof createProviderOperationPhaseObserver>;
 }>;
 
 /**
@@ -40,11 +114,13 @@ export function createProviderOperationLifetime(input: Readonly<{
 /** Settled by {@link awaitWithinProviderOperation} when the operation may not continue. */
 export class ProviderOperationAbandonedError extends Error {
   readonly reason: 'cancelled' | 'deadline';
+  readonly phase?: ProviderOperationPhase;
 
-  constructor(reason: 'cancelled' | 'deadline') {
+  constructor(reason: 'cancelled' | 'deadline', phase?: ProviderOperationPhase) {
     super(`Provider operation abandoned: ${reason}`);
     this.name = 'ProviderOperationAbandonedError';
     this.reason = reason;
+    this.phase = phase;
   }
 }
 
@@ -69,18 +145,20 @@ export async function awaitWithinProviderOperation<T>(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const signal = lifetime.signal;
+  const abandoned = (reason: 'cancelled' | 'deadline') =>
+    new ProviderOperationAbandonedError(reason, lifetime.diagnostics?.abandon(reason));
   try {
-    if (signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
+    if (signal?.aborted) throw abandoned('cancelled');
     const remainingMs = providerOperationRemainingMs(lifetime, now);
-    if (remainingMs <= 0) throw new ProviderOperationAbandonedError('deadline');
+    if (remainingMs <= 0) throw abandoned('deadline');
     return await Promise.race([
       work,
       new Promise<never>((_resolve, reject) => {
         if (Number.isFinite(remainingMs)) {
-          timer = setTimeout(() => reject(new ProviderOperationAbandonedError('deadline')), remainingMs);
+          timer = setTimeout(() => reject(abandoned('deadline')), remainingMs);
         }
         if (!signal) return;
-        onAbort = () => reject(new ProviderOperationAbandonedError('cancelled'));
+        onAbort = () => reject(abandoned('cancelled'));
         signal.addEventListener('abort', onAbort, { once: true });
       }),
     ]);
@@ -106,8 +184,8 @@ export async function awaitAbortableWithinProviderOperation<T>(
     const result = await awaitWithinProviderOperation(work(controller.signal), lifetime);
     // Aborting a transport may synchronously settle its promise. Such a
     // withdrawal result cannot outrun the containing operation's cancellation.
-    if (lifetime.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
-    if (providerOperationRemainingMs(lifetime) <= 0) throw new ProviderOperationAbandonedError('deadline');
+    if (lifetime.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled', lifetime.diagnostics?.abandon('cancelled'));
+    if (providerOperationRemainingMs(lifetime) <= 0) throw new ProviderOperationAbandonedError('deadline', lifetime.diagnostics?.abandon('deadline'));
     return result;
   } finally {
     lifetime.signal?.removeEventListener('abort', cancel);

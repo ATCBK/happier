@@ -28,6 +28,7 @@ import type { ProviderProbeManagedServiceRequest } from './client';
 import { providerProbeFailureHealthState, providerProbeSuccessHealthState } from './health';
 import {
   awaitWithinProviderOperation,
+  observeProviderOperationPhase,
   ProviderOperationAbandonedError,
   type ProviderOperationLifetime,
 } from '../operationLifetime';
@@ -465,7 +466,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
           operationScope?.registry?.providerActivationOccurrenceIdsByPluginId?.get(
             sources.first.implementationIdentity.pluginId,
           );
-        const launchPromise = dependencies.managedCatalogRuntime.launch({
+        const launchPromise = observeProviderOperationPhase(operationScope?.lifetime, 'managed_runtime', () => dependencies.managedCatalogRuntime!.launch({
           source: sources.first,
           request: firstAuthorization.request,
           ticket: firstAuthorization.ticket,
@@ -474,7 +475,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
             : { expectedActivationOccurrenceId }),
           ...(input.signal ? { signal: input.signal } : {}),
           revalidateBeforeEffect: revalidateAll,
-        });
+        }));
         let launched: Awaited<typeof launchPromise>;
         try {
           launched = await awaitWithinProviderOperation(
@@ -617,7 +618,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
             });
             if (contributionRetired()) return contributionUnavailable();
             try {
-              const result = await dependencies.client.getCatalog({
+              const result = await observeProviderOperationPhase(operationScope?.lifetime, 'catalog_dispatch', () => dependencies.client.getCatalog({
                 endpointUrl,
                 path: authorization.probe.path,
                 parser: authorization.probe.parser,
@@ -644,7 +645,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
                 },
                 ...(input.signal ? { signal: input.signal } : {}),
                 ...(input.wallDeadlineAtMs !== undefined ? { wallDeadlineAtMs: input.wallDeadlineAtMs } : {}),
-              });
+              }));
               if (result.requestFingerprint !== exactRuntimeFingerprint) {
                 throw new TypeError('Managed Provider probe client returned a mismatched realized request fingerprint');
               }
@@ -677,7 +678,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
                 return { status: 'error', error: fallbackValidation.error };
               }
               if (contributionRetired()) return contributionUnavailable();
-              const fallback = await dependencies.localCatalogFallback.run({
+              const fallback = await observeProviderOperationPhase(operationScope?.lifetime, 'catalog_dispatch', () => dependencies.localCatalogFallback!.run({
                 descriptor: input.catalogFallback,
                 endpointUrl: fallbackEndpointUrl,
                 lifetime: operationScope?.lifetime ?? {
@@ -687,7 +688,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
                 ...(contributedParsers
                   ? { contributedCatalogParsers: contributedParsers.parsersByFormat }
                   : {}),
-              });
+              }));
               if (contributionRetired()) return contributionUnavailable();
               if (fallback.status === 'success') {
                 return await commitManagedCatalog(fallbackAuthorization, fallback.models, []);
@@ -806,7 +807,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
             await clearCheckingActivity();
             return contributionUnavailable();
           }
-          const result = await dependencies.client.getCatalog({
+          const result = await observeProviderOperationPhase(operationScope?.lifetime, 'catalog_dispatch', () => dependencies.client.getCatalog({
             endpointUrl: request.endpoint.normalizedUrl,
             path: request.probe.path,
             parser: request.probe.parser,
@@ -833,7 +834,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
             }),
             ...(input.signal ? { signal: input.signal } : {}),
             ...(input.wallDeadlineAtMs !== undefined ? { wallDeadlineAtMs: input.wallDeadlineAtMs } : {}),
-          });
+          }));
           if (result.requestFingerprint !== request.requestFingerprint) {
             throw new TypeError('Provider probe client returned a mismatched request fingerprint');
           }
@@ -973,7 +974,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
         );
         if (!validation.ok) return { status: 'error', error: validation.error };
         if (contributionRetired()) return contributionUnavailable();
-        const fallback = await dependencies.localCatalogFallback.run({
+        const fallback = await observeProviderOperationPhase(operationScope?.lifetime, 'catalog_dispatch', () => dependencies.localCatalogFallback!.run({
           descriptor: input.catalogFallback,
           endpointUrl: fallbackEndpoint.normalizedUrl,
           lifetime: operationScope?.lifetime ?? {
@@ -983,7 +984,7 @@ export function createProviderCatalogService<TTicket, TCredentialRef>(dependenci
           ...(contributedParsers
             ? { contributedCatalogParsers: contributedParsers.parsersByFormat }
             : {}),
-        });
+        }));
         if (contributionRetired()) return contributionUnavailable();
         if (fallback.status === 'success') {
           const observedAt = now();

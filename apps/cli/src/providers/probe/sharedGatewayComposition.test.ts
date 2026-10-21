@@ -247,8 +247,9 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
       try {
         pauseTarget = true;
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        const caller = new AbortController();
         let settled = false;
-        const pending = prepareDaemonProviderLaunch({ options: { ...options, machineId: peerMachineId },
+        const pending = prepareDaemonProviderLaunch({ signal: caller.signal, options: { ...options, machineId: peerMachineId },
           effectiveBackendTarget: options.backendTarget, catalogAgentId: fixture.agentId, modelSelection,
           profileEnvironmentVariables: {}, daemonSpawnHooks: null, persistedProviderBinding: null, normalizedExistingSessionId: '',
           pluginRuntimeLease: createSpawnPluginRuntimeLease(launchResourceScope), launchResourceScope,
@@ -258,15 +259,16 @@ it('admits signed-out Agent Sessions through the probed local gateway and chosen
         }).then(result => { settled = true; return result; });
         await entered;
         await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs);
-        const settledAtDeadline = settled;
-        const withdrawnAtDeadline = targetSignal?.aborted;
-        releaseTarget();
+        // Session admission follows its caller's lifetime, not the endpoint
+        // probe budget. Cancellation must still settle a stalled Home read.
+        expect(settled).toBe(false);
+        expect(targetSignal?.aborted).toBe(false);
+        caller.abort();
         const result = await pending;
-        expect(settledAtDeadline).toBe(true);
-        expect(withdrawnAtDeadline).toBe(true);
-        expect(result).toMatchObject({ ok: false, result: { errorDetail: { providerError: { code: 'provider_endpoint_unavailable' } } } });
+        expect(targetSignal?.aborted).toBe(true);
+        expect(result).toMatchObject({ ok: false, result: { errorDetail: { providerError: { code: 'provider_catalog_unavailable' } } } });
         expect(logs.mock.calls).toContainEqual(['[PROVIDER] Spawn authorization phase', expect.objectContaining({
-          phase: 'purpose_bindings', status: 'failed', reason: 'deadline', connectionId: 'run-gateway', machineId: peerMachineId,
+          phase: 'purpose_bindings', status: 'failed', reason: 'cancelled', connectionId: 'run-gateway', machineId: peerMachineId,
         })]);
       } finally { releaseTarget(); vi.useRealTimers(); logs.mockRestore(); }
     } finally { redaction.close(); await launchResourceScope.release(); await fixture.cleanup(); }

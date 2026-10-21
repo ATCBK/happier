@@ -35,6 +35,9 @@ import { createMockSession } from '@/testkit/backends/sessionFixtures';
 import { bindApiSessionSocketPairMock, createApiSessionSocketStub, createSessionRuntimeActivityHomeStub, createSessionTranscriptHomeStub, resolveApiSessionSocketDefaultAck } from '@/testkit/backends/apiSessionSocketHarness';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
+import { registerMachineProviderRpcHandlers } from '@/api/machine/rpcHandlers.providers';
+import { createLegacyProfileMigrationRpcServices } from '@/providers/migrations/rpc';
+import type { RpcOperationDiagnostics } from '@/api/rpc/types';
 
 const transport = vi.hoisted(() => ({ call: vi.fn<typeof callExactMachineRpc>() }));
 const socketBoundary = vi.hoisted(() => ({ io: vi.fn() }));
@@ -47,6 +50,7 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); resetActiveAccountSe
 it.each(['admission', 'pre-launch'] as const)('keeps a requester Home outage retryable at %s instead of reporting changed authorization', phase =>
   withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-home-outage-' }, async ({ homeDir }) => {
     let unavailable = phase === 'admission';
+    let injectOutage = true;
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
       controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true,
       resolveAccountTarget: async target => {
@@ -59,51 +63,119 @@ it.each(['admission', 'pre-launch'] as const)('keeps a requester Home outage ret
       },
     });
     try {
+      const resolveSharedGateway = createMachineSharedProviderGatewayResolver({ machineId: fixture.machineId,
+        readAccountId: () => 'account', readOrigin: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }) });
       const services = createRuntimeProviderServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
         registry: fixture.contributes, featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => fixture.snapshot,
         resolveManagedPurposeBindingIntent: fixture.gateway!.purposeBindingOwner.resolveBindingIntent,
-        managedCatalogRuntime: createProviderManagedCatalogRuntimePort({ happyHomeDir: homeDir, acquireRegistryLease: async () => {
+        resolveSharedGateway,
+        managedCatalogRuntime: createProviderManagedCatalogRuntimePort({ happyHomeDir: homeDir, resolveSharedGateway, acquireRegistryLease: async () => {
           const lease = fixture.gateway!.controller.tryAcquireRuntimeRegistry();
           if (!lease) throw new Error('Expected Gateway registry');
-          unavailable = true;
+          if (injectOutage) unavailable = true;
           return lease;
         } }),
       });
       const request = { connectionId: 'run-gateway', machineId: fixture.machineId };
-      expect(await services.probe(request)).toMatchObject({ status: 'error', error: {
+      expect(DaemonProviderProbeResponseV1Schema.parse(await services.probe(request))).toMatchObject({ status: 'error', error: {
         code: 'provider_catalog_unavailable', retryable: true, action: 'retry',
       } });
+      injectOutage = false;
+      unavailable = false;
+      const diagnostics = vi.fn<(value: RpcOperationDiagnostics) => void>();
+      const recovered = DaemonProviderProbeResponseV1Schema.parse(await services.probe(request, 'manual_refresh', {
+        reportOperationDiagnostics: diagnostics,
+      }));
+      expect(recovered, JSON.stringify(recovered)).toMatchObject({ status: 'success' });
+      const completed = diagnostics.mock.calls.at(-1)?.[0];
+      expect(completed).not.toHaveProperty('failedPhase');
+      expect(completed?.phaseTimingsMs).toEqual(expect.arrayContaining(
+        ['catalog', 'purpose_bindings', 'pre_effect_revalidation', 'managed_runtime', 'catalog_dispatch'].map(phase =>
+          expect.objectContaining({ phase, startedAtMs: expect.any(Number), finishedAtMs: expect.any(Number), durationMs: expect.any(Number) })),
+      ));
+      for (const timing of completed?.phaseTimingsMs ?? []) {
+        expect(timing.durationMs).toBe(timing.finishedAtMs - timing.startedAtMs);
+        expect(timing.durationMs).toBeGreaterThanOrEqual(0);
+      }
     } finally { await fixture.cleanup(); }
   }));
 
-it('reports unavailable catalog preparation rather than an endpoint outage when Home admission spends the operation budget', () =>
+it.each([
+  { phase: 'purpose_bindings', local: false },
+  { phase: 'pre_effect_revalidation', local: false },
+  { phase: 'managed_runtime', local: false },
+  { phase: 'purpose_bindings', local: true },
+] as const)(
+  'identifies $phase when the saved probe deadline expires on the existing RPC completion line (local=$local)', ({ phase, local }) =>
   withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-deadline-' }, async ({ homeDir }) => {
     let entered = () => {};
     let release = () => {};
     const targetEntered = new Promise<void>(resolve => { entered = resolve; });
     const targetReleased = new Promise<void>(resolve => { release = resolve; });
+    let targetReads = 0;
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
       controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true,
       resolveAccountTarget: async (target, signal) => {
-        entered(); await targetReleased; signal.throwIfAborted();
+        targetReads += 1;
+        if (phase === 'purpose_bindings' || phase === 'pre_effect_revalidation' && targetReads > 1) {
+          entered(); await targetReleased; signal.throwIfAborted();
+        }
         return target.kind === 'account' ? { account: target.account, displayName: 'Upstream' } : null;
       },
     });
     let pending: Promise<unknown> | undefined;
     try {
+      const resolveSharedGateway = createMachineSharedProviderGatewayResolver({ machineId: fixture.machineId,
+        readAccountId: () => 'account', readOrigin: async () => {
+          // Home descriptor transport during managed consumer establishment.
+          // The real runtime, registry and pre-effect revalidation remain composed.
+          if (phase === 'managed_runtime') {
+            entered(); await targetReleased;
+            throw new Error('Fixture Home read retired');
+          }
+          return { serverIdentityId: 'home', machineId: fixture.machineId };
+        } });
       const services = createRuntimeProviderServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
         registry: fixture.contributes, featureGate: { isEnabled: () => true }, getAccountSettingsSnapshot: () => fixture.snapshot,
         resolveManagedPurposeBindingIntent: fixture.gateway!.purposeBindingOwner.resolveBindingIntent,
+        resolveSharedGateway,
+        managedCatalogRuntime: createProviderManagedCatalogRuntimePort({ happyHomeDir: homeDir, resolveSharedGateway, acquireRegistryLease: async () => {
+          const lease = fixture.gateway!.controller.tryAcquireRuntimeRegistry();
+          if (!lease) throw new Error('Expected Gateway registry');
+          return lease;
+        } }),
       });
+      const logs = vi.fn();
+      const rpc = new RpcHandlerManager({ scopePrefix: fixture.machineId, encryptionMode: 'plain', logger: logs });
+      registerMachineProviderRpcHandlers({ rpcHandlerManager: rpc, machineId: fixture.machineId,
+        featureGate: { isEnabled: () => true }, services: {
+          ...services,
+          ...createRuntimeProviderConnectionServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+            credentials: { token: 'fixture-token', encryption: null }, featureGate: { isEnabled: () => true },
+            runtimeSummary: services.summary }),
+          ...createRuntimeProviderModelManagementServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+            featureGate: { isEnabled: () => true }, modelSettingsMutation: async () => { throw new Error('No model mutation'); } }),
+          ...createLegacyProfileMigrationRpcServices({ credentials: { token: 'fixture-token', encryption: null } }),
+          probe: (request, waiter) => services.probe(request, 'manual_refresh', waiter),
+        } });
       vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
-      pending = services.probe({ connectionId: 'run-gateway', machineId: fixture.machineId });
-      await targetEntered;
+      const request = { connectionId: 'run-gateway', machineId: fixture.machineId };
+      pending = local ? rpc.invokeLocal(RPC_METHODS.DAEMON_PROVIDERS_PROBE, request)
+        : rpc.handleRequest({ method: `${fixture.machineId}:${RPC_METHODS.DAEMON_PROVIDERS_PROBE}`, params: request });
+      await Promise.race([targetEntered, pending.then(result => { throw new Error(`Probe settled before the boundary: ${JSON.stringify(result)}`); })]);
       await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 1);
       expect(await pending).toMatchObject({ status: 'error', error: {
         code: 'provider_catalog_unavailable', retryable: true, action: 'retry',
       } });
+      expect(logs).toHaveBeenCalledWith('[RPC] Request completed', expect.objectContaining({
+        method: RPC_METHODS.DAEMON_PROVIDERS_PROBE, failedPhase: phase, causeCode: 'deadline',
+        phaseDurationsMs: expect.objectContaining({ [phase]: expect.any(Number) }),
+        phaseTimingsMs: expect.arrayContaining([expect.objectContaining({ phase,
+          startedAtMs: expect.any(Number), finishedAtMs: expect.any(Number), durationMs: expect.any(Number) })]),
+      }));
+      expect(JSON.stringify(logs.mock.calls)).not.toMatch(/fixture-token|upstream-account|run-gateway/);
     } finally {
-      release(); await pending; vi.useRealTimers(); await fixture.cleanup();
+      release(); vi.useRealTimers(); await pending; await fixture.cleanup();
     }
   }));
 
