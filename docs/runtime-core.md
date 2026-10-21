@@ -2050,6 +2050,15 @@ semantic refusals and exceptions share the server's structured ACK phase/cause
 diagnostic, without input content.
 This adds no timer or durable delivery history across a host restart.
 
+In 0.3 development source, content-free Account changes reach context-only input
+through the Session client's existing changes-feed recovery owner. It wakes the
+consumer for changes to that destination Session or its access, including Follow
+destination invalidation and workflow origin delivery. Unrelated Account writes
+leave the context consumer parked when the feed identifies the changed entities.
+An unavailable feed, pruned cursor, full page or disabled changes sync retains
+conservative re-observation. Exact destination broadcasts, reconnects and Execution
+Run worker waiters retain their existing wake paths.
+
 Quiet originals represented in a natural input retain their own Pending identities.
 The host's exact-input acceptance binding records only the originals selected by
 final Follow preparation, plus required returned-answer context. One primary

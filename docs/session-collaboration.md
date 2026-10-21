@@ -794,6 +794,14 @@ facts describe who asked and who posted; they do not prove the Account or creden
 by a separate outward operation. Reply custody without that exact operation actor leaves
 the result's “using” identity unknown.
 
+In development source, CLI input attribution and Discussion reply-return markers
+use the canonical Home identity from the existing feature observation of their
+bound server origin. A local CLI routing profile is not a portable Home identity.
+Unavailable observations retain retryable input custody; a ready legacy Home
+without the capability can still deliver ordinary input without fabricating
+attribution. Previously settled protected attribution is preserved, not relabelled;
+this correction does not rewrite historical messages or signed approvals.
+
 Account-placed agent Actions use the existing authenticated Discussion publisher. Active
 Agent publication retains the current Session publisher and its admission witness. In
 development source, a person's approved post/reply instead reopens the actual executing
