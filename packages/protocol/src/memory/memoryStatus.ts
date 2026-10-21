@@ -58,6 +58,18 @@ export const MemoryWorkerStatusV1Schema = lazyZodSchema(() => z.looseObject({
     lastInventoryAtMs: z._default(z.nullable(z.number().check(z.int(), z.nonnegative())), null),
     currentSessionId: z._default(z.nullable(z.string().check(z.minLength(1))), null),
     currentPhase: z._default(z.nullable(z.string().check(z.minLength(1))), null),
+    /** Optional read diagnostics, projected from the incumbent operation set and cursors. */
+    activeOperations: z.optional(z.array(z.strictObject({
+      kind: z.enum(['transcript', 'documents']),
+      sessionIds: z.array(z.string().check(z.minLength(1))),
+    }))),
+    sessionProgress: z.optional(z.array(z.strictObject({
+      sessionId: z.string().check(z.minLength(1)),
+      observedSeq: z.nullable(z.number().check(z.int(), z.nonnegative())),
+      /** Checked/excluded inventory frontier; absent for the hints lane. */
+      checkedSeq: z.nullable(z.number().check(z.int(), z.nonnegative())),
+      indexedSeq: z.number().check(z.int(), z.nonnegative()),
+    }))),
   }));
 export type MemoryWorkerStatusV1 = z.infer<typeof MemoryWorkerStatusV1Schema>;
 

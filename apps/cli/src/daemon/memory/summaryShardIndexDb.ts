@@ -72,7 +72,7 @@ export type SummaryShardIndexDbHandle = Readonly<{
     createdAtCutoffMs?: number;
   }>) => boolean;
   rewindSessionCursor: (args: Readonly<{ sessionId: string; lane: 'hints' | 'deep'; seq: number }>) => void;
-  getSessionCursors: (args: Readonly<{ sessionId: string; nowMs: number }>) => Readonly<{
+  getSessionCursors: (args: Readonly<{ sessionId: string; nowMs: number; readOnly?: boolean }>) => Readonly<{
     lastObservedSeq: number;
     lastHintedSeq: number;
     lastDeepIndexedSeq: number;
@@ -530,7 +530,7 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
       const value = typeof row?.maxSeqTo === 'number' && Number.isFinite(row.maxSeqTo) ? Math.trunc(row.maxSeqTo) : 0;
       return Math.max(0, value);
     },
-    getSessionCursors: ({ sessionId, nowMs }) => {
+    getSessionCursors: ({ sessionId, nowMs, readOnly }) => {
       const id = String(sessionId ?? '').trim();
       const now = Number.isFinite(nowMs) ? Math.max(0, Math.trunc(nowMs)) : 0;
       if (!id) {
@@ -542,7 +542,7 @@ export function openSummaryShardIndexDb(args: Readonly<{ dbPath: string }>): Sum
           nextDeepEligibleAtMs: 0,
         };
       }
-      ensureCursorStmt.run(id, now);
+      if (!readOnly) ensureCursorStmt.run(id, now);
       const row = getCursorStmt.get(id) as any;
       return {
         lastObservedSeq: typeof row?.lastObservedSeq === 'number' ? Math.max(0, Math.trunc(row.lastObservedSeq)) : 0,

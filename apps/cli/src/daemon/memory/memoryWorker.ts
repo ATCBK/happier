@@ -3,7 +3,7 @@ import { rm } from 'node:fs/promises';
 
 import { INSTALLABLE_KEYS } from '@happier-dev/protocol/installables/codexAcp';
 import type { MemoryExternalTranscriptSourceV1 } from '@happier-dev/protocol/memory/memorySearch';
-import type { MemoryIndexSourceStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
+import type { MemoryIndexSourceStatusV1, MemoryWorkerStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import type { AgentExternalSessionsTranscriptPage } from '@happier-dev/plugin-sdk/sessions/external';
 import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 
@@ -111,13 +111,7 @@ export type MemoryWorkerHandle = Readonly<{
   getSettings: () => MemorySettingsV1;
   getEmbeddingsDiagnostics: () => OperationalMemoryEmbeddingsDiagnostics;
   resolveEmbeddingsProvider?: (signal?: AbortSignal) => Promise<EmbeddingsProviderResolution | null>;
-  getWorkerStatus: () => Readonly<{
-    state: 'disabled' | 'idle' | 'inventorying' | 'indexing' | 'waiting' | 'backoff' | 'error';
-    lastTickAtMs: number | null;
-    lastInventoryAtMs: number | null;
-    currentSessionId: string | null;
-    currentPhase: string | null;
-  }>;
+  getWorkerStatus: () => MemoryWorkerStatusV1;
   getTier1DbPath: () => string | null;
   getIndexSources?: () => readonly MemoryIndexSourceStatusV1[];
   getDeepDbPath: () => string | null;
@@ -929,6 +923,7 @@ export async function startMemoryWorker(params: Readonly<{
 
   const syncEligibleSessions = async (input: Readonly<{
     sessionIds: readonly string[];
+    indexingSessionIds: Set<string>;
     observedSeqBySessionId: ReadonlyMap<string, number>;
     allowInitialBackfillSessionIds: readonly string[];
     forcePolicySnapshot?: boolean;
@@ -998,25 +993,34 @@ export async function startMemoryWorker(params: Readonly<{
         }
       });
     }
-    // Consume only the revisions this turn owns. A revision arriving during
-    // source IO remains queued in this same set for the following worker turn.
-    for (const sessionId of edited) editedSessionIds.delete(sessionId);
-    try {
-      await syncHintsForSessions(admittedSessionIds, {
-        forceSnapshotSessionIds: edited,
-        allowInitialBackfillWhenUninitializedSessionIds: input.allowInitialBackfillSessionIds,
-        initialCursorSeqBySessionId: input.observedSeqBySessionId,
-        ...(input.signal ? { signal: input.signal } : {}),
-      });
-      await syncDeepForSessions(unchanged, input.signal, input.forcePolicySnapshot === true, input.observedSeqBySessionId);
-      const completed = await syncDeepForSessions(edited, input.signal, true, input.observedSeqBySessionId);
-      for (const sessionId of edited) {
-        if (settings.indexMode === 'deep' ? !completed.has(sessionId)
-          : tier1.getSessionCursors({ sessionId, nowMs: Date.now() }).lastHintedSeq === 0) editedSessionIds.add(sessionId);
+    const selected = new Set(settings.indexMode === 'deep' ? [...unchanged, ...edited] : admittedSessionIds);
+    // Admission alone is not transcript work. Remove checked snapshots before
+    // yielding, and retire each completed Session before reading the next one.
+    // A slow sibling must not reopen already established coverage.
+    for (const sessionId of input.indexingSessionIds) {
+      if (!selected.has(sessionId)) input.indexingSessionIds.delete(sessionId);
+    }
+    for (const sessionId of selected) {
+      const isEdited = edited.includes(sessionId);
+      // Consume only the revision this read owns. A later revision stays queued.
+      if (isEdited) editedSessionIds.delete(sessionId);
+      try {
+        await syncHintsForSessions([sessionId], {
+          forceSnapshotSessionIds: isEdited ? [sessionId] : [],
+          allowInitialBackfillWhenUninitializedSessionIds: input.allowInitialBackfillSessionIds,
+          initialCursorSeqBySessionId: input.observedSeqBySessionId,
+          ...(input.signal ? { signal: input.signal } : {}),
+        });
+        const completed = await syncDeepForSessions([sessionId], input.signal,
+          isEdited || input.forcePolicySnapshot === true, input.observedSeqBySessionId);
+        if (isEdited && (settings.indexMode === 'deep' ? !completed.has(sessionId)
+          : tier1.getSessionCursors({ sessionId, nowMs: Date.now() }).lastHintedSeq === 0)) editedSessionIds.add(sessionId);
+      } catch (error) {
+        if (isEdited) editedSessionIds.add(sessionId);
+        throw error;
+      } finally {
+        input.indexingSessionIds.delete(sessionId);
       }
-    } catch (error) {
-      for (const sessionId of edited) editedSessionIds.add(sessionId);
-      throw error;
     }
   };
 
@@ -1048,6 +1052,7 @@ export async function startMemoryWorker(params: Readonly<{
     operation.promise = syncEligibleSessions({
       ...input,
       sessionIds,
+      indexingSessionIds: included,
       signal,
       allowInitialBackfillSessionIds: input.allowInitialBackfillSessionIds.filter((id) => included.has(id)),
       ...(input.forcePolicySnapshot === true ? { forcePolicySnapshot: true } : {}),
@@ -1542,7 +1547,17 @@ export async function startMemoryWorker(params: Readonly<{
     ),
     getEmbeddingsDiagnostics: () => embeddingsDiagnostics,
     resolveEmbeddingsProvider: refreshEmbeddingsDiagnostics,
-    getWorkerStatus: () => workerStatus,
+    getWorkerStatus: () => ({ ...workerStatus,
+      activeOperations: [...activeIndexOperations].map(operation => ({ kind: operation.kind, sessionIds: [...operation.sessionIds] })),
+      sessionProgress: indexesQualified && tier1
+        ? [...new Set([...candidateSessionIds, ...candidateObservedSeqBySessionId.keys(), ...listIndexedSessionIds()])].map(sessionId => {
+          // Status must not acquire the SQLite writer or create a cursor.
+          const cursors = tier1!.getSessionCursors({ sessionId, nowMs: Date.now(), readOnly: true });
+          return { sessionId, observedSeq: candidateObservedSeqBySessionId.get(sessionId) ?? null,
+            checkedSeq: settings.indexMode === 'deep' ? cursors.lastObservedSeq : null,
+            indexedSeq: settings.indexMode === 'deep' ? cursors.lastDeepIndexedSeq : cursors.lastHintedSeq };
+        }) : [],
+    }),
     getIndexSources: () => {
       const sessions: MemoryIndexSourceStatusV1[] = [...new Set([...candidateSessionIds, ...candidateObservedSeqBySessionId.keys(), ...listIndexedSessionIds()])].map(sessionId => {
         const source = { type: 'happier_session' as const, sessionId };
