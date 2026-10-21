@@ -217,8 +217,8 @@ export function SelectionListBody(props: SelectionListBodyProps): React.ReactEle
             <SelectionListOptionPresentationContext.Provider value={props.optionPresentation ?? 'row'}>
                 <SelectionListSelectedMarkContext.Provider
                     value={props.selectionMark === 'none'
-                        || props.multiselectable === true
                         // A card marks itself with its corner overlay; menu rows keep the row marks.
+                        // Every chosen row of a multiple-choice list carries the same check (a fill alone reads as hover).
                         || props.optionPresentation === 'card'
                         ? null
                         : props.selectionMark === 'enter' ? 'enter' : 'check'}

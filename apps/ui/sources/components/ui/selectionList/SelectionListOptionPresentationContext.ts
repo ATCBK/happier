@@ -25,11 +25,11 @@ export const SelectionListOptionPresentationContext =
 
 /**
  * How a row marks itself, published beside the presentation by `SelectionListBody`:
- * - `'check'`: the one current choice of a single-choice list carries a trailing check (the picker
- *   anatomy: fill + check);
+ * - `'check'`: each current choice carries a trailing check (the picker anatomy: fill + check) —
+ *   the one choice of a single-choice list, and every chosen row of a multiple-choice list;
  * - `'enter'`: a command list (⌘K) marks the row the keyboard is on with the ↵ that runs it;
- * - `null`: multiple-choice lists keep their checkbox semantics, card presentation its corner
- *   overlay, and a row rendered outside a body its historical tree.
+ * - `null`: card presentation keeps its corner overlay, rows that draw their own state (`'none'`)
+ *   and a row rendered outside a body keep their own tree.
  */
 export type SelectionListRowMark = 'check' | 'enter' | null;
 export const SelectionListSelectedMarkContext = React.createContext<SelectionListRowMark>(null);

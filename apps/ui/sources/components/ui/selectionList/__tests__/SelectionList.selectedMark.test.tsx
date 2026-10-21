@@ -81,11 +81,15 @@ describe('SelectionList current-choice mark', () => {
         expect(screen.findByTestId('sl:root:option-selected-mark:bot')).toBeFalsy();
     });
 
-    it('leaves multiple-choice lists to their own checkbox semantics', async () => {
+    // A fill alone reads like a hover: every chosen row of a multiple-choice list carries the same check.
+    it('marks every chosen row of a multiple-choice list', async () => {
+        const threeRows: SelectionListStep = { ...rootStep, sections: [{ kind: 'static', id: 'machines', options: [
+            { id: 'macbook', label: 'MacBook Pro' }, { id: 'devbox', label: 'devbox' }, { id: 'nas', label: 'nas' },
+        ] }] };
         const screen = await renderScreen(
             <SelectionList
-                rootStep={rootStep}
-                selection={{ kind: 'multiple', selectedIds: new Set(['macbook']) }}
+                rootStep={threeRows}
+                selection={{ kind: 'multiple', selectedIds: new Set(['macbook', 'nas']) }}
                 onSelect={vi.fn()}
                 onRequestClose={vi.fn()}
                 disableTransitions
@@ -93,7 +97,9 @@ describe('SelectionList current-choice mark', () => {
             />,
         );
 
-        expect(screen.findByTestId('sl:root:option-selected-mark:macbook')).toBeFalsy();
+        expect(screen.findByTestId('sl:root:option-selected-mark:macbook')).toBeTruthy();
+        expect(screen.findByTestId('sl:root:option-selected-mark:nas')).toBeTruthy();
+        expect(screen.findByTestId('sl:root:option-selected-mark:devbox')).toBeFalsy();
     });
 
     it('leaves lists whose rows draw their own selection state unmarked', async () => {

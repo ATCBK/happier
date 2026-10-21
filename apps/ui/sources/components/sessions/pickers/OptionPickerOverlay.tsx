@@ -311,8 +311,8 @@ function OptionTrailingAccessory<TValue>(props: Readonly<{
     selected: boolean;
     /**
      * Whether this accessory draws the current-choice check itself. A single-choice LIST row gets
-     * its check from `SelectionList` (one owner for every picker), so only card presentation and
-     * multiple selection draw it here.
+     * its check from `SelectionList` (one owner for every picker, single or multiple choice), so only
+     * card presentation draws it here.
      */
     drawsSelectionMark: boolean;
     favorite: boolean;
@@ -593,7 +593,7 @@ export function OptionPickerOverlay<TValue = string>(props: OptionPickerOverlayP
                             option={option}
                             valueKey={valueKey}
                             selected={selected}
-                            drawsSelectionMark={props.multiColumn === true || selectedValueKeys !== null}
+                            drawsSelectionMark={props.multiColumn === true}
                             favorite={favorite}
                             canToggleFavorite={canToggleFavorite}
                             optionTestIDPrefix={optionTestIDPrefix}

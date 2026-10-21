@@ -110,6 +110,15 @@ describe('OptionPickerOverlay', () => {
             kind: 'multiple',
             selectedIds: new Set(['model-a', 'model-b']),
         });
+        // The list draws each chosen row's one check; the picker draws no second in list presentation.
+        for (const id of ['model-a', 'model-b']) {
+            expect(screen.findAll((node) => (
+                typeof node.type === 'string'
+                && typeof node.props?.testID === 'string'
+                && node.props.testID.endsWith(`option-selected-mark:${id}`)
+            ))).toHaveLength(1);
+            expect(screen.findAllHostsByTestId(`model-picker-overlay-option-selection-status:${id}`)).toHaveLength(0);
+        }
         await act(async () => {
             screen.findByType(SelectionList).props.onSelect('model-b');
         });
