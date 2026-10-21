@@ -2,7 +2,7 @@ import type { VoicePlaybackStopperRegistrar } from '@/voice/runtime/VoicePlaybac
 import { VoiceLocalTtsSchema } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import { speakWithLocalTtsProvider } from '@/voice/backends/tts/runtime';
 import { patchLocalVoiceState } from '@/voice/local/localVoiceState';
-import { toSpeechText } from '@/voice/output/speechText';
+import { toSpeechText, type SpeechTextContext } from '@/voice/output/speechText';
 
 /**
  * Canonical entry for speaking assistant text in local voice. Normalizes markdown into speakable
@@ -12,12 +12,13 @@ import { toSpeechText } from '@/voice/output/speechText';
  */
 export async function speakAssistantText(params: {
   text: string;
+  speechTextContext?: SpeechTextContext;
   settings: any;
   networkTimeoutMs: number;
   registerPlaybackStopper: VoicePlaybackStopperRegistrar;
   onSpeaking: () => void;
 }): Promise<boolean> {
-  const spoken = toSpeechText(params.text);
+  const spoken = toSpeechText(params.text, params.speechTextContext);
   if (!spoken) return true;
 
   const voice = params.settings?.voice ?? null;

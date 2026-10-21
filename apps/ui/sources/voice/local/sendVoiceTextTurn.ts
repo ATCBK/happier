@@ -1,6 +1,7 @@
 import { sync } from '@/sync/sync';
 import { createTtsChunker, resolveStreamingTtsChunkChars } from '@/voice/output/TtsChunker';
 import { speakAssistantText } from '@/voice/output/speakAssistantText';
+import { createSpeechTextContext, type SpeechTextContext } from '@/voice/output/speechText';
 import { resolveVoiceNetworkTimeoutMs } from '@/voice/runtime/fetchWithTimeout';
 import {
   captureSessionTurnBaseline,
@@ -159,6 +160,7 @@ export async function sendVoiceTextTurn(params: {
     try {
       throwIfAborted();
       const chunker = streamingSpeechEnabled ? createTtsChunker(streamingChunkChars) : null;
+      const streamingSpeechTextContext = chunker ? createSpeechTextContext() : undefined;
       const playbackEpoch = params.playbackController.captureEpoch();
       let queuedChunkCount = 0;
       let chunkPlaybackQueue: Promise<void> = Promise.resolve();
@@ -167,11 +169,12 @@ export async function sendVoiceTextTurn(params: {
 
       // A barge-in advances the playback epoch without aborting the turn, so every reply of this
       // turn (streamed chunks and later tool-round replies) is dropped once the epoch is stale.
-      const speakForThisTurn = async (text: string) => {
+      const speakForThisTurn = async (text: string, speechTextContext?: SpeechTextContext) => {
         if (params.signal?.aborted || speechFailed) return;
         if (!params.playbackController.isEpochCurrent(playbackEpoch)) return;
         const spoken = await speakAssistantText({
           text,
+          speechTextContext,
           settings,
           networkTimeoutMs,
           registerPlaybackStopper: params.playbackController.registerStopper,
@@ -185,7 +188,7 @@ export async function sendVoiceTextTurn(params: {
         const trimmed = chunkText.trim();
         if (!trimmed) return;
         queuedChunkCount += 1;
-        chunkPlaybackQueue = chunkPlaybackQueue.then(() => speakForThisTurn(trimmed));
+        chunkPlaybackQueue = chunkPlaybackQueue.then(() => speakForThisTurn(trimmed, streamingSpeechTextContext));
       };
 
       const sendOptions = chunker

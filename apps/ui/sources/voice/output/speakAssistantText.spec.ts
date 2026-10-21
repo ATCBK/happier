@@ -52,6 +52,7 @@ vi.mock('@/voice/kokoro/runtime/synthesizeKokoroWav', () => ({
 }));
 
 import { speakAssistantText } from '@/voice/output/speakAssistantText';
+import { createTtsChunker } from '@/voice/output/TtsChunker';
 import { getLocalVoiceState, patchLocalVoiceState } from '@/voice/local/localVoiceState';
 
 const fetchMock = vi.fn<(url: string, init?: RequestInit) => Promise<unknown>>();
@@ -117,6 +118,54 @@ async function speak(text: string, tts: Record<string, unknown>, registerPlaybac
 }
 
 describe('speakAssistantText', () => {
+  it.each([
+    [`**${'a'.repeat(29)}**`, 'a'.repeat(29)],
+    [`${'a'.repeat(32)}_count`, `${'a'.repeat(32)}_count`],
+    [`${'a'.repeat(31)}_count`, `${'a'.repeat(31)}_count`],
+    [`${'a'.repeat(31)} _count_`, `${'a'.repeat(31)}count`],
+  ])('preserves delimiter meaning at the streaming hard cut: %s', async (text, expected) => {
+    const chunker = createTtsChunker(32);
+    const speechTextContext = { emphasis: [] };
+    for (const chunk of [...chunker.push(text), ...chunker.flush()]) {
+      await speakAssistantText({
+        text: chunk,
+        speechTextContext,
+        settings: settingsWithTts({ provider: 'device' }),
+        networkTimeoutMs: 15000,
+        registerPlaybackStopper: () => () => {},
+        onSpeaking: () => {},
+      });
+    }
+    expect(speech.speak.mock.calls.map(([spoken]) => spoken).join('')).toBe(expected);
+  });
+
+  it.each(['**', '*', '__', '_', '~~'])('keeps %s emphasis out of speech across streamed chunks without delaying ready prose', async (marker) => {
+    const chunker = createTtsChunker(32);
+    const speechTextContext = { emphasis: [] };
+    const first = 'Hello. This sentence continues inside the same emphasis. ';
+    const last = 'World.';
+    const literals = ' Use *.ts and **/*.ts and file* with max_retry_count and 2 * 3.';
+    const speakChunks = async (chunks: readonly string[]) => {
+      for (const text of chunks) {
+        await speakAssistantText({
+          text,
+          speechTextContext,
+          settings: settingsWithTts({ provider: 'device' }),
+          networkTimeoutMs: 15000,
+          registerPlaybackStopper: () => () => {},
+          onSpeaking: () => {},
+        });
+      }
+    };
+
+    await speakChunks(chunker.push(`${marker}${first}`));
+    expect(speech.speak.mock.calls.length).toBeGreaterThan(0);
+    expect(speech.speak.mock.calls.map(([text]) => text).join(' ')).not.toContain(marker);
+    await speakChunks([...chunker.push(`${last}${marker}${literals}`), ...chunker.flush()]);
+
+    expect(speech.speak.mock.calls.map(([text]) => text).join(' ')).toBe(`${first}${last}${literals}`);
+  });
+
   it('speaks with device speech', async () => {
     await speak('hello', { provider: 'device' });
 

@@ -55,11 +55,23 @@ function isSentenceEndAt(text: string, i: number, atEnd: boolean): boolean {
     return !/^(?:[A-Za-z]\.)+[A-Za-z]$/.test(word);
 }
 
-/** Moves a cut index back so it never separates a UTF-16 surrogate pair. */
+/** Keeps surrogate pairs and emphasis delimiter runs intact at a hard cut. */
 function avoidSurrogateSplit(text: string, index: number): number {
     if (index <= 0 || index >= text.length) return index;
     const code = text.charCodeAt(index);
-    return code >= 0xdc00 && code <= 0xdfff ? index - 1 : index;
+    const end = code >= 0xdc00 && code <= 0xdfff ? index - 1 : index;
+    // Keep an emphasis delimiter together, with its following character available to the
+    // speech normalizer. This also covers a hard cut immediately after an opening delimiter.
+    const marker = /[*_~]/u.test(text[end - 1] ?? '') ? text[end - 1] : text[end];
+    if (marker === '*' || marker === '_' || marker === '~') {
+        let start = end;
+        while (start > 0 && text[start - 1] === marker) start -= 1;
+        // Chunks trim boundary whitespace. Keep literal identifier flanking with the delimiter,
+        // rather than mistaking a leading underscore for emphasis in the next one.
+        if (start > 1 && /\w/u.test(text[start - 1] ?? '')) start -= 1;
+        if (start > 0) return start;
+    }
+    return end;
 }
 
 function isCuttable(text: string, index: number, fences: FenceLayout): boolean {

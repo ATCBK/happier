@@ -8,8 +8,8 @@ describe('toSpeechText', () => {
   });
 
   it('turns markdown emphasis, headings, lists, quotes, and inline code into plain words', () => {
-    expect(toSpeechText('## Summary\n- **Fixed** the `parser` bug\n> _really_ fixed')).toBe(
-      'Summary\nFixed the parser bug\nreally fixed',
+    expect(toSpeechText('## Summary\n- **Fixed** the `parser` bug\n> _really_ fixed and **file.ts** with *file.ts*.')).toBe(
+      'Summary\nFixed the parser bug\nreally fixed and file.ts with file.ts.',
     );
   });
 
@@ -21,8 +21,9 @@ describe('toSpeechText', () => {
     expect(toSpeechText('Open https://www.github.com/happier-dev/happier/pull/1 now.')).toBe('Open github.com now.');
   });
 
-  it('does not alter snake_case identifiers or arithmetic', () => {
-    expect(toSpeechText('Set max_retry_count to 2 * 3.')).toBe('Set max_retry_count to 2 * 3.');
+  it('does not alter identifiers, arithmetic, or file globs', () => {
+    const text = 'Set max_retry_count to 2 * 3, 2*3, 2 *3, and 2* 3. Use *.ts and file* and **/*.ts and *test.ts.';
+    expect(toSpeechText(text)).toBe(text);
   });
 
   it('returns an empty string when the text is only code', () => {

@@ -1,5 +1,40 @@
 import { readFenceLayout } from '@/voice/output/codeFences';
 
+/** Only the five emphasis delimiters can be retained; no assistant text is buffered. */
+export type SpeechTextContext = { emphasis: string[]; previousCharacter?: string };
+
+export function createSpeechTextContext(): SpeechTextContext {
+  return { emphasis: [], previousCharacter: '' };
+}
+
+function removeSpeechEmphasis(text: string, context: SpeechTextContext): string {
+  const normalized = text.replace(/\*{1,2}|_{1,2}|~~/g, (marker: string, offset: number) => {
+    const before = text[offset - 1] ?? '';
+    const after = text[offset + marker.length] ?? '';
+    const active = context.emphasis.indexOf(marker);
+    if (marker.startsWith('*')
+      && /\d[ \t]*$/u.test(`${context.previousCharacter ?? ''}${text.slice(0, offset)}`)
+      && /^[ \t]*[+-]?(?:\d|\.\d)/u.test(text.slice(offset + marker.length))) return marker;
+    // Wildcard paths and identifier/operator punctuation are literal speech input.
+    const token = text.slice(offset + marker.length).match(/^\S*/u)?.[0] ?? '';
+    const closesInToken = token.replace(/[.,!?;:)]+$/u, '').endsWith(marker);
+    const glob = marker.startsWith('*') && !closesInToken
+      && (/^(?:[/\\]|\.[\p{L}\p{N}_?*\[])/u.test(token) || (marker === '*' && /\.[\p{L}\p{N}_]/u.test(token)));
+    if (glob) return marker;
+    if (active !== -1 && !/\s/u.test(before)) {
+      context.emphasis.splice(active, 1);
+      return '';
+    }
+    if (active === -1 && !/\w/u.test(before) && after && !/\s/u.test(after)) {
+      context.emphasis.push(marker);
+      return '';
+    }
+    return marker;
+  });
+  context.previousCharacter = text.at(-1) ?? context.previousCharacter;
+  return normalized;
+}
+
 function removeFencedCode(text: string): string {
   const { closed, openStart } = readFenceLayout(text);
   let out = '';
@@ -16,7 +51,7 @@ function removeFencedCode(text: string): string {
  * spoken-text normalizer for every TTS provider; it runs at the canonical speech entry
  * (`speakAssistantText`).
  */
-export function toSpeechText(markdown: string): string {
+export function toSpeechText(markdown: string, context = createSpeechTextContext()): string {
   let text = markdown.replace(/\r\n?/g, '\n');
 
   // Code is not read aloud; an unterminated fence drops the rest of the text.
@@ -39,11 +74,8 @@ export function toSpeechText(markdown: string): string {
   text = text.replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, '');
   text = text.replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
 
-  // Emphasis markers wrapping words (keeps snake_case and arithmetic intact).
-  text = text.replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2');
-  text = text.replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?!\w)/g, '$1$2');
-  text = text.replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1$2');
-  text = text.replace(/~~(?=\S)([\s\S]*?\S)~~/g, '$1');
+  // Retain only delimiter context when one emphasis span crosses streamed chunks.
+  text = removeSpeechEmphasis(text, context);
 
   return text
     .split('\n')
