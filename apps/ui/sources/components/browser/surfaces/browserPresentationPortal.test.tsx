@@ -53,6 +53,35 @@ function PortalBinder(props: Readonly<{ slotId: string; label: string }>): React
 }
 
 describe('browser presentation portal (UX-6 webview-above-router)', () => {
+    it('does not republish unchanged content or layout echoes and still delivers changed content', async () => {
+        const store = createRetainedPresentationSlotsStore();
+        let presses = '';
+        const firstBody = <Text testID="current-retained-action" onPress={() => { presses = 'first'; }}>First</Text>;
+        const nextBody = <Text testID="current-retained-action" onPress={() => { presses = 'next'; }}>Next</Text>;
+        function Harness(props: Readonly<{ x: number; body: React.ReactNode }>) {
+            return <RetainedPresentationSlotsProvider store={store}>
+                <RetainedPresentationSlotBinder slotId="unchanged" enabled
+                    windowGeometry={{ x: props.x, y: 20, width: 358, height: 224 }}
+                    transition={{ durationMs: 200, easingCss: 'linear', properties: 'transform' }}>
+                    {props.body}
+                </RetainedPresentationSlotBinder>
+            </RetainedPresentationSlotsProvider>;
+        }
+        const screen = await renderScreen(<Harness x={16} body={firstBody} />);
+        try {
+            const initial = store.getPortalSnapshot();
+            await screen.update(<Harness x={16} body={firstBody} />);
+            expect(store.getPortalSnapshot() === initial).toBe(true);
+            await screen.update(<Harness x={32} body={firstBody} />);
+            expect(store.getPortalSnapshot()[0]?.geometry?.x).toBe(32);
+            expect(store.getPortalSnapshot()[0]?.node).toBe(initial[0]?.node);
+            await screen.update(<Harness x={32} body={nextBody} />);
+            await screen.pressByTestIdAsync('current-retained-action');
+            expect(presses).toBe('next');
+            expect(store.getPortalSnapshot()[0]?.node).not.toBe(initial[0]?.node);
+        } finally { await screen.unmount(); }
+    });
+
     it('keeps the last measured placement while a replacement visible binder awaits nonzero geometry', async () => {
         const store = createRetainedPresentationSlotsStore();
         let measured = { x: 20, y: 30, width: 640, height: 400 };

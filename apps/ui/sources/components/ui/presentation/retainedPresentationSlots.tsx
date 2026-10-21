@@ -397,11 +397,13 @@ export function RetainedPresentationSlotBinder(props: RetainedPresentationSlotBi
     }, [measure]);
     const retainedDestination = useRetainedDestinationNode(props.children);
     const retainedFocus = useRetainedPluginSurfaceFocusNode(retainedDestination);
-    const focusEligibleChildren = (
+    // Placement echoes must not mint a new content tree and notify the portal's subscribers.
+    // Captured scope and actual child changes still replace their respective wrappers.
+    const focusEligibleChildren = React.useMemo(() => (
         <PluginSurfaceFocusEligibilityProvider active={props.visible ?? true}>
             {retainedFocus}
         </PluginSurfaceFocusEligibilityProvider>
-    );
+    ), [props.visible, retainedFocus]);
 
     const { portalActive } = useRetainedPresentationSlot({
         slotId: props.slotId,

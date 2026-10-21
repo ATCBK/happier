@@ -29,7 +29,8 @@ function RetainedFocusEligibility(props: Readonly<{
 /** Transfer the existing layout's facts into its portal; parking can only withdraw them. */
 export function useRetainedPluginSurfaceFocusNode(children: React.ReactNode): React.ReactElement {
     const captured = React.useContext(PluginSurfaceFocusEligibilityContext);
-    return <RetainedFocusEligibility captured={captured}>{children}</RetainedFocusEligibility>;
+    return React.useMemo(() => <RetainedFocusEligibility captured={captured}>{children}</RetainedFocusEligibility>,
+        [captured, children]);
 }
 
 /**

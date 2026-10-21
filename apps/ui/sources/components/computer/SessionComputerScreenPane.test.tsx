@@ -224,6 +224,7 @@ describe('SessionComputerScreenPane retained source', () => {
         const { useRouter } = await import('expo-router');
         const store = createRetainedPresentationSlotsStore();
         const destinationId = 'computer-destination';
+        const standaloneDestination = { kind: 'session', params: { id: sessionId, serverId: home.id } } as const;
         const routeParams = { id: sessionId, serverId: home.id,
             ...serializeSessionPaneUrlState({ details: { kind: 'computerScreen', machineId } }) };
         let workspace = createWorkspaceState({ id: destinationId, target: { kind: 'session', params: routeParams }, pinned: false, preview: false });
@@ -237,6 +238,14 @@ describe('SessionComputerScreenPane retained source', () => {
         const subscribeRoute = (listener: () => void) => { routeListeners.add(listener); return () => { routeListeners.delete(listener); }; };
         const readRoute = () => workspace;
         let recordContinuity: (() => void) | null = null;
+        let commitPhase = '';
+        let phaseCommits = 0;
+        const recordCommit = () => {
+            if (commitPhase !== phase) { commitPhase = phase; phaseCommits = 0; }
+            // Test-only escape from an effect cycle that otherwise starves the runner timeout.
+            if (++phaseCommits > 100) throw new Error(`Computer presentation never settles: ${phase}`);
+            recordContinuity?.();
+        };
         const slotId = `${createSessionPaneScopeId(sessionId, home.id, destinationId)}:viewer:computer`;
         let viewerController: SessionViewerController | null = null;
         function PresenceOwner() {
@@ -310,9 +319,9 @@ describe('SessionComputerScreenPane retained source', () => {
             // the destination's open viewer state, not an absent controller.
             const presentation = details ? <DetailsAccount>{viewerPresentation}</DetailsAccount> : viewerPresentation;
             // Match production: retention and destination authority outlive responsive shells.
-            return <React.Profiler id="computer-route-continuity" onRender={() => recordContinuity?.()}><RetainedPresentationSlotsProvider store={store}>
+            return <React.Profiler id="computer-route-continuity" onRender={recordCommit}><RetainedPresentationSlotsProvider store={store}>
                 <DestinationInstanceHost tabId={routed ? destination.id : destinationId}
-                    ref={routed ? destination.target : { kind: 'session', params: { id: sessionId, serverId: home.id } }}
+                    ref={routed ? destination.target : standaloneDestination}
                     pathname={routed ? hrefForDestinationRef([], destination.target)!.split('?')[0] : `/session/${sessionId}`} focused visible navigation={navigation}>
                 <SourceAccount borrowDestination={routed || props.shell === 'phone' || props.shell === 'wide'}>
                     {presentation}
@@ -415,6 +424,10 @@ describe('SessionComputerScreenPane retained source', () => {
             };
             phase = 'checking the retained source slot';
             expect(store.getPortalSnapshot().map(entry => entry.slotId)).toEqual([slotId]);
+            const settledSlot = store.getPortalSnapshot();
+            await screen.update(<Harness shell="pane" />);
+            await flushHookEffects();
+            expect(store.getPortalSnapshot() === settledSlot).toBe(true);
             phase = 'projecting the actual phone breakpoint through the Computer Details route';
             await act(async () => {
                 viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' });
@@ -490,9 +503,11 @@ describe('SessionComputerScreenPane retained source', () => {
             expect(body.props.targetTitle).toBe('Retained window');
             expect(store.getPortalSnapshot().map(entry => entry.slotId)).toEqual([slotId]);
             expect(activeStreams.size).toBe(1);
-            phase = 'streaming through the actual 390-to-1440 viewer placements';
+            phase = 'streaming through the actual 390-to-2200 viewer placements';
             const startsBeforeViewports = streamStarts;
             await act(async () => { viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' }); });
+            viewport.width = 390;
+            viewport.height = 844;
             await reflow('phone');
             expect(screen.findByTestId('session-viewer-sticky')).not.toBeNull();
             expect(picture()).toEqual(lastPicture);
@@ -507,6 +522,8 @@ describe('SessionComputerScreenPane retained source', () => {
                 expect(entry?.geometry?.height ?? 0).toBeGreaterThan(0);
             };
             placedPicture();
+            viewport.width = 2200;
+            viewport.height = 1200;
             await reflow('wide');
             expect(screen.findByTestId('session-viewer-host')).not.toBeNull();
             expect(picture()).toEqual(lastPicture);
@@ -514,12 +531,14 @@ describe('SessionComputerScreenPane retained source', () => {
             // The wide frame deliberately waits for layout before it binds its body.
             await act(async () => {
                 invokeTestInstanceHandler(screen.findByTestId('session-viewer-host')!, 'onLayout', {
-                    nativeEvent: { layout: { x: 0, y: 0, width: 1440, height: 900 } },
+                    nativeEvent: { layout: { x: 0, y: 0, width: 2200, height: 1200 } },
                 });
             });
             await waitForMountedStream();
             expect(picture()).toEqual(lastPicture);
             expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
+            viewport.width = 390;
+            viewport.height = 844;
             await reflow('phone');
             placeholderSize = { width: 0, height: 0 };
             await measurePicture();

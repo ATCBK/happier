@@ -45,7 +45,8 @@ function RetainedDestinationContext(props: Readonly<{
 /** Retain this destination's identity/navigation without mounting a second destination or chrome. */
 export function useRetainedDestinationNode(children: React.ReactNode): React.ReactElement {
     const captured = React.useContext(DestinationInstanceContext);
-    return <RetainedDestinationContext captured={captured}>{children}</RetainedDestinationContext>;
+    return React.useMemo(() => <RetainedDestinationContext captured={captured}>{children}</RetainedDestinationContext>,
+        [captured, children]);
 }
 
 export function DestinationInstanceHost(props: Readonly<{

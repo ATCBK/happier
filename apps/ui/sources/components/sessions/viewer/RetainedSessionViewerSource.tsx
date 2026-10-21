@@ -54,16 +54,19 @@ export function RetainedSessionViewerSource(props: Readonly<{
     // temporary Account reader must neither restart it on handoff nor retire it when the panel leaves.
     // Null is an unresolved destination authority; only an absent destination uses standalone custody.
     const lifetime = destinationLifetime === undefined ? suppliedLifetime : destinationLifetime;
+    const retainedBody = React.useMemo(() => lifetime ? (
+        <AccountBoundSource key={serverAccountScopeKeySuffix(lifetime.scope)} slotId={props.slotId} lifetime={lifetime}>
+            <SessionViewerControllerScope controller={viewerController}>
+                {props.children}
+            </SessionViewerControllerScope>
+        </AccountBoundSource>
+    ) : null, [lifetime, props.children, props.slotId, viewerController]);
     // A nullable pane Home can use only its admitted Session authority, never ambient selection.
     if (!lifetime?.isCurrent() || (props.serverId !== null
         && !areServerProfileIdentifiersEquivalent(lifetime.scope.serverId, props.serverId))) return null;
     return <RetainedPresentationSlotBinder slotId={props.slotId} visible={props.visible}
         windowGeometry={props.windowGeometry} transition={props.transition}
         inputPassthrough={props.inputPassthrough}>
-        <AccountBoundSource key={serverAccountScopeKeySuffix(lifetime.scope)} slotId={props.slotId} lifetime={lifetime}>
-            <SessionViewerControllerScope controller={viewerController}>
-                {props.children}
-            </SessionViewerControllerScope>
-        </AccountBoundSource>
+        {retainedBody}
     </RetainedPresentationSlotBinder>;
 }
