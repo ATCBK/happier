@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import Fastify from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { Server, Socket } from 'socket.io';
+import type { Socket } from 'socket.io';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { StopSessionResultSchema } from '@happier-dev/protocol/sessionStop';
@@ -30,7 +30,7 @@ import { accountRoutes } from '../../../../server/sources/app/api/routes/account
 import { createSessionPublisherPresence } from '../../../../server/sources/app/presence/sessionPublisherPresence';
 import { registerSocketRpcHandlers } from '../../../../server/sources/app/api/socket/rpc/registerSocketRpcHandlers';
 import { machineUpdateHandler } from '../../../../server/sources/app/api/socket/machineUpdateHandler';
-import { createFakeSocket, triggerSocketHandler } from '../../../../server/sources/app/api/testkit/socketHarness';
+import { createFakeSocket, createSocketRoomDiscoveryHarness, triggerSocketHandler } from '../../../../server/sources/app/api/testkit/socketHarness';
 import { createSessionActionTarget } from '../../../../ui/sources/components/sessions/actions/sessionActionContext';
 import { createSessionFixture } from '../../../../ui/sources/dev/testkit/fixtures/sessionFixtures';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -180,7 +180,7 @@ describe.skipIf(process.platform !== 'linux')('plain runner Stop retirement thro
                     const acknowledgement = projectMachineRpcTransportAcknowledgement({ method: RPC_METHODS.STOP_SESSION, result });
                     return acknowledgement ? { v: 1, result, acknowledgement } : result;
                 } }) };
-            const io = { in: () => ({ timeout: () => ({ fetchSockets: async () => [target] }), fetchSockets: async () => [target] }) } as unknown as Server;
+            const io = createSocketRoomDiscoveryHarness(async () => [target]);
             const caller = createFakeSocket({ id: 'caller', data: { clientType: 'user-scoped', authAuthority: 'present_user',
                 authTokenAuthenticationEvidence: [] } });
             registerSocketRpcHandlers({ userId: account.id, socket: caller as unknown as Socket, io, sessionPublisherPresence: presence });

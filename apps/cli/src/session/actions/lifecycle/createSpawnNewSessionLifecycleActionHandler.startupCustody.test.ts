@@ -4,11 +4,13 @@ import { projectCurrentAgentSessionView } from '@happier-dev/agents';
 
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
-import { awaitTrackedRunnerAgentSessionOpen } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
+import { awaitTrackedRunnerAgentSessionOpen, recordTrackedRunnerAgentSessionOpenAttestation } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
+import { createStopSession } from '@/daemon/sessions/stopSession';
+import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import type { TrackedSession } from '@/daemon/types';
 import { SPAWN_SESSION_ERROR_CODES, type SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import { AgentRuntimeDaemonServiceRequestV1Schema, AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { createMachineSessionSpawnRpcHandler } from '../sessionLifecycleActions';
 
@@ -17,6 +19,74 @@ import { runRequesterSessionLifecycle } from './requesterSessionLifecycle';
 import { attemptNativeForkOpen } from './fork/attemptNativeForkOpen';
 
 describe('Session startup operation custody', () => {
+  it.each(['current', 'replacement', 'changed-birth', 'stop-throws', 'stop-incomplete'] as const)(
+    'retires only the attested refused generation and preserves its typed failure (%s)', async scenario => {
+    const sessionId = 'refused-child';
+    const operations = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
+      generateOperationId: () => 'refused-startup', supportsCoreCancellation: () => true });
+    const scope = { machineId: 'machine', accountId: 'account' };
+    const binding = createAgentSessionRunnerFactoryBinding({ v: 1, pluginId: 'acme.plugin', pluginVersion: '1.0.0',
+      agentId: 'acme-agent', localAgentId: 'acme-agent', sourceCustody: { kind: 'managed',
+        immutableGenerationId: `sha256:${'1'.repeat(64)}`, installSource: 'localPath' },
+      locator: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+      normalizedModulePath: '/immutable/acme/runtime.mjs', loadMode: 'immutable-js' });
+    const runner = { pid: 41001001, processStartTimeMs: 1000, processCommandHash: 'a'.repeat(64) };
+    const refused: TrackedSession = { ...runner, startedBy: 'daemon', happySessionId: sessionId,
+      runnerAgentSourceCustodyV1: binding.sourceCustody,
+      agentRuntimeDaemonServiceAuthorityFilePath: '/fixture/refused-authority' };
+    const replacement: TrackedSession = { pid: 41001002, processStartTimeMs: 2000, startedBy: 'daemon',
+      happySessionId: sessionId, agentRuntimeDaemonServiceAuthorityFilePath: '/fixture/replacement-authority' };
+    const tracked = new Map([[refused.pid, refused]]);
+    const selected: number[][] = [];
+    const retired: number[] = [];
+    const physical = createStopSession({ pidToTrackedSession: tracked,
+      // OS liveness/exit and terminal files are boundaries; no actual PID is signalled.
+      areTrackedRunnersExited: async ({ trackedPids }) => { selected.push([...trackedPids]); return true; },
+      waitForTrackedRunnersExit: async ({ trackedPids }) => {
+        expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'running' });
+        retired.push(...trackedPids);
+        return true;
+      },
+      readHostAttachmentState: async () => ({ status: 'absent' }), readTerminalAttachmentInfo: async () => null,
+    });
+    const handler = createMachineSessionSpawnRpcHandler({ handlers: {
+      spawnSession: async () => {
+        // External Agent producer -> exact private parser -> host recorder -> waiter.
+        const request = AgentRuntimeDaemonServiceRequestV1Schema.parse({ v: 1,
+          context: { token: 'a'.repeat(43), sessionId }, operation: { kind: 'session.open.attest',
+            requestId: 'refused-open', phase: 'refused', request: { kind: 'create', sessionId, cwd: '/project' },
+            providerSessionId: null } });
+        if (request.operation.kind !== 'session.open.attest') throw new Error('Wrong attestation operation');
+        expect(await recordTrackedRunnerAgentSessionOpenAttestation({ tracked: refused, retainedAgent: binding, runner,
+          ...request.operation, updateMarker: async () => true })).not.toBeNull();
+        return { type: 'success', sessionId };
+      },
+      stopSession: scenario === 'stop-throws' ? async () => { throw new Error('OS Stop failed'); }
+        : scenario === 'stop-incomplete' ? async () => ({ status: 'incomplete', reason: 'runner_signal_incomplete' })
+        : physical,
+    }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => {
+      const rows = [...tracked.values()];
+      // Replacement registration or a mis-bound mutable birth occurs after observation, before Stop selection.
+      if (scenario === 'replacement') queueMicrotask(() => { tracked.clear(); tracked.set(replacement.pid, replacement); });
+      if (scenario === 'changed-birth') queueMicrotask(() => { refused.processStartTimeMs = 2000; });
+      return rows;
+    } }) });
+    try {
+      await operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'refused' },
+        execute: async operation => ({ ok: true, result: await handler({ directory: '/project',
+          agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+        }, { signal: operation.signal, localActionContext: operation }) }) });
+      await operations.handlers.getV2({ operationId: 'refused-startup', waitForTerminal: true });
+      expect(operations.store.get(scope, 'refused-startup')).toMatchObject({ state: 'failed',
+        error: { errorCode: 'native_agent_session_mode_unavailable' } });
+      expect(retired).toEqual(scenario === 'current' ? [refused.pid] : []);
+      expect(selected).toEqual(scenario === 'current' ? [[refused.pid]] : []);
+      expect(replacement.stopRequestedAtMs).toBeUndefined();
+      if (scenario !== 'current') expect(refused.stopRequestedAtMs).toBeUndefined();
+      else expect(refused.stopRequestedAtMs).toBeTypeOf('number');
+    } finally { operations.runner.cancel(scope, 'refused-startup'); }
+  });
+
   it('joins refused-child retirement before failing the original startup operation', async () => {
     const operations = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
       generateOperationId: () => 'refused-startup', supportsCoreCancellation: () => true });

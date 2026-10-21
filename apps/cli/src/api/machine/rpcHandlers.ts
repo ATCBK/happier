@@ -28,6 +28,7 @@ import {
   StopSessionResultSchema,
   type StopSessionResult,
 } from '@/daemon/sessions/stopSessionContract';
+import type { StopSessionOptions } from '@/daemon/sessions/stopSession';
 import type {
   DaemonExecutionRunEntry,
   DaemonExecutionRunProcessInfo,
@@ -252,7 +253,7 @@ export type MachineRpcHandlers = {
     | { status: 'completed'; sessionId: string }
     | { status: 'pending' | 'not_found' | 'unsupported' | 'failed' }
   >;
-  stopSession: (sessionId: string) => Promise<MachineStopSessionHandlerResult>;
+  stopSession: (sessionId: string, options?: StopSessionOptions) => Promise<MachineStopSessionHandlerResult>;
   isSessionActive?: (sessionId: string) => Promise<boolean>;
   loadLocalSessionMetadata?: (sessionId: string) => Promise<SessionHandoffLocalMetadataSource | null>;
   requestShutdown: () => void;

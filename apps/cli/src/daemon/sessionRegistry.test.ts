@@ -212,7 +212,10 @@ describe('sessionRegistry', () => {
     const reattached = buildTrackedSessionFromMarker({ marker: restored, startedByFallback: 'daemon', reattachedFromDiskMarker: true });
     await expect(awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [reattached],
       sessionId: request.sessionId, timeoutMs: 0 })).resolves.toEqual(phase === 'refused'
-      ? { status: 'refused', code: 'native_agent_session_mode_unavailable' } : { status: 'opened', request });
+      ? { status: 'refused', code: 'native_agent_session_mode_unavailable', expectedTrackedRunner: {
+          tracked: reattached, sessionRunnerPid: reattached.sessionRunnerPid,
+          processStartTimeMs: reattached.processStartTimeMs, processCommandHash: reattached.processCommandHash,
+        } } : { status: 'opened', request });
   });
 
   it('persists only the stable runner daemon-service authority path', async () => {

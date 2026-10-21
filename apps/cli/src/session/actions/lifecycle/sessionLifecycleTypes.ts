@@ -5,7 +5,8 @@ import type {
 import type { runReplaySummaryForDialog } from '@/session/replay/summary/runReplaySummaryForDialog';
 import type { BackendExecutionSurfaces } from '@/agent/runtime/registry/engineRegistry';
 import type { StopSessionResult } from '@/daemon/sessions/stopSessionContract';
-import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { StopSessionOptions } from '@/daemon/sessions/stopSession';
+import type { awaitTrackedRunnerAgentSessionOpen } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 
 export type SessionLifecycleActionHandler = (
@@ -16,7 +17,7 @@ export type SessionLifecycleActionHandler = (
 
 export type SessionLifecycleMachineHandlers = Readonly<{
     spawnSession: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
-    stopSession: (sessionId: string) => Promise<StopSessionResult | boolean>;
+    stopSession: (sessionId: string, options?: StopSessionOptions) => Promise<StopSessionResult | boolean>;
 }>;
 
 export type SessionLifecycleMachineDeps = Readonly<{
@@ -28,10 +29,5 @@ export type SessionLifecycleMachineDeps = Readonly<{
         sessionId: string;
         timeoutMs?: number | null;
         signal?: AbortSignal;
-    }>) => Promise<
-        | Readonly<{ status: 'opened'; request: AgentSessionOpenRequest }>
-        | Readonly<{ status: 'refused'; code: 'native_agent_session_mode_unavailable' }>
-        | Readonly<{ status: 'runner_exited' }>
-        | Readonly<{ status: 'timeout' }>
-    >;
+    }>) => ReturnType<typeof awaitTrackedRunnerAgentSessionOpen>;
 }>;

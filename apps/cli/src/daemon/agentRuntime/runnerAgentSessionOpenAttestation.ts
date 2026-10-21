@@ -16,6 +16,7 @@ import type {
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
 import type { TrackedSession } from '@/daemon/types';
+import type { ExactTrackedRunnerStopWitness } from '@/daemon/sessions/stopSession';
 import { resolveTrackedSessionRunnerIdentity } from '@/daemon/sessions/sessionReportCorrelation';
 import {
   updateSessionMarkerAgentRuntimeSessionOpenAttestation,
@@ -144,7 +145,11 @@ export async function awaitTrackedRunnerAgentSessionOpen(
     }>
   /** A runner that had registered this child exited before committing its open. */
   | Readonly<{ status: 'runner_exited' }>
-  | Readonly<{ status: 'refused'; code: 'native_agent_session_mode_unavailable' }>
+  | Readonly<{
+      status: 'refused';
+      code: 'native_agent_session_mode_unavailable';
+      expectedTrackedRunner: ExactTrackedRunnerStopWitness;
+    }>
   | Readonly<{ status: 'timeout' }>
 > {
   const sessionId = input.sessionId.trim();
@@ -176,7 +181,18 @@ export async function awaitTrackedRunnerAgentSessionOpen(
           tracked.agentRuntimeDaemonServiceAuthorityFilePath,
         )
       ) {
-        if (attestation.refusal) return Object.freeze({ status: 'refused' as const, code: attestation.refusal.code });
+        if (attestation.refusal) return Object.freeze({
+          status: 'refused' as const,
+          code: attestation.refusal.code,
+          // Keep the observed generation, including copied birth identity. The
+          // tracked object can be replaced or rebound before Stop selects it.
+          expectedTrackedRunner: Object.freeze({
+            tracked,
+            sessionRunnerPid: tracked.sessionRunnerPid,
+            processStartTimeMs: tracked.processStartTimeMs,
+            processCommandHash: tracked.processCommandHash,
+          }),
+        });
         return Object.freeze({
           status: 'opened' as const,
           request: attestation.request,

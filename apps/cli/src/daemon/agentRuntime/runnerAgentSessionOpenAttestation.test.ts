@@ -316,7 +316,10 @@ describe('runner-owned Agent session-open attestation', () => {
       refusal: { code: 'native_agent_session_mode_unavailable' } } : null);
     expect(await awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked],
       sessionId: 'session-child', timeoutMs: 0 })).toEqual(mode === 'current'
-      ? { status: 'refused', code: 'native_agent_session_mode_unavailable' } : { status: 'timeout' });
+      ? { status: 'refused', code: 'native_agent_session_mode_unavailable', expectedTrackedRunner: {
+          tracked, sessionRunnerPid: tracked.sessionRunnerPid,
+          processStartTimeMs: tracked.processStartTimeMs, processCommandHash: tracked.processCommandHash,
+        } } : { status: 'timeout' });
   });
 
   it('fails closed before marker mutation on session or resume-provider mismatch', async () => {

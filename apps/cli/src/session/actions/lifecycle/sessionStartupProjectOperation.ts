@@ -48,7 +48,9 @@ export function createSessionStartupProjectSpawn(input: Readonly<{
             // which also suppresses respawn, before releasing startup custody.
             // Native-fork children retain their existing fork cleanup scope above.
             try {
-                const stopped = await input.stopSession!(result.sessionId);
+                const stopped = await input.stopSession!(result.sessionId, {
+                    expectedTrackedRunner: opened.expectedTrackedRunner,
+                });
                 if (stopped !== true && (typeof stopped === 'boolean' || stopped.status !== 'stopped')) {
                     logger.infoFile('[SESSION STARTUP] Refused runner retirement incomplete', {
                         sessionId: result.sessionId, stopResult: stopped,
