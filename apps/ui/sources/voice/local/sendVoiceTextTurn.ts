@@ -258,13 +258,15 @@ export async function sendVoiceTextTurn(params: {
   }
 
   const baseline = captureSessionTurnBaseline(sessionId);
+  let submittedUserLocalId: string | undefined;
 
   patchLocalVoiceState({ status: 'sending' });
   try {
-    await sync.submitMessage(sessionId, userText, undefined, undefined, {
+    const submission = await sync.submitMessage(sessionId, userText, undefined, undefined, {
       callerSurface: 'voice_turn',
       forceImmediate: true,
     });
+    submittedUserLocalId = submission?.localId;
     voiceActivityController.appendActionExecuted(sessionId, adapterId, 'unknown', `Sent to session: ${userText.slice(0, 200)}`);
   } catch (error) {
     voiceActivityController.appendError(sessionId, adapterId, 'send_failed', error instanceof Error ? error.message : 'send_failed');
@@ -278,9 +280,9 @@ export async function sendVoiceTextTurn(params: {
     return;
   }
 
-  // Speak the final reply of the turn this message started; the wait is bounded by the session's
+  // Speak the final reply of the turn admitting this message; the wait is bounded by the session's
   // turn lifecycle and by the voice turn's abort signal (cancel / hang-up), not by a fixed timeout.
-  const assistantText = await waitForTurnFinalAssistantText({ sessionId, baseline, signal: params.signal });
+  const assistantText = await waitForTurnFinalAssistantText({ sessionId, baseline, signal: params.signal, submittedUserLocalId });
   if (params.signal?.aborted) return;
   if (!assistantText) {
     patchLocalVoiceState({ status: 'idle', sessionId, error: null });

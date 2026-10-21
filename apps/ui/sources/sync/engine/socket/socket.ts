@@ -371,8 +371,10 @@ function shouldHydrateTurnsProjectionForSessionUpdate(params: Readonly<{
 }>): boolean {
     if (!params.fullContentConsumerActive) return false;
     if (!params.updateBody || typeof params.updateBody !== 'object') return false;
-    const latestTurnStatus = (params.updateBody as { latestTurnStatus?: unknown }).latestTurnStatus;
-    return isTerminalTurnStatus(latestTurnStatus);
+    const update = params.updateBody as { latestTurnStatus?: unknown; rollbackEligibleTurnStarts?: unknown };
+    // Rollback projection updates carry committed end anchors, including for an older turn
+    // while the latest turn is already running. Full-content consumers need that turn too.
+    return isTerminalTurnStatus(update.latestTurnStatus) || Array.isArray(update.rollbackEligibleTurnStarts);
 }
 
 function buildCacheOnlySessionProjectionPatch(params: Readonly<{

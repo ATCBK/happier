@@ -1,5 +1,6 @@
 import { storage } from '@/sync/domains/state/storage';
 import { readStoredSessionMessages } from '@/sync/domains/messages/readStoredSessionMessages';
+import type { Message } from '@/sync/domains/messages/messageTypes';
 import {
   deriveSessionRuntimePresentationState,
   isTerminalPrimaryTurnStatus,
@@ -8,9 +9,8 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { settleReceivedSessionMessages } from '@/sync/engine/sessions/sessionMessageMaterializationBarrier';
 
 /**
- * Turn-projection fields of the session at baseline time. Only a terminal status on a turn that is
- * different from the baseline one ends the wait, so a turn already running at baseline (or a
- * keep-alive refresh of `thinkingAt`) is never mistaken for the turn our message started.
+ * Legacy turn-projection fields captured at baseline. Producers with transcript anchors instead
+ * bind the submitted input to its own turn, which may already be running at baseline.
  */
 type SessionTurnMarker = Readonly<{
   latestTurnId: string | null;
@@ -27,13 +27,12 @@ export type SessionTurnBaseline = AssistantTextMessageBaseline & Readonly<{
   turnMarker: SessionTurnMarker | null;
 }>;
 
-function getSessionMessages(sessionId: string): any[] {
-  return readStoredSessionMessages(storage.getState(), sessionId) as any[];
+function getSessionMessages(sessionId: string): Message[] {
+  return readStoredSessionMessages(storage.getState(), sessionId);
 }
 
 function getSession(sessionId: string): Session | null {
-  const sessions = (storage.getState() as any)?.sessions;
-  return (sessions?.[sessionId] ?? null) as Session | null;
+  return storage.getState().sessions[sessionId] ?? null;
 }
 
 function readSessionTurnMarker(session: Session | null): SessionTurnMarker | null {
@@ -64,8 +63,7 @@ export function captureAssistantTextMessageBaseline(sessionId: string): Assistan
     baselineCount: messages.length,
     baselineIds: new Set<string>(
       messages
-        .map((message: any) => message?.id)
-        .filter((messageId: any): messageId is string => typeof messageId === 'string'),
+        .map((message) => message.id),
     ),
   };
 }
@@ -174,12 +172,30 @@ export async function waitForNextAssistantTextMessage(
  * message, in order. Earlier texts are progress narration before tool work, or replies to an earlier
  * user message (the turn our message started begins after it), not the answer.
  */
-export function collectFinalAssistantReplySinceBaseline(sessionId: string, baseline: AssistantTextMessageBaseline): string | null {
+type SubmittedReplyBoundary = Readonly<{ localId: string; endSeqInclusive?: number | null }>;
+
+export function collectFinalAssistantReplySinceBaseline(
+  sessionId: string,
+  baseline: AssistantTextMessageBaseline,
+  submitted?: SubmittedReplyBoundary,
+): string | null {
   const messages = getSessionMessages(sessionId);
-  const startIndex = messages.length >= baseline.baselineCount ? baseline.baselineCount : 0;
+  const submittedIndex = submitted
+    ? messages.findIndex((message) => message.kind === 'user-text' && message.localId === submitted.localId)
+    : -1;
+  if (submitted && submittedIndex < 0) return null;
+  const startIndex = submitted
+    ? submittedIndex + 1
+    : messages.length >= baseline.baselineCount ? baseline.baselineCount : 0;
+  const submittedSeq = submittedIndex >= 0 ? messages[submittedIndex]?.seq : undefined;
   let trailing: string[] = [];
   for (let idx = startIndex; idx < messages.length; idx += 1) {
     const message = messages[idx];
+    if (typeof submitted?.endSeqInclusive === 'number' && (
+      typeof message.seq !== 'number'
+      || message.seq > submitted.endSeqInclusive
+      || (typeof submittedSeq === 'number' && message.seq <= submittedSeq)
+    )) continue;
     if (typeof message?.id === 'string' && baseline.baselineIds.has(message.id)) continue;
     if (message?.kind === 'tool-call' || message?.kind === 'user-text') {
       trailing = [];
@@ -199,7 +215,10 @@ function hasTurnProjection(marker: SessionTurnMarker | null): boolean {
 /**
  * Resolves with the final assistant reply of the turn started after `baseline`.
  *
- * With the session turn projection, the turn has ended when a terminal `latestTurnStatus` is
+ * Input transcript anchors bind the submitted message to its actual turn, including steering into
+ * a turn already running at baseline. A different client's latest turn never supplies this binding.
+ * Producers without input anchors retain the historical latest-turn/working compatibility path.
+ * With that legacy session turn projection, the turn has ended when a terminal `latestTurnStatus` is
  * reported for a turn other than the one current at baseline. Sessions from producers without the
  * projection fall back to the canonical runtime `working` signal (observed working, then idle).
  * Before reading the reply, messages this client already received are settled through the
@@ -211,11 +230,47 @@ export async function waitForTurnFinalAssistantText(params: Readonly<{
   sessionId: string;
   baseline: SessionTurnBaseline;
   signal?: AbortSignal;
+  submittedUserLocalId?: string;
 }>): Promise<string | null> {
-  const { sessionId, baseline, signal } = params;
+  const { sessionId, baseline, signal, submittedUserLocalId } = params;
   let sawWorking = false;
+  let submittedReply: SubmittedReplyBoundary | undefined;
   const ended = await waitForStorageCondition(() => {
     const session = getSession(sessionId);
+    if (submittedUserLocalId) {
+      const submitted = getSessionMessages(sessionId).find((message) => message.kind === 'user-text' && message.localId === submittedUserLocalId);
+      // Submission acknowledgement and transcript materialization are independent. Do not speak
+      // another client's reply while our admitted input is still pending or being materialized.
+      if (!submitted) return { done: false };
+      const turns = session?.sessionTurns?.turns ?? [];
+      const submittedSeq = submitted.seq;
+      const boundTurn = typeof submittedSeq === 'number' ? turns.find((turn) => (
+        turn.transcriptAnchors?.startUserMessageSeq === submittedSeq
+        || turn.transcriptAnchors?.userMessageSeqs?.includes(submittedSeq)
+      )) : undefined;
+      if (boundTurn) {
+        if (!isTerminalPrimaryTurnStatus(boundTurn.status)) return { done: false };
+        const endSeqInclusive = boundTurn.transcriptAnchors?.endSeqInclusive;
+        // Codex publishes completion before its final transcript anchors. A terminal status
+        // alone cannot bound the reply; cancellation/failure may never publish an end anchor.
+        if (typeof endSeqInclusive !== 'number') {
+          return boundTurn.status === 'completed' ? { done: false } : { done: true, value: null };
+        }
+        submittedReply = { localId: submittedUserLocalId, endSeqInclusive };
+        return { done: true, value: 'ended' };
+      }
+      if (session?.sessionTurns && session.latestTurnId
+        && session.sessionTurns.latestTurnId !== session.latestTurnId) {
+        return { done: false };
+      }
+      const latestTurn = turns.find(turn => turn.turnId === session?.latestTurnId);
+      // A session can change producers. Historical input anchors do not establish support
+      // in the current producer; its latest turn owns that compatibility decision.
+      if (latestTurn?.transcriptAnchors?.startUserMessageSeq !== undefined || Boolean(latestTurn?.transcriptAnchors?.userMessageSeqs?.length)) {
+        return { done: false };
+      }
+      submittedReply = { localId: submittedUserLocalId };
+    }
     if (!session) {
       return collectFinalAssistantReplySinceBaseline(sessionId, baseline) ? { done: true, value: 'ended' } : { done: false };
     }
@@ -237,5 +292,5 @@ export async function waitForTurnFinalAssistantText(params: Readonly<{
 
   await settleReceivedSessionMessages(sessionId);
   if (signal?.aborted) return null;
-  return collectFinalAssistantReplySinceBaseline(sessionId, baseline);
+  return collectFinalAssistantReplySinceBaseline(sessionId, baseline, submittedReply);
 }
