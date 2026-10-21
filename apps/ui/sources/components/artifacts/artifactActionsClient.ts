@@ -13,7 +13,7 @@ import { getStorage, useActiveServerAccountScope } from '@/sync/domains/state/st
 import { createFrontDoorActionExecute, type FrontDoorActionExecute, type UiActionOperation } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { writeDiscussionSessionDraft } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
-import type { DiscussionMentionSpan } from '@/components/discussions/discussionComposerDocument';
+import type { ComposerStructuredInputMention } from '@/components/sessions/agentInput/structuredInputMentions';
 import { seedDiscussionDraft } from '@/components/discussions/useDiscussionDraft';
 
 /**
@@ -113,7 +113,7 @@ export function createArtifactActionsClient(scope: ServerAccountScope,
          * Prepare (never send) a reply to a suggested edit in its own thread: the thread's draft gets the
          * addressed request unless it already holds the person's words, and the thread opens replying to it.
          */
-        beginProposalReply: (input: Readonly<{ proposalRef: DiscussionMessageRefV1; text: string; mentions: readonly DiscussionMentionSpan[] }>) => {
+        beginProposalReply: (input: Readonly<{ proposalRef: DiscussionMessageRefV1; text: string; mentions: readonly ComposerStructuredInputMention[] }>) => {
             const { discussionId } = input.proposalRef.discussion;
             seedDiscussionDraft({ scope, address: { kind: 'discussion', discussionId }, text: input.text, mentions: input.mentions });
             return buildDiscussionRouteHref({ target: { kind: 'discussion', address: { serverId: scope.serverId }, discussionId,

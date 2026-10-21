@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -22,8 +23,8 @@ export function NewSessionLaunchPendingPreview(props: Readonly<{
         return null;
     }
 
-    const promptText = props.launchAttempt.prompt.displayText.trim()
-        || props.launchAttempt.prompt.prompt.trim();
+    const promptText = readableMessageText(props.launchAttempt.prompt.displayText.trim()
+        || props.launchAttempt.prompt.prompt.trim());
 
     return (
         <View

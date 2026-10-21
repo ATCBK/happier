@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 import { useShallow } from 'zustand/react/shallow';
 
 import { storage } from '@/sync/domains/state/storage';
@@ -26,7 +27,7 @@ function selectCompanionSessionAddress(candidates: readonly SessionActivityAtten
 }
 
 function normalizeMessageSubtitleText(value: string | null | undefined): string | null {
-    const text = value?.replace(/\s+/g, ' ').trim() ?? '';
+    const text = readableMessageText(value ?? '').replace(/\s+/g, ' ').trim();
     return text.length > 0 ? text : null;
 }
 

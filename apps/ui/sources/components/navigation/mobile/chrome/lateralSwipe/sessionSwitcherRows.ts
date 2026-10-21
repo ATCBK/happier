@@ -9,6 +9,7 @@
  */
 
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 
 import type { IconName } from '@/components/ui/icons/Icon';
 import { readStoredSessionMessagesForAddress } from '@/sync/domains/messages/readStoredSessionMessagesForAddress';
@@ -116,7 +117,7 @@ function readExcerpt(state: RowsState, address: SessionAddress): string | null {
     for (let index = messages.length - 1, seen = 0; index >= 0 && seen < 8; index -= 1, seen += 1) {
         const message = messages[index];
         if ((message?.kind === 'agent-text' || message?.kind === 'user-text') && typeof message.text === 'string') {
-            const text = message.text.replace(/\s+/g, ' ').trim();
+            const text = readableMessageText(message.text).replace(/\s+/g, ' ').trim();
             if (text) return text;
         }
     }

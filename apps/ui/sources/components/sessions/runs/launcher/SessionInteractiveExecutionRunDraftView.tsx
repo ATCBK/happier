@@ -3,6 +3,7 @@ import { resolveExecutionRunImplicitRoleIdV1 } from '@happier-dev/protocol/promp
 import { resolveExecutionRunNotifyParentDefaultV1 } from '@happier-dev/protocol/execution/runs/executionRunNotifyParentDefaultV1';
 import type { DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import * as React from 'react';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 import { useHomeAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
 import { Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -513,7 +514,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         try {
             let runId = runIdRef.current;
             if (!runId) {
-                const intentTitle = resolveExecutionRunIntentTitle(submission.displayText ?? submission.text);
+                const intentTitle = resolveExecutionRunIntentTitle(readableMessageText(submission.displayText ?? submission.text));
                 startedTitleRef.current = intentTitle;
                 const launchOrigin = props.launchOrigin
                     ? { ...props.launchOrigin, draftCorrelationId: identity.correlationId }

@@ -1,4 +1,5 @@
 import type { Message } from "@happier-dev/session-core/messages";
+import { prepareTranscriptMessageBody } from '@/components/sessions/transcript/messageDisplayText';
 import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePrivacySettings';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { redactVoicePathLikeData, redactVoicePathLikeString } from '@/voice/shared/redactVoicePathLikeData';
@@ -88,11 +89,13 @@ export function toRoleAndText(
   prefs: Readonly<{ shareToolNames: boolean; shareToolArgs?: boolean; shareFilePaths?: boolean }>,
 ): { role: 'assistant' | 'user' | 'tool' | null; text: string | null } {
   if (message.kind === 'agent-text') {
-    const text = prefs.shareFilePaths === false ? redactVoicePathLikeString(message.text) : message.text;
+    const readable = prepareTranscriptMessageBody(message).text ?? '';
+    const text = prefs.shareFilePaths === false ? redactVoicePathLikeString(readable) : readable;
     return { role: 'assistant', text };
   }
   if (message.kind === 'user-text') {
-    const text = prefs.shareFilePaths === false ? redactVoicePathLikeString(message.text) : message.text;
+    const readable = prepareTranscriptMessageBody(message).text ?? '';
+    const text = prefs.shareFilePaths === false ? redactVoicePathLikeString(readable) : readable;
     return { role: 'user', text };
   }
   if (message.kind === 'tool-call') {

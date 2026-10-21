@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -96,7 +97,7 @@ export function UsageResetStartSection(
         messages.map((message) => (
           <ResetStartRow
             key={message.id}
-            title={message.displayText ?? message.text}
+            title={readableMessageText(message.displayText ?? message.text, message.rawRecord?.meta)}
             localId={message.localId!}
             authorityCurrent
             options={resolved.options}
