@@ -38,6 +38,7 @@ export type ComposerIngressActionInputById = {
                         pluginId: string;
                         localId: string;
                     } | undefined;
+                    composerReferenceTrigger?: '@' | '$' | '/' | undefined;
                 };
             } | {
                 kind: 'reference.remove';
@@ -186,6 +187,10 @@ export type ComposerIngressActionInputById = {
                         sizeBytes: number;
                         sha256: string;
                     };
+                } | undefined;
+                mentionAt?: {
+                    start: number;
+                    end: number;
                 } | undefined;
             } | {
                 kind: 'attachment.update';

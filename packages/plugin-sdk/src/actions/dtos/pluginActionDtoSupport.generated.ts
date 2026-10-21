@@ -9355,6 +9355,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                     pluginId: string;
                     localId: string;
                 } | undefined;
+                composerReferenceTrigger?: '/' | '@' | '$' | undefined;
             };
         } | {
             kind: 'reference.remove';
@@ -9503,6 +9504,10 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                     sizeBytes: number;
                     sha256: string;
                 };
+            } | undefined;
+            mentionAt?: {
+                start: number;
+                end: number;
             } | undefined;
         } | {
             kind: 'attachment.update';
@@ -9779,6 +9784,7 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                         pluginId: string;
                         localId: string;
                     } | undefined;
+                    composerReferenceTrigger?: '/' | '@' | '$' | undefined;
                 };
             } | {
                 kind: 'reference.remove';
@@ -9927,6 +9933,10 @@ export type PluginDeclarativeNodeV2 = PluginDeclarativeDataNodeV1 | Readonly<{
                         sizeBytes: number;
                         sha256: string;
                     };
+                } | undefined;
+                mentionAt?: {
+                    start: number;
+                    end: number;
                 } | undefined;
             } | {
                 kind: 'attachment.update';
@@ -10300,6 +10310,7 @@ export type PluginDeclarativeComposerApplyEffectV1 = {
                 pluginId: string;
                 localId: string;
             } | undefined;
+            composerReferenceTrigger?: '/' | '@' | '$' | undefined;
         };
     } | {
         kind: 'reference.remove';
@@ -10449,6 +10460,10 @@ export type PluginDeclarativeComposerApplyEffectV1 = {
                 sha256: string;
             };
         } | undefined;
+        mentionAt?: {
+            start: number;
+            end: number;
+        } | undefined;
     } | {
         kind: 'attachment.update';
         instanceId: string;
@@ -10511,6 +10526,7 @@ export type PluginDeclarativeActionNodeV2 = {
                     pluginId: string;
                     localId: string;
                 } | undefined;
+                composerReferenceTrigger?: '/' | '@' | '$' | undefined;
             };
         } | {
             kind: 'reference.remove';
@@ -10659,6 +10675,10 @@ export type PluginDeclarativeActionNodeV2 = {
                     sizeBytes: number;
                     sha256: string;
                 };
+            } | undefined;
+            mentionAt?: {
+                start: number;
+                end: number;
             } | undefined;
         } | {
             kind: 'attachment.update';
@@ -10990,6 +11010,7 @@ export type PluginDeclarativeActionPanelNodeV2 = {
                         pluginId: string;
                         localId: string;
                     } | undefined;
+                    composerReferenceTrigger?: '/' | '@' | '$' | undefined;
                 };
             } | {
                 kind: 'reference.remove';
@@ -11138,6 +11159,10 @@ export type PluginDeclarativeActionPanelNodeV2 = {
                         sizeBytes: number;
                         sha256: string;
                     };
+                } | undefined;
+                mentionAt?: {
+                    start: number;
+                    end: number;
                 } | undefined;
             } | {
                 kind: 'attachment.update';
