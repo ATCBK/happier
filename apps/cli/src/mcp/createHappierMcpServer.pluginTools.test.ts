@@ -78,8 +78,8 @@ describe('createHappierMcpServer plugin tools', () => {
       let bridge: Awaited<ReturnType<typeof resolveRunnerMcpServers>> | undefined;
       try {
         // No profile credential exists: the admitted requester context owns currentness.
-        // Reload 40 used the standalone stored-profile check for this requester
-        // too. Exercise that refusal without removing the live custody fence.
+        // A standalone caller requires a stored sign-in. The requester bridge
+        // below must use its admitted custody and still refuse later retirement.
         const storedProfileRuntime = createHappierMcpServer(session, {
           credentials, accountSettings: snapshot.settings, pluginToolCatalog: [],
         });
