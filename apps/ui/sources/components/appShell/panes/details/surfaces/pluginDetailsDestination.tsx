@@ -189,7 +189,7 @@ export type PluginDetailsViewerChoice = Readonly<{
 }>;
 
 /**
- * A bounded candidate model owned by the file-opening owner. This Details
+ * A candidate model owned by the file-opening owner. This Details
  * module owns only the fixed chrome and pending interaction state; it neither
  * ranks viewers nor persists a preference or a file identity.
  */

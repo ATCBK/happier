@@ -15,7 +15,6 @@ import type {
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 
 import {
-    MAX_WORKSPACE_FILE_VIEWER_CHOICES,
     isWorkspaceFileOpenableContentViewerEligible,
     resolveWorkspaceFileViewer,
     resolveWorkspaceFileViewerCandidates,
@@ -313,8 +312,12 @@ describe('resolveWorkspaceFileViewer', () => {
         ]);
     });
 
-    it('bounds chooser candidates while keeping a retained unavailable preference visible', () => {
+    it('offers all eleven matching installed viewers and allows each to be selected with a retained unavailable preference', () => {
         const preferenceKey = serializeOpenableContentPreferenceSelectorV1({ kind: 'mime', value: 'text/markdown' });
+        const availablePluginViewers = Array.from({ length: 11 }, (_, index) => candidate({
+            pluginId: `plugin.${String(index).padStart(2, '0')}`,
+            viewer: viewer({ id: 'markdown', mimeTypes: ['text/markdown'] }),
+        }));
         const model = resolveWorkspaceFileViewerChoiceModel({
             metadata: markdownMetadata,
             preferences: preferences({
@@ -324,13 +327,10 @@ describe('resolveWorkspaceFileViewer', () => {
                     contributionLocalId: 'markdown',
                 },
             }),
-            availablePluginViewers: Array.from({ length: MAX_WORKSPACE_FILE_VIEWER_CHOICES + 3 }, (_, index) => candidate({
-                pluginId: `plugin.${String(index).padStart(2, '0')}`,
-                viewer: viewer({ id: 'markdown', mimeTypes: ['text/markdown'] }),
-            })),
+            availablePluginViewers,
         });
 
-        expect(model.choices).toHaveLength(MAX_WORKSPACE_FILE_VIEWER_CHOICES);
+        expect(model.choices).toHaveLength(13);
         expect(model.choices.slice(0, 2)).toMatchObject([
             { kind: 'builtin' },
             {
@@ -338,6 +338,28 @@ describe('resolveWorkspaceFileViewer', () => {
                 preference: { pluginId: 'plugin.retired', contributionLocalId: 'markdown' },
             },
         ]);
+        expect(model.choices.slice(2)).toMatchObject(availablePluginViewers.map((available) => ({
+            kind: 'plugin',
+            candidate: { identity: { pluginId: available.entry.pluginId, localId: 'markdown' } },
+        })));
+        for (const available of availablePluginViewers) {
+            const selectedModel = resolveWorkspaceFileViewerChoiceModel({
+                metadata: markdownMetadata,
+                availablePluginViewers,
+                preferences: preferences({
+                    [preferenceKey]: {
+                        kind: 'plugin',
+                        pluginId: available.entry.pluginId,
+                        contributionLocalId: 'markdown',
+                    },
+                }),
+            });
+            expect(selectedModel.selected).toMatchObject({
+                kind: 'plugin',
+                candidate: { identity: { pluginId: available.entry.pluginId, localId: 'markdown' } },
+            });
+            expect(selectedModel.choices.filter((choice) => choice.kind === 'plugin')).toHaveLength(11);
+        }
     });
 
     it('projects a current workspace viewer as a semantic details candidate without host capability data', () => {

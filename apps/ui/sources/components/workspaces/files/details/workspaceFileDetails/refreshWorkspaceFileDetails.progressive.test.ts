@@ -132,11 +132,16 @@ describe('file details independent acquisition', () => {
         expect(transport.diff).not.toHaveBeenCalled();
         expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
     });
-    it('does not apply text preview limits to an opaque binary that has no preview', async () => {
+    it('does not apply text preview limits to an opaque binary that has no preview, and names its size (lab FV2b)', async () => {
         transport.stat.mockResolvedValue({ success: true, exists: true, sizeBytes: 12000000 });
         const result = await refreshWorkspaceFileDetails({ ...input, filePath: 'archives/big.zip' });
-        expect(result).toMatchObject({ error: null, fileContent: { isBinary: true } });
-        expect(transport.stat).not.toHaveBeenCalled();
+        // One stat for the identity card's size; never its bytes.
+        expect(result).toMatchObject({ error: null, fileContent: { isBinary: true, binarySizeBytes: 12000000 } });
+        expect(transport.stat).toHaveBeenCalledTimes(1);
+        // A stat that cannot answer leaves the size out; the card still says what the file is.
+        transport.stat.mockResolvedValue({ success: false, error: 'Machine disconnected' });
+        expect(await refreshWorkspaceFileDetails({ ...input, filePath: 'archives/big.zip' }))
+            .toMatchObject({ error: null, fileContent: { isBinary: true, binarySizeBytes: null } });
         expect(transport.diff).not.toHaveBeenCalled();
         expect(workspaceFileDetailsActionBoundary.read).not.toHaveBeenCalled();
     });

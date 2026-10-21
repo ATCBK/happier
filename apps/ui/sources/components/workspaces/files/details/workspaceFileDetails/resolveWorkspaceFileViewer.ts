@@ -51,9 +51,6 @@ export type WorkspaceFileViewerUnavailablePreference = Readonly<{
     contributionLocalId: string;
 }>;
 
-/** The host-owned details picker never renders more than eight candidates. */
-export const MAX_WORKSPACE_FILE_VIEWER_CHOICES = 8;
-
 /**
  * A built-in editor owns its file tab, including the first render that will
  * hydrate a persisted editor draft. An openable-content viewer is therefore
@@ -75,7 +72,7 @@ export type WorkspaceFileViewerChoice = Readonly<{ kind: 'builtin' }> | Readonly
 }>;
 
 /**
- * The bounded host-owned choice data rendered in the current details chrome.
+ * The host-owned choice data rendered in the current details chrome.
  * Display metadata still belongs to the destination projection; this model
  * contains only the built-in candidate, SDK-matched plugin identities, and
  * the canonical Settings selector for the current host metadata.
@@ -237,7 +234,6 @@ function buildWorkspaceFileViewerChoices(input: Readonly<{
             ...input.matchingCandidates.filter((candidate) => !isSameWorkspaceFileViewerCandidate(candidate, selectedCandidate)),
         ];
     for (const candidate of candidates) {
-        if (choices.length >= MAX_WORKSPACE_FILE_VIEWER_CHOICES) break;
         choices.push({ kind: 'plugin', candidate });
     }
     return Object.freeze(choices);

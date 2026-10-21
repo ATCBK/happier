@@ -9,7 +9,7 @@ describe('resolveFileDetailsDisplayMode', () => {
             deepLinkSource: null,
             hasRenderableDiff: false,
             hasFileContent: true,
-            markdownPreviewAvailable: true,
+            previewAvailable: true,
         })).toBe('markdown');
     });
 
@@ -19,7 +19,7 @@ describe('resolveFileDetailsDisplayMode', () => {
             deepLinkSource: null,
             hasRenderableDiff: true,
             hasFileContent: true,
-            markdownPreviewAvailable: true,
+            previewAvailable: true,
         })).toBe('diff');
     });
 
@@ -29,7 +29,7 @@ describe('resolveFileDetailsDisplayMode', () => {
             deepLinkSource: 'file',
             hasRenderableDiff: true,
             hasFileContent,
-            markdownPreviewAvailable: true,
+            previewAvailable: true,
         })).toBe('file');
     });
 
@@ -39,7 +39,7 @@ describe('resolveFileDetailsDisplayMode', () => {
             deepLinkSource: null,
             hasRenderableDiff: true,
             hasFileContent,
-            markdownPreviewAvailable: true,
+            previewAvailable: true,
         })).toBe('file');
     });
 });
@@ -47,25 +47,25 @@ describe('resolveFileDetailsDisplayMode', () => {
 it('preserves an explicit file request as deferred content arrives', () => {
     for (const hasFileContent of [false, true]) {
         expect(resolveFileDetailsDisplayMode({ requestedMode: 'file', persistedEditing: false, deepLinkSource: null,
-            hasRenderableDiff: true, hasFileContent, markdownPreviewAvailable: false })).toBe('file');
+            hasRenderableDiff: true, hasFileContent, previewAvailable: false })).toBe('file');
     }
 });
 
 it('honors the user selection ahead of restored or linked file intent', () => {
     expect(resolveFileDetailsDisplayMode({
         requestedMode: 'diff', persistedEditing: true, deepLinkSource: 'file',
-        hasRenderableDiff: true, hasFileContent: false, markdownPreviewAvailable: false,
+        hasRenderableDiff: true, hasFileContent: false, previewAvailable: false,
     })).toBe('diff');
 });
 
 it('maps selected Edit to the source body without changing the reading-mode enum', () => {
     expect(resolveFileDetailsDisplayMode({ requestedMode: 'edit', persistedEditing: true, deepLinkSource: null,
-        hasRenderableDiff: true, hasFileContent: true, markdownPreviewAvailable: true })).toBe('file');
+        hasRenderableDiff: true, hasFileContent: true, previewAvailable: true })).toBe('file');
 });
 
 it('waits in View, not Changes, while an unchanged file loads or is too large to hold', () => {
     const waiting = { persistedEditing: false, deepLinkSource: null, hasRenderableDiff: false, hasFileContent: false,
-        markdownPreviewAvailable: false } as const;
+        previewAvailable: false } as const;
     expect(resolveFileDetailsDisplayMode({ ...waiting, knownChanged: false })).toBe('file');
     // A file the tree / SCM already knows changed waits for its diff in Changes.
     expect(resolveFileDetailsDisplayMode({ ...waiting, knownChanged: true })).toBe('diff');

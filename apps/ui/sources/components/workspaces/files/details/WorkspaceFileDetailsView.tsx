@@ -6,6 +6,7 @@ import { buildFilePageMenuActions, FilePageHeader, FilePageToolbar } from '@/com
 import { FilePagePluginViewerHeader } from '@/components/workspaces/files/file/FilePagePluginViewerHeader';
 import { resolveFilePageEditControl } from '@/components/workspaces/files/file/filePageModel';
 import { FileCodeSkeleton, FilePartialFooter, FileReadingLine, FileTooLargeState, formatFilePageBytes } from '@/components/workspaces/files/file/FilePageStates';
+import { resolveFilePageMediaFacts, type FilePageMediaInfo } from '@/components/workspaces/files/file/filePageMediaFacts';
 import type { FileDisplayMode } from '@/components/workspaces/files/file/filePageModel';
 import type { FileMenuContext } from '@/components/workspaces/files/file/fileMenus';
 import { useFilePageCodeIntelligence } from '@/components/workspaces/files/intelligence/useFilePageCodeIntelligence';
@@ -142,6 +143,8 @@ import {
 } from '@/sync/domains/plugins/ui/i18n';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
+import { resolveTrackPresenceLines, useTrackPresenceForPath } from '@/components/sessions/files/track/TrackPauseSignal';
+import { FileEditorAgentPresence } from '@/components/workspaces/files/file/editor/FileEditorAgentPresence';
 import { resolvePluginUiRuntimeFormFactor } from '@/components/appShell/panes/layout/resolveMultiPaneDeviceType';
 import { useDeviceType } from '@/utils/platform/responsive';
 import {
@@ -153,6 +156,9 @@ import {
     type WorkspaceFileViewerMatch,
 } from './workspaceFileDetails/resolveWorkspaceFileViewer';
 
+
+/** How long a jump target stays highlighted (a deep link, or Track's scroll to the agent's region). */
+const JUMP_TO_ANCHOR_HOLD_MS = 8000;
 export type WorkspaceFileDeepLinkAnchor = Readonly<{
     source: ReviewCommentSource;
     anchor: ReviewCommentAnchor;
@@ -580,12 +586,18 @@ function WorkspaceFileOpenableContentViewerControls(props: Readonly<{
         stage,
     ]);
 
+    if (!host || !choiceModel || choiceModel.selected.kind === 'plugin') return null;
+    // One entry point per choice (lab FV2b): while the built-in view shows, its binary identity card carries the quiet
+    // "Open as text" link, so the band does not repeat it; once the text shows, the band is the way back to Default.
+    const bandModel = choiceModel.selected.kind === 'text' ? choiceModel
+        : { ...choiceModel, choices: choiceModel.choices.filter((choice) => choice.kind !== 'text') };
     // A choice of one is no choice: the band appears only when the file has another way to open (FV2b, gap 18).
-    if (!host || !choiceModel || choiceModel.selected.kind === 'plugin' || choiceModel.choices.length < 2) return null;
+    if (bandModel.choices.length < 2) return null;
     const viewerChoice = createWorkspaceFileViewerChoiceChromeModel({
-        model: choiceModel,
+        model: bandModel,
         selectedPluginViewerId: null,
-        canSelect: settingsVersion !== null,
+        // Default only writes the Account preference when a plugin viewer could own the file; otherwise it is the tab's.
+        canSelect: settingsVersion !== null || !hasViewerDemand,
         selectCandidate,
         details: host.details,
         localizePluginText,
@@ -847,9 +859,9 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     // Binary bytes under a text-looking name (`firmware.bin`) are a binary file, not a "Text file" (FV2b).
     const fileViewer = resolveFileViewerKind({ path: filePath, mimeType: fileContent?.binaryMime,
         isBinaryContent: fileEntry?.stats.isBinary === true || fileContent?.isBinary === true });
-    const markdownPreviewAvailable = fileContent?.isBinary !== true
-        && fileViewer.kind === 'markdown'
-        && typeof fileContent?.content === 'string';
+    // Markdown and SVG open in Preview (P3 §5 modes; PROGRAM D-F1: an SVG renders as an image), Source one tap away.
+    const previewKind = fileViewer.kind === 'markdown' || fileViewer.kind === 'svg';
+    const previewAvailable = fileContent?.isBinary !== true && previewKind && typeof fileContent?.content === 'string';
     const hasRenderableDiff = React.useMemo(
         () => resolveFileDetailsRenderableDiff({ diffContent }),
         [diffContent],
@@ -865,7 +877,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
 
         const timer = setTimeout(() => {
             setJumpToAnchor(null);
-        }, 8000);
+        }, JUMP_TO_ANCHOR_HOLD_MS);
 
         return () => clearTimeout(timer);
     }, [deepLinkKey]);
@@ -1002,11 +1014,11 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
             deepLinkSource: deepLinkAnchor?.source ?? null,
             hasRenderableDiff,
             hasFileContent: Boolean(fileContent),
-            markdownPreviewAvailable,
+            previewAvailable,
             knownChanged: fileEntry !== null,
-            previewKind: fileViewer.kind === 'markdown',
+            previewKind,
         }));
-    }, [requestedDisplayMode, deepLinkAnchor?.source, fileContent, hasRenderableDiff, isEditingFile, markdownPreviewAvailable, persistedDraft?.isEditingFile, fileEntry, fileViewer.kind]);
+    }, [requestedDisplayMode, deepLinkAnchor?.source, fileContent, hasRenderableDiff, isEditingFile, previewAvailable, persistedDraft?.isEditingFile, fileEntry, previewKind]);
 
     const readBodyRef = React.useRef<View | null>(null);
     // Edit opens where the person is (P4-R10): from View on the same top row with the caret on the selection,
@@ -1070,6 +1082,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         availableModes: [...headerModel.modes.map(option => option.id), ...(headerModel.editUnavailableReason === null ? ['edit' as const] : [])],
         blameAvailable: scmSnapshot?.capabilities?.readBlame === true,
         changesScopeAvailable: scope !== null,
+        get search() { return codeIntelligence.search; },
         set: async patch => {
             if (patch.mode === 'edit') handleStartEditingFile();
             else if (patch.mode) {
@@ -1164,10 +1177,10 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         setSelectedLineKeys(new Set());
     }, []);
     // The selection toolbar's Comment: comment mode on, the inline composer on the selected lines.
-    const [commentRangeRequest, setCommentRangeRequest] = React.useState<Readonly<{ startLine: number; endLine: number; key: number }> | null>(null);
-    const onCommentSelectedRange = React.useCallback((range: Readonly<{ startLine: number; endLine: number }>) => {
+    const [commentRangeRequest, setCommentRangeRequest] = React.useState<React.ComponentProps<typeof FileContentPanel>['commentRangeRequest']>(null);
+    const onCommentSelectedRange = React.useCallback((range: Readonly<{ startLine: number; endLine: number; side?: 'before' | 'after' }>) => {
         onToggleReviewCommentMode(true);
-        setCommentRangeRequest((previous) => ({ startLine: range.startLine, endLine: range.endLine, key: (previous?.key ?? 0) + 1 }));
+        setCommentRangeRequest((previous) => ({ startLine: range.startLine, endLine: range.endLine, side: range.side, key: (previous?.key ?? 0) + 1 }));
     }, [onToggleReviewCommentMode]);
 
     const onRefresh = React.useCallback(() => {
@@ -1207,6 +1220,26 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         ownWriteHash: lastOwnWriteHash,
         reducedMotion,
     });
+    // Track's agent caret and wash (P5 §3.10): where this Session's agent writes in this file now.
+    const trackPresence = useTrackPresenceForPath(filePath);
+    const trackPresenceText = trackPresence && !trackPresence.region && !fileContent?.isBinary ? fileContent?.content : undefined;
+    const agentPresence = React.useMemo(() => {
+        if (!trackPresence) return null;
+        const lines = resolveTrackPresenceLines(trackPresence, trackPresenceText);
+        return lines ? { ...lines, agentId: trackPresence.agentId, agentName: trackPresence.agentName, reducedMotion } : null;
+    }, [reducedMotion, trackPresence, trackPresenceText]);
+    // Track's scroll (P5 §3.10): Track decides when, this page resolves where — the same lines the caret uses.
+    const trackRevealSeq = trackPresence?.reveal?.seq ?? null;
+    const trackRevealLine = agentPresence?.startLine ?? null;
+    const appliedTrackReveal = React.useRef<number | null>(null);
+    React.useEffect(() => {
+        if (trackRevealSeq === null || trackRevealLine === null || appliedTrackReveal.current === trackRevealSeq) return;
+        appliedTrackReveal.current = trackRevealSeq;
+        const anchor: ReviewCommentAnchor = { kind: 'fileLine', startLine: trackRevealLine };
+        setJumpToAnchor(anchor);
+        const timer = setTimeout(() => setJumpToAnchor((current) => current === anchor ? null : current), JUMP_TO_ANCHOR_HOLD_MS);
+        return () => clearTimeout(timer);
+    }, [trackRevealLine, trackRevealSeq]);
     const [liveMomentAt, setLiveMomentAt] = React.useState<number | null>(null);
     React.useEffect(() => { if (liveMoment) setLiveMomentAt(Date.now()); }, [liveMoment]);
     const attributionUpdatedAt = Math.max(editorAttribution.updatedAt ?? 0, liveMomentAt ?? 0) || null;
@@ -1244,6 +1277,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const changesReview = useFileChangesReview({
         scope, sessionId: sessionId || null, filePath,
         liveDiff: diffContent, refreshLiveDiff: onRefresh, view: fileView, onChangesScopeChange,
+        liveEntry: fileEntry,
         contentHash: fileContent?.contentHash ?? null,
         active: isActive && (displayMode === 'diff' || Boolean(fileEntry)),
         agentName: editorAttribution.agentName,
@@ -1272,6 +1306,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
         outlineEnabled: (fileViewer.kind === 'code' || fileViewer.kind === 'markdown') && !fileContent?.isBinary
             && !fileContent?.partial && fileEntry?.kind !== 'deleted' && Boolean(fileContent),
         active: isActive, liveValue, getUnsaved: () => editorState.readSnapshot().dirty, editorHandleRef,
+        displayedText: isEditorSelected ? undefined : fileContent?.content,
         sessionId: sessionId || null, accountId: editorAccountScope?.accountId ?? null,
         machineName: checkoutReachability.machineName, machineUnreachable: checkoutReachability.unreachable,
         agentName: editorAttribution.agentName,
@@ -1397,7 +1432,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     [fileContent]);
     const blameRegion = useFileBlameRegion({
         scope: blameScope, path: filePath, content: blameContent,
-        enabled: fileView.blame === true && isActive,
+        enabled: fileView.blame === true,
+        active: isActive,
         readBlame: scmSnapshot?.capabilities?.readBlame === true,
         sessionAddress, compact: phonePage,
         revision: scmSnapshot?.branch.headOid ?? scmSnapshot?.fetchedAt ?? null,
@@ -1420,6 +1456,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const isBinaryFile = fileContent?.isBinary === true;
     const [imageInfo, setImageInfo] = React.useState<Readonly<{ path: string; info: ImageWellInfo }> | null>(null);
     const onImageInfo = React.useCallback((info: ImageWellInfo) => setImageInfo({ path: filePath, info }), [filePath]);
+    const [mediaInfo, setMediaInfo] = React.useState<Readonly<{ path: string; info: FilePageMediaInfo }> | null>(null);
+    const onMediaInfo = React.useCallback((info: FilePageMediaInfo) => setMediaInfo({ path: filePath, info }), [filePath]);
     // The non-code body (image, SVG preview, PDF, media, binary identity) and its "View full screen" control.
     const showsViewerBody = (displayMode === 'file' && isBinaryFile) || (displayMode === 'markdown' && fileViewer.kind === 'svg' && heldText !== null);
     const viewerStageRef = React.useRef<FileViewerStageHandle | null>(null);
@@ -1435,14 +1473,18 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
     const partial = fileContent?.partial ?? null;
     // Media: size and kind are written once, here in the meta row, never under the picture (lab FV4–FV6, delta 3).
     // A plain binary file says what it is on its identity card instead (FV2b).
+    // An SVG's Preview is a picture too (FV4s): its facts are the picture's, not its XML's line count.
     const shownImageInfo = imageInfo?.path === filePath ? imageInfo.info : null;
-    const mediaFacts = isBinaryFile && fileViewer.kind !== 'binary' ? [
-        ...(shownImageInfo ? [`${shownImageInfo.width} × ${shownImageInfo.height}`] : []),
+    const shownMediaInfo = mediaInfo?.path === filePath ? mediaInfo.info : null;
+    const svgPreviewShown = showsViewerBody && fileViewer.kind === 'svg';
+    const mediaFacts = (isBinaryFile && fileViewer.kind !== 'binary') || svgPreviewShown ? resolveFilePageMediaFacts({
+        viewer: fileViewer,
+        sizeBytes: svgPreviewShown ? svgPreviewBytes?.byteLength ?? null : fileContent?.binarySizeBytes ?? null,
+        image: shownImageInfo,
         // A PDF says how long it is once the viewer knows (FV5 "14 pages · 1.8 MB"); its mark already names the kind.
-        pdfBody && shownPdfPageInfo ? t('files.viewer.pdfPageCount', { count: shownPdfPageInfo.total }) : t(fileViewer.labelKey as never) as string,
-        ...(typeof fileContent?.binarySizeBytes === 'number' ? [formatFilePageBytes(fileContent.binarySizeBytes)] : []),
-        ...(shownImageInfo && shownImageInfo.displayScale > 1 ? [t('files.viewer.shownAt', { scale: shownImageInfo.displayScale })] : []),
-    ] : null;
+        pdfPageCount: pdfBody && shownPdfPageInfo ? shownPdfPageInfo.total : null,
+        media: shownMediaInfo,
+    }) : null;
     // Text with no language says so, so an unhighlighted body reads as a fact rather than a fault (lab FV2t).
     const plainTextFact = (language === null || language === 'text') && typeof fileContent?.content === 'string' && !isBinaryFile && !mediaFacts
         ? [t('files.pane.page.plainText')] : [];
@@ -1494,6 +1536,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         workspaceScope={scope}
                         find={find}
                         liveMoment={displayMode === 'file' ? liveMoment : null}
+                        agentPresence={agentPresence}
                         intelligence={displayMode === 'file' || displayMode === 'diff' ? codeIntelligence.viewBinding : null}
                         codeBottomInset={codeIntelligence.phoneSheetInset}
                         theme={theme}
@@ -1724,6 +1767,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         accessory={editorAccessory}
                         peek={editorPeek}
                     />
+                    <FileEditorAgentPresence handle={readyEditorHandle} presence={agentPresence} />
                     {scope ? (
                         <FileEditorAskControls handle={readyEditorHandle} scopeId={props.scopeId} scope={scope} filePath={filePath}
                             savedText={fileContent?.isBinary ? undefined : fileContent?.content} sessionId={sessionId || null} active={isActive} />
@@ -1745,6 +1789,7 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                         onOpenAsText={openAsText}
                         {...(share.openInDefaultApp ? { onOpenInDefaultApp: share.openInDefaultApp } : {})}
                         onImageInfo={onImageInfo}
+                        onMediaInfo={onMediaInfo}
                         stageRef={viewerStageRef}
                         {...(fileViewer.kind === 'pdf' ? { pdf: pdfControl } : {})}
                         testID="file-viewer-body"
@@ -1752,7 +1797,8 @@ function WorkspaceFileDetailsPage(props: WorkspaceFileDetailsViewProps & Readonl
                 ) : displayMode === 'diff' && scope ? (
                     <FileChangesSection review={changesReview} scope={scope} filePath={filePath}
                         keyboardActive={isActive} liveChangeKind={fileEntry?.kind ?? null}
-                        ask={{ scopeId: props.scopeId, sessionId: sessionId || null, active: isActive }}>
+                        ask={{ scopeId: props.scopeId, sessionId: sessionId || null, active: isActive,
+                            onCommentRange: reviewCommentsEnabled ? onCommentSelectedRange : undefined }}>
                         {(surface) => renderFindPanel(surface)}
                     </FileChangesSection>
                 ) : readBody}

@@ -1653,7 +1653,10 @@ audio and video keep their specific MIME with binary content class. Markdown is
 `text/markdown`; code remains `text/plain`. A Markdown viewer that previously
 matched `text/plain` should match `text/markdown` or a Markdown extension instead.
 The existing plugin read budgets are unchanged, and the built-in viewer remains
-available in the chooser.
+available in the chooser. Every matching, currently available installed viewer
+is offered in the existing horizontally scrollable chooser; viewer count does
+not truncate the choices. Matching and runtime admission still apply to each
+viewer, including externally installed plugins.
 
 Public `StoredImage` supports the host's shared Media stage through an optional
 private presentation-host `mediaStage` port. When supplied, pressing a loaded

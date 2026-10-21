@@ -99,11 +99,22 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                 if (input.signal?.aborted) throw new Error(t('files.fileReadFailed'));
                 const videoPreview = input.readAsText !== true && viewer.kind === 'video';
                 const wantsBinaryPreview = input.readAsText !== true && viewer.previewable && viewer.kind !== 'svg';
-                // Opaque binary classification performs no inline read and consumes no text budget.
+                // Opaque binary classification performs no inline read and consumes no text budget; one stat names its
+                // size on the identity card (lab FV2b), and a stat that cannot answer only leaves the size out.
                 if (viewer.kind === 'binary' && !input.readAsText) {
+                    const stat = await callDaemonWorkspaceStatFileRpc({
+                        machineId: input.scope.machineId,
+                        serverId: input.scope.serverId,
+                        rootPath: input.scope.rootPath,
+                        request: { path: input.filePath },
+                        signal: input.signal,
+                    }).catch(() => null);
+                    if (input.signal?.aborted) throw new Error(t('files.fileReadFailed'));
+                    const binarySizeBytes = stat?.success && stat.exists === true && typeof stat.sizeBytes === 'number'
+                        && Number.isFinite(stat.sizeBytes) && stat.sizeBytes >= 0 ? Math.floor(stat.sizeBytes) : null;
                     return {
                         status: 'ready', error: null, diffContent,
-                        fileContent: { content: '', isBinary: true, contentHash: null, binaryMime: viewer.mimeType },
+                        fileContent: { content: '', isBinary: true, contentHash: null, binaryMime: viewer.mimeType, binarySizeBytes },
                         fileWriteSupported: true,
                     };
                 }
