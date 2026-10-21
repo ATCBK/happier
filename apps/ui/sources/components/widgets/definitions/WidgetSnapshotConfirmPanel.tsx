@@ -23,7 +23,7 @@ import type { WidgetSnapshotCapture } from './widgetSnapshotCapture';
  * still refreshing, stale or failed yields nothing — a snapshot posts current numbers or none.
  */
 export function buildWidgetSnapshotPreview(capture: WidgetSnapshotCapture | null, sourceLabel: string, now: number): WidgetSnapshotPreviewV1 | null {
-    if (!capture || !capture.current) return null;
+    if (!capture || !capture.current || !capture.readAuthorized) return null;
     return projectWidgetSnapshotPreviewV1({
         document: capture.document,
         frozenByPath: capture.frozenByPath,
@@ -62,12 +62,15 @@ export function WidgetSnapshotConfirmPanel(props: Readonly<{
     const [state, setState] = React.useState<'idle' | 'refreshing' | 'busy' | 'pending' | 'failed'>('idle');
     const time = formatHappierAsOfTime(opened.at);
     const { capture, sourceLabel, watch } = props;
-    // Only while it waits on a refresh it asked for: the first current capture freezes the preview.
+    // Freshness never replaces a frozen preview. Disclosure retirement does:
+    // the preview is another custodian of the same private output.
     React.useEffect(() => {
-        if (state !== 'refreshing' || !watch) return;
+        if (!watch) return;
         const settle = () => {
             const next = capture();
-            if (next?.current) {
+            setOpened(previous => previous.preview && !sameReadAuthority(previous, next)
+                ? { ...previous, preview: null } : previous);
+            if (state === 'refreshing' && next?.current && next.readAuthorized) {
                 setOpened(freeze(next, sourceLabel));
                 setState('idle');
             }
@@ -92,7 +95,7 @@ export function WidgetSnapshotConfirmPanel(props: Readonly<{
         setState('idle');
     }, [capture, sourceLabel, state, watch]);
     const post = React.useCallback(async () => {
-        if (!opened.preview || state === 'busy') return;
+        if (!opened.preview || state === 'busy' || !sameReadAuthority(opened, capture())) return;
         setState('busy');
         const outcome = await runWidgetDefinitionCommand('widgets.snapshot.post', {
             surface: props.surface, itemId: randomUUID(), title: props.title, preview: opened.preview, placement: {},
@@ -104,7 +107,7 @@ export function WidgetSnapshotConfirmPanel(props: Readonly<{
             return;
         }
         setState(outcome.kind === 'approvalPending' ? 'pending' : 'failed');
-    }, [opened.preview, props, state]);
+    }, [opened, capture, props, state]);
 
     return (
         <WidgetFlowPanel
@@ -161,7 +164,11 @@ export function WidgetSnapshotConfirmPanel(props: Readonly<{
 }
 
 /** The confirm's frozen preview at one moment: what the card shows now, or nothing when it is not current. */
-function freeze(capture: WidgetSnapshotCapture | null, sourceLabel: string): Readonly<{ at: number; preview: WidgetSnapshotPreviewV1 | null }> {
+function freeze(capture: WidgetSnapshotCapture | null, sourceLabel: string) {
     const at = Date.now();
-    return { at, preview: buildWidgetSnapshotPreview(capture, sourceLabel, at) };
+    return { at, readIdentity: capture?.readIdentity, preview: buildWidgetSnapshotPreview(capture, sourceLabel, at) };
+}
+
+function sameReadAuthority(opened: ReturnType<typeof freeze>, capture: WidgetSnapshotCapture | null): boolean {
+    return capture?.readAuthorized === true && capture.readIdentity === opened.readIdentity;
 }

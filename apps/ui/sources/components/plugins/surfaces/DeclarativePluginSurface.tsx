@@ -621,7 +621,7 @@ export function DeclarativePluginSurface(props: Readonly<{
         action?: SurfaceStateAction;
     }> | null;
     /** The whole-document Resource's facts for the exact rendered model. */
-    documentSourceSnapshot?: Readonly<{ current: boolean; digest?: string; refresh: () => Promise<void> }>;
+    documentSourceSnapshot?: Readonly<{ current: boolean; readIdentity: object; readAuthorized: boolean; digest?: string; refresh: () => Promise<void> }>;
     /** Recheck the mounted authority when capture is requested, before disclosure. */
     captureIsCurrent?: () => boolean;
     /**
@@ -680,15 +680,19 @@ export function DeclarativePluginSurface(props: Readonly<{
     const occurrenceId = admittedModel?.occurrenceId ?? null;
     const qualifiedId = admittedModel?.qualifiedId ?? props.pluginId;
     const visible = admittedModel !== null;
+    const staticReadIdentity = React.useMemo(() => ({}), [qualifiedId, occurrenceId, props.accountLifetime]);
     const readSnapshot = React.useMemo(() => root ? (): WidgetSnapshotCapture => ({
         document: { version: 1, root },
         frozenByPath: new Map(),
         digests: props.documentSourceSnapshot?.digest ? [props.documentSourceSnapshot.digest] : [],
+        readIdentity: props.documentSourceSnapshot?.readIdentity ?? staticReadIdentity,
+        readAuthorized: props.accountLifetime?.isCurrent() === true && props.captureIsCurrent?.() !== false
+            && (props.documentSourceSnapshot?.readAuthorized ?? true),
         current: props.interactionEnabled && props.accountLifetime?.isCurrent() === true
             && props.captureIsCurrent?.() !== false
             && (props.documentSourceSnapshot?.current ?? true),
         refresh: async () => { await props.documentSourceSnapshot?.refresh(); },
-    }) : null, [root, props.interactionEnabled, props.accountLifetime, props.documentSourceSnapshot, props.captureIsCurrent]);
+    }) : null, [root, props.interactionEnabled, props.accountLifetime, props.documentSourceSnapshot, props.captureIsCurrent, staticReadIdentity]);
     useDeclarativeWidgetSnapshotCapture(readSnapshot);
     const collectionCommandCatalog: DeclarativeCollectionCommandCatalog = admittedModel
         ? admittedModel

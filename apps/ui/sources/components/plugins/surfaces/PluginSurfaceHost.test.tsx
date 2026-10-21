@@ -12825,124 +12825,129 @@ describe('mounted plugin surface context (§3.2, §3.3, UI-D11/D12/D13)', () => 
 });
 
 describe('Composer physical surface mount', () => {
-    it('consumes one exact admitted composer catalog row through the embedded renderer pipeline', async () => {
-        const contribution = Object.freeze({
-            pluginId: 'acme.compose',
-            localId: 'summary',
-            sourceCustody: developmentSourceCustody('acme-compose-test-root'),
-        });
-        const rendererIdentity = Object.freeze({ pluginId: 'acme.compose', localId: 'summary-view' });
-        const applyComposer = vi.fn(async () => ({ status: 'applied' as const, revision: 5 }));
-        const mount = Object.freeze({
-            kind: 'composer' as const,
-            contribution,
-            occurrenceId: 'compose-generation-a',
-            projectionGeneration: 7,
-            role: 'region' as const,
-            selectedRenderer: rendererIdentity,
-            rendererChain: Object.freeze([rendererIdentity]),
-            composer: Object.freeze({ kind: 'session' as const, sessionId: 'session-a' }),
-            instanceKey: 'composer-region:session-a:summary',
-            input: Object.freeze({
-                v: 1 as const,
+    function createComposerRegionMountFixture() {
+            const contribution = Object.freeze({
+                pluginId: 'acme.compose',
+                localId: 'summary',
+                sourceCustody: developmentSourceCustody('acme-compose-test-root'),
+            });
+            const rendererIdentity = Object.freeze({ pluginId: 'acme.compose', localId: 'summary-view' });
+            const applyComposer = vi.fn(async () => ({ status: 'applied' as const, revision: 5 }));
+            const mount = Object.freeze({
+                kind: 'composer' as const,
+                contribution,
+                occurrenceId: 'compose-generation-a',
+                projectionGeneration: 7,
                 role: 'region' as const,
+                selectedRenderer: rendererIdentity,
+                rendererChain: Object.freeze([rendererIdentity]),
                 composer: Object.freeze({ kind: 'session' as const, sessionId: 'session-a' }),
-                regionLocalId: 'summary',
-            }),
-        });
-        const renderer = Object.freeze({
-            kind: 'declarative' as const,
-            contributionId: rendererIdentity.localId,
-            model: Object.freeze(admittedDeclarativeModelFixture({
-                visible: true,
-                identity: Object.freeze({
-                    pluginId: contribution.pluginId,
-                    localId: rendererIdentity.localId,
-                    qualifiedId: `${contribution.pluginId}/${rendererIdentity.localId}`,
-                    occurrenceId: '7',
+                instanceKey: 'composer-region:session-a:summary',
+                input: Object.freeze({
+                    v: 1 as const,
+                    role: 'region' as const,
+                    composer: Object.freeze({ kind: 'session' as const, sessionId: 'session-a' }),
+                    regionLocalId: 'summary',
                 }),
-                nodes: Object.freeze([]),
-                root: Object.freeze({
-                    kind: 'group',
-                    path: 'root',
-                    order: 0,
-                    children: Object.freeze([
-                        Object.freeze({
-                            kind: 'text',
-                            path: 'root.summary',
-                            order: 1,
-                            text: 'Composer summary',
-                        }),
-                        Object.freeze({
-                            kind: 'action',
-                            path: 'root.apply',
-                            order: 2,
-                            label: 'Replace draft',
-                            enabled: true,
-                            effect: Object.freeze({
-                                kind: 'composerApply',
-                                expectedRevision: 4,
-                                operations: Object.freeze([{ kind: 'text.set', text: 'Triage this incident' }]),
+            });
+            const renderer = Object.freeze({
+                kind: 'declarative' as const,
+                contributionId: rendererIdentity.localId,
+                model: Object.freeze(admittedDeclarativeModelFixture({
+                    visible: true,
+                    identity: Object.freeze({
+                        pluginId: contribution.pluginId,
+                        localId: rendererIdentity.localId,
+                        qualifiedId: `${contribution.pluginId}/${rendererIdentity.localId}`,
+                        occurrenceId: '7',
+                    }),
+                    nodes: Object.freeze([]),
+                    root: Object.freeze({
+                        kind: 'group',
+                        path: 'root',
+                        order: 0,
+                        children: Object.freeze([
+                            Object.freeze({
+                                kind: 'text',
+                                path: 'root.summary',
+                                order: 1,
+                                text: 'Composer summary',
                             }),
-                        }),
-                    ]),
+                            Object.freeze({
+                                kind: 'action',
+                                path: 'root.apply',
+                                order: 2,
+                                label: 'Replace draft',
+                                enabled: true,
+                                effect: Object.freeze({
+                                    kind: 'composerApply',
+                                    expectedRevision: 4,
+                                    operations: Object.freeze([{ kind: 'text.set', text: 'Triage this incident' }]),
+                                }),
+                            }),
+                        ]),
+                    }),
+                })),
+            });
+            const catalogEntry = Object.freeze({
+                contribution: { pluginId: contribution.pluginId, localId: contribution.localId },
+                occurrenceId: mount.occurrenceId,
+                projectionGeneration: mount.projectionGeneration,
+                role: mount.role,
+                rendererChain: mount.rendererChain,
+                selectedRenderer: Object.freeze({
+                    identity: rendererIdentity,
+                    renderer,
+                    availability: Object.freeze({ state: 'available' as const, reason: 'available', diagnostics: Object.freeze([]) }),
                 }),
-            })),
-        });
-        const catalogEntry = Object.freeze({
-            contribution: { pluginId: contribution.pluginId, localId: contribution.localId },
-            occurrenceId: mount.occurrenceId,
-            projectionGeneration: mount.projectionGeneration,
-            role: mount.role,
-            rendererChain: mount.rendererChain,
-            selectedRenderer: Object.freeze({
-                identity: rendererIdentity,
-                renderer,
-                availability: Object.freeze({ state: 'available' as const, reason: 'available', diagnostics: Object.freeze([]) }),
-            }),
-            executionOrigin: mountedExecutionOrigin(contribution.pluginId, 'machine-compose', 'compose-materialization-a'),
-            resourceCapability: Object.freeze({ readable: true, dynamic: true }),
-            contributorTargetedContributions: Object.freeze({
-                target: Object.freeze({
-                    pluginId: contribution.pluginId,
-                    occurrenceId: mount.occurrenceId,
-                    sourceCustody: contribution.sourceCustody,
+                executionOrigin: mountedExecutionOrigin(contribution.pluginId, 'machine-compose', 'compose-materialization-a'),
+                resourceCapability: Object.freeze({ readable: true, dynamic: true }),
+                contributorTargetedContributions: Object.freeze({
+                    target: Object.freeze({
+                        pluginId: contribution.pluginId,
+                        occurrenceId: mount.occurrenceId,
+                        sourceCustody: contribution.sourceCustody,
+                    }),
+                    points: Object.freeze([]),
                 }),
-                points: Object.freeze([]),
-            }),
-        });
-        const rawProjection = PluginProjectionV2Schema.parse({
-            v: 2 as const,
-            generation: 7,
-            installedPackagesById: Object.freeze({}),
-            agentsById: Object.freeze({}),
-            actionsById: Object.freeze({}),
-            toolsById: Object.freeze({}),
-            commandsById: Object.freeze({}),
-            resourcesById: Object.freeze({}),
-            settingsById: Object.freeze({}),
-            familiesById: Object.freeze({}),
-            diagnostics: Object.freeze([]),
-        });
-        const inputs = publishDaemonMergedProjectionInputs({ projection: rawProjection,
-            composerSurfaceCatalog: [DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse(catalogEntry)] });
-        const ownedCatalogEntry = inputs.composerSurfaceCatalog![0]!;
-        const composerMount = Object.freeze({
-            mount: Object.freeze({ kind: 'composer' as const, mount, catalogEntry: ownedCatalogEntry, renderer }),
-            physicalTarget: Object.freeze({ kind: 'session' as const, sessionId: 'session-a' }),
-            parentLifetime: Object.freeze({
-                isCurrent: () => true,
-                onRetire: () => Object.freeze({ dispose() {} }),
-            }),
-            pluginProjectionById: Object.freeze({}),
-            pluginProjectionV2: rawProjection,
-            pluginUiProjection: inputs.pluginUiProjection,
-            actionInputSelectionFactsKey: inputs.composerSurfaceActionInputSelectionFacts.get(ownedCatalogEntry)!,
-            daemonProjectionReady: true,
-            binding: Object.freeze({
-                mountedHostApiHandlers: Object.freeze({ applyComposer }),
-            }),
-        });
+            });
+            const rawProjection = PluginProjectionV2Schema.parse({
+                v: 2 as const,
+                generation: 7,
+                installedPackagesById: Object.freeze({}),
+                agentsById: Object.freeze({}),
+                actionsById: Object.freeze({}),
+                toolsById: Object.freeze({}),
+                commandsById: Object.freeze({}),
+                resourcesById: Object.freeze({}),
+                settingsById: Object.freeze({}),
+                familiesById: Object.freeze({}),
+                diagnostics: Object.freeze([]),
+            });
+            const inputs = publishDaemonMergedProjectionInputs({ projection: rawProjection,
+                composerSurfaceCatalog: [DaemonPluginUiComposerSurfaceCatalogEntryV1Schema.parse(catalogEntry)] });
+            const ownedCatalogEntry = inputs.composerSurfaceCatalog![0]!;
+            const composerMount = Object.freeze({
+                mount: Object.freeze({ kind: 'composer' as const, mount, catalogEntry: ownedCatalogEntry, renderer }),
+                physicalTarget: Object.freeze({ kind: 'session' as const, sessionId: 'session-a' }),
+                parentLifetime: Object.freeze({
+                    isCurrent: () => true,
+                    onRetire: () => Object.freeze({ dispose() {} }),
+                }),
+                pluginProjectionById: Object.freeze({}),
+                pluginProjectionV2: rawProjection,
+                pluginUiProjection: inputs.pluginUiProjection,
+                actionInputSelectionFactsKey: inputs.composerSurfaceActionInputSelectionFacts.get(ownedCatalogEntry)!,
+                daemonProjectionReady: true,
+                binding: Object.freeze({
+                    mountedHostApiHandlers: Object.freeze({ applyComposer }),
+                }),
+            });
+        return { mount, composerMount, applyComposer };
+    }
+
+    it('consumes one exact admitted composer catalog row through the embedded renderer pipeline', async () => {
+        const { mount, composerMount, applyComposer } = createComposerRegionMountFixture();
         const { PluginSurfaceHost } = await import('./PluginSurfaceHost');
         const screen = await renderScreen(React.createElement(PluginSurfaceHost as unknown as React.ComponentType<
             Readonly<Record<string, unknown>>
@@ -12971,6 +12976,35 @@ describe('Composer physical surface mount', () => {
                 },
             },
         }), undefined);
+    });
+
+    // An inline Composer region is not a page: while it loads it reserves nothing (no page-shaped
+    // skeleton in the thread), keeping only the hidden diagnostic marker for QA.
+    it('reserves no visible placeholder while an inline Composer region is still loading', async () => {
+        let holdModeRead = false;
+        await pluginSurfaceAccountLifetime.setScope({ serverId: 'server-a', accountId: 'account-a' }, (path) => {
+            if (path !== '/v1/account/encryption/currentness' || !holdModeRead) return undefined;
+            return new Promise<Response>(() => {});
+        }, { serverIdentityId: 'srv_server_a' });
+        holdModeRead = true;
+        (await import('@/sync/api/account/apiAccountEncryptionMode')).invalidateAccountEncryptionModeCache();
+        const { composerMount } = createComposerRegionMountFixture();
+        const { PluginSurfaceHost } = await import('./PluginSurfaceHost');
+        const screen = await renderScreen(React.createElement(PluginSurfaceHost as unknown as React.ComponentType<
+            Readonly<Record<string, unknown>>
+        >, {
+            composerMount,
+            serverId: 'server-a',
+            sessionId: 'session-a',
+            platform: 'web',
+            channel: 'internal',
+        }), { flushOptions: { cycles: 0 } });
+        try {
+            await flushHookEffects();
+            expect(screen.findByTestId('plugin-surface-unavailable-diagnostic-account_encryption_mode_pending')).toBeTruthy();
+            expect(screen.findByTestId('plugin-surface-unavailable-loading-skeleton')).toBeNull();
+            expect(screen.getTextContent()).not.toContain('Composer summary');
+        } finally { await screen.unmount(); }
     });
 
     it.each(['standalone', 'overview', 'footer'] as const)('keeps equivalent %s Composer requests on one physical RN controller across Machine Ask hide/reveal and retires on occurrence replacement', async placement => {

@@ -12,6 +12,10 @@ export type WidgetSnapshotCapture = Readonly<{
     frozenByPath: ReadonlyMap<string, PluginDeclarativeDataNodeV1>;
     /** The read identities shown, for the snapshot's provenance. */
     digests: readonly string[];
+    /** Exact admitted read, independent of its latest value/digest or freshness. */
+    readIdentity: string | object;
+    /** False when the read owner withdraws disclosure, even if a preview was already frozen. */
+    readAuthorized: boolean;
     current: boolean;
     /** Reads every shown read again (the card's own Retry), so a not-current card can become current. */
     refresh: () => Promise<unknown>;

@@ -46,6 +46,7 @@ export function resolveDeclarativeWidgetResourceBinding(props: DeclarativeWidget
 
 /** What one live data node knows about its retained content, for the document's one freshness line. */
 type DataNodeFreshness = Readonly<{
+    readIdentity: string;
     state: 'fresh' | 'refreshing' | 'stale' | 'failed';
     reasonCode?: string;
     /** When this mount first saw the shown bytes current; absent when it never did. */
@@ -90,6 +91,7 @@ function freshnessOf(projected: DeclarativeDataSourceProjection): DataNodeFreshn
  * as of when, why, and offers one Retry. Content whose read authority is gone is never shown.
  */
 function RetainedDataNode(props: Readonly<{
+    readIdentity: string;
     reportKey: string;
     node: PluginDeclarativeDataNodeV1;
     projected: DeclarativeDataSourceProjection;
@@ -106,15 +108,16 @@ function RetainedDataNode(props: Readonly<{
     const refresh = props.refresh;
     const shown = props.node;
     React.useEffect(() => {
-        store?.report(props.reportKey, { state, shown, ...(digest ? { digest } : {}), ...(reasonCode ? { reasonCode } : {}),
+        store?.report(props.reportKey, { readIdentity: props.readIdentity, state, shown, ...(digest ? { digest } : {}), ...(reasonCode ? { reasonCode } : {}),
             ...(asOf !== undefined ? { asOf } : {}), refresh });
-    }, [store, props.reportKey, state, shown, digest, reasonCode, asOf, refresh]);
+    }, [store, props.reportKey, props.readIdentity, state, shown, digest, reasonCode, asOf, refresh]);
     React.useEffect(() => () => store?.report(props.reportKey, null), [store, props.reportKey]);
     return <>{renderDeclarativeNode(props.node, { ...props.context, renderDataNode: undefined }, props.reportKey)}</>;
 }
 
 /** Retain a validated presentation only while the exact read still discloses bytes. */
 function ProjectedResourceDataNode(props: Readonly<{
+    readIdentity: string;
     node: PluginDeclarativeDataNodeV1;
     snapshot: PluginUiResourceSnapshot | null;
     isCurrent: boolean;
@@ -128,7 +131,7 @@ function ProjectedResourceDataNode(props: Readonly<{
     // No bytes means the Resource owner withdrew them (or has not admitted a
     // first read). Keeping a typed model then would bypass its authority.
     lastGood.current = projected.node ? projected : null;
-    if (projected.node) return <RetainedDataNode reportKey={props.reportKey} node={projected.node} projected={projected}
+    if (projected.node) return <RetainedDataNode readIdentity={props.readIdentity} reportKey={props.reportKey} node={projected.node} projected={projected}
         refresh={props.refresh} context={props.context} />;
     if (projected.pending === 'initial' && !projected.errorCode) return <ItemLoadStateRows testID={`${props.testID}-data-loading`}
         state={{ kind: 'loading' }} rows={3} lines={2} shape="list" />;
@@ -154,7 +157,7 @@ function ResourceDataNode(props: DeclarativeWidgetDocumentProps & Readonly<{
         binding.serverId, binding.expectedCallerOccurrenceId, binding.context, props.node]);
     return <PluginContextualResourceState binding={binding} resource={props.node.data.resource} isCurrent={props.isCurrent}
         active={props.enabled !== false && readEnabled}>
-        {(snapshot, controls) => <ProjectedResourceDataNode key={dataIdentity} node={props.node} snapshot={snapshot}
+        {(snapshot, controls) => <ProjectedResourceDataNode key={dataIdentity} readIdentity={dataIdentity} node={props.node} snapshot={snapshot}
             isCurrent={props.accountLifetime.isCurrent() && props.isCurrent()} refresh={controls.refresh}
             context={props.context} reportKey={props.reportKey} testID={props.testID} />}
     </PluginContextualResourceState>;
@@ -196,10 +199,13 @@ export function DeclarativeWidgetDocument(props: DeclarativeWidgetDocumentProps)
     const readSnapshot = React.useMemo(() => document ? (): WidgetSnapshotCapture => {
             const reports = [...freshness.getSnapshot()];
             return { document, frozenByPath: new Map(reports.map(([path, report]) => [path, report.shown])),
+                readIdentity: JSON.stringify([props.accountLifetime.scope, props.sessionId, props.input, document,
+                    reports.map(([path, report]) => [path, report.readIdentity])]),
+                readAuthorized: props.isCurrent() && props.accountLifetime.isCurrent(),
                 digests: reports.flatMap(([, report]) => (report.digest ? [report.digest] : [])),
                 current: props.isCurrent() && props.accountLifetime.isCurrent() && reports.every(([, report]) => report.state === 'fresh'),
                 refresh: () => Promise.all(reports.map(([, report]) => report.refresh())) };
-        } : null, [document, freshness, props.isCurrent, props.accountLifetime]);
+        } : null, [document, freshness, props.isCurrent, props.accountLifetime, props.sessionId, props.input]);
     useDeclarativeWidgetSnapshotCapture(readSnapshot, freshness.subscribe);
     const renderDataNode = (value: Readonly<Record<string, unknown>>, path: string): React.ReactNode => {
         const { path: _path, order: _order, ...authored } = value;

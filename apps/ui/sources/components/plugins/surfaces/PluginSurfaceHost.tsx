@@ -696,7 +696,8 @@ function DeclarativePluginSurfaceDocumentContent(
                     manageAction: props.unavailableAction,
                 }),
             }}
-            documentSourceSnapshot={{ current: document.presentation === 'fresh', digest: document.digest, refresh: document.retry }}
+            documentSourceSnapshot={{ current: document.presentation === 'fresh', readIdentity: document.readIdentity,
+                readAuthorized: document.readAuthorized, digest: document.digest, refresh: document.retry }}
             captureIsCurrent={props.controller.isCurrent}
             renderTargetedSurface={props.renderTargetedSurface}
             reportUnsupportedNestedTargetedSurface={props.reportUnsupportedNestedTargetedSurface}
@@ -2095,6 +2096,8 @@ export function resolvePluginSurfaceDescriptorRenderGate(
     }
     return { canRender: true };
 }
+
+const INLINE_LOADING_MARKER_STYLE = { width: 0, height: 0 } as const;
 
 function renderPluginSurfaceUnavailable(
     reasonCode: string,
@@ -3768,7 +3771,12 @@ function PluginSurfaceHostMount(props: Readonly<(
     ): React.ReactElement => (
         state !== 'loading' && embeddedFallback !== undefined
             ? <>{embeddedFallback}</>
-            : renderPluginSurfaceUnavailable(reason, props.unavailableAction, state, onRetry, projectedBrand?.displayName)
+            // A Composer region or control is inline, not a page: while it loads it reserves nothing
+            // (a page-shaped skeleton would sit in the thread), keeping only the hidden QA marker.
+            : state === 'loading' && composerMount
+                ? <View testID={`plugin-surface-unavailable-diagnostic-${reason}`} accessibilityElementsHidden
+                    importantForAccessibility="no-hide-descendants" style={INLINE_LOADING_MARKER_STYLE} />
+                : renderPluginSurfaceUnavailable(reason, props.unavailableAction, state, onRetry, projectedBrand?.displayName)
     );
     const renderAccountEncryptionModeReadiness = (): React.ReactElement => (
         accountEncryptionModeReadiness.status === 'loading'

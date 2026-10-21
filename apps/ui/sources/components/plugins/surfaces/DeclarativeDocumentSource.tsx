@@ -93,6 +93,9 @@ export type DeclarativeDocumentSourceInput = Readonly<{
 }>;
 
 export type DeclarativeDocumentSourceResult = Readonly<{
+    /** The incumbent read scope and its disclosure authority, independent of freshness. */
+    readIdentity: object;
+    readAuthorized: boolean;
     /** Static or atomically adopted dynamic last-known-good model. */
     model: RecordValue;
     /** Identity of the exact adopted whole-document bytes shown by this model. */
@@ -569,6 +572,8 @@ export function useDeclarativeDocumentSource(input: DeclarativeDocumentSourceInp
         resource,
     });
     return React.useMemo(() => Object.freeze({
+        readIdentity: sourceScope,
+        readAuthorized: currentSourceScopeIsCurrent && !readAuthorityLost,
         model: currentState.model,
         digest: currentState.digest,
         invalidDocument: currentState.invalidDocument,
@@ -580,6 +585,9 @@ export function useDeclarativeDocumentSource(input: DeclarativeDocumentSourceInp
         ...(resource.error === undefined ? {} : { resourceError: resource.error }),
         retry: refresh,
     }), [
+        sourceScope,
+        currentSourceScopeIsCurrent,
+        readAuthorityLost,
         currentState.invalidDocument,
         currentState.model,
         currentState.digest,
