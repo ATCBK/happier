@@ -93,10 +93,17 @@ describe('apiProviderAccountUsage', () => {
         const projectionDocuments: import('./apiProviderAccountUsage').ProviderAccountUsageProjectionDocuments = new Map();
         const input = { source, projection: { range: { startAtMs: 0, endAtMs: 5 }, resolution: 'accepted_observations' as const } };
         const options = { accountMode, material, request, nowMs: 1, includePendingWork: false, projectionDocuments };
-        const values = await Promise.all([getProviderAccountUsageQuota({ token: 'test-token' }, input, options),
-            getProviderAccountUsageQuota({ token: 'test-token' }, input, options)]);
-        expect(values.map(value => value.pageFacts?.resetWitness?.id)).toEqual(['accepted', 'accepted']);
-        expect(writes).toBe(1);
+        // Randomness is the crypto boundary: an identical locally accepted
+        // publication must not repack/seal a second ciphertext that is discarded.
+        const cryptoRandom = await import('@/platform/cryptoRandom');
+        const randomBytes = vi.spyOn(cryptoRandom, 'getRandomBytes');
+        try {
+            const values = await Promise.all([getProviderAccountUsageQuota({ token: 'test-token' }, input, options),
+                getProviderAccountUsageQuota({ token: 'test-token' }, input, options)]);
+            expect(values.map(value => value.pageFacts?.resetWitness?.id)).toEqual(['accepted', 'accepted']);
+            expect(writes).toBe(1);
+            expect(randomBytes).toHaveBeenCalledTimes(accountMode === 'e2ee' ? 1 : 0);
+        } finally { randomBytes.mockRestore(); }
         await getProviderAccountUsageQuota({ token: 'test-token' }, input, options);
         expect(writes).toBe(1);
         const narrow = await getProviderAccountUsageQuota({ token: 'test-token' }, { ...input,

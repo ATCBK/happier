@@ -283,27 +283,36 @@ async function readProviderAccountUsageProjectedQuota(credentials: AuthCredentia
                     } while (cursor);
                     const projection = buildProviderAccountUsagePageProjectionV1({ recordId, range, history: { entries, nextCursor: null } });
                     const last = entries.at(-1);
-                    const body: z.infer<typeof ProviderAccountUsagePageProjectionWriteV1Schema> = { recordId, encoding: PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING,
+                    const metadata = { recordId, encoding: PROVIDER_ACCOUNT_USAGE_PAGE_ENCODING,
                         demand: { range, resolution: demand.resolution }, frontier: last ? { id: last.id, observedAtMs: last.observedAtMs } : null,
-                        observationCount: entries.length, content: sealProviderAccountUsagePageProjectionV1({ projection,
-                            accountMode: options.accountMode, material: options.material, randomBytes: getRandomBytes }) };
+                        observationCount: entries.length };
+                    const materialize = (): z.infer<typeof ProviderAccountUsagePageProjectionWriteV1Schema> => ({ ...metadata,
+                        content: sealProviderAccountUsagePageProjectionV1({ projection, accountMode: options.accountMode,
+                            material: options.material, randomBytes: getRandomBytes }) });
                     // Rejected/superseded protected content must be repaired;
                     // matching opaque metadata does not prove current encoding.
                     const published = opened ? raw.published : undefined;
-                    const alreadyPublished = published && published.contentMode === body.content.t
+                    const alreadyPublished = published && published.contentMode === (options.accountMode === 'plain' ? 'plain' : 'encrypted')
                         && published.demand.range.startAtMs === range.startAtMs
-                        && published.observationCount === body.observationCount
-                        && sameStrictJsonValue(published.frontier, body.frontier);
+                        && published.observationCount === metadata.observationCount
+                        && sameStrictJsonValue(published.frontier, metadata.frontier);
                     if (alreadyPublished) {
+                        const body = materialize();
                         // Exact paging may race a backdated/removed witness.
                         // With no PUT to validate our derivation, re-admit that
                         // actual derived prefix before claiming completeness.
                         const confirmed = await requestProviderAccountUsageProjection(credentials, query, options, { projection: body, etag: '' });
                         if (!active) return;
                         if (!confirmed || confirmed.projection !== body || !confirmed.complete) continue;
-                    }
-                    assertCurrent();
-                    if (!alreadyPublished) {
+                        assertCurrent();
+                        // This is our derived representation, not the other
+                        // writer's ciphertext. Its accepted-prefix proof is used
+                        // next time; never borrow the other body's ETag.
+                        admitted = { accountMode: options.accountMode, credentialScope,
+                            materialType: options.material?.type, materialBytes: materialBytes?.slice(), opened: projection };
+                        options.projectionDocuments?.set(recordId, { projection: body, etag: '', admitted });
+                    } else {
+                        assertCurrent();
                         const published = await publishUsageProjection(options.projectionDocuments, recordId, async () => {
                             if (!active) return false;
                             assertCurrent();
@@ -313,11 +322,15 @@ async function readProviderAccountUsageProjectedQuota(credentials: AuthCredentia
                             // Compare admitted content, not opaque ciphertext or
                             // metadata alone, before skipping our duplicate PUT.
                             if (held && hasUsageProjectionCustody(held.admitted, options, credentialScope, materialBytes)
-                                && sameStrictJsonValue(held.projection.demand, body.demand)
+                                && sameStrictJsonValue(held.projection.demand, metadata.demand)
                                 && sameStrictJsonValue(held.admitted!.opened, projection)) {
                                 admitted = held.admitted;
                                 return true;
                             }
+                            // The incumbent publication owner has admitted the
+                            // duplicate check. Only an actual write needs its
+                            // complete packed/encrypted representation.
+                            const body = materialize();
                             const response = await (options.request ?? createServerFetchForActiveServer(options.expectedActiveServer))('/v4/connect/qualified/provider-account-usage/history', {
                                 method: 'PUT', signal: options.signal, headers: { Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' },
                                 body: JSON.stringify(body),
@@ -342,13 +355,6 @@ async function readProviderAccountUsageProjectedQuota(credentials: AuthCredentia
                         });
                         if (!active) return;
                         if (!published) continue;
-                    } else {
-                        // This is our derived representation, not the other
-                        // writer's ciphertext. Its accepted-prefix proof is used
-                        // next time; never borrow the other body's ETag.
-                        admitted = { accountMode: options.accountMode, credentialScope,
-                            materialType: options.material?.type, materialBytes: materialBytes?.slice(), opened: projection };
-                        options.projectionDocuments?.set(recordId, { projection: body, etag: '', admitted });
                     }
                 } else if (!opened) throw new ProviderAccountUsageReadErrorV1('provider_account_usage_content_unavailable');
                 if (!active) return;
