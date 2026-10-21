@@ -11445,10 +11445,10 @@ const enToolView = {
       outsideAgentSessions: 'Not one of this Agent’s sessions',
       unverifiedAgentAccess: 'Couldn’t confirm this Agent’s access',
       authorizationRefused: 'Authorization was refused',
+      toolPolicyUnsupportedAuth: 'Codex cannot apply this run’s tool permissions with the selected sign-in method.',
     },
   },
 };
-      toolPolicyUnsupportedAuth: 'Codex cannot apply this run’s tool permissions with the selected sign-in method.',
 
 const enTools = {
   common: {
@@ -12627,10 +12627,6 @@ const enLocalServices = {
     startTitle: ({ service }: { service: string }) => `Start ${service}?`,
     startTitleOn: ({ service, machine }: { service: string; machine: string }) => `Start ${service} on ${machine}?`,
     restartTitle: ({ service }: { service: string }) => `Restart ${service}?`,
-    subtitle: 'Review what runs and where. Happier asks again if it changes.',
-    start: 'Start',
-    notNow: 'Not now',
-  },
     stopTitle: ({ service }: { service: string }) => `Stop ${service}?`,
     stopBody: ({ service }: { service: string }) => `This stops ${service} now. Anything using its address loses its connection.`,
     stopBodyOn: ({ service, machine }: { service: string; machine: string }) => `This stops ${service} on ${machine} now. Anything using its address loses its connection.`,
@@ -12639,6 +12635,10 @@ const enLocalServices = {
     restartBodyOn: ({ service, machine }: { service: string; machine: string }) => `This restarts ${service} on ${machine} now. Anything using its address disconnects while it restarts.`,
     restart: 'Restart',
     thisService: 'this service',
+    subtitle: 'Review what runs and where. Happier asks again if it changes.',
+    start: 'Start',
+    notNow: 'Not now',
+  },
   row: {
     onMachine: ({ machine }: { machine: string }) => `on ${machine}`,
     startingOn: ({ machine }: { machine: string }) => `Starting on ${machine}…`,
