@@ -173,6 +173,14 @@ async function readTeamCredentialResourceCandidates(
     }));
 }
 
+function readTeamCredentialBrokerRefusalReason(reasons: readonly (string | null)[]) {
+    const first = reasons[0];
+    return (first === 'application_unavailable' || first === 'model_unavailable')
+        && reasons.every(reason => reason === first)
+        ? first
+        : null;
+}
+
 async function readTeamCredentialBrokerSourceEligibility(
     app: Fastify,
     input: Readonly<{
@@ -407,13 +415,9 @@ async function projectTeamCredentialBrokerAdministrationReadiness(
         const hasEligibleSource = eligibility.some(candidate => candidate.eligibility?.status === 'eligible');
         const hasChangedSource = eligibility.some(candidate => candidate.eligibility?.status === 'unavailable'
             && (candidate.eligibility.reason === 'source_changed' || candidate.eligibility.reason === 'source_unavailable'));
-        const firstEligibility = eligibility[0]?.eligibility;
-        const brokerRefusalReason = firstEligibility?.status === 'unavailable'
-            && (firstEligibility.reason === 'application_unavailable' || firstEligibility.reason === 'model_unavailable')
-            && eligibility.every(candidate => candidate.eligibility?.status === 'unavailable'
-                && candidate.eligibility.reason === firstEligibility.reason)
-            ? firstEligibility.reason
-            : null;
+        const brokerRefusalReason = readTeamCredentialBrokerRefusalReason(eligibility.map(({ eligibility }) => (
+            eligibility?.status === 'unavailable' ? eligibility.reason : null
+        )));
         let sourcePresentation = resource.sourcePresentation;
         let providerSourceState: 'current' | 'changed' | 'unknown' = source.kind === 'provider_connection' ? 'unknown' : 'current';
         if (source.kind === 'provider_connection') {
@@ -993,12 +997,19 @@ export function registerTeamCredentialResourceRoutes(
         if (brokerMachineId === null || selected === null || selected.status === "unavailable") {
             const sourceUnavailable = candidateResults.some(({ candidate }) => candidate?.status === "unavailable"
                 && candidate.reason === "source_unavailable");
+            const brokerRefusalReason = readTeamCredentialBrokerRefusalReason(candidateResults.map(({ candidate }) => (
+                candidate?.status === "unavailable" ? candidate.reason : null
+            )));
             return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                 result: "needs_attention",
-                readiness: { kind: sourceUnavailable ? "source_unavailable" : "broker_unavailable" },
+                readiness: sourceUnavailable
+                    ? { kind: "source_unavailable" }
+                    : { kind: "broker_unavailable", ...(brokerRefusalReason ? { reason: brokerRefusalReason } : {}) },
                 recovery: sourceUnavailable
                     ? "Repair the credential source and try again."
-                    : "Reconnect the broker Machine and try again.",
+                    : brokerRefusalReason
+                        ? "Review the broker application and model availability, then try again."
+                        : "Reconnect the broker Machine and try again.",
             }));
         }
         if (

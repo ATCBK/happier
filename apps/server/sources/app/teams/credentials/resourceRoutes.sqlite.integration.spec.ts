@@ -2354,6 +2354,15 @@ describe("Team credential resource routes (SQLite integration)", () => {
         })).toBe(true);
         forwardRpcForUser.mockClear();
 
+        // Direct-material reconciliation uses this existing filter. A Team
+        // with only brokered grants must not turn that read into broker work.
+        const directResources = await post("/v1/teams/credential-resources/list", custodian.id, {
+            teamId: team.id, filter: "direct",
+        });
+        expect(directResources.statusCode, directResources.body).toBe(200);
+        expect(directResources.json().resources).toEqual([]);
+        expect(forwardRpcForUser).not.toHaveBeenCalled();
+
         const catalog = await post("/v1/teams/credential-resources/entitled/list", recipient.id, {
             teamId: team.id,
             application,
@@ -2580,6 +2589,20 @@ describe("Team credential resource routes (SQLite integration)", () => {
             source,
             verifiedCredentialEvidence: evidence,
         }));
+        const successfulCandidateRpc = app.forwardRpcForUser;
+        for (const reason of ["application_unavailable", "model_unavailable"] as const) {
+            app.forwardRpcForUser = async () => ({ ok: true, result: { status: "unavailable", reason } });
+            const unavailable = await post("/v1/teams/credential-resources/test", manager.id, {
+                teamId: team.id, resourceId: resource.id,
+            }, evidence);
+            expect(unavailable.statusCode, unavailable.body).toBe(200);
+            expect(unavailable.json()).toMatchObject({
+                result: "needs_attention",
+                readiness: { kind: "broker_unavailable", reason },
+            });
+        }
+        expect(dispatch).toHaveBeenCalledOnce();
+        app.forwardRpcForUser = successfulCandidateRpc;
         await db.teamMembership.delete({ where: {
             teamId_accountId: { teamId: team.id, accountId: custodian.id },
         } });

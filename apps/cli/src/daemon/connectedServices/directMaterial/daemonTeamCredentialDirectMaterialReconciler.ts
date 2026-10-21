@@ -82,7 +82,7 @@ async function listOwnedResources(input: Readonly<{
       do {
         const listed = await input.homeDomainAction({
           actionId: 'teams.credentials.list',
-          input: { teamId: team.id, ...(resourceCursor ? { cursor: resourceCursor } : {}) },
+          input: { teamId: team.id, filter: 'direct', ...(resourceCursor ? { cursor: resourceCursor } : {}) },
           context: { surface: 'cli' },
           ...(input.signal ? { signal: input.signal } : {}),
         });
