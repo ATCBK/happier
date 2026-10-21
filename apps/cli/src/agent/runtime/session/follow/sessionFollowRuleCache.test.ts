@@ -129,14 +129,21 @@ describe('Account Follow rule cache', () => {
     cache.dispose();
   });
 
-  it('withdraws a read that finishes after Account retirement or rule invalidation', async () => {
+  it.each(['retirement', 'invalidation'] as const)('withdraws overlapping refreshes that finish after Account %s', async cause => {
     let finish!: (value: { mode: 'plain'; material: null; rules: typeof row[] }) => void;
+    let invalidate = () => {};
     const lifetime = new AbortController();
     const cache = createSessionFollowRuleCache({ signal: lifetime.signal, isCurrent: () => true,
-      subscribeInvalidation: () => () => {}, read: async () => await new Promise(resolve => { finish = resolve; }) });
-    const pending = cache.read();
-    lifetime.abort();
+      subscribeInvalidation: listener => { invalidate = listener; return () => {}; },
+      read: async () => await new Promise(resolve => { finish = resolve; }) });
+    const pending = cache.read({ refresh: true });
+    const overlapping = cache.read({ refresh: true });
+    if (cause === 'retirement') lifetime.abort();
+    else invalidate();
     finish({ mode: 'plain', material: null, rules: [row] });
-    expect(await pending).toMatchObject({ status: 'unavailable', reason: 'account-retired' });
+    const unavailable = { status: 'unavailable', reason: cause === 'retirement' ? 'account-retired' : 'rules-changed' };
+    expect(await pending).toMatchObject(unavailable);
+    expect(await overlapping).toMatchObject(unavailable);
+    cache.dispose();
   });
 });

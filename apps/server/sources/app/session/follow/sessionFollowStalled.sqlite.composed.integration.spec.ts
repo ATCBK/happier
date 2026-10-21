@@ -14,7 +14,7 @@ import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
 import { createSessionPublisherPresence, expireSessionPublisherCandidates } from '@/app/presence/sessionPublisherPresence';
-import { createAuthenticatedFakeSocket, getSocketHandler } from '@/app/api/testkit/socketHarness';
+import { createAuthenticatedFakeSocket, createSocketRoomDiscoveryHarness, getSocketHandler } from '@/app/api/testkit/socketHarness';
 import { sessionUpdateHandler } from '@/app/api/socket/sessionUpdateHandler';
 import { SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1,
     SessionFollowObservePendingResponseV1Schema, SessionFollowObserveSourceRoutesRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
@@ -240,9 +240,10 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 cleanups.push(() => presence.forgetDisconnectedPublisher({ socket: sourceSocket }));
             }
             const binding = { accountId: account.id, sessionId: destination.id, machineId: machine.id };
-            let publisherSocket = createAuthenticatedFakeSocket({ id: randomUUID() });
+            const nsp = { server: createSocketRoomDiscoveryHarness(async () => []) };
+            let publisherSocket = createAuthenticatedFakeSocket({ id: randomUUID(), nsp });
             const replacePublisher = async () => {
-                publisherSocket = createAuthenticatedFakeSocket({ id: randomUUID() });
+                publisherSocket = createAuthenticatedFakeSocket({ id: randomUUID(), nsp });
                 expect(await presence.registerPublisher({ socket: publisherSocket, binding,
                     completeActivitySnapshot: { state: 'idle', activeCount: 0 } })).toMatchObject({ status: 'registered' });
                 sessionUpdateHandler(account.id, publisherSocket as never, { connectionType: 'session-scoped',
@@ -280,7 +281,9 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             const app = createAuthenticatedTestApp({ authentication: 'real' });
             const requests: { url: string; status: number }[] = [];
             const admissionFault = { originalSeq: null as number | null, boundary: 'admission' as 'admission' | 'routes' };
+            const rulesReadBarrier: { beforeRead?: () => Promise<void> } = {};
             app.addHook('preHandler', async (request, reply) => {
+                if (request.method === 'GET' && request.url === '/v2/account/session-follow-rules') await rulesReadBarrier.beforeRead?.();
                 const body = request.body;
                 const delivery = body && typeof body === 'object' && 'followDeliveryV1' in body
                     ? SessionFollowInputV1Schema.safeParse(body.followDeliveryV1) : null;
@@ -336,10 +339,11 @@ describe('session → Follow WorkerUpdate acceptance', () => {
             // at every preparation boundary.
             let originalReconcile = makeReconciler();
             const restart = () => { originalReconcile = makeReconciler(); };
+            const dispatchReceiverPending = async (observations?: SessionFollowPendingObservationV1[]) => dispatcher.dispatchReceiverRange({
+                observations: observations ?? (await observe()).observations, destinationSessionId: destination.id,
+            });
             const dispatchPending = async () => {
-                if (entry === 'receiver') return dispatcher.dispatchReceiverRange({
-                    observations: (await observe()).observations, destinationSessionId: destination.id,
-                });
+                if (entry === 'receiver') return dispatchReceiverPending();
                 const { readCommittedSessionFollowSourceOccurrence } = await vi.importActual<{
                     readCommittedSessionFollowSourceOccurrence(input: {
                         sourceSessionId: string; serverId: string; ownerAccountId: string; origin: null;
@@ -366,8 +370,10 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                         publisherGeneration: currentSource.publisherGeneration.toString(), committedFenceMs: currentSource.lastActiveAt.getTime() } });
                 }
             };
-            const prepare = async (intent: 'natural' | 'wake', maxFollowContextUtf8Bytes?: number, collectRetainedContext = false) => {
-                await dispatchPending();
+            const prepare = async (intent: 'natural' | 'wake', maxFollowContextUtf8Bytes?: number, collectRetainedContext = false,
+                recovery: 'configured' | 'receiver' | 'admitted' = 'configured') => {
+                if (recovery === 'receiver') await dispatchReceiverPending();
+                else if (recovery === 'configured') await dispatchPending();
                 for (;;) {
                     const retained = collectRetainedContext ? await db.sessionPendingMessage.findMany({
                         where: { sessionId: destination.id, localId: { in: deliveries.map(row => row.localInputId) } },
@@ -448,7 +454,8 @@ describe('session → Follow WorkerUpdate acceptance', () => {
                 await vi.waitFor(() => expect(acknowledgements.length).toBe(before + (prepared.representedFollowLocalInputIds?.length ?? 0)));
                 await Promise.allSettled(acknowledgements);
             };
-            return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart, dispatchPending, admissionFault };
+            return { prepare, accept, acceptNative, settleAcceptance, replacePublisher, deliveries, restart, dispatchPending,
+                dispatchReceiverPending, admissionFault, rulesReadBarrier, requests };
         };
         const appendReply = async (text: string, turnId: string) => {
             await appendTurnInput(turnId);
@@ -916,6 +923,68 @@ describe('session → Follow WorkerUpdate acceptance', () => {
         await original.accept(suffix!);
         expect(f.acceptedPrompts[1]!.indexOf('Report A')).toBeLessThan(f.acceptedPrompts[1]!.indexOf('Report B'));
         expect(f.acceptedPrompts[1]).toContain(artifactId);
+        expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
+        expect((await f.observe()).observations).toEqual([]);
+    });
+
+    it('recovers the CONT16 persisted 8–11 suffix after accepting only original 7 under the successor without replaying source notifications', async () => {
+        const f = await fixture('in_progress', { preset: 'quiet' });
+        for (let index = 0; index < 5; index++) await f.appendTurnInput(`earlier-turn-${index}`);
+        await f.follow({ preset: 'quiet' });
+        const original = await f.originals(true, 'source');
+        const receiver = await db.session.findUniqueOrThrow({ where: { id: f.destination.id } });
+        const held = writeSessionExplicitStopV1ToMetadata(JSON.parse(receiver.metadata), {
+            v: 1, cause: 'explicit_stop', requestId: 'cont16-person-stop', requestedAtMs: 1,
+        });
+        await db.session.update({ where: { id: f.destination.id }, data: { active: false, metadata: JSON.stringify(held) } });
+        expect(await f.appendReport('ORC_LIVE_CONT16_QUIET_7', [])).toBe(7);
+        await original.dispatchPending();
+        const olderObservations = (await f.observe()).observations;
+        const artifactId = randomUUID();
+        for (const [index, summary] of ['A'.repeat(2479), 'B'.repeat(2479), 'Report A', 'Report B'].entries()) {
+            expect(await f.appendReport(summary, index === 2 ? [{ kind: 'artifact', artifactId }] : [])).toBe(index + 8);
+        }
+        // A lost source notification cannot require reposting an already committed
+        // original. Only 7 has Pending custody when the successor first prepares.
+        original.admissionFault.originalSeq = 8;
+        original.admissionFault.boundary = 'routes';
+        await db.session.update({ where: { id: f.destination.id }, data: { active: true,
+            metadata: JSON.stringify(clearSessionExplicitStopV1FromMetadata(held, 'cont16-person-stop')) } });
+        await original.replacePublisher();
+        original.restart();
+        const prefix = await original.prepare('natural', 4096, true, 'receiver');
+        expect(original.deliveries.map(row => 'sourceMessage' in row.delivery.original ? row.delivery.original.sourceMessage.seq : null)).toEqual([7]);
+        expect(prefix?.workerUpdates?.map(update => update.transcriptPointer?.kind === 'session' ? update.transcriptPointer.seq : null)).toEqual([7]);
+        await original.accept(prefix!);
+        expect(await Promise.all(f.acknowledgements)).toEqual([
+            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq: 7 }) }),
+        ]);
+        original.admissionFault.originalSeq = null;
+        // Source notifications and receiver recovery share the captured Account
+        // cache. A delayed 7-only notification must not retire a concurrent range
+        // that has already observed all persisted originals through 11.
+        let releaseRules!: () => void;
+        const rulesGate = new Promise<void>(resolve => { releaseRules = resolve; });
+        let readingRules = false;
+        original.rulesReadBarrier.beforeRead = async () => { readingRules = true; await rulesGate; };
+        const listsBefore = original.requests.filter(request => request.url.endsWith('/follows/sessions')).length;
+        const newestRecovery = original.dispatchReceiverPending();
+        await vi.waitFor(() => expect(readingRules).toBe(true));
+        const olderRecovery = original.dispatchReceiverPending(olderObservations);
+        try {
+            await vi.waitFor(() => expect(original.requests.filter(request => request.url.endsWith('/follows/sessions')).length)
+                .toBe(listsBefore + 2));
+        } finally { releaseRules(); }
+        await Promise.all([newestRecovery, olderRecovery]);
+        original.rulesReadBarrier.beforeRead = undefined;
+        const suffix = await original.prepare('natural', 16384, true, 'admitted');
+        expect(suffix?.workerUpdates?.map(update => update.transcriptPointer?.kind === 'session' ? update.transcriptPointer.seq : null))
+            .toEqual([8, 9, 10, 11]);
+        expect(suffix?.workerUpdates?.[2]?.deliverables).toEqual([{ kind: 'artifact', artifactId }]);
+        await original.accept(suffix!);
+        expect(f.acceptedPrompts[1]).toContain(artifactId);
+        expect(await Promise.all(f.acknowledgements.slice(1))).toEqual([8, 9, 10, 11].map(transcriptSeq =>
+            expect.objectContaining({ ok: true, delivered: expect.objectContaining({ transcriptSeq }) })));
         expect(await db.sessionPendingMessage.count({ where: { sessionId: f.destination.id } })).toBe(0);
         expect((await f.observe()).observations).toEqual([]);
     });

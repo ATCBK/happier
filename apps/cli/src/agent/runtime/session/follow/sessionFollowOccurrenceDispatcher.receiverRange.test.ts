@@ -17,7 +17,7 @@ import { deriveSessionFollowInputLocalIdV1 } from '@happier-dev/protocol/session
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(['receiver', 'source'] as const)('opens the first original range for a fresh rule without an edge or encountered source and keeps an unreadable range pending (%s)', async entry => {
+it.each(['receiver', 'source', 'overlapping-receiver'] as const)('admits the observed original through fresh-rule discovery or overlapping receiver recovery, retaining unreadable ranges (%s)', async entry => {
   const log = vi.spyOn(logger, 'debug').mockImplementation(() => {});
   const authoredLocalId = 'private-authored-follow-source-id';
   const sourceSessionId = 'c111111111111111111111111';
@@ -32,18 +32,26 @@ it.each(['receiver', 'source'] as const)('opens the first original range for a f
     archivedAt: null, active: true, seq: 2, origin: { kind: 'none' as const } };
   const destination = { ...source, id: destinationSessionId, seq: 0 };
   let readable = false;
+  let releaseRules!: () => void;
+  const rulesGate = new Promise<void>(resolve => { releaseRules = resolve; });
+  let readingRules = false;
+  let sourceLists = 0;
   const afterSequences: number[] = [];
   const pending: unknown[] = [];
   vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
     const parsed = new URL(String(url));
     const path = parsed.pathname;
-    if (path.endsWith('/follows/sessions')) return { status: 200, data: { sources: [] } };
+    if (path.endsWith('/follows/sessions')) { sourceLists++; return { status: 200, data: { sources: [] } }; }
     if (path === '/v1/account/encryption/currentness') return { status: 200,
       data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }) };
     if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
     if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200,
       data: { sessions: [], hasNext: false, nextCursor: null } };
     if (path === '/v2/account/session-follow-rules') {
+      if (entry === 'overlapping-receiver') {
+        if (readable) { readingRules = true; await rulesGate; }
+        return { status: 200, data: { rules: [] } };
+      }
       const demanded = options?.params?.destinationSessionId;
       return { status: 200, data: { rules: [rule], ...(demanded ? { sourceRanges: { status: 'available', sources: [{
         sourceSessionId, delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 }, throughSeq: 2,
@@ -67,7 +75,10 @@ it.each(['receiver', 'source'] as const)('opens the first original range for a f
     const path = new URL(String(url)).pathname;
     if (path === '/v2/sessions/lookup-by-tags') return { status: 200, data: { sessions: [] } };
     if (path.endsWith('/follows/occurrence-routes')) return { status: 200,
-      data: { ok: true, v: 1, sourceSessionId, originalCreatedAt: 200, routes: [] } };
+      data: { ok: true, v: 1, sourceSessionId, originalCreatedAt: 200, routes: entry === 'overlapping-receiver' ? [{
+        sourceSessionId, destinationSessionId, relation: 'follower', policy: { preset: 'important' },
+        delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 }, observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 2 },
+      }] : [] } };
     if (path.endsWith('/pending')) { pending.push(body); return { status: 200,
       data: { didWrite: true, message: { localId: 'accepted-original', seq: 1 } } }; }
     throw new Error(`Unexpected POST ${path}`);
@@ -77,7 +88,7 @@ it.each(['receiver', 'source'] as const)('opens the first original range for a f
     signal: new AbortController().signal, isCurrent: async () => true, subscribeInvalidation: () => () => {},
     resolveSourceKeyContext: async () => null, isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
   try {
-    const dispatch = () => entry === 'receiver' ? dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [] })
+    const dispatch = () => entry !== 'source' ? dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [] })
       : dispatcher.dispatch(SessionFollowRuleSourceOccurrenceV1Schema.parse({ sourceSessionId,
           sourcePublisher: { machineId: 'source-machine', publisherGeneration: '1', committedFenceMs: 1 },
           sourceMessage: { localId: authoredLocalId, seq: 2 }, evidence: { v: 1, ownerAccountId: 'account-1',
@@ -85,22 +96,36 @@ it.each(['receiver', 'source'] as const)('opens the first original range for a f
     await dispatch();
     expect(pending).toEqual([]);
     readable = true;
-    const available = await dispatch();
+    const available = await (async () => {
+      if (entry !== 'overlapping-receiver') return dispatch();
+      const observation = { sourceSessionId, destinationSessionId, relation: 'follower' as const, policy: { preset: 'important' as const },
+        delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 1 }, observed: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 2 } };
+      const listsBefore = sourceLists;
+      const latest = dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [observation] });
+      await vi.waitFor(() => expect(readingRules).toBe(true));
+      const older = dispatcher.dispatchReceiverRange({ destinationSessionId, observations: [{ ...observation,
+        observed: { ...observation.observed, transcriptSeq: 1 } }] });
+      try { await vi.waitFor(() => expect(sourceLists).toBe(listsBefore + 2)); }
+      finally { releaseRules(); }
+      return (await Promise.all([latest, older]))[0];
+    })();
     expect(afterSequences).toEqual([1]);
     if (entry === 'receiver') expect(available).toMatchObject({ coveredEvents: [{ sourceSessionId, kind: 'goal_changed' }] });
     expect(pending).toHaveLength(1);
     const localInputId = deriveSessionFollowInputLocalIdV1({ destinationSessionId,
       original: { sourceSessionId, sourceMessage: { localId: authoredLocalId, seq: 2 } } });
-    expect(pending[0]).toMatchObject({ localId: localInputId, followSources: [{ sourceMessage: { localId: authoredLocalId, seq: 2 }, ...(entry === 'source'
-      ? { expectedSourcePublisherGeneration: '1', machineId: 'source-machine', installationId: 'installation' }
-      : { evaluation: 'receiver' }) }] });
+    expect(pending[0]).toMatchObject({ localId: localInputId, ...(entry === 'overlapping-receiver'
+      ? { followRelations: [{ relation: 'follower' }] }
+      : { followSources: [{ sourceMessage: { localId: authoredLocalId, seq: 2 }, ...(entry === 'source'
+        ? { expectedSourcePublisherGeneration: '1', machineId: 'source-machine', installationId: 'installation' }
+        : { evaluation: 'receiver' }) }] }) });
     const admissionLogs = log.mock.calls.filter(([message]) => message === '[Session Follow] Original admission completed');
     expect(admissionLogs).toHaveLength(1);
     expect(JSON.stringify(admissionLogs)).not.toContain(authoredLocalId);
     expect(admissionLogs).toEqual([[expect.any(String), expect.objectContaining({
       sourceSessionId, destinationSessionId, sourceMessageSeq: 2, ok: true, localInputId,
     })]]);
-  } finally { dispatcher.dispose(); }
+  } finally { releaseRules(); dispatcher.dispose(); }
 });
 
 it.each(['complete', 'unavailable-route', 'unavailable-mute', 'optout-before-dispatch', 'unavailable-personal-scope'] as const)(
