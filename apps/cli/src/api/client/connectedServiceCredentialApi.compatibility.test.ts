@@ -18,12 +18,58 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
 import { acquireRequesterAccountEncryptionCurrentness } from './accountEncryptionCurrentnessObservation';
 import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { projectAutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
+import { readAccountEncryptionModeOnce } from './accountEncryptionMode';
 
 describe('connected-service credential exact 0.2.1 response boundary', () => {
   beforeEach(() => {
     vi.mocked(axios.get).mockReset();
     vi.mocked(axios.delete).mockReset();
     vi.mocked(axios.isAxiosError).mockReset();
+  });
+
+  it('does not retain a settled mode TTL without an admitted Account socket lifetime', async () => {
+    vi.mocked(axios.get)
+      .mockResolvedValueOnce({ status: 200, data: { mode: 'plain', updatedAt: 1 } })
+      .mockResolvedValueOnce({ status: 200, data: { mode: 'e2ee', updatedAt: 2 } });
+    const api = new ConnectedServiceCredentialHttpClient({ token: 'unheld-token' });
+    await expect(api.getAccountEncryptionMode()).resolves.toBe('plain');
+    await expect(api.getAccountEncryptionMode()).resolves.toBe('e2ee');
+    expect(axios.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an explicit fresh-authority mode read fresh before a held socket publication', async () => {
+    const channel = await createRequesterCurrentnessSocketHarness();
+    let current = { mode: 'plain' as 'plain' | 'e2ee', version: 1, updatedAt: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null };
+    vi.mocked(axios.get).mockImplementation(async url => ({ status: 200,
+      data: String(url).endsWith('/currentness') ? current : { mode: current.mode, updatedAt: current.updatedAt } }));
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    const holder = acquireRequesterAccountEncryptionCurrentness({ accountId: 'bob', token,
+      serverBaseUrl: 'https://server.example' });
+    try {
+      await holder.read();
+      const api = new ConnectedServiceCredentialHttpClient({ token });
+      await expect(api.getAccountEncryptionMode()).resolves.toBe('plain');
+      current = { ...current, mode: 'e2ee', version: 2, updatedAt: 2 };
+      await expect(api.getAccountEncryptionMode({ refresh: true })).resolves.toBe('e2ee');
+    } finally { await holder.dispose(); await channel.close(); }
+  });
+
+  it('keeps the explicit fresh-authority storage-mode boundary separate from a live identity fact', async () => {
+    const channel = await createRequesterCurrentnessSocketHarness();
+    const current = { mode: 'plain' as const, version: 1, updatedAt: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null };
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data: current });
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    const scope = { token, serverBaseUrl: 'https://server.example' };
+    const holder = acquireRequesterAccountEncryptionCurrentness({ ...scope, accountId: 'bob' });
+    try {
+      await holder.read();
+      const request = vi.fn(async () => ({ status: 200, data: { mode: 'e2ee', updatedAt: 2 } }));
+      await expect(readAccountEncryptionModeOnce({ scope, request, usage: 'fresh-authority' }))
+        .resolves.toEqual({ kind: 'resolved', mode: 'e2ee' });
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally { await holder.dispose(); await channel.close(); }
   });
 
   it('accepts the released no-revision response only as legacy_unfenced', async () => {

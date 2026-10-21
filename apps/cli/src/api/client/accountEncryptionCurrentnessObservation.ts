@@ -1,4 +1,6 @@
-import { AccountEncryptionCurrentnessResponseSchema, type AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { type AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { createAccountEncryptionCurrentnessObservation, sameAccountEncryptionIdentity,
+    waitForAccountEncryptionObservation } from '@happier-dev/sync-client';
 import { UpdateContainerSchema } from '@happier-dev/protocol/updates';
 import { createManagedConnectionSupervisor, DEFAULT_MANAGED_CONNECTION_POLICY, type ManagedConnectionSupervisor, type ManagedConnectionTransport } from '@happier-dev/connection-supervisor';
 import { fetchAccountEncryptionCurrentnessFromServer, AccountEncryptionCurrentnessUnavailableError } from './accountEncryptionCurrentness';
@@ -44,9 +46,7 @@ export function readObservedAccountEncryptionCurrentness(scope: Readonly<{
 }
 
 export function sameRequesterAccountEncryptionCurrentness(a: AccountEncryptionCurrentnessResponse, b: AccountEncryptionCurrentnessResponse): boolean {
-    // Account seq/settings also change for unrelated activity.
-    return a.mode === b.mode && a.updatedAt === b.updatedAt
-        && a.signingKeyFingerprint === b.signingKeyFingerprint && a.contentKeyFingerprint === b.contentKeyFingerprint;
+    return sameAccountEncryptionIdentity(a, b);
 }
 
 /** Encryption identity only; exact Account cursor/Settings witnesses still use fresh HTTP. */
@@ -130,14 +130,17 @@ function createObservation(scope: Scope): SharedObservation {
     let activeTransport: ManagedConnectionTransport | undefined;
     let connectionReady: Promise<void> | null = null;
     let stopping: Promise<void> | null = null;
-    let fact: AccountEncryptionCurrentnessResponse | null = null;
     let lifetime = new AbortController();
     const retirement = new AbortController();
     let connected = false;
     let disposed = false;
     let unsupported = false;
-    let pending: Promise<void> | null = null;
-    let readError: unknown = null;
+    const currentness = createAccountEncryptionCurrentnessObservation({
+        accountId: scope.accountId,
+        readFresh: signal => fetchAccountEncryptionCurrentnessFromServer({ token: activeToken,
+            serverBaseUrl: scope.serverBaseUrl, signal }),
+        unavailable: () => new AccountEncryptionCurrentnessUnavailableError(),
+    });
     let supervisor: ManagedConnectionSupervisor | undefined;
     const settingsListeners = new Set<(event: RequesterAccountSettingsObservation) => void>();
     let settingsEvent: RequesterAccountSettingsObservation | null = null;
@@ -153,7 +156,7 @@ function createObservation(scope: Scope): SharedObservation {
         settingsEvent = event;
         for (const listener of settingsListeners) listener(event);
     };
-    const invalidate = () => { lifetime.abort(); lifetime = new AbortController(); fact = null; pending = null; readError = null; };
+    const invalidate = () => { lifetime.abort(); lifetime = new AbortController(); currentness.invalidate(); };
     // Classify the incumbent Account feed before invalidating private rules:
     // ordinary Session updates must not reload the rule corpus per occurrence.
     const syncFollowChanges = () => {
@@ -197,15 +200,6 @@ function createObservation(scope: Scope): SharedObservation {
         // Transport failures are normalized by fetchChanges; keep listener failures observed, too.
         void work.catch(() => { if (current()) logger.warn('Requester Follow invalidation unavailable.'); });
     };
-    const refresh = () => {
-        if (!connected || disposed || fact || pending) return;
-        const captured = lifetime;
-        pending = waitForObservation(fetchAccountEncryptionCurrentnessFromServer({ token: activeToken, serverBaseUrl: scope.serverBaseUrl,
-            signal: captured.signal }), captured.signal)
-            .then(next => { if (connected && !disposed && lifetime === captured) fact = next; })
-            .catch(error => { if (lifetime === captured) readError = error; })
-            .finally(() => { if (lifetime === captured) pending = null; });
-    };
     // Stop settles the socket adapter's in-flight connect; never queue retirement
     // behind a connect or HTTP read that may still be waiting on the network.
     const stopConnection = () => {
@@ -217,9 +211,7 @@ function createObservation(scope: Scope): SharedObservation {
     const startConnection = () => {
         const starting = supervisor!.start();
         connectionReady = starting;
-        void starting.catch(error => {
-            if (connectionReady === starting && !disposed) readError = error;
-        });
+        void starting.catch(() => {});
         return starting;
     };
     // The existing socket/managed-connection owners supply reconnection policy;
@@ -250,31 +242,19 @@ function createObservation(scope: Scope): SharedObservation {
                         publishSettings({ kind: 'hint', version: parsed.success && 'settingsVersion' in body ? body.settingsVersion : undefined });
                     }
                 }
-                if (!parsed.success) {
-                    // Invalid matching encryption publication withdraws trust;
-                    // its contents are never admitted as an Account fact.
-                    const body = raw && typeof raw === 'object' && 'body' in raw ? raw.body : null;
-                    if (body && typeof body === 'object' && 't' in body && body.t === 'update-account'
-                        && 'id' in body && body.id === scope.accountId && 'encryptionCurrentness' in body) invalidate();
-                    return;
+                if (currentness.update(raw)) {
+                    lifetime.abort();
+                    lifetime = new AbortController();
                 }
-                if (parsed.data.body.t !== 'update-account' || parsed.data.body.id !== scope.accountId) return;
-                if (!('encryptionCurrentness' in parsed.data.body)) return;
-                const next = AccountEncryptionCurrentnessResponseSchema.safeParse(parsed.data.body.encryptionCurrentness);
-                if (next.success && fact && next.data.version < fact.version) return;
-                // A push wins over a concurrently outstanding initial HTTP read.
-                invalidate();
-                fact = next.success ? next.data : null;
-                pending = null;
             });
-            transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); refresh(); publishSettings({ kind: 'reconnected' }); publishFollow(); publishSource(null); syncFollowChanges(); } });
-            transport.onDisconnected(() => { if (isActive()) { connected = false; invalidate(); publishSettings({ kind: 'disconnected' }); publishFollow(); publishSource(null); } });
+            transport.onConnected(() => { if (isActive()) { connected = true; invalidate(); currentness.connected(); publishSettings({ kind: 'reconnected' }); publishFollow(); publishSource(null); syncFollowChanges(); } });
+            transport.onDisconnected(() => { if (isActive()) { connected = false; invalidate(); currentness.disconnected(); publishSettings({ kind: 'disconnected' }); publishFollow(); publishSource(null); } });
             return transport;
         };
         supervisor = createManagedConnectionSupervisor({ ...DEFAULT_MANAGED_CONNECTION_POLICY,
             createTransport,
             probeReadiness: async () => ({ status: 'ready' }), classifyTransportErrorToProbeResult,
-            onAuthFailed: () => { connected = false; invalidate(); },
+            onAuthFailed: () => { connected = false; invalidate(); currentness.disconnected(); },
         });
         // A runtime without this transport keeps the incumbent fresh HTTP path.
         // Once a channel exists, connection failure is unknown, never fallback.
@@ -310,6 +290,7 @@ function createObservation(scope: Scope): SharedObservation {
             activeTransport = undefined;
             connected = false;
             invalidate();
+            currentness.disconnected();
             // Settings holders lose the retired credential's channel like any disconnect.
             publishSettings({ kind: 'disconnected' });
             publishFollow();
@@ -324,7 +305,7 @@ function createObservation(scope: Scope): SharedObservation {
                 }
             });
         },
-        isCurrent: expected => !disposed && (unsupported || connected && fact !== null && sameRequesterAccountEncryptionCurrentness(fact, expected)),
+        isCurrent: expected => !disposed && (unsupported || connected && currentness.isCurrent(expected)),
         async read(signal) {
             signal?.throwIfAborted();
             const readerSignal = signal ? AbortSignal.any([signal, retirement.signal]) : retirement.signal;
@@ -341,16 +322,14 @@ function createObservation(scope: Scope): SharedObservation {
                 await waitForObservation(starting, readerSignal);
                 if (connectionReady === starting) break;
             }
-            if (connected && !fact) refresh();
-            if (pending) await waitForObservation(pending, readerSignal);
             signal?.throwIfAborted();
             if (disposed) throw new AccountEncryptionCurrentnessUnavailableError();
             if (!connected) throw Object.assign(new AccountEncryptionCurrentnessUnavailableError(), { retryable: true });
-            if (!fact) throw readError ?? Object.assign(new AccountEncryptionCurrentnessUnavailableError(), { retryable: true });
-            return fact;
+            return await currentness.read(readerSignal);
         },
         async dispose() {
             disposed = true; activeTransport = undefined; connected = false; retirement.abort(); invalidate();
+            currentness.dispose();
             publishSettings({ kind: 'disconnected' });
             settingsListeners.clear();
             followListeners.clear();
@@ -364,11 +343,5 @@ function createObservation(scope: Scope): SharedObservation {
 
 /** Reader cancellation must not cancel a different holder's shared subscription. */
 export function waitForObservation<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-        const abort = () => reject(signal.reason);
-        const detach = () => signal.removeEventListener('abort', abort);
-        signal.addEventListener('abort', abort, { once: true });
-        operation.then(value => { detach(); resolve(value); }, error => { detach(); reject(error); });
-        if (signal.aborted) { detach(); abort(); }
-    });
+    return waitForAccountEncryptionObservation(operation, signal);
 }
