@@ -242,7 +242,7 @@ export function isUsageNightHour(hour: number, night: NonNullable<UsageWorkInter
 }
 
 /** Half-open lane spans share one boundary sweep for period and calendar peaks. */
-export function summarizeUsageConcurrency(segments: readonly UsageWorkIntervalSegment[]): { maxParallel: number; parallelBusyMs: number } {
+export function summarizeUsageConcurrency(segments: readonly UsageWorkIntervalSegment[]): { maxParallel: number; parallelBusyMs: number; peakAtMs: number | null } {
     const boundaries = new Map<number, number>();
     for (const span of segments) {
         boundaries.set(span.startMs, (boundaries.get(span.startMs) ?? 0) + 1);
@@ -252,13 +252,14 @@ export function summarizeUsageConcurrency(segments: readonly UsageWorkIntervalSe
     let previous: number | null = null;
     let maxParallel = 0;
     let parallelBusyMs = 0;
+    let peakAtMs: number | null = null;
     for (const [instant, change] of [...boundaries.entries()].sort((a, b) => a[0] - b[0])) {
         if (previous !== null && active > 1) parallelBusyMs += instant - previous;
         active += change;
-        maxParallel = Math.max(maxParallel, active);
+        if (active > maxParallel) { maxParallel = active; peakAtMs = instant; }
         previous = instant;
     }
-    return { maxParallel, parallelBusyMs };
+    return { maxParallel, parallelBusyMs, peakAtMs };
 }
 
 export function projectUsageWorkIntervals(input: UsageWorkIntervalsInput): UsageWorkIntervalsProjection {
@@ -318,7 +319,9 @@ export function projectUsageWorkIntervals(input: UsageWorkIntervalsInput): Usage
         busy.push(...lane.busy);
         waits.push(...lane.waits);
     }
-    Object.assign(result, summarizeUsageConcurrency(busy));
+    const concurrency = summarizeUsageConcurrency(busy);
+    result.maxParallel = concurrency.maxParallel;
+    result.parallelBusyMs = concurrency.parallelBusyMs;
     const mergedBusy = mergeUsageWorkIntervalSegments(busy);
     const mergedWaits = mergeUsageWorkIntervalSegments(waits);
     result.elapsedBusyMs = duration(mergedBusy);

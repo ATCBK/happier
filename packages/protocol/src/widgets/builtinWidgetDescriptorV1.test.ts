@@ -42,6 +42,8 @@ describe('native widget target contracts', () => {
         ] });
         expect(resolveEffectiveInputFields({ inputHints: rhythm.inputs }, { style: 'sky' }).map(field => field.path)).toContain('colourBy');
         expect(resolveEffectiveInputFields({ inputHints: rhythm.inputs }, { style: 'weekTide' }).map(field => field.path)).not.toContain('colourBy');
+        expect(resolveEffectiveInputFields({ inputHints: rhythm.inputs }, { style: 'heatmap' }).map(field => field.path)).not.toContain('metric');
+        expect(resolveEffectiveInputFields({ inputHints: rhythm.inputs }, { style: 'sky' }).map(field => field.path)).toContain('metric');
         expect(rhythm.inputs?.fields.filter(field => ['metric', 'style', 'colourBy'].includes(field.path)).every(field => field.contextMode === 'own')).toBe(true);
     });
     it('discovers the five distinct chart questions and materializes Agents preset from descriptor defaults', () => {

@@ -9,7 +9,7 @@ import { lazyDefinition } from '../lazyZodSchema.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import { WorkspaceRefV1WriteSchema } from '../workspaces/workspaceRefV1.js';
 import type { WidgetLayoutWidgetV1 } from './widgetLayoutItemV1.js';
-import { USAGE_QUERY_INPUT_FIELDS, USAGE_MULTI_BREAKDOWN_INPUT_FIELD, UsageQuerySchema, UsageSourceInventoryScopeSchema } from '../inputs/usageQuery.js';
+import { USAGE_QUERY_INPUT_FIELDS, USAGE_MULTI_BREAKDOWN_INPUT_FIELD, UsageAccountingMetricSchema, UsageQuerySchema, UsageSourceInventoryScopeSchema } from '../inputs/usageQuery.js';
 import { MachineTargetV1Schema } from '../machines/machineAccessV1.js';
 import { VoiceTrackedSessionAddressV1Schema } from '../sessions/follow/voiceTrackedTargetsCompatibilityV1.js';
 import type { InputFieldHint } from '../inputs/inputFields.js';
@@ -116,7 +116,7 @@ const nativeMetadata = {
     usage_sources: { title: 'Sources', titleKey: 'usage.widgets.usage_sources', descriptionKey: 'usage.board.page.purposeSources', icon: 'stack' },
     usage_source_coverage: { title: 'Coverage', titleKey: 'usage.widgets.usage_source_coverage', descriptionKey: 'usage.board.sources.coveragePurpose', icon: 'stack' },
     usage_unpriced: { title: 'Unpriced', titleKey: 'usage.widgets.usage_unpriced', descriptionKey: 'usage.board.sources.unpricedPurpose', icon: 'currency-dollar' },
-    usage_score: { title: 'Score dots', titleKey: 'usage.widgets.usage_score', icon: 'dots-nine' },
+    usage_score: { title: 'Score dots', titleKey: 'usage.widgets.usage_score', icon: 'chart-bar' },
     usage_orbit: { title: 'Orbit', titleKey: 'usage.widgets.usage_orbit', icon: 'planet' },
     usage_constellation: { title: 'Constellation', titleKey: 'usage.widgets.usage_constellation', icon: 'graph' },
     usage_planet: { title: 'Your planet', titleKey: 'usage.widgets.usage_planet', icon: 'planet' },
@@ -185,6 +185,8 @@ function usageInputs(id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 {
     if (id === 'usage_rhythm') {
         const metric = fields.find(field => field.path === 'metric')!;
         metric.required = false; // Retained copies predate the Metric input.
+        // The incumbent combined activity composition has no selected-measure encoding.
+        metric.visibleWhen = { op: 'or', any: ['sky', 'weekTide', 'daylight'].map(value => ({ op: 'eq', path: 'style', value })) };
     }
     if (styles) fields.push({ path: 'style', title: 'Style', widget: 'select', contextMode: 'own',
         options: styles.map(value => ({ value, label: labels[value]! })) });
@@ -196,7 +198,7 @@ function usageInputs(id: UsageBuiltinWidgetIdV1): WidgetInputDescriptorV1 {
         z.extend(UsageQuerySchema, {
             ...(id === 'usage_rhythm' ? { metric: z._default(UsageQuerySchema.shape.metric._zod.def.innerType, 'busy'),
                 colourBy: z._default(z.enum(['intensity', 'leadingAgent']), 'intensity') }
-                : { metric: z._default(z.enum(['tokens', 'cost']), 'tokens') }),
+                : { metric: z._default(UsageAccountingMetricSchema, 'tokens') }),
             ...(styles ? { style: z._default(z.enum(styles), styles[0]) } : {}),
             ...(id === 'usage_parallel' || id === 'usage_score' ? { day: z.optional(z.iso.date()) } : {}),
         }), { target: 'draft-7' }))) };

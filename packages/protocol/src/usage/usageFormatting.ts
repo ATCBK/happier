@@ -40,6 +40,19 @@ export function formatPercent(value: number): string {
     return `${trimTrailingZero(value.toFixed(1))}%`;
 }
 
+/** A share, not a percentage-valued measure. */
+export const formatUsageSharePercent = (share: number): string => `${Math.round(share * 100)}%`;
+
+/** Hours on the Usage chart's calendar, including its closing 24:00 tick. */
+export const formatUsageChartClock = (hour: number): string => `${String(Math.floor(hour) % 24 === 0 && hour >= 24 ? 24 : Math.floor(hour) % 24).padStart(2, '0')}:${String(Math.round((hour % 1) * 60)).padStart(2, '0')}`;
+
+/** The fixed calendar offset, stated rather than assumed to be the viewer's local zone. */
+export function formatUsageUtcOffset(offsetMinutes: number): string {
+    const sign = offsetMinutes < 0 ? '−' : '+';
+    const absolute = Math.abs(Math.round(offsetMinutes));
+    return `UTC${sign}${String(Math.floor(absolute / 60)).padStart(2, '0')}:${String(absolute % 60).padStart(2, '0')}`;
+}
+
 /** Keep a short trailing model/Agent-id segment together with a non-breaking hyphen. */
 export function formatIdentifierLabel(value: string): string {
     return value.replace(/-(?=[^-]{1,3}$)/, '‑');

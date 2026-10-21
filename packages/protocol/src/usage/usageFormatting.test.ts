@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatUsageCalendarDate, formatUsageCalendarRange, formatUsageDuration, formatUsageDurationCompact } from './usageFormatting.js';
+import { formatUsageCalendarDate, formatUsageCalendarRange, formatUsageChartClock, formatUsageDuration,
+    formatUsageDurationCompact, formatUsageSharePercent, formatUsageUtcOffset } from './usageFormatting.js';
 
 describe('shared Usage formatting', () => {
     it('keeps measured duration rounding and host-owned long/narrow unit labels', () => {
@@ -32,5 +33,15 @@ describe('shared Usage formatting', () => {
         expect(formatUsageCalendarRange(startMs, oneDayEnd + 86_400_000, 120, 'en-US')).toBe(`${date(2)} – ${date(3)}`);
         expect(formatUsageCalendarRange(startMs, startMs, 120, 'en-US')).toBe(date(2));
         expect(formatUsageCalendarDate(Date.UTC(2026, 0, 2, 2), -330, undefined, 'en-US')).toBe(date(1));
+    });
+
+    it('retains the chart closing tick, fractional hours, share units and explicit fixed offsets', () => {
+        expect(formatUsageChartClock(0)).toBe('00:00');
+        expect(formatUsageChartClock(24)).toBe('24:00');
+        expect(formatUsageChartClock(7.5)).toBe('07:30');
+        expect(formatUsageSharePercent(0)).toBe('0%');
+        expect(formatUsageSharePercent(0.245)).toBe('25%');
+        expect(formatUsageUtcOffset(120)).toBe('UTC+02:00');
+        expect(formatUsageUtcOffset(-330)).toBe('UTC−05:30');
     });
 });

@@ -5,8 +5,17 @@ import { UsageAnalyticsQueryRequestSchema } from '../usage/usageAnalyticsContrac
 import { InputFieldHintSchema } from './inputFields.js';
 import { resolveEffectiveInputFields } from './inputFieldRuntime.js';
 import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
+import * as usageQuery from './usageQuery.js';
 
 describe('shared UsageQuery', () => {
+  it('keeps accounting-only consumers on an explicit tokens/cost boundary rather than else-tokens', () => {
+    expect(usageQuery.UsageAccountingMetricSchema.parse('tokens')).toBe('tokens');
+    expect(usageQuery.UsageAccountingMetricSchema.parse('cost')).toBe('cost');
+    for (const metric of ['sessions', 'busy', 'steering', 'peakParallel']) {
+      expect(usageQuery.UsageAccountingMetricSchema.safeParse(metric).success).toBe(false);
+      expect(normalizeUsageQuery({ metric }).metric).toBe(metric);
+    }
+  });
   it('keys eligible public history separately and preserves the ordinary older-server request shape', () => {
     const ordinary = normalizeUsageQuery({});
     const explicitOrdinary = normalizeUsageQuery({ population: 'all_personal_history' });

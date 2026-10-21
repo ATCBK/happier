@@ -10,6 +10,8 @@ export const UsageRelativePeriodSchema = z.enum(['today', '7days', '30days', '90
 export type UsageRelativePeriod = z.infer<typeof UsageRelativePeriodSchema>;
 
 /** Presentation identity, not an accounting HTTP clause. Evidence-backed measures retain their unit. */
+export const UsageAccountingMetricSchema = z.enum(['tokens', 'cost']);
+export type UsageAccountingMetric = z.infer<typeof UsageAccountingMetricSchema>;
 export const UsagePresentationMetricSchema = z.enum(['tokens', 'cost', 'sessions', 'busy', 'steering', 'peakParallel']);
 export type UsagePresentationMetric = z.infer<typeof UsagePresentationMetricSchema>;
 
