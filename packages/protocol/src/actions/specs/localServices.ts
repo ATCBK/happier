@@ -318,7 +318,7 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
   approvalSummaries: { 'localServices.launcher.start': describeLocalServiceStartApprovalSummary },
   approvalPolicies: {
     // A person's own Start is reversible and the Services page owns its designed setup/copy review;
-    // Agent, CLI and automation requests keep the approval floor.
+    // Agent, CLI and automation requests keep the approval floor. Stop and Restart keep their confirmation.
     'localServices.launcher.start': { uiConfirmation: 'direct' },
     'localServices.publicPreview.status': { agentDefault: 'egress' },
     'localServices.publicPreview.copyUrl': { agentDefault: 'egress' },
