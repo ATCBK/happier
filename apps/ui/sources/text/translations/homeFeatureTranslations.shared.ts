@@ -129,6 +129,10 @@ export const en = {
             title: 'Following',
             description: 'Follow a session to get its updates and notifications.',
         },
+        autonomousExchange: {
+            title: 'Autonomous exchanges',
+            description: 'Track accepted starts and Account check-ins when agents start sessions for each other.',
+        },
         conversations: {
             title: 'Conversations',
             description: 'People talk and mention each other inside a shared session.',
