@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { t } from '@/text';
 
 import { createSessionListViewFilterDefaults } from './sessionListViewFilters';
 import type { SessionListViewFilterController } from './useSessionListViewFilterController';
@@ -63,8 +64,9 @@ describe('SessionListFilterControl legacy corpus presentation', () => {
             label: string;
             editor: Readonly<{ queryEnabled: boolean }>;
         }>;
-        expect(props.label).toBe('Owned & shared directly');
-        expect(props.label).not.toContain('My work');
+        // The legacy corpus is named by its own declared label, never by the semantic scope's (copy: 93cdda7854
+        // set the shared catalog's legacy wording to "My work"; this pins the key, not the words).
+        expect(props.label).toBe(t('sessionsList.filtersLegacyOwnerDirect'));
         expect(props.editor.queryEnabled).toBe(false);
     });
 

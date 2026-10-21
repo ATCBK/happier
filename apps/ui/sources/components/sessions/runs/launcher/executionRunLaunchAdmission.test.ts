@@ -30,6 +30,7 @@ import { sessionModelSelectionKey } from '@/components/sessions/modelPicker/sess
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import { createAccountTokenForTests, createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createConfirmedTeamModelProjectionFixture } from '@/dev/testkit/harness/providerSettingsHarness';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resetTeamsDirectoryEngineForTests } from '@/sync/engine/teams/teamsDirectoryEngine';
@@ -486,6 +487,9 @@ describe('real execution Run launch admission', () => {
         const readiness = createDeferred<unknown>();
         boundary.rpc.mockImplementation(async (request) => {
             if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return supportedCapabilities;
+            // A Team model commits only after the selected worker projects it (recipient consent held there).
+            if (request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) return createConfirmedTeamModelProjectionFixture({
+                agentTargetKey: teamModel.agentTargetKey, modelId: teamModel.modelId, modelName: 'Shared review model' });
             if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
                 const payload = request.payload as { spawnNonce?: string };
                 return { type: 'success', sessionIdStatus: 'pending', spawnNonce: payload.spawnNonce };

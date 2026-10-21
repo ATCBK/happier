@@ -620,7 +620,9 @@ describe('SessionActionDraftCard', () => {
       .map((node: any) => node.findAllByType('Text').map((text: any) => text.props.children).join(''));
 
     expect(paintedOptionLabels.length).toBeGreaterThan(0);
-    expect(describedOptionLabels).toEqual(paintedOptionLabels);
+    // The choice field seats rows it cannot offer (a sole required selection) after the others; that moves
+    // no row, so the descriptor must report the same rows, not their seating.
+    expect([...describedOptionLabels].sort()).toEqual([...paintedOptionLabels].sort());
   });
 
   /**

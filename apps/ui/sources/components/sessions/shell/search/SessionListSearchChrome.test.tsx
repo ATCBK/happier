@@ -407,6 +407,8 @@ describe('SessionListSearchChrome', () => {
     it('lets the open field use the available width without fixing its height', async () => {
         const { SessionListSearchChrome } = await import('./SessionListSearchChrome');
         const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        // The platform the chrome sees is the one the shell mocks install; the static import above predates them.
+        const { Platform: chromePlatform } = await import('react-native');
         const screen = await renderScreen(
             <SessionListSearchChrome
                 searchQuery="responsive"
@@ -429,7 +431,7 @@ describe('SessionListSearchChrome', () => {
         expect(inputStyle.lineHeight).toBeUndefined();
 
         const escalation = screen.root.findByProps({ testID: 'session-list-search-everything' });
-        expect(flatten(escalation.props.style).minHeight).toBe(resolveMinimumInteractiveTargetSize(Platform.OS));
+        expect(flatten(escalation.props.style).minHeight).toBe(resolveMinimumInteractiveTargetSize(chromePlatform.OS));
         expect(escalation.findByType(Text).props.numberOfLines).toBeUndefined();
     });
 

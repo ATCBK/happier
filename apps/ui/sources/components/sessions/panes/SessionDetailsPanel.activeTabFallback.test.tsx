@@ -80,6 +80,7 @@ vi.mock('@/components/sessions/terminal/SessionEmbeddedTerminalPane', () => ({
 const scopeState = {
     details: {
         isOpen: true,
+        tabState: {},
         activeTabKey: null,
         tabs: [
             { key: 'file:a', kind: 'file', title: 'a.txt', isPinned: true, isPreview: false, resource: { kind: 'file', path: 'a.txt' } },
@@ -97,6 +98,10 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
         scopeState,
     }),
 }));
+
+// Compile the real graph during collection, after its boundaries are installed, so a cold import is not
+// charged to the first test's deadline.
+await import('./SessionDetailsPanel');
 
 describe('SessionDetailsPanel (active tab fallback)', () => {
     it('marks only the last tab active when activeTabKey is missing', async () => {

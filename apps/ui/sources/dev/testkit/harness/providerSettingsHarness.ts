@@ -264,6 +264,31 @@ export function createProviderModelProjectionFixture(input: Readonly<{
     }) as Extract<DaemonProviderModelProjectionResponseV1, { status: 'success' }>;
 }
 
+/**
+ * The selected worker's answer for a Team provider model whose recipient consent the worker already
+ * holds: the projection a Team model selection reads before it commits (`useConfirmExperimentalProviderModel`).
+ */
+export function createConfirmedTeamModelProjectionFixture(input: Readonly<{
+    agentTargetKey: string;
+    modelId: string;
+    modelName?: string;
+    confirmationSource?: Readonly<{ connectionId: string; catalogSourceKey: string }>;
+}>): Extract<DaemonProviderModelProjectionResponseV1, { status: 'success' }> {
+    const confirmationSource = input.confirmationSource
+        ?? { connectionId: 'connected-source:recipient', catalogSourceKey: 's'.repeat(43) };
+    return createProviderModelProjectionFixture({ agentTargetKey: input.agentTargetKey,
+        groups: [createProviderModelProjectionGroupFixture({ connectionId: confirmationSource.connectionId,
+            connectionRevision: 0, rows: [{
+                ref: { agentTargetKey: input.agentTargetKey, providerConnectionId: confirmationSource.connectionId, modelId: input.modelId },
+                descriptor: { id: input.modelId, name: input.modelName ?? input.modelId }, confirmationSource,
+                sources: { manual: false, static: false, probe: false }, confidence: 'account_unverified',
+                compatibility: { result: { status: 'experimental', reasons: ['compatibility_evidence_missing'],
+                    selectedProtocol: 'openai-responses', confirmationScope: { kind: 'model', modelId: input.modelId } },
+                    compatibilityFingerprint: 'compatibility:v1:worker', confirmed: true },
+                endpointHealth: 'not_checked', catalog: { stale: false }, loadState: 'unknown', visibility: 'visible',
+            }] })] });
+}
+
 function defaultResponses(): ProviderRpcResponseByMethod {
     return {
         [RPC_METHODS.DAEMON_PROVIDERS_BINDING_STATUS]: DaemonProviderBindingStatusResponseV1Schema.parse({ status: 'current' }),

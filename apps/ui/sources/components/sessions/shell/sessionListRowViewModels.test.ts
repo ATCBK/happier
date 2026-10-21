@@ -99,6 +99,7 @@ describe('buildSessionListRowViewModels', () => {
     });
 
     it('retains detached runtime activity alongside a completed primary turn', () => {
+        // The completed turn is not finished work while the runtime reports continuing background activity.
         const item = { type: 'session', sessionId: 'external-ready-background', serverId: 'server_a',
             storageKind: 'direct', groupKey: 'group-a', groupKind: 'date' } satisfies SessionListIndexItem;
         const session: SessionListRenderableSession = {
@@ -113,7 +114,7 @@ describe('buildSessionListRowViewModels', () => {
             hasMultipleMachines: false, pinnedSessionKeys: new Set(), sessionTags: {}, selectedSessionId: null,
             showServerBadge: false, showPinnedServerBadge: false,
         });
-        expect(row?.sessionStatus?.state).toBe('ready');
+        expect(row?.sessionStatus?.state).toBe('background_active');
         expect(row?.externalSessionRuntime?.detachedActivity).toBe('active');
     });
 

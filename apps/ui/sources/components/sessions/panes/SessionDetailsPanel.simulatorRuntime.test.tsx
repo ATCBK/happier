@@ -67,6 +67,10 @@ const simulatorTab = {
     resource: { kind: 'simulatorPreview', viewerId: 'viewer_1', selectedSimulatorId: 'sim_1' },
 };
 
+// Compile the real graph during collection, after its boundaries are installed, so a cold import is not
+// charged to the first test's deadline.
+await import('./SessionDetailsPanel');
+
 describe('SessionDetailsPanel simulator runtime wiring', () => {
     it('renders the live daemon snapshot and preserves device selection through real actions', async () => {
         const { SessionDetailsPanel } = await import('./SessionDetailsPanel');

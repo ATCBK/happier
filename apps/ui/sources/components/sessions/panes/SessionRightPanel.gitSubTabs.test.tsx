@@ -15,6 +15,11 @@ installSessionDetailsPanelCommonModuleMocks({
     },
 });
 
+// Compile the real graph during collection, after its boundaries are installed, so a cold import is not
+// charged to the first test's deadline.
+await import('./SessionRightPanel');
+await import('./git/SessionRightPanelGitView');
+
 let snapshot: ScmWorkingSnapshot | null;
 const rpc = vi.fn(async (method: string, _input: unknown) => {
     if (method === RPC_METHODS.SCM_STATUS_SNAPSHOT) return snapshot ? { success: true, snapshot } : { success: false, errorCode: 'BACKEND_UNAVAILABLE' };

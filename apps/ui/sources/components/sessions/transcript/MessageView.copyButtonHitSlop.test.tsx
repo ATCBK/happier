@@ -87,6 +87,13 @@ vi.mock('@/sync/sync', () => ({
     sync: { submitMessage: vi.fn(), sendMessage: vi.fn() },
 }));
 
+// Compile the real transcript graph during collection, after its boundaries are installed, so a cold
+// import is not charged to the first test's deadline.
+await import('./MessageView');
+await import('@/dev/testkit/sessionTranscriptSource');
+await import('./messageSelection/TranscriptMessageSelectionContext');
+await import('@/components/ui/forms/dropdown/ContextMenu');
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
         return Object.assign({}, ...style.filter(Boolean).map(flattenStyle));
@@ -174,8 +181,10 @@ describe('MessageView (native inline action targets)', () => {
             // The hold uses the native recognizer without acquiring a parent JS responder.
             expect(screen.findAll((node) => typeof node.type === 'string' && typeof node.props.onLongPress === 'function')).toHaveLength(0);
 
+            // The open context menu is the only menu: it is the hold's own anchored menu, with no dropdown trigger.
             const dropdowns = screen.findAllByType('DropdownMenu');
-            expect(dropdowns.length).toBe(0);
+            expect(dropdowns).toHaveLength(1);
+            expect(dropdowns[0]!.props.trigger).toBeNull();
         },
     );
 

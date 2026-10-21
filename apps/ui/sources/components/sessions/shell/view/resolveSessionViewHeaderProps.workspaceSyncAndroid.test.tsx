@@ -47,8 +47,9 @@ describe('resolveSessionViewHeaderProps workspace sync on Android', () => {
             hitSlop: number;
             style: (input: { pressed: boolean }) => { width: number; height: number };
         }>).props;
-        expect(props.style({ pressed: false })).toMatchObject({ width: 44, height: 44 });
-        expect(props.hitSlop).toBe(2);
+        expect(props.style({ pressed: false })).toMatchObject({ width: 48, height: 48 });
+        // The frame itself is the 48dp target; no extra hit slop is added around it.
+        expect(props.hitSlop).toBeUndefined();
     });
 
     it('announces unavailable and mixed link facts without counting them as conflicts', async () => {

@@ -81,6 +81,7 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
         scopeState: {
             details: {
                 isOpen: true,
+                tabState: {},
                 activeTabKey: 'file:src/app.ts',
                 tabs: [
                     {
@@ -113,6 +114,10 @@ function getStyleValue(node: renderer.ReactTestInstance, key: string): unknown {
     }
     return undefined;
 }
+
+// Compile the real graph during collection, after its boundaries are installed, so a cold import is not
+// charged to the first test's deadline.
+await import('./SessionDetailsPanel');
 
 describe('SessionDetailsPanel (mobile screen chrome)', () => {
     beforeEach(() => {

@@ -2,6 +2,7 @@ import React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { SESSION_SETTINGS } from '@/components/settings/session/sessionSettings';
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -10,6 +11,7 @@ const dropdownMenuSpy = vi.fn();
 const resolveWorkspaceFaviconMock = vi.hoisted(() => vi.fn());
 const setSessionFolderViewMode = vi.fn();
 const applySettings = vi.hoisted(() => vi.fn());
+const setSettingSpy = vi.hoisted(() => vi.fn(async () => true));
 let platformOs: 'ios' | 'web' = 'ios';
 let sessionFolderViewMode: 'off' | 'tree' = 'off';
 let sessionFoldersFeatureEnabled = true;
@@ -61,6 +63,12 @@ vi.mock('expo-image', () => ({
 
 vi.mock('@/sync/ops/workspaceFavicon', () => ({
     resolveWorkspaceFavicon: resolveWorkspaceFaviconMock,
+}));
+
+// The declared-setting Action writer is the owner of View option writes (its own tests admit and persist them);
+// this test pins which declared setting and value the menu hands it.
+vi.mock('@/components/settings/shell/useSettingActionFeedback', () => ({
+    useSettingActionFeedback: () => ({ setSetting: setSettingSpy, isCurrent: () => true }),
 }));
 
 vi.mock('@/sync/store/settingsWriters', () => ({
@@ -164,6 +172,7 @@ describe('ProjectGroupHeader menu items', () => {
         dropdownMenuSpy.mockClear();
         setSessionFolderViewMode.mockClear();
         applySettings.mockClear();
+        setSettingSpy.mockClear();
         platformOs = 'ios';
         sessionFolderViewMode = 'off';
         sessionFoldersFeatureEnabled = true;
@@ -423,7 +432,7 @@ describe('ProjectGroupHeader menu items', () => {
         ]));
 
         latestMenuProps?.onSelect?.('folderDisplay:tree');
-        expect(applySettings).toHaveBeenCalledWith({ sessionFolderViewModeV1: 'tree' });
+        await vi.waitFor(() => expect(setSettingSpy).toHaveBeenCalledWith(SESSION_SETTINGS.settings.folderView, 'tree'));
     });
 
     it('routes folder row press, collapse, and menu actions separately', async () => {

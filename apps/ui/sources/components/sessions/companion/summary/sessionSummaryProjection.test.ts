@@ -77,10 +77,16 @@ describe('projectSessionSummaryCard', () => {
         expect(offline.status?.state).toBe('disconnected');
         expect(offline.status?.statusText).not.toBe(t('status.online'));
 
+        // Operational evidence and reachability are orthogonal: with no operational fact an unknown runtime
+        // stays unknown, while a stated one (ready) stays meaningful without a presence channel.
         const unknownRuntime = projectSessionSummaryCard(input({
-            awareness: awareness({ runtime: 'unknown', freshness: 'offline', operational: { primary: 'ready', reasons: [] } }),
+            awareness: awareness({ runtime: 'unknown', freshness: 'offline', operational: { primary: 'none', reasons: [] } }),
         }));
         expect(unknownRuntime.status?.state).toBe('unknown');
+        const unknownRuntimeReady = projectSessionSummaryCard(input({
+            awareness: awareness({ runtime: 'unknown', freshness: 'offline', operational: { primary: 'ready', reasons: [] } }),
+        }));
+        expect(unknownRuntimeReady.status?.state).toBe('ready');
 
         // An unservable runtime outranks a `ready` operational answer, exactly as the row does.
         const unservable = projectSessionSummaryCard(input({

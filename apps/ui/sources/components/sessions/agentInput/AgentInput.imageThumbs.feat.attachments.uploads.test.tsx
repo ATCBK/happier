@@ -81,9 +81,9 @@ describe('AgentInput (image attachment thumbnails)', () => {
         expect(modalConfig?.component).toBeDefined();
         expect(modalConfig?.props).toEqual(expect.objectContaining({
             initialIndex: 0,
-            images: [
-                { kind: 'direct', uri: 'blob:test', title: 'file.png' },
-                { kind: 'direct', uri: 'blob:second', title: 'second.png' },
+            items: [
+                expect.objectContaining({ kind: 'image', title: 'file.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:test' } } }),
+                expect.objectContaining({ kind: 'image', title: 'second.png', source: { enabled: true, source: { kind: 'uri', uri: 'blob:second' } } }),
             ],
         }));
     }, 120_000);

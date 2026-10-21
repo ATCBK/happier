@@ -51,6 +51,10 @@ vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
     useAppPaneScope: () => mockAppPaneScope,
 }));
 
+// Compile the real graph during collection, after its boundaries are installed, so a cold import is not
+// charged to the first test's deadline.
+await import('./SessionDetailsPanel');
+
 describe('SessionDetailsPanel (close tab)', () => {
     it('closes a tab exactly once when clicking its close button', async () => {
         const closeDetailsTabSpy = vi.fn();
@@ -63,6 +67,7 @@ describe('SessionDetailsPanel (close tab)', () => {
             scopeState: {
                 details: {
                     isOpen: true,
+                    tabState: {},
                     activeTabKey: 'file:a',
                     tabs: [
                         { key: 'file:a', kind: 'file', title: 'a.txt', isPinned: true, isPreview: false, resource: { kind: 'file', path: 'a.txt' } },

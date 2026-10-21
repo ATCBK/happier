@@ -184,7 +184,9 @@ describe('projectWork', () => {
             store.mergeSnapshots({ serverId: 'home', snapshots: [{ ...snapshot, revision, state: 'running', startedAt: 2,
                 observation: { kind, code: 'owner_not_observed' } }] });
             projection = read();
-            expect(projection.projectCommands[0].status).toMatchObject({ bucket: 'working', tone: 'attention', word: 'unavailable' });
+            // A lost acknowledgement is named as such; an unconfirmed stop is the owner being unavailable.
+            expect(projection.projectCommands[0].status).toMatchObject({ bucket: 'working', tone: 'attention',
+                word: kind === 'outcome_uncertain' ? 'outcome_uncertain' : 'unavailable' });
             expect(projection.summary.outstanding).toBe(1);
             expect(projection.projectCommands[0].operation?.snapshot.state).toBe('running');
             expect(resolveWorkItemContextActions(projection.projectCommands[0]).stop)

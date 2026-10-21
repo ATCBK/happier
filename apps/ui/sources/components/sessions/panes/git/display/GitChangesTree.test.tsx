@@ -33,6 +33,8 @@ vi.mock('@/hooks/workspaces/files/useWorkspaceRepositoryTreeBrowser', () => ({
             retryRoot: vi.fn(),
             retryDirectory: vi.fn(),
             gitIgnoreAvailable: true,
+            liveFileWrites: new Map(),
+            arrivedPaths: new Set<string>(),
         };
     },
 }));
