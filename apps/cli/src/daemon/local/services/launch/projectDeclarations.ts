@@ -116,9 +116,9 @@ function literalServiceCommand(source: Extract<ProjectCommandSourceV1, { kind: '
 /** Effect dependency of the canonical, approved launcher Action; not an alternate dispatcher. */
 export function createProjectServiceDeclarationStarter(input: ProjectServiceDeclarationStarterInput) {
     const platformFor = (runtime: ProjectFiniteActionRuntime) => ({ os: (runtime.platform ?? process.platform) === 'win32' ? 'windows' : runtime.platform ?? process.platform, arch: runtime.arch ?? process.arch });
-    async function readChoice(runtime: ProjectFiniteActionRuntime, request: DaemonLocalServiceLauncherStartRequestV1,
+    async function readPlacement(runtime: ProjectFiniteActionRuntime, request: DaemonLocalServiceLauncherStartRequestV1,
         ingress: RpcHandlerContext, context: ActionContext, workspaceRefId: string,
-        service: NonNullable<ProjectManifestV1['services']>[string] | undefined, assertCurrent: () => Promise<void>,
+        assertCurrent: () => Promise<void>,
         phase: <T>(name: string, read: () => T | Promise<T>) => Promise<T>) {
         const config = await phase('placement_context', () => runtime.resolveWorkspaceExecutionConfig(context, ingress, 'localServices.launcher.start'));
         await assertCurrent();
@@ -128,6 +128,10 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             serviceName: selection.kind === 'manifest' ? selection.name : request.targetId }));
         await assertCurrent();
         if (placement.status !== 'ready') throw new ServiceStartRefusal(`project_service_placement_${placement.status}`);
+        return placement;
+    }
+    function readChoice(placement: Awaited<ReturnType<typeof readPlacement>>, request: DaemonLocalServiceLauncherStartRequestV1,
+        service: NonNullable<ProjectManifestV1['services']>[string] | undefined) {
         const resolved = resolveProjectServiceStartChoice({ execution: service?.execution ?? 'primary', placement, invocation: request.choice });
         if (resolved.status === 'refused') throw new ServiceStartRefusal(resolved.reason);
         return { placement, choice: resolved.choice };
@@ -196,14 +200,19 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         let worker: SourceReview | undefined;
         if (association.workspace.machineId !== runtime.machineId) {
             if (!runtime.inspectSourceProjectManifest) throw new ServiceStartRefusal('project_source_declaration_unavailable');
-            const snapshot = await phase('source_manifest', () => runtime.inspectSourceProjectManifest!({ source: association.workspace, signal }));
+            // These are independent passive reads. Both retain their existing
+            // currentness checks; only the fresh manifest may decide portability.
+            const [snapshot, sourcePlacement] = await Promise.all([
+                phase('source_manifest', () => runtime.inspectSourceProjectManifest!({ source: sourceAssociation.workspace, signal })),
+                phase('source_placement', () => readPlacement(runtime, request, ingress, context, sourceAssociation.workspace.id, assertCurrent, phase)),
+            ]);
             await assertCurrent();
             if (snapshot.document?.status === 'invalid') throw new ServiceStartRefusal('invalid_manifest');
             const manifest = snapshot.document?.manifest;
             const selection = request.declaration.selection;
             const service = selection.kind === 'manifest' ? manifest?.services?.[selection.name] : undefined;
             if (selection.kind === 'manifest' && !service) throw new ServiceStartRefusal('project_service_not_found');
-            const { placement, choice } = await phase('source_placement', () => readChoice(runtime, request, ingress, context, association.workspace.id, service, assertCurrent, phase));
+            const { placement, choice } = readChoice(sourcePlacement, request, service);
             await phase('source_receiving_placement', () => assertPlacement(choice));
             if (request.targetId !== createProjectServiceDeclarationTargetIdV1(association.workspace, selection)) throw new ServiceStartRefusal('launcher_target_unknown');
             if (!manifest || !service) throw new ServiceStartRefusal('project_service_not_found');
@@ -297,7 +306,8 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         const service = selection.kind === 'manifest' ? plan.manifest?.services?.[selection.name] : undefined;
         const source: ProjectCommandSourceV1 | undefined = selection.kind === 'native' ? selection.source : service?.source;
         if (!source) throw new ServiceStartRefusal('project_service_not_found');
-        const { placement, choice } = await phase('target_placement', () => readChoice(runtime, request, ingress, context, sourceAssociation.workspace.id, service, assertCurrent, phase));
+        const { placement, choice } = await phase('target_placement', async () => readChoice(
+            await readPlacement(runtime, request, ingress, context, sourceAssociation.workspace.id, assertCurrent, phase), request, service));
         if (worker && digest({ placement: placement.placement, choice }) !== worker.placementEffectDigest) throw new ServiceStartRefusal('project_service_effect_changed');
         await phase('target_receiving_placement', () => assertPlacement(choice));
         if (prepared.kind === 'pendingApproval' && !approvalPreparation && (!worker || !worker.serviceEffectDigest)) throw new ServiceStartRefusal(prepared.code, {

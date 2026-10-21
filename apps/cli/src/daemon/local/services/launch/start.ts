@@ -114,6 +114,7 @@ async function readSnapshot(
     input: Pick<CreateLocalServiceLauncherStartTargetInput, 'feed' | 'now'>,
     request: DaemonLocalServiceLauncherStartRequestV1,
     actualWorkspaceId?: string,
+    managedBindingsOnly = false,
 ): Promise<Readonly<
     | { ok: true; snapshot: LocalServiceLauncherSnapshotV1; machineMatches: boolean }
     | { ok: false; response: DaemonLocalServiceLauncherStartResponseV1 }
@@ -121,6 +122,10 @@ async function readSnapshot(
     try {
         const rawSnapshot = await input.feed.getSnapshot({
             ...(request.sessionId ? { sessionId: request.sessionId } : {}),
+            // Exact Project declarations are freshly admitted by the declaration
+            // owner below. Listener/suggestion discovery contributes no authority;
+            // retain the supervisor's current binding and scope checks directly.
+            ...(managedBindingsOnly ? { projection: 'managed_bindings' as const } : {}),
             ...(actualWorkspaceId ? { scope: 'machine' as const }
                 : request.workspace ? { workspaceRoot: request.workspace.rootPath } : {}),
         });
@@ -158,13 +163,22 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
                 requestId: actionContext?.actionRequestId, machineId: request.machineId, targetId: request.targetId,
                 durationMs: Math.round(performance.now() - startedAt) }); }
         };
-        const snapshotResult = await phase('launcher_snapshot', () => readSnapshot({ feed: input.feed, now }, request));
+        const exactDeclaration = request.workspace !== undefined && request.declaration !== undefined;
+        const snapshotResult = await phase('launcher_snapshot', () => readSnapshot({ feed: input.feed, now }, request, undefined, exactDeclaration));
         if (!snapshotResult.ok) {
             return snapshotResult.response;
         }
         const snapshot = snapshotResult.snapshot;
+        const respond = async (value: Parameters<typeof response>[0]) => {
+            if (!exactDeclaration) return response(value);
+            // Action responses are published as complete launcher snapshots by
+            // clients. A mutation-only preflight projection must not erase sibling
+            // declarations or presentation targets from that response.
+            const complete = await readSnapshot({ feed: input.feed, now }, request);
+            return response({ ...value, snapshot: complete.ok ? complete.snapshot : emptyRequestBoundSnapshot(request, now()) });
+        };
         if (!snapshotResult.machineMatches) {
-            return response({
+            return respond({
                 request,
                 status: 'denied',
                 reasonCode: 'wrong_machine',
@@ -175,7 +189,7 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
         const target = snapshot.targets.find((candidate) => candidate.id === request.targetId);
         const resolution = await phase('declaration_review', () => input.resolveStartTarget?.(request, ingress, actionContext, executeCanonicalAction));
         if (resolution && !resolution.ok && resolution.reasonCode !== 'launcher_target_unknown') {
-            return response({
+            return respond({
                 request,
                 status: 'denied',
                 reasonCode: resolution.reasonCode,
@@ -188,13 +202,13 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
 
         const scopeDenial = targetScopeDenial(target, request);
         if (scopeDenial) {
-            return response({ request, status: 'denied', reasonCode: scopeDenial, snapshot });
+            return respond({ request, status: 'denied', reasonCode: scopeDenial, snapshot });
         }
         // Presentation/history is not execution authority. Only a fresh admitted Project
         // declaration may start without an enabled or visible suggestion.
         const admittedProjectDeclaration = resolution?.ok === true && request.workspace !== undefined && request.declaration !== undefined;
         if (!target && !admittedProjectDeclaration) {
-            return response({
+            return respond({
                 request,
                 status: 'denied',
                 reasonCode: resolution?.ok ? 'launcher_start_unsupported' : 'launcher_target_unknown',
@@ -202,7 +216,7 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
             });
         }
         if (target?.source === 'package_script' && !admittedProjectDeclaration) {
-            return response({
+            return respond({
                 request,
                 status: 'denied',
                 reasonCode: 'package_script_start_unavailable',
@@ -210,7 +224,7 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
             });
         }
         if (target && !target.actions.includes('start') && !admittedProjectDeclaration) {
-            return response({
+            return respond({
                 request,
                 status: 'denied',
                 reasonCode: 'launcher_start_unsupported',
@@ -218,7 +232,7 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
             });
         }
         if (!resolution?.ok || !input.startManagedDeclaration) {
-            return response({
+            return respond({
                 request,
                 status: 'denied',
                 reasonCode: 'launcher_start_declaration_unavailable',

@@ -27,6 +27,7 @@ import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/inv
 import type { ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
 import { discoverLocalServiceRunTargets } from './runTargets';
 import { createProjectServiceDeclarationStarter } from './projectDeclarations';
+import { createLocalServicesDaemonRuntime } from '../runtime';
 import { createLocalServiceLauncherFeed } from './feed';
 import { createLocalServiceLauncherRoutes } from './routes';
 import { createLocalServiceInventoryRegistry } from '../inventory/registry';
@@ -115,6 +116,65 @@ class ObservedSetupPty implements PtyProcess {
 }
 
 describe('accepted Project Service declaration starter', () => {
+    it('starts an exact Project declaration without waiting for unrelated listener discovery', async () => {
+        const h = await fixture();
+        await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ ...h.manifest,
+            services: { ...h.manifest.services, sibling: { source: { kind: 'command', command: 'echo sibling' } } } }));
+        const review = await h.routes.startTarget!(h.request, h.ingress, h.context);
+        expect(review).toMatchObject({ status: 'denied', reasonCode: 'project_service_effect_review_required' });
+        let releaseScan!: () => void;
+        const pendingScan = new Promise<void>(resolve => { releaseScan = resolve; });
+        const runtime = createLocalServicesDaemonRuntime({ machineId: h.workspace.machineId,
+            startLoop: false, inventoryEnabled: () => true, projectManagedServices: h.owner,
+            workspaceFacts: () => ({ facts: [{ id: h.workspace.id, path: h.root }], acceptedWorkspaceRefs: [h.workspace], diagnostics: [] }),
+            scan: async () => { await pendingScan; return { listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }; },
+            projectServiceStarter: { resolveRuntime: async () => h.runtime,
+                acquirePluginRuntime: async () => ({ registry: { projectManagedServices: h.owner,
+                    retirementSignal: new AbortController().signal }, release: async () => {} }) } });
+        const inventory = runtime.refreshInventoryNow();
+        const completion = (async () => {
+            const started = await runtime.launcherRoutes.startTarget!({ ...h.request,
+                expectedEffectDigest: review.reviewedEffectDigest }, h.ingress, h.context);
+            expect(started).toMatchObject({ status: 'succeeded', currentTarget: { machineId: h.workspace.machineId },
+                snapshot: { targets: expect.arrayContaining([
+                    expect.objectContaining({ source: 'managed_service', serviceState: 'running' }),
+                    expect.objectContaining({ declaration: expect.objectContaining({ selection: { kind: 'manifest', name: 'sibling' } }) }),
+                ]) } });
+            return started;
+        })();
+        void completion.catch(() => {});
+        try {
+            await vi.waitFor(() => expect(h.owner.listProjectServices().some(handle => handle.snapshot().state === 'running')).toBe(true));
+            releaseScan();
+            await completion;
+            const denied = await runtime.launcherRoutes.startTarget!({ ...h.request, expectedEffectDigest: 'changed' }, h.ingress, h.context);
+            expect(denied).toMatchObject({ status: 'denied', snapshot: { targets: expect.arrayContaining([
+                expect.objectContaining({ declaration: expect.objectContaining({ selection: { kind: 'manifest', name: 'sibling' } }) }),
+            ]) } });
+        } finally { releaseScan(); await inventory; try { await completion; } finally { await runtime.stop(); } }
+    });
+    it('reads placement while SOURCE inspection is pending and retains the primary-only refusal', async () => {
+        const h = await fixture(false, undefined, true, 'primary');
+        let releaseInspection!: () => void;
+        const pendingInspection = new Promise<void>(resolve => { releaseInspection = resolve; });
+        let inspectionStarted = false;
+        const post = vi.mocked(axios.post).getMockImplementation()!;
+        vi.mocked(axios.post).mockImplementation(async (url, body, options) => {
+            if (new URL(String(url)).pathname === '/v1/actions/projects.inspect') {
+                inspectionStarted = true;
+                await pendingInspection;
+            }
+            return post(url, body, options);
+        });
+        const review = h.starter.resolveStartTarget(h.request, h.ingress, h.context);
+        try {
+            await vi.waitFor(() => expect(inspectionStarted).toBe(true));
+            await vi.waitFor(() => expect(h.placementReads()).toBeGreaterThan(0));
+        } finally { releaseInspection(); }
+        expect(await review).toMatchObject({ ok: false, reasonCode: 'primary_only' });
+        expect(h.copies()).toBe(0);
+        expect(h.owner.listProjectServices()).toEqual([]);
+    });
     it.each(['revoked', 'cancelled'] as const)('overlaps independent admission reads but never reviews a Service after %s admission', async scenario => {
         const h = await fixture(false, undefined, false, 'portable');
         const api = await ApiClient.create(h.runtime.credentials);
@@ -458,10 +518,11 @@ describe('accepted Project Service declaration starter', () => {
             return { status: 200, data: { status: 'listed', coverage: 'complete', rows } };
         });
         let savedPlacement: ProjectServicePlacementV1 | undefined;
+        let placementReads = 0;
         const config = createWorkspaceExecutionConfigClientV1({ mode: 'plain', material: null, isCurrent: () => true,
-            randomBytes: length => new Uint8Array(length), transport: { read: async () => savedPlacement
+            randomBytes: length => new Uint8Array(length), transport: { read: async () => { placementReads++; return savedPlacement
                 ? { status: 'present', revision: 1, content: { t: 'plain', v: { ...createDefaultWorkspaceExecutionSettingsV1(), services: { worker: savedPlacement } } } }
-                : { status: 'absent' },
+                : { status: 'absent' }; },
                 mutate: async () => { throw new Error('read only'); } } });
         const setupProcesses: Array<{ params: PtySpawnParams; pty: ObservedSetupPty }> = [];
         const terminalSessions = createTerminalPtySessionManager({ ptyProvider: { spawn(params) {
@@ -559,7 +620,7 @@ describe('accepted Project Service declaration starter', () => {
                 return createLocalServicesDaemonRuntimeActionExecutor({ featureGate, ingress: runtimeIngress,
                     routes: { launcherRoutes, ...(relocateService ? { relocateService } : {}), ...(actionRoutes ? { actionRoutes } : {}) } });
             },
-            copies: () => copies, withdrawRelationship() { relationshipCurrent = false; },
+            copies: () => copies, placementReads: () => placementReads, withdrawRelationship() { relationshipCurrent = false; },
             changeCopiedManifest(value: unknown) { copyManifestOverride = value; },
             afterCopy(callback: () => void | Promise<void>) { afterCopy = callback; },
             savePlacement(value: ProjectServicePlacementV1) { savedPlacement = value; },
