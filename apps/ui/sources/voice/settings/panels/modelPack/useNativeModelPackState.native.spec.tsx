@@ -153,6 +153,33 @@ describe('useNativeModelPackState through device boundaries', () => {
     expect(boundary.alert).not.toHaveBeenCalled();
   });
 
+  it('detaches old-pack progress and completion when a follower selects another pack', async () => {
+    boundary.fetch.mockResolvedValue(Response.json(modelPackManifest(packId, 'stt')));
+    const starter = await renderHook(useNativeModelPackState, { initialProps: input });
+    let started!: Promise<void>;
+    await act(async () => { started = starter.getCurrent().prepareModel(); });
+    await vi.waitFor(() => expect(boundary.transfers).toHaveLength(2));
+    await starter.unmount();
+    const follower = await renderHook(useNativeModelPackState, { initialProps: input });
+    await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('downloading'));
+    try {
+      await follower.rerender({ ...input, packId: 'other-pack' });
+      await act(async () => { boundary.transfers[0]!.report(1, modelBytes.length); });
+      expect(follower.getCurrent().downloadProgress).toBeNull();
+      expect(follower.getCurrent().modelStatus).toBe('idle');
+    } finally {
+      await act(async () => {
+        for (const transfer of boundary.transfers) transfer.finish(modelBytes.slice());
+        await started;
+      });
+    }
+    await vi.waitFor(() => expect(follower.getCurrent().modelStatus).toBe('idle'));
+    expect(follower.getCurrent().installed).toBe(false);
+    expect(follower.getCurrent().installSummary?.manifest).toBeNull();
+    expect(boundary.files.has(`${root}/modelPacks/${packId}/pack.json`)).toBe(true);
+    expect(boundary.alert).not.toHaveBeenCalled();
+  });
+
   it('explains a download that does not fit in the free space', async () => {
     boundary.availableDiskSpace = 1;
     boundary.fetch.mockResolvedValue(Response.json(modelPackManifest(packId, 'stt')));

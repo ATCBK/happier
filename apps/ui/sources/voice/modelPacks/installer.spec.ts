@@ -1106,6 +1106,27 @@ describe('native speech engine lifecycle', () => {
     expect(fs.files.has(`${PACK_URI}/model.onnx`)).toBe(false);
   });
 
+  it.each(['remove', 'update'] as const)('preserves the installed pack when engine release rejects a %s', async (operation) => {
+    const fs = createFs();
+    await installSingleFilePack(fs, {});
+    const oldBytes = fs.files.get(`${PACK_URI}/model.onnx`);
+    const oldReceipt = fs.files.get(`${PACK_URI}/pack.json`);
+    const error = new Error('native_release_failed');
+    const sherpaNative = { release: async () => { throw error; } };
+    const next = new Uint8Array([8]);
+    useNativeDownloads(fs, () => next);
+    const mutation = operation === 'remove'
+      ? removeModelPack({ packId: 'example' }, { fs, sherpaNative })
+      : ensureModelPackInstalled({ ...installOptions, signal: new AbortController().signal, updatePolicy: 'manual_update_if_available' }, {
+        fs, sherpaNative, fetch: fetchManifest(manifest([
+          { path: 'model.onnx', url: 'https://example.com/model.onnx?rev=2', sha256: await sha256Hex(next), sizeBytes: 1 },
+        ], 'v2')),
+      });
+    await expect(mutation).rejects.toBe(error);
+    expect(fs.files.get(`${PACK_URI}/model.onnx`)).toEqual(oldBytes);
+    expect(fs.files.get(`${PACK_URI}/pack.json`)).toEqual(oldReceipt);
+  });
+
   it('unloads native engines before an update swaps the pack files', async () => {
     const fs = createFs();
     await installSingleFilePack(fs, {});

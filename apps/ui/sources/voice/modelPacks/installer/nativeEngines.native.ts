@@ -24,11 +24,7 @@ async function getSherpaNative(overrides: InstallerOverrides): Promise<Installer
 export async function releaseModelPackEngines(overrides: InstallerOverrides, dirUri: string): Promise<void> {
   const native = await getSherpaNative(overrides);
   if (!native?.release) return;
-  try {
-    await native.release({ assetsDir: fileUriToNativePath(dirUri) });
-  } catch (error) {
-    console.warn('[modelPacks] Failed to release native speech engines', error instanceof Error ? error.name : 'unknown');
-  }
+  await native.release({ assetsDir: fileUriToNativePath(dirUri) });
 }
 
 async function excludeFromBackup(native: InstallerSherpaNative, dirUri: string): Promise<void> {
