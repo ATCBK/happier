@@ -422,6 +422,8 @@ function Probe(props: Readonly<{
         value,
     ]);
     return React.createElement('output', {
+        readIdentity: source.readIdentity,
+        readAuthorized: source.readAuthorized,
         model: source.model,
         value,
         action: readAction(source.model),
@@ -1261,6 +1263,7 @@ describe('useDeclarativeDocumentSource', () => {
         expect(tree.root.findByType('output').props).toMatchObject({
             value: 'Static dashboard',
             documentPresentation: 'terminalUnavailable',
+            readAuthorized: false,
             freshness: 'unknown',
             pending: 'idle',
             subscription: 'ended',
@@ -1297,6 +1300,8 @@ describe('useDeclarativeDocumentSource', () => {
             await flushMicrotasks();
         });
         expect(tree.root.findByType('output').props.value).toBe('Adopted dashboard');
+        const readIdentity = tree.root.findByType('output').props.readIdentity;
+        expect(tree.root.findByType('output').props.readAuthorized).toBe(true);
 
         await act(async () => {
             tree.update(renderProbe(reconnectHostApi, undefined, mountScope));
@@ -1308,6 +1313,8 @@ describe('useDeclarativeDocumentSource', () => {
             expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
         expect(tree.root.findByType('output').props.value).toBe('Adopted dashboard');
+        expect(tree.root.findByType('output').props.readIdentity).toBe(readIdentity);
+        expect(tree.root.findByType('output').props.readAuthorized).toBe(true);
 
         await act(async () => {
             reconnectRead.resolve(resourceRead({

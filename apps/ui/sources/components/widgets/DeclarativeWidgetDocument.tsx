@@ -107,11 +107,13 @@ function RetainedDataNode(props: Readonly<{
     const reasonCode = props.projected.errorCode;
     const refresh = props.refresh;
     const shown = props.node;
-    React.useEffect(() => {
+    // Capture follows the committed visible node before paint. A passive report
+    // can arrive after Refresh's completion has already settled the confirm.
+    React.useLayoutEffect(() => {
         store?.report(props.reportKey, { readIdentity: props.readIdentity, state, shown, ...(digest ? { digest } : {}), ...(reasonCode ? { reasonCode } : {}),
             ...(asOf !== undefined ? { asOf } : {}), refresh });
     }, [store, props.reportKey, props.readIdentity, state, shown, digest, reasonCode, asOf, refresh]);
-    React.useEffect(() => () => store?.report(props.reportKey, null), [store, props.reportKey]);
+    React.useLayoutEffect(() => () => store?.report(props.reportKey, null), [store, props.reportKey]);
     return <>{renderDeclarativeNode(props.node, { ...props.context, renderDataNode: undefined }, props.reportKey)}</>;
 }
 

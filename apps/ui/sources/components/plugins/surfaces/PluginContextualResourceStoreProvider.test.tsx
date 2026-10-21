@@ -29,6 +29,7 @@ import type { WorkBoardEntityBinding } from '@/components/boards/model/workBoard
 import { resolveDeclarativeDataResourceBinding } from './declarativeDataSource';
 import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
 import { createWidgetSnapshotCaptureSlot, WidgetSnapshotCaptureContext } from '@/components/widgets/definitions/widgetSnapshotCapture';
+import { WidgetSnapshotConfirmPanel } from '@/components/widgets/definitions/WidgetSnapshotConfirmPanel';
 import { t } from '@/text';
 
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -412,21 +413,30 @@ describe('PluginContextualResourceStoreProvider', () => {
         const runtime = { pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current' as const,
             interactionEnabled: true, machineId: 'machine-1', serverId: a.lifetime.scope.serverId, platform: 'web' as const, accountLifetime: a.lifetime };
         const captureSlot = createWidgetSnapshotCaptureSlot();
-        const renderDocument = (sessionId: string) => <WidgetFrame testID="private-frame" frameStyle="card" placement="home" title="Checks"
+        let previewOpen = false;
+        const renderDocument = (sessionId: string) => <><WidgetFrame testID="private-frame" frameStyle="card" placement="home" title="Checks"
             body={{ kind: 'content', children: <WidgetSnapshotCaptureContext.Provider value={captureSlot}>
                 <DeclarativeWidgetDocument document={document} input={{}} runtime={runtime}
                     accountLifetime={a.lifetime} sessionId={sessionId} isCurrent={a.lifetime.isCurrent} testID="private-data" />
-            </WidgetSnapshotCaptureContext.Provider> }} />;
+            </WidgetSnapshotCaptureContext.Provider> }} />
+            {previewOpen ? <WidgetSnapshotConfirmPanel surface={{ ...a.lifetime.scope, owner: { kind: 'sessionBoard', sessionId: 'session-1' } }}
+                title="Checks" sourceLabel="Private checks" capture={captureSlot.capture} watch={captureSlot.watch}
+                onCancel={() => {}} onDone={() => {}} testID="private-preview" /> : null}</>;
         const screen = await renderScreen(renderDocument('session-1'));
         const lease = acquirePluginContextualResourceStore(binding(a.lifetime))!;
         try {
             await vi.waitFor(() => expect(screen.tree.root.findAllByType(HappierDataMetric)).toHaveLength(1));
+            previewOpen = true;
+            await screen.update(renderDocument('session-1'));
+            expect(screen.findByTestId('private-preview.preview')).not.toBeNull();
             // The contextual adapter exposes this exact daemon refusal code;
             // the Account and local declaration remain current.
             machineResourceRpc.read.mockResolvedValue({ supported: true,
                 result: { ok: false, reason: 'unavailable', code: 'plugin_resource_session_access_unavailable' } });
             await act(async () => { await lease.store.getEntry(RESOURCE_ID).refresh(); });
             expect(a.lifetime.isCurrent()).toBe(true);
+            expect(screen.findByTestId('private-preview.preview')).toBeNull();
+            expect(screen.findByTestId('private-preview.primary')!.props.disabled).toBe(true);
             expect(screen.tree.root.findAllByType(HappierDataMetric)).toHaveLength(0);
             expect(screen.findAllByTestId('private-frame').length).toBeGreaterThan(0);
             expect(captureSlot.capture()?.frozenByPath.size).toBe(0);
@@ -435,10 +445,16 @@ describe('PluginContextualResourceStoreProvider', () => {
             machineResourceRpc.read.mockResolvedValue(resourceResponse('c'));
             await act(async () => { await lease.store.getEntry(RESOURCE_ID).refresh(); });
             await vi.waitFor(() => expect(screen.tree.root.findAllByType(HappierDataMetric)).toHaveLength(1));
+            // A recovered source does not silently replace the withdrawn frozen preview.
+            expect(screen.findByTestId('private-preview.preview')).toBeNull();
+            await screen.pressByTestIdAsync('private-preview.refresh');
+            await vi.waitFor(() => expect(screen.findByTestId('private-preview.preview')).not.toBeNull());
             // An exact Session identity change must also clear validated LKG
             // immediately, before the new authority's first read settles.
             machineResourceRpc.read.mockImplementation(() => new Promise(() => {}));
             await act(async () => { screen.tree.update(renderDocument('session-2')); });
+            expect(screen.findByTestId('private-preview.preview')).toBeNull();
+            expect(screen.findByTestId('private-preview.primary')!.props.disabled).toBe(true);
             expect(screen.tree.root.findAllByType(HappierDataMetric)).toHaveLength(0);
             expect(captureSlot.capture()?.frozenByPath.size).toBe(0);
         } finally { lease.dispose(); await act(async () => { screen.tree.unmount(); }); }

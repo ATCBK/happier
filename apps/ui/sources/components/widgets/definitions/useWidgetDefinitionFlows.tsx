@@ -162,7 +162,7 @@ export function useWidgetDefinitionFlows(input: Readonly<{
                         }}
                         testID={`${testID}.save`}
                     />
-                ) : flow === 'snapshot' && sessionItem ? (
+                ) : flow === 'snapshot' && sessionItem?.canEdit && capturable ? (
                     <WidgetSnapshotConfirmPanel surface={scope} title={sessionItem.title} sourceLabel={sessionItem.sourceLabel}
                         {...(sessionItem.mark ? { mark: sessionItem.mark } : {})} watch={slot.watch}
                         capture={slot.capture} onCancel={close} onDone={close} testID={`${testID}.snapshot`} />
