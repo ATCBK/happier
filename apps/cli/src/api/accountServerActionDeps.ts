@@ -1120,6 +1120,10 @@ export function createAccountServerActionDeps(input: Readonly<{
       if (!dispatch.ok) return dispatch;
       const response = dispatch.response;
       if (response.status < 200 || response.status >= 300) {
+        const confirmedRollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
+        if (confirmedRollback) {
+          return { ok: false, errorCode: confirmedRollback.code, error: confirmedRollback.code };
+        }
         const body = response.data !== null && typeof response.data === 'object'
           ? response.data as Readonly<Record<string, unknown>>
           : null;

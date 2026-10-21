@@ -1667,6 +1667,33 @@ describe('Session access HTTP adapter', () => {
     })).resolves.toEqual({ ok: false, errorCode, error: errorCode });
   });
 
+  it('preserves confirmed Session-access rollback without disclosing untrusted response content', async () => {
+    let responseBody: unknown = { error: 'database_transaction_conflict_exhausted', statusCode: 503 };
+    app.post('/v2/sessions/responsibility/set', async (_request, reply) => reply.code(503).send(responseBody));
+    const deps = createAccountServerActionDeps({ token: 'bound-home-token', serverId: 'home', serverHttpBaseUrl: 'http://access.test' });
+    const request = {
+      actionId: 'session.responsibility.set' as const,
+      input: { sessionId: 'session', responsibleAccountId: null },
+      context: { surface: 'cli' as const, serverId: 'home' },
+    };
+
+    await expect(deps.sessionAccessAction!(request)).resolves.toEqual({
+      ok: false, errorCode: 'database_transaction_conflict_exhausted', error: 'database_transaction_conflict_exhausted',
+    });
+
+    for (const body of [
+      { error: 'database_transaction_conflict_exhausted' },
+      { error: 'database_transaction_conflict_exhausted', statusCode: 503, token: 'PRIVATE_BEARER' },
+      { error: 'PRIVATE_RESPONSE', statusCode: 503 },
+    ]) {
+      responseBody = body;
+      const failure = await deps.sessionAccessAction!(request).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ response: { status: 503 } });
+      expect(JSON.stringify(failure)).not.toContain('PRIVATE_');
+    }
+  });
+
   it('materializes a key-free direct E2EE grant through the bound credential before the physical mutation', async () => {
     const callerMachineKey = new Uint8Array(32).fill(7);
     const callerPublicKey = deriveBoxPublicKeyFromSeed(callerMachineKey);
