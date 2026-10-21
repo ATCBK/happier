@@ -20,6 +20,8 @@ import { createServer } from "node:http";
 import { registerPeerTcpTunnelRelayTerminator } from "../../../../../cli/src/daemon/peer/mediation/tunnel/relay";
 import { connectPeerTcpTunnelTcp } from "../../../../../cli/src/daemon/peer/mediation/tunnel/open";
 import { startFirstBytesLocalCapabilityProxy } from "../../../../../cli/src/daemon/peer/mediation/loopback/firstBytesLocalCapability";
+import { writeProviderBrokerApplicationFailure } from "../../../../../cli/src/providers/broker/providerBrokerApplicationServer";
+import { TeamCredentialTestActionOutputV1Schema } from "@happier-dev/protocol/teams/credentials/actionsV1";
 
 describe("Resource Test relay composition (SQLite integration)", () => {
     afterEach(() => vi.restoreAllMocks());
@@ -72,7 +74,8 @@ describe("Resource Test relay composition (SQLite integration)", () => {
         return await db.account.create({ data: { encryptionMode: "plain", publicKey: null } });
     }
 
-    it.each(["available", "stalled_activation", "silent_carrier", "slow_response"] as const)("tests a revision-zero resource through the real broker terminator: %s", async outcome => {
+    it.each(["available", "stalled_activation", "silent_carrier", "slow_response", "source_refusal", "upstream_unauthorized"] as const)("tests a revision-zero resource through the real broker terminator: %s", async outcome => {
+        const ordinaryResponse = outcome === "available" || outcome === "source_refusal" || outcome === "upstream_unauthorized";
         const custodian = await createAccount();
         const team = await db.team.create({ data: { name: "Initial resource Test" } });
         await db.teamMembership.create({ data: { teamId: team.id, accountId: custodian.id, role: "owner" } });
@@ -149,6 +152,18 @@ describe("Resource Test relay composition (SQLite integration)", () => {
             request.on("end", () => {
                 applicationRequest = JSON.parse(Buffer.concat(chunks).toString("utf8"));
                 respond = () => {
+                    if (outcome === "source_refusal") {
+                        writeProviderBrokerApplicationFailure({
+                            header(name, value) { response.setHeader(name, value); },
+                            code(statusCode) { response.statusCode = statusCode; return { send(payload) { response.end(JSON.stringify(payload)); } }; },
+                        }, { ok: false, reasonCode: "source_unavailable" });
+                        return;
+                    }
+                    if (outcome === "upstream_unauthorized") {
+                        response.writeHead(401, { "content-type": "application/json" });
+                        response.end('{"error":"private upstream response"}');
+                        return;
+                    }
                     response.writeHead(200, { "content-type": "application/json" });
                     response.end('{"ok":true}');
                 };
@@ -176,7 +191,7 @@ describe("Resource Test relay composition (SQLite integration)", () => {
                 },
             },
             connectTcp: target => {
-                if (outcome === "available" || outcome === "slow_response") return connectPeerTcpTunnelTcp(target);
+                if (ordinaryResponse || outcome === "slow_response") return connectPeerTcpTunnelTcp(target);
                 connecting();
                 return new Promise(() => {});
             },
@@ -190,7 +205,7 @@ describe("Resource Test relay composition (SQLite integration)", () => {
             createRelayTransport: () => {
                 // Only time is substituted. The deadline is the authorization
                 // actually minted by the production dispatcher, not a test cap.
-                if (outcome !== "available") vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+                if (!ordinaryResponse) vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
                 return {
                     relaySocketId, close() {},
                     subscribe(handler) { receive = handler; return () => { receive = undefined; }; },
@@ -234,7 +249,7 @@ describe("Resource Test relay composition (SQLite integration)", () => {
                 await vi.advanceTimersByTimeAsync(admissionExpiresAt - Date.now() + 1);
                 expect(settled).toBe(false);
                 respond!();
-            } else if (outcome !== "available") {
+            } else if (!ordinaryResponse) {
                 await (outcome === "stalled_activation" ? connectionStarted : openSent);
                 await vi.advanceTimersByTimeAsync(admissionExpiresAt - Date.now() + 1);
                 await vi.waitFor(() => expect(settled).toBe(true));
@@ -242,12 +257,20 @@ describe("Resource Test relay composition (SQLite integration)", () => {
             const tested = await Promise.race([request,
                 denied.then(reason => { throw new Error(`Real broker refused carrier frames: ${reason}`); })]);
             expect(tested.statusCode, tested.body).toBe(200);
-            expect(tested.json(), JSON.stringify(diagnostics.mock.calls))
+            const result = TeamCredentialTestActionOutputV1Schema.parse(tested.json());
+            expect(result, JSON.stringify(diagnostics.mock.calls))
                 .toMatchObject(outcome === "available" || outcome === "slow_response"
                     ? { result: "available", readiness: { kind: "available" } }
+                    : outcome === "source_refusal" || outcome === "upstream_unauthorized"
+                        ? { result: "needs_attention", readiness: { kind: "source_unavailable" },
+                            code: outcome === "source_refusal" ? "source_unavailable" : "upstream_unavailable" }
                     : { result: "needs_attention", readiness: { kind: "broker_unavailable" } });
+            if (outcome === "source_refusal" || outcome === "upstream_unauthorized") {
+                expect(diagnostics).toHaveBeenCalledWith({ module: "team-credential-resource-test", stage: "dispatch", code: result.code });
+                expect(JSON.stringify(result)).not.toContain("private");
+            }
             expect(admitted).toBe(true);
-            if (outcome === "available" || outcome === "slow_response") expect(applicationRequest).toMatchObject({ kind: "resource_test", resourceId: resource.id });
+            if (ordinaryResponse || outcome === "slow_response") expect(applicationRequest).toMatchObject({ kind: "resource_test", resourceId: resource.id });
             else expect(applicationRequest).toBeUndefined();
         } finally {
             vi.useRealTimers();

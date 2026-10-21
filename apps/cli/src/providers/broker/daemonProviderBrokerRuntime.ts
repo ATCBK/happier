@@ -43,7 +43,13 @@ import {
   teamCredentialBrokerPlacementAcceptsMachine,
   type TeamCredentialBrokerOperation,
   type TeamCredentialBrokerSourceOwner,
+  type TeamCredentialBrokerSourceAcquireResult,
 } from './teamCredentialBrokerSourceOwner';
+
+function brokerSourceAcquisitionFailure(failure: Extract<TeamCredentialBrokerSourceAcquireResult, { ok: false }>) {
+  return { ok: false as const,
+    reasonCode: failure.reasonCode === 'broker_machine_mismatch' ? 'broker_unavailable' as const : failure.reasonCode };
+}
 
 type SelectedProviderBrokerRequestAdmission = ProviderBrokerRequestAdmission & Readonly<{
   sourceMemberKey: string;
@@ -718,12 +724,7 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
             actualModelId: null,
             tokens: null,
           }).catch(() => undefined);
-          return {
-            ok: false as const,
-            reasonCode: acquired.reasonCode === 'broker_machine_mismatch'
-              ? 'broker_unavailable' as const
-              : 'resource_unavailable' as const,
-          };
+          return brokerSourceAcquisitionFailure(acquired);
         }
         let cleaned = false;
         const cleanup = async () => { if (!cleaned) { cleaned = true; await acquired.projection.cleanup(); } };
@@ -761,12 +762,7 @@ export async function startDaemonProviderBrokerRuntime(input: Readonly<{
           application: request.application,
           signal: request.request.signal ?? new AbortController().signal,
         });
-        if (!acquired.ok) return {
-          ok: false as const,
-          reasonCode: acquired.reasonCode === 'broker_machine_mismatch'
-            ? 'broker_unavailable' as const
-            : 'resource_unavailable' as const,
-        };
+        if (!acquired.ok) return brokerSourceAcquisitionFailure(acquired);
         let cleaned = false;
         // A resource test is genuinely one request: its operation is keyed by
         // that request id and nothing else will ever join it, so the response

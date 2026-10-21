@@ -23,13 +23,17 @@ import { inTx } from '@/storage/inTx';
 import { admitTeamCredentialBrokerMachineForResourceInTx } from '@/app/teams/credentials/brokerPlacementResolver';
 import { authorizeTeamCredentialResourceTestActorInTx } from '@/app/teams/credentials/resourceTest';
 import { logger } from '@/utils/logging/log';
+import { TeamCredentialBrokerApplicationFailureCodeV1Schema, type TeamCredentialBrokerApplicationFailureCodeV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 
 function send(transport: ReturnType<PeerTcpTunnelRelayTransportFactory>, envelope: PeerTcpTunnelRelayEnvelope) {
     transport.send(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, envelope);
 }
 
-type ProviderBrokerCarrierDispatchResult = Awaited<ReturnType<ExternalProviderBrokerDispatch>>
-    | Readonly<{ ok: false; error: 'broker_unavailable'; reason: 'incompatible' }>;
+type ProviderBrokerCarrierDispatchResult = Extract<Awaited<ReturnType<ExternalProviderBrokerDispatch>>, { ok: true }>
+    | (Extract<Awaited<ReturnType<ExternalProviderBrokerDispatch>>, { ok: false }> & Readonly<{
+        reason?: 'incompatible';
+        applicationCode?: TeamCredentialBrokerApplicationFailureCodeV1;
+    }>);
 
 type ProviderBrokerCarrierDispatch = (input: Readonly<{
     request: unknown;
@@ -47,6 +51,7 @@ export function mapProviderBrokerApplicationFailure(
         | 'resource_unavailable' | 'team_credential_usage_limit' | 'cost_limit_unavailable' | 'upstream_unavailable';
     retryAtMs?: number;
     reason?: 'incompatible';
+    applicationCode?: TeamCredentialBrokerApplicationFailureCodeV1;
 }> {
     const code = headers['x-happier-provider-broker-error-code'];
     if (statusCode === 499 && code === 'request_cancelled') return { error: 'request_cancelled' };
@@ -61,6 +66,7 @@ export function mapProviderBrokerApplicationFailure(
             : { error: 'team_credential_usage_limit' };
     }
     if (statusCode === 403 && code === 'cost_limit_unavailable') return { error: 'cost_limit_unavailable' };
+    if (statusCode === 403 && (code === 'source_unavailable' || code === 'source_invalid')) return { error: 'upstream_unavailable' };
     if (statusCode === 403 && (code === 'resource_changed' || code === 'resource_unavailable'
         || code === 'operation_not_current' || code === 'session_not_active')) return { error: 'resource_unavailable' };
     if (statusCode === 403 && code === 'update_required') return { error: 'broker_unavailable', reason: 'incompatible' };
@@ -226,29 +232,35 @@ function createProviderBrokerCarrierDispatch(input: Readonly<{
             // so the budget is checked before reading more rather than against
             // whatever the transport happened to coalesce.
             if (buffered.byteLength > config.serverRoutedMaxBinaryHeaderBytes) {
+                logger.warn({ module: 'provider-broker-carrier', stage: 'response_headers', code: 'headers_too_large' });
                 cleanup();
                 return { ok: false, error: 'upstream_unavailable' };
             }
             const next = await iterator.next();
-            if (next.done) { cleanup(); return { ok: false, error: 'upstream_unavailable' }; }
+            if (next.done) {
+                logger.warn({ module: 'provider-broker-carrier', stage: 'response_headers', code: 'response_incomplete' });
+                cleanup(); return { ok: false, error: 'upstream_unavailable' };
+            }
             buffered = Buffer.concat([buffered, Buffer.from(next.value)]);
             boundary = buffered.indexOf('\r\n\r\n');
         }
         const headerText = buffered.subarray(0, boundary).toString('latin1');
         const lines = headerText.split('\r\n');
         const status = /^HTTP\/1\.1 (\d{3})/u.exec(lines.shift() ?? '');
-        if (!status) { cleanup(); return { ok: false, error: 'upstream_unavailable' }; }
+        if (!status) {
+            logger.warn({ module: 'provider-broker-carrier', stage: 'response_headers', code: 'status_invalid' });
+            cleanup(); return { ok: false, error: 'upstream_unavailable' };
+        }
         const statusCode = Number(status[1]);
         const headers: Record<string, string> = {};
         for (const line of lines) { const split = line.indexOf(':'); if (split > 0) headers[line.slice(0, split).toLowerCase()] = line.slice(split + 1).trim(); }
         if (statusCode >= 400) {
             await relay.stream.close();
-            if (statusCode === 403 && (headers['x-happier-provider-broker-error-code'] === 'broker_unavailable'
-                || headers['x-happier-provider-broker-error-code'] === 'update_required')) {
-                logger.warn({ module: 'provider-broker-carrier', stage: 'application_response',
-                    code: headers['x-happier-provider-broker-error-code'] });
-            }
-            return { ok: false, ...mapProviderBrokerApplicationFailure(statusCode, headers) };
+            const applicationCode = TeamCredentialBrokerApplicationFailureCodeV1Schema.safeParse(headers['x-happier-provider-broker-error-code']);
+            logger.warn({ module: 'provider-broker-carrier', stage: 'application_response',
+                code: applicationCode.success ? applicationCode.data : 'application_refusal_unclassified', statusCode });
+            return { ok: false, ...mapProviderBrokerApplicationFailure(statusCode, headers),
+                ...(applicationCode.success ? { applicationCode: applicationCode.data } : {}) };
         }
         const initial = buffered.subarray(boundary + 4);
         async function* responseBody() {

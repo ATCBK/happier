@@ -13,6 +13,7 @@ import type {
     ProviderBrokerRequestHandler,
 } from './providerBrokerRequestHandler';
 import { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
+import { logger } from '@/ui/logger';
 export { PROVIDER_BROKER_APPLICATION_ERROR_CODE_HEADER } from './providerBrokerPrivateProtocol';
 
 export type ProviderBrokerApplicationStreamTarget = Readonly<{
@@ -141,6 +142,9 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
     const proxies = new Set<FirstBytesLocalCapabilityProxy>();
     const streamLifetimes = new Set<Pick<ProviderBrokerApplicationStreamLifetime, 'close' | 'retire'>>();
     const app = fastify({ logger: false });
+    app.addHook('onError', async () => {
+        logger.warnLocalFile('[provider-broker-application]', { stage: 'handler', code: 'exception' });
+    });
 
     const sendResponse = async (
         reply: FastifyReply,
@@ -149,6 +153,7 @@ export async function startProviderBrokerApplicationServer(input: Readonly<{
         context?: ProviderBrokerAuthenticatedStreamContext,
     ) => {
         if (!response.ok) {
+            logger.warnLocalFile('[provider-broker-application]', { stage: 'application_response', code: response.reasonCode });
             return writeProviderBrokerApplicationFailure(
                 reply,
                 response,

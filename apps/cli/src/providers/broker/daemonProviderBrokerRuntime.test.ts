@@ -1238,6 +1238,60 @@ function startBrokerAdmission(
 }
 
 describe('Provider-broker release after grant expiry (machine/1 admission + broker runtime)', () => {
+  it('retains a failed exact source open through the resource-test application response', async () => {
+    const unused = (): never => { throw new Error('Source refusal reached a Provider effect'); };
+    const custody = createManagedProviderExplicitStartCustody({ machineId: 'broker-machine', happyHomeDir: '/unreached-source' });
+    const bindings = createConnectedAccountPurposeBindingOwner({
+      store: { read: async () => ({ v: 1, bindings: [] }), update: unused, subscribe: () => ({ dispose() {} }) },
+      selectTarget: unused, resolveTarget: async () => ({ displayName: 'Account', account: source.target.account }),
+      materializeAccount: unused, projectTargetAccounts: unused, assertTargetAccountMaterializable: unused,
+    });
+    const sourceOwner = createTeamCredentialBrokerSourceOwner({
+      machineId: 'broker-machine', custody,
+      selectConnectedServicesSourceMember: createConnectedServicesBrokerSourceMemberSelect({
+        withRegistry: async read => await read(createBrokerProviderRegistry()), resolveBindingIntentSelection: bindings.resolveBindingIntentSelection,
+      }),
+      openConnectedServicesSource: createConnectedServicesBrokerSourceOpen({
+        withRegistry: async read => await read(createBrokerProviderRegistry()), resolveBindingIntentSelection: bindings.resolveBindingIntentSelection,
+        // The Home resource HTTP read is unavailable. Selection, currentness,
+        // source acquisition, policy, application handling and TCP stay real.
+        readResource: async () => null, custody,
+      }),
+      openProviderConnectionSource: unused,
+    });
+    const binding = { v: 1 as const, kind: 'resource_test' as const, teamId: 'team-1', resourceId: 'resource-1',
+      actorAccountId: 'custodian-account', requestId: 'source-refusal', expectedResourceRevision: 7,
+      application: authority.payload.application, source };
+    const runtime = await startDaemonProviderBrokerRuntime({
+      machineId: 'broker-machine', resolveTrustRoots: () => homeTrustRoots, nowMs: () => 150,
+      createRequestId: () => 'source-refusal', resolveRequestPolicy: async () => null, admitRequest: unused, authorizeModelCatalog: unused,
+      resolveResourceTestRequestPolicy: async () => ({ resourceRevision: 7, application: binding.application, policy: null,
+        modelCatalog: { models: [{ id: 'gpt-5' }], resolveCanonicalModelId: id => id } }),
+      admitResourceTestRequest: async () => ({ ok: true, resourceId: binding.resourceId, resourceRevision: 7,
+        brokerMachineId: 'broker-machine', source, operation: { kind: 'resource_test', actorAccountId: binding.actorAccountId } }),
+      sourceOwner,
+    });
+    closeTasks.push(runtime.close);
+    // Relay authorization is the already-authenticated transport boundary;
+    // the real relay/route composition separately verifies its signature.
+    const target = await runtime.resolveExternalProviderBrokerApplicationTarget({ binding, relayAuthorization: {
+      payload: { v: 2, grantId: 'test-grant', accountId: 'custodian-account', targetMachineId: 'broker-machine',
+        flowKind: 'provider_broker', routeKind: 'server_relay', tunnelId: 'test-tunnel', relaySocketId: 'test-relay',
+        providerBroker: binding, capProfileId: 'server-relay-v1', maxFrameBytes: 65_536, maxIdleMs: 10_000,
+        maxDurationMs: 30_000, iat: 100, exp: 200, aud: 'happier-tcp-tunnel-relay-authorization' },
+      signature: { alg: 'Ed25519', keyId: 'home', valueBase64Url: 'AA' },
+    } });
+    if (!target) throw new Error('Resource-test application target absent');
+    const response = await rawRequestThroughApplicationTarget({ ...target, method: 'POST',
+      path: TEAM_CREDENTIAL_EXTERNAL_PROVIDER_APPLICATION_HTTP_PATH_V1,
+      body: JSON.stringify({ v: 1, kind: 'resource_test', teamId: binding.teamId, resourceId: binding.resourceId,
+        requestId: binding.requestId, route: 'responses', method: 'POST', pathAndQuery: '/v1/responses',
+        bodyBase64: Buffer.from(JSON.stringify({ model: 'gpt-5', input: 'hello' })).toString('base64') }),
+    });
+    expect(response).toContain('HTTP/1.1 403');
+    expect(response).toContain('x-happier-provider-broker-error-code: source_unavailable');
+  });
+
   it.each(['unavailable', 'cancelled'] as const)('admits the personal carrier before private source acquisition (%s Home read)', async outcome => {
     const payload: SignedProviderBrokerRouteGrantV2['payload'] = {
       v: 2, grantId: 'personal-request', aud: 'happier-provider-broker-route-v2', issuedAt: 100, expiresAt: 200,

@@ -179,7 +179,7 @@ describe('external Provider broker dispatcher', () => {
         ));
         expect(result).toMatchObject({ ok: false, error: 'broker_unavailable' });
         if (code === 'update_required') expect(result).toMatchObject({ reason: 'incompatible' });
-        expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage: 'application_response', code });
+        expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage: 'application_response', code, statusCode: 403 });
         expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
     });
 
@@ -199,9 +199,35 @@ describe('external Provider broker dispatcher', () => {
     });
 
     it('still refuses a header segment larger than the header budget', async () => {
+        const diagnostics = vi.spyOn(logger, 'warn').mockImplementation(() => {});
         const { result } = await dispatchWithUpstreamResponse(
             new TextEncoder().encode(`HTTP/1.1 200 OK\r\nX-Oversized: ${'h'.repeat(24 * 1024)}`),
         );
         expect(result).toEqual({ ok: false, error: 'upstream_unavailable' });
+        expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage: 'response_headers', code: 'headers_too_large' });
+    });
+
+    it.each([
+        ['', 'response_incomplete'],
+        ['HTTP/1.1 200 OK\r\nContent-Length: 0', 'response_incomplete'],
+        ['invalid status\r\n\r\n', 'status_invalid'],
+    ])('diagnoses a closed or malformed application response: %j', async (wire, code) => {
+        const diagnostics = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        const { result } = await dispatchWithUpstreamResponse(new TextEncoder().encode(wire));
+        expect(result).toEqual({ ok: false, error: 'upstream_unavailable' });
+        expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage: 'response_headers', code });
+    });
+
+    it.each(['resource_changed', 'source_unavailable', 'model_not_allowed', 'private-unknown'])('preserves only a closed application refusal: %s', async code => {
+        const diagnostics = vi.spyOn(logger, 'warn').mockImplementation(() => {});
+        const { result } = await dispatchWithUpstreamResponse(new TextEncoder().encode(
+            `HTTP/1.1 403 Forbidden\r\nX-Happier-Provider-Broker-Error-Code: ${code}\r\n\r\nprivate body`,
+        ));
+        expect(result).toMatchObject({ ok: false });
+        if (code === 'private-unknown') expect(result).not.toHaveProperty('applicationCode');
+        else expect(result).toHaveProperty('applicationCode', code);
+        expect(diagnostics).toHaveBeenCalledWith({ module: 'provider-broker-carrier', stage: 'application_response',
+            code: code === 'private-unknown' ? 'application_refusal_unclassified' : code, statusCode: 403 });
+        expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
     });
 });

@@ -4,7 +4,7 @@ import { z } from 'zod/mini';
 import { decodeBase64, encodeBase64 } from '../../crypto/base64.js';
 import { ProviderPublicHeadersV1Schema } from '../../providers/publicHeadersSchema.js';
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '../../providers/safety/limits.js';
-import { ProviderBrokerApplicationBindingV1Schema, ProviderBrokerRequestFactsV1Schema } from '../../providers/brokerRouteGrantV1.js';
+import { ProviderBrokerAdmissionFailureCodeV1Schema, ProviderBrokerApplicationBindingV1Schema, ProviderBrokerRequestFactsV1Schema } from '../../providers/brokerRouteGrantV1.js';
 import {
   ProviderBrokerExternalApiKeyRelayBindingV1Schema,
   ProviderBrokerResourceTestRelayBindingV1Schema,
@@ -321,6 +321,21 @@ export const TeamCredentialExternalProviderErrorCodeV1Schema = lazyZodSchema(() 
   'request_cancelled',
 ]));
 export type TeamCredentialExternalProviderErrorCodeV1 = z.infer<typeof TeamCredentialExternalProviderErrorCodeV1Schema>;
+
+/** Closed, content-free failures emitted by the authenticated broker application.
+ * Public external API classification remains separate from this exact diagnostic. */
+export const TeamCredentialBrokerApplicationFailureCodeV1Schema = lazyZodSchema(() => z.union([
+  ProviderBrokerAdmissionFailureCodeV1Schema,
+  z.enum([
+    'source_invalid', 'source_unavailable',
+    'request_malformed', 'route_not_allowed', 'model_not_allowed',
+    'reasoning_effort_not_allowed', 'request_constraint_unsupported',
+    'grant_invalid', 'grant_unknown_key', 'grant_bad_signature', 'grant_expired',
+    'grant_not_yet_valid', 'grant_binding_mismatch', 'transport_identity_mismatch',
+    'request_too_large',
+  ]),
+]));
+export type TeamCredentialBrokerApplicationFailureCodeV1 = z.infer<typeof TeamCredentialBrokerApplicationFailureCodeV1Schema>;
 
 export const TeamCredentialExternalProviderErrorV1Schema = lazyZodSchema(() => z.strictObject({
   error: z.strictObject({

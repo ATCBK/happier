@@ -15,7 +15,6 @@ import type {
 import {
     verifyProviderBrokerRouteGrantV1,
     type ProviderBrokerRouteGrantExpectedBindingV1,
-    type ProviderBrokerRouteGrantVerificationResultV1,
 } from '@/daemon/peer/mediation/verifyProviderBrokerRouteGrantV1';
 import type { DirectRouteGrantTrustRoot } from '@/daemon/peer/mediation/verifyRouteGrantSignature';
 import { evaluateTeamCredentialRequestPolicyV1, type TeamCredentialRequestPolicyFailureCodeV1 } from './requestPolicyV1';
@@ -32,6 +31,7 @@ import { readProviderBrokerTransportFailure } from './providerBrokerTransportFai
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH, PROVIDER_BROKER_PRIVATE_ENDPOINT_PATH,
     PROVIDER_BROKER_MODEL_ID_HEADER, projectProviderBrokerEndpointMetadata } from './providerBrokerPrivateProtocol';
 import type { SignedProviderBrokerRouteGrantV2 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
+import type { TeamCredentialBrokerApplicationFailureCodeV1 } from '@happier-dev/protocol/teams/credentials/externalProviderApiV1';
 
 async function requestProviderAccess(
     access: ManagedProviderEndpointHttpAccess,
@@ -45,13 +45,6 @@ async function requestProviderAccess(
         throw error;
     }
 }
-
-/** Request-policy refusals come from the evaluator owner; Home admission
- * failures use the one canonical protocol vocabulary. */
-type ProviderBrokerVerificationReason = Extract<
-    ProviderBrokerRouteGrantVerificationResultV1,
-    Readonly<{ valid: false }>
->['reasonCode'];
 
 export type ProviderBrokerRequestAdmission = Readonly<{
     authority: SignedProviderBrokerRouteGrantV1;
@@ -169,10 +162,7 @@ export type ProviderBrokerRequestHandlerResult =
     | Readonly<{ ok: true; response: ManagedServiceResponse }>
     | Readonly<{
         ok: false;
-        reasonCode:
-            | TeamCredentialRequestPolicyFailureCodeV1
-            | ProviderBrokerAdmissionFailureCodeV1
-            | ProviderBrokerVerificationReason;
+        reasonCode: TeamCredentialBrokerApplicationFailureCodeV1;
         usageLimit?: TeamCredentialUsageLimitDenialV1;
     }>;
 
@@ -318,7 +308,7 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
         ok: true;
         access: ManagedProviderEndpointHttpAccess;
         terminalUsage?: ProviderBrokerExternalTerminalUsage;
-    }> | Readonly<{ ok: false; reasonCode: ProviderBrokerAdmissionFailureCodeV1; usageLimit?: TeamCredentialUsageLimitDenialV1 }>>;
+    }> | Readonly<{ ok: false; reasonCode: TeamCredentialBrokerApplicationFailureCodeV1; usageLimit?: TeamCredentialUsageLimitDenialV1 }>>;
     resolveResourceTestRequestPolicy?: (input: Readonly<{
         binding: Extract<ProviderBrokerRelayApplicationBindingV1, { kind: 'resource_test' }>;
         request: ManagedServiceRequest;
@@ -335,7 +325,7 @@ export function createProviderBrokerRequestHandler(input: Readonly<{
         application: ProviderBrokerApplicationBindingV1;
         request: ManagedServiceRequest;
         requestFacts: ProviderBrokerRequestAdmission['requestFacts'];
-    }>) => Promise<Readonly<{ ok: true; access: ManagedProviderEndpointHttpAccess }> | Readonly<{ ok: false; reasonCode: ProviderBrokerAdmissionFailureCodeV1; usageLimit?: TeamCredentialUsageLimitDenialV1 }>>;
+    }>) => Promise<Readonly<{ ok: true; access: ManagedProviderEndpointHttpAccess }> | Readonly<{ ok: false; reasonCode: TeamCredentialBrokerApplicationFailureCodeV1; usageLimit?: TeamCredentialUsageLimitDenialV1 }>>;
 }>): ProviderBrokerRequestHandler {
     const modelListResponse = (
         catalog: TeamCredentialRequestModelCatalog,

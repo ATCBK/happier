@@ -23,6 +23,7 @@ import {
 } from './providerBrokerApplicationServer';
 import { createProviderBrokerRequestHandler } from './providerBrokerRequestHandler';
 import { PROVIDER_BROKER_PRIVATE_CLOSE_PATH } from './providerBrokerPrivateProtocol';
+import { logger } from '@/ui/logger';
 
 const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(17));
 const payload: ProviderBrokerRouteGrantPayloadV1 = {
@@ -143,6 +144,25 @@ async function closeApplicationTarget(input: Readonly<{
 }
 
 describe('Provider broker target application integration', () => {
+  it('logs an application exception without logging its private diagnostic', async () => {
+    const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+    const server = await startProviderBrokerApplicationServer({
+      handler: async () => ({ ok: false, reasonCode: 'resource_unavailable' }),
+      localConsumer: {
+        authorize: () => true,
+        request: async () => { throw new Error('private credential diagnostic'); },
+      },
+    });
+    try {
+      const response = await server.app.inject({ method: 'GET', url: '/v1/models' });
+      expect(response.statusCode).toBe(500);
+      expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', { stage: 'handler', code: 'exception' });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
+    } finally {
+      await server.close();
+      diagnostics.mockRestore();
+    }
+  });
   it('keeps the separate external carrier envelope boundary and reports a typed size refusal', async () => {
     const server = await startProviderBrokerApplicationServer({ handler: createProviderBrokerRequestHandler({
       resolveTrustRoots: () => [], nowMs: () => 0, resolveRequestPolicy: async () => null,

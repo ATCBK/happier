@@ -912,9 +912,15 @@ credential details.
 Saved-resource Test connection failures also leave content-free `stage` and
 `code` records in the server logger: `team-credential-resource-test` identifies
 placement, candidate, dispatch and response-body failures; `provider-broker-carrier`
-identifies feature, signing, authorization, initial write and trusted application
-refusals. These records omit request/response content and exception text. A trusted
-broker update refusal retains the existing `incompatible` readiness reason.
+identifies feature, signing, authorization, initial write, incomplete or invalid
+response headers and application refusals. Application-response records include
+the HTTP status and only a schema-admitted broker code; unknown headers become a
+constant diagnostic. The daemon logs source-open/currentness and application
+failure stages as well. These records omit request/response content and exception
+text. In 0.3 development, the Test result's optional, closed `code` preserves the
+exact admitted application refusal or the carrier's public failure classification;
+`source_unavailable` alone does not establish an absent or expired credential.
+A trusted broker update refusal retains the existing `incompatible` readiness reason.
 
 The development Temporary-computer flow resolves its Team credential before a Session exists. It
 authorizes the named resource through the planned-Session admission owner before it discovers any

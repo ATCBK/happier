@@ -19,6 +19,7 @@ import {
   teamCredentialBrokerPlacementAcceptsMachine,
 } from './teamCredentialBrokerSourceOwner';
 import { createConnectedServicesBrokerSourceOpen } from './connectedServicesSource';
+import { logger } from '@/ui/logger';
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -301,6 +302,7 @@ describe('Team credential broker source owner', () => {
   });
 
   it('keeps retained custody when the Home source read is unavailable', async () => {
+    const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
     const harness = sourceCustodyHarness();
     try {
       const acquired = await harness.acquire(new AbortController().signal);
@@ -310,11 +312,13 @@ describe('Team credential broker source owner', () => {
         ok: false,
         reasonCode: 'source_unavailable',
       });
+      expect(diagnostics).toHaveBeenCalledWith('[provider-broker-source]', { stage: 'source_open', code: 'exception' });
       await expect(harness.managed.revalidateManagedProviderExplicitStarts()).resolves.toBe(0);
       expect(harness.childCleanup).not.toHaveBeenCalled();
       expect(harness.managed.readRetainedSemanticCustodyCount()).toBe(1);
     } finally {
       await harness.managed.dispose();
+      diagnostics.mockRestore();
     }
   });
 

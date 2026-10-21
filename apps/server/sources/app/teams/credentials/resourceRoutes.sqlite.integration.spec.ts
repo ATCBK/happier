@@ -2773,6 +2773,17 @@ describe("Team credential resource routes (SQLite integration)", () => {
             teamId: team.id, resourceId: resource.id,
         }, evidence);
         expect(incompatible.json().readiness).toEqual({ kind: "broker_unavailable", reason: "incompatible" });
+        for (const error of ["upstream_unavailable", "resource_unavailable", "invalid_request", "request_cancelled",
+            "team_credential_usage_limit", "cost_limit_unavailable", "policy_denied"] as const) {
+            app.forwardTeamCredentialBrokerResourceTest = async () => ({ ok: false, error });
+            diagnostics.mockClear();
+            const refused = await post("/v1/teams/credential-resources/test", manager.id, {
+                teamId: team.id, resourceId: resource.id,
+            }, evidence);
+            expect(refused.statusCode, refused.body).toBe(200);
+            expect(refused.json()).toHaveProperty("code", error);
+            expect(diagnostics).toHaveBeenCalledWith({ module: "team-credential-resource-test", stage: "dispatch", code: error });
+        }
         app.forwardTeamCredentialBrokerResourceTest = dispatch;
         await db.teamMembership.delete({ where: {
             teamId_accountId: { teamId: team.id, accountId: custodian.id },

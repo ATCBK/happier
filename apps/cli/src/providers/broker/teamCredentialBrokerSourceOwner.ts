@@ -11,6 +11,7 @@ import type {
 } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import type { TeamCredentialSourceCurrentness } from './teamCredentialSourceSnapshot';
+import { logger } from '@/ui/logger';
 
 type ConnectedServicesSource = Extract<
   TeamCredentialSourceBindingV1,
@@ -298,12 +299,14 @@ export function createTeamCredentialBrokerSourceOwner(input: Readonly<{
               source: source.data,
             });
       } catch {
+        logger.warnLocalFile('[provider-broker-source]', { stage: 'source_open', code: 'exception' });
         return Object.freeze({
           ok: false as const,
           reasonCode: 'source_unavailable' as const,
         });
       }
       if (!opened) {
+        logger.warnLocalFile('[provider-broker-source]', { stage: 'source_open', code: 'projection_unavailable' });
         return Object.freeze({
           ok: false as const,
           reasonCode: 'source_unavailable' as const,
@@ -312,6 +315,7 @@ export function createTeamCredentialBrokerSourceOwner(input: Readonly<{
       const { projection, sourceCurrentness } = opened;
       let sourceCurrent = await sourceCurrentness.isCurrent().catch(() => false);
       if (rawInput.signal.aborted || !sourceCurrent || !readsCurrent(projection)) {
+        logger.warnLocalFile('[provider-broker-source]', { stage: 'source_currentness', code: rawInput.signal.aborted ? 'request_cancelled' : 'source_not_current' });
         // Only a source that is not current retires the operation this open
         // would have joined; a caller that went away releases nothing shared.
         if (!rawInput.signal.aborted && (!sourceCurrent || !readsCurrent(projection))) {

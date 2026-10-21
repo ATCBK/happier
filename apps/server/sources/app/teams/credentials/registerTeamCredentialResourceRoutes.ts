@@ -1006,14 +1006,15 @@ export function registerTeamCredentialResourceRoutes(
             const brokerRefusalReason = readTeamCredentialBrokerRefusalReason(candidateResults.map(({ candidate }) => (
                 candidate?.status === "unavailable" ? candidate.reason : null
             )));
-            if (!sourceUnavailable && brokerRefusalReason === null) {
-                logger.warn({ module: "team-credential-resource-test", stage: "candidate", code: "candidate_unavailable" });
+            if (sourceUnavailable || brokerRefusalReason === null) {
+                logger.warn({ module: "team-credential-resource-test", stage: "candidate", code: sourceUnavailable ? "source_unavailable" : "candidate_unavailable" });
             }
             return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                 result: "needs_attention",
                 readiness: sourceUnavailable
                     ? { kind: "source_unavailable" }
                     : { kind: "broker_unavailable", ...(brokerRefusalReason ? { reason: brokerRefusalReason } : {}) },
+                ...(sourceUnavailable ? { code: "source_unavailable" } : {}),
                 recovery: sourceUnavailable
                     ? "Repair the credential source and try again."
                     : brokerRefusalReason === 'response_invalid'
@@ -1065,11 +1066,11 @@ export function registerTeamCredentialResourceRoutes(
                     : dispatched.error === "policy_denied"
                         ? "policy_denied" as const
                         : "source_unavailable" as const;
-                if (readiness === "broker_unavailable") {
-                    logger.warn({ module: "team-credential-resource-test", stage, code: dispatched.error });
-                }
+                const code = dispatched.applicationCode ?? dispatched.error;
+                logger.warn({ module: "team-credential-resource-test", stage, code });
                 return reply.send(TeamCredentialTestActionOutputV1Schema.parse({
                     result: "needs_attention",
+                    code,
                     readiness: { kind: readiness, ...(readiness === "broker_unavailable" && "reason" in dispatched
                         ? { reason: dispatched.reason } : {}) },
                     recovery: readiness === "broker_unavailable"
