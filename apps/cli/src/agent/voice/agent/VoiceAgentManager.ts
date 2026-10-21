@@ -48,6 +48,8 @@ function isVoiceAgentReadyHandshakeReply(text: string): boolean {
 
 async function awaitWithinVoiceAgentBootstrapBudget<T>(promise: Promise<T>, budgetMs: number): Promise<T> {
   if (budgetMs <= 0) {
+    // The deadline error supersedes whatever the abandoned step settles with later.
+    promise.catch(() => {});
     throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent bootstrap budget exhausted');
   }
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -56,7 +58,7 @@ async function awaitWithinVoiceAgentBootstrapBudget<T>(promise: Promise<T>, budg
       promise,
       new Promise<never>((_resolve, reject) => {
         timer = setTimeout(
-          () => reject(new VoiceAgentError('VOICE_AGENT_START_FAILED', `Voice agent session start timed out after ${budgetMs}ms`)),
+          () => reject(new VoiceAgentError('VOICE_AGENT_START_FAILED', `Voice agent bootstrap timed out after ${budgetMs}ms`)),
           budgetMs,
         );
         timer.unref?.();
@@ -360,14 +362,14 @@ export class VoiceAgentManager {
             memoryRecallGuidanceEnabled: instance.memoryRecallGuidanceEnabled,
             systemAppendBlocks: instance.systemAppendBlocks,
           });
-          await instance.chatBackend.sendPrompt(instance.chatSessionId, prompt);
-          if (instance.chatBackend.waitForResponseComplete) {
-            const remainingMs = remainingBootstrapBudgetMs();
-            if (remainingMs <= 0) {
-              throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent bootstrap budget exhausted');
+          // The whole handshake (prompt write + response) stays inside the bootstrap deadline: a stalled
+          // write or a backend whose response wait extends on every update must not outlive it.
+          await awaitWithinVoiceAgentBootstrapBudget((async () => {
+            await instance.chatBackend.sendPrompt(instance.chatSessionId, prompt);
+            if (instance.chatBackend.waitForResponseComplete) {
+              await instance.chatBackend.waitForResponseComplete(Math.max(1, remainingBootstrapBudgetMs()));
             }
-            await instance.chatBackend.waitForResponseComplete(remainingMs);
-          }
+          })(), remainingBootstrapBudgetMs());
           if (!isVoiceAgentReadyHandshakeReply(instance.chatBuffer)) {
             throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Bootstrap failed');
           }

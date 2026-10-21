@@ -1423,6 +1423,75 @@ describe('VoiceAgentManager', () => {
     }
   });
 
+  it('rejects start at the bootstrap deadline when the READY prompt write never completes', async () => {
+    const { VoiceAgentManager } = await import('./VoiceAgentManager');
+
+    const dispose = vi.fn(async () => {});
+    const backend: AgentBackend = {
+      onMessage() {},
+      async startSession() {
+        return { sessionId: 's-stalled-prompt' as SessionId };
+      },
+      sendPrompt: () => new Promise<never>(() => {}),
+      async waitForResponseComplete() {},
+      async cancel() {},
+      dispose,
+    };
+    const manager = new VoiceAgentManager({ createBackend: () => backend });
+    try {
+      await expect(
+        manager.start({
+          agentId: 'claude',
+          chatModelId: 'chat-model',
+          commitModelId: 'commit-model',
+          permissionPolicy: 'read_only',
+          idleTtlSeconds: 60,
+          initialContext: 'CTX',
+          bootstrapMode: 'ready_handshake',
+          bootstrapTimeoutMs: 25,
+        } as any),
+      ).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
+      expect(dispose).toHaveBeenCalled();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
+  it('rejects start at the bootstrap deadline when the READY response keeps extending its own wait', async () => {
+    const { VoiceAgentManager } = await import('./VoiceAgentManager');
+
+    const dispose = vi.fn(async () => {});
+    const backend: AgentBackend = {
+      onMessage() {},
+      async startSession() {
+        return { sessionId: 's-chatty' as SessionId };
+      },
+      async sendPrompt() {},
+      // Models an ACP backend whose idle timer restarts on every streamed update.
+      waitForResponseComplete: () => new Promise<void>(() => {}),
+      async cancel() {},
+      dispose,
+    };
+    const manager = new VoiceAgentManager({ createBackend: () => backend });
+    try {
+      await expect(
+        manager.start({
+          agentId: 'claude',
+          chatModelId: 'chat-model',
+          commitModelId: 'commit-model',
+          permissionPolicy: 'read_only',
+          idleTtlSeconds: 60,
+          initialContext: 'CTX',
+          bootstrapMode: 'ready_handshake',
+          bootstrapTimeoutMs: 25,
+        } as any),
+      ).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
+      expect(dispose).toHaveBeenCalled();
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it('uses the provided bootstrap timeout for READY handshakes', async () => {
     const { VoiceAgentManager } = await import('./VoiceAgentManager');
 
