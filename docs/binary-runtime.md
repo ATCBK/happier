@@ -94,7 +94,12 @@ slow active service to publish the selected Home's owner, and ends the ownership
 check without adding its standalone grace window. The supplied budget is a
 remaining duration; guest CLI bootstrap before service-command entry is outside
 this check. An observed service exit
-or incompatible owner ends this finite wait early. Standalone service commands
+or incompatible published owner ends this finite wait early. A discovered daemon
+process without an ownership file remains pending; it cannot yet prove its
+version or service identity. Systemd's inactive restart transition and a previous
+run's exit properties alone do not prove startup failure. Finite failures report
+the predicate code, elapsed ownership waiting and available budget separately.
+Standalone service commands
 keep their existing startup checkpoints and platform defaults. The controller
 and guest CLI must both be updated for this propagation.
 The consent prompt ends at the earlier recipe deadline or Home request expiry,
