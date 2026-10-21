@@ -1,4 +1,5 @@
 import type { PluginReactNativeSurfaceModule } from './PluginReactNativeSurface';
+import { instantiatePluginUiCommonJsBundle, type PluginUiCommonJsModule } from './commonJsEvaluator';
 
 /**
  * An active-projection admission captured before an asynchronous module load.
@@ -10,6 +11,10 @@ export type PluginReactNativeModuleRegistryWriteFence = Readonly<{
 }>;
 
 export type PluginReactNativeModuleRegistry = Readonly<{
+    /** Evaluation has document lifetime; publication and activation retain their own authority fences. */
+    loadExecutableExport: (
+        input: Omit<Parameters<typeof instantiatePluginUiCommonJsBundle>[0], 'hostModules'>,
+    ) => (...args: never[]) => unknown;
     read: (cacheKey: string | undefined) => PluginReactNativeSurfaceModule | null;
     /** Capture the key-local admission fact before beginning asynchronous work. */
     captureWriteFence: (cacheKey: string | undefined) => PluginReactNativeModuleRegistryWriteFence | null;
@@ -25,8 +30,21 @@ export type PluginReactNativeModuleRegistry = Readonly<{
 
 export function createPluginReactNativeModuleRegistry(): PluginReactNativeModuleRegistry {
     const modules = new Map<string, PluginReactNativeSurfaceModule>();
+    const executableModules = new Map<string, PluginUiCommonJsModule>();
     const activeKeyTokens = new Map<string, symbol>();
     return Object.freeze({
+        loadExecutableExport: (input) => {
+            // The universal bundle and host-module ABI are shared in this JS realm.
+            // Account/Home, contribution locators and requested exports select
+            // activations, not distinct evaluations of identical installed code.
+            const key = JSON.stringify([input.identity.pluginId, input.identity.artifactId, input.identity.digest]);
+            let module = executableModules.get(key);
+            if (!module) {
+                module = instantiatePluginUiCommonJsBundle(input);
+                executableModules.set(key, module);
+            }
+            return module.readExport(input.requestedExport);
+        },
         read: (cacheKey) => cacheKey ? modules.get(cacheKey) ?? null : null,
         captureWriteFence: (cacheKey) => {
             if (!cacheKey) return null;

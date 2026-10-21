@@ -44,9 +44,9 @@ function backend(exported: PluginReactNativeExecutableExport): PluginReactNative
 }
 
 describe('PluginUiExecutableModuleHost', () => {
-    it('evaluates unchanged CommonJS bytes once per admitted activation lifetime, not per reconciliation', async () => {
+    it('evaluates unchanged CommonJS bytes once across reconciliation and activation invalidation', async () => {
         // Forward the real loader and evaluator; count the expensive operation itself.
-        const evaluations = vi.spyOn(commonJs, 'evaluatePluginUiCommonJsBundle');
+        const evaluations = vi.spyOn(commonJs, 'instantiatePluginUiCommonJsBundle');
         onTestFinished(() => evaluations.mockRestore());
         const host = createPluginUiExecutableModuleHost();
         onTestFinished(() => host.unload());
@@ -63,8 +63,43 @@ describe('PluginUiExecutableModuleHost', () => {
         expect(evaluations).toHaveBeenCalledTimes(1);
         await host.invalidatePlugin(identity.pluginId);
         expect(await host.activate(input)).toEqual({ ok: true });
-        expect(evaluations).toHaveBeenCalledTimes(2);
-        console.info('R-C CommonJS evaluation counts', { unchangedActivations: 200, evaluations: 1, afterInvalidation: 2 });
+        expect(evaluations).toHaveBeenCalledTimes(1);
+    });
+
+    it('shares one evaluated artifact across seven authority lifetimes while isolating activation scopes', async () => {
+        vi.stubGlobal('__dg8AccountRuntimeEvaluations', 0);
+        onTestFinished(() => { vi.unstubAllGlobals(); });
+        const artifactIdentity = { ...identity, artifactId: 'dg8-account-runtime' };
+        const bytes = new TextEncoder().encode(`
+            globalThis.__dg8AccountRuntimeEvaluations++;
+            exports.activateClientRuntime = api => {
+                let calls = 0;
+                api.register(() => [api.accountId, ++calls]);
+                return () => api.cleaned();
+            };
+        `);
+        const readers: Array<() => readonly [string, number]> = [];
+        const cleaned = vi.fn();
+        for (let index = 0; index < 7; index += 1) {
+            const host = createPluginUiExecutableModuleHost();
+            const accountId = `account-${index}`;
+            const accountAuthority = { kind: 'account' as const, serverId: 'home', accountId, custodyId: 'release' };
+            await host.replaceAuthority(accountAuthority);
+            const cache = createPluginReactNativeBundleCache();
+            cache.putInstalledArtifact({ identity: { ...artifactIdentity }, bytes: new Uint8Array(bytes), format: 'plainJs' });
+            expect(await host.activate({
+                cache, identity: { ...artifactIdentity }, moduleReference, authority: accountAuthority,
+                hostPlatform: 'web', backend: createPluginUiCommonJsLoaderBackend(),
+                createScope: () => ({
+                    api: { accountId, register: (read: () => readonly [string, number]) => readers.push(read), cleaned },
+                    commit: () => {}, unwind: () => {},
+                }),
+            })).toEqual({ ok: true });
+            await host.unload();
+        }
+        expect(Reflect.get(globalThis, '__dg8AccountRuntimeEvaluations')).toBe(1);
+        expect(readers.map(read => read())).toEqual(Array.from({ length: 7 }, (_, index) => [`account-${index}`, 1]));
+        expect(cleaned).toHaveBeenCalledTimes(7);
     });
 
     it('fails closed until the canonical projection owner establishes a generation', async () => {

@@ -1,5 +1,5 @@
 import type { PluginReactNativeLoaderBackend } from './loader';
-import { evaluatePluginUiCommonJsBundle } from './commonJsEvaluator';
+import { getInstalledPluginReactNativeModuleRegistry } from './moduleRegistry';
 
 /** The sole installed executable-artifact backend on web, iOS, and Android. */
 export function createPluginUiCommonJsLoaderBackend(): PluginReactNativeLoaderBackend {
@@ -7,7 +7,7 @@ export function createPluginUiCommonJsLoaderBackend(): PluginReactNativeLoaderBa
         backendId: 'commonJs',
         available: true,
         diagnostics: Object.freeze([]),
-        loadInstalledBundle: async (input) => evaluatePluginUiCommonJsBundle({
+        loadInstalledBundle: async (input) => getInstalledPluginReactNativeModuleRegistry().loadExecutableExport({
             bytes: input.bytes,
             identity: {
                 pluginId: input.identity.pluginId,

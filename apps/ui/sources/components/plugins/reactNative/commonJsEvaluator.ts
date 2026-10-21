@@ -46,12 +46,19 @@ function boundedSourceUrl(identity: PluginUiCommonJsArtifactIdentity): string {
     return `\n//# sourceURL=happier-plugin-ui-${safe}.cjs`;
 }
 
-export function evaluatePluginUiCommonJsBundle(input: Readonly<{
+type PluginUiCommonJsEvaluationInput = Readonly<{
     bytes: Uint8Array;
     identity: PluginUiCommonJsArtifactIdentity;
     requestedExport: string;
     hostModules?: PluginUiCommonJsHostModules;
-}>): (...args: never[]) => unknown {
+}>;
+
+export type PluginUiCommonJsModule = Readonly<{
+    readExport: (requestedExport: string) => (...args: never[]) => unknown;
+}>;
+
+/** Instantiate bytes separately from selecting an export or activating a scope. */
+export function instantiatePluginUiCommonJsBundle(input: PluginUiCommonJsEvaluationInput): PluginUiCommonJsModule {
     let source: string;
     try {
         source = new TextDecoder('utf-8', { fatal: true }).decode(input.bytes);
@@ -95,15 +102,19 @@ export function evaluatePluginUiCommonJsBundle(input: Readonly<{
     }
 
     const namespace = module.exports;
-    const exported = namespace && (typeof namespace === 'object' || typeof namespace === 'function')
-        ? Reflect.get(namespace, input.requestedExport)
-        : undefined;
-    if (typeof exported !== 'function') {
-        fail({
-            code: 'invalid_executable_export',
-            identity: input.identity,
-            requestedExport: input.requestedExport,
-        });
-    }
-    return exported as (...args: never[]) => unknown;
+    return Object.freeze({
+        readExport: (requestedExport) => {
+            const exported = namespace && (typeof namespace === 'object' || typeof namespace === 'function')
+                ? Reflect.get(namespace, requestedExport)
+                : undefined;
+            if (typeof exported !== 'function') {
+                fail({ code: 'invalid_executable_export', identity: input.identity, requestedExport });
+            }
+            return exported as (...args: never[]) => unknown;
+        },
+    });
+}
+
+export function evaluatePluginUiCommonJsBundle(input: PluginUiCommonJsEvaluationInput): (...args: never[]) => unknown {
+    return instantiatePluginUiCommonJsBundle(input).readExport(input.requestedExport);
 }
