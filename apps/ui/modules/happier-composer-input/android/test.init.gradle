@@ -1,0 +1,10 @@
+// Keep native-test outputs outside the moving source mirror. Sources stay live.
+def testBuildRoot = System.getProperty('happier.composer.testBuildDir')
+if (!testBuildRoot) {
+  throw new GradleException('Pass -Dhappier.composer.testBuildDir=<external scratch directory>')
+}
+gradle.beforeProject { project ->
+  if (project.path in [':happier-composer-input', ':happier-hardware-keyboard-shortcuts', ':react-native-enriched-markdown']) {
+    project.layout.buildDirectory.set(new File(testBuildRoot, project.name))
+  }
+}

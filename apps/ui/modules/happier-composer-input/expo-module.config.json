@@ -1,0 +1,6 @@
+{
+  "name": "HappierComposerInput",
+  "platforms": ["android", "ios"],
+  "android": { "modules": ["dev.happier.composerinput.HappierComposerInputModule"] },
+  "ios": { "modules": ["HappierComposerInputModule"] }
+}

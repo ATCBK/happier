@@ -1,4 +1,5 @@
 import { createHash, getHashes } from 'node:crypto';
+import * as React from 'react';
 
 // Vitest runs in a Node environment; `expo-modules-core` is designed for Expo/Metro and
 // imports `react-native` (Flow) via its TS source entrypoint. For unit tests we only need
@@ -71,9 +72,15 @@ export function requireNativeModule<T = never>(moduleName: string): T {
     return {} as T;
 }
 
+/** Native view registration is an OS boundary; renderer tests keep its public host props and ref. */
+export function requireNativeViewManager<P extends object>(moduleName: string): React.ComponentType<P> {
+    return moduleName as unknown as React.ComponentType<P>;
+}
+
 export default {
     NativeModule,
     Platform,
     requireOptionalNativeModule,
     requireNativeModule,
+    requireNativeViewManager,
 };

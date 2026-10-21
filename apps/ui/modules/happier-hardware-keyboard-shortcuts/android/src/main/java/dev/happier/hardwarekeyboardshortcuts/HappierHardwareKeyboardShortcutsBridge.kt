@@ -4,6 +4,8 @@ import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.View
+import android.view.inputmethod.BaseInputConnection
+import android.widget.EditText
 import java.lang.ref.WeakReference
 
 object HappierHardwareKeyboardShortcutsBridge {
@@ -25,6 +27,13 @@ object HappierHardwareKeyboardShortcutsBridge {
     if (!enabled || event.action != KeyEvent.ACTION_DOWN) return false
     if (event.deviceId == KeyCharacterMap.VIRTUAL_KEYBOARD) return false
     if (!event.isFromSource(InputDevice.SOURCE_KEYBOARD)) return false
+
+    // Native IME navigation/commit/cancel must precede the configured host shortcuts.
+    if (focusedView is EditText && BaseInputConnection.getComposingSpanStart(focusedView.text) >= 0 &&
+      event.keyCode in listOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER,
+        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
+        KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_TAB, KeyEvent.KEYCODE_ESCAPE,
+        KeyEvent.KEYCODE_DEL, KeyEvent.KEYCODE_FORWARD_DEL)) return false
 
     val module = moduleRef?.get() ?: return false
     if (!module.canReceiveHardwareKeyEvents()) return false

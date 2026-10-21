@@ -150,6 +150,32 @@ async function loadAppConfigWithNativeSshFlag(value) {
     return loadAppConfigWithNativeFlags({ nativeSsh: value, terminalNative: '1' });
 }
 
+test('composer input is autolinked on both native platforms with a new binary runtime', async () => {
+    const moduleRoot = join(appRoot, 'modules', 'happier-composer-input');
+    const config = await readJson(join(moduleRoot, 'expo-module.config.json'));
+    assert.deepEqual(config.platforms.slice().sort(), ['android', 'ios']);
+    assert.deepEqual(config.ios.modules, ['HappierComposerInputModule']);
+    assert.deepEqual(config.android.modules, ['dev.happier.composerinput.HappierComposerInputModule']);
+    const appPackage = await readJson(join(appRoot, 'package.json'));
+    assert.notEqual(appPackage.happierExpoRuntimeVersion, '0.3.1-native', 'new composer view requires a new native binary runtime');
+    const nativeModuleSources = await Promise.all([
+        readText(join(moduleRoot, 'ios', 'HappierComposerInputModule.swift')),
+        readText(join(moduleRoot, 'android', 'src', 'main', 'java', 'dev', 'happier', 'composerinput', 'HappierComposerInputModule.kt')),
+    ]);
+    const expectedEvents = ['onChange', 'onSelection', 'onKeyPress', 'onSubmitEditing', 'onFocus', 'onBlur',
+        'onContentHeightChange', 'onScroll', 'onReferencePress', 'onDecorationPress'].sort();
+    for (const source of nativeModuleSources) {
+        assert.deepEqual(extractQuotedEventNames(source), expectedEvents);
+        for (const name of ['focus', 'blur', 'setTextAndSelection', 'setSelection', 'offsetAtPoint', 'setDropCaret']) {
+            assert.ok(source.includes(`AsyncFunction("${name}")`), `native composer command ${name} is exported`);
+        }
+    }
+    for (const platform of ['ios', 'android']) {
+        const modules = await searchAutolinkedModules(platform);
+        assert.ok(modules['happier-composer-input'], `composer input must autolink on ${platform}`);
+    }
+});
+
 test('apps/ui fast test lane includes the native modules package contract check', async () => {
     const packageJson = await readJson(join(appRoot, 'package.json'));
     // `scripts.test` is only the Stack executor indirection

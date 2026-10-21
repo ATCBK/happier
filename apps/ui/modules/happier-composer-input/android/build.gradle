@@ -1,0 +1,23 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'dev.happier.composerinput'
+version = '0.0.0'
+
+android {
+  namespace 'dev.happier.composerinput'
+  defaultConfig {
+    versionCode 1
+    versionName version
+  }
+  testOptions { unitTests.includeAndroidResources = true }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  implementation 'androidx.appcompat:appcompat:1.7.0'
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'org.robolectric:robolectric:4.14.1'
+}

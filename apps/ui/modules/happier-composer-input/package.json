@@ -1,0 +1,10 @@
+{
+  "name": "happier-composer-input",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Happier native composer with atomic inline references.",
+  "files": ["android", "ios", "expo-module.config.json", "package.json"],
+  "devDependencies": { "expo-modules-core": "55.0.20" },
+  "peerDependencies": { "expo": "*" },
+  "peerDependenciesMeta": { "expo": { "optional": true } }
+}

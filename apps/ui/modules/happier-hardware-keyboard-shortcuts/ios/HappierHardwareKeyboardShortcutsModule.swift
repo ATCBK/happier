@@ -20,7 +20,7 @@ private enum HardwareKeyboardShortcutMode: Hashable {
 private final class HardwareKeyboardTextViewInterceptor {
   static let shared = HardwareKeyboardTextViewInterceptor()
 
-  private let textInputClassNames = ["RCTUITextView", "RCTUITextField"]
+  private let textInputClassNames = ["RCTUITextView", "RCTUITextField", "HappierComposerTextView"]
   private let originalSelector = #selector(UIResponder.pressesBegan(_:with:))
   private let interceptedSelector = Selector(("happierHardwareKeyboardShortcuts_pressesBegan:withEvent:"))
   private let methodEncoding = "v@:@@"
