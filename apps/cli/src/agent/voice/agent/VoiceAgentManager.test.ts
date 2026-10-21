@@ -3084,10 +3084,10 @@ describe('VoiceAgentManager', () => {
     }
   });
 
-  it('bootstraps new sessions with a READY handshake when bootstrapMode is enabled', async () => {
+  it.each(['READY', 'Ready.', '**READY!**', '`ready`'])('bootstraps new sessions with a decorated READY handshake: %s', async (responseText) => {
 
     const backend = createPromptCaptureBackend([
-      { responseText: 'READY' },
+      { responseText },
       { responseText: 'ok' },
     ]);
     const createBackend: BackendFactory = () => backend;
@@ -3179,6 +3179,58 @@ describe('VoiceAgentManager', () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(['provisioning', 'delivery', 'completion'] as const)(
+    'shares the bootstrap deadline across provisioning, delivery and completion while %s is pending',
+    async (phase) => {
+      vi.useFakeTimers();
+      let releaseOpen!: () => void;
+      let releaseSend!: () => void;
+      const opening = new Promise<void>((resolve) => { releaseOpen = resolve; });
+      const sending = new Promise<void>((resolve) => { releaseSend = resolve; });
+      let opened = false;
+      let sent = false;
+      let bootstrapStartedAt = 0;
+      const backend = createDeterministicBackend('bootstrap-budget', {
+        async onOpen() { opened = true; bootstrapStartedAt = Date.now(); await opening; },
+        async onSend() { sent = true; await sending; },
+      });
+      const manager = new VoiceAgentManager({ createRuntime: () => backend });
+      let outcome = 'pending';
+      const started = manager.start({
+        voiceAgentId: 'bootstrap-budget',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        chatModelId: 'chat-model', commitModelId: 'commit-model',
+        permissionIntent: 'read-only', idleTtlSeconds: 60, initialContext: '',
+        bootstrapMode: 'ready_handshake', bootstrapTimeoutMs: 15_000,
+      });
+      const observed = started.then(() => { outcome = 'started'; }, () => { outcome = 'failed'; });
+      try {
+        await vi.waitFor(() => expect(opened).toBe(true));
+        // Provisioning consumes part of the same budget as the READY response.
+        await vi.advanceTimersByTimeAsync(5_000);
+        if (phase !== 'provisioning') {
+          releaseOpen();
+          await vi.waitFor(() => expect(sent).toBe(true));
+          await vi.advanceTimersByTimeAsync(5_000);
+          if (phase === 'completion') releaseSend();
+        }
+        await vi.advanceTimersByTimeAsync(bootstrapStartedAt + 15_000 - Date.now() - 1);
+        expect(outcome).toBe('pending');
+        await vi.advanceTimersByTimeAsync(1);
+        expect(outcome).toBe('failed');
+        await expect(started).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
+        expect(manager.readCurrentRuntimeOccurrence('bootstrap-budget')).toBeNull();
+        expect(manager.isTurnInFlight('bootstrap-budget')).toBe(false);
+      } finally {
+        releaseOpen();
+        releaseSend();
+        await manager.dispose();
+        await observed;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('can bootstrap a new session with a welcome message before the first user turn', async () => {
 

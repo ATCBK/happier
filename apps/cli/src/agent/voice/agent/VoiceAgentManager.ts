@@ -60,6 +60,10 @@ export type VoiceAgentRuntimeAuthorityV1 = Readonly<{
   activeTurnId: string | null;
 }>;
 
+function isVoiceAgentReadyHandshakeReply(text: string): boolean {
+  return text.trim().replace(/[\s.!"'`*]+$/u, '').replace(/^[\s"'`*]+/u, '').toUpperCase() === 'READY';
+}
+
 function areVoiceModelSelectionsEqual(
   left: ProviderBoundModelRef | undefined,
   right: ProviderBoundModelRef | undefined,
@@ -734,6 +738,8 @@ export class VoiceAgentManager {
     const startSignal = options?.signal
       ? AbortSignal.any([startOccurrence.abortController.signal, options.signal])
       : startOccurrence.abortController.signal;
+    let bootstrapFailure: VoiceAgentError | null = null;
+    let bootstrapTimer: NodeJS.Timeout | null = null;
     const cancelStart = (): void => {
       startOccurrence.cancelled = true;
       void startOccurrence.provisionalCleanup?.().catch(() => {});
@@ -746,7 +752,7 @@ export class VoiceAgentManager {
         || startOccurrence.cancelled
         || this.startingVoiceAgents.get(voiceAgentId) !== startOccurrence
       ) {
-        throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent start was cancelled');
+        throw bootstrapFailure ?? new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent start was cancelled');
       }
     };
     const createRuntime = options?.createRuntime ?? this.createRuntime;
@@ -804,7 +810,22 @@ export class VoiceAgentManager {
       const clearCommitBuffer = () => {
         if (instanceForCleanup) instanceForCleanup.commitBuffer = '';
       };
-      const chatSessionId = await (async () => {
+      // Provisioning, prompt admission and READY completion share one budget.
+      // Expiry retires the same start occurrence as caller cancellation.
+      const bootstrapBudgetMs = this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs);
+      const bootstrapDeadlineMs = this.getNowMs() + bootstrapBudgetMs;
+      const bootstrapExpired = new Promise<never>((_resolve, reject) => {
+        bootstrapTimer = setTimeout(() => {
+          bootstrapFailure = new VoiceAgentError(
+            'VOICE_AGENT_START_FAILED', `Voice agent bootstrap timed out after ${bootstrapBudgetMs}ms`,
+          );
+          reject(bootstrapFailure);
+          startOccurrence.abortController.abort(bootstrapFailure);
+        }, bootstrapBudgetMs);
+        bootstrapTimer.unref?.();
+      });
+      const awaitBootstrap = <T>(work: Promise<T>): Promise<T> => Promise.race([work, bootstrapExpired]);
+      const chatSessionId = await awaitBootstrap((async () => {
         return (
           await chatBackend.provisionRuntime(
             resume.chatSessionId
@@ -812,7 +833,7 @@ export class VoiceAgentManager {
               : undefined,
           )
         ).runtimeId;
-      })();
+      })());
       ensureCurrentStart();
 
       const instance: VoiceAgentInstance = {
@@ -886,7 +907,7 @@ export class VoiceAgentManager {
       instance.unsubscribeChatMessages = this.subscribeToChatBackend(instance, chatBackend, instance.chatGeneration);
 
       if (resume.commitSessionId) {
-        await this.ensureCommitBackendSession(instance);
+        await awaitBootstrap(this.ensureCommitBackendSession(instance));
         ensureCurrentStart();
       }
 
@@ -903,14 +924,13 @@ export class VoiceAgentManager {
           memoryRecallGuidanceEnabled: instance.memoryRecallGuidanceEnabled,
           systemAppendBlocks: instance.systemAppendBlocks,
         });
-        await this.deliverPrompt(instance.chatBackend, instance.chatSessionId, prompt);
+        await awaitBootstrap(this.deliverPrompt(instance.chatBackend, instance.chatSessionId, prompt));
         ensureCurrentStart();
         if (instance.chatBackend.waitForTurnCompletion) {
-          await instance.chatBackend.waitForTurnCompletion(this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs));
+          await awaitBootstrap(instance.chatBackend.waitForTurnCompletion(Math.max(1, bootstrapDeadlineMs - this.getNowMs())));
           ensureCurrentStart();
         }
-        const response = instance.chatBuffer.trim();
-        if (response.toUpperCase() !== 'READY') {
+        if (!isVoiceAgentReadyHandshakeReply(instance.chatBuffer)) {
           throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Bootstrap failed');
         }
         instance.clearChatBuffer();
@@ -950,6 +970,7 @@ export class VoiceAgentManager {
       }
       throw new VoiceAgentError('VOICE_AGENT_START_FAILED', e instanceof Error ? e.message : 'start failed');
     } finally {
+      if (bootstrapTimer) clearTimeout(bootstrapTimer);
       startSignal.removeEventListener('abort', cancelStart);
       if (this.startingVoiceAgents.get(voiceAgentId) === startOccurrence) {
         this.startingVoiceAgents.delete(voiceAgentId);
