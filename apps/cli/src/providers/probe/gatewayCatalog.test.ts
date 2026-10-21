@@ -6,7 +6,7 @@ import { PROVIDER_ENDPOINT_SAFETY_LIMITS, ProviderConnectionIdSchema, ProviderSe
 import { ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { DaemonProviderModelProjectionRequestV1Schema, DaemonProviderModelProjectionResponseV1Schema, DaemonProviderModelsResponseV1Schema, DaemonProviderProbeResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { createProviderProbeRequestFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';
+import { createProviderManagedProbeRequestFingerprintV1, createProviderProbeRequestFingerprintV1 } from '@happier-dev/protocol/providers/securityFingerprintsV1';
 import * as persistence from '@/persistence';
 import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
 import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/bootstrapMachineSyncRuntime';
@@ -38,6 +38,11 @@ import { createSessionProviderInputConsumer } from '@/agent/runtime/session/inpu
 import { registerMachineProviderRpcHandlers } from '@/api/machine/rpcHandlers.providers';
 import { createLegacyProfileMigrationRpcServices } from '@/providers/migrations/rpc';
 import type { RpcOperationDiagnostics } from '@/api/rpc/types';
+import { createDaemonConnectedAccountPurposeBindingRuntime } from '@/daemon/connectedServices/purposeBindings/createDaemonConnectedAccountPurposeBindingRuntime';
+import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from '@/daemon/connectedServices/accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
+import type { QualifiedConnectedAccountGroupV4, QualifiedConnectedAccountProfileV4 } from '@happier-dev/protocol';
+import { createRuntimeProviderProbeAuthorizationPort } from '@/providers/spawn/probePort';
+import { createProviderOperationLifetime } from '@/providers/operationLifetime';
 
 const transport = vi.hoisted(() => ({ call: vi.fn<typeof callExactMachineRpc>() }));
 const socketBoundary = vi.hoisted(() => ({ io: vi.fn() }));
@@ -113,11 +118,13 @@ it.each([
     const targetEntered = new Promise<void>(resolve => { entered = resolve; });
     const targetReleased = new Promise<void>(resolve => { release = resolve; });
     let targetReads = 0;
+    let homeSignal: AbortSignal | undefined;
     const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
       controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true,
       resolveAccountTarget: async (target, signal) => {
         targetReads += 1;
         if (phase === 'purpose_bindings' || phase === 'pre_effect_revalidation' && targetReads > 1) {
+          homeSignal = signal;
           entered(); await targetReleased; signal.throwIfAborted();
         }
         return target.kind === 'account' ? { account: target.account, displayName: 'Upstream' } : null;
@@ -167,6 +174,7 @@ it.each([
       expect(await pending).toMatchObject({ status: 'error', error: {
         code: 'provider_catalog_unavailable', retryable: true, action: 'retry',
       } });
+      if (phase !== 'managed_runtime') expect(homeSignal?.aborted).toBe(true);
       expect(logs).toHaveBeenCalledWith('[RPC] Request completed', expect.objectContaining({
         method: RPC_METHODS.DAEMON_PROVIDERS_PROBE, failedPhase: phase, causeCode: 'deadline',
         phaseDurationsMs: expect.objectContaining({ [phase]: expect.any(Number) }),
@@ -177,6 +185,86 @@ it.each([
     } finally {
       release(); vi.useRealTimers(); await pending; await fixture.cleanup();
     }
+  }));
+
+it.each(['deadline', 'caller cancellation'] as const)('aborts the pre-effect Home group read on %s without listing accounts afterwards', abandonment =>
+  withConfiguredDaemonTestHome({ prefix: 'gateway-catalog-group-cancellation-' }, async ({ homeDir }) => {
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller: createPluginReloadController(), physicalGateway: true, probeCatalog: true });
+    let enter = () => {};
+    let release = () => {};
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    let groupReads = 0;
+    let homeSignal: AbortSignal | undefined;
+    let pending: Promise<unknown> | undefined;
+    const caller = new AbortController();
+    try {
+      const gateway = fixture.gateway!;
+      const account = gateway.purposeBindings.bindings[0]!.target;
+      if (account.kind !== 'account') throw new Error('Expected fixture Account');
+      const service = account.account.service;
+      const group: QualifiedConnectedAccountGroupV4 = { v: 1, ref: { service, groupId: 'pool' }, incarnation: 'group-pool',
+        displayName: 'Pool', policy: DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1, activeConnectedAccountId: account.account.accountId,
+        generation: 1, runtimeStateRevision: 0, state: {}, createdAt: 1, updatedAt: 1,
+        members: [{ v: 1, connectedAccountId: account.account.accountId, priority: 1, enabled: true, state: {}, createdAt: 1, updatedAt: 1 }] };
+      const profile: QualifiedConnectedAccountProfileV4 = { ref: account.account, status: 'connected', authenticationModeId: 'manual',
+        revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuv', configurationReady: true,
+        configurationRevision: null, kind: 'token', expiresAt: null, displayName: 'Upstream', scopes: [] };
+      const unavailable = async (): Promise<never> => { throw new Error('Unexpected credential or mutation effect'); };
+      const listAccounts = vi.fn(async () => ({ service, accounts: [profile] }));
+      const purposeRuntime = createDaemonConnectedAccountPurposeBindingRuntime({ reloadController: gateway.controller,
+        resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+        establishedRuntimeOwner: { invokeWithReceipt: unavailable, invokeDirectMaterial: unavailable },
+        store: { read: async () => ({ v: 1, bindings: [] }), update: unavailable, subscribe: () => ({ dispose() {} }) },
+        qualifiedApi: { listAccounts, listGroups: unavailable, readGroup: async (_group, signal) => {
+          groupReads += 1;
+          if (groupReads > 1) { homeSignal = signal; enter(); await released; }
+          return group;
+        } },
+      });
+      const base = ProviderSettingsV1Schema.parse({ ...fixture.providerSettings, connections: fixture.providerSettings.connections.map(connection => ({
+        ...connection, purposeBindingDefaults: { upstream: { kind: 'group', service, groupId: group.ref.groupId } },
+      })) });
+      const resolved = resolveProviderConnectionForMachine({ connectionId: fixture.record.connectionId, machineId: fixture.machineId,
+        providerSettings: base, registry: fixture.contributes, dnsEvidenceByEndpointUrl: new Map() });
+      if (resolved.status !== 'resolved') throw new Error('Expected group Gateway connection');
+      const settings = ProviderSettingsV1Schema.parse({ ...base,
+        accountGrants: [{ v: 1, connectionId: fixture.record.connectionId, confirmedAt: 1, connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint }],
+        machineGrants: [{ v: 1, connectionId: fixture.record.connectionId, machineId: fixture.machineId, confirmedAt: 1,
+          connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, endpointSetFingerprint: resolved.record.endpointSetFingerprint }],
+      });
+      const snapshot = { ...fixture.snapshot,
+        providerConnectionsCatalog: { status: 'ready' as const, revision: 1, catalog: splitProviderSettingsV1(settings).catalog } };
+      setActiveAccountSettingsSnapshot(snapshot);
+      const authorization = createRuntimeProviderProbeAuthorizationPort({ registry: fixture.contributes, getAccountSettingsSnapshot: () => snapshot,
+        resolveManagedPurposeBindingIntent: purposeRuntime.resolveBindingIntent,
+      });
+      if (resolved.record.deployment.kind !== 'managedLocal') throw new Error('Expected managed Gateway');
+      const source = { implementationIdentity: resolved.record.deployment.implementationIdentity,
+        managedRuntime: resolved.record.deployment.managedRuntime, purposeBindings: resolved.record.deployment.purposeBindingIntents,
+        endpointTemplateId: 'api', protocol: 'openai-responses' as const, sourceRegistryVersion: 'fixture-registry:v1' };
+      const request = { deployment: 'managedLocal' as const, connectionId: fixture.record.connectionId, machineId: fixture.machineId,
+        ...source, path: '/v1/models', parser: 'openai-models' as const,
+        probeRequestFingerprint: createProviderManagedProbeRequestFingerprintV1({ ...source, method: 'GET', path: '/v1/models',
+          parser: 'openai-models', publicHeaders: {} }),
+      };
+      expect(await authorization.authorize(request)).toMatchObject({ ok: true });
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      // Cancel the containing authorization operation. A public probe waiter
+      // can detach without cancelling already-admitted shared scheduler work.
+      pending = authorization.authorize(request, { lifetime: createProviderOperationLifetime({ signal: caller.signal,
+        wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs }) });
+      await Promise.race([entered, pending.then(result => { throw new Error(`Probe settled before the Home read: ${JSON.stringify(result)}`); })]);
+      if (abandonment === 'deadline') await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 1);
+      else caller.abort();
+      expect(await pending).toMatchObject({ ok: false, error: { code: 'provider_catalog_unavailable' } });
+      expect(homeSignal?.aborted).toBe(true);
+      expect(listAccounts).toHaveBeenCalledTimes(1);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(listAccounts).toHaveBeenCalledTimes(1);
+    } finally { release(); vi.useRealTimers(); await pending; await fixture.cleanup(); }
   }));
 
 it('composes G1 Gateway setup, hub and peer tool turns, isolation, outage, Pending, slow auth and grant recovery', () =>

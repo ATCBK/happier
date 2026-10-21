@@ -17,6 +17,7 @@ import { readProviderSettingsForCli } from '../settings/read';
 import { createAccountBoundProviderSnapshotReader, sameProviderConnectionsCatalogAuthority } from '../lifecycle/currentAccountSettingsSnapshot';
 import { collectProviderConnectionDnsEvidence } from '../registry/dnsEvidence';
 import {
+  awaitAbortableWithinProviderOperation,
   awaitWithinProviderOperation,
   createProviderOperationLifetime,
   observeProviderOperationPhase,
@@ -342,8 +343,8 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
         };
       }
       try {
-        managedPurposeBindingResolution = await awaitWithinProviderOperation(
-          resolveManagedProviderPurposeBindingSnapshot({
+        managedPurposeBindingResolution = await awaitAbortableWithinProviderOperation(
+          signal => resolveManagedProviderPurposeBindingSnapshot({
             implementationIdentity:
               resolution.record.deployment.implementationIdentity,
             connectedAccounts:
@@ -351,6 +352,7 @@ export function createRuntimeProviderProbeAuthorizationPort(input: Readonly<{
             purposeBindingIntents:
               resolution.record.deployment.purposeBindingIntents,
             resolveBindingIntent: input.resolveManagedPurposeBindingIntent,
+            signal,
           }),
           operationScope.lifetime,
         );
