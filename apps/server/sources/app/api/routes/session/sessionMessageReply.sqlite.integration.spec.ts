@@ -53,7 +53,7 @@ describe('original Session input reply custody', () => {
     }, 120_000);
     afterAll(async () => { await harness?.close(); });
 
-    it.each(['pass', 'answer'] as const)('retains a Workflow V2 %s at the original input through retirement and final replay', async outcomeKind => {
+    it.each(['pass', 'answer', 'cancelled'] as const)('retains a Workflow V2 %s at the original input through retirement and final replay', async outcomeKind => {
         const account = await db.account.create({ data: { encryptionMode: 'plain' } });
         const machine = await db.machine.create({ data: { id: randomUUID(), installationId: randomUUID(), accountId: account.id,
             metadata: encodePlainMachineStoredContent({ host: 'host', platform: 'linux', happyCliVersion: 'test', homeDir: '/home/test', happyHomeDir: '/home/test/.happier' }),
@@ -98,13 +98,14 @@ describe('original Session input reply custody', () => {
         }
         const final = await db.sessionMessage.create({ data: { sessionId: session.id, seq: input.seq + 1, messageRole: 'agent',
             content: { t: 'plain', v: { text: 'Exact final answer' } } } });
-        const terminal = { v: 1 as const, sessionId: session.id, turnId, mutationId: randomUUID(), action: 'complete' as const, observedAt: Date.now() + 1,
+        const terminal = { v: 1 as const, sessionId: session.id, turnId, mutationId: randomUUID(),
+            action: outcomeKind === 'cancelled' ? 'cancel' as const : 'complete' as const, observedAt: Date.now() + 1,
             transcriptAnchors: { startSeqInclusive: input.seq, endSeqInclusive: final.seq, finalAssistantMessageSeq: final.seq } };
         expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: terminal })).toMatchObject({ ok: true });
         await withAuthenticatedTestApp(registerSessionMessageRoutes, async app => {
             const url = `/v2/sessions/${session.id}/messages/by-local-id/${localId}/reply`;
             const headers = { 'x-test-user-id': account.id };
-            const expected = outcomeKind === 'pass' ? { kind: 'pass' } : { kind: 'answer', result: { sessionId: session.id, messageId: final.id } };
+            const expected = outcomeKind === 'pass' ? { kind: 'pass' } : { kind: outcomeKind, result: { sessionId: session.id, messageId: final.id } };
             expect((await app.inject({ method: 'GET', url, headers })).json()).toMatchObject({ status: 'available', progress: { mode: 'wait', acceptedTurnId: turnId, outcome: expected } });
             expect((await app.inject({ method: 'POST', url, headers, payload: { kind: 'inline' } })).json()).toMatchObject({ ok: true, progress: { disposition: 'inline', outcome: expected } });
             expect(await applySessionTurnMutation({ actorUserId: account.id, authentication, mutation: terminal })).toMatchObject({ ok: true });

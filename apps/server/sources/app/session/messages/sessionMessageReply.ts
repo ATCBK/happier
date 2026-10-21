@@ -502,7 +502,8 @@ export async function mutateSessionMessageReplyForAccountInTx(tx: Tx, params: Re
     return { v: 1, ok: true, progress };
 }
 
-async function isCommittedResultInTx(tx: Tx, original: Original, turnId: string, messageId: string): Promise<boolean> {
+async function isCommittedResultInTx(tx: Tx, original: Original, turnId: string, messageId: string,
+    status: 'completed' | 'cancelled' = 'completed'): Promise<boolean> {
     const publication = await loadSessionTranscriptPublication(tx, original.sessionId);
     const result = await tx.sessionMessage.findFirst({ where: buildSessionMessagePublicationWhere({
         where: { id: messageId, sessionId: original.sessionId, sidechainId: original.sidechainId, messageRole: { in: ['agent', 'assistant'] } }, publication,
@@ -515,7 +516,7 @@ async function isCommittedResultInTx(tx: Tx, original: Original, turnId: string,
     const turn = await tx.sessionTurn.findUnique({ where: { sessionId_turnId: { sessionId: original.sessionId, turnId } },
         select: { status: true, transcriptAnchorsJson: true } });
     const anchors = turn ? parseStoredSessionTurnTranscriptAnchors(turn.transcriptAnchorsJson) : null;
-    return turn?.status === 'completed' && anchors?.finalAssistantMessageSeq === result.seq
+    return turn?.status === status && anchors?.finalAssistantMessageSeq === result.seq
         && anchors.userMessageSeqs?.includes(original.messageSeq) === true;
 }
 
@@ -580,16 +581,15 @@ export async function mutateSessionMessageReplyInTx(tx: Tx, params: Readonly<{
         if (mutation.sessionId !== mutation.requestSessionId) return { v: 1, ok: false, error: 'forbidden' };
         if (current.acceptedTurnId !== operation.turnId) return { v: 1, ok: false, error: 'conflict' };
         const outcome = operation.outcome;
-        if (outcome.kind === 'answer') {
-            if ('result' in outcome) {
-                if (outcome.result.sessionId !== mutation.requestSessionId
-                    || original.targetExecutionRunId !== null && original.sidechainId === null
-                    || !await isCommittedResultInTx(tx, original, operation.turnId, outcome.result.messageId)) return { v: 1, ok: false, error: 'conflict' };
-            } else {
-                // Native resource publications are fulfilled in their own committed transaction,
-                // where that owner proves actor, addressing and access before calling the hook.
-                return { v: 1, ok: false, error: 'forbidden' };
-            }
+        if ('result' in outcome) {
+            if (outcome.result.sessionId !== mutation.requestSessionId
+                || original.targetExecutionRunId !== null && original.sidechainId === null
+                || !await isCommittedResultInTx(tx, original, operation.turnId, outcome.result.messageId,
+                    outcome.kind === 'cancelled' ? 'cancelled' : 'completed')) return { v: 1, ok: false, error: 'conflict' };
+        } else if (outcome.kind === 'answer') {
+            // Native resource publications are fulfilled in their own committed transaction,
+            // where that owner proves actor, addressing and access before calling the hook.
+            return { v: 1, ok: false, error: 'forbidden' };
         }
         if (current.outcome && !isDeepStrictEqual(current.outcome, outcome)) return { v: 1, ok: false, error: 'conflict' };
         progress = await releaseDiscussionWatchReturnInTx(tx, { ...current, outcome });
@@ -645,7 +645,7 @@ export async function projectSessionInputRepliesFromTurnInTx(tx: Tx, turn: Reado
     const terminal = ['completed', 'failed', 'cancelled'].includes(turn.status);
     const final = terminal && typeof anchors?.finalAssistantMessageSeq === 'number'
         ? await tx.sessionMessage.findFirst({ where: { sessionId: turn.sessionId, seq: anchors.finalAssistantMessageSeq,
-            messageRole: { in: ['agent', 'assistant'] } }, select: { id: true } }) : null;
+            sidechainId: null, messageRole: { in: ['agent', 'assistant'] } }, select: { id: true } }) : null;
     for (const input of inputs) {
         if (!input.localId) continue;
         const original = await readOriginal(tx, turn.sessionId, input.localId);
@@ -653,7 +653,7 @@ export async function projectSessionInputRepliesFromTurnInTx(tx: Tx, turn: Reado
         let progress: SessionMessageReplyProgressV1 = { ...original.progress, acceptedTurnId: turn.turnId };
         if (terminal && !progress.outcome) {
             progress = { ...progress, outcome: turn.status === 'failed' ? { kind: 'failed' }
-                : turn.status === 'cancelled' ? { kind: 'cancelled' }
+                : turn.status === 'cancelled' ? { kind: 'cancelled', ...(final ? { result: { sessionId: turn.sessionId, messageId: final.id } } : {}) }
                 : final ? { kind: 'answer', result: { sessionId: turn.sessionId, messageId: final.id } } : { kind: 'terminal_no_result' } };
         }
         if (terminal) progress = await releaseDiscussionWatchReturnInTx(tx, progress);

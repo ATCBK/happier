@@ -266,12 +266,13 @@ describe('CLI host Message admission', () => {
     expect(machineAdmissionTransport).not.toHaveBeenCalled();
   });
 
-  it.each(['cli', 'voice'] as const)('returns an exact typed pass inline on %s only after the original observation wins custody', async surface => {
+  it.each([{ surface: 'cli', partial: false }, { surface: 'voice', partial: false }, { surface: 'cli', partial: true }] as const)(
+    'returns the exact typed inline outcome on $surface (stopped partial: $partial) after observation wins custody', async ({ surface, partial }) => {
     const sessionId = 'cmv3hostadmissionaaaaaaaaa';
     const localId = 'original-wait';
     let content: unknown;
     const progress = { v: 1, mode: 'wait', acceptedTurnId: 'accepted-turn',
-      disposition: 'observing', outcome: { kind: 'pass' } } as const;
+      disposition: 'observing', outcome: partial ? { kind: 'cancelled', result: { sessionId, messageId: 'partial-row' } } : { kind: 'pass' } } as const;
     const socket = createApiSessionSocketStub({ connected: true });
     sockets.connect.mockImplementation(() => ({ socket, transport: createSocketTransportAdapter(socket as never) }));
     http.get.mockImplementation(async (url: string) => {
@@ -283,6 +284,9 @@ describe('CLI host Message admission', () => {
       if (url.endsWith(`/messages/by-local-id/${localId}`)) return { status: 200, data: { message: {
         id: 'committed-input', seq: 7, localId, sidechainId: null, content, createdAt: Date.now(), updatedAt: Date.now(),
       } } };
+      if (url.includes('/messages?')) return { status: 200, data: { messages: [{ id: 'partial-row', seq: 8, localId: 'partial',
+        content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', agentId: 'codex', data: { type: 'text', text: 'Stopped partial' } } } },
+        createdAt: Date.now(), updatedAt: Date.now() }] } };
       if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: {
         id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
         metadata: JSON.stringify({ permissionMode: 'default', permissionModeUpdatedAt: 1 }), metadataVersion: 1,
@@ -301,7 +305,8 @@ describe('CLI host Message admission', () => {
     expect(await deps.sessionSendMessage({ sessionId, localId, message: 'Can you answer?', reply: 'wait',
       callerSurface: surface, actionCaller: { kind: 'host' }, context: { surface, authority: surface === 'cli' ? 'present_user' : 'account_automation' },
       requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({ status: 'replied', localId,
-        inputMessageRef: { messageId: 'committed-input' }, outcome: { kind: 'pass' } });
+        inputMessageRef: { messageId: 'committed-input' }, outcome: partial
+          ? { kind: 'cancelled', partialText: 'Stopped partial', messageRef: { messageId: 'partial-row' } } : { kind: 'pass' } });
     expect(observations).toEqual([{ kind: 'inline' }]);
     expect(content).toMatchObject({ t: 'plain', v: { meta: { happierInputRequestV1: { replyIntent: { mode: 'wait' } } } } });
   });

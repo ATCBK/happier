@@ -7754,7 +7754,11 @@ export function createCliActionDeps(params: Readonly<{
             && saved.result.sessionId === result.messageRef.session.sessionId
             && saved.result.messageId === result.messageRef.messageId
             ? { kind: 'answer' as const, text: result.text, messageRef: result.messageRef }
-            : result.kind === 'fulfilled' && (result.outcome.kind !== 'answer' || 'publicationRef' in result.outcome)
+            : result.kind === 'cancelled' && result.partialText !== undefined && result.messageRef
+              && saved?.kind === 'cancelled' && 'result' in saved
+              && saved.result.sessionId === result.messageRef.session.sessionId && saved.result.messageId === result.messageRef.messageId
+              ? { kind: 'cancelled' as const, partialText: result.partialText, messageRef: result.messageRef }
+            : result.kind === 'fulfilled' && !('result' in result.outcome)
               ? result.outcome : null;
           if (!outcome) { await release(); return admission; }
           const consumed = await observe('inline', signal);

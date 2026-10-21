@@ -29,10 +29,15 @@ export type SessionMessageExplicitReplyV1 = z.infer<typeof SessionMessageExplici
 export const SessionMessageReplyTerminalOutcomeV1Schema = lazyZodSchema(() =>
   z.strictObject({ kind: z.enum(['pass', 'failed', 'cancelled', 'terminal_no_result', 'declined']) }));
 
+const SessionMessageReplyResultV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: asProtocolZod(SessionIdSchema), messageId: z.string().check(z.minLength(1)),
+}));
+
 /** Authorized inline projection; text never enters original-input progress. */
 export const SessionMessageReplyResolvedOutcomeV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.literal('answer'), text: z.string(), messageRef: SessionMessageRefV1Schema }),
   z.strictObject({ kind: z.literal('answer'), publicationRef: CoordinationMessageRefV1Schema }),
+  z.strictObject({ kind: z.literal('cancelled'), partialText: z.string(), messageRef: SessionMessageRefV1Schema }),
   SessionMessageReplyTerminalOutcomeV1Schema,
 ]));
 export type SessionMessageReplyResolvedOutcomeV1 = z.infer<typeof SessionMessageReplyResolvedOutcomeV1Schema>;
@@ -52,8 +57,10 @@ export const SessionMessageReplyAdmissionV1Schema = lazyZodSchema(() => z.strict
 export type SessionMessageReplyAdmissionV1 = z.infer<typeof SessionMessageReplyAdmissionV1Schema>;
 
 export const SessionMessageReplyOutcomeV1Schema = lazyZodSchema(() => z.union([
-  z.strictObject({ kind: z.literal('answer'), result: z.strictObject({ sessionId: asProtocolZod(SessionIdSchema), messageId: z.string().check(z.minLength(1)) }) }),
+  z.strictObject({ kind: z.literal('answer'), result: SessionMessageReplyResultV1Schema }),
   z.strictObject({ kind: z.literal('answer'), publicationRef: CoordinationMessageRefV1Schema }),
+  // Partial content stays with its exact committed transcript row, including in E2EE Accounts.
+  z.strictObject({ kind: z.literal('cancelled'), result: SessionMessageReplyResultV1Schema }),
   SessionMessageReplyTerminalOutcomeV1Schema,
 ]));
 export type SessionMessageReplyOutcomeV1 = z.infer<typeof SessionMessageReplyOutcomeV1Schema>;

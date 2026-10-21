@@ -134,7 +134,7 @@ export type SessionInputResultV1 =
       usage?: SessionInputUsageV1;
     }>
   | Readonly<{ kind: 'failed'; message: string; runtimeIssueV1?: SessionRuntimeIssueV1; usage?: SessionInputUsageV1 }>
-  | Readonly<{ kind: 'cancelled'; message: string; usage?: SessionInputUsageV1 }>;
+  | Readonly<{ kind: 'cancelled'; message: string; partialText?: string; messageRef?: SessionMessageRefV1; usage?: SessionInputUsageV1 }>;
 
 export type WaitForSessionInputResult =
   | Readonly<{
@@ -587,7 +587,7 @@ function turnActivityFromProjectedCurrentTurnStatus(
 
 type AssistantTurnFailure =
   | Readonly<{ kind: 'failed'; message: string; runtimeIssueV1?: SessionRuntimeIssueV1; usage?: SessionInputUsageV1 }>
-  | Readonly<{ kind: 'cancelled'; message: string; usage?: SessionInputUsageV1 }>;
+  | Readonly<{ kind: 'cancelled'; message: string; partialText?: string; finalAssistantMessageId?: string; usage?: SessionInputUsageV1 }>;
 
 type AssistantTurnOutcome =
   | Readonly<{ kind: 'missing' }>
@@ -674,7 +674,7 @@ async function waitForCurrentPromptDelivery(params: CurrentPromptDeliveryObserva
           params.signal?.throwIfAborted();
           // Pre-provider failure/cancellation can settle original Pending custody
           // without ever producing a committed transcript input or answer.
-          if (outcome && outcome.kind !== 'answer') return { kind: 'fulfilled', outcome };
+          if (outcome && !('result' in outcome)) return { kind: 'fulfilled', outcome };
         } catch {
           // Unavailable custody is not completion; reuse the input change wait.
           params.signal?.throwIfAborted();
@@ -961,14 +961,14 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
           acceptedTurnId = original.status === 'available' && !replyOutcome ? original.progress.acceptedTurnId : undefined;
           if (replyOutcome) {
             params.reply.onOutcome(replyOutcome);
-            if (replyOutcome.kind !== 'answer' || 'publicationRef' in replyOutcome) {
+            if (!('result' in replyOutcome)) {
               return { kind: 'fulfilled', outcome: replyOutcome };
             }
           }
         }
         const outcome = await readAssistantTurnOutcomeAfterCurrentUserTurn({ ...params,
           ...(acceptedTurnId ? { acceptedTurnId } : {}),
-          ...(replyOutcome?.kind === 'answer' && 'result' in replyOutcome
+          ...(replyOutcome && 'result' in replyOutcome
             && replyOutcome.result.sessionId === params.sessionId
             ? { resultMessageId: replyOutcome.result.messageId } : {}) });
         if ((!params.reply || originalHasNoReply) && outcome.kind !== 'missing') return outcome;
@@ -977,9 +977,13 @@ async function waitForAssistantCompletionAfterCurrentUserTurn(params: AssistantC
         // result reader; explicit pass/failure/cancellation above stays final.
         if (acceptedTurnId && (outcome.kind === 'failed' || outcome.kind === 'cancelled'
           || outcome.kind === 'completed' && outcome.finalAssistantText !== null)) return outcome;
-        if (replyOutcome?.kind === 'answer' && 'result' in replyOutcome
+        if (replyOutcome && 'result' in replyOutcome
           && replyOutcome.result.sessionId === params.sessionId
-          && outcome.kind === 'completed' && outcome.finalAssistantMessageId === replyOutcome.result.messageId) return outcome;
+          && outcome.kind === 'completed' && outcome.finalAssistantMessageId === replyOutcome.result.messageId) {
+          return replyOutcome.kind === 'cancelled' ? { kind: 'cancelled', message: formatStructuredTurnFailureMessage('cancelled'),
+            ...(outcome.finalAssistantText !== null ? { partialText: outcome.finalAssistantText } : {}),
+            finalAssistantMessageId: outcome.finalAssistantMessageId, ...(outcome.usage ? { usage: outcome.usage } : {}) } : outcome;
+        }
       } catch {
         // An unavailable transcript is not completion. Reobserve on change or reconnect.
       }
@@ -998,7 +1002,13 @@ function resultFromAssistantTurnOutcome(
   if (outcome.kind === 'missing') {
     return { kind: 'pending' };
   }
-  if (outcome.kind === 'failed' || outcome.kind === 'cancelled') {
+  if (outcome.kind === 'cancelled') {
+    const { finalAssistantMessageId, ...cancelled } = outcome;
+    return { ...cancelled, ...(finalAssistantMessageId ? { messageRef: SessionMessageRefV1Schema.parse({
+      kind: 'session', session, messageId: finalAssistantMessageId,
+    }) } : {}) };
+  }
+  if (outcome.kind === 'failed') {
     return outcome;
   }
   if (!outcome.finalAssistantText) {

@@ -108,15 +108,18 @@ export async function projectSessionMessageReplyOutcome(input: Readonly<{
 }>): Promise<Readonly<{ message: string; sourceMessageRef?: SessionMessageRefV1 }> | null> {
   const outcome = input.outcome;
   if (outcome.kind === 'declined') return null;
-  if (outcome.kind === 'answer' && 'result' in outcome) {
+  if ('result' in outcome) {
     // Reuse the exact input/result reader; never select a later assistant row.
     const result = await waitForSessionInputResult({ credentials: input.credentials, serverId: input.serverId,
       idOrPrefix: input.sessionId, localId: input.localId, ...(input.signal ? { signal: input.signal } : {}),
       observeReply: true, observation: { kind: 'absolute_deadline', deadlineMs: Date.now() } });
-    if (!result.ok || result.result.kind !== 'final_text' || !result.result.messageRef
-      || result.result.messageRef.session.sessionId !== outcome.result.sessionId
-      || result.result.messageRef.messageId !== outcome.result.messageId) return null;
-    return { message: result.result.text, sourceMessageRef: result.result.messageRef };
+    if (!result.ok || result.result.kind !== (outcome.kind === 'answer' ? 'final_text' : 'cancelled')) return null;
+    const resolved = result.result;
+    if (resolved.kind !== 'final_text' && resolved.kind !== 'cancelled' || !resolved.messageRef
+      || resolved.messageRef.session.sessionId !== outcome.result.sessionId
+      || resolved.messageRef.messageId !== outcome.result.messageId) return null;
+    const message = resolved.kind === 'final_text' ? resolved.text : resolved.partialText;
+    return message === undefined ? null : { message, sourceMessageRef: resolved.messageRef };
   }
   if (outcome.kind === 'answer') return { message: `Reply published: ${JSON.stringify(outcome.publicationRef)}`,
     ...(outcome.publicationRef.kind === 'session' ? { sourceMessageRef: outcome.publicationRef } : {}) };

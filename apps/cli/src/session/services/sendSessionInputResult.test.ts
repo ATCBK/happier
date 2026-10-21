@@ -14,6 +14,7 @@ vi.mock('@/api/session/sockets', () => ({
 }));
 
 import { waitForSessionInputResult } from './sendSessionMessage';
+import { projectSessionMessageReplyOutcome } from './sessionMessageReply';
 
 const sessionId = 'c' + 'a'.repeat(24);
 const session = { serverId: 'result-home', sessionId };
@@ -283,6 +284,26 @@ describe('waitForSessionInputResult', () => {
         messageRef: resultMessageRef(4),
         usage: { inputTokens: 125, outputTokens: 37, costUsd: 0.05 },
       },
+    });
+  });
+
+  it.each(['row-1', 'missing'] as const)('resolves only the stopped partial row for inline and late replies (%s)', async messageId => {
+    const { httpGet } = await arrange({ rowsAfterInput: () => [rawAssistantText('Stopped partial'),
+      rawLifecycle('turn_cancelled'), rawAssistantText('Unrelated later answer')] });
+    const previousGet = httpGet.getMockImplementation()!;
+    const outcome = { kind: 'cancelled' as const, result: { sessionId, messageId } };
+    httpGet.mockImplementation(async (url, config) => url.endsWith('/reply') ? { status: 200, data: {
+      v: 1, status: 'available', progress: { v: 1, mode: 'wait', disposition: 'observing', acceptedTurnId: 'turn-1', outcome },
+    } } : previousGet(url, config));
+    const observed = await waitForSessionInputResult({ credentials: { token: 'token', encryption: null },
+      serverId: session.serverId, idOrPrefix: sessionId, localId: 'automation:run:run-1', observeReply: true,
+      observation: { kind: 'absolute_deadline', deadlineMs: Date.now() } });
+    expect(observed).toMatchObject({ ok: true, replyOutcome: outcome, result: messageId === 'missing' ? { kind: 'pending' } : {
+      kind: 'cancelled', partialText: 'Stopped partial', messageRef: resultMessageRef(1),
+    } });
+    expect(await projectSessionMessageReplyOutcome({ credentials: { token: 'token', encryption: null },
+      serverId: session.serverId, sessionId, localId: 'automation:run:run-1', outcome })).toEqual(messageId === 'missing' ? null : {
+      message: 'Stopped partial', sourceMessageRef: resultMessageRef(1),
     });
   });
 
