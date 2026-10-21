@@ -279,7 +279,7 @@ function projectionInputs(
         automationEligibleEvents: [event],
         registryDiagnostics: [],
     } satisfies Omit<DaemonMergedProjectionInputs, 'pluginUiProjection' | 'pluginUiProjectionPlatform' | 'connectedAccountProjection'
-        | 'composerSurfaceActionInputSelectionFacts' | 'automationSetupSurfaceActionInputSelectionFacts'>;
+        | 'composerSurfaceActionInputSelectionFacts' | 'ephemeralInputSurfaceActionInputSelectionFacts'>;
     const published = publishDaemonMergedProjectionInputs({ projection: inputs.pluginProjectionV2,
         automationEligibleEvents: inputs.automationEligibleEvents });
     return { ...published, ...inputs, automationEligibleEvents: published.automationEligibleEvents };

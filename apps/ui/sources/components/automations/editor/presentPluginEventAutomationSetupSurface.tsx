@@ -124,8 +124,8 @@ function PluginEventAutomationSetupSurfaceModal(
     }, []);
 
     if (!mount || !setupSurface) return null;
-    const actionInputSelectionFactsKey = props.projection.automationSetupSurfaceActionInputSelectionFacts.get(setupSurface);
-    if (!actionInputSelectionFactsKey) throw new Error('automation_setup_action_input_selection_facts_missing');
+    const actionInputSelectionFactsKey = props.projection.ephemeralInputSurfaceActionInputSelectionFacts.get(setupSurface);
+    if (!actionInputSelectionFactsKey) throw new Error('ephemeral_input_surface_action_input_selection_facts_missing');
     const ephemeralMount: PluginSurfaceEphemeralMountProps = Object.freeze({
         mount,
         boundaryResetKey: [

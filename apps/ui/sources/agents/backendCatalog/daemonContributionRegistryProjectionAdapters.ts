@@ -55,7 +55,7 @@ export type DaemonMergedProjectionInputs = Readonly<{
     connectedAccountProjection: ConnectedAccountDescriptorMachineProjection | null;
     composerSurfaceCatalog?: readonly DaemonPluginUiComposerSurfaceCatalogEntryV1[];
     composerSurfaceActionInputSelectionFacts: ReadonlyMap<DaemonPluginUiComposerSurfaceCatalogEntryV1, PluginActionInputSelectionSnapshot>;
-    automationSetupSurfaceActionInputSelectionFacts: ReadonlyMap<DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1, PluginActionInputSelectionSnapshot>;
+    ephemeralInputSurfaceActionInputSelectionFacts: ReadonlyMap<DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1, PluginActionInputSelectionSnapshot>;
     automationEligibleEvents?: DaemonContributionRegistryProjectionAutomationEligibleEventsV1;
     registryDiagnostics: readonly PluginProjectionDiagnostic[];
 }>;
@@ -136,11 +136,18 @@ export function publishDaemonMergedProjectionInputs(params: Readonly<{
             && previous.row.contribution.localId === row.contribution.localId && previous.row.occurrenceId === row.occurrenceId
             && previous.row.role === row.role)?.publication ?? createPluginActionInputSelectionFactsPublication(),
     }));
-    const setupSelections = (automationEligibleEvents ?? []).flatMap(event => event.setupSurface ? [{ row: event.setupSurface,
-        publication: prior?.setupSelections.find(previous => previous.row.contribution.pluginId === event.setupSurface?.contribution.pluginId
-            && previous.row.contribution.localId === event.setupSurface?.contribution.localId
-            && previous.row.occurrenceId === event.setupSurface?.occurrenceId)?.publication ?? createPluginActionInputSelectionFactsPublication(),
-    }] : []);
+    // Picker callers consume the row from pluginProjectionV2, while automation
+    // callers consume the published event row. Publish facts for those exact
+    // identities at the same owner, including picker-only input types.
+    const inputSurfaces = [
+        ...(automationEligibleEvents ?? []).flatMap(event => event.setupSurface ? [event.setupSurface] : []),
+        ...Object.values(params.projection.familiesById.inputTypes?.entriesById ?? {}).flatMap(entry => entry.pickerSurface ? [entry.pickerSurface] : []),
+    ];
+    const setupSelections = inputSurfaces.map(row => ({ row,
+        publication: prior?.setupSelections.find(previous => previous.row.contribution.pluginId === row.contribution.pluginId
+            && previous.row.contribution.localId === row.contribution.localId
+            && previous.row.occurrenceId === row.occurrenceId)?.publication ?? createPluginActionInputSelectionFactsPublication(),
+    }));
     const selection = (row: DaemonPluginUiComposerSurfaceCatalogEntryV1 | DaemonContributionRegistryProjectionAutomationEligibleEventSetupSurfaceV1,
         publication: ReturnType<typeof createPluginActionInputSelectionFactsPublication>) => publication.publish({
         pluginProjectionById: adapted.pluginProjectionById, translationsByPluginId: pluginUiProjection.translationsByPluginId,
@@ -154,7 +161,7 @@ export function publishDaemonMergedProjectionInputs(params: Readonly<{
         pluginUiProjection,
         connectedAccountProjection: readConnectedAccountDescriptorProjection(projection),
         composerSurfaceActionInputSelectionFacts: new Map(composerSelections.map(({ row, publication }) => [row, selection(row, publication)])),
-        automationSetupSurfaceActionInputSelectionFacts: new Map(setupSelections.map(({ row, publication }) => [row, selection(row, publication)])),
+        ephemeralInputSurfaceActionInputSelectionFacts: new Map(setupSelections.map(({ row, publication }) => [row, selection(row, publication)])),
         ...(composerSurfaceCatalog === undefined ? {} : { composerSurfaceCatalog }),
         ...(automationEligibleEvents === undefined ? {} : { automationEligibleEvents }),
     };
