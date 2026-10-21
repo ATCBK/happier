@@ -247,7 +247,7 @@ export function createCodexExternalSessionObservationContribution(params: Readon
 }> = {}): AgentExternalSessionObservationContribution {
   const readEnv = () => params.env ?? process.env;
   const now = params.now ?? Date.now;
-  const inventories = new Map<string, CodexRolloutObservationInventory>();
+  const inventories = new WeakMap<AbortSignal, Map<string, CodexRolloutObservationInventory>>();
 
   return Object.freeze({
     describeResource(request) {
@@ -335,10 +335,22 @@ export function createCodexExternalSessionObservationContribution(params: Readon
       const firstResolved = firstQualified.resolved;
       const home = firstQualified.home;
 
-      let observationInventory = inventories.get(home.codexHome);
+      const lifetime = request.observation?.lifetime;
+      lifetime?.throwIfAborted();
+      let demandInventories = lifetime ? inventories.get(lifetime) : undefined;
+      if (lifetime && !demandInventories) {
+        demandInventories = new Map();
+        inventories.set(lifetime, demandInventories);
+        const owned = demandInventories;
+        lifetime.addEventListener('abort', () => {
+          for (const inventory of owned.values()) inventory.clear();
+          owned.clear();
+        }, { once: true });
+      }
+      let observationInventory = demandInventories?.get(home.codexHome);
       if (!observationInventory) {
         observationInventory = new CodexRolloutObservationInventory();
-        inventories.set(home.codexHome, observationInventory);
+        demandInventories?.set(home.codexHome, observationInventory);
       }
 
       const inventory = await inventoryCodexRootSessionRolloutFiles({
@@ -351,6 +363,7 @@ export function createCodexExternalSessionObservationContribution(params: Readon
             : []
         )),
         signal: request.signal,
+        ...(request.observation?.changedFiles ? { changedFiles: request.observation.changedFiles } : {}),
       });
       const filesByRemoteSessionId = new Map(
         inventory.requested.map(({ remoteSessionId, files }) => [

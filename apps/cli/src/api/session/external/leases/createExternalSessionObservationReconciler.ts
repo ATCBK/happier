@@ -69,7 +69,7 @@ export type ExternalSessionAccountingSourceDemand = Readonly<{
 type AccountingRecord = {
     active: boolean;
     demand: ExternalSessionAccountingSourceDemand;
-    watchedFiles: ReadonlySet<string>;
+    watchedFiles: Set<string>;
 };
 
 type LinkRedescription = Readonly<{
@@ -109,6 +109,8 @@ type TopologyWatcherBatchRecord = {
     dispose: () => void;
     resource: ResourceRecord;
     state: 'starting' | 'ready' | 'failed';
+    ready: Promise<void>;
+    settleReady(): void;
 };
 
 type TopologyWatcherLifecycle = Readonly<{
@@ -154,6 +156,7 @@ type ResourceRecord = {
     pendingResourceRedescriptionReasons: number;
     pendingChangedFiles: Set<string>;
     retirementListener: (() => void) | null;
+    observationLifetime: AbortController;
 };
 
 type ExternalSessionObservationReconcilerParams = Readonly<{
@@ -183,6 +186,7 @@ type ExternalSessionObservationReconcilerParams = Readonly<{
         resource: ExternalSessionObservationResourceIdentity;
         links: readonly ExternalSessionObservationLinkIdentity[];
         signal: AbortSignal;
+        observation?: Readonly<{ lifetime: AbortSignal; changedFiles?: readonly string[] }>;
     }>) => ExternalAgentObservationReconcileResultV1
         | Promise<ExternalAgentObservationReconcileResultV1>;
     watchFile?: (
@@ -423,6 +427,7 @@ export function createExternalSessionObservationReconciler(
         if (watcher.disposed) return;
         watcher.disposed = true;
         watcher.active = false;
+        watcher.settleReady();
         watcher.dispose();
     };
 
@@ -458,7 +463,22 @@ export function createExternalSessionObservationReconciler(
         }
         for (const record of resource.accounting) {
             if (!record.active || record.demand.changeObservation !== 'watch_file_changes') continue;
-            for (const file of record.watchedFiles) desired.add(file);
+            const directories = new Set(record.demand.watchFileChanges?.topologyDirectories);
+            for (const file of record.watchedFiles) {
+                // The production topology owner already attaches every admitted
+                // directory. Keep exact-file observation for uncovered paths
+                // and legacy injected watcher boundaries that lack content events.
+                let parent = dirname(file);
+                let covered = false;
+                while (!params.watchTopologyDirectory && !params.watchFile
+                    && resource.topologyWatcherBatch?.state !== 'failed') {
+                    if (directories.has(parent)) { covered = true; break; }
+                    const ancestor = dirname(parent);
+                    if (ancestor === parent) break;
+                    parent = ancestor;
+                }
+                if (!covered) desired.add(file);
+            }
         }
         return desired;
     };
@@ -592,6 +612,10 @@ export function createExternalSessionObservationReconciler(
         if (current?.state !== 'failed') {
             resource.topologyWatcherRecoveryPending = false;
         }
+        let markReady = () => {};
+        let markUnavailable = (_error: unknown) => {};
+        const ready = new Promise<void>((resolve, reject) => { markReady = resolve; markUnavailable = reject; });
+        void ready.catch(() => {});
         const watcher: TopologyWatcherBatchRecord = {
             active: true,
             directories: desired,
@@ -599,6 +623,8 @@ export function createExternalSessionObservationReconciler(
             dispose: () => {},
             resource,
             state: 'starting',
+            ready,
+            settleReady: markReady,
         };
         resource.topologyWatcherBatch = watcher;
         const lifecycle: TopologyWatcherLifecycle = {
@@ -613,13 +639,14 @@ export function createExternalSessionObservationReconciler(
                     return;
                 }
                 watcher.state = 'ready';
+                markReady();
                 if (!resource.topologyWatcherRecoveryPending) {
                     return;
                 }
                 resource.topologyWatcherRecoveryPending = false;
                 requestTopologyResourceRedescription(resource);
             },
-            onUnavailable: () => {
+            onUnavailable: (error) => {
                 if (
                     disposed
                     || !watcher.active
@@ -631,8 +658,13 @@ export function createExternalSessionObservationReconciler(
                     return;
                 }
                 watcher.state = 'failed';
+                markUnavailable(error);
                 resource.topologyWatcherRecoveryPending = true;
                 releaseTopologyWatcherBatch(watcher);
+                // Source-wide demand no longer has per-file attachments while
+                // the directory owner is live. Restore that established owner
+                // on failure without retrying topology or adding a timer.
+                void reconcileFileWatchDemand(resource).catch(() => undefined);
             },
         };
         let disposeTopologyWatch: () => void;
@@ -640,6 +672,18 @@ export function createExternalSessionObservationReconciler(
             disposeTopologyWatch = watchTopologyDirectories(
                 desired.map((directory) => ({
                     directory,
+                    onFileChange: (changedPath) => {
+                        if (disposed || !watcher.active || watcher.disposed
+                            || resource.topologyWatcherBatch !== watcher || !resource.active) return;
+                        if (changedPath && resource.fileWatchersByPath.has(changedPath)) return;
+                        notifyAccounting(resource, changedPath
+                            ? { reason: 'file_changed', changedFile: changedPath }
+                            : { reason: 'source_changed' });
+                        // A previously unrelated rollout can be rewritten into
+                        // a demanded root family, so all links must be rechecked.
+                        if (changedPath) requestFileChangeRedescription(resource, changedPath);
+                        else requestTopologyResourceRedescription(resource);
+                    },
                     onStructuralChange: (changedPath) => {
                         if (
                             disposed
@@ -887,6 +931,7 @@ export function createExternalSessionObservationReconciler(
             pendingResourceRedescriptionReasons: 0,
             pendingChangedFiles: new Set(),
             retirementListener: null,
+            observationLifetime: new AbortController(),
         };
         const retirementSignal = identity.retirementSignal;
         if (retirementSignal) {
@@ -930,7 +975,7 @@ export function createExternalSessionObservationReconciler(
     };
 
     const releaseResourceLogicalLinks = (resource: ResourceRecord): void => {
-        for (const record of resource.accounting) record.active = false;
+        for (const record of resource.accounting) { record.active = false; record.watchedFiles.clear(); }
         resource.accounting.clear();
         for (const link of resource.links) {
             if (linksBySessionId.get(link.identity.sessionId) === link) {
@@ -946,6 +991,7 @@ export function createExternalSessionObservationReconciler(
         options?: Readonly<{ releaseLogicalLinksBeforeCleanup?: boolean }>,
     ): Promise<void> => {
         resource.active = false;
+        resource.observationLifetime.abort();
         resource.reconciliationAbortController?.abort();
         resource.redescriptionAbortController?.abort();
         stopFileWatchers(resource);
@@ -978,6 +1024,14 @@ export function createExternalSessionObservationReconciler(
         resource.pendingChangedFiles.clear();
     };
 
+    const observationFor = (resource: ResourceRecord, changedFiles = [...resource.pendingChangedFiles],
+        full = resource.pendingResourceRedescriptionReasons !== 0 || resource.redescriptionAbortController !== null) => {
+        const unobserved = full || resource.topologyWatcherBatch?.state !== 'ready'
+            || params.watchTopologyDirectory !== undefined || params.watchFile !== undefined
+            || params.watchTopologyDirectories !== undefined;
+        return { lifetime: resource.observationLifetime.signal, ...(unobserved ? {} : { changedFiles }) };
+    };
+
     const reconcileObserverDemand = async (resource: ResourceRecord): Promise<void> => {
         if (resource.changeObservation === null) {
             stopFileWatchers(resource);
@@ -987,6 +1041,12 @@ export function createExternalSessionObservationReconciler(
         }
         await reconcileFileWatchDemand(resource);
         reconcileTopologyWatchDemand(resource);
+        if (!params.watchTopologyDirectory && !params.watchTopologyDirectories) {
+            await resource.topologyWatcherBatch?.ready.catch(() => undefined);
+            // Keep the established degraded-topology contract: live exact-file
+            // watches still work while the topology owner awaits reconciliation.
+            if (resource.topologyWatcherBatch?.state === 'failed') await reconcileFileWatchDemand(resource);
+        }
         if (hasObserverDemand(resource)) {
             await ensureObserver(resource);
             return;
@@ -1091,6 +1151,7 @@ export function createExternalSessionObservationReconciler(
                     resource: resource.identity,
                     links,
                     signal: abortController.signal,
+                    observation: observationFor(resource),
                 });
 
                 if (
@@ -1397,7 +1458,6 @@ export function createExternalSessionObservationReconciler(
             ) {
                 const redescriptionReasons =
                     resource.pendingResourceRedescriptionReasons;
-                const redescribeWholeResource = redescriptionReasons !== 0;
                 const topologyRedescription = (
                     redescriptionReasons & RESOURCE_REDESCRIPTION_TOPOLOGY
                 ) !== 0;
@@ -1408,6 +1468,8 @@ export function createExternalSessionObservationReconciler(
                     &= ~redescriptionReasons;
                 const changedFiles = new Set(resource.pendingChangedFiles);
                 resource.pendingChangedFiles.clear();
+                const knownFiles = new Set([...resource.links].flatMap(link => link.identity.watchFileChanges?.files ?? []));
+                const redescribeWholeResource = redescriptionReasons !== 0 || [...changedFiles].some(file => !knownFiles.has(file));
                 const currentLinks = [...resource.links].filter((link) => {
                     if (
                         !isCurrentLink(link)
@@ -1462,6 +1524,7 @@ export function createExternalSessionObservationReconciler(
                                 resource: resource.identity,
                                 links: requestedLinks.map((link) => link.identity),
                                 signal: abortController.signal,
+                                observation: observationFor(resource, [...changedFiles], redescriptionReasons !== 0),
                             });
                             if (
                                 result.purpose !== 'resource_descriptors'
@@ -1650,7 +1713,9 @@ export function createExternalSessionObservationReconciler(
             if (!resource || !resource.active) throw new Error('External accounting observation resource is unavailable');
             const record: AccountingRecord = {
                 active: true,
-                demand: input,
+                demand: { ...input, ...(input.watchFileChanges ? { watchFileChanges: {
+                    files: [], topologyDirectories: input.watchFileChanges.topologyDirectories,
+                } } : {}) },
                 watchedFiles: new Set(input.watchFileChanges?.files),
             };
             resource.accounting.add(record);
@@ -1658,6 +1723,7 @@ export function createExternalSessionObservationReconciler(
                 if (!record.active) return;
                 record.active = false;
                 resource.accounting.delete(record);
+                record.watchedFiles.clear();
                 if (resource.links.size === 0 && resource.accounting.size === 0) {
                     await deactivateResource(resource);
                 } else {

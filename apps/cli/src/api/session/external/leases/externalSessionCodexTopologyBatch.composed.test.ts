@@ -707,6 +707,7 @@ describe('composed Codex topology descriptor batching', () => {
                 resource: ExternalSessionObservationResourceIdentity;
                 links: readonly ExternalSessionObservationLinkIdentity[];
                 signal: AbortSignal;
+                observation?: Parameters<AgentExternalSessionObservationContribution['reconcileResource']>[0]['observation'];
             }>,
         ) => {
             const home = homeByResourceKey.get(input.resource.resourceKey);
@@ -730,6 +731,7 @@ describe('composed Codex topology descriptor batching', () => {
                 })),
                 signal: input.signal,
                 managedEndpointRead: unavailableManagedEndpointRead,
+                observation: input.observation,
             });
             if (input.purpose === 'resource_descriptors') {
                 descriptorInventoryCounts.push({
@@ -856,11 +858,12 @@ describe('composed Codex topology descriptor batching', () => {
         expect(hostReconcileResource.mock.calls.filter(
             ([input]) => input.purpose === 'resource_descriptors',
         ).map(([input]) => input.links.length).sort()).toEqual([50, 50]);
-        // These callbacks carry no physical directory change. Reconciliation
-        // must preserve descriptors without rereading unchanged directories.
+        // These are the first reconciliations under the newly acquired host
+        // observation lifetime; prior authority-free probes cannot seed it.
+        // Each new demand reads once, then reuses its own directory facts.
         expect(descriptorInventoryCounts).toEqual([
-            { sessions: 0, archivedSessions: 0 },
-            { sessions: 0, archivedSessions: 0 },
+            { sessions: 1, archivedSessions: 1 },
+            { sessions: 1, archivedSessions: 1 },
         ]);
         expect(requestTranscriptRefresh).not.toHaveBeenCalled();
         expect(fileCallbacks.has(delayedChildFile)).toBe(true);

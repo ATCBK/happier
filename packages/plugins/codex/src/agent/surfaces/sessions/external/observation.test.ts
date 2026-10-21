@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 
 import type {
   AgentExternalSessionsResolvedIdentity,
@@ -11,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const fsBoundary = vi.hoisted(() => ({
   open: vi.fn(),
   readdir: vi.fn(),
+    stat: vi.fn(),
 }));
 
 vi.mock('node:fs/promises', async () => {
@@ -23,6 +26,7 @@ vi.mock('node:fs/promises', async () => {
     readdir: (...args: Parameters<typeof actual.readdir>) => (
       fsBoundary.readdir(...args)
     ),
+    stat: (...args: Parameters<typeof actual.stat>) => fsBoundary.stat(...args),
   };
 });
 
@@ -32,6 +36,7 @@ import { inventoryCodexRootSessionRolloutFiles } from '../../../rollout/discover
 type CodexObservationContribution = ReturnType<
   typeof createCodexExternalSessionObservationContribution
 >;
+const observationLifetimes = new WeakMap<CodexObservationContribution, AbortController>();
 
 function linkedSource(params: Readonly<{
   codexHome: string;
@@ -54,11 +59,14 @@ async function reconcileDescriptor(
   identity: AgentExternalSessionsResolvedIdentity,
 ) {
   const grouping = contribution.describeResource(identity);
+  let lifetime = observationLifetimes.get(contribution);
+  if (!lifetime) { lifetime = new AbortController(); observationLifetimes.set(contribution, lifetime); }
   const result = await contribution.reconcileResource({
     purpose: 'resource_descriptors',
     resourceKey: grouping.resourceKey,
     links: [{ linkKey: grouping.linkKey, linkedSource: identity }],
     signal: new AbortController().signal,
+    observation: { lifetime: lifetime.signal },
   });
   const outcome = result.outcomes[0];
   if (!outcome || outcome.kind !== 'described') {
@@ -133,6 +141,8 @@ describe('Codex External Session observation', () => {
     fsBoundary.open.mockImplementation(actual.open);
     fsBoundary.readdir.mockReset();
     fsBoundary.readdir.mockImplementation(actual.readdir);
+    fsBoundary.stat.mockReset();
+    fsBoundary.stat.mockImplementation(actual.stat);
   });
 
   it('keeps the observed native session id byte-exact, bounds the raw value, and rejects blank', () => {
@@ -611,6 +621,37 @@ describe('Codex External Session observation', () => {
     expect(() => disposable.dispose()).not.toThrow();
   });
 
+  it('uses demanded file invalidations without per-file work on unchanged ticks and releases facts on retirement', async () => {
+    const fixture = await createRolloutSetFixture();
+    const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: fixture.codexHome } });
+    const lifetime = new AbortController();
+    const grouping = contribution.describeResource(fixture.identity);
+    const request = { purpose: 'resource_descriptors' as const, resourceKey: grouping.resourceKey,
+      links: [{ linkKey: grouping.linkKey, linkedSource: fixture.identity }], signal: new AbortController().signal,
+      observation: { lifetime: lifetime.signal, changedFiles: [] as string[] } };
+    const initial = await contribution.reconcileResource(request);
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    fsBoundary.stat.mockImplementation(async (...args: Parameters<typeof actual.stat>) => {
+      if (String(args[0]).endsWith('.jsonl')) throw new Error('unchanged file must not be re-read');
+      return actual.stat(...args);
+    });
+    expect(await contribution.reconcileResource(request)).toEqual(initial);
+    fsBoundary.stat.mockImplementation(actual.stat);
+    await writeFile(fixture.sidechainFile, JSON.stringify({ type: 'session_meta', payload: { id: 'thread-child', session_id: 'other-root' } }));
+    const updated = await contribution.reconcileResource({ ...request,
+      observation: { lifetime: lifetime.signal, changedFiles: [fixture.sidechainFile] } });
+    expect(updated.outcomes[0]).toMatchObject({ kind: 'described', descriptor: { watchFileChanges: { files: [fixture.rootFile] } } });
+    lifetime.abort();
+    const replacement = new AbortController();
+    fsBoundary.stat.mockImplementation(async (...args: Parameters<typeof actual.stat>) => {
+      if (String(args[0]).endsWith('.jsonl')) throw new Error('new demand must reacquire native facts');
+      return actual.stat(...args);
+    });
+    const retired = await contribution.reconcileResource({ ...request,
+      observation: { lifetime: replacement.signal, changedFiles: [] } });
+    expect(retired.outcomes[0]).toMatchObject({ kind: 'unavailable' });
+  });
+
   it('reconciles an unchanged rollout tree without reopening unrelated heads or relisting directories', async () => {
     const fixture = await createRolloutSetFixture();
     const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: fixture.codexHome,
@@ -632,7 +673,8 @@ describe('Codex External Session observation', () => {
     expect(await reconcileDescriptor(contribution, fixture.identity)).toEqual(before);
     const grouping = contribution.describeResource(fixture.identity);
     const evidence = await contribution.reconcileResource({ purpose: 'observation_evidence', resourceKey: grouping.resourceKey,
-      links: [{ linkKey: grouping.linkKey, linkedSource: fixture.identity }], signal: new AbortController().signal });
+      links: [{ linkKey: grouping.linkKey, linkedSource: fixture.identity }], signal: new AbortController().signal,
+      observation: { lifetime: observationLifetimes.get(contribution)!.signal } });
     expect(evidence.outcomes[0]?.facts).toContainEqual(expect.objectContaining({ kind: 'recent_activity' }));
   });
 
@@ -644,17 +686,33 @@ describe('Codex External Session observation', () => {
         await mkdir(dir, { recursive: true });
         await Promise.all(Array.from({ length: 100 }, (_, index) => writeFile(
           join(dir, `rollout-2026-10-${String(day).padStart(2, '0')}T10-00-00-${day}-${index}.jsonl`),
-          JSON.stringify({ type: 'session_meta', payload: { id: index === 0 ? 'session-a' : `unrelated-${day}-${index}` } }),
+          JSON.stringify({ type: 'session_meta', payload: { id: index === 0 ? 'session-a' : `unrelated-${day}-${index}`,
+            base_instructions: { text: 'discarded-native-instructions '.repeat(800) + index } } }),
         )));
       }
       const contribution = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: codexHome } });
       const identity = linkedSource({ codexHome });
+      let collect: (() => unknown) | undefined;
+      if (process.env.HAPPIER_RUN_OBSERVATION_MEMORY_BENCHMARK === '1') {
+        setFlagsFromString('--expose_gc');
+        const gc: unknown = runInNewContext('gc');
+        if (typeof gc !== 'function') throw new Error('Benchmark GC unavailable');
+        collect = gc;
+      }
+      const sample = async () => {
+        fsBoundary.open.mockClear(); fsBoundary.stat.mockClear(); fsBoundary.readdir.mockClear();
+        await new Promise<void>(resolve => setImmediate(resolve)); collect?.();
+        await new Promise<void>(resolve => setImmediate(resolve)); collect?.();
+        return process.memoryUsage().heapUsed;
+      };
+      const heapBefore = await sample();
       await reconcileDescriptor(contribution, identity);
+      const heapDemanded = await sample();
+      if (collect) expect(heapDemanded - heapBefore).toBeLessThan(2000 * 800 * 29 / 4);
       const baselineStarted = performance.now();
       const baselineCpuBefore = process.cpuUsage();
       for (let tick = 0; tick < 5; tick += 1) {
-        const inventory = await inventoryCodexRootSessionRolloutFiles({ codexHome, remoteSessionIds: ['session-a'], signal: new AbortController().signal });
-        expect(inventory.requested[0]?.files).toHaveLength(20);
+        expect((await reconcileDescriptor(contribution, identity)).watchFileChanges.files).toHaveLength(20);
       }
       const baselineCpu = process.cpuUsage(baselineCpuBefore);
       const baseline = { elapsedMs: performance.now() - baselineStarted, cpuMs: (baselineCpu.user + baselineCpu.system) / 1000 };
@@ -662,11 +720,29 @@ describe('Codex External Session observation', () => {
       const started = performance.now();
       const readsBefore = fsBoundary.readdir.mock.calls.length;
       const opensBefore = fsBoundary.open.mock.calls.length;
-      for (let tick = 0; tick < 5; tick += 1) expect((await reconcileDescriptor(contribution, identity)).watchFileChanges.files).toHaveLength(20);
+      const grouping = contribution.describeResource(identity);
+      const lifetime = observationLifetimes.get(contribution)!.signal;
+      for (let tick = 0; tick < 5; tick += 1) {
+        const result = await contribution.reconcileResource({ purpose: 'resource_descriptors', resourceKey: grouping.resourceKey,
+          links: [{ linkKey: grouping.linkKey, linkedSource: identity }], signal: new AbortController().signal,
+          observation: { lifetime, changedFiles: [] } });
+        expect(result.outcomes[0]).toMatchObject({ kind: 'described', descriptor: { watchFileChanges: { files: expect.any(Array) } } });
+        if (result.purpose === 'resource_descriptors' && result.outcomes[0]?.kind === 'described') expect(result.outcomes[0].descriptor.watchFileChanges?.files).toHaveLength(20);
+      }
       const cpu = process.cpuUsage(cpuBefore);
       console.info('CODEX_OBSERVATION_SYNTHETIC', JSON.stringify({ files: 2000, ticks: 5,
         elapsedMs: performance.now() - started, cpuMs: (cpu.user + cpu.system) / 1000,
         directoryReads: fsBoundary.readdir.mock.calls.length - readsBefore, headOpens: fsBoundary.open.mock.calls.length - opensBefore, baseline }));
+      const heapAfterTicks = await sample();
+      const parser = vi.spyOn(Date, 'parse').mockImplementation(() => { throw new Error('surviving rollout names must not be reparsed'); });
+      try {
+        await writeFile(join(codexHome, 'sessions', '2026', '10', '20', 'rollout-new.jsonl'),
+          JSON.stringify({ type: 'session_meta', payload: { id: 'unrelated-new' } }));
+        expect((await reconcileDescriptor(contribution, identity)).watchFileChanges.files).toHaveLength(20);
+      } finally { parser.mockRestore(); }
+      observationLifetimes.get(contribution)!.abort();
+      const heapReleased = await sample();
+      if (collect) console.info('R242_CODEX_HEAP', JSON.stringify({ heapBefore, heapDemanded, heapAfterTicks, heapReleased }));
       const { listCodexSessionCandidates } = await import('./candidateSource.js');
       const cursorBytes: number[] = [];
       let cursor: string | undefined;

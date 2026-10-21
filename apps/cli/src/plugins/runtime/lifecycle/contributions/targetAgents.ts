@@ -857,6 +857,7 @@ function createOccurrenceBoundExternalSessionObservation(params: Readonly<{
                         links,
                         signal: composed.signal,
                         managedEndpointRead,
+                        ...(request.observation ? { observation: request.observation } : {}),
                     })),
                 );
                 const result = await Promise.race([

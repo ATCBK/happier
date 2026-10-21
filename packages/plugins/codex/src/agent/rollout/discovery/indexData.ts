@@ -349,10 +349,10 @@ function retainSessionMetaFields(payload: CodexSessionMetaPayload | null): Codex
  * A same-inode rewrite must refresh membership too. A line that does not parse
  * yet — a rollout still being created — is never remembered.
  */
-const sessionMetaByRolloutPath = new Map<string, Readonly<{
+export type CodexSessionMetaCache = Map<string, Readonly<{
     fileVersion: string;
     sessionMeta: CodexSessionMetaPayload;
-}>>();
+}>>;
 
 function sessionMetaFileVersion(metadata: Readonly<{ dev: number; ino: number; birthtimeMs: number; size: number; mtimeMs: number; ctimeMs: number }>): string {
     return `${metadata.dev}:${metadata.ino}:${metadata.birthtimeMs}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`;
@@ -368,7 +368,7 @@ export async function readCodexSessionMetaFromRollout(
     try {
         const current = await stat(filePath);
         throwIfCodexExternalSessionInvocationStopped(bounds);
-        const remembered = sessionMetaByRolloutPath.get(filePath);
+        const remembered = bounds.sessionMetaCache?.get(filePath);
         if (remembered?.fileVersion === sessionMetaFileVersion(current)) return remembered.sessionMeta;
         const fh = await open(filePath, 'r');
         try {
@@ -378,9 +378,9 @@ export async function readCodexSessionMetaFromRollout(
             throwIfCodexExternalSessionInvocationStopped(bounds);
             const sessionMeta = line ? retainSessionMetaFields(parseCodexSessionMetaLine(line)) : null;
             if (sessionMeta) {
-                sessionMetaByRolloutPath.set(filePath, { fileVersion: sessionMetaFileVersion(metadata), sessionMeta });
+                bounds.sessionMetaCache?.set(filePath, { fileVersion: sessionMetaFileVersion(metadata), sessionMeta });
             } else {
-                sessionMetaByRolloutPath.delete(filePath);
+                bounds.sessionMetaCache?.delete(filePath);
             }
             return sessionMeta;
         } finally {
@@ -388,7 +388,7 @@ export async function readCodexSessionMetaFromRollout(
         }
     } catch {
         throwIfCodexExternalSessionInvocationStopped(bounds);
-        sessionMetaByRolloutPath.delete(filePath);
+        bounds.sessionMetaCache?.delete(filePath);
         return null;
     }
 }

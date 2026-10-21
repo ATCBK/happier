@@ -239,6 +239,7 @@ export function createExternalSessionObservationDaemonProjection(
                         linkedSource: link.linkedSource,
                     })),
                     signal: input.signal,
+                    observation: input.observation,
                 });
                 if (result.purpose !== 'resource_descriptors') {
                     return result;

@@ -2607,6 +2607,18 @@ advertise standard search with `contentSearch`; readable transcript facets
 supply indexing when selected in daemon-local Search settings. A declaration
 alone creates neither an index nor user consent. Per-source readiness is a
 worker projection, and native windows resolve through `pageTranscript`.
+
+In 0.3 development, observation reconciliation may receive the host's optional
+`observation: { lifetime, changedFiles? }` read hint. The lifetime ends with the
+physical observation demand, separately from each invocation's cancellation.
+An omitted file list requires full native freshness checks; an empty list means
+the host's attached directory observation has reported no changes. Plugins may
+ignore the hint and perform those checks. It grants no path or Session authority.
+Codex retains directory, filename and stripped metadata facts only for that demand,
+invalidates named writes and structural changes, and releases them on retirement.
+Source-wide file consumers share the existing directory attachments for content
+delivery; exact-file observation remains for paths outside those admitted trees.
+
 [Search](search.md#memory-index-and-native-ingestion-03-development) owns the
 index, settings, privacy and cross-machine coordination contracts.
 

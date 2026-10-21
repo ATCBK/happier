@@ -1,10 +1,12 @@
 import { readdir, stat } from 'node:fs/promises';
-import type { Dirent } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import {
   parseCodexRolloutFilename,
   isMatchingCodexRolloutIdentity,
   readCodexSessionMetaFromRollout,
+  type CodexSessionMetaCache,
+  type CodexSessionMetaPayload,
 } from './indexData.js';
 import {
   throwIfCodexExternalSessionInvocationStopped,
@@ -405,9 +407,12 @@ type RolloutInventoryEntry = Readonly<{
   kind: 'directory' | 'file' | 'other';
   filePath: string;
   fileRelPath: string;
+  nativeRelPath: string;
 }> & {
   fromName?: number | null;
   filename?: ReturnType<typeof parseCodexRolloutFilename>;
+  facts?: Readonly<{ sessionMeta: CodexSessionMetaPayload; metadata: Stats }>;
+  matches?: Readonly<{ requested: string; ids: readonly string[]; file?: CodexRolloutFile }>;
 };
 
 async function readRolloutInventoryDirectory(codexHome: string, dir: string): Promise<RolloutInventoryEntry[]> {
@@ -416,8 +421,9 @@ async function readRolloutInventoryDirectory(codexHome: string, dir: string): Pr
   return entries.filter(entry => !entry.isSymbolicLink()).map(entry => {
     const name = String(entry.name);
     const filePath = join(dir, name);
+    const nativeRelPath = relative(codexHome, filePath);
     return { kind: entry.isDirectory() ? 'directory' : entry.isFile() && name.startsWith('rollout-') && name.endsWith('.jsonl') ? 'file' : 'other',
-      filePath, fileRelPath: relative(codexHome, filePath).split(sep).join('/') };
+      filePath, nativeRelPath, fileRelPath: nativeRelPath.split(sep).join('/') };
   });
 }
 
@@ -425,6 +431,17 @@ async function readRolloutInventoryDirectory(codexHome: string, dir: string): Pr
  * authority. Both observation and resumable callers use the inventory below. */
 export class CodexRolloutObservationInventory {
   private readonly directories = new Map<string, Readonly<{ signature: string; entries: RolloutInventoryEntry[] }>>();
+  readonly sessionMetaCache: CodexSessionMetaCache = new Map();
+
+  clear(): void { this.directories.clear(); this.sessionMetaCache.clear(); }
+
+  invalidate(changedFiles?: readonly string[]): void {
+    const changed = changedFiles === undefined ? null : new Set(changedFiles);
+    if (changed?.size === 0) return;
+    for (const directory of this.directories.values()) for (const entry of directory.entries) {
+      if (!changed || changed.has(entry.filePath)) { entry.facts = undefined; entry.matches = undefined; }
+    }
+  }
 
   async readDirectory(codexHome: string, dir: string): Promise<RolloutInventoryEntry[]> {
     const metadata = await stat(dir, { bigint: true });
@@ -432,12 +449,27 @@ export class CodexRolloutObservationInventory {
     const remembered = this.directories.get(dir);
     if (remembered?.signature === signature) return remembered.entries;
     const entries = await readRolloutInventoryDirectory(codexHome, dir);
+    // Directory mtime changes on sibling creation, not on filename mutation.
+    // Preserve lexical facts for surviving paths instead of reparsing every
+    // sibling when a new rollout joins today's directory.
+    const prior = new Map(remembered?.entries.map(entry => [entry.filePath, entry]));
+    for (const entry of entries) {
+      const previous = prior.get(entry.filePath);
+      if (previous?.kind === entry.kind) {
+        entry.fromName = previous.fromName;
+        entry.filename = previous.filename;
+        entry.facts = previous.facts;
+        entry.matches = previous.matches;
+      }
+    }
     this.directories.set(dir, { signature, entries });
     return entries;
   }
 
   retainDirectories(visited: ReadonlySet<string>): void {
     for (const dir of this.directories.keys()) if (!visited.has(dir)) this.directories.delete(dir);
+    const files = new Set([...this.directories.values()].flatMap(directory => directory.entries.map(entry => entry.filePath)));
+    for (const file of this.sessionMetaCache.keys()) if (!files.has(file)) this.sessionMetaCache.delete(file);
   }
 }
 
@@ -446,8 +478,10 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
   remoteSessionIds: readonly string[];
   signal: AbortSignal;
   observationInventory?: CodexRolloutObservationInventory;
+  changedFiles?: readonly string[];
 }> & CodexExternalSessionInvocationBounds): Promise<CodexRootSessionRolloutInventory> {
   throwIfCodexExternalSessionInvocationStopped(params);
+  params.observationInventory?.invalidate(params.changedFiles);
   const requestedIds = new Set(params.remoteSessionIds);
   const filesByRootSessionId = new Map<string, CodexRolloutFile[]>();
   for (const remoteSessionId of requestedIds) {
@@ -471,8 +505,10 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
   const progress = preparation?.rootInventory(params.codexHome, params.remoteSessionIds, sourceGeneration);
   // Resume facts are locators, not authority. Re-authorize selected paths on
   // every invocation; unrelated completed heads need no further native I/O.
-  const nativeBounds = { ...params, preparation: undefined };
+  const nativeBounds = { ...params, preparation: undefined,
+    sessionMetaCache: params.observationInventory?.sessionMetaCache };
   const inventoryIds = new Set(progress?.requestedIds ?? requestedIds);
+  const requestedIdentity = JSON.stringify([...inventoryIds].sort());
   const requestedStartTimes = [...inventoryIds].map(
     parseRemoteSessionTimestampMs,
   );
@@ -525,6 +561,11 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
         continue;
       }
       if (entry.kind !== 'file') continue;
+      if (entry.facts && entry.matches?.requested === requestedIdentity) {
+        const { file, ids } = entry.matches;
+        if (file) for (const id of ids) filesByRootSessionId.get(id)?.push(file);
+        continue;
+      }
       // Parse only past the cursor frontier, retaining the facts for observed
       // directories without redoing completed-prefix work on resumed scans.
       if (entry.fromName === undefined) entry.fromName = parseRolloutTimestampFromFilename(full);
@@ -566,15 +607,20 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
       }
 
       await preparation?.authorize(full);
-      const sessionMeta = await readCodexSessionMetaFromRollout(full, nativeBounds);
+      const sessionMeta = entry.facts?.sessionMeta ?? await readCodexSessionMetaFromRollout(full, nativeBounds);
       throwIfCodexExternalSessionInvocationStopped(nativeBounds);
       const sessionId = readNonEmptySessionId(sessionMeta?.id);
       const metadataRootSessionId = readNonEmptySessionId(sessionMeta?.session_id);
       const matchingIds = matchingRolloutSessionIds(full, sessionMeta, inventoryIds, 'root_session_family', entry.filename);
-      if (matchingIds.length === 0) { commitFile(fileRelPath); continue; }
-
       try {
-        const current = await stat(full);
+        const current = entry.facts?.metadata ?? await stat(full);
+        // Null/incomplete heads are retried; complete facts belong only to the
+        // live observation demand and invalidate on named writes or topology.
+        if (sessionMeta) entry.facts = { sessionMeta, metadata: current };
+        if (matchingIds.length === 0) {
+          entry.matches = { requested: requestedIdentity, ids: [] };
+          commitFile(fileRelPath); continue;
+        }
         metadata ??= current;
         throwIfCodexExternalSessionInvocationStopped(nativeBounds);
         const fromName = entry.fromName;
@@ -585,7 +631,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
           : null;
         const file = {
           filePath: full,
-          fileRelPath: relative(params.codexHome, full),
+          fileRelPath: entry.nativeRelPath,
           sortMs: Math.max(
             fromName ?? 0,
             fromBirth ?? 0,
@@ -595,6 +641,7 @@ export async function inventoryCodexRootSessionRolloutFiles(params: Readonly<{
           ...(sessionId ? { sessionId } : {}),
           ...(metadataRootSessionId ? { rootSessionId: metadataRootSessionId } : {}),
         };
+        entry.matches = { requested: requestedIdentity, ids: matchingIds, file };
         if (progress) progress.files.push({ ref: { home: progress.home, path: fileRelPath }, matchingIds, generation: formatPhysicalGeneration(current),
           sortMs: file.sortMs, mtimeMs: file.mtimeMs });
         else for (const id of matchingIds) filesByRootSessionId.get(id)?.push(file);

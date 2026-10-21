@@ -66,6 +66,10 @@ export type AgentExternalSessionObservationReconcileResourceRequest = Readonly<{
     links: readonly AgentExternalSessionObservationReconcileLink[];
     signal: AbortSignal;
     managedEndpointRead: AgentExternalSessionsManagedEndpointRead;
+    /** Optional host watch facts. Omission requires native freshness checks.
+     * Empty changedFiles means an unchanged observed tree; omission means full
+     * invalidation. Facts may be retained only until this demand is retired. */
+    observation?: Readonly<{ lifetime: AbortSignal; changedFiles?: readonly string[] }>;
 }>;
 
 export type AgentExternalSessionObservationContribution = Readonly<{

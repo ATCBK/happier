@@ -823,6 +823,55 @@ describe('contribution-owned External Sessions managed endpoint', () => {
 });
 
 describe('target Agent runtime registry', () => {
+    it('carries native observation facts through the daemon and registered facade until demand retirement', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'codex-observation-seam-'));
+        const retirement = new AbortController();
+        const { createCodexExternalSessionObservationContribution } = await import(
+            '../../../../../../../packages/plugins/codex/src/agent/surfaces/sessions/external/observation.js'
+        );
+        const { createExternalSessionObservationDaemonProjection } = await import(
+            '../../../../api/session/external/leases/createExternalSessionObservationDaemonProjection'
+        );
+        const sessions = join(directory, 'sessions');
+        await mkdir(sessions);
+        const file = join(sessions, 'rollout-fixture.jsonl');
+        await writeFile(file, JSON.stringify({ type: 'session_meta', payload: { id: 'session-a' } }) + '\n');
+        const native = createCodexExternalSessionObservationContribution({ env: { CODEX_HOME: directory } });
+        const requests: Parameters<AgentExternalSessionObservationContribution['reconcileResource']>[0][] = [];
+        const registered = await createTargetAgentRuntimeRegistry({
+            agents: [{ id: 'assistant', pluginId: 'acme.agent.fixture' }], activationTargets: [target()],
+            targetRegistrations: [observationRegistration({ observation: {
+                ...native, reconcileResource(request) { requests.push(request); return native.reconcileResource(request); },
+            } })],
+            isOccurrenceCurrent: () => true, retirementSignal: retirement.signal, onDuplicate: vi.fn(),
+        });
+        const contribution = registered.get('assistant')?.externalSessionObservation;
+        if (!contribution) throw new Error('Expected registered observation contribution');
+        const identity = { source: { kind: 'codexHome', home: 'user', homePath: directory }, remoteSessionId: 'session-a', linkData: {} };
+        const grouping = contribution.describeResource(identity);
+        const projection = createExternalSessionObservationDaemonProjection({ publishField: async () => {},
+            acquireObservationContribution: async () => ({ contribution,
+                filesystemReadAllowedPaths: new Set([directory]), release: async () => {} }),
+        });
+        try {
+            await projection.reconcileLink({
+                resource: { pluginId: 'acme.agent.fixture', agentLocalId: 'assistant', occurrenceId: 'generation-7', resourceKey: grouping.resourceKey },
+                link: { sessionId: 'observation-seam', linkGeneration: 'link-1', linkKey: grouping.linkKey, linkedSource: identity },
+                target: { qualifiedLinkIdentity: { v: 1, agent: { pluginId: 'acme.agent.fixture', localId: 'assistant' },
+                    source: { kind: 'codexHome', contractVersion: 1 } }, linkGeneration: 'link-1' },
+                demand: { passiveEvent: true, persistedPolicy: false, fallbackDemand: false },
+            });
+            await vi.waitFor(() => expect(requests[0]?.observation?.lifetime.aborted).toBe(false));
+            const lifetime = requests[0]!.observation!.lifetime;
+            // The facade retires each invocation signal after settlement. Native
+            // facts must instead live with the physical observation demand.
+            await vi.waitFor(() => expect(requests[0]!.signal.aborted).toBe(true));
+            expect(lifetime.aborted).toBe(false);
+            await projection.dispose();
+            expect(lifetime.aborted).toBe(true);
+            expect(retirement.signal.aborted).toBe(false);
+        } finally { await projection.dispose(); retirement.abort(); await rm(directory, { recursive: true, force: true }); }
+    });
     it('binds managed endpoint reads once before observation and reconciliation entry', async () => {
         const observeExactRead = vi.fn(async () => Object.freeze({
             ok: true,

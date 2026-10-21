@@ -1,5 +1,6 @@
 import type { ExternalSessionContentSearchControl } from '@happier-dev/plugin-sdk/sessions/file-stores';
 import type { CodexRolloutPreparation } from '../../../rollout/discovery/preparation.js';
+import type { CodexSessionMetaCache } from '../../../rollout/discovery/indexData.js';
 
 export type CodexExternalSessionInvocationBounds = Readonly<{
   signal?: AbortSignal;
@@ -8,6 +9,7 @@ export type CodexExternalSessionInvocationBounds = Readonly<{
   onProgress?: (resetEstimate?: boolean) => void;
   contentSearchControl?: ExternalSessionContentSearchControl;
   preparation?: CodexRolloutPreparation;
+  sessionMetaCache?: CodexSessionMetaCache;
 }>;
 
 export function throwIfCodexExternalSessionInvocationStopped(

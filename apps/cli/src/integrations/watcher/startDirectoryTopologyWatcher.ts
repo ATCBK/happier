@@ -24,6 +24,8 @@ export type StartDirectoryTopologyWatcherOptions = Readonly<{
 export type DirectoryTopologyWatchTarget = Readonly<{
     directory: string;
     onStructuralChange: (changedPath?: string) => void | Promise<void>;
+    /** Source-wide consumers share these directory attachments for content too. */
+    onFileChange?: (changedPath?: string) => void | Promise<void>;
 }>;
 
 function isCanonicalDirectory(path: string): boolean {
@@ -42,6 +44,7 @@ function watchDirectoryTree(
     watchImpl: DirectoryTopologyWatch,
     onStructuralChange: (changedPath?: string) => void,
     onUnavailable: (error: unknown) => void,
+    onFileChange?: (changedPath?: string) => void,
 ) {
     const watchers = new Map<string, FSWatcher>();
     let active = true;
@@ -59,8 +62,12 @@ function watchDirectoryTree(
     const walk = async (directory: string): Promise<void> => {
         if (!active || watchers.has(directory) || !isCanonicalDirectory(directory)) return;
         const watcher = watchImpl(directory, { persistent: true, recursive: false }, (eventType, filename) => {
-            if (!active || watchers.get(directory) !== watcher || eventType !== 'rename') return;
+            if (!active || watchers.get(directory) !== watcher) return;
             const changedPath = filename === null ? directory : resolve(directory, String(filename));
+            if (eventType !== 'rename') {
+                onFileChange?.(filename === null ? undefined : changedPath);
+                return;
+            }
             // Serialize structural enrollment with the initial walk. A burst
             // cannot leave a newer subtree attached beneath a stale disposer.
             pending = pending.then(async () => {
@@ -113,6 +120,7 @@ export function startDirectoryTopologyWatchers(
         directory: string;
         targetName: string;
         onStructuralChange: DirectoryTopologyWatchTarget['onStructuralChange'];
+        onFileChange: DirectoryTopologyWatchTarget['onFileChange'];
         watcher: ReturnType<typeof watch> | null;
         disposeTree: (() => void) | null;
         attachment: Promise<void>;
@@ -134,6 +142,7 @@ export function startDirectoryTopologyWatchers(
             directory: target.directory,
             targetName: basename(target.directory),
             onStructuralChange: target.onStructuralChange,
+            onFileChange: target.onFileChange,
             watcher: null,
             disposeTree: null,
             attachment: Promise.resolve(),
@@ -163,6 +172,10 @@ export function startDirectoryTopologyWatchers(
         current?.close();
         target.disposeTree?.();
         target.disposeTree = null;
+    };
+
+    const emitFileChange = (target: TargetRecord, path?: string) => {
+        if (active) void Promise.resolve(target.onFileChange?.(path)).catch(() => undefined);
     };
 
     let unavailableNotified = false;
@@ -212,7 +225,7 @@ export function startDirectoryTopologyWatchers(
                         if (!active || target.disposeTree !== tree.dispose) return;
                         closeTargetWatcher(target);
                         notifyUnavailable(error);
-                    });
+                    }, path => emitFileChange(target, path));
                 target.disposeTree = tree.dispose;
                 await tree.ready;
                 if (emitAfterAttachment) emitStructuralChange(target);
@@ -226,10 +239,13 @@ export function startDirectoryTopologyWatchers(
                     { persistent: true, recursive: true },
                     (eventType, filename) => {
                         if (!active || target.watcher !== nextWatcher) return;
-                        if (eventType !== 'rename') return;
                         const changedPath = filename === null
                             ? undefined
                             : resolve(target.directory, String(filename));
+                        if (eventType !== 'rename') {
+                            emitFileChange(target, changedPath);
+                            return;
+                        }
                         emitStructuralChange(target, changedPath);
                     },
                 );
