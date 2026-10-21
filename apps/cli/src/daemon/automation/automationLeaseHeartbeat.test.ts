@@ -4,6 +4,29 @@ import { startAutomationLeaseHeartbeat } from './automationLeaseHeartbeat';
 afterEach(() => vi.useRealTimers());
 
 describe('Automation claim lease observation', () => {
+  it('renews the confirmed lease while a currentness read is pending without overlapping those reads', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let rejectCurrentness!: (error: Error) => void;
+    const currentness = new Promise<void>((_resolve, reject) => { rejectCurrentness = reject; });
+    const onRenewed = vi.fn(() => currentness);
+    const onHeartbeat = vi.fn(async () => Date.now() + 3_000);
+    const onError = vi.fn();
+    const heartbeat = startAutomationLeaseHeartbeat({ heartbeatMs: 1_000, leaseExpiresAtMs: 3_000,
+      onHeartbeat, onRenewed, onError });
+    try {
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(onError).not.toHaveBeenCalled();
+      expect(onHeartbeat).toHaveBeenCalledTimes(10);
+      expect(onRenewed).toHaveBeenCalledOnce();
+      const refusal = new Error('authorization_not_current');
+      rejectCurrentness(refusal);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(onError).toHaveBeenCalledExactlyOnceWith(refusal);
+      expect(onHeartbeat).toHaveBeenCalledTimes(10);
+    } finally { heartbeat.stop(); }
+  });
+
   it('keeps a claim after a transient heartbeat failure and renews only from server expiry', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);

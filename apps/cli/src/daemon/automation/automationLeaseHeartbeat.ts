@@ -12,6 +12,7 @@ export function startAutomationLeaseHeartbeat(params: {
   let leaseExpiresAtMs = params.leaseExpiresAtMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inFlight = false;
+  let currentnessInFlight = false;
   const stop = () => {
     active = false;
     clearTimeout(timer);
@@ -36,7 +37,7 @@ export function startAutomationLeaseHeartbeat(params: {
     schedule();
     if (inFlight) return;
     inFlight = true;
-    void params.onHeartbeat().then(async expiresAtMs => {
+    void params.onHeartbeat().then(expiresAtMs => {
       if (!active) return;
       if (Date.now() >= leaseExpiresAtMs || !Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
         expire();
@@ -45,9 +46,13 @@ export function startAutomationLeaseHeartbeat(params: {
       leaseExpiresAtMs = expiresAtMs;
       clearTimeout(timer);
       schedule();
-      // Lease transport uncertainty is distinct from the executor's existing
-      // authorization/control checks. Preserve their fail-closed boundary.
-      await params.onRenewed?.().catch(fail);
+      // Authorization/control reads can outlive this lease. Keep them serialized
+      // without holding up its transport renewal; their failure still retires it.
+      if (params.onRenewed && !currentnessInFlight) {
+        currentnessInFlight = true;
+        void Promise.resolve().then(() => active ? params.onRenewed?.() : undefined)
+          .catch(fail).finally(() => { currentnessInFlight = false; });
+      }
     }).catch((error: unknown) => {
       if (!active) return;
       const { kind } = classifyDaemonServerWorkError(error);
