@@ -184,7 +184,7 @@ describe('DESIGN-13 RUN captures', () => {
         process.stdout.write(`IMG ${phase}-${name}.png ${png.toString('base64')}\n`);
         measurements[name] = await measure(page);
       };
-      const only = (process.env.RUN_DESIGN13_ONLY ?? '').split(',').filter(Boolean);
+      const only: string[] = (process.env.RUN_DESIGN13_ONLY ?? '').split(',').filter(Boolean);
       const attempt = async (name: string, body: () => Promise<void>) => {
         if (only.length > 0 && !only.some((prefix) => name.startsWith(prefix))) return;
         try {

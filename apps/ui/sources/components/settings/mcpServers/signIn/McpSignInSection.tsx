@@ -289,13 +289,14 @@ function Link(
       hitSlop={8}
       style={props.quiet ? styles.quietLinkBox : undefined}
     >
-      {({ hovered }: { hovered?: boolean }) => (
+      {(state) => (
         <Text
           variant="meta"
           emphasis={props.quiet ? undefined : 'semiBold'}
           style={[
             props.quiet ? styles.quietLink : styles.link,
-            hovered ? styles.linkHover : null,
+            // react-native-web adds hovered to the Pressable state.
+            (state as Readonly<{ hovered?: boolean }>).hovered === true ? styles.linkHover : null,
           ]}
         >
           {props.label}

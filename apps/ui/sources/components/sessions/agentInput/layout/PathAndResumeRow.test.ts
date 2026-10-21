@@ -9,11 +9,13 @@ import type { PathAndResumeRowProps } from './PathAndResumeRow';
 installSessionDetailsPanelCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+        // react-native-web's Pressable state also carries hovered.
+        const pressableState = { pressed: false, hovered: false };
         return createReactNativeWebMock({
             // Forward actual native anchor refs; node identity is supplied by the renderer's SDK port.
             Pressable: React.forwardRef<View, React.ComponentProps<typeof import('react-native')['Pressable']>>(
                 (props, ref) => React.createElement('Pressable', { ...props, ref },
-                    typeof props.children === 'function' ? props.children({ pressed: false, hovered: false }) : props.children),
+                    typeof props.children === 'function' ? props.children(pressableState) : props.children),
             ),
             useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
         });
