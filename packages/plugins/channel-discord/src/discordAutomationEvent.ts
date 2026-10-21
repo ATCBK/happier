@@ -97,7 +97,7 @@ export const DISCORD_AUTOMATION_MESSAGE_SOURCE_CONFIG_SCHEMA = {
   required: ['v', 'applicationId', 'channelId'],
 } satisfies PluginJsonSchema;
 
-export const DISCORD_AUTOMATION_MESSAGE_SETUP_INPUT_SCHEMA = {
+export const DISCORD_AUTOMATION_MESSAGE_SETUP_INPUT_SCHEMA: PluginJsonSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {

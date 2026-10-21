@@ -1,8 +1,8 @@
-import { ProviderContributionV1Schema } from '@happier-dev/plugin-sdk/providers';
+import { ProviderContributionV1Schema, type ProviderContribution } from '@happier-dev/plugin-sdk/providers';
 
 import { ANTHROPIC_STATIC_MODELS } from './catalog.js';
 
-export const ANTHROPIC_PROVIDER_CONTRIBUTION = ProviderContributionV1Schema.parse({
+export const ANTHROPIC_PROVIDER_CONTRIBUTION: ProviderContribution = ProviderContributionV1Schema.parse({
   v: 1,
   id: 'anthropic',
   name: 'Anthropic',

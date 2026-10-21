@@ -55,7 +55,7 @@ export const TELEGRAM_AUTOMATION_MESSAGE_PAYLOAD_SCHEMA = {
   required: ['chatId', 'chatType', 'messageId', 'text', 'senderIsBot'],
 } as const satisfies PluginJsonSchema;
 
-export const TELEGRAM_AUTOMATION_MESSAGE_SETUP_INPUT_SCHEMA = {
+export const TELEGRAM_AUTOMATION_MESSAGE_SETUP_INPUT_SCHEMA: PluginJsonSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {

@@ -4,6 +4,7 @@ import {
   selectTargetedContributionSurface,
 } from '@happier-dev/plugin-sdk/ui';
 import type {
+  PluginUiTargetedContributionOperationV1,
   PluginUiTargetedContributionSelectorV1,
   PluginUiTargetedContributionSurfaceV1,
   PluginUiTargetedContributionV1,
@@ -160,7 +161,7 @@ export function hasTriageSourceSessionRelationsV1(targetedContributions: Surface
 export function resolveTriageSourcePrepareReviewWorkspaceOperationV1(
   targetedContributions: SurfaceContext['targetedContributions'],
   source: TriageEntryRefV1['source'],
-) {
+) : PluginUiTargetedContributionOperationV1 | undefined {
   if (targetedContributions === undefined) return undefined;
   return selectTargetedContributionOperation(targetedContributions, {
     ...triageSourceSelectorV1(source),
@@ -173,7 +174,7 @@ export function resolveTriageSourceTaskOperationV1(
   targetedContributions: SurfaceContext['targetedContributions'],
   source: TriageEntryRefV1['source'],
   role: 'create' | 'edit' | 'transition' | 'readSessionLinks',
-) {
+) : PluginUiTargetedContributionOperationV1 | undefined {
   if (targetedContributions === undefined) return undefined;
   return selectTargetedContributionOperation(targetedContributions, { ...triageSourceSelectorV1(source), role });
 }
@@ -220,7 +221,7 @@ export function readTriageSourcePreparesReviewWorkspaceV1(
 export function readTriageSourcePrepareReviewWorkspaceOperationV1(
   context: SurfaceContext,
   source: TriageEntryRefV1['source'],
-) {
+) : PluginUiTargetedContributionOperationV1 | undefined {
   return resolveTriageSourcePrepareReviewWorkspaceOperationV1(context.targetedContributions, source);
 }
 
@@ -228,7 +229,7 @@ export function readTriageSourcePrepareReviewWorkspaceOperationV1(
 export function readTriageSourceGetOperationV1(
   context: SurfaceContext,
   source: TriageEntryRefV1['source'],
-) {
+) : PluginUiTargetedContributionOperationV1 | undefined {
   if (context.targetedContributions === undefined) return undefined;
   return selectTargetedContributionOperation(context.targetedContributions, {
     ...triageSourceSelectorV1(source),
