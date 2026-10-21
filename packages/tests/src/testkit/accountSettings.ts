@@ -129,6 +129,9 @@ export async function upsertPlainAccountSettingsV2(params: Readonly<{
     if (parsed.data.error === 'invalid') {
       throw new Error(`Failed to update plain account settings due to invalid content (${parsed.data.reason})`);
     }
+    if (parsed.data.error === 'profile-transfer-mismatch') {
+      throw new Error(`Failed to update plain account settings due to profile transfer mismatch (current=${parsed.data.currentProfileTransferRevision})`);
+    }
     throw new Error(
       `Failed to update plain account settings due to version mismatch (expected=${expectedVersion}, current=${parsed.data.currentVersion})`,
     );
@@ -181,6 +184,9 @@ export async function upsertEncryptedAccountSettingsV2(params: Readonly<{
       throw new Error(
         `Failed to update encrypted account settings due to invalid content (${parsed.data.reason})`,
       );
+    }
+    if (parsed.data.error === 'profile-transfer-mismatch') {
+      throw new Error(`Failed to update encrypted account settings due to profile transfer mismatch (current=${parsed.data.currentProfileTransferRevision})`);
     }
     throw new Error(
       `Failed to update encrypted account settings due to version mismatch (expected=${expectedVersion}, current=${parsed.data.currentVersion})`,

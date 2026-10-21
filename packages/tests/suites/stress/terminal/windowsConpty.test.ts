@@ -32,8 +32,6 @@ describe('stress: terminal Windows/ConPTY fallback diagnostics', () => {
     const manager = createTerminalPtySessionManager({
       ptyProvider: createWindowsPtyProvider(),
       config: {
-        maxSessions: 1,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: 64 * 1024,
         bufferMaxEvents: 32,
         bufferRetentionMs: 60_000,

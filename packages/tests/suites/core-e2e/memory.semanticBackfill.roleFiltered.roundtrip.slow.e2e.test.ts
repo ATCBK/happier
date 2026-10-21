@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import {
+  isMemorySessionSearchHitV1,
   MemorySearchResultV1Schema,
   MemorySettingsV1Schema,
   MemoryStatusV1Schema,
@@ -205,9 +206,9 @@ function expectFirstHitForSession(result: MemorySearchResultV1, sessionId: strin
   if (!result.ok) {
     throw new Error(`memory search failed: ${result.errorCode}`);
   }
-  const hit = result.hits.find((candidate) => candidate.sessionId === sessionId) ?? null;
-  expect(hit).not.toBeNull();
-  return hit!;
+  const hit = result.hits.find((candidate) => isMemorySessionSearchHitV1(candidate) && candidate.sessionId === sessionId) ?? null;
+  if (!hit || !isMemorySessionSearchHitV1(hit)) throw new Error('expected a Session memory hit');
+  return hit;
 }
 
 function expectNoHitsForSession(result: MemorySearchResultV1, sessionId: string): void {
@@ -215,7 +216,7 @@ function expectNoHitsForSession(result: MemorySearchResultV1, sessionId: string)
   if (!result.ok) {
     throw new Error(`memory search failed: ${result.errorCode}`);
   }
-  expect(result.hits.some((hit) => hit.sessionId === sessionId)).toBe(false);
+  expect(result.hits.some((hit) => isMemorySessionSearchHitV1(hit) && hit.sessionId === sessionId)).toBe(false);
 }
 
 function readRequiredIndexContent(status: MemoryStatusV1): MemoryIndexContentForAssertion {

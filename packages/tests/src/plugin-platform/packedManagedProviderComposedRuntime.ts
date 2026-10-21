@@ -21,8 +21,8 @@ import {
   readProcessIdentityByPid,
 } from '../../../../apps/cli/src/daemon/processIdentity';
 import {
-  listProcessSnapshot,
-} from '../../../../apps/cli/src/daemon/processSnapshotCache';
+  readProcessCensus,
+} from '../../../../apps/cli/src/processes/census/processCensus';
 import {
   buildConnectedServiceCredentialRecord,
   CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD,
@@ -165,6 +165,13 @@ import type {
 import type {
   PackedManagedProviderFailureDiagnostics,
 } from './runPackedManagedProviderVertical';
+
+/** Fresh Machine-wide process rows (pid, name, command) from the canonical process census. */
+async function listProcessSnapshot(): Promise<readonly Readonly<{ pid: number; name: string; cmd: string }>[]> {
+  const snapshot = await readProcessCensus({ freshness: 'fresh', scope: 'all', fields: ['argv'] });
+  if (snapshot.status !== 'ok') return [];
+  return snapshot.rows.map(row => ({ pid: row.pid, name: row.name, cmd: row.commandLine ?? row.argv?.join(' ') ?? '' }));
+}
 
 const CONNECTION_ID = ProviderConnectionIdSchema.parse(
   'pc_packed_cliproxyapi',
@@ -1439,7 +1446,7 @@ async function listCandidateWrapperProcesses(
   const expectedPath = resolve(input.prepared.wrapperExecutable);
   const expectedName = basename(expectedPath).toLowerCase();
   const result: ObservedCandidateProcess[] = [];
-  for (const entry of await listProcessSnapshot({ ttlMs: 0 })) {
+  for (const entry of await listProcessSnapshot()) {
     const command = String(entry.cmd ?? '').trim();
     const name = String(entry.name ?? '').trim().toLowerCase();
     if (!command.toLowerCase().includes(expectedName) && name !== expectedName) {
@@ -3619,7 +3626,7 @@ async function listCandidateHandoffWrapperProcesses(
     .toLowerCase();
   const expectedDigest = await sha256File(input.prepared.wrapperExecutable);
   const observed: ObservedCandidateProcess[] = [];
-  for (const entry of await listProcessSnapshot({ ttlMs: 0 })) {
+  for (const entry of await listProcessSnapshot()) {
     const command = String(entry.cmd ?? '').trim();
     const name = String(entry.name ?? '').trim().toLowerCase();
     if (!command.toLowerCase().includes(expectedName) && name !== expectedName) {

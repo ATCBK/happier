@@ -513,6 +513,8 @@ const GITLAB_ACCOUNT = Object.freeze({ service: GITLAB_SERVICE, accountId: 'acco
 const GITLAB_VIEWER = Object.freeze({ id: 41, username: 'example-user' });
 
 function gitlabInstance() {
+  const configuration = encodeGitlabConfiguration(GITLAB_CONFIGURATION_RECORD_V1);
+  if (!configuration) throw new Error('GitLab conformance fixture configuration must encode');
   return {
     v: 1 as const,
     instance: {
@@ -521,7 +523,7 @@ function gitlabInstance() {
     },
     binding: { purpose: GITLAB_CONNECTED_ACCOUNT_PURPOSE, account: GITLAB_ACCOUNT },
     localInstanceKey: 'https://gitlab.com',
-    configuration: encodeGitlabConfiguration(GITLAB_CONFIGURATION_RECORD_V1),
+    configuration,
   };
 }
 

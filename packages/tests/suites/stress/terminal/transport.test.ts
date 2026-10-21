@@ -97,8 +97,6 @@ describe('stress: canonical terminal base64 framing', () => {
       platform: 'linux',
       now: () => 0,
       config: {
-        maxSessions: 1,
-        idleTimeoutMs: 60_000,
         bufferMaxBytes: TERMINAL_STREAM_MAX_FRAMES,
         bufferMaxEvents: TERMINAL_STREAM_MAX_FRAMES + 10,
         bufferRetentionMs: 10 * 60_000,

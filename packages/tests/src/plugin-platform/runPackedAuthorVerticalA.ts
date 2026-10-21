@@ -5,6 +5,7 @@ import { delimiter, resolve } from 'node:path';
 
 import {
   accountSettingsParse,
+  readAccountSettingsConnectedAccountPurposeBindings,
   CONNECTED_ACCOUNT_AUTHENTICATION_COMMAND_RPC_METHOD,
   CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
   ConnectedAccountAttemptResponseSchema,
@@ -698,7 +699,7 @@ export async function runPackedAuthorVerticalAWithTestServer(
             ({ ref }) => ref.accountId === deviceAccount.accountId,
           ) ?? null;
           const binding =
-            accountSettings.settings.connectedAccountPurposeBindingsV1.bindings
+            readAccountSettingsConnectedAccountPurposeBindings(accountSettings.settings).bindings
               .find(({ purpose }) => (
                 purpose.consumer.pluginId === 'acme.vertical-a'
                 && purpose.consumer.localId === 'roundtrip'
@@ -864,8 +865,7 @@ export async function runPackedAuthorVerticalAWithTestServer(
               secret,
             });
           const retainedBindings =
-            currentAccountSettings.settings
-              .connectedAccountPurposeBindingsV1.bindings.filter(
+            readAccountSettingsConnectedAccountPurposeBindings(currentAccountSettings.settings).bindings.filter(
                 ({ purpose }) => !(
                   purpose.consumer.pluginId === 'acme.vertical-a'
                   && purpose.consumer.localId === 'roundtrip'

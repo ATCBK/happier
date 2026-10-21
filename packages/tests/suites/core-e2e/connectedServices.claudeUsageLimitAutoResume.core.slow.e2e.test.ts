@@ -94,7 +94,7 @@ describe('core e2e: Claude due usage-limit continuation', () => {
     const initialLocalId = randomUUID();
     const initialAdmission = await enqueuePendingQueueV2({
       baseUrl: fixture.serverBaseUrl, token: fixture.auth.token, sessionId,
-      localId: initialLocalId, messageRole: 'user', requestedAction: 'send_now',
+      localId: initialLocalId, messageRole: 'user', requestedAction: { v: 1, kind: 'send_now' },
       ciphertext: encryptLegacyBase64({
         role: 'user', content: { type: 'text', text: initialPrompt }, localId: initialLocalId,
         meta: { source: 'ui', sentFrom: 'e2e' },

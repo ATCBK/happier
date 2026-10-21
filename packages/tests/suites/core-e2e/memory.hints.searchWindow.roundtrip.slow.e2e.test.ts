@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import {
+  isMemorySessionSearchHitV1,
   MemorySearchResultV1Schema,
   MemorySettingsV1Schema,
   MemoryWindowV1Schema,
@@ -153,13 +154,14 @@ describe('core e2e: memory hints search + window roundtrip', () => {
     expect(searchRes.ok).toBe(true);
     if (!searchRes.ok) return;
     const hit = searchRes.hits[0];
-    expect(hit?.sessionId).toBe(sessionId);
+    if (!hit || !isMemorySessionSearchHitV1(hit)) throw new Error('expected a Session memory hit');
+    expect(hit.sessionId).toBe(sessionId);
 
     const windowRes = await callEncryptedMachineRpc({
       ui,
       machineId: seeded.machineId,
       method: RPC_METHODS.DAEMON_MEMORY_GET_WINDOW,
-      req: { v: 1, sessionId, seqFrom: hit!.seqFrom, seqTo: hit!.seqTo },
+      req: { v: 1, sessionId, seqFrom: hit.seqFrom, seqTo: hit.seqTo },
       secret,
       schema: MemoryWindowV1Schema,
       timeoutMs: 90_000,

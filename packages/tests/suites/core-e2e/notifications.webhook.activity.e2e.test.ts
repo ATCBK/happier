@@ -105,7 +105,7 @@ describe('core e2e: webhook activity notifications', () => {
     expect(webhookRequest.headers['x-happier-signature-256']).toMatch(/^sha256=[a-f0-9]{64}$/);
     const payload = webhookRequest.payload;
     expect(payload.topic).toBe('ready');
-    if (payload.topic === 'workflow_run_update') {
+    if (payload.topic === 'workflow_run_update' || payload.topic === 'follow_update') {
       throw new Error('Expected an ordinary ready webhook payload');
     }
     expect(payload.navigation).toEqual({ sessionId: 'session-ready-1' });
@@ -189,7 +189,7 @@ describe('core e2e: webhook activity notifications', () => {
         expect(request.headers['x-happier-signature-256']).toMatch(/^sha256=[a-f0-9]{64}$/);
         const payload = request.payload;
         expect(payload.topic).toBe(event.topic);
-        if (payload.topic === 'workflow_run_update') {
+        if (payload.topic === 'workflow_run_update' || payload.topic === 'follow_update') {
           throw new Error(`Expected an ordinary ${event.topic} webhook payload`);
         }
         expect(payload.navigation).toEqual({ sessionId: event.sessionId, requestId: event.requestId });

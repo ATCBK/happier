@@ -2,6 +2,7 @@ import { io, type Socket } from 'socket.io-client';
 import {
   buildAccountStoredContentCompatibilitySocketAuthV1,
   CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
+  type SocketRpcAuthorizationContext,
 } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
@@ -205,10 +206,15 @@ export class SocketCollector {
     });
   }
 
-  async rpcCall<T = RpcResponseEnvelope>(method: string, params: unknown, timeoutMs = 30_000): Promise<T> {
+  async rpcCall<T = RpcResponseEnvelope>(
+    method: string,
+    params: unknown,
+    timeoutMs = 30_000,
+    authorization?: SocketRpcAuthorizationContext,
+  ): Promise<T> {
     return await this.emitWithAck(
       SOCKET_RPC_EVENTS.CALL,
-      { method, params, timeoutMs },
+      { method, params, timeoutMs, ...(authorization ? { authorization } : {}) },
       timeoutMs,
     );
   }

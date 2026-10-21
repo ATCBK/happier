@@ -77,8 +77,6 @@ function terminalConfig(
   overrides: Partial<TerminalPtySessionManagerConfig> = {},
 ): TerminalPtySessionManagerConfig {
   return {
-    maxSessions: 8,
-    idleTimeoutMs: 60_000,
     bufferMaxBytes: 64 * 1024,
     bufferMaxEvents: 32,
     bufferRetentionMs: 60_000,
@@ -216,40 +214,21 @@ describe('stress: terminal bounded byte-stream lifecycle', () => {
     }
   });
 
-  it('releases session buffers and PTYs through idle reaping, close, and disposal', () => {
-    let now = 0;
+  it('releases session buffers and PTYs through close and disposal', () => {
     const provider = new FakePtyProvider();
     const manager = createTerminalPtySessionManager({
       ptyProvider: provider,
-      config: terminalConfig({ idleTimeoutMs: 100 }),
-      now: () => now,
+      config: terminalConfig(),
+      now: () => 0,
       env: { SHELL: '/bin/bash' },
       platform: 'linux',
     });
 
-    const idle = manager.ensure({ terminalKey: 'idle-terminal', cwd: '/tmp' });
-    expect(idle.ok).toBe(true);
-    if (!idle.ok) throw new Error('expected idle terminal');
-    const idlePty = provider.spawned[0]?.pty;
-    if (!idlePty) throw new Error('expected idle PTY');
-    idlePty.emitBytes(Buffer.from('retained-before-idle-cleanup'));
-
-    now = 101;
     const active = manager.ensure({ terminalKey: 'active-terminal', cwd: '/tmp' });
     expect(active.ok).toBe(true);
     if (!active.ok) throw new Error('expected active terminal');
-    expect(idlePty.killCount).toBe(1);
-    expect(manager.readByteStream({
-      terminalId: idle.terminalId,
-      byteOffset: 0,
-      creditBytes: 1,
-    })).toEqual({
-      ok: false,
-      code: 'terminal_not_found',
-      message: 'terminal_not_found',
-    });
 
-    const activePty = provider.spawned[1]?.pty;
+    const activePty = provider.spawned[0]?.pty;
     if (!activePty) throw new Error('expected active PTY');
     expect(manager.close({ terminalId: active.terminalId })).toEqual({ ok: true });
     expect(activePty.killCount).toBe(1);
@@ -257,7 +236,7 @@ describe('stress: terminal bounded byte-stream lifecycle', () => {
     const final = manager.ensure({ terminalKey: 'dispose-terminal', cwd: '/tmp' });
     expect(final.ok).toBe(true);
     if (!final.ok) throw new Error('expected final terminal');
-    const finalPty = provider.spawned[2]?.pty;
+    const finalPty = provider.spawned[1]?.pty;
     if (!finalPty) throw new Error('expected final PTY');
     manager.dispose();
     expect(finalPty.killCount).toBe(1);

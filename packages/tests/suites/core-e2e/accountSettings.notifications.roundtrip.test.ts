@@ -146,7 +146,11 @@ describe('core e2e: account settings notifications roundtrip', () => {
     expect(Object.hasOwn(parsed, 'notificationChannelsV1')).toBe(false);
     // The transport preserves a genuine predecessor carrier until destination
     // transfer, but it is never current preference/runtime channel authority.
-    const retainedRaw: unknown = JSON.parse(rawSettings);
+    const retainedParsed: unknown = JSON.parse(rawSettings);
+    if (!retainedParsed || typeof retainedParsed !== 'object' || Array.isArray(retainedParsed)) {
+      throw new Error('expected retained account settings to be an object');
+    }
+    const retainedRaw: Readonly<Record<string, unknown>> = Object.fromEntries(Object.entries(retainedParsed));
     expect(readLegacyNotificationChannelInventoryV1(retainedRaw)).toMatchObject({ status: 'ready', channels: [
       {
         v: 1,

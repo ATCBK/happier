@@ -65,9 +65,7 @@ describe('Provider UI E2E settings fixture', () => {
     const result = resolveProviderConnectionForMachine({
       connectionId: 'pc_e2e_lmstudio_1',
       machineId,
-      accountSettings: {
-        providerSettingsV1: buildLmStudioProviderUiE2eSettings({ machineId }),
-      },
+      providerSettings: buildLmStudioProviderUiE2eSettings({ machineId }),
       registry: {
         providersByContributionKey: new Map([
           [canonicalizeProviderContributionKeyV1(LMSTUDIO_PROVIDER_CONTRIBUTION_KEY), contribution],
