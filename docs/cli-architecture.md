@@ -4612,12 +4612,26 @@ and final environment checks still run after accepted Team material is available
 In 0.3 development source, an authenticated same-key rejoin of a committed,
 inactive Session with runtime Activity revision zero and no runner-authored
 `hostPid` launches that same Session through the existing committed-row spawn
-owner before submitting initial input. Archived rows first use ordinary tag
-restoration. A repeated launch refusal keeps its typed error and admits no
-initial input. Sessions with prior Activity, a retained process identity, or
-missing Activity evidence keep ordinary rejoin and explicit Resume; a
-resolve-only request never dispatches another launch. No new persisted launch
-marker is needed.
+owner before submitting initial input. The Action operation owner also carries
+the previous same-input creation's typed launch refusal in its existing
+host-only acceptance context. A dying runner can publish Activity and its process
+identity before native startup; physical-launch nonce success alone does not
+prove that startup completed. Outside the original revision-zero/no-process
+baseline, an inactive candidate with a retained launch refusal keeps that typed
+refusal and receives no initial input. The receipt cannot safely authorize
+automatic relaunch: a separate Resume may have succeeded since it was recorded.
+An eligible archived row first uses ordinary tag restoration. A repeated launch refusal keeps its
+typed error and admits no initial input. Previously started then stopped
+Sessions without a retained failed creation receipt keep ordinary rejoin and
+explicit Resume; a resolve-only request
+never dispatches another launch. If that request includes initial input while
+the Session is still inactive, it retains the existing pending startup outcome
+without admitting the input. A resolve-only request without input may still
+return the authenticated Session identity. Explicit Resume after repairing setup,
+or a new launch, remains the recovery path for a retained refusal. The receipt is
+retained only by the daemon's existing operation store; it is not reconstructed
+after that store retires or reloads.
+No new persisted launch marker is needed.
 Creation refusals keep their exact terminal spawn detail, through the same
 classification the runner uses.
 In development source, a Session create/load HTTP 5xx retains its status through
