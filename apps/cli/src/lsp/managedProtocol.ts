@@ -14,6 +14,7 @@ export type OpenLanguageServerProtocolInput = Readonly<{
     rootPath: string;
     processOwner: ProcessOwnerRef;
     signal: AbortSignal;
+    onRetired?: () => void;
 }>;
 
 export class LanguageServerProtocolUnavailableError extends PluginError {
@@ -32,13 +33,30 @@ export function createLanguageServerProtocolOpener(options: Readonly<{
     return async input => {
         input.signal.throwIfAborted();
         const lease = await options.acquireRuntimeRegistry();
+        let unsubscribeRetirement: (() => void) | undefined;
         try {
             const registry = lease.registry;
             const occurrenceId = registry.readPluginOccurrenceId?.(input.definition.pluginId);
+            const retirement = new AbortController();
+            const retire = () => {
+                if (retirement.signal.aborted) return;
+                retirement.abort(new PluginError({ code: 'plugin_generation_stale', message: 'Language-server plugin occurrence retired' }));
+                input.onRetired?.();
+            };
+            const unsubscribeFence = registry.subscribePluginOccurrenceFence?.((pluginId, fencedOccurrenceId) => {
+                if (pluginId === input.definition.pluginId && fencedOccurrenceId === occurrenceId) retire();
+            });
+            registry.retirementSignal?.addEventListener('abort', retire, { once: true });
+            unsubscribeRetirement = () => {
+                unsubscribeFence?.();
+                registry.retirementSignal?.removeEventListener('abort', retire);
+            };
+            if (registry.retirementSignal?.aborted) retire();
+            const signal = AbortSignal.any([input.signal, retirement.signal]);
             const service = createStablePluginExecService({
                 processOwner: input.processOwner,
                 allowedExecutables: [input.definition.executable],
-                signal: input.signal,
+                signal,
                 isOccurrenceCurrent: () => Boolean(occurrenceId
                     && registry.isPluginOccurrenceCurrent?.(input.definition.pluginId, occurrenceId)),
                 async resolveExecutable(executable) {
@@ -46,7 +64,7 @@ export function createLanguageServerProtocolOpener(options: Readonly<{
                     try {
                         return await registry.resolveReadyManagedExecutable(executable, input.definition.pluginId);
                     } catch (error) {
-                        input.signal.throwIfAborted();
+                        signal.throwIfAborted();
                         throw new LanguageServerProtocolUnavailableError(executable, error);
                     }
                 },
@@ -68,10 +86,12 @@ export function createLanguageServerProtocolOpener(options: Readonly<{
             // Preserve the canonical handle identity for its host-private disposal hook.
             void handle.wait().finally(async () => {
                 stderr.dispose();
+                unsubscribeRetirement?.();
                 await lease.release();
             }).catch(error => logger.infoFile('[LanguageServer] Runtime lease cleanup failed', error));
             return handle;
         } catch (error) {
+            unsubscribeRetirement?.();
             await lease.release();
             throw error;
         }

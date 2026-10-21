@@ -152,6 +152,9 @@ export function registerSessionHandlers(
         executionBudgetRegistry?: ExecutionBudgetRegistry;
         admissionDrain?: DaemonAdmissionDrain;
         transcriptActionExecutor?: RpcActionExecutor | null;
+        workspaceFileReplaceActionExecutor?: RpcActionExecutor;
+        resolveWorkspaceFileReplaceActionExecutor?: () => RpcActionExecutor | null;
+        workspaceFileReplaceMachineId?: string;
         localServicesPreview?: LocalServicePreviewRoutes | null;
         browserControl?: BrowserDaemonControlRoutes | null;
         browserDiagnostics?: BrowserDiagnosticsRoutes | null;
@@ -251,7 +254,11 @@ export function registerSessionHandlers(
     registerPreviewEnvHandler(rpcHandlerManager);
     registerWorkspaceFileListHandler(rpcHandlerManager, workingDirectory, { accessPolicy });
     registerWorkspaceFileSearchHandler(rpcHandlerManager, workingDirectory, { accessPolicy });
-    registerWorkspaceFileReplaceHandlers(rpcHandlerManager, workingDirectory, { accessPolicy });
+    registerWorkspaceFileReplaceHandlers(rpcHandlerManager, workingDirectory, { accessPolicy,
+        actionExecutor: opts?.workspaceFileReplaceActionExecutor,
+        resolveActionExecutor: opts?.resolveWorkspaceFileReplaceActionExecutor,
+        machineId: opts?.workspaceFileReplaceMachineId,
+    });
     registerDifftasticHandler(rpcHandlerManager, workingDirectory, { accessPolicy });
     registerSessionUserMessageSendHandler(authorizedSessionRpcHandlerManager, {
         workingDirectory,

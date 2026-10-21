@@ -46,4 +46,12 @@ describe('language-server definitions', () => {
         expect(definitions.findDefinitionsForDocument({ languageId: 'toString', path: 'src/no-extension' })).toEqual([]);
         expect(definitions.findDefinitionsForDocument({ languageId: 'example', path: 'src/no-extension' })).toHaveLength(2);
     });
+
+    it('does not guess a language for a pattern matched document with multiple distinct LSP ids', () => {
+        const ambiguous = contribution('com.example.a', 'server', { languageIds: { first: 'first-lsp', second: 'second-lsp' }, filePatterns: ['*.new'] });
+        const definitions = createLanguageServerDefinitions({ readCurrentContributionRegistry: () => createResolvedContributionRegistry({ languageServers: [ambiguous] }) });
+        expect(definitions.findDefinitionsForDocument({ languageId: 'text', path: 'file.new' })).toEqual([]);
+        expect(definitions.findDefinitionsForDocument({ languageId: null, path: 'file.new' })).toEqual([]);
+        expect(definitions.findDefinitionsForDocument({ languageId: 'first', path: 'file.new' })).toHaveLength(1);
+    });
 });

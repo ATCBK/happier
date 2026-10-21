@@ -1,17 +1,19 @@
 import { createHash } from 'node:crypto';
 import { closeSync, constants, openSync, readSync, statSync, unlinkSync } from 'node:fs';
-import { access, chmod, realpath, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { FilesystemWriteGuardErrorCode } from '@happier-dev/protocol/actions';
 
 import { moveFileWithCrossDeviceFallback, type MoveFileOperations } from '@/utils/fs/moveFileWithCrossDeviceFallback';
-import { writeFileAtomically } from '@/utils/fs/writeJsonAtomic';
+import { renameWithWindowsRetries, writeFileAtomically } from '@/utils/fs/writeJsonAtomic';
 
 type GuardedFileReplaceFailure = Readonly<{ success: false; error: string; errorCode: FilesystemWriteGuardErrorCode | 'file_replace_failed' }>;
 export type GuardedFileReplaceResult =
   | Readonly<{ success: true; hash: string }>
   | GuardedFileReplaceFailure;
 export type GuardedFileAbsenceResult = Readonly<{ success: true; hash: null }> | GuardedFileReplaceFailure;
-type GuardedFileReplaceSource = Readonly<{ kind: 'bytes'; bytes: Uint8Array }> | Readonly<{ kind: 'staged'; path: string; sha256: string }>;
+type GuardedFileReplaceSource = Readonly<{ kind: 'bytes'; bytes: Uint8Array }> | Readonly<{ kind: 'staged'; path: string; sha256: string }>
+  | Readonly<{ kind: 'move'; path: string; expectedHash: string }>;
 type GuardedFileReplaceOptions = Readonly<{
   destPath: string;
   expectation?: string | null;
@@ -36,7 +38,7 @@ function hashFile(path: string): string {
   } finally { closeSync(descriptor); }
 }
 
-function checkExpectation(path: string, expectation: string | null | undefined): void {
+export function checkFileWriteExpectation(path: string, expectation: string | null | undefined): void {
   if (expectation === undefined) return;
   try {
     if (expectation === null) {
@@ -57,11 +59,22 @@ export async function commitGuardedFileReplace(input: GuardedFileReplaceOptions 
   source: GuardedFileReplaceSource | Readonly<{ kind: 'absent' }>;
 }>): Promise<GuardedFileReplaceResult | GuardedFileAbsenceResult> {
   try {
+    if (input.source.kind === 'move') {
+      await mkdir(dirname(input.destPath), { recursive: true });
+      // Source currentness and destination absence are checked together at
+      // publication. Semantic rename never replaces an existing destination.
+      const source = input.source;
+      await renameWithWindowsRetries(source.path, input.destPath, () => {
+        checkFileWriteExpectation(source.path, source.expectedHash);
+        checkFileWriteExpectation(input.destPath, null);
+      }, input.prepareCommit);
+      return { success: true, hash: source.expectedHash };
+    }
     if (input.source.kind === 'absent') {
       // Added-file Discard removes the directory entry (a symlink's target stays intact).
       // There is no staged content to publish: unlink is the atomic filesystem operation.
       if (input.prepareCommit) await input.prepareCommit();
-      checkExpectation(input.destPath, input.expectation);
+      checkFileWriteExpectation(input.destPath, input.expectation);
       unlinkSync(input.destPath);
       return { success: true, hash: null };
     }
@@ -69,7 +82,7 @@ export async function commitGuardedFileReplace(input: GuardedFileReplaceOptions 
       if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return input.destPath;
       throw error;
     });
-    checkExpectation(destPath, input.expectation);
+    checkFileWriteExpectation(destPath, input.expectation);
     // Atomic rename must preserve the existing writer's OS permission refusal;
     // writable parent directories alone do not admit overwriting read-only files.
     await access(destPath, constants.W_OK).catch((error: unknown) => {
@@ -86,7 +99,7 @@ export async function commitGuardedFileReplace(input: GuardedFileReplaceOptions 
           await moveFileWithCrossDeviceFallback(source.path, temporary, input.fileOperations);
         }
       },
-      beforeCommit: () => checkExpectation(destPath, input.expectation),
+      beforeCommit: () => checkFileWriteExpectation(destPath, input.expectation),
       prepareCommit: input.prepareCommit,
     });
     return { success: true, hash };

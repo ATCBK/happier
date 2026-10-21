@@ -8,6 +8,8 @@ import {
 } from '@happier-dev/protocol/machines/languageIntelligence';
 import type { FilesystemAccessPolicy } from './fileSystem/accessPolicy/filesystemAccessPolicy';
 import { authorizeFilesystemPath } from './fileSystem/accessPolicy/filesystemPathAuthorization';
+import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
+import type { RpcActionExecutor } from './_actionDispatchAdapter';
 
 type TransportFailure = Readonly<{ status: 'error'; errorCode: 'invalid_request' | 'path_not_allowed' | 'cancelled' | 'request_failed' }>;
 
@@ -15,7 +17,7 @@ type TransportFailure = Readonly<{ status: 'error'; errorCode: 'invalid_request'
 export function registerLanguageIntelligenceHandlers(
   registrar: RpcHandlerRegistrar,
   workingDirectory: string,
-  options?: Readonly<{ accessPolicy?: FilesystemAccessPolicy; host?: LanguageServerHost }>,
+  options?: Readonly<{ accessPolicy?: FilesystemAccessPolicy; host?: LanguageServerHost; machineId?: string; resolveActionExecutor?: () => RpcActionExecutor | null }>,
 ): void {
   const accessPolicy = options?.accessPolicy ?? { kind: 'osUser' };
   function register<Request extends { rootPath: string }, Response>(
@@ -54,4 +56,9 @@ export function registerLanguageIntelligenceHandlers(
     (host, request, signal) => host.watch(request, { signal }));
   register(RPC_METHODS.DAEMON_LSP_RESTART, DaemonLspRestartRequestSchema, () => [],
     (host, request, signal) => host.restart(request, { signal }));
+  registerActionSpecRpcHandlers({
+    rpcHandlerManager: registrar, actionIds: ['code.rename.apply', 'code.file.rename.apply', 'code.codeAction.apply'],
+    ...(options?.machineId ? { targetMachineId: options.machineId, defaultMachineTarget: true } : {}),
+    resolveActionExecutor: () => options?.resolveActionExecutor?.() ?? { execute: async () => ({ ok: false, errorCode: 'language_intelligence_action_owner_unavailable', error: 'Language Action admission is unavailable' }) },
+  });
 }

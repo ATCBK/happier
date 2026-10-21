@@ -1,8 +1,30 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyDocumentTextEdit, positionToOffset, readDocumentLine, resolveDocumentPosition, resolveSymbolColumn } from './documentText';
+import { applyDocumentTextEdit, applyWorkspaceFileTextEdits, positionToOffset, readDocumentLine, resolveDocumentPosition, resolveSymbolColumn } from './documentText';
+import { applyInverseEdits } from '@happier-dev/protocol/diff/hunks';
 
 describe('language server document text', () => {
+    it('preserves LSP array order for same-position insertions followed by a replacement', () => {
+        const position = { line: 0, character: 0 };
+        const edited = applyWorkspaceFileTextEdits('old!', [
+            { range: { start: position, end: position }, text: 'first ' },
+            { range: { start: position, end: position }, text: 'second ' },
+            { range: { start: position, end: { line: 0, character: 3 } }, text: 'new' },
+        ]);
+        expect(edited.text).toBe('first second new!');
+        expect(applyInverseEdits(edited.text, edited.edits)).toEqual({ ok: true, text: 'old!' });
+    });
+    it('keeps adjacent removals undoable and refuses a range that would corrupt a Unicode scalar', () => {
+        const edited = applyWorkspaceFileTextEdits('abcd', [
+            { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 2 } }, text: '' },
+            { range: { start: { line: 0, character: 2 }, end: { line: 0, character: 4 } }, text: '' },
+        ]);
+        expect(edited.text).toBe('');
+        expect(applyInverseEdits(edited.text, edited.edits)).toEqual({ ok: true, text: 'abcd' });
+        expect(() => applyWorkspaceFileTextEdits('😀', [
+            { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, text: '' },
+        ])).toThrowError(expect.objectContaining({ code: 'invalid_position' }));
+    });
     it('resolves whole Unicode identifiers, exact case before folded case, with occurrences', () => {
         const text = '😀 foobar Foo foo Foo $name café ℘value 𐐀Name';
         expect(resolveSymbolColumn(text, { line: 0, symbol: 'Foo', occurrence: 2 })).toBe(18);

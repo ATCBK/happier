@@ -4,13 +4,18 @@ import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutor } from '@happier-dev/protocol';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { callSocketRpc } from '@happier-dev/sync-client';
+import { buildWorkspaceFileRestoreOperation } from '@happier-dev/protocol/machines/workspaceFilesReplace';
 import { DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyResponseSchema, WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES } from '@happier-dev/protocol/machines/workspaceFiles';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandler } from '@/api/rpc/types';
-import { registerWorkspaceFileReplaceHandlers } from './workspaceFileReplace';
+import { applyWorkspaceFileReplace, registerWorkspaceFileReplaceHandlers } from './workspaceFileReplace';
 import { registerSessionHandlers } from './registerSessionHandlers';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
 
 // Keep the filesystem real while exposing its write boundary as a configurable spy.
 vi.mock('node:fs/promises', async () => {
@@ -36,33 +41,74 @@ describe('registered workspace replace transport', () => {
     vi.restoreAllMocks(); await dispose?.(); await rm(root, { recursive: true, force: true });
   });
   const preview = async (extra = {}) => DaemonWorkspaceFileReplacePreviewResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)!({ rootPath: root, ...matcher, ...extra }));
-  const apply = async (operation: unknown, signal?: AbortSignal) => DaemonWorkspaceFileReplaceApplyResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!({ rootPath: root, operation }, signal ? { signal } : undefined));
+  const apply = async (operation: unknown, signal?: AbortSignal) => DaemonWorkspaceFileReplaceApplyResponseSchema.parse(await applyWorkspaceFileReplace({ rootPath: root, operation }, root, { kind: 'osUser' }, signal ? { signal } : undefined));
+
+  it('refuses replacement at production registration without an Action admission owner', async () => {
+    handlers.clear();
+    dispose = registerSessionHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root).dispose;
+    await writeFile(join(root, 'a.txt'), 'old');
+    expect(await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!({ rootPath: root,
+      operation: { kind: 'replace', matcher, files: [{ path: 'a.txt', expectedHash: hash(Buffer.from('old')) }] },
+    })).toMatchObject({ ok: false });
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('old');
+  });
 
   it('previews raw BOM hashes then applies only selected matches and restores exact bytes through Actions', async () => {
     // Use the production composition for this seam test. Clearing the direct
     // owner registration makes removal/misbinding in registerSessionHandlers fail.
     handlers.clear();
-    dispose = registerSessionHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root).dispose;
+    const executor = createActionExecutor({
+      workspaceFilesReplace: async ({ machineId: _machineId, ...request }, context) =>
+        applyWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
+    });
+    dispose = registerSessionHandlers({ registerHandler: (id, handler) => { handlers.set(id, handler); } }, root, {
+      workspaceFileReplaceActionExecutor: executor, workspaceFileReplaceMachineId: 'machine',
+    }).dispose;
     const bytes = Buffer.from('\uFEFFold old\r\n');
     await writeFile(join(root, 'a.txt'), bytes);
     const page = await preview();
     expect(page).toMatchObject({ ok: true, files: [{ path: 'a.txt', hash: hash(bytes), matchCount: 2 }] });
     if (!page.ok) return;
-    const deps: Pick<ActionExecutorDeps, 'workspaceFilesReplacePreview' | 'workspaceFilesReplace'> = {
-      workspaceFilesReplacePreview: async ({ machineId: _machineId, ...request }) => handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW)!(request),
-      workspaceFilesReplace: async ({ machineId: _machineId, rootPath, files, ...matcher }) => handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!({ rootPath, operation: { kind: 'replace', matcher, files } }),
-    };
-    const executor = createActionExecutor(deps as ActionExecutorDeps);
-    const outcome = await executor.execute('workspace.files.replace', { machineId: 'machine', rootPath: root, ...matcher,
-      files: [{ path: 'a.txt', expectedHash: page.files[0].hash, excludedMatches: [{ line: page.files[0].matches[1].line, column16: page.files[0].matches[1].column16 }] }] }, { surface: 'ui', authority: 'present_user' });
-    expect(outcome).toMatchObject({ ok: true, result: { ok: true, results: [{ status: 'replaced', matchCount: 1 }] } });
+    const context = { signal: new AbortController().signal, localActionContext: { surface: 'ui', authority: 'present_user' } } as const;
+    const outcome = await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!({ machineId: 'machine', rootPath: root,
+      operation: { kind: 'replace', matcher,
+        files: [{ path: 'a.txt', expectedHash: page.files[0].hash, excludedMatches: [{ line: page.files[0].matches[1].line, column16: page.files[0].matches[1].column16 }] }] },
+    }, context);
+    expect(outcome).toMatchObject({ ok: true, results: [{ status: 'replaced', matchCount: 1 }] });
     expect(await readFile(join(root, 'a.txt'))).toEqual(Buffer.from('\uFEFFnew old\r\n'));
-    if (!outcome.ok) return;
-    const result = DaemonWorkspaceFileReplaceApplyResponseSchema.parse(outcome.result);
+    const result = DaemonWorkspaceFileReplaceApplyResponseSchema.parse(outcome);
     if (!result.ok) return;
-    const restored = await apply({ kind: 'restore', files: [{ path: 'a.txt', expectedHash: result.results[0].hash, edits: result.results[0].edits }] });
+    const restored = await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!({ machineId: 'machine', rootPath: root,
+      operation: { kind: 'restore', files: [{ path: 'a.txt', expectedHash: result.results[0].hash, edits: result.results[0].edits }] },
+    }, context);
     expect(restored).toMatchObject({ results: [{ status: 'restored' }] });
     expect(await readFile(join(root, 'a.txt'))).toEqual(bytes);
+  });
+
+  it.each(['replace', 'restore'] as const)('keeps %s behind agent approval at the Action boundary', async kind => {
+    await writeFile(join(root, 'a.txt'), kind === 'replace' ? 'old' : 'new');
+    const requests: unknown[] = [];
+    const executor = createActionExecutor({
+      workspaceFilesReplace: async ({ machineId: _machineId, ...request }, context) =>
+        applyWorkspaceFileReplace(request, root, { kind: 'osUser' }, context.signal ? { signal: context.signal } : undefined),
+      // Approval Artifact persistence is the boundary; policy and dispatch stay real.
+      approvalsCreate: async ({ request }) => { requests.push(request); return { artifactId: 'replace-approval' }; },
+      approvalsUpdate: async () => ({ ok: true }),
+      approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+      isActionApprovalRequired: (id, context, input) => isApprovalRequiredByActionsSettings(id,
+        context.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), context, undefined, undefined, input),
+    });
+    const operation = kind === 'replace'
+      ? { kind, matcher, files: [{ path: 'a.txt', expectedHash: hash(Buffer.from('old')) }] }
+      : { kind, files: [{ path: 'a.txt', expectedHash: hash(Buffer.from('new')),
+        edits: [{ startUtf16: 0, deleteLength: 3, insertText: 'new', originalText: 'old' }] }] };
+    const input = { machineId: 'machine', rootPath: root, operation };
+    expect(await executor.execute('workspace.files.replace', input, {
+      surface: 'agent', authority: 'account_automation', actionRequestId: 'replace-request',
+      serverId: 'home', runtimeAccountId: 'account', externalActionTarget: { kind: 'machine', machineId: 'machine' },
+    })).toMatchObject({ ok: false, errorCode: 'approval_rejected' });
+    expect(requests).toEqual([expect.objectContaining({ actionId: 'workspace.files.replace', actionArgs: input })]);
+    expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe(kind === 'replace' ? 'old' : 'new');
   });
 
   it('refuses stale, deleted, root-escaping and symlink-escaping files without writing', async () => {
@@ -83,6 +129,56 @@ describe('registered workspace replace transport', () => {
     } finally { await rm(outside, { recursive: true, force: true }); }
   });
 
+  it('retains the native accepted operation and partial cancellation inverse until the terminal acknowledgement', async () => {
+    const bytes = Buffer.from('\uFEFFold\r\n');
+    for (const path of ['a.txt', 'b.txt']) await writeFile(join(root, path), bytes);
+    const previousWorkingDirectory = process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY;
+    process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = root;
+    const client = new ApiMachineClient('token', { id: 'machine', encryptionKey: new Uint8Array(32).fill(7),
+      encryptionVariant: 'legacy', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+    const runtime = createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account',
+      generateOperationId: () => 'replace-operation' });
+    const executor = createActionExecutor({ workspaceFilesReplace: client.createWorkspaceFileReplaceActionExecutor('home'),
+      runActionOperation: runtime.runActionOperation });
+    client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'unused' }),
+      stopSession: async () => true, requestShutdown: () => {} }, { externalActionIngressOwner: {
+      currentServerId: 'home', executor, resolveTarget: async () => ({ kind: 'machine', machineId: 'machine' }),
+    } });
+    const { writeFile: write } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    let cancellation: unknown;
+    // The real OS write boundary pauses the first staged file. The real
+    // operation owner cancels between files and retains the resulting inverse.
+    vi.mocked(filesystem.writeFile).mockImplementation(async (path, data, options) => {
+      await write(path, data, options);
+      if (!cancellation) cancellation = await runtime.handlers.cancel({ operationId: 'replace-operation' });
+    });
+    try {
+      const accepted = await executor.execute('workspace.files.replace', { machineId: 'machine', rootPath: root,
+        operation: { kind: 'replace', matcher, files: ['a.txt', 'b.txt'].map(path => ({ path, expectedHash: hash(bytes) })) },
+      }, { surface: 'ui', authority: 'present_user', serverId: 'home', runtimeAccountId: 'account',
+        actionRequestId: 'replace-request', externalActionTarget: { kind: 'machine', machineId: 'machine' } });
+      expect(accepted).toEqual({ ok: true, result: { operation: { operationId: 'replace-operation' } } });
+      const terminal = await runtime.handlers.getV2({ operationId: 'replace-operation', waitForTerminal: true });
+      expect(cancellation).toEqual({ kind: 'requested' });
+      expect(terminal).toMatchObject({ kind: 'found', operation: { state: 'succeeded', result: {
+        ok: true, results: [{ path: 'a.txt', status: 'replaced' }], cancelled: ['b.txt'],
+      } } });
+      if (terminal.kind !== 'found') return;
+      const result = DaemonWorkspaceFileReplaceApplyResponseSchema.parse(terminal.operation.result);
+      if (!result.ok) return;
+      expect(await readFile(join(root, 'a.txt'))).toEqual(Buffer.from('\uFEFFnew\r\n'));
+      expect(await readFile(join(root, 'b.txt'))).toEqual(bytes);
+      vi.mocked(filesystem.writeFile).mockImplementation(write);
+      expect(await apply({ kind: 'restore', files: result.results.map(file => ({ path: file.path,
+        expectedHash: file.hash, edits: file.edits })) })).toMatchObject({ results: [{ status: 'restored' }] });
+      expect(await readFile(join(root, 'a.txt'))).toEqual(bytes);
+    } finally {
+      await client.shutdown();
+      if (previousWorkingDirectory == null) delete process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY;
+      else process.env.HAPPIER_MACHINE_RPC_WORKING_DIRECTORY = previousWorkingDirectory;
+    }
+  });
+
   it('restores only when the post-hash and inserted-text assertions both hold', async () => {
     await writeFile(join(root, 'a.txt'), 'new');
     const edit = { startUtf16: 0, deleteLength: 3, insertText: 'wrong', originalText: 'old' };
@@ -94,6 +190,7 @@ describe('registered workspace replace transport', () => {
   });
 
   it('applies one semantic edit set through the guarded writer and restores exact multiline bytes', async () => {
+    const apply = (operation: unknown) => applyWorkspaceFileReplace({ rootPath: root, operation }, root, { kind: 'osUser' });
     const bytes = Buffer.from('\uFEFFconst old = 1;\r\nold();\r\n');
     await writeFile(join(root, 'a.ts'), bytes);
     await writeFile(join(root, 'b.ts'), 'old\n');
@@ -116,6 +213,7 @@ describe('registered workspace replace transport', () => {
   });
 
   it('rejects overlapping semantic edits and stale edit sets without writing', async () => {
+    const apply = (operation: unknown) => applyWorkspaceFileReplace({ rootPath: root, operation }, root, { kind: 'osUser' });
     await writeFile(join(root, 'a.ts'), 'old();\n');
     const edit = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'new' };
     expect(await apply({ kind: 'editSet', files: [{ path: 'a.ts', expectedHash: hash(Buffer.from('old();\n')), edits: [edit, edit] }] }))
@@ -126,6 +224,7 @@ describe('registered workspace replace transport', () => {
   });
 
   it('renames a semantic source with importer edits and guarded inverse rename without overwriting a destination', async () => {
+    const apply = (operation: unknown) => applyWorkspaceFileReplace({ rootPath: root, operation }, root, { kind: 'osUser' });
     await writeFile(join(root, 'a.ts'), 'export const value = 1;\n');
     await writeFile(join(root, 'b.ts'), "import './a';\n");
     const originalHash = hash(Buffer.from('export const value = 1;\n'));
@@ -143,8 +242,11 @@ describe('registered workspace replace transport', () => {
     })) })).toMatchObject({ results: [{ status: 'restored' }, { status: 'restored' }] });
     expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('export const value = 1;\n');
     await writeFile(join(root, 'renamed.ts'), 'user destination');
-    expect(await apply({ kind: 'editSet', files: [source] })).toMatchObject({ results: [{ status: 'changed', reason: 'expected_file_absent' }] });
+    expect(await apply({ kind: 'editSet', files: [source, { path: 'b.ts', expectedHash: hash(Buffer.from("import './a';\n")), edits: [
+      { range: { start: { line: 0, character: 10 }, end: { line: 0, character: 11 } }, text: 'renamed' },
+    ] }] })).toMatchObject({ results: [{ status: 'changed', reason: 'expected_file_absent' }, { status: 'skipped', reason: 'edit_set_aborted' }] });
     expect(await readFile(join(root, 'renamed.ts'), 'utf8')).toBe('user destination');
+    expect(await readFile(join(root, 'b.ts'), 'utf8')).toBe("import './a';\n");
   });
 
   it('maps an agent write during staging to changed through the real guarded writer', async () => {
@@ -160,6 +262,21 @@ describe('registered workspace replace transport', () => {
     const result = await apply({ kind: 'replace', matcher, files: [{ path: 'a.txt', expectedHash: hash(Buffer.from('old')) }] });
     expect(result).toMatchObject({ results: [{ status: 'changed', reason: 'hash_mismatch' }] });
     expect(await readFile(dest, 'utf8')).toBe('agent changed');
+  });
+
+  it('keeps importer Undo unattempted when the inverse file move conflicts', async () => {
+    const current = "import './renamed';\n";
+    await writeFile(join(root, 'a.ts'), 'new user file');
+    await writeFile(join(root, 'renamed.ts'), 'export const value = 1;\n');
+    await writeFile(join(root, 'b.ts'), current);
+    const operation = buildWorkspaceFileRestoreOperation([
+      { path: 'a.ts', status: 'replaced', hash: hash(Buffer.from('export const value = 1;\n')), edits: [], renameTo: 'renamed.ts' },
+      { path: 'b.ts', status: 'replaced', hash: hash(Buffer.from(current)), edits: [{ startUtf16: 10, deleteLength: 1, insertText: 'renamed', originalText: 'a' }] },
+    ]);
+    const result = await applyWorkspaceFileReplace({ rootPath: root, operation }, root, { kind: 'osUser' });
+    expect(result).toMatchObject({ results: [{ status: 'skipped', reason: 'edit_set_aborted' }, { status: 'changed' }] });
+    expect(await readFile(join(root, 'b.ts'), 'utf8')).toBe(current);
+    expect(await readFile(join(root, 'a.ts'), 'utf8')).toBe('new user file');
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reports the canonical writer refusal for read-only files', async () => {
@@ -199,7 +316,7 @@ describe('registered workspace replace transport', () => {
       emitWithAck: async (_event: string, payload: unknown) => {
         expect(payload).toMatchObject({ waitForResultOnCancel: true });
         const request = (payload as { params: unknown }).params;
-        const result = await handlers.get(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY)!(request, { signal: remote.signal });
+        const result = await applyWorkspaceFileReplace(request, root, { kind: 'osUser' }, { signal: remote.signal });
         return { ok: true, result };
       },
     };

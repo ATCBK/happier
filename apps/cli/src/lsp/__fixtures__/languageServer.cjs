@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const log = process.argv[2];
 const options = JSON.parse(process.argv[3] || '{}');
-let input = Buffer.alloc(0), registered = false, queued = [], documents = new Map(), pending = new Map(), externalDiagnosticMessage, progressRequest;
+let input = Buffer.alloc(0), registered = false, queued = [], documents = new Map(), pending = new Map(), externalDiagnosticMessage, progressRequest, commandRequest;
 const record = value => fs.appendFileSync(log, JSON.stringify(value) + '\n');
 const send = value => { const json = JSON.stringify({jsonrpc:'2.0', ...value}); process.stdout.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`); };
 const reply = (id, result) => send({id, result});
@@ -19,17 +19,31 @@ const answer = message => {
   if (message.method === 'textDocument/documentSymbol') reply(message.id, [{name:'fixture',kind:12,range,selectionRange:range}]);
   if (message.method === 'textDocument/rename') {
     const edit={range:{start:{line:0,character:0},end:{line:0,character:3}},newText:message.params.newName};
+    if(message.params.newName==='orderedInserts') {reply(message.id,{changes:{[uri]:[{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'x'},{range:{start:{line:0,character:0},end:{line:0,character:0}},newText:'x'}]}});return;}
     const target=message.params.newName==='outside'?new URL('../outside.ts',uri).href:new URL('b.ts',uri).href;
     reply(message.id,{documentChanges:[{textDocument:{uri,version:null},edits:[edit]}, {textDocument:{uri:target,version:null},edits:message.params.newName==='overlap'?[edit,edit]:[edit]}]});
   }
+  if (message.method === 'textDocument/prepareRename') reply(message.id,{range:{start:{line:0,character:0},end:{line:0,character:3}},placeholder:'old'});
+  if (message.method === 'textDocument/codeAction') {
+    if(options.requireDiagnosticContext&&!message.params.context?.diagnostics?.some(diagnostic=>diagnostic.code===2322&&diagnostic.data?.fixToken==='native-fixture')){reply(message.id,[]);return;}
+    const edit=options.commandDirectEdits?{documentChanges:[{textDocument:{uri:new URL('b.ts',uri).href,version:null},edits:[{range:{start:{line:0,character:0},end:{line:0,character:3}},newText:'mid'}]},{kind:'rename',oldUri:uri,newUri:new URL('moved.ts',uri).href}]}:undefined;
+    reply(message.id,[{title:'Fix fixture',kind:'quickfix',...(edit?{edit}:{}),command:{title:'Fix fixture',command:'fixture.fix',arguments:[uri]}}]);
+  }
+  if (message.method === 'workspace/executeCommand') {
+    if (options.delayCommand) {pending.set(message.id,message);return;}
+    commandRequest=message;
+    const target=new URL(options.refuseCommandEdit?'../outside.ts':'b.ts',message.params.arguments[0]).href;
+    send({id:'server-edit',method:'workspace/applyEdit',params:{edit:{changes:{[target]:[{range:{start:{line:0,character:0},end:{line:0,character:3}},newText:'fixed'}]}}}});
+  }
   if (message.method === 'textDocument/diagnostic') {
     if (externalDiagnosticMessage && options.failRefreshDiagnosticPath && uri?.endsWith('/'+options.failRefreshDiagnosticPath)) send({id:message.id,error:{code:-32000,message:'fixture refresh failed'}});
-    else reply(message.id, {kind:'full',items:externalDiagnosticMessage || document?.text.includes('broken') ? [{range,severity:1,message:externalDiagnosticMessage || document.text,code:2322,source:'fixture'}] : []});
+    else reply(message.id, {kind:'full',items:externalDiagnosticMessage || document?.text.includes('broken') ? [{range,severity:1,message:externalDiagnosticMessage || document.text,code:2322,source:'fixture',...(options.requireDiagnosticContext?{data:{fixToken:'native-fixture'},tags:[1]}:{})}] : []});
   }
 };
 const receive = (message, fromQueue = false) => {
   if (!fromQueue) record(message);
   if (message.id === 'registration' && !message.method) { registered = true; for (const item of queued.splice(0)) receive(item,true); return; }
+  if (message.id === 'server-edit' && !message.method && commandRequest) {reply(commandRequest.id,message.result);commandRequest=undefined;return;}
   if (message.id === 'progress-create' && !message.method && progressRequest) {
     send({method:'$/progress',params:{token:progressRequest.token,value:{kind:'begin',title:'Loading fixture'}}});
     reply(progressRequest.id,null);progressRequest=undefined;return;
@@ -37,7 +51,7 @@ const receive = (message, fromQueue = false) => {
   if (message.method === 'initialize') {
     if (options.stallInitialize) return;
     if (options.failInitialize) { send({id:message.id,error:{code:-32000,message:'fixture initialization failed'}}); return; }
-    reply(message.id,{capabilities:{positionEncoding:'utf-16',textDocumentSync:{openClose:true,change:options.syncKind ?? 2},hoverProvider:true,definitionProvider:true,referencesProvider:true,documentSymbolProvider:true,...(options.semanticEdits ? {renameProvider:{prepareProvider:true},codeActionProvider:true,workspace:{fileOperations:{willRename:{filters:[]},didRename:{filters:[]}}}}:{}),...(options.diagnosticsMode === 'push' ? {} : {diagnosticProvider:{interFileDependencies:true,workspaceDiagnostics:false}})}}); return;
+    reply(message.id,{capabilities:{positionEncoding:'utf-16',textDocumentSync:{openClose:true,change:options.syncKind ?? 2},hoverProvider:true,definitionProvider:true,referencesProvider:true,documentSymbolProvider:true,...(options.semanticEdits ? {renameProvider:{prepareProvider:true},codeActionProvider:true,executeCommandProvider:{commands:['fixture.fix']},workspace:{fileOperations:{willRename:{filters:[]},didRename:{filters:[]}}}}:{}),...(options.diagnosticsMode === 'push' ? {} : {diagnosticProvider:{interFileDependencies:true,workspaceDiagnostics:false}})}}); return;
   }
   if (message.method === 'initialized') { send({id:'registration',method:'client/registerCapability',params:{registrations:options.watching === false ? [] : [{id:'files',method:'workspace/didChangeWatchedFiles',registerOptions:{watchers:[{globPattern:'**/*'}]}}]}}); return; }
   if (message.method === 'shutdown') {
@@ -61,6 +75,12 @@ const receive = (message, fromQueue = false) => {
     else {send({method:'$/progress',params:{token:message.params.token,value:{kind:'end'}}});reply(message.id,null);}
   }
   if (message.method === 'fixture/barrier') reply(message.id,null);
+  if (message.method === 'fixture/unsolicitedEdit') { commandRequest=message;send({id:'server-edit',method:'workspace/applyEdit',params:{edit:{changes:{[message.params.uri]:[{range,newText:'bad'}]}}}}); }
+  if (message.method === 'workspace/willRenameFiles') {
+    const target=new URL('b.ts',message.params.files[0].oldUri).href;
+    reply(message.id,{changes:{[target]:[{range:{start:{line:0,character:0},end:{line:0,character:3}},newText:'updated'}]}});
+  }
+  if (message.method === 'workspace/executeCommand') answer(message);
   if (message.method?.startsWith('textDocument/') && message.id !== undefined) {
     if (options.crashOnHover && message.method === 'textDocument/hover') process.exit(2);
     if ((options.delayHover && message.method === 'textDocument/hover') || (options.delayDiagnostic && message.method === 'textDocument/diagnostic' && (!options.delayDiagnosticPath || uriOf(message)?.endsWith('/'+options.delayDiagnosticPath)))) pending.set(message.id,message);

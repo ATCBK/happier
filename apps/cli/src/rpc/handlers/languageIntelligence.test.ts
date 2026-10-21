@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, readFile, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
@@ -11,6 +12,9 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema, DaemonLspSyncResponseSchema, DaemonLspWatchResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
 import { registerSessionHandlers } from './registerSessionHandlers';
 import { registerLanguageIntelligenceHandlers } from './languageIntelligence';
+import { createLanguageServerHost } from '@/lsp/languageServerHost';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions/actionRpcTransport';
 
 describe('language intelligence registered Machine transport', () => {
   const roots: string[] = [];
@@ -30,6 +34,30 @@ describe('language intelligence registered Machine transport', () => {
     };
     return { rootPath, call };
   }
+
+  it('registers semantic mutations only through Action admission and rejects a foreign operation', async () => {
+    const rootPath = await mkdtemp(join(tmpdir(), 'happier-lsp-edit-action-'));
+    roots.push(rootPath);
+    await writeFile(join(rootPath, 'a.ts'), 'old');
+    const handlers = new Map<string, RpcHandler>();
+    const registrar: RpcHandlerRegistrar = { registerHandler: (method, handler) => { handlers.set(method, handler); } };
+    const host = createLanguageServerHost({ readCurrentContributionRegistry: () => null });
+    const executor = createActionExecutor({ languageIntelligenceApply: ({ request }, context) => host.apply(request, { signal: context.signal }) });
+    const request = { rootPath, path: 'a.ts', operation: { kind: 'rename', files: [{ path: 'a.ts',
+      expectedHash: createHash('sha256').update('old').digest('hex'), edits: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, text: 'next' }],
+    }] } };
+    const context = { signal: new AbortController().signal, localActionContext: { surface: 'ui', authority: 'present_user' } } as const;
+    try {
+      registerLanguageIntelligenceHandlers(registrar, rootPath, { machineId: 'machine' });
+      expect(await handlers.get(RPC_METHODS.DAEMON_LSP_RENAME_APPLY)!(request, context)).toMatchObject({ ok: false });
+      expect(await readFile(join(rootPath, 'a.ts'), 'utf8')).toBe('old');
+      registerLanguageIntelligenceHandlers(registrar, rootPath, { machineId: 'machine', host, resolveActionExecutor: () => executor });
+      expect(await handlers.get(RPC_METHODS.DAEMON_LSP_FILE_RENAME_APPLY)!(request, context)).toMatchObject({ ok: false, errorCode: 'invalid_action_transport_input' });
+      expect(await handlers.get(RPC_METHODS.DAEMON_LSP_RENAME_APPLY)!(createTargetedActionRpcRequestV1(request, { kind: 'machine', machineId: 'machine' }), context))
+        .toMatchObject({ ok: true, results: [{ status: 'replaced' }] });
+      expect(await readFile(join(rootPath, 'a.ts'), 'utf8')).toBe('next');
+    } finally { await host.dispose(); }
+  });
 
   it('exposes typed no-server behavior through the transport and real process host', async () => {
     const { rootPath, call } = await fixture();

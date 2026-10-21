@@ -1,7 +1,7 @@
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1, admitActionAgentStartV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
 import { SessionSpawnNewIncompatibleTargetV1Schema, type SessionSpawnNewIncompatibleTargetV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { homedir } from 'node:os';
-import { DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
+import { DaemonLspApplyResponseSchema, DaemonLspQueryResponseSchema, DaemonLspRestartResponseSchema } from '@happier-dev/protocol/machines/languageIntelligence';
 import { logger } from '@/ui/logger';
 import { executeCapturedMachineAction } from '@/api/machine/capturedMachineAction';
 import { isOriginalSessionInputAccountActionCustody } from "@/daemon/sessionEncryption/requesterAccountActionProjection";
@@ -153,7 +153,8 @@ import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@hap
 import { DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadResponseSchema, DaemonAgentInstallCancelResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { DaemonTerminalEnsureResponseSchema, DaemonTerminalListResponseV1Schema, DaemonTerminalCloseResponseSchema } from '@happier-dev/protocol/daemon/terminal';
 import { DaemonWorkspaceFileSearchResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
-import { DaemonWorkspaceFileReplacePreviewResponseSchema, DaemonWorkspaceFileReplaceApplyResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { DaemonWorkspaceFileReplacePreviewResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
+import { WorkspaceFilesReplaceActionOutputSchema } from '@happier-dev/protocol/actions/actionSpecs';
 import { projectSessionActivityCompatibilityV1, SESSION_LIST_AWARENESS_VIEW_V1 } from '@happier-dev/protocol/sessions/awareness/action';
 import { projectSessionManagerSourceKeyPreparationV1, readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
@@ -6982,11 +6983,11 @@ export function createCliActionDeps(params: Readonly<{
       }));
       return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());
     },
-    workspaceFilesReplace: async ({ machineId, rootPath, files, ...matcher }, context) => {
+    workspaceFilesReplace: async ({ machineId, ...request }, context) => {
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
-      const invoke = async () => DaemonWorkspaceFileReplaceApplyResponseSchema.parse(await callMachineAction({
+      const invoke = async () => WorkspaceFilesReplaceActionOutputSchema.parse(await callMachineAction({
         machineId, serverId: context.serverId ?? undefined, method: RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY,
-        request: { rootPath, operation: { kind: 'replace', matcher, files } }, context, effectActionId: 'workspace.files.replace',
+        request: { machineId, ...request }, context, effectActionId: 'workspace.files.replace',
         waitForResultOnCancel: true,
         ...(context.signal ? { signal: context.signal } : {}),
       }));
@@ -7007,6 +7008,17 @@ export function createCliActionDeps(params: Readonly<{
         if (code === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE || code === RPC_ERROR_CODES.METHOD_NOT_FOUND || code === RPC_ERROR_CODES.UPDATE_REQUIRED) return { status: 'unavailable', reason: 'update_required' };
         throw error;
       }
+    },
+    languageIntelligenceApply: async ({ machineId, request, actionId }, context) => {
+      if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      const method = actionId === 'code.rename.apply' ? RPC_METHODS.DAEMON_LSP_RENAME_APPLY
+        : actionId === 'code.file.rename.apply' ? RPC_METHODS.DAEMON_LSP_FILE_RENAME_APPLY : RPC_METHODS.DAEMON_LSP_CODE_ACTION_APPLY;
+      const invoke = async () => DaemonLspApplyResponseSchema.parse(await callMachineAction({
+        machineId, serverId: context.serverId ?? undefined, method, request, timeoutMs: null,
+        context, authority: context.authority, effectActionId: actionId, exactMachine: true, waitForResultOnCancel: true,
+        ...(context.signal ? { signal: context.signal } : {}),
+      }));
+      return await (params.serverHttpBaseUrl ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, invoke) : invoke());
     },
     languageIntelligenceRestart: async ({ machineId, request }, context) => {
       if (!params.credentials && params.machineActionDirectTargetTransport?.machineId !== machineId) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };

@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
-import type { DaemonLspSyncRequest, DaemonLspSyncResponse, DaemonLspQueryRequest, DaemonLspQueryResponse, DaemonLspWatchRequest, DaemonLspWatchResponse, DaemonLspRestartRequest, DaemonLspRestartResponse, LanguageIntelligenceCapabilities, LanguageIntelligenceDiagnostic, LanguageIntelligenceDiagnosticsEntry, } from '@happier-dev/protocol/machines/languageIntelligence';
+import { LanguageIntelligenceCommandSchema, type DaemonLspApplyRequest, type DaemonLspApplyResponse, type DaemonLspSyncRequest, type DaemonLspSyncResponse, type DaemonLspQueryRequest, type DaemonLspQueryResponse, type DaemonLspWatchRequest, type DaemonLspWatchResponse, type DaemonLspRestartRequest, type DaemonLspRestartResponse, type LanguageIntelligenceCapabilities, type LanguageIntelligenceDiagnostic, type LanguageIntelligenceDiagnosticsEntry, } from '@happier-dev/protocol/machines/languageIntelligence';
+import type { WorkspaceFileEditSetFile, DaemonWorkspaceFileReplaceApplyResponse } from '@happier-dev/protocol/machines/workspaceFiles';
 import { MachineProcessesPolicyV1Schema } from '@happier-dev/protocol/machines/resources/machineResourcesPolicyV1';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { getFileLanguageFromPath } from '@happier-dev/protocol/machines/fileLanguage';
@@ -13,18 +14,29 @@ import type { MachineResourcesPolicyReader } from '@/processes/toolIdleTimeouts'
 import { parkWatch } from '@/daemon/lifecycle/parkWatch';
 import { resolveCanonicalAbsolutePathComparisonIdentity } from '@/utils/path/expandHomeDirPath';
 import { logger } from '@/ui/logger';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 import { createLanguageServerDefinitions, type LanguageServerDefinition } from './languageServerDefinitions';
 import { createServerSession, LanguageServerSessionError, type OpenLanguageServerProtocol, type ServerSession, type ServerSessionAnswer } from './serverSession';
-import { LspDocumentTextError, readDocumentLine, resolveDocumentPosition } from './documentText';
+import { applyWorkspaceFileTextEdits, LspDocumentTextError, readDocumentLine, resolveDocumentPosition } from './documentText';
 import { LspWorkspacePathError, resolveWorkspacePath, workspaceUriToPath } from './workspaceUris';
 import { resolveLanguageServerRoot } from './rootResolution';
 import { normalizeLspDocumentSymbols, normalizeLspHover, readLspObject, readLspRange } from './languageServerResults';
+import { LspWorkspaceEditError, normalizeWorkspaceEdit } from './workspaceEdit';
+import { applyWorkspaceFileReplace } from '@/rpc/handlers/workspaceFileReplace';
 type RequestContext = Readonly<{
     signal?: AbortSignal;
 }>;
+/** Native arguments can contain absolute URIs and remain inside the host. */
+function readCodeActionCommand(value: Record<string, unknown>) {
+    const command = typeof value.command === 'string' ? value : readLspObject(value.command);
+    return command ? LanguageIntelligenceCommandSchema.parse({ command: command.command,
+        ...(command.arguments !== undefined ? { arguments: command.arguments } : {}) }) : undefined;
+}
 export type LanguageServerHost = Readonly<{
+    readProcessRoots(): readonly HappierProcessRootSource[];
     sync(input: DaemonLspSyncRequest, context?: RequestContext): Promise<DaemonLspSyncResponse>;
     query(input: DaemonLspQueryRequest, context?: RequestContext): Promise<DaemonLspQueryResponse>;
+    apply(input: DaemonLspApplyRequest, context?: RequestContext): Promise<DaemonLspApplyResponse>;
     watch(input: DaemonLspWatchRequest, context?: RequestContext): Promise<DaemonLspWatchResponse>;
     restart(input: DaemonLspRestartRequest, context?: RequestContext): Promise<DaemonLspRestartResponse>;
     dispose(): Promise<void>;
@@ -65,10 +77,25 @@ type QueryOk = Extract<DaemonLspQueryResponse, {
 const emptyCapabilities = (): LanguageIntelligenceCapabilities => ({ hover: false, definition: false, references: false, documentSymbol: false, diagnostics: 'none', acceptsExternalChanges: false });
 function combineCapabilities(sessions: readonly ServerSession[]): LanguageIntelligenceCapabilities {
     const all = sessions.map(s => s.capabilities());
-    return { hover: all.some(c => c.hover), definition: all.some(c => c.definition), references: all.some(c => c.references), documentSymbol: all.some(c => c.documentSymbol), acceptsExternalChanges: all.some(c => c.acceptsExternalChanges), diagnostics: all.some(c => c.diagnostics === 'pull') ? 'pull' : all.some(c => c.diagnostics === 'push') ? 'push' : 'none' };
+    return { hover: all.some(c => c.hover), definition: all.some(c => c.definition), references: all.some(c => c.references), documentSymbol: all.some(c => c.documentSymbol), acceptsExternalChanges: all.some(c => c.acceptsExternalChanges), diagnostics: all.some(c => c.diagnostics === 'pull') ? 'pull' : all.some(c => c.diagnostics === 'push') ? 'push' : 'none', rename: all.some(c => c.rename), prepareRename: all.some(c => c.prepareRename), fileRename: all.some(c => c.fileRename), codeAction: all.some(c => c.codeAction) };
 }
 function unique<T>(items: T[], key: (item: T) => string): T[] { const seen = new Set<string>(); return items.filter(item => { const k = key(item); if (seen.has(k))
     return false; seen.add(k); return true; }); }
+async function mergeEditSets(rootPath: string, platform: NodeJS.Platform, files: readonly WorkspaceFileEditSetFile[]): Promise<WorkspaceFileEditSetFile[]> {
+    const merged = new Map<string, WorkspaceFileEditSetFile>();
+    for (const file of files) {
+        const previous = merged.get(file.path);
+        if (previous && (previous.expectedHash !== file.expectedHash || previous.renameTo && file.renameTo && previous.renameTo !== file.renameTo)) throw new LspWorkspaceEditError('stale_query');
+        // Equivalent whole contributions from stacked servers are one edit set;
+        // repeated same-position inserts inside a server's array are ordered LSP edits.
+        const edits = previous && JSON.stringify(previous.edits) === JSON.stringify(file.edits)
+            ? previous.edits : [...(previous?.edits ?? []), ...file.edits];
+        const text = (await readFile(resolveWorkspacePath({ rootPath, platform }, file.path))).toString('utf8');
+        try { applyWorkspaceFileTextEdits(text, edits); } catch { throw new LspWorkspaceEditError('invalid_request'); }
+        merged.set(file.path, { ...file, edits, ...(previous?.renameTo ? { renameTo: previous.renameTo } : {}) });
+    }
+    return [...merged.values()];
+}
 export function createLanguageServerHost(options: LanguageServerHostOptions = {}): LanguageServerHost {
     const platform = options.platform ?? process.platform;
     const definitions = createLanguageServerDefinitions({ readCurrentContributionRegistry: options.readCurrentContributionRegistry ?? readCurrentContributionRegistry });
@@ -93,14 +120,30 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
         return root;
     }
     const rootSessions = (root: RootState) => [...root.sessions].flatMap(id => { const hosted = sessions.get(id); return hosted ? [hosted.session] : []; });
-    function retireEmptySession(id: string, session: ServerSession): void {
+    function heldDocument(root: RootState, path: string) {
+        const documents = rootSessions(root).flatMap(session => {
+            try { const document = session.document(localPath(session, root, path)); return document ? [document] : []; }
+            catch { return []; }
+        });
+        return documents.find(document => document.unsaved) ?? documents[0];
+    }
+    function retireSession(id: string, session: ServerSession): void {
         const hosted = sessions.get(id);
-        if (hosted?.session !== session || session.paths().length !== 0)
+        if (hosted?.session !== session)
             return;
         hosted.timer?.();
         sessions.delete(id);
-        for (const root of roots.values())
-            root.sessions.delete(id);
+        for (const root of roots.values()) {
+            if (!root.sessions.delete(id)) continue;
+            for (const [path, document] of root.documents) {
+                if (document.sessions.delete(id) && document.sessions.size === 0) root.documents.delete(path);
+            }
+            root.revision++;
+            for (const listener of root.listeners) listener();
+        }
+    }
+    function retireEmptySession(id: string, session: ServerSession): void {
+        if (session.paths().length === 0) retireSession(id, session);
     }
     function localPath(session: ServerSession, root: RootState, path: string): string {
         const absolute = resolveWorkspacePath({ rootPath: root.path, platform }, path);
@@ -164,8 +207,8 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 touch(sessionKey);
                 return;
             }
-            void hosted.session.dispose().then(() => { sessions.delete(sessionKey); for (const root of roots.values())
-                root.sessions.delete(sessionKey); }, error => logger.debug('[LSP] Idle cleanup failed', { error }));
+            void hosted.session.dispose().then(() => retireSession(sessionKey, hosted.session),
+                error => logger.debug('[LSP] Idle cleanup failed', { error }));
         }, { unref: true });
     }
     async function ensureSession(root: RootState, path: string, definition: LanguageServerDefinition, isCurrent?: () => boolean): Promise<{
@@ -177,7 +220,10 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
         const id = JSON.stringify([definition.id, key(nativeRoot)]);
         let hosted = sessions.get(id);
         if (!hosted) {
-            const session = createServerSession({ definition, rootPath: nativeRoot, workspaceRoot: nativeRoot, platform, openProtocol, onChange: () => { projectChange(id); touch(id); } });
+            const session = createServerSession({ definition, rootPath: nativeRoot, workspaceRoot: nativeRoot, platform, openProtocol,
+                onRetired: () => { void session.dispose().then(() => retireSession(id, session),
+                    error => logger.debug('[LSP] Plugin retirement cleanup failed', { error })); },
+                onChange: () => { projectChange(id); touch(id); } });
             hosted = { session, timer: undefined, lastActivity: Date.now(), activeOperations: 0 };
             sessions.set(id, hosted);
         }
@@ -191,6 +237,8 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
             return error.code === 'unsupported_root' ? { status: 'unavailable', reason: 'unsupported_root' } : { status: 'error', errorCode: 'path_not_allowed' };
         if (error instanceof LspDocumentTextError)
             return error.code === 'symbol_not_found' ? { status: 'error', errorCode: 'symbol_not_found', candidates: [...(error.candidates ?? [])] } : { status: 'error', errorCode: 'invalid_position' };
+        if (error instanceof LspWorkspaceEditError) return error.code === 'unsaved_editor_changes'
+            ? { status: 'error', errorCode: error.code, diskHash: error.diskHash! } : { status: 'error', errorCode: error.code };
         if (error instanceof LanguageServerSessionError)
             return { status: 'error', errorCode: error.code };
         const native = readLspObject(error);
@@ -216,6 +264,7 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
         return { status: 'ok', revision: root.revision, servers: rootSessions(root).map(session => session.status()), diagnostics };
     }
     const host: LanguageServerHost = {
+        readProcessRoots: () => [...sessions.values()].flatMap(({ session }) => session.readProcessRoots()),
         async sync(input, context) {
             try {
                 if (disposed)
@@ -338,12 +387,15 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                     }
                     else {
                         const document = { path, languageId, text: diskText ?? existing?.text ?? '', version: existing?.version ?? 0, unsaved: existing?.unsaved ?? false };
-                        for (let i = 0; i < (sourceDocument?.references ?? 1); i++)
+                        for (let i = 0; i < (sourceDocument?.references ?? 0); i++)
                             await session.open(document);
                         if (sourceDocument)
                             sourceDocument.sessions.add(id);
-                        else
-                            transient.push({ id, session, path });
+                    }
+                    if (input.text === 'disk' || !sourceDocument) {
+                        const document = session.document(path) ?? { path, languageId, text: diskText ?? existing?.text ?? '', version: existing?.version ?? 0, unsaved: existing?.unsaved ?? false };
+                        await session.open(document);
+                        transient.push({ id, session, path });
                     }
                 }
                 const document = selected[0].session.document(localPath(selected[0].session, root, input.path));
@@ -352,11 +404,13 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 if (input.version !== undefined && input.version !== document.version)
                     return { status: 'error', errorCode: 'stale_query' };
                 const position = input.position === undefined ? undefined : resolveDocumentPosition(document.text, input.position);
-                if ((input.kind === 'hover' || input.kind === 'definition' || input.kind === 'references') && !position)
+                if (input.kind === 'rename' && !input.newName || input.kind === 'willRenameFiles' && !input.newPath)
+                    return { status: 'error', errorCode: 'invalid_request' };
+                if ((input.kind === 'hover' || input.kind === 'definition' || input.kind === 'references' || input.kind === 'prepareRename' || input.kind === 'rename' || input.kind === 'codeActions' && !input.range) && !position)
                     return { status: 'error', errorCode: 'invalid_position' };
                 const requestedGeneration = root.generation;
                 const answers = await Promise.allSettled(selected.map(async ({ id, session }) => { const hosted = sessions.get(id)!; hosted.activeOperations++; touch(id); try {
-                    const answer = await session.query({ path: localPath(session, root, input.path), kind: input.kind, position, includeDeclaration: input.includeDeclaration, signal: context?.signal });
+                    const answer = await session.query({ path: localPath(session, root, input.path), kind: input.kind, position, includeDeclaration: input.includeDeclaration, newName: input.newName, newPath: input.newPath ? localPath(session, root, input.newPath) : undefined, range: input.range, signal: context?.signal });
                     return { session, answer };
                 }
                 finally {
@@ -376,12 +430,12 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                     return errorResponse(errors[0]);
                 }
                 const provenance = { status: 'ok' as const, version: document.version, generation: root.generation, ...(fileHash ? { fileHash } : {}) };
-                let result = await projectResults(root, input.kind, ready, provenance);
+                let result = await projectResults(root, input.kind, ready, provenance, { ...input, position });
                 if (result.kind === 'references')
                     result = pageLanguageServerReferences(result);
                 if (requestedGeneration !== root.generation || ready.some(({ session, answer }) => session.status().generation !== answer.generation || answer.version !== document.version || session.document(localPath(session, root, input.path))?.version !== answer.version || session.document(localPath(session, root, input.path))?.text !== document.text))
                     return { status: 'error', errorCode: 'stale_query' };
-                const isEmpty = result.kind === 'hover' ? result.sections.length === 0 : result.kind === 'documentSymbols' ? result.symbols.length === 0 : result.kind === 'diagnostics' ? result.diagnostics.length === 0 : result.locations.length === 0;
+                const isEmpty = result.kind === 'hover' ? result.sections.length === 0 : result.kind === 'documentSymbols' ? result.symbols.length === 0 : result.kind === 'diagnostics' ? result.diagnostics.length === 0 : result.kind === 'prepareRename' ? result.targets.length === 0 : result.kind === 'codeActions' ? result.actions.length === 0 : result.kind === 'rename' || result.kind === 'willRenameFiles' ? result.files.length === 0 : result.locations.length === 0;
                 return isEmpty && ready.some(answer => answer.answer.loading) ? { status: 'loading' } : result;
             }
             catch (error) {
@@ -395,6 +449,89 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
                 catch (error) {
                     logger.debug('[LSP] Transient cleanup failed', { error });
                 } }));
+            }
+        },
+        async apply(input, context) {
+            const retained: Array<{ id: string; session: ServerSession; path: string }> = [];
+            const results: Extract<DaemonWorkspaceFileReplaceApplyResponse, { ok: true }>['results'] = [];
+            try {
+                context?.signal?.throwIfAborted();
+                const root = rootFor(input.rootPath);
+                const applyFiles = async (files: WorkspaceFileEditSetFile[]) => {
+                    for (const file of files) {
+                        if (heldDocument(root, file.path)?.unsaved) {
+                            const bytes = await readFile(resolveWorkspacePath({ rootPath: root.path, platform }, file.path));
+                            throw new LspWorkspaceEditError('unsaved_editor_changes', createHash('sha256').update(bytes).digest('hex'));
+                        }
+                    }
+                    const response = await applyWorkspaceFileReplace({ rootPath: root.path, operation: { kind: 'editSet', files } }, root.path,
+                        { kind: 'restrictedRoots', roots: [root.path] }, context?.signal ? { signal: context.signal } : undefined);
+                    if (response.ok) {
+                        results.push(...response.results);
+                        const renamed = response.results.flatMap(result => result.status === 'replaced' && result.renameTo ? [{ path: result.path, renameTo: result.renameTo }] : []);
+                        for (const session of rootSessions(root)) {
+                            for (const result of response.results) {
+                                if (result.status !== 'replaced' || result.renameTo) continue;
+                                let path: string;
+                                try { path = localPath(session, root, result.path); } catch { continue; }
+                                const held = session.document(path);
+                                if (held && !held.unsaved) {
+                                    const text = (await readFile(resolveWorkspacePath({ rootPath: root.path, platform }, result.path))).toString('utf8');
+                                    await session.snapshot({ ...held, text, version: held.version + 1 });
+                                }
+                            }
+                            if (renamed.length) await session.didRenameFiles(renamed.map(file => ({ path: localPath(session, root, file.path), renameTo: localPath(session, root, file.renameTo) })));
+                        }
+                    }
+                    return response;
+                };
+                if (input.operation.kind !== 'codeAction') {
+                    if (input.operation.kind === 'rename' && input.operation.files.some(file => file.renameTo)
+                        || input.operation.kind === 'fileRename' && !input.operation.files.some(file => file.path === input.path && file.renameTo)) return { status: 'error', errorCode: 'invalid_request' };
+                    return await applyFiles(input.operation.files);
+                }
+                const operation = input.operation;
+                if (operation.action.disabledReason !== undefined) return { status: 'error', errorCode: 'unsupported' };
+                const bytes = await readFile(resolveWorkspacePath({ rootPath: root.path, platform }, input.path));
+                const diskHash = createHash('sha256').update(bytes).digest('hex');
+                if (heldDocument(root, input.path)?.unsaved) return { status: 'error', errorCode: 'unsaved_editor_changes', diskHash };
+                if (diskHash !== operation.expectedHash) return { status: 'error', errorCode: 'stale_query' };
+                const languageId = input.languageId ?? root.documents.get(input.path)?.languageId ?? getFileLanguageFromPath(input.path) ?? '';
+                const definition = definitions.findDefinitionsForDocument({ languageId, path: input.path }).find(item => item.id === operation.action.serverId);
+                if (!definition) return { status: 'unavailable', reason: 'no_capable_server' };
+                const { id, session } = await ensureSession(root, input.path, definition);
+                const path = localPath(session, root, input.path), previous = session.document(path);
+                await session.open({ path, languageId, text: bytes.toString('utf8'), version: previous?.version ?? 0, unsaved: false });
+                retained.push({ id, session, path });
+                const hosted = sessions.get(id)!;
+                hosted.activeOperations++;
+                try {
+                    const answer = await session.query({ path, kind: 'codeActions', range: operation.action.range, signal: context?.signal });
+                    const current = await projectResults(root, 'codeActions', [{ session, answer }], { status: 'ok', fileHash: diskHash, version: answer.version, generation: answer.generation },
+                        { rootPath: root.path, path: input.path, kind: 'codeActions', range: operation.action.range });
+                    if (current.kind !== 'codeActions') throw new LspWorkspaceEditError('invalid_request');
+                    const candidates = current.actions.filter(action => action.title === operation.action.title && action.kind === operation.action.kind);
+                    if (candidates.length !== 1 || candidates[0].disabledReason !== undefined) return { status: 'error', errorCode: 'unsupported' };
+                    const action = candidates[0];
+                    if (action.hasCommand !== operation.action.hasCommand || JSON.stringify(action.files) !== JSON.stringify(operation.action.files)) return { status: 'error', errorCode: 'stale_query' };
+                    const nativeAction = Array.isArray(answer.value) ? answer.value.map(readLspObject).find(value => value
+                        && value.title === action.title && (typeof value.kind === 'string' ? value.kind : undefined) === action.kind) : undefined;
+                    if (!nativeAction) throw new LspWorkspaceEditError('invalid_request');
+                    const command = readCodeActionCommand(nativeAction);
+                    const initial = await applyFiles(action.files);
+                    if (!initial.ok || initial.results.some(result => result.status !== 'replaced' || result.reason !== undefined)) return initial;
+                    if (command) await session.executeCommand(command, async edit => {
+                        const files = await normalizeWorkspaceEdit({ rootPath: root.path, platform, edit, document: path => heldDocument(root, path) });
+                        const applied = await applyFiles(files);
+                        return applied.ok && applied.results.every(result => result.status === 'replaced' && result.reason === undefined);
+                    }, context?.signal);
+                    return { ok: true, results };
+                } finally { hosted.activeOperations--; touch(id); }
+            } catch (error) {
+                if (results.length) return { ok: true, results: [...results, { path: input.path, status: 'failed', reason: context?.signal?.aborted ? 'cancelled' : error instanceof LanguageServerSessionError ? error.code : 'request_failed' }], ...(context?.signal?.aborted ? { cancelled: [input.path] } : {}) };
+                return errorResponse(error);
+            } finally {
+                await Promise.all(retained.map(async ({ id, session, path }) => { await session.close(path); retireEmptySession(id, session); }));
             }
         },
         async watch(input, context) {
@@ -447,7 +584,45 @@ export function createLanguageServerHost(options: LanguageServerHostOptions = {}
         version: number;
         generation: string;
         fileHash?: string;
-    }>): Promise<QueryOk> {
+    }>, input: DaemonLspQueryRequest): Promise<QueryOk> {
+        const normalize = (edit: unknown) => normalizeWorkspaceEdit({ rootPath: root.path, platform, edit,
+            document: path => heldDocument(root, path) });
+        if (kind === 'prepareRename') return { ...provenance, kind, targets: ready.flatMap(({ session, answer }) => {
+            if (answer.value === null) return [];
+            const value = readLspObject(answer.value);
+            if (!value) throw new LspWorkspaceEditError('invalid_request');
+            return [{ serverId: session.definition.id, ...(value.defaultBehavior === true ? {} : { range: readLspRange(value.range ?? value) }), ...(typeof value.placeholder === 'string' ? { placeholder: value.placeholder } : {}) }];
+        }) };
+        if (kind === 'rename' || kind === 'willRenameFiles') {
+            const edits = await Promise.all(ready.map(({ answer }) => normalize(answer.value)));
+            const merged = await mergeEditSets(root.path, platform, edits.flat());
+            if (kind === 'willRenameFiles') {
+                const source = await normalizeWorkspaceEdit({ rootPath: root.path, platform, edit: null,
+                    document: path => heldDocument(root, path), rename: { path: input.path, newPath: input.newPath! } });
+                return { ...provenance, kind, files: await mergeEditSets(root.path, platform, [...source, ...merged]) };
+            }
+            return { ...provenance, kind, files: merged };
+        }
+        if (kind === 'codeActions') {
+            const actions = [];
+            for (const { session, answer } of ready) {
+                if (answer.value === null) continue;
+                if (!Array.isArray(answer.value)) throw new LspWorkspaceEditError('invalid_request');
+                for (const raw of answer.value) {
+                    const value = readLspObject(raw);
+                    if (!value || typeof value.title !== 'string') throw new LspWorkspaceEditError('invalid_request');
+                    const command = readCodeActionCommand(value);
+                    const disabledReason = readLspObject(value.disabled)?.reason;
+                    const position = input.position && 'character' in input.position ? input.position : undefined;
+                    if (!input.range && !position) throw new LspWorkspaceEditError('invalid_request');
+                    actions.push({ serverId: session.definition.id, title: value.title, range: input.range ?? { start: position!, end: position! }, files: await normalize(value.edit),
+                        ...(typeof value.kind === 'string' ? { kind: value.kind } : {}),
+                        hasCommand: command !== undefined,
+                        ...(typeof disabledReason === 'string' ? { disabledReason } : {}) });
+                }
+            }
+            return { ...provenance, kind, actions };
+        }
         if (kind === 'hover')
             return { ...provenance, kind, sections: ready.flatMap(({ session, answer }) => { const hover = normalizeLspHover(answer.value); return hover ? [{ serverId: session.definition.id, label: session.definition.title, ...hover }] : []; }) };
         if (kind === 'documentSymbols')
@@ -496,6 +671,7 @@ export function configureLanguageServerHost(options: LanguageServerHostOptions):
     configuredOptions = options;
 }
 export function getLanguageServerHost(): LanguageServerHost { return sharedHost ??= createLanguageServerHost(configuredOptions); }
+export function readLanguageServerProcessRoots(): readonly HappierProcessRootSource[] { return sharedHost?.readProcessRoots() ?? []; }
 export async function disposeLanguageServerHost(): Promise<void> { const host = sharedHost; sharedHost = undefined; configuredOptions = undefined; await host?.dispose(); }
 export function pageLanguageServerReferences(result: Extract<DaemonLspQueryResponse, {
     status: 'ok';

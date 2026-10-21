@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { basename, resolve, join } from 'node:path';
 import { mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { withTempDir } from '@/testkit/fs/tempDir';
@@ -12,9 +12,11 @@ import { readSupervisedPluginProcessIdForHost } from '@/plugins/runtime/exec/pro
 import { isPidAlive } from '@/testkit/process/spawn';
 import { createLanguageServerProtocolOpener } from './managedProtocol';
 import { createLanguageServerDefinitions } from './languageServerDefinitions';
+import { createLanguageServerHost } from './languageServerHost';
+import type { PluginProtocolClientHandle } from '@happier-dev/plugin-sdk/exec/protocol-clients';
 
 describe('managed language server protocol', () => {
-    it('launches an installed declaration and accepts native replies larger than a machine transport page', async () => {
+    it.each(['protocol', 'retirement', 'host-disable', 'host-replacement'] as const)('launches an installed declaration through its %s lifecycle', async scenario => {
         await withTempDir('happier-lsp-managed-', async rootPath => {
             const pluginId = 'fixture.language';
             const pluginRoot = join(rootPath, 'plugin');
@@ -24,7 +26,9 @@ describe('managed language server protocol', () => {
             await writeFile(manifestPath, JSON.stringify({ schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Fixture',
                 runtime: { apiVersion: 1 }, contributes: {
                     languageServers: [{ id: 'language', title: 'Fixture', languageIds: { fixture: 'fixture' },
-                        executable: { kind: 'systemTool', id: 'native' }, args: [resolve('src/lsp/__fixtures__/managedProtocol.cjs'), logPath] }],
+                        executable: { kind: 'systemTool', id: 'native' }, args: scenario.startsWith('host-')
+                            ? [resolve('src/lsp/__fixtures__/languageServer.cjs'), logPath, JSON.stringify({ delayHover: true })]
+                            : [resolve('src/lsp/__fixtures__/managedProtocol.cjs'), logPath] }],
                     systemTools: [{ id: 'native', title: 'Fixture native executable', executableNames: [basename(process.execPath)] }],
                 },
             }));
@@ -46,6 +50,36 @@ describe('managed language server protocol', () => {
             const definition = createLanguageServerDefinitions({ readCurrentContributionRegistry: () => registry.contributes })
                 .readLanguageServerDefinitions().find(candidate => candidate.pluginId === pluginId);
             if (!definition) throw new Error('Installed language-server definition was not projected');
+            if (scenario.startsWith('host-')) {
+                const handles: PluginProtocolClientHandle<'jsonRpc'>[] = [];
+                const host = createLanguageServerHost({
+                    readCurrentContributionRegistry: () => controller.getState().activeRegistry?.contributes ?? registry.contributes,
+                    async openProtocol(input) { const handle = await openProtocol(input); handles.push(handle); return handle; },
+                });
+                try {
+                    await writeFile(join(rootPath, 'a.ts'), 'broken');
+                    expect(await host.sync({ rootPath, op: { op: 'open', path: 'a.ts', languageId: 'fixture', text: 'broken', version: 1, unsaved: false } }))
+                        .toMatchObject({ status: 'ok', servers: [{ state: 'ready' }] });
+                    expect(await host.query({ rootPath, path: 'a.ts', kind: 'diagnostics' }))
+                        .toMatchObject({ status: 'ok', diagnostics: [{ message: 'broken' }] });
+                    const pending = host.query({ rootPath, path: 'a.ts', kind: 'hover', position: { line: 0, character: 0 } });
+                    await vi.waitFor(async () => expect((await readFile(logPath, 'utf8')).includes('textDocument/hover')).toBe(true));
+                    if (scenario === 'host-replacement') {
+                        const next = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, pluginIds: [pluginId] });
+                        await controller.adoptPreparedRuntimeRegistry({ registry: next, changedPluginIds: [pluginId], runningSessionDisposition: 'retainRunningSessions' });
+                    } else await registry.retirePluginConsumers?.([pluginId]);
+                    await vi.waitFor(async () => expect(await host.watch({ rootPath })).toMatchObject({ status: 'ok', servers: [] }));
+                    expect(await pending).not.toMatchObject({ status: 'ok' });
+                    await handles[0].wait();
+                    expect(await host.watch({ rootPath })).toMatchObject({ status: 'ok', diagnostics: { 'a.ts': { [definition.id]: { items: [] } } } });
+                    if (scenario === 'host-replacement') {
+                        expect(await host.query({ rootPath, path: 'a.ts', languageId: 'fixture', kind: 'diagnostics', text: 'disk' }))
+                            .toMatchObject({ status: 'ok', diagnostics: [{ message: 'broken' }] });
+                        expect(handles).toHaveLength(2);
+                    }
+                } finally { await host.dispose(); await controller.shutdown(); }
+                return;
+            }
             const processOwner = { kind: 'service', serviceId: `lsp:${definition.id}:123456789abc` } as const;
             const handle = await openProtocol({
                 definition,
@@ -60,8 +94,17 @@ describe('managed language server protocol', () => {
                 const facts = JSON.parse(await readFile(logPath, 'utf8')) as { cwd: string; owner: string };
                 expect(facts.cwd).toBe(await realpath(rootPath));
                 expect(parseProcessOwnerTag(facts.owner)?.owner).toEqual(processOwner);
-                await expect(handle.client.request('largeReply', { characters: DEFAULT_JSON_RPC_MAX_FRAME_BYTES + 1 }))
-                    .rejects.toMatchObject({ code: 'PLUGIN_EXEC_CLIENT_PROTOCOL_ERROR' });
+                if (scenario === 'retirement') {
+                    const pending = handle.client.request('wait').then(() => 'answered', () => 'retired');
+                    await handle.client.request('echo', { barrier: true });
+                    await registry.retirePluginConsumers?.([pluginId]);
+                    await expect(handle.client.request('echo', { after: true })).rejects.toBeDefined();
+                    await vi.waitFor(() => expect(isPidAlive(pid)).toBe(false));
+                    expect(await pending).toBe('retired');
+                } else {
+                    await expect(handle.client.request('largeReply', { characters: DEFAULT_JSON_RPC_MAX_FRAME_BYTES + 1 }))
+                        .rejects.toMatchObject({ code: 'PLUGIN_EXEC_CLIENT_PROTOCOL_ERROR' });
+                }
             } finally { await handle.dispose(); }
             expect((await handle.wait()).termination.observed.kind).not.toBe('failed');
             expect(isPidAlive(pid)).toBe(false);

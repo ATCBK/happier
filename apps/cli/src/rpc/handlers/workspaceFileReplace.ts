@@ -1,4 +1,4 @@
-import type { RpcHandlerRegistrar } from '@/api/rpc/types';
+import type { RpcHandlerRegistrar, RpcHandlerContext } from '@/api/rpc/types';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -12,7 +12,10 @@ import { DaemonWorkspaceFileReplacePreviewRequestSchema, DaemonWorkspaceFileRepl
 import type { FilesystemAccessPolicy } from './fileSystem/accessPolicy/filesystemAccessPolicy';
 import { authorizeFilesystemPath, authorizeFilesystemPathWithinRoot } from './fileSystem/accessPolicy/filesystemPathAuthorization';
 import { isSafeRelativeWorkspacePath, workspaceFileExclusionArguments } from './workspaceFilePaths';
-import { commitGuardedFileReplace } from './fileSystem/commitGuardedFileReplace';
+import { checkFileWriteExpectation, commitGuardedFileReplace } from './fileSystem/commitGuardedFileReplace';
+import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
+import type { RpcActionExecutor } from './_actionDispatchAdapter';
+import { applyWorkspaceFileTextEdits } from '@/lsp/documentText';
 
 const hashBytes = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const responseBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8');
@@ -39,7 +42,8 @@ function fileResultBytes(result: FileResult): number {
 export function registerWorkspaceFileReplaceHandlers(
   registrar: RpcHandlerRegistrar,
   workingDirectory: string,
-  opts?: Readonly<{ accessPolicy?: FilesystemAccessPolicy }>,
+  opts?: Readonly<{ accessPolicy?: FilesystemAccessPolicy; machineId?: string;
+    resolveActionExecutor?: () => RpcActionExecutor | null; actionExecutor?: RpcActionExecutor }>,
 ): void {
   const accessPolicy = opts?.accessPolicy ?? { kind: 'osUser' as const };
   registrar.registerHandler<unknown, DaemonWorkspaceFileReplacePreviewResponse>(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_PREVIEW, async (raw, context) => {
@@ -120,7 +124,27 @@ export function registerWorkspaceFileReplaceHandlers(
       return { ok: false, code: error instanceof SyntaxError ? 'invalid_pattern' : 'ripgrep_failed' };
     }
   });
-  registrar.registerHandler<unknown, DaemonWorkspaceFileReplaceApplyResponse>(RPC_METHODS.DAEMON_WORKSPACE_FILES_REPLACE_APPLY, async (raw, context) => {
+  registerActionSpecRpcHandlers({
+    rpcHandlerManager: registrar,
+    actionIds: ['workspace.files.replace'],
+    ...(opts?.machineId ? { targetMachineId: opts.machineId, defaultMachineTarget: true } : {}),
+    resolveActionExecutor: () => opts?.resolveActionExecutor?.() ?? opts?.actionExecutor ?? {
+      execute: async () => ({ ok: false, errorCode: 'workspace_file_replace_action_owner_unavailable', error: 'Workspace replacement Action admission is unavailable' }),
+    },
+    mapRequestForMethod: ({ input }) => {
+      if (!opts?.machineId || !input || typeof input !== 'object' || Array.isArray(input)) return { accepted: true, input };
+      return { accepted: true, input: { machineId: opts.machineId, ...input } };
+    },
+  });
+}
+
+/** Native effect reached after canonical Action admission; also owns inverse restore. */
+export async function applyWorkspaceFileReplace(
+  raw: unknown,
+  workingDirectory: string,
+  accessPolicy: FilesystemAccessPolicy,
+  context?: Pick<RpcHandlerContext, 'signal'>,
+): Promise<DaemonWorkspaceFileReplaceApplyResponse> {
     const parsed = DaemonWorkspaceFileReplaceApplyRequestSchema.safeParse(raw);
     if (!parsed.success) return { ok: false, code: 'invalid_request' };
     const { rootPath, operation } = parsed.data;
@@ -131,8 +155,45 @@ export function registerWorkspaceFileReplaceHandlers(
       catch (error) { if (error instanceof SyntaxError) return { ok: false, code: 'invalid_pattern' }; throw error; }
     }
     const results: FileResult[] = [];
+    const dependentEditSet = operation.kind === 'editSet'
+      || operation.kind === 'restore' && operation.files.some(file => file.renameTo !== undefined);
+    // Undo receipts run in reverse time order. Refuse a known inverse-move
+    // destination conflict before restoring importers; the actual move still
+    // repeats the same canonical absence guard immediately before publication.
+    if (operation.kind === 'restore') {
+      for (let index = 0; index < operation.files.length; index++) {
+        const file = operation.files[index];
+        if (!file.renameTo || file.renameTo === file.path) continue;
+        if (context?.signal.aborted) return { ok: true, results: [], cancelled: operation.files.map(file => file.path) };
+        const destination = isSafeRelativeWorkspacePath(file.renameTo)
+          ? authorizeFilesystemPathWithinRoot({ targetPath: file.renameTo, rootPath: root.resolvedPath, defaultDirectory: workingDirectory, accessPolicy })
+          : { valid: false as const };
+        let refusal: FileResult | undefined;
+        if (!destination.valid) refusal = { path: file.path, status: 'failed', reason: 'path_not_allowed' };
+        else {
+          try { checkFileWriteExpectation(destination.resolvedPath, null); }
+          catch (error) {
+            const code = readErrorCode(error);
+            refusal = { path: file.path, status: isFilesystemWriteGuardErrorCode(code) ? 'changed' : 'failed', reason: code ?? 'read_failed' };
+          }
+        }
+        if (refusal) {
+          const failed = refusal;
+          return { ok: true, results: operation.files.map((file, fileIndex): FileResult => fileIndex === index
+            ? failed : { path: file.path, status: 'skipped', reason: 'edit_set_aborted' }) };
+        }
+      }
+    }
     for (let index = 0; index < operation.files.length; index++) {
       if (context?.signal.aborted) return { ok: true, results, cancelled: operation.files.slice(index).map(file => file.path) };
+      // Semantic edits are one dependent set (for example a move and its
+      // importers). Honour LSP's abort failure mode without claiming rollback.
+      const previous = results.at(-1);
+      if (dependentEditSet && previous && (!['replaced', 'restored'].includes(previous.status) || previous.reason !== undefined)) {
+        return { ok: true, results: [...results, ...operation.files.slice(index).map(file => ({
+          path: file.path, status: 'skipped' as const, reason: 'edit_set_aborted',
+        }))] };
+      }
       const file = operation.files[index];
       const authorization = authorizeFilesystemPathWithinRoot({ targetPath: file.path, rootPath: root.resolvedPath, defaultDirectory: workingDirectory, accessPolicy });
       if (!authorization.valid) { results.push({ path: file.path, status: 'failed', reason: 'path_not_allowed' }); continue; }
@@ -148,21 +209,47 @@ export function registerWorkspaceFileReplaceHandlers(
           if (!replacement.matches.length) { results.push({ path: file.path, status: 'changed' }); continue; }
           newBytes = replacement.newBytes;
           result = { path: file.path, status: 'replaced', hash: hashBytes(newBytes), matchCount: replacement.matches.length, edits: [...replacement.edits] };
-        } else {
+        } else if (operation.kind === 'restore') {
           const decoded = decodeReplaceFileText(bytes);
           if (decoded.kind === 'skip') { results.push({ path: file.path, status: 'skipped', reason: decoded.reason }); continue; }
           const restored = applyInverseEdits(decoded.text, operation.files[index].edits);
           if (!restored.ok) { results.push({ path: file.path, status: 'changed', reason: restored.reason }); continue; }
           newBytes = new TextEncoder().encode(restored.text);
           result = { path: file.path, status: 'restored', hash: hashBytes(newBytes) };
+        } else {
+          const decoded = decodeReplaceFileText(bytes);
+          if (decoded.kind === 'skip') { results.push({ path: file.path, status: 'skipped', reason: decoded.reason }); continue; }
+          const edited = applyWorkspaceFileTextEdits(decoded.text, operation.files[index].edits);
+          newBytes = new TextEncoder().encode(edited.text);
+          result = { path: file.path, status: 'replaced', hash: hashBytes(newBytes), edits: edited.edits };
         }
+        const renameTo = operation.kind !== 'replace' ? operation.files[index].renameTo : undefined;
+        if (renameTo && renameTo !== file.path) result = { ...result, renameTo };
         const remaining = operation.files.slice(index + 1).map(next => ({ path: next.path, status: 'failed', reason: 'transport_ceiling' }));
         const otherResultsBytes = responseBytes({ ok: true, results: [...results, ...remaining] });
         if (otherResultsBytes + fileResultBytes(result) + (results.length + remaining.length ? 1 : 0) > WORKSPACE_FILE_SEARCH_MAX_RESPONSE_UTF8_BYTES) {
           results.push({ path: file.path, status: 'failed', reason: 'transport_ceiling' }); continue;
         }
-        const write = await commitGuardedFileReplace({ destPath: authorization.resolvedPath, expectation: file.expectedHash, source: { kind: 'bytes', bytes: newBytes } });
+        let destinationPath = authorization.resolvedPath;
+        if (renameTo && renameTo !== file.path) {
+          const destination = isSafeRelativeWorkspacePath(renameTo)
+            ? authorizeFilesystemPathWithinRoot({ targetPath: renameTo, rootPath: root.resolvedPath, defaultDirectory: workingDirectory, accessPolicy })
+            : { valid: false as const };
+          if (!destination.valid) { results.push({ path: file.path, status: 'failed', reason: 'path_not_allowed' }); continue; }
+          const moved = await commitGuardedFileReplace({ destPath: destination.resolvedPath, expectation: null,
+            source: { kind: 'move', path: authorization.resolvedPath, expectedHash: file.expectedHash } });
+          if (!moved.success) {
+            results.push({ path: file.path, status: isFilesystemWriteGuardErrorCode(moved.errorCode) ? 'changed' : 'failed', reason: moved.errorCode });
+            continue;
+          }
+          destinationPath = destination.resolvedPath;
+        }
+        const write = await commitGuardedFileReplace({ destPath: destinationPath, expectation: file.expectedHash, source: { kind: 'bytes', bytes: newBytes } });
         if (write.success) results.push({ ...result, hash: write.hash });
+        // A rename is already observable even if its subsequent text write
+        // fails. Preserve its real hash and inverse move instead of losing Undo.
+        else if (result.renameTo) results.push({ path: file.path, status: result.status, renameTo: result.renameTo,
+          hash: file.expectedHash, edits: [], reason: write.errorCode });
         else results.push({ path: file.path, status: isFilesystemWriteGuardErrorCode(write.errorCode) ? 'changed' : 'failed', reason: write.errorCode ?? 'write_failed' });
       } catch (error) {
         results.push({ path: file.path, status: ['ENOENT', 'ENOTDIR'].includes(readErrorCode(error) ?? '') ? 'changed' : 'failed',
@@ -170,5 +257,4 @@ export function registerWorkspaceFileReplaceHandlers(
       }
     }
     return { ok: true, results };
-  });
 }

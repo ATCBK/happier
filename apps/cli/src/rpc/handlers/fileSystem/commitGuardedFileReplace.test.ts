@@ -16,6 +16,23 @@ async function fixture() {
 }
 
 describe('commitGuardedFileReplace', () => {
+  it('moves only a current source to an absent destination through the same guard', async () => {
+    const { root, path } = await fixture();
+    const destination = join(root, 'renamed');
+    await writeFile(path, 'before');
+    const move = { kind: 'move' as const, path, expectedHash: hash('before') };
+    expect(await commitGuardedFileReplace({ destPath: destination, expectation: null, source: { ...move, expectedHash: hash('other') } }))
+      .toMatchObject({ success: false, errorCode: 'hash_mismatch' });
+    await writeFile(destination, 'user file');
+    expect(await commitGuardedFileReplace({ destPath: destination, expectation: null, source: move }))
+      .toMatchObject({ success: false, errorCode: 'expected_file_absent' });
+    expect(await readFile(destination, 'utf8')).toBe('user file');
+    await rm(destination);
+    expect(await commitGuardedFileReplace({ destPath: destination, expectation: null, source: move }))
+      .toEqual({ success: true, hash: hash('before') });
+    await expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(destination, 'utf8')).toBe('before');
+  });
   it('checks the hash after asynchronous authority preparation and before publication', async () => {
     const { path } = await fixture();
     await writeFile(path, 'before');

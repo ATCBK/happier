@@ -3,11 +3,15 @@ import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import type { ProcessOwnerRef } from '@/processes/ownerTag';
+import { invalidateProcessLaunchDiscovery } from '@/processes/launchNotification';
+import { readSupervisedPluginProcessIdForHost } from '@/plugins/runtime/exec/processSupervisor';
+import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
 import { resolveCanonicalAbsolutePathComparisonIdentity } from '@/utils/path/expandHomeDirPath';
 import { logger } from '@/ui/logger';
 import { disposePluginProtocolClientGracefullyForHost } from '@/plugins/runtime/invocation/services/exec';
-import type { LanguageServerDefinition } from './languageServerDefinitions';
-import type { LanguageIntelligenceCapabilities, LanguageIntelligenceDiagnosticsEntry, LanguageIntelligencePosition, LanguageIntelligenceServerStatus } from '@happier-dev/protocol/machines/languageIntelligence';
+import { resolveLanguageServerDocumentLanguageId, type LanguageServerDefinition } from './languageServerDefinitions';
+import type { DaemonLspQueryRequest, LanguageIntelligenceCommandSchema, LanguageIntelligenceCapabilities, LanguageIntelligenceDiagnosticsEntry, LanguageIntelligencePosition, LanguageIntelligenceRange, LanguageIntelligenceServerStatus } from '@happier-dev/protocol/machines/languageIntelligence';
+import type { z } from 'zod/mini';
 import { applyDocumentTextEdit } from './documentText';
 import { createDiagnosticsPullScheduler } from './diagnosticsPull';
 import { normalizeLspDiagnostics, readLspObject } from './languageServerResults';
@@ -37,12 +41,16 @@ export type OpenLanguageServerProtocol = (input: Readonly<{
     rootPath: string;
     processOwner: ProcessOwnerRef;
     signal: AbortSignal;
+    onRetired?: () => void;
 }>) => Promise<PluginProtocolClientHandle<'jsonRpc'>>;
 export type ServerSessionQuery = Readonly<{
     path: string;
-    kind: 'hover' | 'definition' | 'references' | 'documentSymbols' | 'diagnostics';
+    kind: DaemonLspQueryRequest['kind'];
     position?: LanguageIntelligencePosition;
     includeDeclaration?: boolean;
+    newName?: string;
+    newPath?: string;
+    range?: LanguageIntelligenceRange;
     signal?: AbortSignal;
 }>;
 export type ServerSessionAnswer = Readonly<{
@@ -55,6 +63,7 @@ export class LanguageServerSessionError extends Error {
     constructor(readonly code: 'session_unavailable' | 'document_out_of_sync' | 'stale_query' | 'cancelled' | 'request_failed' | 'unsupported', options?: ErrorOptions) { super(code, options); }
 }
 export type ServerSession = Readonly<{
+    readProcessRoots(): readonly HappierProcessRootSource[];
     definition: LanguageServerDefinition;
     rootPath: string;
     workspaceRoot: string;
@@ -70,6 +79,8 @@ export type ServerSession = Readonly<{
     start(): Promise<void>;
     external(paths: readonly string[], workspaceRoot?: string): Promise<void>;
     query(input: ServerSessionQuery): Promise<ServerSessionAnswer>;
+    executeCommand(command: z.infer<typeof LanguageIntelligenceCommandSchema>, applyEdit: (edit: unknown) => Promise<boolean>, signal?: AbortSignal): Promise<void>;
+    didRenameFiles(files: readonly Readonly<{ path: string; renameTo: string }>[]): Promise<void>;
     restart(): Promise<void>;
     dispose(): Promise<void>;
 }>;
@@ -79,13 +90,14 @@ export type CreateServerSessionOptions = Readonly<{
     workspaceRoot: string;
     openProtocol: OpenLanguageServerProtocol;
     onChange(): void;
+    onRetired?(): void;
     platform?: NodeJS.Platform;
 }>;
 export function createServerSession(options: CreateServerSessionOptions): ServerSession {
     const documents = new Map<string, LanguageServerDocument & {
         references: number;
     }>();
-    const diagnostics = new Map<string, LanguageIntelligenceDiagnosticsEntry>();
+    const diagnostics = new Map<string, LanguageIntelligenceDiagnosticsEntry & { nativeItems?: JsonValue[] }>();
     const hiddenDiagnostics: ReadonlyMap<string, LanguageIntelligenceDiagnosticsEntry> = new Map();
     const platform = options.platform ?? process.platform;
     const uriContext = { rootPath: options.workspaceRoot, platform };
@@ -94,6 +106,7 @@ export function createServerSession(options: CreateServerSessionOptions): Server
     let reason: LanguageIntelligenceServerStatus['reason'];
     let stderrPreview: string | undefined;
     let protocol: PluginProtocolClientHandle<'jsonRpc'> | undefined;
+    let processRoot: HappierProcessRootSource | undefined;
     let lifetime: AbortController | undefined;
     let starting: Promise<void> | undefined;
     let operations: Promise<void> = Promise.resolve();
@@ -102,6 +115,9 @@ export function createServerSession(options: CreateServerSessionOptions): Server
     let diagnosticsEnabled = false;
     let watchedFilesRegistered = false;
     let syncKind = 0;
+    let executeCommands: readonly string[] = [];
+    let codeActionResolve = false;
+    let mutation: Readonly<{ applyEdit(edit: unknown): Promise<boolean>; signal?: AbortSignal }> | undefined;
     const progressTokens = new Set<string | number>();
     const loadingTokens = new Set<string | number>();
     let capabilities: LanguageIntelligenceCapabilities = { hover: false, definition: false, references: false, documentSymbol: false, diagnostics: 'none', acceptsExternalChanges: false };
@@ -140,7 +156,10 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                 const report = readLspObject(raw);
                 if (report?.kind !== 'full')
                     throw new Error('Language server returned an unsupported diagnostic report');
-                diagnostics.set(path, { state: loadingTokens.size ? 'checking' : 'ready', version, generation, items: normalizeLspDiagnostics(options.definition.id, path, report.items) });
+                const items = normalizeLspDiagnostics(options.definition.id, path, report.items);
+                // The managed JSON-RPC boundary supplies JSON; retain native Diagnostic.data
+                // in this same store for codeAction, outside the public marker projection.
+                diagnostics.set(path, { state: loadingTokens.size ? 'checking' : 'ready', version, generation, items, nativeItems: report.items as JsonValue[] });
                 changed();
             }
             catch (error) {
@@ -162,7 +181,9 @@ export function createServerSession(options: CreateServerSessionOptions): Server
         }
     };
     const notifyOpen = async (document: LanguageServerDocument) => {
-        await protocol?.client.notify('textDocument/didOpen', { textDocument: { uri: uri(document.path), languageId: options.definition.languageIds[document.languageId] ?? document.languageId, version: document.version, text: document.text } });
+        const languageId = resolveLanguageServerDocumentLanguageId(options.definition, document.languageId);
+        if (languageId === null) throw new LanguageServerSessionError('unsupported');
+        await protocol?.client.notify('textDocument/didOpen', { textDocument: { uri: uri(document.path), languageId, version: document.version, text: document.text } });
     };
     const notifySnapshot = async (document: LanguageServerDocument) => {
         if (syncKind !== 0)
@@ -190,13 +211,27 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                 if (rootIdentity === null)
                     throw new Error('Language-server root is invalid');
                 const rootHash = createHash('sha256').update(rootIdentity).digest('hex').slice(0, 12);
-                const opened = await options.openProtocol({ definition: options.definition, rootPath: options.rootPath, signal: lifetime!.signal, processOwner: { kind: 'service', serviceId: `lsp:${options.definition.id}:${rootHash}`, pluginId: options.definition.pluginId } });
+                const processOwner = { kind: 'service', serviceId: `lsp:${options.definition.id}:${rootHash}`, pluginId: options.definition.pluginId } as const;
+                const ownerCreatedAtMs = Date.now();
+                const opened = await options.openProtocol({ definition: options.definition, rootPath: options.rootPath, signal: lifetime!.signal, processOwner,
+                    onRetired: options.onRetired });
                 if (disposed || nativeGeneration !== generation) {
                     await opened.dispose();
                     throw new LanguageServerSessionError('session_unavailable');
                 }
                 protocol = opened;
+                const pid = readSupervisedPluginProcessIdForHost(opened.process);
+                if (pid !== null) {
+                    // Processes joins this live custody source to its native census and owner tag.
+                    processRoot = { owner: processOwner, pid, live: true, ownerCreatedAtMs,
+                        workspacePath: options.workspaceRoot, stop: async () => { if (protocol === opened) await stop(); } };
+                    invalidateProcessLaunchDiscovery();
+                }
                 void opened.wait().then(() => {
+                    if (protocol === opened) {
+                        processRoot = undefined;
+                        invalidateProcessLaunchDiscovery();
+                    }
                     if (!stopping && nativeGeneration === generation && (state === 'starting' || state === 'ready')) {
                         state = state === 'starting' ? 'unavailable' : 'crashed';
                         reason = state === 'crashed' ? 'crashed' : 'start_failed';
@@ -230,7 +265,12 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                 client.onRequest('window/workDoneProgress/create', request => { const token = readLspObject(request.params)?.token; if (typeof token === 'string' || typeof token === 'number')
                     progressTokens.add(token); return null; });
                 client.onRequest('workspace/diagnostic/refresh', () => { if (nativeGeneration === generation && !stopping) void refresh().catch(error => logger.debug('[LSP] Diagnostics refresh failed', { serverId: options.definition.id, error })); return null; });
-                client.onRequest('workspace/applyEdit', () => ({ applied: false }));
+                client.onRequest('workspace/applyEdit', async request => {
+                    const authority = mutation;
+                    if (!authority || authority.signal?.aborted || nativeGeneration !== generation || stopping) return { applied: false };
+                    try { return { applied: await authority.applyEdit(readLspObject(request.params)?.edit) }; }
+                    catch { return { applied: false }; }
+                });
                 client.onRequest('window/showMessageRequest', () => null);
                 client.onNotification(message => {
                     if (nativeGeneration !== generation || stopping) return;
@@ -262,7 +302,9 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                             const document = documents.get(location.path);
                             if (location.outsideWorkspace || !document || (params.version !== undefined && params.version !== document.version))
                                 return;
-                            diagnostics.set(location.path, { state: loadingTokens.size ? 'checking' : 'ready', version: document.version, generation, items: normalizeLspDiagnostics(options.definition.id, location.path, params.diagnostics) });
+                            const items = normalizeLspDiagnostics(options.definition.id, location.path, params.diagnostics);
+                            diagnostics.set(location.path, { state: loadingTokens.size ? 'checking' : 'ready', version: document.version, generation, items,
+                                nativeItems: params.diagnostics as JsonValue[] });
                             if (diagnosticsEnabled) changed();
                             return;
                         }
@@ -276,14 +318,35 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                 const initialized = readLspObject(await client.request('initialize', {
                     processId: process.pid, rootUri: folders[0].uri, workspaceFolders: folders,
                     ...(options.definition.initializationOptions === undefined ? {} : { initializationOptions: options.definition.initializationOptions }),
-                    capabilities: { general: { positionEncodings: ['utf-16'] }, textDocument: { synchronization: { dynamicRegistration: false, didSave: false }, hover: { contentFormat: ['markdown', 'plaintext'] }, definition: { linkSupport: false }, references: {}, documentSymbol: { hierarchicalDocumentSymbolSupport: true }, publishDiagnostics: { versionSupport: true }, diagnostic: {} }, window: { workDoneProgress: true }, workspace: { workspaceFolders: true, applyEdit: false, diagnostics: { refreshSupport: true }, ...(options.definition.settings === undefined ? {} : { configuration: true }), ...(platform === 'linux' ? { didChangeWatchedFiles: { dynamicRegistration: true } } : {}) } }
+                    capabilities: {
+                        general: { positionEncodings: ['utf-16'] },
+                        textDocument: {
+                            synchronization: { dynamicRegistration: false, didSave: false }, hover: { contentFormat: ['markdown', 'plaintext'] },
+                            definition: { linkSupport: false }, references: {}, documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+                            publishDiagnostics: { versionSupport: true, dataSupport: true }, diagnostic: {}, rename: { prepareSupport: true },
+                            codeAction: { codeActionLiteralSupport: { codeActionKind: { valueSet: ['quickfix', 'refactor', 'source'] } }, disabledSupport: true, dataSupport: true, resolveSupport: { properties: ['edit', 'command'] } },
+                        },
+                        window: { workDoneProgress: true },
+                        workspace: {
+                            workspaceFolders: true, applyEdit: true, workspaceEdit: { documentChanges: true, resourceOperations: ['rename'], failureHandling: 'abort' },
+                            fileOperations: { willRename: true, didRename: true }, executeCommand: { dynamicRegistration: false }, diagnostics: { refreshSupport: true },
+                            ...(options.definition.settings === undefined ? {} : { configuration: true }),
+                            ...(platform === 'linux' ? { didChangeWatchedFiles: { dynamicRegistration: true } } : {}),
+                        },
+                    },
                 }, { signal: lifetime!.signal }));
                 const native = readLspObject(initialized?.capabilities);
                 if (!native)
                     throw new Error('Language server initialize capabilities are missing');
                 const sync = readLspObject(native.textDocumentSync);
                 syncKind = typeof native.textDocumentSync === 'number' ? native.textDocumentSync : typeof sync?.change === 'number' ? sync.change : 0;
-                capabilities = { hover: !!native.hoverProvider, definition: !!native.definitionProvider, references: !!native.referencesProvider, documentSymbol: !!native.documentSymbolProvider, diagnostics: native.diagnosticProvider ? 'pull' : 'push', acceptsExternalChanges: platform === 'linux' && watchedFilesRegistered };
+                const rename = readLspObject(native.renameProvider), codeAction = readLspObject(native.codeActionProvider);
+                const fileOperations = readLspObject(readLspObject(native.workspace)?.fileOperations);
+                const commandOptions = readLspObject(native.executeCommandProvider);
+                executeCommands = Array.isArray(commandOptions?.commands) ? commandOptions.commands.filter((item): item is string => typeof item === 'string') : [];
+                codeActionResolve = codeAction?.resolveProvider === true;
+                capabilities = { hover: !!native.hoverProvider, definition: !!native.definitionProvider, references: !!native.referencesProvider, documentSymbol: !!native.documentSymbolProvider, diagnostics: native.diagnosticProvider ? 'pull' : 'push', acceptsExternalChanges: platform === 'linux' && watchedFilesRegistered,
+                    rename: !!native.renameProvider, prepareRename: rename?.prepareProvider === true, fileRename: !!fileOperations?.willRename, codeAction: !!native.codeActionProvider };
                 await client.notify('initialized', {});
                 await enqueue(async () => { for (const document of documents.values())
                     await notifyOpen(document); });
@@ -300,6 +363,7 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                 }
                 await protocol?.dispose().catch(cleanupError => logger.debug('[LSP] Failed-start cleanup failed', { serverId: options.definition.id, error: cleanupError }));
                 protocol = undefined;
+                processRoot = undefined;
                 throw new LanguageServerSessionError('session_unavailable', { cause: error });
             }
             finally {
@@ -326,6 +390,7 @@ export function createServerSession(options: CreateServerSessionOptions): Server
             });
         lifetime?.abort();
         protocol = undefined;
+        processRoot = undefined;
         state = 'stopped';
         loadingTokens.clear();
         progressTokens.clear();
@@ -334,15 +399,18 @@ export function createServerSession(options: CreateServerSessionOptions): Server
         clearDiagnostics();
     }
     const session: ServerSession = {
+        readProcessRoots: () => processRoot ? [{ ...processRoot, ...(stopping ? { state: 'stopping' as const } : {}) }] : [],
         definition: options.definition, rootPath: options.rootPath, workspaceRoot: options.workspaceRoot,
-        get diagnostics() { return diagnosticsEnabled ? diagnostics : hiddenDiagnostics; },
+        get diagnostics() { return diagnosticsEnabled ? new Map([...diagnostics].map(([path, entry]) => [path, {
+            state: entry.state, version: entry.version, generation: entry.generation, items: entry.items,
+        }])) : hiddenDiagnostics; },
         status: () => ({ serverId: options.definition.id, label: options.definition.title, state, loading: loadingTokens.size > 0, generation, ...(reason ? { reason } : {}), ...(stderrPreview ? { stderrPreview } : {}),
             ...(reason === 'server_missing' && options.definition.executable.kind === 'managedDependency' ? { installable: { pluginId: typeof options.definition.executable.id === 'string' ? options.definition.pluginId : options.definition.executable.id.pluginId, dependencyId: typeof options.definition.executable.id === 'string' ? options.definition.executable.id : options.definition.executable.id.localId } } : {}),
         }),
         capabilities: () => capabilities,
         document: path => documents.get(path), paths: () => [...documents.keys()],
         start,
-        open: document => enqueue(async () => { const previous = documents.get(document.path); documents.set(document.path, { ...document, references: (previous?.references ?? 0) + 1 }); if (state === 'ready') {
+        open: document => enqueue(async () => { const previous = documents.get(document.path); documents.set(document.path, { ...document, references: (previous?.references ?? 0) + 1 }); if (state === 'ready' && (!previous || previous.text !== document.text || previous.version !== document.version || previous.languageId !== document.languageId)) {
             if (previous)
                 await notifySnapshot(document);
             else
@@ -381,7 +449,8 @@ export function createServerSession(options: CreateServerSessionOptions): Server
             if (!document || !opened || state !== 'ready')
                 throw new LanguageServerSessionError('session_unavailable');
             const requestGeneration = generation, version = document.version, wasLoading = loadingTokens.size > 0;
-            const supported = input.kind === 'documentSymbols' ? capabilities.documentSymbol : input.kind === 'diagnostics' ? capabilities.diagnostics !== 'none' : capabilities[input.kind];
+            const supported = input.kind === 'documentSymbols' ? capabilities.documentSymbol : input.kind === 'diagnostics' ? capabilities.diagnostics !== 'none'
+                : input.kind === 'willRenameFiles' ? capabilities.fileRename : input.kind === 'codeActions' ? capabilities.codeAction : capabilities[input.kind];
             if (!supported)
                 throw new LanguageServerSessionError('unsupported');
             try {
@@ -413,8 +482,39 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                     }
                 }
                 else {
-                    const method = input.kind === 'documentSymbols' ? 'documentSymbol' : input.kind;
-                    value = await opened.client.request(`textDocument/${method}`, { textDocument: { uri: uri(input.path) }, ...(input.position ? { position: input.position } : {}), ...(input.kind === 'references' ? { context: { includeDeclaration: input.includeDeclaration ?? true } } : {}) }, { signal: input.signal });
+                    let codeActionContext: { diagnostics: JsonValue[]; only: string[] } | undefined;
+                    if (input.kind === 'codeActions') {
+                        if (capabilities.diagnostics === 'pull') {
+                            const pulled = await session.query({ path: input.path, kind: 'diagnostics', signal: input.signal });
+                            diagnosticsLoading = pulled.loading;
+                        }
+                        const entry = diagnostics.get(input.path);
+                        const range = input.range ?? { start: input.position!, end: input.position! };
+                        const compare = (a: LanguageIntelligencePosition, b: LanguageIntelligencePosition) => a.line - b.line || a.character - b.character;
+                        const current = entry?.version === version && entry.generation === requestGeneration && entry.state === 'ready' ? entry : undefined;
+                        codeActionContext = { only: [''], diagnostics: (current?.nativeItems ?? []).filter((_raw, index) => {
+                            const itemRange = current?.items[index]?.range;
+                            if (!itemRange) return false;
+                            const { start, end } = itemRange;
+                            return compare(range.start, range.end) === 0
+                                ? compare(start, range.start) <= 0 && compare(end, range.start) >= 0
+                                : compare(start, range.end) < 0 && compare(end, range.start) > 0;
+                        }) };
+                    }
+                    const method = input.kind === 'documentSymbols' ? 'documentSymbol' : input.kind === 'codeActions' ? 'codeAction' : input.kind;
+                    value = await opened.client.request(input.kind === 'willRenameFiles' ? 'workspace/willRenameFiles' : `textDocument/${method}`,
+                        input.kind === 'willRenameFiles' ? { files: [{ oldUri: uri(input.path), newUri: uri(input.newPath!) }] }
+                            : { textDocument: { uri: uri(input.path) }, ...(input.position ? { position: input.position } : {}),
+                                ...(input.kind === 'references' ? { context: { includeDeclaration: input.includeDeclaration ?? true } } : {}),
+                                ...(input.kind === 'rename' ? { newName: input.newName } : {}),
+                                ...(input.kind === 'codeActions' ? { range: input.range ?? { start: input.position, end: input.position }, context: codeActionContext } : {}) }, { signal: input.signal });
+                    if (input.kind === 'codeActions' && codeActionResolve && Array.isArray(value)) {
+                        value = await Promise.all(value.map(async action => {
+                            const object = readLspObject(action);
+                            return object && object.data !== undefined && object.edit === undefined && typeof object.command !== 'string' && object.disabled === undefined
+                                ? opened.client.request('codeAction/resolve', action as JsonValue, { signal: input.signal }) : action;
+                        }));
+                    }
                 }
                 if (requestGeneration !== generation || documents.get(input.path)?.version !== version || documents.get(input.path)?.text !== document.text)
                     throw new LanguageServerSessionError('stale_query');
@@ -425,6 +525,32 @@ export function createServerSession(options: CreateServerSessionOptions): Server
                 if (requestGeneration !== generation) throw new LanguageServerSessionError('stale_query', { cause: error });
                 throw failure(error);
             }
+        },
+        async executeCommand(command, applyEdit, signal) {
+            await start();
+            await operations;
+            if (signal?.aborted) throw new LanguageServerSessionError('cancelled');
+            if (!protocol || state !== 'ready') throw new LanguageServerSessionError('session_unavailable');
+            if (mutation) throw new LanguageServerSessionError('request_failed');
+            if (!executeCommands.includes(command.command)) throw new LanguageServerSessionError('unsupported');
+            const writes: Promise<boolean>[] = [];
+            const authority = { signal, applyEdit(edit: unknown) { const result = applyEdit(edit); writes.push(result); return result; } };
+            mutation = authority;
+            let commandFailure: LanguageServerSessionError | undefined;
+            try {
+                await protocol.client.request('workspace/executeCommand', command, { signal });
+            } catch (error) { commandFailure = failure(error); }
+            finally {
+                if (mutation === authority) mutation = undefined;
+            }
+            const applied = await Promise.allSettled(writes);
+            if (commandFailure) throw commandFailure;
+            if (applied.some(result => result.status === 'rejected' || !result.value)) throw new LanguageServerSessionError('request_failed');
+        },
+        async didRenameFiles(files) {
+            if (state === 'ready' && protocol) await protocol.client.notify('workspace/didRenameFiles', {
+                files: files.map(file => ({ oldUri: uri(file.path), newUri: uri(file.renameTo) })),
+            });
         },
         async restart() { await stop(); if (disposed)
             return; state = 'idle'; reason = undefined; generation = randomUUID(); if (documents.size)

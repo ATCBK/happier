@@ -19,6 +19,18 @@ export type LanguageServerDefinitions = Readonly<{
     findDefinitionsForDocument(input: Readonly<{ languageId: string | null; path: string }>): readonly LanguageServerDefinition[];
 }>;
 
+export function resolveLanguageServerDocumentLanguageId(
+    definition: Pick<LanguageServerDefinition, 'languageIds'>,
+    languageId: string | null,
+): string | null {
+    if (languageId !== null && Object.hasOwn(definition.languageIds, languageId))
+        return definition.languageIds[languageId];
+    // File patterns admit languages unknown to the host's highlighter. A single
+    // declared LSP id is authoritative; several different ids cannot be inferred.
+    const languageIds = new Set(Object.values(definition.languageIds));
+    return languageIds.size === 1 ? languageIds.values().next().value! : null;
+}
+
 export function createLanguageServerDefinitions(options: Readonly<{
     readCurrentContributionRegistry: () => ResolvedContributionRegistry | null | undefined;
 }>): LanguageServerDefinitions {
@@ -32,10 +44,11 @@ export function createLanguageServerDefinitions(options: Readonly<{
         }));
     const findDefinitionsForDocument = (input: Readonly<{ languageId: string | null; path: string }>): readonly LanguageServerDefinition[] => {
         const path = input.path.replace(/\\/gu, '/');
-        return readLanguageServerDefinitions().filter(definition =>
+        return readLanguageServerDefinitions().filter(definition => (
             input.languageId !== null && Object.hasOwn(definition.languageIds, input.languageId)
             || definition.filePatterns?.some(pattern => posix.matchesGlob(path, pattern)
-                || !pattern.includes('/') && posix.matchesGlob(posix.basename(path), pattern)));
+                || !pattern.includes('/') && posix.matchesGlob(posix.basename(path), pattern)))
+            && resolveLanguageServerDocumentLanguageId(definition, input.languageId) !== null);
     };
     return { readLanguageServerDefinitions, findDefinitionsForDocument };
 }
