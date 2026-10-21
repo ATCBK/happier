@@ -20,7 +20,7 @@ import { useSkillsLibrary, type SkillsLibrary } from '@/sync/domains/skills/useS
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 import { SKILLS_COLLECTION_ROUTE, skillSource } from '../skillsCollectionModel';
 import { useSkillPlaces } from '../useSkillPlaces';
@@ -50,7 +50,7 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
   props: Readonly<{ library: SkillsLibrary; firstRun: SkillsFirstRun }>,
 ) {
   const { library, firstRun } = props;
-  const { pluginUiProjection } = useAppShellPluginUiProjection();
+  const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
   const router = useRouter();
   const { theme } = useUnistyles();
   // A skill added from a machine names that machine, as the rail and homepage do.

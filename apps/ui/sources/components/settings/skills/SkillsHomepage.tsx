@@ -67,7 +67,7 @@ import { SKILLS_FOUND_ROUTE } from './found/foundSkillsModel';
 import type { SkillNeedsALookEntry } from './status/skillStatus';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { useFoundSkillsCount } from '@/sync/domains/skills/useFoundSkills';
-import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 /**
  * The reach map's box beside its legend (lab hs-A: a 284 × 264 scene around a 42 px planet). The orbits
@@ -137,7 +137,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
   props: Readonly<{ library: SkillsLibrary; phone: boolean }>,
 ) {
   const { library } = props;
-  const { pluginUiProjection } = useAppShellPluginUiProjection();
+  const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
   const open = useOpen();
   const openAdd = useOpenSkillAddModal();
   useSkillAddRouteParams();

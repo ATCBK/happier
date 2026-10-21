@@ -43,7 +43,7 @@ import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { useOpenSkillAddModal } from './add/useOpenSkillAddModal';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 import {
   SKILLS_COLLECTION_ROUTE,
@@ -101,7 +101,7 @@ export const SkillsList = React.memo(function SkillsList(
   props: Readonly<{ variant: 'rail' | 'page'; library: SkillsLibrary }>,
 ) {
   const { theme } = useUnistyles();
-  const { pluginUiProjection } = useAppShellPluginUiProjection();
+  const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
   const router = useRouter();
   const pathname = usePathname().replace(/\/+$/, '');
   const { library } = props;

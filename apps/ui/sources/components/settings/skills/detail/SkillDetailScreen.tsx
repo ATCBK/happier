@@ -70,7 +70,7 @@ import {
   type SkillMachineTruth,
 } from './useSkillMachineTruth';
 import { useSkillPlaces } from '../useSkillPlaces';
-import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useAppShellPluginUiDeclarationProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 
 function formatDay(ms: number): string {
@@ -117,7 +117,7 @@ function hostOwnedNote(provenance: SkillProvenanceV1): string | undefined {
 
 function SavedSkill(props: Readonly<{ skillId: string }>) {
   const { skillId } = props;
-  const { pluginUiProjection } = useAppShellPluginUiProjection();
+  const pluginUiProjection = useAppShellPluginUiDeclarationProjection();
   const router = useRouter();
   const detail = useSkillDetail(skillId);
   const places = useSkillPlaces();
