@@ -1,4 +1,5 @@
 import { readFenceLayout, type FenceLayout, type FenceSpan } from '@/voice/output/codeFences';
+import { nextSpeechMarkupToken } from '@/voice/output/speechMarkup';
 
 export type TtsChunker = Readonly<{
     push: (textDelta: string) => string[];
@@ -15,6 +16,31 @@ export function resolveStreamingTtsChunkChars(raw: unknown): number {
 }
 
 type Span = FenceSpan;
+
+function readProtectedLayout(text: string, fences: FenceLayout, force: boolean, initialCodeDelimiter = 0): FenceLayout & { inlineCodeDelimiter: number } {
+    const closed = [...fences.closed];
+    let openStart = fences.openStart;
+    let cursor = 0;
+    let inlineCodeDelimiter = initialCodeDelimiter;
+    while (cursor < text.length) {
+        const token = nextSpeechMarkupToken(text, cursor, inlineCodeDelimiter);
+        if (!token || (fences.openStart !== null && token.start >= fences.openStart)) break;
+        const fence = fences.closed.find((span) => token.start >= span.start && token.start < span.end);
+        if (fence) {
+            cursor = fence.end;
+            continue;
+        }
+        if (token.kind === 'pending_link') {
+            if (force) closed.push({ start: token.start, end: text.length });
+            else openStart = token.start;
+            break;
+        }
+        if (token.kind === 'link') closed.push({ start: token.start, end: token.end });
+        else inlineCodeDelimiter = token.delimiterAfter;
+        cursor = token.end;
+    }
+    return { closed, openStart, inlineCodeDelimiter };
+}
 
 function spanContaining(spans: readonly Span[], index: number): Span | null {
     return spans.find((span) => index > span.start && index < span.end) ?? null;
@@ -95,7 +121,7 @@ function lastBoundaryIndex(text: string, maxChars: number, fences: FenceLayout, 
     }
 
     const fence = spanContaining(fences.closed, limit);
-    if (fence) return fence.start > 0 ? fence.start : fence.end;
+    if (fence) return fence.start > 0 ? fence.start : fence.end + (isSentenceEndAt(text, fence.end, atEnd) ? 1 : 0);
     const cut = avoidSurrogateSplit(text, limit);
     return cut > 0 ? cut : limit + 1;
 }
@@ -112,11 +138,13 @@ function firstSentenceEndIndex(text: string, maxChars: number, fences: FenceLayo
 
 /**
  * Streaming chunker for assistant text deltas. Chunks end at sentence boundaries when possible and
- * never split a fenced code block, so the per-chunk speech normalizer sees complete fences.
+ * keep fences and inline links intact for speech normalization. The size is a latency target:
+ * an undecidable link or open fence stays in the existing pending buffer until close or flush.
  */
 export function createTtsChunker(chunkChars: number): TtsChunker {
     const bounded = clampChunkChars(chunkChars);
     let buffer = '';
+    let inlineCodeDelimiter = 0;
 
     const drain = (force: boolean): string[] => {
         const chunks: string[] = [];
@@ -128,16 +156,19 @@ export function createTtsChunker(chunkChars: number): TtsChunker {
                 buffer = buffer.slice(0, fences.openStart);
                 continue;
             }
+            const protectedLayout = readProtectedLayout(buffer, fences, force, inlineCodeDelimiter);
             // While a fence is open, only the prose before it can be emitted.
-            const readyLength = !force && fences.openStart !== null ? fences.openStart : buffer.length;
-            if (!force && readyLength < bounded) {
+            const readyLength = !force && protectedLayout.openStart !== null ? protectedLayout.openStart : buffer.length;
+            if (readyLength === 0 || (!force && readyLength < bounded && protectedLayout.openStart === fences.openStart)) {
                 break;
             }
 
             const isFinalSmallChunk = force && buffer.length <= bounded;
-            const cut = isFinalSmallChunk ? buffer.length : lastBoundaryIndex(buffer, Math.min(bounded, readyLength), fences, force);
+            const cut = isFinalSmallChunk ? buffer.length : lastBoundaryIndex(buffer, Math.min(bounded, readyLength), protectedLayout, force);
             if (cut <= 0) break;
             const nextChunk = buffer.slice(0, cut).trim();
+            const emitted = buffer.slice(0, cut);
+            inlineCodeDelimiter = readProtectedLayout(emitted, readFenceLayout(emitted), true, inlineCodeDelimiter).inlineCodeDelimiter;
             buffer = buffer.slice(cut).trimStart();
 
             if (nextChunk) {
@@ -162,7 +193,7 @@ export function createTtsChunker(chunkChars: number): TtsChunker {
 
 /**
  * Splits complete text into sentence-sized parts (each at most `maxChars`, except an unsplittable
- * code fence) so synthesis can start speaking after the first sentence.
+ * code fence or inline link) so synthesis can start speaking after the first sentence.
  */
 export function splitSpeechSentences(text: string, maxChars: number): string[] {
     const bounded = clampChunkChars(maxChars);
@@ -170,7 +201,7 @@ export function splitSpeechSentences(text: string, maxChars: number): string[] {
     let rest = text.trim();
 
     while (rest.length > 0) {
-        const fences = readFenceLayout(rest);
+        const fences = readProtectedLayout(rest, readFenceLayout(rest), true);
         const cut = firstSentenceEndIndex(rest, bounded, fences)
             ?? (rest.length <= bounded ? rest.length : lastBoundaryIndex(rest, bounded, fences, true));
         const part = rest.slice(0, cut).trim();

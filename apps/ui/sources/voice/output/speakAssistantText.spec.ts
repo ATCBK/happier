@@ -132,6 +132,9 @@ describe('speakAssistantText', () => {
     ['Call `f(*args, **kwargs)` and then **continue speaking**.', 'Call f(*args, **kwargs) and then continue speaking.'],
     [`${'a'.repeat(31)}\`\`f(*args, \`literal\`, **kwargs)\`\` then **done**.`, `${'a'.repeat(31)}f(*args, \`literal\`, **kwargs) then done.`],
     ['Before first. See [`parser`](u). Then `left [x](url) right` continues afterward.', 'Before first. See parser. Then left [x](url) right continues afterward.'],
+    ['See [the parser documentation with examples](https://example.test/docs). Then continue.', 'See the parser documentation with examples. Then continue.'],
+    [`See [${'a'.repeat(45)}](https://example.test/docs). Then continue.`, `See ${'a'.repeat(45)}. Then continue.`],
+    ['See ![the architecture diagram with labels](diagram.png). Then continue.', 'See the architecture diagram with labels. Then continue.'],
   ])('preserves inline code across supported streamed cuts: %s', async (text, expected) => {
     const chunker = createTtsChunker(32);
     const speechTextContext = { emphasis: [] };
@@ -147,6 +150,30 @@ describe('speakAssistantText', () => {
     }
     expect(speech.speak.mock.calls.map(([spoken]) => spoken).join('').replace(/\s+/gu, ''))
       .toBe(expected.replace(/\s+/gu, ''));
+  });
+
+  it.each([
+    ['](https://example.test/docs). Then continue.', 'Ready first. See the parser documentation with examples. Then continue.'],
+    ['', 'Ready first. See [the parser documentation with examples'],
+    ['] remains ordinary bracketed prose.', 'Ready first. See [the parser documentation with examples] remains ordinary bracketed prose.'],
+  ])('keeps a link label pending until its grammar is decidable: %s', async (tail, expected) => {
+    const chunker = createTtsChunker(32);
+    const speechTextContext = { emphasis: [] };
+    const first = chunker.push('Ready first. See [the parser documentation with examples');
+    expect(first[0]).toBe('Ready first.');
+    const chunks = [
+      ...first,
+      ...chunker.push(tail),
+      ...chunker.flush(),
+    ];
+    for (const text of chunks) {
+      await speakAssistantText({
+        text, speechTextContext, settings: settingsWithTts({ provider: 'device' }),
+        networkTimeoutMs: 15000, registerPlaybackStopper: () => () => {}, onSpeaking: () => {},
+      });
+    }
+    expect(speech.speak.mock.calls.map(([spoken]) => spoken).join(' ').replace(/\s+/gu, ' '))
+      .toBe(expected);
   });
 
   it.each([

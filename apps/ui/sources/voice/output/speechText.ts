@@ -1,4 +1,5 @@
 import { readFenceLayout } from '@/voice/output/codeFences';
+import { nextSpeechMarkupToken } from '@/voice/output/speechMarkup';
 
 /** Delimiter context only; no assistant text is buffered. */
 export type SpeechTextContext = { emphasis: string[]; previousCharacter?: string; inlineCodeDelimiter?: number };
@@ -74,25 +75,23 @@ function normalizeSpeechMarkup(text: string, context: SpeechTextContext, atLineS
       spoken += normalizeSpeechProse(part, context, cursor === 0 ? atLineStart : text[cursor - 1] === '\n', text[end] ?? '');
     }
   };
-  const backticks = /`+/gu;
-  const tokens = /`+|!\[([^\]]*)\]\([^)]*\)|\[([^\]]+)\]\([^)]*\)/gu;
   while (cursor < text.length) {
     // Active code owns delimiter detection; link-looking content stays literal even when
     // it contains the backtick that closes this code span.
-    const pattern = context.inlineCodeDelimiter ? backticks : tokens;
-    pattern.lastIndex = cursor;
-    const match = pattern.exec(text);
-    if (!match) break;
-    append(match.index);
-    const label = match[1] ?? match[2];
-    if (label !== undefined) spoken += normalizeSpeechMarkup(label, context, false);
-    else {
-      const length = match[0].length;
-      if (!context.inlineCodeDelimiter) context.inlineCodeDelimiter = length;
-      else if (context.inlineCodeDelimiter === length) context.inlineCodeDelimiter = 0;
-      else spoken += match[0];
+    const token = nextSpeechMarkupToken(text, cursor, context.inlineCodeDelimiter ?? 0);
+    if (!token) break;
+    if (token.kind === 'pending_link') {
+      append(token.end);
+      cursor = token.end;
+      continue;
     }
-    cursor = match.index + match[0].length;
+    append(token.start);
+    if (token.kind === 'link') spoken += normalizeSpeechMarkup(token.label, context, false);
+    else {
+      if (context.inlineCodeDelimiter === token.delimiterAfter) spoken += text.slice(token.start, token.end);
+      context.inlineCodeDelimiter = token.delimiterAfter;
+    }
+    cursor = token.end;
   }
   append(text.length);
   return spoken;

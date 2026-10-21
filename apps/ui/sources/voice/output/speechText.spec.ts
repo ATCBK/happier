@@ -23,6 +23,7 @@ describe('toSpeechText', () => {
     expect(toSpeechText('See [`parser`](https://example.test/docs), [**`value`**](u), [***`nested`***](u), and ![`diagram`](i). Literal `[x](url)`.'))
       .toBe('See parser, value, nested, and diagram. Literal [x](url).');
     expect(toSpeechText('Code `left [x` out](u) **done**.')).toBe('Code left [x out](u) done.');
+    expect(toSpeechText('Ordinary [brackets with `f(*args)` inside.')).toBe('Ordinary [brackets with f(*args) inside.');
   });
 
   it('reads bare URLs as their domain', () => {

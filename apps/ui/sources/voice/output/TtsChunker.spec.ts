@@ -16,6 +16,13 @@ describe('TtsChunker', () => {
         expect(chunker.flush()).toEqual(['small fragment']);
     });
 
+    it('continues emitting literal brackets inside inline code opened by an earlier chunk', () => {
+        const chunker = createTtsChunker(32);
+        chunker.push(`First ready. \`${'a'.repeat(40)}`);
+        const chunks = chunker.push(`[literal ${'word '.repeat(30)}`);
+        expect(chunks.join(' ')).toContain('[literal');
+    });
+
     it('bounds configured chunk size', () => {
         expect(resolveStreamingTtsChunkChars(undefined)).toBe(200);
         expect(resolveStreamingTtsChunkChars(1)).toBe(32);
