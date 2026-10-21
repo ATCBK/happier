@@ -51,9 +51,10 @@ export function createUiMcpServerActionExecuteV1(account: LazyActionAccountConte
                 ]);
                 assertCurrent();
                 const selected = storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.mcpServers] ?? null;
+                if (!selected) return resolveUiAccountActionFallbackMachineId(account);
                 const target = resolveFreshMachineAdministrationExecutionTarget(selected, { accountScope: account.accountLifetime.scope });
                 return target && areServerProfileIdentifiersEquivalent(target.profile.id, account.serverId)
-                    ? target.machine.id : resolveUiAccountActionFallbackMachineId(account);
+                    ? target.machine.id : null;
             };
             const readPluginItems = async () => {
                 assertCurrent();

@@ -188,6 +188,41 @@ describe('UI MCP per-Agent tool facts', () => {
         } finally { account.dispose(); }
     });
 
+    it('refuses sign-in rerouting while the saved MCP target is unavailable, then uses it after recovery', async () => {
+        const home = await prepareToolFactsHome(true, [], undefined, undefined, { catalog: () => ({ v: 1, bindings: [],
+            servers: [{ id: 'server', name: 'server', transport: 'http', remote: { url: 'https://mcp.fixture.test/mcp',
+                headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }] }) });
+        const selected = createMachineFixture({ id: 'mcp-machine', active: true, activeAt: Date.now() });
+        const state = getStorage().getState();
+        const machines = [...Object.values(state.machines), selected];
+        getStorage().setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+            machineListByServerId: { [home.id]: machines }, machineListStatusByServerId: { [home.id]: 'error' },
+            settings: { ...state.settings, machineAdministrationTargetsLocalV1: {} } });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { createUiMcpServerActionExecuteV1 } = await import('./mcpServerActionDeps');
+        const account = await captureLazyActionAccountContext(home.id);
+        projectionRpc.mockResolvedValue({ status: 'unavailable', code: 'connected_account_service_unavailable' });
+        try {
+            const execute = createUiMcpServerActionExecuteV1(account);
+            const request = { actionId: 'mcp.servers.signIn.start' as const, input: { serverId: 'server' },
+                context: { serverId: home.id, surface: 'ui' as const, authority: 'present_user' as const,
+                    actionCaller: { kind: 'host' as const } } };
+            expect(await execute(request)).toMatchObject({ ok: false, errorCode: 'mcp_sign_in_not_supported' });
+            expect(projectionRpc.mock.calls.map(([request]) => request.machineId)).toEqual(['facts-machine']);
+            projectionRpc.mockClear();
+            getStorage().setState({ settings: { ...getStorage().getState().settings,
+                machineAdministrationTargetsLocalV1: { 'mcpServers.settings': {
+                    serverIdentityId: home.serverIdentityId!, machineId: selected.id,
+                } } } });
+            expect(await execute(request)).toMatchObject({ ok: false, errorCode: 'no_machine_online' });
+            expect(projectionRpc).not.toHaveBeenCalled();
+
+            getStorage().setState({ machineListStatusByServerId: { [home.id]: 'idle' } });
+            expect(await execute(request)).toMatchObject({ ok: false, errorCode: 'mcp_sign_in_not_supported' });
+            expect(projectionRpc.mock.calls.map(([request]) => request.machineId)).toEqual([selected.id]);
+        } finally { account.dispose(); }
+    });
+
     it.each(['active', 'inactive'] as const)('lists valid neighbors from real %s partial authority while refusing tools', async authority => {
         const incomplete = { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
             stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 },
