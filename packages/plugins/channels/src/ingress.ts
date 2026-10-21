@@ -5819,6 +5819,14 @@ async function isIngressRetentionCandidatePhysicallyForgettable(input: Readonly<
   now: number;
 }>): Promise<boolean> {
   const { census, obligations } = input.candidate;
+  // Unit-wide predicates that need no storage read decide first, so a unit
+  // before its frozen horizon never pays for per-binding projection reads.
+  if (!(census.value.payload.conflict === null
+    && !census.value.attention
+    && obligations.every((obligation) => !obligation.value.attention)
+    && (!requiresIngressCensusCheckpointCoverage(census.value)
+      || census.value.payload.checkpointCoveredAt !== null)
+    && isIngressCensusPastFrozenRetentionHorizon({ census: census.value, now: input.now }))) return false;
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
   for (const { value } of obligations) {
     const accepted = value.payload.sessionInput;
@@ -5834,12 +5842,7 @@ async function isIngressRetentionCandidatePhysicallyForgettable(input: Readonly<
     if (!isJsonRecord(payload) || payload.targetSessionId !== accepted.sessionId
       || typeof payload.lastScannedSeq !== 'number' || payload.lastScannedSeq < accepted.projectedReplySeq) return false;
   }
-  return census.value.payload.conflict === null
-    && !census.value.attention
-    && obligations.every((obligation) => !obligation.value.attention)
-    && (!requiresIngressCensusCheckpointCoverage(census.value)
-      || census.value.payload.checkpointCoveredAt !== null)
-    && isIngressCensusPastFrozenRetentionHorizon({ census: census.value, now: input.now });
+  return true;
 }
 
 async function deleteIngressRetentionCandidate(input: Readonly<{
