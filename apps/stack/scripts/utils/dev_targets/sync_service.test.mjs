@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -231,12 +232,73 @@ test('sync startup makes configured Lima transports ready before Mutagen project
     writePreparationState: async () => {},
   });
 
-  assert.deepEqual(calls.slice(0, 4), [
+  assert.deepEqual(calls.slice(0, 5), [
     { kind: 'runtime', target: 'mac' },
     { kind: 'runtime', target: 'linux' },
-    { kind: 'roots', targets: ['mac', 'linux'] },
+    { kind: 'roots', targets: ['mac'] },
+    { kind: 'roots', targets: ['linux'] },
     { kind: 'ensure' },
   ]);
+});
+
+test('sync startup reports a failed WSL target while healthy targets repair and remain monitored', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-sync-partial-start-' });
+  const bin = fixture.path('bin');
+  const sourceDir = fixture.path('source');
+  await mkdir(bin);
+  await mkdir(sourceDir);
+  const callsPath = fixture.path('calls.jsonl');
+  // Replace only external SSH/PowerShell and Mutagen. Runtime preparation,
+  // project safety/setup, conflict repair and persisted target statuses stay real.
+  await writeFile(fixture.path('boundary.mjs'), [
+    'import fs from "node:fs";',
+    'const [command, ...args] = process.argv.slice(2);',
+    'fs.appendFileSync(process.env.HSTACK_TEST_CALLS, JSON.stringify({command,args}) + "\\n");',
+    'if (command === "ssh" && (args.includes("windows-host") || args.includes("windows1-linux"))) {',
+    '  console.error("user not found"); process.exit(1);',
+    '}',
+    'if (command === "mutagen" && args[0] === "sync" && args[1] === "list") {',
+    '  const name = args[2];',
+    '  if (name === "--template") console.log("[]");',
+    '  else console.log(JSON.stringify([{name,paused:false,status:"watching",successfulCycles:1,mode:"one-way-replica",alpha:{connected:true,scanned:true},beta:{connected:true,scanned:true},conflicts:[{root:"apps/ui/stale-repair",alphaChanges:[{path:"apps/ui/stale-repair",old:{kind:"directory"},new:null}],betaChanges:[{path:"apps/ui/stale-repair/node_modules",old:null,new:{kind:"untracked"}}]}]}]));',
+    '}',
+  ].join('\n'));
+  for (const command of ['ssh', 'mutagen']) {
+    await writeFile(join(bin, command), `#!/bin/sh\nexec "${process.execPath}" "${fixture.path('boundary.mjs')}" ${command} "$@"\n`);
+    await chmod(join(bin, command), 0o700);
+  }
+  const env = { ...process.env, ...envFor(fixture.root), PATH: `${bin}:${process.env.PATH}`, HSTACK_TEST_CALLS: callsPath };
+  const configuredTargets = [
+    { name: 'windows1-linux', platform: 'posix', ssh: 'windows1-linux', repoDir: '/replica/broken', cliHomeDir: '/home/worker',
+      managedRuntime: { kind: 'wsl', instance: 'worker', user: 'missing', host: { ssh: 'windows-host', sshConfigFile: fixture.path('ssh.config') },
+        capacity: { mode: 'dedicated', shared: { cpus: 8, memoryGiB: 8 }, dedicated: { cpus: 12, memoryGiB: 12 } } } },
+    { name: 'healthy', platform: 'posix', ssh: 'healthy', repoDir: '/replica/healthy', cliHomeDir: '/home/worker' },
+  ];
+  const monitors = [];
+  const result = await startDevTargetSyncService({
+    stackBaseDir: fixture.path('stack'), sourceDir, targets: configuredTargets, env,
+  }, {
+    // The foreground child is also an external process boundary.
+    spawnMonitor: options => { monitors.push(options); return { completion: Promise.resolve({ code: 0 }) }; },
+  });
+  assert.equal(result.statuses[0].target, 'windows1-linux');
+  assert.equal(result.statuses[0].status.state, 'unhealthy');
+  assert.match(result.statuses[0].status.error, /user not found/);
+  assert.equal(result.statuses[1].target, 'healthy');
+  assert.equal(result.statuses[1].status.state, 'synchronizing');
+  assert.deepEqual(result.statuses[1].status.repairedRoots, ['apps/ui/stale-repair']);
+  const preparation = JSON.parse(await readFile(resolveDevTargetMutagenRuntime({ stackBaseDir: fixture.path('stack'), sourceDir, env }).syncServiceStateFile, 'utf8'));
+  assert.equal(preparation.state, 'failed');
+  assert.equal(preparation.targets['windows1-linux'].state, 'failed');
+  assert.match(preparation.targets['windows1-linux'].error, /user not found/);
+  assert.equal(preparation.targets.healthy.state, 'ready');
+  const calls = (await readFile(callsPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  const healthySession = resolveMutagenSessionName('healthy', sourceDir);
+  assert.deepEqual(calls.filter(call => call.command === 'mutagen' && ['reset', 'flush'].includes(call.args[1])).map(call => call.args), [
+    ['sync', 'reset', healthySession], ['sync', 'flush', healthySession],
+  ]);
+  assert.equal(calls.some(call => call.command === 'ssh' && call.args.includes('windows1-linux')), false, 'a failed runtime must not block later project preparation through its guest SSH');
+  assert.deepEqual(monitors[0].args.slice(4), [healthySession]);
 });
 
 test('sync startup accepts an unpaused reconnecting session when Mutagen resume reports an offline endpoint', async (t) => {
@@ -456,34 +518,34 @@ test('recovered sync status uses current sessions and retains failed startup as 
   }
 });
 
-test('detached sync start records every synchronization observation before rejecting an unavailable target', async (t) => {
+test('detached sync start reports an unavailable target alongside healthy synchronization observations', async (t) => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-sync-service-' });
   const states = [];
-  await assert.rejects(
-    startDevTargetSyncService({
-      stackBaseDir: '/stack',
-      sourceDir: '/repo',
-      targets,
-      detached: true,
-      env: envFor(root),
-    }, {
-      ensureReplicaRoots: async () => {},
-      ensureProject: async () => ({ ownership: 'owned', env: envFor(root) }),
-      resumeSync: async () => {},
-      prepareTarget: async () => { throw new Error('dependency bootstrap must not run'); },
-      inspectSync: async ({ target }) => target.name === 'mac'
-        ? { state: 'unavailable', error: 'mac session unavailable' }
-        : { state: 'ready' },
-      writePreparationState: async ({ state }) => { states.push(state); },
-    }),
-    /mac session unavailable/,
-  );
+  const result = await startDevTargetSyncService({
+    stackBaseDir: '/stack',
+    sourceDir: '/repo',
+    targets,
+    detached: true,
+    env: envFor(root),
+  }, {
+    ensureReplicaRoots: async () => {},
+    ensureProject: async () => ({ ownership: 'owned', env: envFor(root) }),
+    resumeSync: async () => {},
+    prepareTarget: async () => { throw new Error('dependency bootstrap must not run'); },
+    inspectSync: async ({ target }) => target.name === 'mac'
+      ? { state: 'unavailable', error: 'mac session unavailable' }
+      : { state: 'ready' },
+    writePreparationState: async ({ state }) => { states.push(state); },
+  });
 
   assert.equal(states.at(-1).state, 'failed');
   assert.deepEqual(states.at(-1).targets, {
     mac: { state: 'failed', error: '[dev-targets] mac synchronization is unavailable: mac session unavailable' },
     mac2: { state: 'ready' },
   });
+  assert.equal(result.statuses[0].status.state, 'unhealthy');
+  assert.match(result.statuses[0].status.error, /mac session unavailable/);
+  assert.equal(result.statuses[1].status.state, 'ready');
 });
 
 test('sync service repairs a deleted source root blocked only by ignored beta artifacts', async (t) => {
@@ -624,6 +686,52 @@ test('recoverable conflict repair deletes only the exact managed replica root af
     ['sync', 'reset'],
     ['sync', 'flush'],
   ]);
+});
+
+test('recoverable conflict repair rescans an already absent replica root and preserves unrelated replacements', async (t) => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-sync-absent-root-' });
+  const repoDir = fixture.path('replica');
+  const sourceDir = fixture.path('source');
+  const relativeRoot = 'apps/ui/stale-repair';
+  const candidate = join(repoDir, relativeRoot);
+  await mkdir(dirname(candidate), { recursive: true });
+  const controls = [];
+  const repair = () => repairRecoverableDevTargetSyncConflicts({
+    target: { name: 'worker', platform: 'posix', repoDir },
+    status: { session: { mode: 'one-way-replica', conflicts: [{
+      root: relativeRoot,
+      alphaChanges: [{ path: relativeRoot, old: { kind: 'directory' }, new: null }],
+      betaChanges: [{ path: `${relativeRoot}/node_modules`, old: null, new: { kind: 'untracked' } }],
+    }] } },
+    sourceDir, stackBaseDir: fixture.path('stack'), env: envFor(fixture.root),
+  }, {
+    // Execute the actual remote repair shell against disposable fixture paths.
+    runCommand: async ({ commandArgs }) => {
+      const result = spawnSync(commandArgs[0], commandArgs.slice(1), { encoding: 'utf8' });
+      assert.ifError(result.error);
+      return { code: result.status };
+    },
+    runControl: async ({ args }) => { controls.push(args.slice(0, 2)); return { code: 0 }; },
+  });
+  assert.deepEqual(await repair(), { repaired: true, roots: [relativeRoot] });
+  assert.deepEqual(controls, [['sync', 'reset'], ['sync', 'flush']]);
+  controls.length = 0;
+  await writeFile(candidate, 'unrelated replacement');
+  await assert.rejects(repair(), /refused stale replica artifact repair/);
+  assert.equal(await readFile(candidate, 'utf8'), 'unrelated replacement');
+  assert.deepEqual(controls, [], 'refused repair must not reset or flush');
+  await rm(candidate);
+  await symlink(fixture.path('missing-destination'), candidate);
+  await assert.rejects(repair(), /refused stale replica artifact repair/);
+  assert.deepEqual(controls, [], 'a dangling symlink is not an absent root');
+  await rm(candidate);
+  await mkdir(candidate);
+  await assert.rejects(repair(), /refused stale replica artifact repair/);
+  assert.deepEqual(controls, [], 'an unmarked directory must be preserved');
+  await mkdir(join(candidate, 'node_modules'));
+  assert.deepEqual(await repair(), { repaired: true, roots: [relativeRoot] });
+  await assert.rejects(readFile(candidate), { code: 'ENOENT' });
+  assert.deepEqual(controls, [['sync', 'reset'], ['sync', 'flush']]);
 });
 
 test('recoverable conflict repair refuses when the alpha source root exists again', async (t) => {

@@ -110,6 +110,7 @@ export async function repairRecoverableDevTargetSyncConflicts(
           'relative=$2',
           'shift 2',
           'candidate="$repo/$relative"',
+          'if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then exit 0; fi',
           '[ -d "$candidate" ]',
           'candidate_name=${candidate##*/}',
           'found_marker=0',
@@ -203,14 +204,16 @@ export async function startDevTargetSyncService(
     throw new Error('[dev-targets] QA stacks consume shared synchronization; start sync-service through the routing producer');
   }
   env = { ...env, HAPPIER_STACK_SYNC_SOURCE_DIR: sourceDir };
-  await Promise.all(targets.map(async (target) => {
+  const preparationResults = await Promise.allSettled(targets.map(async (target) => {
     await startTargetRuntime({ target, env });
+    await ensureReplicaRoots({ targets: [target], stackBaseDir, env });
   }));
-  await ensureReplicaRoots({ targets, stackBaseDir, env });
+  const preparedTargets = targets.filter((_, index) => preparationResults[index].status === 'fulfilled');
+  if (preparedTargets.length === 0) throw preparationResults[0].reason;
   const project = await ensureProject({
     stackBaseDir,
     sourceDir,
-    targets,
+    targets: preparedTargets,
     ownerId: INDEPENDENT_DEV_TARGET_SYNC_OWNER,
     allowIndependentBorrow: false,
     env,
@@ -227,10 +230,12 @@ export async function startDevTargetSyncService(
       targets: Object.fromEntries(targets.map((target) => [target.name, { state: 'pending' }])),
     },
   });
-  await Promise.allSettled(targets.map(async (target) => {
+  await Promise.allSettled(preparedTargets.map(async (target) => {
     await resumeSync({ target, env: project.env });
   }));
-  const statusResults = await Promise.allSettled(targets.map(async (target) => {
+  const statusResults = await Promise.allSettled(targets.map(async (target, index) => {
+    const preparation = preparationResults[index];
+    if (preparation.status === 'rejected') throw preparation.reason;
     const status = await inspectAndRepairSync({
       target,
       sourceDir,
@@ -261,10 +266,19 @@ export async function startDevTargetSyncService(
       targets: targetPreparation,
     },
   });
-  if (failedPreparation !== -1) throw statusResults[failedPreparation].reason;
-  const statuses = statusResults.map((result) => result.value);
+  if (statusResults.every((result) => result.status === 'rejected')) throw statusResults[failedPreparation].reason;
+  const statuses = statusResults.map((result, index) => result.status === 'fulfilled'
+    ? result.value
+    : {
+        target: targets[index].name,
+        status: {
+          state: 'unhealthy',
+          sessionName: resolveMutagenSessionName(targets[index].name, sourceDir),
+          error: errorMessage(result.reason),
+        },
+      });
   const targetBySession = new Map(
-    targets.map((target) => [resolveMutagenSessionName(target.name, sourceDir), target]),
+    preparedTargets.map((target) => [resolveMutagenSessionName(target.name, sourceDir), target]),
   );
   const recoveryByTarget = new Map();
   const scheduleConflictRecovery = ({ sessionName, conflictCount }) => {
@@ -295,7 +309,7 @@ export async function startDevTargetSyncService(
     : spawnMonitor({
         command: 'mutagen',
         args: buildMutagenMonitorArgs(
-          targets.map((target) => resolveMutagenSessionName(target.name, sourceDir)),
+          preparedTargets.map((target) => resolveMutagenSessionName(target.name, sourceDir)),
         ),
         lineFilter: createMutagenMonitorLineFilter({ onStateChange: scheduleConflictRecovery }),
         env: project.env,
