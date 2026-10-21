@@ -1208,7 +1208,10 @@ and credit the picture's licence; no Happier image proxy is added.
 The development profile-copy boundary reuses that presentation, catalog and Look
 logic, without inheriting Home moments, Session activity or global glass. A private
 profile preview reports unavailable selected pixels instead of substituting Home
-or a previous image. The [local preparer](../apps/ui/sources/components/atmosphere/preparePublicProfileAtmosphere.ts)
+or a previous image. The shared picker acquires through `settings.invoke`; its
+captured Home, Project or profile-draft owner selects the result. Project and
+profile acquisition never selects Home as a side effect.
+The [local preparer](../apps/ui/sources/components/atmosphere/preparePublicProfileAtmosphere.ts)
 retains a lossless PNG and frozen effective Look/credit/crop metadata without an
 upload or library write. The [selected-copy contract](../packages/protocol/src/account/publicProfileAtmosphere.ts)
 also admits already-prepared WebP; the media owner normalizes stored copies to PNG.
@@ -1217,7 +1220,10 @@ not another editable preference: released builtin Looks adapt legibility, while
 own pictures and customized Looks remain as composed. The copy shape omits local
 picture addresses, plugin ids, source-URL fields and inactive remembered Looks;
 this does not inspect or redact text authored into the selected pixels or credit.
-Only reviewed Publish/Update may send it;
+Publish/Update keep selected pixels in the existing live-only approval invocation;
+the durable Approval Artifact and observations omit picture content. A lost live
+invocation cannot replay the pixels from approval history. Only reviewed
+Publish/Update may send the copy;
 public delivery must bind it to the applied edition and recheck current profile
 admission before bytes or validators. Visitors never load the plugin or fetch its
 image URLs. Later plugin/default changes, device deletion and facts refresh must

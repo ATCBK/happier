@@ -56,9 +56,10 @@ Public-profile publication is an unfinished 0.3 capability. The source now
 contains the closed `PublicProfileV1` disclosure contracts, a single policy
 projector and an Account-associated publication lifecycle. The supporting server
 feature resolver is deliberately absent: declaring `account.publicProfiles`
-does not advertise support, and a missing enabled bit fails closed. Eligible-fact
-preparation and the actual shared page/body renderer remain required
-before publication can be offered. This is not a released endpoint guarantee.
+does not advertise support, and a missing enabled bit fails closed. The canonical
+eligible-fact builder is bound at the authenticated UI/CLI Action hosts; complete
+shared-body/output integration and loaded-runtime proof remain required before
+publication can be offered. This is not a released endpoint guarantee.
 
 `account/publicProfile.ts` owns field consent, snapshot facts and tolerant stored
 readers; writes reject unknown fields recursively. `projectPublicProfile` masks
@@ -67,7 +68,22 @@ Tokens-hidden mixes retain shares while losing absolute token amounts in every
 lens. Weekly mixes accept shares only; weekly peaks also require peak-parallel
 consent. Stored unknown field ids grant no consent, and malformed known consent
 or facts fail closed. Private widget Artifacts remain drafts; the public layout
-is an explicitly applied inline copy.
+is an explicitly applied inline copy. Copied built-in Usage presentations consume
+the closed declarations at `widgets/builtinWidgetDescriptorV1.ts`, not private
+Usage query inputs. Reviewed block titles use the existing widget display-name
+contract. External templates remain symbolic inert declarative documents; the
+same projector removes hidden columns and dependent labels inside source lenses.
+The safe view carries the current indexability bit so output adapters do not
+become independent consent readers.
+
+The key-holding preview uses the same projection core and a derived local view
+whose appearance contains the retained prepared pixels. Anonymous views accept
+only applied publication references, never those pixels. Preview inputs/results
+and prepared publication effects use existing live-only Action custody;
+approval Artifacts and observations omit computed snapshots, image content and
+the original metadata selection. Resolved consented metadata can still describe
+the reviewed effect. Approval dispatches that retained effect rather than
+recomputing it from a changed query or draft.
 
 `account/publicProfilePublication.ts` separates reviewed prepared request bodies
 from author Action intents. The server lifecycle serializes consent and snapshot
@@ -93,6 +109,24 @@ are not publication authority. Anonymous representation admission must precede
 ETag comparison; renderer and loaded-runtime proof remain outstanding. See
 [Actions](actions.md) and the published
 [development guide](../apps/docs/content/docs/accounts/public-profiles.mdx).
+
+The development anonymous route owner is independent of an optional UI mount.
+Its HTML adapter cold-renders the portable `HappierPublicProfile` with RNW CSS;
+badge/card SVG and fixed-dark OG PNG use the current projected visitor result,
+Brand geometry and in-process Sharp. The SVG glyph layer embeds locally shaped
+PNG pixels from packaged Inter/Noto faces, with explicit font selection rather
+than system fallback. The runtime build copies those faces and their OFL
+licenses. This source integration does not advertise capability support while
+the shared atmosphere header and complete responsive built-in body integration
+are unfinished; positive publication/read/revalidation and loaded-runtime
+acceptance remain required at that boundary.
+
+Reviewed picture Apply uses the existing Account private-file custody owner:
+normalize/write before the winning publication transaction, then settle and bind
+the new copy while retiring the displaced reference in that transaction. A
+rejected candidate is discarded; failed deletion retains its cleanup locator and
+cannot resurrect an old public binding. The deliberately public normalized copy
+does not acquire client E2EE semantics from its physical private-file backend.
 
 The development Home reclaim transport is
 `POST /v1/home/public-profiles/:accountId/handle-reclaim` with strict
