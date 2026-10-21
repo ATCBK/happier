@@ -252,13 +252,20 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   const machineDetail = /^\/v1\/machines\/([^/]+)$/.exec(path);
   if (path === '/v1/machines' || path === '/v1/machines/read-batch' || machineDetail) {
     await readMachines();
-    const rows = Object.values(state.machines).map((machine: any) => ({
-      ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
-      ...machine, metadata: machine.metadata ? encodePlainMachineStoredContent({
-        ...createMachineFixture().metadata, ...machine.metadata,
-      }) : null,
-      daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-    }));
+    const rows = Object.values(state.machines as Record<string, Parameters<typeof createMachineFixture>[0]>).map(value => {
+      const machine = createMachineFixture(value);
+      return {
+        ...createPlainMachineRowFixture({ id: machine.id, accountId: 'account-a' }),
+        seq: machine.seq, createdAt: machine.createdAt, updatedAt: machine.updatedAt,
+        active: machine.active, activeAt: machine.activeAt, metadataVersion: machine.metadataVersion,
+        daemonStateVersion: machine.daemonStateVersion,
+        revokedAt: machine.revokedAt ?? null, replacedByMachineId: machine.replacedByMachineId ?? null,
+        metadata: machine.metadata ? encodePlainMachineStoredContent({
+          ...createMachineFixture().metadata, ...machine.metadata,
+        }) : null,
+        daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+      };
+    });
     if (path === '/v1/machines/read-batch') return createMachineReadBatchResponseFixture(init?.body,
       id => rows.find(machine => machine.id === id) ?? null);
     return json(machineDetail ? { machine: rows.find(machine => machine.id === decodeURIComponent(machineDetail[1])) } : rows);
@@ -534,13 +541,15 @@ describe('VoiceExecutionTransport (persistence)', () => {
     const controller = createVoiceExecutionTransport();
 
     await expect(controller.sendTurn('s1', 'hello')).rejects.toMatchObject({
-      message: expect.stringContaining('Experimental Features > Voice Agent'),
       code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
       pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
-      featureDecision: expect.objectContaining({
-        featureId: 'voice.agent',
-        blockedBy: 'local_policy',
-        blockerCode: 'flag_disabled',
+      cause: expect.objectContaining({
+        code: 'VOICE_AGENT_RUNTIME_UNAVAILABLE',
+        featureDecision: expect.objectContaining({
+          featureId: 'voice.agent',
+          blockedBy: 'local_policy',
+          blockerCode: 'flag_disabled',
+        }),
       }),
     });
 
@@ -1398,7 +1407,7 @@ describe('VoiceExecutionTransport (persistence)', () => {
     expect(daemonStart).not.toHaveBeenCalled();
   });
 
-  it('fails fast when a global hidden voice binding points at a target flavor without local control support', async () => {
+  it('admits an independent global Voice run when the bound target lacks terminal control support', async () => {
     state.sessions.s_kimi = {
       id: 's_kimi',
       updatedAt: 1,
@@ -1421,13 +1430,10 @@ describe('VoiceExecutionTransport (persistence)', () => {
     });
     const controller = createVoiceExecutionTransport();
 
-    await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).rejects.toMatchObject({
-      message: 'Target session provider does not support local voice control.',
-      code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
-      pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
+    await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).resolves.toEqual({
+      assistantText: 'ok', actions: [],
     });
-
-    expect(daemonStart).not.toHaveBeenCalled();
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'sys_voice' }));
   });
 
   it('prefers visible lookup target session metadata when raw target metadata is stale', async () => {

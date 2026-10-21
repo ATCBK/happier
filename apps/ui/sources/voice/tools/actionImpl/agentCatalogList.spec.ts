@@ -21,7 +21,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 let catalogHomeId = '';
 let accountHomes: Awaited<ReturnType<typeof serveAccountHomes>>;
@@ -168,6 +168,8 @@ describe('agent catalog voice tools', () => {
           status: 'present', revision: 1, content: sealProviderConnectionsContentV1({ mode: 'plain', material: null,
             catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 }),
         }));
+        if (request.path === '/v1/machines/read-batch' && request.method === 'POST') return createMachineReadBatchResponseFixture(request.body,
+          id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
         const machine = /^\/v1\/machines\/([^/]+)$/.exec(request.path);
         if (machine) return Response.json({ machine: createPlainMachineRowFixture({ id: decodeURIComponent(machine[1]), accountId: 'account-a' }) });
         return undefined;
@@ -1116,7 +1118,9 @@ describe('agent catalog voice tools', () => {
     expect(result).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ modelId: 'policy-model', label: 'Policy model' })]) });
     expect(result).not.toHaveProperty('refreshError');
     resetDynamicModelProbeCacheForTests();
-    machineCapabilitiesInvoke.mockRejectedValue(new Error('offline'));
+    machineCapabilitiesInvoke.mockResolvedValue({ supported: true, response: {
+      ok: false, error: { code: 'agent_unavailable', message: 'agent_unavailable' },
+    } });
     expect(await listAgentModelsForVoiceTool({ agentId: 'claude', machineId: 'm1' })).toMatchObject({ source: 'unavailable', refreshError: true });
   });
 
