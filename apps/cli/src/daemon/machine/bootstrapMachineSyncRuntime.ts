@@ -698,6 +698,7 @@ export type BootstrapMachineSyncRuntimeParams = Readonly<{
   directTransferRegistryHost: ReturnType<typeof createCliRegistryHostV1>;
   connectedServiceRefreshLoopHandle: ConnectedServiceRefreshLoopHandle | null;
   connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle | null;
+  publicProfileRefreshHandle?: import('../lifecycle/singleFlightIntervalLoop').SingleFlightIntervalLoopHandle | null;
   daemonServerWorkScheduler: DaemonServerWorkScheduler;
   retryTemporaryThrottleNow?: (input: Readonly<{ sessionId: string }>) => Promise<unknown> | unknown;
   readTemporaryThrottleRecovery?: (sessionId: string) => Readonly<{ issueFingerprint: string; armedAtMs: number }> | null;
@@ -2015,6 +2016,7 @@ export async function bootstrapMachineSyncRuntime(
 
     const connectedServiceQuotasLoopHandle = params.connectedServiceQuotasLoopHandle;
     const connectedServiceRefreshLoopHandle = params.connectedServiceRefreshLoopHandle;
+    const publicProfileRefreshHandle = params.publicProfileRefreshHandle;
     const unsubscribePendingResetQuotaTick = connectedServiceQuotasLoopHandle?.subscribeAfterTick(async () => {
       if (params.isShuttingDown()) return;
       await inactiveUsageLimitRecoveryScheduler.reconcilePendingResetStartsForTrackedSessions()
@@ -2057,6 +2059,11 @@ export async function bootstrapMachineSyncRuntime(
               },
             ]
           : []),
+        ...(publicProfileRefreshHandle ? [{
+          name: 'publicProfileRefresh',
+          pause: () => publicProfileRefreshHandle.pause(),
+          resume: () => publicProfileRefreshHandle.resume(),
+        }] : []),
       ],
     });
 

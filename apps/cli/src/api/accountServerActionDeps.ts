@@ -14,7 +14,9 @@ import { createAccountServerMachineFinitePolicyClient } from '@/api/machine/acco
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { ACCOUNT_EMAIL_CHANGE_REQUEST_PATH_V1, ACCOUNT_PASSWORD_CHANGE_PATH_V1, ACCOUNT_PASSWORD_ENROLL_PATH_V1, ACCOUNT_PASSWORD_REMOVE_PATH_V1, ACCOUNT_SECURITY_PATH_V1, ACCOUNT_TERMINAL_PRESENT_USER_POLICY_PATH_V1, AccountEmailChangeRequestResponseV1Schema, AccountEmailChangeRequestV1Schema, AccountPasswordChangeRequestV1Schema, AccountPasswordEnrollRequestV1Schema, AccountPasswordMutationResponseV1Schema, AccountPasswordRemoveRequestV1Schema, AccountSecurityGetResponseV1Schema, AccountSecurityRouteErrorV1Schema, AccountTerminalPresentUserPolicySetRequestV1Schema, AccountTerminalPresentUserPolicySetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import { ACCOUNT_SESSIONS_SIGN_OUT_EVERYWHERE_HTTP_PATH_V1, AccountSessionsSignOutEverywhereActionInputV1Schema, AccountSessionsSignOutEverywhereServerOutputV1Schema } from '@happier-dev/protocol/auth/accountSessions';
-import { bindHomeDomainActionHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { bindHomeDomainActionHttpRequestV1, bindPublicProfilePreparedHttpRequestV1, homeDomainActionOutputSchemaV1, readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { bindPublicProfileActionPorts } from '@happier-dev/protocol/actions/executor/publicProfileActions';
+import { readScmHostingRepository } from '@/scm/hostingProviders/readRepository';
 import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { bindSessionAccessActionHttpRequestV1 } from '@happier-dev/protocol/actions/sessionAccessActionFamily';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
@@ -62,6 +64,7 @@ import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/ca
 import { ConnectedServicePoolSelectionGetResponseV1Schema } from '@happier-dev/protocol/connect/connectedServicePoolSelection';
 import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetResultV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { AccountProfileResponseSchema } from '@happier-dev/protocol/account/profile';
+import { PublicProfileReadResultV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { admitUsageCoachRemedies, applyUsageCoachPreferences } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
@@ -96,6 +99,7 @@ export type AccountServerActionDeps = Pick<
   | 'machineAccessAction'
   | 'projectWorkerAction'
   | 'usageActions'
+  | 'publicProfileActions'
 >;
 
 type AccountServerActionFixedHome =
@@ -443,9 +447,35 @@ export function createAccountServerActionDeps(input: Readonly<{
           return failure('usage_quota_read_failed');
         }
       };
-  return {
+  const deps: AccountServerActionDeps = {
     usageActions: {
       readQuota,
+      readPublicProfile: async (context) => {
+        const failure = (errorCode: string): ActionExecuteFailure => ({ ok: false, errorCode, error: errorCode });
+        const mismatch = await accountServerTargetMismatch(context);
+        if (mismatch) return mismatch;
+        if (context.signal?.aborted) return failure('cancelled');
+        if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return failure('credential_scope_retired');
+        const effectActionId = context.externalActionExecutionAuthorization?.binding.actionId ?? 'usage.recap.compose';
+        // Only the captured recap invocation may consume this Account-scoped
+        // current view. Neither a caller handle nor a caller public DTO is accepted.
+        if (!['usage.recap.compose', 'usage.recap.export', 'usage.recap.deliver'].includes(effectActionId)) {
+          return externalAuthorizationUnavailable();
+        }
+        const path = '/v1/account/public-profile/view';
+        const authorization = resolveRequestHeaders({ context, effectActionId, method: 'GET', path });
+        if (!authorization.ok) return externalAuthorizationUnavailable();
+        const dispatched = await dispatchAccountServerActionHttpRequest({ headers: authorization.headers,
+          method: 'GET', path, signal: context.signal, sideEffectClass: 'read' });
+        if (context.signal?.aborted) return failure('cancelled');
+        if (input.isCredentialCurrent && !await input.isCredentialCurrent()) return failure('credential_scope_retired');
+        if (!dispatched.ok) return dispatched;
+        if (isAuthenticationStatus(dispatched.response.status)) return externalAuthorizationUnavailable();
+        if ([404, 405, 501].includes(dispatched.response.status)) return { kind: 'unavailable' };
+        if (dispatched.response.status < 200 || dispatched.response.status >= 300) return failure('public_profile_read_failed');
+        const parsed = PublicProfileReadResultV1Schema.safeParse(dispatched.response.data);
+        return parsed.success ? parsed.data : failure('public_profile_read_invalid');
+      },
       prices: {
         get: context => readPrices(false, context),
         refresh: context => readPrices(true, context),
@@ -888,7 +918,7 @@ export function createAccountServerActionDeps(input: Readonly<{
      * configured endpoint and the signed Account credential do, and the Home's
      * own transaction remains the authority for every governance decision.
      */
-    homeDomainAction: async ({ actionId, input: actionInput, context: actionContext, signal }) => {
+    homeDomainAction: async ({ actionId, input: actionInput, preparedRequest, context: actionContext, signal }) => {
       const mismatch = await accountServerTargetMismatch(actionContext);
       if (mismatch) return mismatch;
       const hasOrganizationDisplay = (actionId.startsWith('session.folders.') || actionId.startsWith('session.tags.'))
@@ -897,9 +927,13 @@ export function createAccountServerActionDeps(input: Readonly<{
         token: input.token, credentials: input.credentials, serverHttpBaseUrl,
         isCurrent: input.isCredentialCurrent, ...(signal ? { signal } : {}),
       }) : null;
-      const request = bindHomeDomainActionHttpRequestV1(actionId,
-        organizationDisplay ? organizationDisplay.prepareInput(actionId, actionInput) : actionInput);
+      const request = preparedRequest ? bindPublicProfilePreparedHttpRequestV1(actionId, preparedRequest)
+        : bindHomeDomainActionHttpRequestV1(actionId,
+          organizationDisplay ? organizationDisplay.prepareInput(actionId, actionInput) : actionInput);
       await organizationDisplay?.assertCurrent();
+      if (input.isCredentialCurrent && !await input.isCredentialCurrent()) {
+        return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      }
       const requestHeaders = resolveRequestHeaders({
         context: actionContext,
         effectActionId: actionId,
@@ -917,6 +951,12 @@ export function createAccountServerActionDeps(input: Readonly<{
         sideEffectClass: getActionSpec(actionId).sideEffectClass,
       });
       if (!dispatch.ok) return dispatch;
+      // Reads require current custody before disclosure. A committed mutation's
+      // acknowledgement remains true even if its original Account retires.
+      if (getActionSpec(actionId).sideEffectClass === 'read'
+        && input.isCredentialCurrent && !await input.isCredentialCurrent()) {
+        return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      }
       const { response } = dispatch;
       if (response.status >= 400) {
         // The Home completed the transaction and confirmed that every attempt
@@ -951,7 +991,7 @@ export function createAccountServerActionDeps(input: Readonly<{
       }
       const settled = settleAccountServerActionHttpOutput({
         data: response.data,
-        outputSchema: homeDomainActionOutputSchemaV1(actionId),
+        outputSchema: homeDomainActionOutputSchemaV1(actionId, preparedRequest),
         sideEffectClass: getActionSpec(actionId).sideEffectClass,
       });
       await organizationDisplay?.assertCurrent();
@@ -1474,4 +1514,16 @@ export function createAccountServerActionDeps(input: Readonly<{
       });
     },
   };
+  return { ...deps, publicProfileActions: bindPublicProfileActionPorts({
+    homeDomainAction: deps.homeDomainAction!, usage: deps.usageActions,
+    assertCurrent: async context => {
+      context.signal?.throwIfAborted();
+      const mismatch = await accountServerTargetMismatch(context);
+      if (mismatch) throw Object.assign(new Error(mismatch.error), { code: mismatch.errorCode });
+      if (input.isCredentialCurrent && !await input.isCredentialCurrent()) {
+        throw Object.assign(new Error('credential_scope_retired'), { code: 'credential_scope_retired' });
+      }
+    },
+    getRepository: (selector, context) => readScmHostingRepository({ selector, signal: context.signal }),
+  }) };
 }

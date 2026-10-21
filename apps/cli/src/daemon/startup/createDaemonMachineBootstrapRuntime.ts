@@ -217,6 +217,7 @@ export function createDaemonMachineBootstrapRuntime(
     acquireLocalServicePreviewApplication?: BootstrapRuntime['acquireLocalServicePreviewApplication'];
     directTransferRegistryHost: BootstrapRuntime['directTransferRegistryHost'];
     daemonServerWorkScheduler: BootstrapRuntime['daemonServerWorkScheduler'];
+    publicProfileRefreshHandle?: BootstrapRuntime['publicProfileRefreshHandle'];
     cancelConnectedServiceRuntimeAuthRecovery?: BootstrapRuntime['cancelConnectedServiceRuntimeAuthRecovery'];
     checkRuntimeAuthUsageLimitRecovery?: BootstrapRuntime['checkRuntimeAuthUsageLimitRecovery'];
     retryTemporaryThrottleNow?: BootstrapRuntime['retryTemporaryThrottleNow'];
@@ -362,6 +363,7 @@ export function createDaemonMachineBootstrapRuntime(
       onError: (error) => logger.warn('[DAEMON RUN] Stopped watching the CLI update record; the next daemon start republishes it', error),
     }),
     credentials: params.credentials,
+    publicProfileRefreshHandle: params.publicProfileRefreshHandle,
     ...(params.requesterServerId ? { requesterServerId: params.requesterServerId } : {}),
     ...(params.resolveCurrentMachineExecutionOriginContext
       ? { resolveCurrentMachineExecutionOriginContext: params.resolveCurrentMachineExecutionOriginContext } : {}),

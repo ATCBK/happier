@@ -101,6 +101,8 @@ import type { DaemonStartupSource } from '../ownership/daemonOwnershipMetadata';
 import { isDaemonStartupSourceServiceManaged } from '../ownership/daemonOwnershipMetadata';
 import type { TrackedSession } from '../types';
 import { createResolveHostedSessionWorkingDirectory } from '../sessions/createLoadLocalSessionMetadataForHandoff';
+import { startPublicProfileRefresh } from '../account/publicProfileRefresh';
+import type { SingleFlightIntervalLoopHandle } from '../lifecycle/singleFlightIntervalLoop';
 
 type LoggerLike = Readonly<{
   debug: (message: string, details?: unknown) => void;
@@ -124,6 +126,7 @@ function resolveTrackedSessionNotificationTitle(tracked: TrackedSession | null |
 }
 
 export type StartDaemonRuntimeBootstrapParams = Readonly<{
+  publicProfileRefresh?: Omit<Parameters<typeof startPublicProfileRefresh>[0], 'scheduler'>;
   api: ApiClient;
   credentials: StoredCredentials;
   daemonSessionMutationCustody?: Pick<DaemonSessionMutationCustody, 'stageTranscriptEvent'>;
@@ -207,6 +210,7 @@ export type StartDaemonRuntimeBootstrapParams = Readonly<{
 }>;
 
 export type StartDaemonRuntimeBootstrapResult = Readonly<{
+  publicProfileRefreshHandle: SingleFlightIntervalLoopHandle | null;
   fileState: DaemonLocallyPersistedState;
   initialDaemonState: DaemonState;
   directPeerServerLifecycle: DirectTransferServerLifecycle | null;
@@ -361,7 +365,13 @@ export async function startDaemonRuntimeBootstrap(
     connectedServiceQuotasCoordinator, connectedServiceQuotasLoopHandle,
     daemonServerWorkScheduler, setDaemonServerWorkOnline,
   } = await startDaemonConnectedServiceRuntime(params);
+  // This is native Account custody. The reusable Connected Services bootstrap
+  // below also serves transient requester Accounts and must not start this work.
+  const publicProfileRefreshHandle = params.publicProfileRefresh ? startPublicProfileRefresh({
+    ...params.publicProfileRefresh, scheduler: daemonServerWorkScheduler,
+  }) : null;
   return {
+    publicProfileRefreshHandle,
     fileState,
     initialDaemonState,
     directPeerServerLifecycle,

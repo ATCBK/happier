@@ -49,6 +49,29 @@ let cleanup: (() => void) | undefined;
 afterEach(() => { cleanup?.(); cleanup = undefined; vi.restoreAllMocks(); socketBoundary.mockReset(); resetActiveAccountSettingsSnapshotForTests(); process.exitCode = undefined; });
 
 describe('CLI and MCP personal usage Account transport', () => {
+  it('reads the captured Account public view without private Usage and refuses a retired result', async () => {
+    const app = fastify();
+    let current = true;
+    let retireOnRead = false;
+    let reads = 0;
+    app.get('/v1/account/public-profile/view', async () => {
+      reads += 1;
+      if (retireOnRead) current = false;
+      return { kind: 'unavailable' };
+    });
+    cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      ...createAccountServerActionDeps({ token: 'owner-token', serverId: 'home', serverHttpBaseUrl: 'http://usage.test',
+        isCredentialCurrent: async () => current }),
+    });
+    const request = { source: { kind: 'public_profile' } };
+    expect(await executor.execute('usage.recap.compose', request, { surface: 'cli', serverId: 'home' }))
+      .toMatchObject({ ok: true, result: { kind: 'unavailable', reason: 'public_profile_unavailable' } });
+    expect(reads).toBe(1);
+    retireOnRead = true;
+    expect(await executor.execute('usage.recap.compose', request, { surface: 'cli', serverId: 'home' }))
+      .toMatchObject({ ok: false, errorCode: 'credential_scope_retired' });
+  });
   it.each(['full', 'summary'] as const)('opens admitted Session intervals and mixed Claude tools through the real HTTP owners and denies keyless E2EE (%s)', async detail => {
     const app = fastify();
     const sessionId = 'c111111111111111111111111';
@@ -126,6 +149,8 @@ describe('CLI and MCP personal usage Account transport', () => {
         messageRole: 'agent', content: { t: 'plain', v: { role: 'agent', content: { type: 'output',
           data: { type: 'assistant', message: { role: 'assistant', content: [
             { type: 'text', text: 'private prose must never be disclosed' }, { type: 'tool_use', id: 'read', name: 'Read', input: { file_path: '/secret' } },
+            { type: 'tool_use', id: 'review-call', name: 'SubAgentRun', input: { runId: 'run-review', sidechainId: 'review-side', intent: 'review',
+              backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, launchOrigin: { kind: 'session', sessionId }, label: 'private reviewer' } },
           ] } } } } } }, { id: 'mcp', seq: 2, createdAt: 150, messageRole: 'event', content: { t: 'plain', v: {
             role: 'agent', content: { type: 'event', id: 'mcp-event', data: { type: 'mcp-binding-usage', usage: mcpUsage } },
           } } }, { id: 'composition', seq: 3, createdAt: 150, messageRole: 'event', content: { t: 'plain', v: {
@@ -176,6 +201,7 @@ describe('CLI and MCP personal usage Account transport', () => {
       return;
     }
     expect(opened.howYouWork).toMatchObject({ intervals: { agentTimeMs: 60 },
+      collaboration: { edges: [{ sourceAgentId: 'claude', targetAgentId: 'codex', relation: 'review', count: 1 }] },
       autopsy: { events: expect.arrayContaining([expect.objectContaining({ sessionId, kind: 'read', evidenceId: 'read' })]) } });
     expect(opened.work, JSON.stringify({ sources: opened.sources, socketReads: socketBoundary.mock.calls.length, reads })).toMatchObject({ allocations: [{ reason: 'allocated', outcome: { pullRequest: { number: 7 } } }],
       branchAllocations: [{ reason: 'allocated', branch: { branch: { ref: 'refs/heads/feature' } } }] });
@@ -203,6 +229,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     expect(catalog.bindings[0]?.enabled).toBe(true);
     expect(JSON.stringify(opened)).not.toContain('private prose');
     expect(JSON.stringify(opened)).not.toContain('/secret');
+    expect(JSON.stringify(opened)).not.toContain('private reviewer');
     expect(sessionReads).toBeGreaterThan(0);
     reads.length = 0;
     expect((await read({ ...query, includeSessionEvidence: false })).work?.allocations[0]?.reason).toBe('allocated');
@@ -249,6 +276,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     let includeUnavailableAccount = false;
     let quotaUnavailable = false;
     let pagedHistory = true;
+    let rangeHistoryReads = 0;
     const cursor = { id: 'history', observedAtMs: 150 };
     const historyRequest = { range: { startAtMs: 100, endAtMs: 200 }, pageSize: 100 };
     let releaseContinuation!: () => void;
@@ -287,6 +315,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     app.get('/v4/connect/qualified/provider-account-usage/history', async request => {
       const requested = QualifiedProviderAccountUsageHistoryRequestV4Schema.parse(JSON.parse(z.object({ query: z.string() }).parse(request.query).query));
       if (!('history' in requested)) throw new Error('Expected a range history read');
+      rangeHistoryReads += 1;
       if (requested.history.cursor) {
         expect(requested).toEqual({ recordId: snapshot.recordId, history: { ...historyRequest, cursor } });
         enteredContinuation();
@@ -310,8 +339,8 @@ describe('CLI and MCP personal usage Account transport', () => {
       }),
       isActionApprovalRequired: () => false,
     });
-    const read = async () => {
-      const result = await executor.execute('usage.query', { queries: [query] }, { surface: 'cli', serverId: 'home' });
+    const read = async (selected = query) => {
+      const result = await executor.execute('usage.query', { queries: [selected] }, { surface: 'cli', serverId: 'home' });
       expect(result.ok).toBe(true);
       return UsageQueryBatchResultSchema.parse(result.ok ? result.result : undefined).results[0]!;
     };
@@ -344,6 +373,15 @@ describe('CLI and MCP personal usage Account transport', () => {
     const slice = await read();
     expect(slice.pending).toBe(false);
     expect(slice.quota).toMatchObject([{ current: snapshot, history: { entries: [{ id: 'history' }], nextCursor: null }, targets }]);
+    const beforeHead = rangeHistoryReads;
+    const head = await read(normalizeUsageQuery({ ...query, includeQuotaHistory: false }));
+    expect(rangeHistoryReads).toBe(beforeHead);
+    expect(head.key).not.toBe(slice.key);
+    expect(head.quota).toMatchObject([{ current: snapshot, unusedCapacity: { historyStatus: 'unavailable' }, targets }]);
+    expect(head.quota?.[0]?.history).toBeUndefined();
+    expect(head.quota?.[0]?.pageFacts).toBeUndefined();
+    expect((await read()).quota).toMatchObject([{ history: { entries: [{ id: 'history' }], nextCursor: null } }]);
+    expect(rangeHistoryReads).toBe(beforeHead + 1);
     expect(slice.pools).toMatchObject([{ group: group.ref, memberAccountIds: ['work'], activeAccountId: 'work',
       selection: { status: 'unsupported', errorCode: 'machine_context_unavailable' } }]);
     expect(slice.sources).toEqual(expect.arrayContaining([{ source: 'accounting', status: 'available', asOfMs: 180 },

@@ -101,7 +101,8 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
       const items: SettingsDeclarationDescriptorV1[] = BUILT_IN_SETTINGS_DECLARATIONS_V1
         .filter(item => !requested.pageId || item.pageId === requested.pageId).map(item => {
           const sensitive = item.sensitive || item.storage?.access === 'sensitive';
-          const readable = Boolean(item.storage) && !sensitive;
+          const unsupportedHost = item.storage?.kind === 'atmospherePictureLibrary';
+          const readable = Boolean(item.storage) && !sensitive && !unsupportedHost;
           return { anchor: item.anchor, pageId: item.pageId, title: item.title,
             ...(item.description ? { description: item.description } : {}), sensitive, readable,
             writable: readable && item.storage?.access === 'read_write'
@@ -109,7 +110,7 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
             ...(item.storage?.scope === 'account' || item.storage?.scope === 'local' ? { storageScope: item.storage.scope } : {}),
             ...(item.targetKinds.length ? { targetKinds: [...item.targetKinds], targetRequired: item.storage?.scope === 'team' || item.storage?.scope === 'project' } : {}),
             ...(item.storage?.allowedValues ? { allowedValues: [...item.storage.allowedValues] } : {}),
-            ...(sensitive ? { unavailableReason: 'sensitive' as const } : !item.storage ? { unavailableReason: 'not_bound' as const }
+            ...(unsupportedHost ? { unavailableReason: 'unsupported_host' as const } : sensitive ? { unavailableReason: 'sensitive' as const } : !item.storage ? { unavailableReason: 'not_bound' as const }
               : item.storage.access === 'read_only' ? { unavailableReason: 'read_only' as const } : {}),
             ...(item.operation ? { operation: { actionId: 'settings.invoke' as const,
               requiresHumanInteraction: item.operation.requiresHumanInteraction,
@@ -121,6 +122,10 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
     const parsed = SettingsDeclarationActionInputSchemasV1[actionId].parse(input);
     const declaration = readBuiltInSettingDeclarationV1(parsed.anchor);
     if (!declaration) return refuse('setting_not_found');
+    // A UI draft is the answering client's captured controller, never an Account preference.
+    if ('target' in parsed && parsed.target?.kind === 'public_profile_draft') {
+      return declaration.targetKinds.includes('public_profile_draft') ? clientActionUnavailable(actionId) : refuse('setting_target_mismatch');
+    }
     const keyedOwner = parsed.anchor === 'machines.terminal.host' ? {
       key: MachineTerminalHostSettingKeySchema, value: MachineTerminalHostSettingChangeSchema,
       read: readMachineTerminalHostSetting,

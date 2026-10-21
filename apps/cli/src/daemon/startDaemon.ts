@@ -107,6 +107,8 @@ import { isAgentInstallTargetInUse } from '@/agent/acp/catalog/registry/managedA
 import { createBeforeShutdownDrain } from './lifecycle/createBeforeShutdownDrain';
 import { createDaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { startDaemonRuntimeBootstrap } from './startup/startDaemonRuntimeBootstrap';
+import { captureNativePublicProfileRefresh } from './account/nativePublicProfileRefreshActions';
+import type { SingleFlightIntervalLoopHandle } from './lifecycle/singleFlightIntervalLoop';
 import { createRequesterSessionRuntimeContext } from './sessionEncryption/createRequesterSessionRuntimeContext';
 import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext } from './sessionEncryption/requesterSessionCredentials';
 import { createRequesterSessionRuntimeContextResolver, resolveRequesterSessionBootstrapFromCustody, bindRequesterSessionRuntimeMachineAdmissionCurrentness, listRequesterSessionCredentialBindings, releaseUnretainedRequesterSessionRuntimeContext } from './sessionEncryption/requesterSessionCredentials';
@@ -388,6 +390,7 @@ export async function startDaemon(
   //
   const { requestShutdown, resolvesWhenShutdownRequested } = createDaemonShutdownController();
   const homeTransportCancellation = new AbortController();
+  let publicProfileRefreshHandle: SingleFlightIntervalLoopHandle | null = null;
   void resolvesWhenShutdownRequested.then(() => homeTransportCancellation.abort());
 
   logger.debug('[DAEMON RUN] Starting daemon process...');
@@ -2969,6 +2972,12 @@ export async function startDaemon(
         return [];
       });
     const runtimeBootstrap = await startDaemonRuntimeBootstrap({
+      publicProfileRefresh: await captureNativePublicProfileRefresh({
+        credentials, serverId: configuration.activeServerId, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+        signal: homeTransportCancellation.signal,
+        resolveServerFeaturesSnapshot: () => serverFeaturesSnapshotStore.getSnapshot(),
+        onError: error => logger.debug('[DAEMON RUN] Public-profile refresh deferred', serializeAxiosErrorForLog(error)),
+      }),
       api,
       credentials,
       daemonSessionMutationCustody,
@@ -3083,6 +3092,7 @@ export async function startDaemon(
     connectedServiceRefreshLoopHandle = runtimeBootstrap.connectedServiceRefreshLoopHandle;
     connectedServiceQuotasCoordinator = runtimeBootstrap.connectedServiceQuotasCoordinator;
     connectedServiceQuotasLoopHandle = runtimeBootstrap.connectedServiceQuotasLoopHandle;
+    publicProfileRefreshHandle = runtimeBootstrap.publicProfileRefreshHandle;
     createRequesterRuntime = async (bootstrap, signal) => {
       if (bootstrap.serverHttpBaseUrl !== requesterRuntimeServerHttpBaseUrl
         || !requesterMachineAdmissionBoundary(bootstrap.attribution).isHomeCurrent()) return null;
@@ -3829,6 +3839,7 @@ export async function startDaemon(
         },
         directTransferRegistryHost,
         daemonServerWorkScheduler,
+        publicProfileRefreshHandle,
         cancelConnectedServiceRuntimeAuthRecovery,
         retryTemporaryThrottleNow,
         readTemporaryThrottleRecovery,
@@ -4235,6 +4246,7 @@ export async function startDaemon(
       connectedServiceRefreshLoopHandle,
       connectedServiceQuotasLoopHandle,
       beforeShutdown,
+      publicProfileRefreshHandle,
       apiMachine,
       closeDaemonMutationCustody: async () => {
         connectedAccountDaemonRuntime.dispose();
@@ -4267,6 +4279,8 @@ export async function startDaemon(
     releaseMachineAdmissionTransport();
   } catch (error) {
     homeTransportCancellation.abort();
+    await publicProfileRefreshHandle?.stop().catch(stopError =>
+      logger.debug('[DAEMON RUN] Public-profile refresh drain failed during startup cleanup', stopError));
     storageRoutes?.dispose();
     storageRoutes = null;
     await daemonGuard?.stop().catch(stopError => logger.warn('[DAEMON RUN] Guard shutdown failed', stopError));

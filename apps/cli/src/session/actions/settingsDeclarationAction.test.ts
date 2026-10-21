@@ -6,6 +6,23 @@ import { API_TOKEN_FULL_GRANT_V1, ExternalActionExecutionAuthorizationV1Schema }
 afterEach(() => vi.restoreAllMocks());
 
 describe('headless settings conditional writes', () => {
+    it('refuses a captured App draft target before reading or mutating Home settings', async () => {
+        const read = vi.spyOn(axios, 'get');
+        const write = vi.spyOn(axios, 'post');
+        const action = createCliSettingsDeclarationAction({ serverId: 'home-a' });
+        for (const actionId of ['settings.get', 'settings.set'] as const) {
+            expect(await action({ actionId, input: { anchor: 'appearance.atmosphereSource',
+                ...(actionId === 'settings.set' ? { value: 'none' } : {}), target: { kind: 'public_profile_draft', serverId: 'home-a' } },
+                context: { surface: 'cli', serverId: 'home-a' } }))
+                .toMatchObject({ ok: false, errorCode: 'unavailable', details: { reason: 'client_unavailable' } });
+        }
+        expect(read).not.toHaveBeenCalled();
+        expect(write).not.toHaveBeenCalled();
+        const discovery = await action({ actionId: 'settings.list', input: { pageId: 'appearance' }, context: { surface: 'cli' } });
+        expect(discovery).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({
+            anchor: 'appearance.atmospherePictureLibrary', readable: false, writable: false, unavailableReason: 'unsupported_host',
+        })]) });
+    });
     it('routes catalog-dependent atmosphere and private Project settings to an answering client', async () => {
         const action = createCliSettingsDeclarationAction({});
         for (const anchor of ['appearance.homeAtmosphere', 'appearance.atmosphereLooks', 'appearance.projectAtmosphere']) {
@@ -18,8 +35,9 @@ describe('headless settings conditional writes', () => {
     it('refuses a read-only reset before reading or writing Account material', async () => {
         const read = vi.spyOn(axios, 'get');
         const write = vi.spyOn(axios, 'post');
-        const action = createCliSettingsDeclarationAction({});
-        expect(await action({ actionId: 'settings.reset', input: { anchor: 'language.appLanguage' },
+        const action = createCliSettingsDeclarationAction({ serverId: 'home-a' });
+        expect(await action({ actionId: 'settings.reset', input: { anchor: 'homeAdministration.serverSettings.HAPPIER_CANONICAL_SERVER_URL',
+            target: { kind: 'home', serverId: 'home-a' } },
             context: { surface: 'cli' } })).toMatchObject({ ok: false, errorCode: 'setting_read_only' });
         expect(read).not.toHaveBeenCalled();
         expect(write).not.toHaveBeenCalled();

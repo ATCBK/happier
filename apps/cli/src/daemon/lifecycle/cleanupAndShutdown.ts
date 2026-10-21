@@ -13,6 +13,7 @@ import type { VoiceInferenceWorkerHandle } from '../voiceInference/voiceInferenc
 import { getDaemonShutdownExitCode, getDaemonShutdownWatchdogTimeoutMs } from '../shutdownPolicy';
 import { publishShutdownStateBestEffort } from './publishShutdownState';
 import type { DaemonShutdownSource } from './shutdown';
+import type { SingleFlightIntervalLoopHandle } from './singleFlightIntervalLoop';
 
 type DaemonLockHandle = NonNullable<Awaited<ReturnType<typeof acquireDaemonLock>>>;
 type ConnectedServiceRefreshLoopHandle = Readonly<{
@@ -27,6 +28,7 @@ export type CleanupAndShutdownParams = Readonly<{
     restartOnStaleVersionAndHeartbeat: NodeJS.Timeout | null;
     connectedServiceRefreshLoopHandle: ConnectedServiceRefreshLoopHandle | null;
     connectedServiceQuotasLoopHandle: ConnectedServiceQuotasLoopHandle | null;
+    publicProfileRefreshHandle?: Pick<SingleFlightIntervalLoopHandle, 'stop'> | null;
     beforeShutdown?: () => Promise<void>;
     apiMachine: ApiMachineClient | null;
     closeDaemonMutationCustody?: () => Promise<void>;
@@ -77,6 +79,10 @@ export async function cleanupAndShutdown(params: CleanupAndShutdownParams): Prom
         clearInterval(params.restartOnStaleVersionAndHeartbeat);
         logger.debug('[DAEMON RUN] Health check interval cleared');
     }
+
+    // Publication preparation holds captured Account authority. Abort and join
+    // it before any shutdown drain can retire its settings or HTTP transport.
+    await params.publicProfileRefreshHandle?.stop();
 
     // Admission has already been stopped synchronously by the outer lifecycle
     // owner. Retire native language-server work before joining admitted requests

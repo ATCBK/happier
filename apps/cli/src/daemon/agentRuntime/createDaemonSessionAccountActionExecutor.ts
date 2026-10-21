@@ -82,7 +82,7 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
   token: string;
   credentials?: StoredCredentials;
   /** Existing observation of this daemon's bound Home, distinct from its local profile. */
-  resolveServerFeaturesSnapshot?: () => CliServerFeaturesSnapshot | undefined;
+  resolveServerFeaturesSnapshot?: () => CliServerFeaturesSnapshot | undefined | Promise<CliServerFeaturesSnapshot | undefined>;
   /** The installed daemon producer, independent of optional public-API proof. */
   machineId?: string;
   /** Content-free observations from the startup requester-runtime binding. */
@@ -256,7 +256,7 @@ export function createDaemonSessionAccountActionExecutor(params: Readonly<{
       && !proposesPluginInstallApproval
       && !(Object.hasOwn(RoleActionInputSchemasV1, operation.actionId) && operation.actionId.startsWith('session.'));
     if (params.credentials && (operation.actionId === 'discussion.post' || operation.actionId === 'discussion.reply')) {
-      context = { ...context, serverIdentityId: readServerIdentityIdFromFeaturesSnapshot(params.resolveServerFeaturesSnapshot?.()) ?? undefined };
+      context = { ...context, serverIdentityId: readServerIdentityIdFromFeaturesSnapshot(await params.resolveServerFeaturesSnapshot?.()) ?? undefined };
       const bound = await bindDiscussionDraftReply({ actionId: operation.actionId, input: operation.input, context,
         serverId: params.serverId, discussionAction: createDiscussionActionDeps({ credentials: params.credentials,
           serverId: params.serverId, serverHttpBaseUrl: params.serverHttpBaseUrl }).discussionAction,

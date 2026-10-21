@@ -1284,6 +1284,57 @@ describe('Account API token HTTP adapter', () => {
     expect(stored).toHaveLength(2);
   });
 
+  it('carries username availability and release through the exact captured Home and typed acknowledgements', async () => {
+    const checked = { username: 'candidate', availability: 'unavailable', suggestions: ['candidate1', 'candidate2'] };
+    const released = { username: null, released: true, reservedUntilMs: 2_592_000_000 };
+    const requests: Array<{ path: string; token: string | undefined; body: unknown }> = [];
+    let current = true;
+    app.post('/v1/account/username/check', async request => {
+      requests.push({ path: request.url, token: request.headers.authorization, body: request.body });
+      return checked;
+    });
+    app.post('/v1/account/username/release', async request => {
+      requests.push({ path: request.url, token: request.headers.authorization, body: request.body });
+      // Retirement cannot turn an acknowledged committed release into a false failure.
+      current = false;
+      return released;
+    });
+    const deps = createAccountServerActionDeps({ token: 'selected-home-token', serverId: 'home',
+      serverHttpBaseUrl: 'http://account.test', isCredentialCurrent: () => current });
+    const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home' };
+    expect(await deps.homeDomainAction!({ actionId: 'account.username.check', input: { username: 'Candidate' }, context })).toEqual(checked);
+    expect(await deps.homeDomainAction!({ actionId: 'account.username.release', input: {}, context })).toEqual(released);
+    expect(await deps.homeDomainAction!({ actionId: 'account.username.release', input: {}, context }))
+      .toEqual({ ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' });
+    expect(requests).toEqual([
+      { path: '/v1/account/username/check', token: 'Bearer selected-home-token', body: { username: 'Candidate' } },
+      { path: '/v1/account/username/release', token: 'Bearer selected-home-token', body: {} },
+    ]);
+  });
+
+  it.each(['account.username.check', 'account.username.release'] as const)('reports missing %s on an older Home without falling back to username.set', async actionId => {
+    let legacyWrites = 0;
+    app.post('/v1/account/username', async () => { legacyWrites += 1; return { username: 'legacy' }; });
+    const deps = createAccountServerActionDeps({ token: 'selected-home-token', serverId: 'home', serverHttpBaseUrl: 'http://account.test' });
+    expect(await deps.homeDomainAction!({ actionId, input: actionId === 'account.username.check' ? { username: 'candidate' } : {},
+      context: { surface: 'cli', authority: 'present_user', serverId: 'home' } }))
+      .toEqual({ ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` });
+    expect(legacyWrites).toBe(0);
+  });
+
+  it('does not disclose a late availability read after its captured Account retires', async () => {
+    let current = true;
+    app.post('/v1/account/username/check', async () => {
+      current = false;
+      return { username: 'candidate', availability: 'available', suggestions: [] };
+    });
+    const deps = createAccountServerActionDeps({ token: 'selected-home-token', serverId: 'home',
+      serverHttpBaseUrl: 'http://account.test', isCredentialCurrent: () => current });
+    expect(await deps.homeDomainAction!({ actionId: 'account.username.check', input: { username: 'candidate' },
+      context: { surface: 'cli', authority: 'present_user', serverId: 'home' } }))
+      .toEqual({ ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' });
+  });
+
   it('carries the complete managed provider lifecycle through exact Home routes with redacted typed output', async () => {
     const provider = managedIdentityProviderFixture();
     const lifecycleInput = {
