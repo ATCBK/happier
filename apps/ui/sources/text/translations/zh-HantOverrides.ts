@@ -4,6 +4,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHant as actionTitlesZhHant } from './actionTitles/zh-Hant';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
@@ -14252,5 +14253,5 @@ settingsSession: {
 
 
 export function createZhHant(base: typeof zhHans) {
-    return defineTranslations(deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'], hunkReview: hunkReviewTranslations['zh-Hant'] }));
+    return defineTranslations(deepMerge(base, { ...zhHantOverrides, fileReviewNote: fileReviewNoteTranslations['zh-Hant'], hunkReview: hunkReviewTranslations['zh-Hant'], composerReferences: composerReferenceTranslations['zh-Hant'] }));
 }

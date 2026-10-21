@@ -2,6 +2,7 @@ import { fileEditingTranslations } from './fileEditingTranslations.shared';
 import { pt as actionTitlesPt } from './actionTitles/pt';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.shared';
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
@@ -1320,6 +1321,7 @@ function plural({
  */
 const ptValues = {
     fileReviewNote: fileReviewNoteTranslations['pt'],
+    composerReferences: composerReferenceTranslations['pt'],
     hunkReview: hunkReviewTranslations['pt'],
   panes: { mainColumn: paneMainColumnTranslations['pt'], emptyEditor: paneEmptyEditorTranslations['pt'], shortcutsSheet: paneShortcutsSheetTranslations['pt'] },
   sessionCoordinator: {

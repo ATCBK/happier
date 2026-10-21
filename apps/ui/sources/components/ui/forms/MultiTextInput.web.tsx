@@ -1,6 +1,7 @@
 import * as React from 'react';
+import { createRoot } from 'react-dom/client';
 import type { CSSProperties } from 'react';
-import { View, type TextStyle } from 'react-native';
+import type { LayoutChangeEvent, TextStyle } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
 import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
@@ -9,30 +10,21 @@ import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { extractWebAttachmentFilesFromDataTransfer } from '@/utils/files/webAttachmentDataTransfer';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone.web';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { recordLargeTextInputDiagnostic } from '@/utils/system/userInteractionDiagnostics';
 import { MULTI_TEXT_INPUT_BASE_FONT_SIZE } from './multiTextInputTypography';
-import {
-    TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS,
-    WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT,
-    isLargeTextInputValueLength,
-} from './largeTextInputPolicy';
+import { TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS, isLargeTextInputValueLength } from './largeTextInputPolicy';
+import { createComposerEditorController, type ComposerEditorDocument } from './composerEditor/composerEditorController.web';
+import { ComposerChipView } from './composerEditor/ComposerChipView.web';
+import { ComposerChipHoverCard, type ComposerChipHoverTarget } from './composerEditor/ComposerChipHoverCard.web';
+import { useHoverPreviewPopover } from '@/components/ui/popover/useHoverPreviewPopover';
+import { ensureReferenceChipStyles, referenceChipCssVariables } from '@/components/ui/referenceChip/referenceChipStyles';
+import type { ComposerEditorCaretRect, ComposerEditorDecoration, ComposerEditorReference } from './composerEditor/composerEditorTypes';
 
 export type { SupportedKey } from '@/keyboard/events';
-
-export interface TextInputState {
-    text: string;
-    selection: {
-        start: number;
-        end: number;
-    };
-}
-
-export type KeyPressEvent = KeyboardKeyPressEvent & Readonly<{
-    inputState?: TextInputState;
-}>;
-
+export interface TextInputState { text: string; selection: { start: number; end: number } }
+export type KeyPressEvent = KeyboardKeyPressEvent & Readonly<{ inputState?: TextInputState }>;
 export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
-
 export interface MultiTextInputHandle {
     setTextAndSelection: (text: string, selection: { start: number; end: number }) => void;
     setSelection: (selection: { start: number; end: number }) => void;
@@ -40,43 +32,34 @@ export interface MultiTextInputHandle {
     flushPendingTextChange: () => string;
     focus: () => void;
     blur: () => void;
-
-    // --- Added in Lane A0 (D33) -----------------------------------------------
-    /**
-     * Calls getBoundingClientRect on the underlying textarea and fires the
-     * callback with viewport/client coordinates (D47: no window.scrollX/Y
-     * addition, matching the existing web Popover measurement contract).
-     */
     measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void;
-
-    /**
-     * Web: returns `null`. Native uses `getReactNodeTag()` for node identity.
-     */
     getReactNodeTag: () => number | null;
-
-    /**
-     * Returns the underlying `<textarea>` DOM element (or `null` if unmounted).
-     * Used by `useTextInputCaretRect.web.ts` to pass into `textarea-caret`.
-     */
-    getInputElement: () => HTMLTextAreaElement | null;
+    getCaretRect: () => ComposerEditorCaretRect | null;
+    subscribeCaretRect: (listener: () => void) => () => void;
+    offsetAtPoint: (point: Readonly<{ x: number; y: number }>) => Promise<number | null>;
+    setDropCaret: (offset: number | null) => void;
 }
-
 export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
-
-interface MultiTextInputProps {
+export interface MultiTextInputProps {
     textStyle?: TextStyle;
     testID?: string;
     value: string;
+    references?: readonly ComposerEditorReference[];
+    decorations?: readonly ComposerEditorDecoration[];
+    attachmentIds?: readonly string[];
+    onReferencesChange?: (references: readonly ComposerEditorReference[]) => void;
+    onReferencePress?: (ref: string) => void;
     onChangeText: (text: string) => void;
     placeholder?: string;
-    /** The placeholder's ink: a theme token, which backed glass steps up like any quiet ink. Defaults to `input.placeholder`. */
     placeholderTextColor?: string;
     maxHeight?: number;
+    autoFocus?: boolean;
     editable?: boolean;
     paddingTop?: number;
     paddingBottom?: number;
     paddingLeft?: number;
     paddingRight?: number;
+    onLayout?: (event: LayoutChangeEvent) => void;
     onKeyPress?: OnKeyPressCallback;
     onSelectionChange?: (selection: { start: number; end: number }) => void;
     onStateChange?: (state: TextInputState) => void;
@@ -101,571 +84,241 @@ interface MultiTextInputProps {
     'aria-activedescendant'?: string;
 }
 
-const DEFAULT_TEXT_STYLE: TextStyle = { fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE };
+type Controller = ReturnType<typeof createComposerEditorController>;
 
-type WebTextStyleOverride = Readonly<{
-    color?: string;
-    fontFamily?: string;
-    fontSize?: string;
-    fontStyle?: TextStyle['fontStyle'];
-    fontWeight?: TextStyle['fontWeight'];
-    letterSpacing?: string;
-    lineHeight?: string;
-}>;
-
-type WebTextareaStyle = CSSProperties;
-
-type TextareaResize = Readonly<{
-    node: HTMLTextAreaElement;
-    maxHeight: number;
-    collapse: boolean;
-    onMeasure: (contentHeight: number, height: number) => void;
-}>;
-
-// A document can mount hundreds of composers in one commit. Interleaving each
-// textarea's height writes and geometry reads forces a full layout per field.
-// Finish the same measurements together before paint, retaining both the
-// wrapper's height lock and the input's own scroll position during collapse.
-const pendingTextareaResizes = new Map<HTMLTextAreaElement, TextareaResize>();
-function scheduleTextareaResize(resize: TextareaResize): void {
-    const scheduled = pendingTextareaResizes.size > 0;
-    pendingTextareaResizes.set(resize.node, resize);
-    if (scheduled) return;
-    queueMicrotask(() => {
-        const entries = [...pendingTextareaResizes.values()]
-            .filter(({ node }) => node.isConnected !== false)
-            .map((entry) => ({
-                ...entry,
-                wrapper: entry.collapse ? entry.node.parentElement : null,
-                wrapperHeight: entry.collapse ? entry.node.parentElement?.offsetHeight : undefined,
-                previousWrapperHeight: entry.node.parentElement?.style.height ?? '',
-                scrollTop: entry.node.scrollTop,
-            }));
-        pendingTextareaResizes.clear();
-        for (const entry of entries) {
-            if (!entry.collapse) continue;
-            if (entry.wrapper) entry.wrapper.style.height = `${entry.wrapperHeight}px`;
-            entry.node.style.height = 'auto';
-        }
-        const measured = entries.map((entry) => {
-            const scrollHeight = entry.node.scrollHeight;
-            const contentHeight = Number.isFinite(scrollHeight) ? Math.ceil(scrollHeight) : entry.maxHeight;
-            return {
-                ...entry,
-                contentHeight: entry.collapse ? contentHeight : Math.max(contentHeight, entry.maxHeight),
-                height: entry.collapse ? Math.min(entry.maxHeight, Math.max(0, contentHeight)) : entry.maxHeight,
-            };
-        });
-        for (const entry of measured) {
-            entry.node.style.height = `${entry.height}px`;
-            if (entry.wrapper) entry.wrapper.style.height = entry.previousWrapperHeight;
-        }
-        for (const entry of measured) {
-            if (entry.node.scrollTop !== entry.scrollTop) entry.node.scrollTop = entry.scrollTop;
-            entry.onMeasure(entry.contentHeight, entry.height);
-        }
-    });
+/** A picture element rebuilt for the same source draws the same picture. */
+function sameThumbnail(left: React.ReactNode, right: React.ReactNode): boolean {
+    if (left === right) return true;
+    if (!React.isValidElement<{ source?: { uri?: string } }>(left) || !React.isValidElement<{ source?: { uri?: string } }>(right)) return false;
+    return left.type === right.type && left.props.source?.uri !== undefined && left.props.source?.uri === right.props.source?.uri;
 }
 
-function toCssLength(value: TextStyle['fontSize'] | TextStyle['lineHeight'] | TextStyle['letterSpacing']) {
-    if (typeof value === 'number') return `${value}px`;
-    if (typeof value === 'string') return value;
-    return undefined;
+function sameChipPresentation(left: ComposerEditorReference, right: ComposerEditorReference): boolean {
+    return left.ref === right.ref && left.label === right.label && left.state === right.state
+        && Boolean(left.onOpen) === Boolean(right.onOpen) && sameThumbnail(left.thumbnail, right.thumbnail);
 }
-
-function normalizeWebTextareaMaxHeight(maxHeight: number): number {
-    return Number.isFinite(maxHeight) && maxHeight > 0 ? Math.round(maxHeight) : 120;
-}
-
-function clampTextSelection(selection: { start: number; end: number }, textLength: number): { start: number; end: number } {
-    const start = Number.isFinite(selection.start)
-        ? Math.min(Math.max(0, Math.trunc(selection.start)), textLength)
-        : textLength;
-    const end = Number.isFinite(selection.end)
-        ? Math.min(Math.max(0, Math.trunc(selection.end)), textLength)
-        : start;
-    return { start, end };
-}
-
-function resolveWebTextStyle(textStyle: TextStyle | undefined, uiFontScale: number): WebTextStyleOverride {
-    const scaledStyle = scaleTextStyle(textStyle ?? DEFAULT_TEXT_STYLE, uiFontScale);
-    const next: Record<string, string | TextStyle['fontStyle'] | TextStyle['fontWeight']> = {};
-    const color = typeof scaledStyle.color === 'string' ? scaledStyle.color : undefined;
-    const fontFamily = typeof scaledStyle.fontFamily === 'string' ? scaledStyle.fontFamily : undefined;
-    const fontSize = toCssLength(scaledStyle.fontSize);
-    const letterSpacing = toCssLength(scaledStyle.letterSpacing);
-    const lineHeight = toCssLength(scaledStyle.lineHeight);
-
-    if (color) next.color = color;
-    if (fontFamily) next.fontFamily = fontFamily;
-    if (fontSize) next.fontSize = fontSize;
-    if (scaledStyle.fontStyle) next.fontStyle = scaledStyle.fontStyle;
-    if (scaledStyle.fontWeight) next.fontWeight = scaledStyle.fontWeight;
-    if (letterSpacing) next.letterSpacing = letterSpacing;
-    if (lineHeight) next.lineHeight = lineHeight;
-
-    return next;
-}
+const EMPTY_REFERENCES: readonly ComposerEditorReference[] = [];
+const EMPTY_DECORATIONS: readonly ComposerEditorDecoration[] = [];
 
 export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextInputProps>((props, ref) => {
-    const {
-        value,
-        onChangeText,
-        placeholder,
-        maxHeight = 120,
-        onKeyPress,
-        onSelectionChange,
-        onStateChange,
-        onContentHeightChange,
-    } = props;
-    
     const { theme } = useUnistyles();
     const uiFontScale = useLocalSetting('uiFontScale');
-    const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-    const isComposingRef = React.useRef(false);
-    const liveValueRef = React.useRef(value);
-    const lastEmittedValueRef = React.useRef(value);
-    const hasUnconfirmedEmissionRef = React.useRef(false);
-    const pendingChangeTextRef = React.useRef<string | null>(null);
-    const pendingChangeTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    const lastScrollRestoreKeyRef = React.useRef<string | null>(null);
-    const lastReportedContentHeightRef = React.useRef<number | null>(null);
-    const normalizedMaxHeight = normalizeWebTextareaMaxHeight(maxHeight);
-    const [textareaHeight, setTextareaHeight] = React.useState<number | undefined>(
-        () => (value.length > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT ? normalizedMaxHeight : undefined),
-    );
-    const scaledTextStyle = React.useMemo(
-        () => resolveWebTextStyle(props.textStyle, uiFontScale),
-        [props.textStyle, uiFontScale],
-    );
-    const placeholderInk = useGlassBackedInk()(props.placeholderTextColor ?? theme.colors.input.placeholder);
-    const textareaStyle = React.useMemo<WebTextareaStyle>(() => ({
-        width: '100%',
-        padding: '0',
-        fontSize: `${MULTI_TEXT_INPUT_BASE_FONT_SIZE}px`,
-        color: theme.colors.input.text,
-        border: 'none',
-        outline: 'none',
-        resize: 'none',
-        boxSizing: 'border-box',
-        backgroundColor: 'transparent',
-        fontFamily: Typography.default().fontFamily,
-        lineHeight: '1.4',
-        scrollbarWidth: 'none',
-        paddingTop: props.paddingTop,
-        paddingBottom: props.paddingBottom,
-        paddingLeft: props.paddingLeft,
-        paddingRight: props.paddingRight,
-        ...scaledTextStyle,
-        caretColor: theme.colors.input.text,
-        // `theme.css` paints the raw textarea's placeholder from it.
-        '--happier-placeholder-color': placeholderInk,
-    }) as WebTextareaStyle, [
-        placeholderInk,
-        props.paddingBottom,
-        props.paddingLeft,
-        props.paddingRight,
-        props.paddingTop,
-        scaledTextStyle,
-        theme.colors.input.text,
-    ]);
-    const clearPendingChangeTimer = React.useCallback(() => {
-        if (pendingChangeTimerRef.current === null) return;
-        clearTimeout(pendingChangeTimerRef.current);
-        pendingChangeTimerRef.current = null;
-    }, []);
-
-    const emitChangeText = React.useCallback((text: string) => {
-        clearPendingChangeTimer();
-        pendingChangeTextRef.current = null;
-        lastEmittedValueRef.current = text;
-        hasUnconfirmedEmissionRef.current = true;
-        onChangeText(text);
-    }, [clearPendingChangeTimer, onChangeText]);
-
-    const scheduleChangeText = React.useCallback((text: string) => {
-        if (!isLargeTextInputValueLength(text.length)) {
-            emitChangeText(text);
-            return;
-        }
-        pendingChangeTextRef.current = text;
-        clearPendingChangeTimer();
-        pendingChangeTimerRef.current = setTimeout(() => {
-            const pendingText = pendingChangeTextRef.current;
-            if (pendingText === null) return;
-            emitChangeText(pendingText);
-        }, TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS);
-    }, [clearPendingChangeTimer, emitChangeText]);
-
-    React.useEffect(() => () => {
-        clearPendingChangeTimer();
-        pendingChangeTextRef.current = null;
-    }, [clearPendingChangeTimer]);
-
-    const flushPendingTextChange = React.useCallback((): string => {
-        const text = textareaRef.current?.value ?? liveValueRef.current;
-        if (pendingChangeTextRef.current !== null || text !== lastEmittedValueRef.current) {
-            emitChangeText(text);
-        }
+    const hostRef = React.useRef<HTMLDivElement>(null);
+    const controllerRef = React.useRef<Controller | null>(null);
+    const currentProps = React.useRef(props);
+    currentProps.current = props;
+    const pending = React.useRef<string | null>(null);
+    const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastEmitted = React.useRef(props.value);
+    const confirmed = React.useRef(true);
+    const scrollRestoreKey = React.useRef<string | null>(null);
+    const caretListeners = React.useRef(new Set<() => void>());
+    const lastContentHeight = React.useRef<number | null>(null);
+    // A chip's hover card is drawn here, in the input's own tree; chips report the pointer to it.
+    const chipHover = useHoverPreviewPopover<ComposerChipHoverTarget>({ enabled: props.editable !== false });
+    const chipHoverRef = React.useRef(chipHover);
+    chipHoverRef.current = chipHover;
+    const clearTimer = () => { if (timer.current !== null) clearTimeout(timer.current); timer.current = null; };
+    const emit = (text: string) => {
+        clearTimer(); pending.current = null; lastEmitted.current = text; confirmed.current = false;
+        currentProps.current.onChangeText(text);
+    };
+    const flush = (): string => {
+        const text = controllerRef.current?.read().text ?? currentProps.current.value;
+        if (pending.current !== null || text !== lastEmitted.current) emit(text);
         return text;
-    }, [emitChangeText]);
-
-    const notifyContentHeightChange = React.useCallback((height: number) => {
-        if (!onContentHeightChange) return;
-        if (lastReportedContentHeightRef.current === height) return;
-        lastReportedContentHeightRef.current = height;
-        onContentHeightChange(height);
-    }, [onContentHeightChange]);
-
-    const applyTextareaHeight = React.useCallback((node: HTMLTextAreaElement, nextValueLength = liveValueRef.current.length) => {
-        scheduleTextareaResize({
-            node,
-            maxHeight: normalizedMaxHeight,
-            // Oversized drafts retain the existing no-collapse policy and
-            // report their true content height for the expand affordance.
-            collapse: nextValueLength <= WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT,
-            onMeasure: (contentHeight, height) => {
-                notifyContentHeightChange(contentHeight);
-                setTextareaHeight(current => current === height ? current : height);
-            },
-        });
-    }, [normalizedMaxHeight, notifyContentHeightChange]);
-
-    React.useLayoutEffect(() => {
-        const node = textareaRef.current;
-        if (!node || typeof ResizeObserver === 'undefined') return;
-        let width = node.clientWidth;
-        const observer = new ResizeObserver(() => {
-            const nextWidth = node.clientWidth;
-            if (nextWidth === width) return;
-            width = nextWidth;
-            // Hidden, still-mounted composers retain their state; measure when
-            // they regain a width. Height-only notifications cannot recurse.
-            if (nextWidth > 0) applyTextareaHeight(node);
-        });
-        observer.observe(node);
-        return () => observer.disconnect();
-    }, [applyTextareaHeight]);
-
-    React.useLayoutEffect(() => {
-        const node = textareaRef.current;
-        if (!node) return;
-        if (value === liveValueRef.current || value === lastEmittedValueRef.current) {
-            if (value === lastEmittedValueRef.current) {
-                hasUnconfirmedEmissionRef.current = false;
+    };
+    const notifyCaret = () => { for (const listener of caretListeners.current) listener(); };
+    const measure = () => {
+        const host = hostRef.current;
+        if (!host) return;
+        const height = Math.ceil(host.scrollHeight);
+        if (lastContentHeight.current !== height) {
+            lastContentHeight.current = height;
+            currentProps.current.onContentHeightChange?.(height);
+        }
+        notifyCaret();
+    };
+    const reportState = (document: ComposerEditorDocument, changed: boolean) => {
+        const latest = currentProps.current;
+        const inputState = { text: document.text, selection: document.selection };
+        latest.onStateChange?.(inputState);
+        if (changed) latest.onReferencesChange?.(document.references);
+        latest.onSelectionChange?.(document.selection);
+        const dom = controllerRef.current?.editor.view.dom;
+        if (dom) {
+            if (document.text.length === 0) dom.setAttribute('data-empty', 'true');
+            else dom.removeAttribute('data-empty');
+        }
+        if (changed) {
+            if (isLargeTextInputValueLength(document.text.length)) {
+                pending.current = document.text; clearTimer();
+                timer.current = setTimeout(() => { if (pending.current !== null) emit(pending.current); }, TEXT_INPUT_LARGE_TEXT_CHANGE_DEBOUNCE_MS);
+            } else emit(document.text);
+            recordLargeTextInputDiagnostic({ phase: 'web-change', platform: 'web', surface: 'agentInput',
+                textLength: document.text.length, selection: document.selection, valueLength: latest.value.length,
+                liveTextLength: document.text.length, pendingTextLength: pending.current?.length });
+        }
+        measure();
+    };
+    const makeOptions = () => ({
+        text: currentProps.current.value,
+        references: currentProps.current.references ?? EMPTY_REFERENCES,
+        decorations: currentProps.current.decorations ?? EMPTY_DECORATIONS,
+        attachmentIds: currentProps.current.attachmentIds,
+        editable: currentProps.current.editable,
+        onChange: (document: ComposerEditorDocument) => reportState(document, true),
+        onSelection: (document: ComposerEditorDocument) => reportState(document, false),
+        onCaretChange: notifyCaret,
+        onFocus: () => currentProps.current.onFocus?.(),
+        onBlur: () => currentProps.current.onBlur?.(),
+        onOpenLink: (url: string) => { void openExternalUrl(url, { platformOS: 'web' }); },
+        onKeyDown: (event: KeyboardEvent, document: ComposerEditorDocument) => {
+            const latest = currentProps.current;
+            const normalized = normalizeKeyboardKeyPressEvent(event);
+            if (normalized && latest.onKeyPress?.({ ...normalized, inputState: { text: document.text, selection: document.selection } })) return true;
+            if (event.key === 'Enter' && !event.shiftKey && (latest.submitBehavior === 'submit' || latest.submitBehavior === 'blurAndSubmit')) {
+                flush(); latest.onSubmitEditing?.();
+                if (latest.submitBehavior === 'blurAndSubmit') controllerRef.current?.editor.view.dom.blur();
+                return true;
             }
-            applyTextareaHeight(node);
-            return;
-        }
-
-        const pendingText = pendingChangeTextRef.current;
-        if (
-            pendingText !== null
-            && pendingText === liveValueRef.current
-            && value !== pendingText
-            && value !== lastEmittedValueRef.current
-        ) {
-            recordLargeTextInputDiagnostic({
-                phase: 'web-stale-props-skip',
-                platform: 'web',
-                surface: 'agentInput',
-                textLength: pendingText.length,
-                valueLength: value.length,
-                liveTextLength: liveValueRef.current.length,
-                lastEmittedTextLength: lastEmittedValueRef.current.length,
-                pendingTextLength: pendingText.length,
-            });
-            applyTextareaHeight(node, pendingText.length);
-            return;
-        }
-
-        // Until the parent confirms our latest emission, every differing controlled value is
-        // older than the live input from this component's perspective. Persistence and external
-        // subscriptions can interleave those renders with typing; adopting one here rolls the
-        // DOM back even though a later input event has already fired. Once the latest emission is
-        // confirmed above, a subsequent differing value is external and remains adoptable.
-        if (hasUnconfirmedEmissionRef.current) {
-            recordLargeTextInputDiagnostic({
-                phase: 'web-stale-props-skip',
-                platform: 'web',
-                surface: 'agentInput',
-                textLength: liveValueRef.current.length,
-                valueLength: value.length,
-                liveTextLength: liveValueRef.current.length,
-                lastEmittedTextLength: lastEmittedValueRef.current.length,
-                pendingTextLength: pendingChangeTextRef.current?.length,
-            });
-            applyTextareaHeight(node);
-            return;
-        }
-
-        clearPendingChangeTimer();
-        recordLargeTextInputDiagnostic({
-            phase: 'web-props-reconcile',
-            platform: 'web',
-            surface: 'agentInput',
-            textLength: value.length,
-            valueLength: value.length,
-            liveTextLength: liveValueRef.current.length,
-            lastEmittedTextLength: lastEmittedValueRef.current.length,
-            pendingTextLength: pendingChangeTextRef.current?.length,
-        });
-        pendingChangeTextRef.current = null;
-        liveValueRef.current = value;
-        lastEmittedValueRef.current = value;
-        hasUnconfirmedEmissionRef.current = false;
-        // The node.value write below resets the browser's scroll position, so
-        // any already-consumed scroll restore must become applicable again
-        // against the adopted content (session open applies the restore before
-        // the async draft text lands).
-        lastScrollRestoreKeyRef.current = null;
-        node.value = value;
-        applyTextareaHeight(node, value.length);
-    }, [applyTextareaHeight, clearPendingChangeTimer, textareaStyle, value]);
-
-    // `value` is a dependency so the restore re-applies in the same commit an
-    // external adoption resets scrollTop; parent confirms of self-edits re-run
-    // it too but bail on the consumed restore key.
-    React.useLayoutEffect(() => {
-        const node = textareaRef.current;
-        const initialScrollY = props.initialScrollY;
-        if (!node || isComposingRef.current) return;
-        if (typeof initialScrollY !== 'number' || !Number.isFinite(initialScrollY) || initialScrollY < 0) return;
-        const restoreKey = props.scrollRestoreToken ?? `scroll:${initialScrollY}`;
-        if (lastScrollRestoreKeyRef.current === restoreKey) return;
-        node.scrollTop = initialScrollY;
-        lastScrollRestoreKeyRef.current = restoreKey;
-    }, [props.initialScrollY, props.scrollRestoreToken, textareaStyle, value]);
-
-    const renderedTextareaHeight = value.length > WEB_TEXTAREA_AUTOSIZE_VALUE_LENGTH_LIMIT
-        ? normalizedMaxHeight
-        : textareaHeight;
-
-    const handleKeyDown = React.useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (!onKeyPress) return;
-
-        const isComposing = e.nativeEvent.isComposing || e.keyCode === 229;
-        if (isComposing) {
-            return;
-        }
-
-        const keyEvent = normalizeKeyboardKeyPressEvent({
-            key: e.key,
-            code: e.code,
-            shiftKey: e.shiftKey,
-            altKey: e.altKey,
-            ctrlKey: e.ctrlKey,
-            metaKey: e.metaKey,
-            repeat: e.repeat,
-            isComposing,
-        });
-        if (!keyEvent) return;
-
-        const handled = onKeyPress({
-            ...keyEvent,
-            inputState: {
-                text: e.currentTarget.value,
-                selection: {
-                    start: e.currentTarget.selectionStart,
-                    end: e.currentTarget.selectionEnd,
+            return false;
+        },
+        onPasteFiles: (event: ClipboardEvent) => {
+            if (!event.clipboardData || !currentProps.current.onFilesPasted) return false;
+            const files = extractWebAttachmentFilesFromDataTransfer(event.clipboardData);
+            if (files.length === 0) return false;
+            currentProps.current.onFilesPasted(files); event.preventDefault(); return true;
+        },
+        renderChip: (host: HTMLElement, reference: ComposerEditorReference, selected: boolean, remove: () => void) => {
+            const root = createRoot(host);
+            let current: ComposerChipHoverTarget | null = null;
+            let shown: Readonly<{ reference: ComposerEditorReference; selected: boolean }> | null = null;
+            const removeFromMessage = () => { chipHoverRef.current.close(); remove(); };
+            const openCurrent = () => current?.open?.();
+            const render = (reference: ComposerEditorReference, selected: boolean) => {
+                const open = reference.onOpen
+                    ?? (currentProps.current.onReferencePress ? () => currentProps.current.onReferencePress?.(reference.ref) : undefined);
+                current = { element: host, reference, ...(open ? { open } : {}), remove: removeFromMessage };
+                // Every document update refreshes every chip; draw again only when what it shows changed.
+                if (shown && shown.selected === selected && sameChipPresentation(shown.reference, reference)) return;
+                shown = { reference, selected };
+                root.render(<ComposerChipView reference={reference} selected={selected} onOpen={open ? openCurrent : undefined} onRemove={removeFromMessage} />);
+            };
+            const enter = () => { if (current) chipHoverRef.current.triggerHoverProps(current)?.onPointerEnter(); };
+            const leave = () => { chipHoverRef.current.triggerHoverProps(current!)?.onPointerLeave(); };
+            host.addEventListener('pointerenter', enter);
+            host.addEventListener('pointerleave', leave);
+            render(reference, selected);
+            return {
+                update: render,
+                destroy: () => {
+                    host.removeEventListener('pointerenter', enter);
+                    host.removeEventListener('pointerleave', leave);
+                    if (chipHoverRef.current.target?.element === host) chipHoverRef.current.close();
+                    queueMicrotask(() => root.unmount());
                 },
-            },
-        });
-        if (handled) {
-            e.preventDefault();
-        }
-    }, [onKeyPress]);
-
-    const handleChange = React.useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        const text = e.target.value;
-        const selection = { 
-            start: e.target.selectionStart, 
-            end: e.target.selectionEnd 
-        };
-        liveValueRef.current = text;
-        applyTextareaHeight(e.currentTarget, text.length);
-        scheduleChangeText(text);
-        recordLargeTextInputDiagnostic({
-            phase: 'web-change',
-            platform: 'web',
-            surface: 'agentInput',
-            textLength: text.length,
-            selection,
-            valueLength: value.length,
-            liveTextLength: text.length,
-            pendingTextLength: isLargeTextInputValueLength(text.length) ? text.length : undefined,
-        });
-        
-        if (onStateChange) {
-            onStateChange({ text, selection });
-        }
-        if (onSelectionChange) {
-            onSelectionChange(selection);
-        }
-    }, [applyTextareaHeight, onStateChange, onSelectionChange, scheduleChangeText]);
-
-    const handleSelect = React.useCallback((e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-        const target = e.target as HTMLTextAreaElement;
-        const selection = { 
-            start: target.selectionStart, 
-            end: target.selectionEnd 
-        };
-        
-        if (onSelectionChange) {
-            onSelectionChange(selection);
-        }
-        if (onStateChange) {
-            onStateChange({ text: target.value, selection });
-        }
-    }, [onSelectionChange, onStateChange]);
-
-    const handleScroll = React.useCallback((e: React.UIEvent<HTMLTextAreaElement>) => {
-        const scrollY = e.currentTarget.scrollTop;
-        if (typeof scrollY !== 'number' || !Number.isFinite(scrollY) || scrollY < 0) return;
-        props.onScrollYChange?.(scrollY);
-    }, [props.onScrollYChange]);
-
-    const handleCompositionStart = React.useCallback(() => {
-        isComposingRef.current = true;
-    }, []);
-
-    const handleCompositionEnd = React.useCallback(() => {
-        isComposingRef.current = false;
-    }, []);
-
-    const handlePaste = React.useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-        const cb = props.onFilesPasted;
-        if (!cb) return;
-        const files = extractWebAttachmentFilesFromDataTransfer(e.clipboardData);
-        if (files.length > 0) {
-            cb(files);
-            e.preventDefault();
-        }
-    }, [props.onFilesPasted]);
-
-    useWebFileDropZone({
-        hostRef: textareaRef,
-        present: Boolean(props.onFilesDropped),
-        enabled: props.editable !== false && Boolean(props.onFilesDropped),
-        onFileDragActiveChange: props.onFileDragActiveChange,
-        onFilesDropped: (event) => {
-            const files = extractWebAttachmentFilesFromDataTransfer(event.dataTransfer);
-            if (files.length > 0) props.onFilesDropped?.(files);
+            };
         },
     });
-
-    // Imperative handle for direct control
+    React.useLayoutEffect(() => {
+        if (!hostRef.current) return;
+        ensureReferenceChipStyles();
+        const controller = createComposerEditorController(hostRef.current, makeOptions());
+        controllerRef.current = controller;
+        const host = hostRef.current;
+        const dom = controller.editor.view.dom;
+        const onScroll = () => { currentProps.current.onScrollYChange?.(host.scrollTop); notifyCaret(); };
+        host.addEventListener('scroll', onScroll);
+        const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+        for (let node: Element | null = host; node && observer; node = node.parentElement) observer.observe(node);
+        Object.assign(dom.style, { whiteSpace: 'pre-wrap', outline: 'none', minHeight: '1lh', overflowWrap: 'anywhere' });
+        if (currentProps.current.autoFocus) dom.focus();
+        measure();
+        return () => {
+            clearTimer(); pending.current = null; host.removeEventListener('scroll', onScroll);
+            observer?.disconnect(); controller.destroy(); controllerRef.current = null;
+        };
+    }, []);
+    React.useLayoutEffect(() => {
+        const controller = controllerRef.current;
+        if (!controller) return;
+        const live = controller.read().text;
+        if (props.value === lastEmitted.current) confirmed.current = true;
+        const stale = props.value !== live && (!confirmed.current || pending.current !== null);
+        if (!stale) {
+            const external = live !== props.value;
+            controller.update(makeOptions());
+            if (external) { clearTimer(); pending.current = null; lastEmitted.current = props.value; scrollRestoreKey.current = null; }
+        }
+        const dom = controller.editor.view.dom;
+        const attributes: Record<string, string | undefined> = {
+            'data-testid': props.testID, 'data-placeholder': props.placeholder,
+            'aria-label': props.accessibilityLabel, 'aria-description': props.accessibilityHint,
+            role: props.accessibilityRole ?? 'textbox', 'aria-multiline': 'true',
+            'aria-expanded': props.accessibilityState?.expanded === undefined ? undefined : String(props.accessibilityState.expanded),
+            'aria-haspopup': props['aria-haspopup'], 'aria-autocomplete': props['aria-autocomplete'],
+            'aria-controls': props['aria-controls'], 'aria-activedescendant': props['aria-activedescendant'],
+            autocapitalize: 'sentences', autocorrect: 'on', autocomplete: 'off',
+            'data-empty': controller.read().text.length === 0 ? 'true' : undefined,
+        };
+        for (const [name, value] of Object.entries(attributes)) {
+            if (value === undefined) dom.removeAttribute(name); else dom.setAttribute(name, value);
+        }
+        if (!controller.editor.view.composing && props.initialScrollY !== undefined && Number.isFinite(props.initialScrollY) && props.initialScrollY >= 0) {
+            const key = props.scrollRestoreToken ?? `scroll:${props.initialScrollY}`;
+            if (scrollRestoreKey.current !== key) { hostRef.current!.scrollTop = props.initialScrollY; scrollRestoreKey.current = key; }
+        }
+        measure();
+    });
     React.useImperativeHandle(ref, () => ({
-        setTextAndSelection: (text: string, selection: { start: number; end: number }) => {
-            const nextSelection = clampTextSelection(selection, text.length);
-            liveValueRef.current = text;
-            if (textareaRef.current) {
-                textareaRef.current.value = text;
-                textareaRef.current.setSelectionRange(nextSelection.start, nextSelection.end);
-                applyTextareaHeight(textareaRef.current, text.length);
-            }
-
-            emitChangeText(text);
-            if (onStateChange) {
-                onStateChange({ text, selection: nextSelection });
-            }
-            if (onSelectionChange) {
-                onSelectionChange(nextSelection);
-            }
-        },
-        setSelection: (selection: { start: number; end: number }) => {
-            if (isComposingRef.current) return;
-            const liveText = textareaRef.current?.value ?? liveValueRef.current;
-            // Native parity (MultiTextInput.tsx): a selection may only be
-            // applied while the live text matches the controlled value.
-            // Callers compute selections against the controlled value; once
-            // the user has typed ahead of it, applying that selection would
-            // drag the live caret backwards mid-typing.
-            if (liveText !== value) return;
-            const nextSelection = clampTextSelection(selection, liveText.length);
-            if (textareaRef.current) {
-                textareaRef.current.setSelectionRange(nextSelection.start, nextSelection.end);
-            }
-
-            if (onStateChange) {
-                onStateChange({ text: liveText, selection: nextSelection });
-            }
-            if (onSelectionChange) {
-                onSelectionChange(nextSelection);
-            }
-        },
-        getText: () => textareaRef.current?.value ?? liveValueRef.current,
-        flushPendingTextChange,
-        focus: () => {
-            textareaRef.current?.focus();
-        },
-        blur: () => {
-            textareaRef.current?.blur();
-        },
-        // Lane A0 (D33): measurement/identity helpers for useTextInputCaretRect
-        measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => {
-            const el = textareaRef.current;
-            if (el) {
-                // D47: use raw getBoundingClientRect viewport/client coordinates,
-                // NO window.scrollX/Y addition.
-                const rect = el.getBoundingClientRect();
-                callback(rect.left, rect.top, rect.width, rect.height);
-            }
-        },
+        setTextAndSelection: (text, selection) => { controllerRef.current?.setTextAndSelection(text, selection); flush(); },
+        setSelection: selection => { if (controllerRef.current?.read().text === currentProps.current.value) controllerRef.current.setSelection(selection); },
+        getText: () => controllerRef.current?.read().text ?? currentProps.current.value,
+        flushPendingTextChange: flush,
+        focus: () => controllerRef.current?.editor.view.dom.focus(),
+        blur: () => controllerRef.current?.editor.view.dom.blur(),
+        measureInWindow: callback => { const rect = hostRef.current?.getBoundingClientRect(); if (rect) callback(rect.left, rect.top, rect.width, rect.height); },
         getReactNodeTag: () => null,
-        getInputElement: () => textareaRef.current,
-    }), [applyTextareaHeight, emitChangeText, flushPendingTextChange, onStateChange, onSelectionChange, value]);
-
-    const commonTextareaProps = {
-        ref: textareaRef,
-        'data-testid': props.testID,
-        // This raw DOM textarea bypasses the shared TextInput host. Reuse its
-        // forced-colors-only focus cue without restoring normal-mode chrome.
-        'data-happier-text-input': 'true',
-        placeholder,
-        defaultValue: value,
-        onChange: handleChange,
-        onSelect: handleSelect,
-        onScroll: handleScroll,
-        onKeyDown: handleKeyDown,
-        onCompositionStart: handleCompositionStart,
-        onCompositionEnd: handleCompositionEnd,
-        onPaste: handlePaste,
-        onFocus: props.onFocus,
-        onBlur: props.onBlur,
-        readOnly: props.editable === false,
-        autoCapitalize: 'sentences',
-        autoCorrect: 'on',
-        autoComplete: 'off',
-        'aria-label': props.accessibilityLabel,
-        'aria-description': props.accessibilityHint,
-        role: props.accessibilityRole,
-        'aria-expanded': props.accessibilityState?.expanded,
-        'aria-haspopup': props['aria-haspopup'],
-        'aria-autocomplete': props['aria-autocomplete'],
-        'aria-controls': props['aria-controls'],
-        'aria-activedescendant': props['aria-activedescendant'],
-    } satisfies React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
-        ref: React.Ref<HTMLTextAreaElement>;
-        'data-testid'?: string;
-        'data-happier-text-input'?: 'true';
-    };
-
-    return (
-        <View style={{ width: '100%', position: 'relative' }}>
-            <textarea
-                {...commonTextareaProps}
-                rows={1}
-                style={{
-                    ...textareaStyle,
-                    maxHeight: normalizedMaxHeight,
-                    height: renderedTextareaHeight,
-                    overflowY: 'auto',
-                    overscrollBehavior: 'contain',
-                }}
-            />
-        </View>
-    );
+        getCaretRect: () => controllerRef.current?.getCaretRect() ?? null,
+        subscribeCaretRect: listener => { caretListeners.current.add(listener); return () => { caretListeners.current.delete(listener); }; },
+        offsetAtPoint: async point => controllerRef.current?.offsetAtPoint(point) ?? null,
+        setDropCaret: offset => controllerRef.current?.setDropCaret(offset),
+    }), []);
+    useWebFileDropZone({
+        hostRef, present: Boolean(props.onFilesDropped), enabled: props.editable !== false && Boolean(props.onFilesDropped),
+        onFileDragActiveChange: props.onFileDragActiveChange,
+        onFilesDropped: event => {
+            const files = extractWebAttachmentFilesFromDataTransfer(event.dataTransfer);
+            if (files.length > 0) currentProps.current.onFilesDropped?.(files);
+        },
+    });
+    const scaled = scaleTextStyle(props.textStyle ?? { fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE }, uiFontScale);
+    const placeholderInk = useGlassBackedInk()(props.placeholderTextColor ?? theme.colors.input.placeholder);
+    const maxHeight = Number.isFinite(props.maxHeight) && (props.maxHeight ?? 0) > 0 ? props.maxHeight : 120;
+    const style = {
+        width: '100%', position: 'relative', boxSizing: 'border-box', backgroundColor: 'transparent',
+        color: scaled.color ?? theme.colors.input.text, caretColor: theme.colors.input.text,
+        fontFamily: scaled.fontFamily ?? Typography.default().fontFamily,
+        fontSize: scaled.fontSize, fontWeight: scaled.fontWeight, fontStyle: scaled.fontStyle,
+        letterSpacing: scaled.letterSpacing, lineHeight: scaled.lineHeight ? `${scaled.lineHeight}px` : '1.4',
+        paddingTop: props.paddingTop, paddingBottom: props.paddingBottom, paddingLeft: props.paddingLeft, paddingRight: props.paddingRight,
+        maxHeight, overflowY: 'auto', overscrollBehavior: 'contain', scrollbarWidth: 'none',
+        '--happier-placeholder-color': placeholderInk,
+        '--happier-composer-monospace': Typography.mono().fontFamily,
+        '--happier-composer-muted': theme.colors.text.secondary,
+        '--happier-composer-warning': theme.colors.state.warning.foreground,
+        '--happier-composer-success': theme.colors.state.success.foreground,
+        '--happier-composer-accent': theme.colors.accent.blue,
+        ...referenceChipCssVariables({
+            secondary: theme.colors.text.secondary, tertiary: theme.colors.text.tertiary,
+            accent: theme.colors.accent.blue, focus: theme.colors.border.focus,
+        }),
+    } as CSSProperties;
+    const hoveredChip = chipHover.mode !== 'closed' ? chipHover.target : null;
+    return <>
+        <div ref={hostRef} data-composer-editor="" style={style} />
+        {hoveredChip ? <ComposerChipHoverCard target={hoveredChip} panelHoverProps={chipHover.panelHoverProps} onRequestClose={chipHover.close} /> : null}
+    </>;
 });
-
 MultiTextInput.displayName = 'MultiTextInput';

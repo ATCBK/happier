@@ -87,12 +87,48 @@ html:not([data-happier-input-modality="keyboard"]) :focus {
 }
 
 /*
- * The raw web textarea (`MultiTextInput.web`) carries its placeholder ink, already stepped for the glass it
+ * Web inputs carry their placeholder ink, already stepped for the glass they
  * stands on, as a custom property; without one the browser's own grey applies.
  */
 [data-happier-text-input="true"]::placeholder {
     color: var(--happier-placeholder-color, revert);
     opacity: 1;
+}
+
+[data-composer-editor] .ProseMirror p {
+    margin: 0;
+}
+
+[data-composer-editor] [data-empty="true"]::before {
+    content: attr(data-placeholder);
+    color: var(--happier-placeholder-color);
+    pointer-events: none;
+    position: absolute;
+}
+
+[data-composer-decoration="code"] {
+    font-family: var(--happier-composer-monospace);
+}
+
+[data-composer-decoration="link"] {
+    color: var(--happier-composer-accent);
+    text-decoration: underline;
+}
+
+[data-composer-decoration="highlight"] {
+    color: var(--happier-composer-accent);
+}
+
+[data-composer-decoration="muted"] {
+    color: var(--happier-composer-muted);
+}
+
+[data-composer-decoration="warning"] {
+    color: var(--happier-composer-warning);
+}
+
+[data-composer-decoration="success"] {
+    color: var(--happier-composer-success);
 }
 
 @keyframes happierStatusDotPulse {

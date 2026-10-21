@@ -35,7 +35,6 @@ function createMockHandle(overrides?: Partial<TextInputCaretRectHandle>): TextIn
     return {
         measureInWindow: overrides?.measureInWindow ?? vi.fn((cb) => cb(100, 200, 300, 100)),
         getReactNodeTag: overrides?.getReactNodeTag ?? (() => 42),
-        getInputElement: overrides?.getInputElement ?? (() => null),
     };
 }
 

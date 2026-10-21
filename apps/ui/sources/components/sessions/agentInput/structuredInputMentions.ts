@@ -1,4 +1,5 @@
-import { MENTION_KIND_V1, admitMentionRefsV1ForText, buildMentionRefForKindV1, sanitizeMentionRefsV1, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { MENTION_KIND_V1, admitMentionRefsV1ForText, buildMentionRefForKindV1, parseMentionRefV1, sanitizeMentionRefsV1, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
+import { INLINE_REFERENCE_ATTACHMENT_SCHEME_V1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
 import { readComposerReferenceMentionV1 } from '@happier-dev/protocol/runtime/input/composerReferenceProviderV1';
 import { resolveSkillCatalogItemIdentityV1, resolveSkillCatalogOriginV1 } from '@happier-dev/protocol/runtime/catalog/skills';
 import type { ComposerAttachmentDraftV1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
@@ -38,6 +39,7 @@ export type {
 };
 
 export type StructuredInputImageInput = Readonly<{
+    id?: string;
     type: 'localImage' | 'image';
     kind?: 'image';
     path?: string;
@@ -127,6 +129,7 @@ function isComposerReferenceMention(
         ...(mention.composerReference
             ? { composerReference: mention.composerReference }
             : {}),
+        ...(mention.composerReferenceTrigger ? { composerReferenceTrigger: mention.composerReferenceTrigger } : {}),
     }) !== null;
 }
 
@@ -183,7 +186,8 @@ function resolveMentionRefWrite(mention: ComposerStructuredInputMention): Mentio
             ...token,
             ...(mention.label ? { label: mention.label } : {}),
             ...(isComposerReferenceMention(mention)
-                ? { composerReference: mention.composerReference }
+                ? { composerReference: mention.composerReference,
+                    ...(mention.composerReferenceTrigger ? { composerReferenceTrigger: mention.composerReferenceTrigger } : {}) }
                 : {}),
         },
     };
@@ -368,7 +372,9 @@ function buildEnvelope(args: Readonly<{
     attachments?: readonly StructuredInputImageInput[];
     composerAttachments?: readonly ComposerAttachmentDraftV1[];
 }>): StructuredInputEnvelope | null {
-    const composerMentions = args.mentions ?? [];
+    const composerMentions = (args.mentions ?? []).filter(mention => !('ref' in mention
+        && typeof mention.ref === 'string'
+        && parseMentionRefV1(mention.ref)?.scheme === INLINE_REFERENCE_ATTACHMENT_SCHEME_V1));
     const writes = composerMentions.map(resolveMentionRefWrite);
     const canWriteReferences = !writes.some((write) => write.status === 'unreferenceable');
     const mentionByIdentity = new Map<string, ComposerStructuredInputMention>();

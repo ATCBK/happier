@@ -4,6 +4,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { de as actionTitlesDe } from './actionTitles/de';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
@@ -1076,6 +1077,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  */
 export const de: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations.de,
+    composerReferences: composerReferenceTranslations.de,
     hunkReview: hunkReviewTranslations['de'],
   panes: { mainColumn: paneMainColumnTranslations['de'], emptyEditor: paneEmptyEditorTranslations['de'], shortcutsSheet: paneShortcutsSheetTranslations['de'] },
   sessionCoordinator: {

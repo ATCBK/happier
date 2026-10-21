@@ -144,6 +144,16 @@ function hugeStrokeUnitsForSize(units: number, size: number): number {
     return units * (HUGEICONS_STROKE_REFERENCE_SIZE_PX / size);
 }
 
+/**
+ * The HugeIcons drawing for a concept under the selected family, or undefined when Phosphor draws it.
+ * HugeIcons draws outline only. `fill` is a Phosphor capability, so a filled request always goes
+ * there regardless of the chosen family — and so does any concept HugeIcons has no glyph for.
+ */
+export function resolveHugeIconGlyph(name: IconName, weight: IconWeight | undefined, family: string) {
+    if (family !== 'hugeicons' || weight === 'fill' || PHOSPHOR_PINNED.has(name)) return undefined;
+    return HUGE_ICON_REGISTRY[name as HugeIconName];
+}
+
 export const Icon = React.memo((props: IconProps) => {
     const { theme } = useUnistyles();
     const family = useIconFamily();
@@ -165,12 +175,8 @@ export const Icon = React.memo((props: IconProps) => {
                 importantForAccessibility: 'no-hide-descendants' as const,
             };
 
-    // HugeIcons draws outline only. `fill` is a Phosphor capability, so a filled request always goes
-    // there regardless of the chosen family — and so does any concept HugeIcons has no glyph for.
-    const hugeGlyph = props.weight === 'fill' || PHOSPHOR_PINNED.has(props.name)
-        ? undefined
-        : HUGE_ICON_REGISTRY[props.name as HugeIconName];
-    if (family === 'hugeicons' && hugeGlyph) {
+    const hugeGlyph = resolveHugeIconGlyph(props.name, props.weight, family);
+    if (hugeGlyph) {
         return (
             // `HugeiconsIcon` destructures `style` out of its props and never forwards it to the
             // underlying `Svg`, so anything a caller sets — positioning, transforms, the optical

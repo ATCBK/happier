@@ -3,6 +3,7 @@ import { fileSelectionAskTranslations } from './fileSelectionAskTranslations.sha
 import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 import { workspaceTabKeyboardTranslations } from './workspaceTabTranslations.shared';
@@ -21932,6 +21933,7 @@ const enConversationSearch = {
 
 export const en: TranslationStructure = {
     fileReviewNote: fileReviewNoteTranslations.en,
+    composerReferences: composerReferenceTranslations.en,
     hunkReview: hunkReviewTranslations['en'],
   panes: { mainColumn: paneMainColumnTranslations['en'], emptyEditor: paneEmptyEditorTranslations['en'], shortcutsSheet: paneShortcutsSheetTranslations['en'] },
     sessionCoordinator: {
@@ -23042,7 +23044,7 @@ type EnglishNamespaces29 = TranslationOverlay<
   typeof projectWorkers
 >;
 
-export type TranslationsEn = EnglishNamespaces29 & Readonly<{ fileReviewNote: typeof fileReviewNoteTranslations.en; hunkReview: typeof hunkReviewTranslations.en }>;
+export type TranslationsEn = EnglishNamespaces29 & Readonly<{ fileReviewNote: typeof fileReviewNoteTranslations.en; hunkReview: typeof hunkReviewTranslations.en; composerReferences: typeof composerReferenceTranslations.en }>;
 
 // Shape contract for all locales: enforce identical key structure without requiring English literal
 // string values. Functions are preserved so parameter lists remain typechecked.

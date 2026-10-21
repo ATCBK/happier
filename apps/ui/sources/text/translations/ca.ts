@@ -4,6 +4,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ca as actionTitlesCa } from './actionTitles/ca';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
@@ -1251,6 +1252,7 @@ function plural({ count, singular, plural }: { count: number; singular: string; 
  */
 const caValues = {
     fileReviewNote: fileReviewNoteTranslations['ca'],
+    composerReferences: composerReferenceTranslations['ca'],
     hunkReview: hunkReviewTranslations['ca'],
   panes: { mainColumn: paneMainColumnTranslations['ca'], emptyEditor: paneEmptyEditorTranslations['ca'], shortcutsSheet: paneShortcutsSheetTranslations['ca'] },
   sessionCoordinator: {

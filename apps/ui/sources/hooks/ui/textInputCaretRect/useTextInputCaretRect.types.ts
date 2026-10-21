@@ -11,13 +11,16 @@ export type CaretRect = Readonly<{
 }>;
 
 /**
- * Narrow measurement/identity handle that MultiTextInput exposes (Lane A0 / D33).
+ * Narrow measurement/identity handle that MultiTextInput exposes.
  * The caret-rect hook consumes this interface — never reaches into platform internals.
  */
 export type TextInputCaretRectHandle = Readonly<{
     measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void;
     getReactNodeTag: () => number | null;
-    getInputElement: () => HTMLTextAreaElement | null;
+    /** Web editors measure their current selection in viewport coordinates. */
+    getCaretRect?: () => CaretRect | null;
+    /** Web editor scroll, selection and layout changes invalidate the current measurement. */
+    subscribeCaretRect?: (listener: () => void) => () => void;
 }>;
 
 /**
@@ -26,7 +29,7 @@ export type TextInputCaretRectHandle = Readonly<{
 export type UseTextInputCaretRectInput = Readonly<{
     /** Ref to the narrow measurement/identity handle exposed by MultiTextInput. */
     inputRef: React.RefObject<TextInputCaretRectHandle | null>;
-    /** Web-only: the current selection (rendered cursor index in the value). Native ignores. */
+    /** Web-only: current selection in composer-text offsets; triggers remeasurement. Native ignores. */
     selection?: { start: number; end: number };
     /** When false, the hook returns null and releases native/web tracking. */
     enabled?: boolean;

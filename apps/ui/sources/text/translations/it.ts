@@ -4,6 +4,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { it as actionTitlesIt } from './actionTitles/it';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
@@ -1283,6 +1284,7 @@ function plural({
  */
 const itValues = {
     fileReviewNote: fileReviewNoteTranslations['it'],
+    composerReferences: composerReferenceTranslations['it'],
     hunkReview: hunkReviewTranslations['it'],
   panes: { mainColumn: paneMainColumnTranslations['it'], emptyEditor: paneEmptyEditorTranslations['it'], shortcutsSheet: paneShortcutsSheetTranslations['it'] },
   sessionCoordinator: {

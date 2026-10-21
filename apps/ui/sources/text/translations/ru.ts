@@ -4,6 +4,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ru as actionTitlesRu } from './actionTitles/ru';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
@@ -1298,6 +1299,7 @@ function plural({
  */
 const ruValues = {
     fileReviewNote: fileReviewNoteTranslations['ru'],
+    composerReferences: composerReferenceTranslations['ru'],
     hunkReview: hunkReviewTranslations['ru'],
   panes: { mainColumn: paneMainColumnTranslations['ru'], emptyEditor: paneEmptyEditorTranslations['ru'], shortcutsSheet: paneShortcutsSheetTranslations['ru'] },
   sessionCoordinator: {

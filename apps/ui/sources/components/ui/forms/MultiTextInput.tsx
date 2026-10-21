@@ -1,44 +1,43 @@
 import * as React from 'react';
-import {
-    View,
-    NativeSyntheticEvent,
-    TextInputKeyPressEventData,
-    TextInputSelectionChangeEventData,
-    TextStyle,
-    findNodeHandle,
-    type LayoutChangeEvent,
-    Platform,
-} from 'react-native';
+import { View, findNodeHandle, Platform, type LayoutChangeEvent, type TextStyle } from 'react-native';
+import { requireNativeViewManager } from 'expo-modules-core';
 import { useUnistyles } from 'react-native-unistyles';
 import { Typography } from '@/constants/Typography';
-import { TextInput } from '@/components/ui/text/Text';
+import { referenceChipFill } from '@/components/ui/referenceChip/referenceChipFill';
+import { nativeReferenceChipGlyph } from '@/components/ui/referenceChip/nativeReferenceChip';
 import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
+import { scaleTextStyle } from '@/components/ui/text/uiFontScale';
 import { normalizeKeyboardKeyPressEvent, type KeyPressEvent as KeyboardKeyPressEvent } from '@/keyboard/events';
 import { useLocalSetting } from '@/sync/store/settingsReadHooks';
+import { t } from '@/text';
+import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import { recordLargeTextInputDiagnostic } from '@/utils/system/userInteractionDiagnostics';
+import type { CaretRect } from '@/hooks/ui/textInputCaretRect/useTextInputCaretRect.types';
+import { normalizeNativeMultiTextInputMaxHeight, resolveNativeMultiTextInputMinHeight } from './nativeMultiTextInputHeight';
 import {
-    normalizeNativeMultiTextInputMaxHeight,
-    resolveNativeMultiTextInputMinHeight,
-} from './nativeMultiTextInputHeight';
-import { TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT } from './largeTextInputPolicy';
-import { MULTI_TEXT_INPUT_BASE_FONT_SIZE, MULTI_TEXT_INPUT_BASE_LINE_HEIGHT } from './multiTextInputTypography';
-
+    MULTI_TEXT_INPUT_BASE_FONT_SIZE,
+    MULTI_TEXT_INPUT_BASE_LINE_HEIGHT,
+    COMPOSER_REFERENCE_CHIP_HEIGHT,
+    COMPOSER_REFERENCE_CHIP_PHONE_MAX_LABEL_WIDTH,
+    NATIVE_REFERENCE_CHIP_ANATOMY,
+} from './multiTextInputTypography';
+import type {
+    ComposerInputReference, ComposerInputDecoration,
+    NativeComposerInputProps, NativeComposerInputHandle,
+} from './nativeComposerInput';
+import type { ComposerEditorReference } from './composerEditor/composerEditorTypes';
+import { boundComposerEditorReferences } from './composerEditor/composerTextDocMapping';
 
 export type { SupportedKey } from '@/keyboard/events';
+export type { ComposerInputReference, ComposerInputDecoration } from './nativeComposerInput';
 
 export interface TextInputState {
     text: string;
-    selection: {
-        start: number;
-        end: number;
-    };
+    selection: { start: number; end: number };
 }
-
-export type KeyPressEvent = KeyboardKeyPressEvent & Readonly<{
-    inputState?: TextInputState;
-}>;
-
+export type KeyPressEvent = KeyboardKeyPressEvent & Readonly<{ inputState?: TextInputState }>;
 export type OnKeyPressCallback = (event: KeyPressEvent) => boolean;
+export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
 
 export interface MultiTextInputHandle {
     setTextAndSelection: (text: string, selection: { start: number; end: number }) => void;
@@ -49,23 +48,22 @@ export interface MultiTextInputHandle {
     blur: () => void;
     measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void;
     getReactNodeTag: () => number | null;
-    getInputElement: () => HTMLTextAreaElement | null;
+    getCaretRect: () => CaretRect | null;
+    subscribeCaretRect: (listener: () => void) => () => void;
+    offsetAtPoint: (point: Readonly<{ x: number; y: number }>) => Promise<number | null>;
+    setDropCaret: (offset: number | null) => void;
 }
 
-export type MultiTextInputSubmitBehavior = 'newline' | 'submit' | 'blurAndSubmit';
-
-type NativeTextInputContentSizeChangeEvent = NativeSyntheticEvent<Readonly<{
-    contentSize?: Readonly<{
-        height?: number;
-    }>;
-}>>;
-
 export interface MultiTextInputProps {
+    attachmentIds?: readonly string[];
+    onReferencesChange?: (references: readonly ComposerEditorReference[]) => void;
     textStyle?: TextStyle;
     value: string;
+    references?: readonly ComposerEditorReference[];
+    decorations?: readonly ComposerInputDecoration[];
+    onReferencePress?: (ref: string) => void;
     onChangeText: (text: string) => void;
     placeholder?: string;
-    /** The placeholder's ink: a theme token, which backed glass steps up like any quiet ink. Defaults to `input.placeholder`. */
     placeholderTextColor?: string;
     testID?: string;
     maxHeight?: number;
@@ -89,389 +87,241 @@ export interface MultiTextInputProps {
     onSubmitEditing?: () => void;
     accessibilityLabel?: string;
     accessibilityHint?: string;
-    // Web-only: file attachments via paste or drag-and-drop.
-    onFilesPasted?: (files: readonly File[]) => void;
-    onFilesDropped?: (files: readonly File[]) => void;
-    onFileDragActiveChange?: (active: boolean) => void;
     accessibilityRole?: 'combobox';
     accessibilityState?: Readonly<{ expanded?: boolean }>;
     'aria-haspopup'?: 'listbox';
     'aria-autocomplete'?: 'list';
     'aria-controls'?: string;
     'aria-activedescendant'?: string;
+    onFilesPasted?: (files: readonly File[]) => void;
+    onFilesDropped?: (files: readonly File[]) => void;
+    onFileDragActiveChange?: (active: boolean) => void;
 }
 
-function resolveNativeReturnKeyType(submitBehavior: MultiTextInputSubmitBehavior | undefined): 'default' | 'send' {
-    return submitBehavior === 'submit' || submitBehavior === 'blurAndSubmit' ? 'send' : 'default';
+// Expo's declared view type omits its native AsyncFunction ref methods.
+const NativeComposerInput = requireNativeViewManager<NativeComposerInputProps>('HappierComposerInput') as unknown as
+    React.ForwardRefExoticComponent<NativeComposerInputProps & React.RefAttributes<NativeComposerInputHandle>>;
+
+const NO_REFERENCES: readonly ComposerEditorReference[] = [];
+const NO_DECORATIONS: readonly ComposerInputDecoration[] = [];
+
+function clampSelection(selection: TextInputState['selection'], length: number, references: readonly Pick<ComposerEditorReference, 'start' | 'end'>[] = []): TextInputState['selection'] {
+    const clamp = (offset: number) => Number.isFinite(offset) ? Math.min(length, Math.max(0, Math.trunc(offset))) : length;
+    const start = clamp(Math.min(selection.start, selection.end));
+    const end = clamp(Math.max(selection.start, selection.end));
+    const snap = (offset: number, edge: 'start' | 'end' | 'nearest') => {
+        const reference = references.find(reference => reference.start < offset && offset < reference.end);
+        if (!reference) return offset;
+        return edge === 'start' || (edge === 'nearest' && offset - reference.start <= reference.end - offset) ? reference.start : reference.end;
+    };
+    return { start: snap(start, start === end ? 'nearest' : 'start'), end: snap(end, start === end ? 'nearest' : 'end') };
 }
 
-function normalizeUiFontScale(value: number): number {
-    if (!Number.isFinite(value) || value <= 0) return 1;
-    return value;
-}
-
-function clampTextSelection(selection: { start: number; end: number }, textLength: number): { start: number; end: number } {
-    const start = Number.isFinite(selection.start)
-        ? Math.min(Math.max(0, Math.trunc(selection.start)), textLength)
-        : textLength;
-    const end = Number.isFinite(selection.end)
-        ? Math.min(Math.max(0, Math.trunc(selection.end)), textLength)
-        : start;
-    return { start, end };
-}
-
-function resolveTextDiffBounds(previousText: string, nextText: string): Readonly<{
-    commonPrefixLength: number;
-    commonSuffixLength: number;
-}> {
-    const previousLength = previousText.length;
-    const nextLength = nextText.length;
-    const sharedLength = Math.min(previousLength, nextLength);
-
-    let commonPrefixLength = 0;
-    while (
-        commonPrefixLength < sharedLength
-        && previousText.charCodeAt(commonPrefixLength) === nextText.charCodeAt(commonPrefixLength)
-    ) {
-        commonPrefixLength += 1;
-    }
-
-    let commonSuffixLength = 0;
-    const remainingSharedLength = sharedLength - commonPrefixLength;
-    while (
-        commonSuffixLength < remainingSharedLength
-        && previousText.charCodeAt(previousLength - commonSuffixLength - 1)
-            === nextText.charCodeAt(nextLength - commonSuffixLength - 1)
-    ) {
-        commonSuffixLength += 1;
-    }
-
-    return { commonPrefixLength, commonSuffixLength };
-}
-
-function resolveCursorFromTextDiff(previousText: string, nextText: string): { start: number; end: number } {
-    const nextLength = nextText.length;
-    const { commonPrefixLength, commonSuffixLength } = resolveTextDiffBounds(previousText, nextText);
-
-    const insertedLength = Math.max(0, nextLength - commonPrefixLength - commonSuffixLength);
-    const cursor = commonPrefixLength + insertedLength;
-    return clampTextSelection({ start: cursor, end: cursor }, nextLength);
-}
-
-function hasSelectionBasedChangeBoundaryEvidence(params: Readonly<{
-    previousText: string;
-    previousSelection: { start: number; end: number };
-    nextText: string;
-    insertedLength: number;
-}>): boolean {
-    if (params.insertedLength < 0) return true;
-
-    if (
-        params.previousSelection.start > 0
-        && params.previousText.charCodeAt(params.previousSelection.start - 1)
-            !== params.nextText.charCodeAt(params.previousSelection.start - 1)
-    ) {
-        return false;
-    }
-
-    const previousAfterOffset = params.previousSelection.end;
-    const nextAfterOffset = params.previousSelection.start + params.insertedLength;
-    if (
-        previousAfterOffset < params.previousText.length
-        && nextAfterOffset < params.nextText.length
-        && params.previousText.charCodeAt(previousAfterOffset) !== params.nextText.charCodeAt(nextAfterOffset)
-    ) {
-        return false;
-    }
-
-    return true;
-}
-
-function shouldResolveNativeChangedTextSelectionFromDiff(params: Readonly<{
-    previousText: string;
-    previousSelection: { start: number; end: number };
-    nextText: string;
-    insertedLength: number;
-}>): boolean {
-    if (params.previousText.length <= TEXT_INPUT_LARGE_TEXT_VALUE_LENGTH_LIMIT) return false;
-    if (params.insertedLength < 0) return false;
-
-    const selectionWasAtDocumentStart = params.previousSelection.start === 0 && params.previousSelection.end === 0;
-    return selectionWasAtDocumentStart || !hasSelectionBasedChangeBoundaryEvidence(params);
-}
-
-function resolveNativeChangedTextSelection(params: Readonly<{
-    previousText: string;
-    previousSelection: { start: number; end: number };
-    nextText: string;
-}>): { start: number; end: number } {
-    const previousLength = params.previousText.length;
-    const nextLength = params.nextText.length;
-    const previousSelection = clampTextSelection(params.previousSelection, previousLength);
-    const selectedLength = Math.max(0, previousSelection.end - previousSelection.start);
-    const insertedLength = nextLength - (previousLength - selectedLength);
-
-    if (shouldResolveNativeChangedTextSelectionFromDiff({
-        previousText: params.previousText,
-        previousSelection,
-        nextText: params.nextText,
-        insertedLength,
-    })) {
-        return resolveCursorFromTextDiff(params.previousText, params.nextText);
-    }
-
-    const cursor = insertedLength >= 0
-        ? previousSelection.start + insertedLength
-        : Math.min(previousSelection.start, nextLength);
-    return clampTextSelection({ start: cursor, end: cursor }, nextLength);
-}
-
-function resolveNativeLineHeight(params: Readonly<{
-    textStyle?: TextStyle;
-    uiFontScale: number;
-}>): number {
-    const baseLineHeight = typeof params.textStyle?.lineHeight === 'number' && Number.isFinite(params.textStyle.lineHeight)
-        ? params.textStyle.lineHeight
-        : MULTI_TEXT_INPUT_BASE_LINE_HEIGHT;
-    return Math.ceil(baseLineHeight * params.uiFontScale);
-}
+const bindingKey = (ref: string, token: string) => JSON.stringify([ref, token]);
 
 export const MultiTextInput = React.forwardRef<MultiTextInputHandle, MultiTextInputProps>((props, ref) => {
-    const {
-        value,
-        onChangeText,
-        placeholder,
-        maxHeight,
-        onKeyPress,
-        onSelectionChange,
-        onStateChange,
-        onContentHeightChange,
-    } = props;
-
     const { theme } = useUnistyles();
-    const placeholderInk = useGlassBackedInk()(props.placeholderTextColor ?? theme.colors.input.placeholder);
-    const uiFontScale = normalizeUiFontScale(useLocalSetting('uiFontScale'));
-    const normalizedMaxHeight = normalizeNativeMultiTextInputMaxHeight(maxHeight);
-    const resolvedLineHeight = resolveNativeLineHeight({
-        textStyle: props.textStyle,
-        uiFontScale,
+    const resolveInk = useGlassBackedInk();
+    const scaleSetting = useLocalSetting('uiFontScale');
+    const uiFontScale = typeof scaleSetting === 'number' && Number.isFinite(scaleSetting) && scaleSetting > 0 ? scaleSetting : 1;
+    const textStyle = React.useMemo(() => scaleTextStyle({
+        ...Typography.default(),
+        fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE,
+        lineHeight: MULTI_TEXT_INPUT_BASE_LINE_HEIGHT,
+        ...props.textStyle,
+    }, uiFontScale), [props.textStyle, uiFontScale]);
+    const maxHeight = normalizeNativeMultiTextInputMaxHeight(props.maxHeight);
+    const minHeight = resolveNativeMultiTextInputMinHeight({
+        maxHeight, lineHeight: textStyle.lineHeight, paddingTop: props.paddingTop, paddingBottom: props.paddingBottom,
     });
-    const resolvedInputMinHeight = resolveNativeMultiTextInputMinHeight({
-        maxHeight: normalizedMaxHeight,
-        lineHeight: resolvedLineHeight,
-        paddingTop: props.paddingTop,
-        paddingBottom: props.paddingBottom,
-    });
-    const selectionRef = React.useRef({ start: value.length, end: value.length });
-    const latestNativeTextRef = React.useRef(value);
-    const controlledValueRef = React.useRef(value);
-    const inputRef = React.useRef<React.ElementRef<typeof TextInput> | null>(null);
-    if (controlledValueRef.current !== value) {
-        const previousValue = controlledValueRef.current;
-        const wasSelectionAtPreviousEnd = selectionRef.current.start === previousValue.length
-            && selectionRef.current.end === previousValue.length;
-        selectionRef.current = wasSelectionAtPreviousEnd
-            ? { start: value.length, end: value.length }
-            : clampTextSelection(selectionRef.current, value.length);
-        controlledValueRef.current = value;
+    const [contentHeight, setContentHeight] = React.useState<number | null>(null);
+    const inputRef = React.useRef<NativeComposerInputHandle | null>(null);
+    const textRef = React.useRef(props.value);
+    const controlledValueRef = React.useRef(props.value);
+    const selectionRef = React.useRef({ start: props.value.length, end: props.value.length });
+    const eventCountRef = React.useRef(0);
+    const inputTagRef = React.useRef<number | null>(null);
+    const caretRectRef = React.useRef<CaretRect | null>(null);
+    const lastHeightRef = React.useRef<number | null>(null);
+    const caretListenersRef = React.useRef(new Set<() => void>());
+    // Native undo retains attachment/span identity; opaque JS owner bindings stay on this side of the bridge.
+    const bindingsRef = React.useRef(new Map<string, ComposerEditorReference>());
+    const boundReferences = React.useMemo(() => boundComposerEditorReferences(props.value, props.references ?? NO_REFERENCES), [props.value, props.references]);
+    for (const reference of boundReferences) bindingsRef.current.set(bindingKey(reference.ref, reference.token), reference);
+    const nativeReferences = React.useMemo<readonly ComposerInputReference[]>(() => boundReferences.map(reference => ({
+        start: reference.start, end: reference.end, ref: reference.ref, label: reference.label, kind: reference.kind,
+        glyph: nativeReferenceChipGlyph(reference.ref, undefined, Platform.OS, reference.kind === 'image'),
+        ...(reference.state === undefined ? {} : { state: reference.state }),
+        ...(reference.accessibilityLabel === undefined ? {} : { accessibilityLabel: reference.accessibilityLabel }),
+        ...(reference.readableMarker === undefined ? {} : { marker: reference.readableMarker }),
+    })), [boundReferences]);
+    if (controlledValueRef.current !== props.value) {
+        const atEnd = selectionRef.current.start === controlledValueRef.current.length
+            && selectionRef.current.end === controlledValueRef.current.length;
+        controlledValueRef.current = props.value;
+        textRef.current = props.value;
+        selectionRef.current = atEnd
+            ? { start: props.value.length, end: props.value.length }
+            : clampSelection(selectionRef.current, props.value.length, boundReferences);
     }
-    latestNativeTextRef.current = value;
-    const lastReportedContentHeightRef = React.useRef<number | null>(null);
 
-    const handleKeyPress = React.useCallback((e: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
-        const nativeEvent = e.nativeEvent as TextInputKeyPressEventData & Partial<KeyboardKeyPressEvent>;
-        const keyEvent = normalizeKeyboardKeyPressEvent(nativeEvent);
-        let handled = false;
-
-        if (onKeyPress && keyEvent) {
-            handled = onKeyPress({
-                ...keyEvent,
-                inputState: {
-                    text: latestNativeTextRef.current,
-                    selection: { ...selectionRef.current },
-                },
-            });
+    const recordGeometry = React.useCallback((geometry: Readonly<{ nativeInputTag?: number; caretRect?: CaretRect | null }>) => {
+        if (typeof geometry.nativeInputTag === 'number') inputTagRef.current = geometry.nativeInputTag;
+        if ('caretRect' in geometry) {
+            caretRectRef.current = geometry.caretRect ?? null;
+            for (const listener of caretListenersRef.current) listener();
         }
-        if (handled) {
-            e.preventDefault();
-        }
-    }, [onKeyPress]);
-
-    const handleTextChange = React.useCallback((text: string) => {
-        const previousText = latestNativeTextRef.current;
-        const selection = resolveNativeChangedTextSelection({
-            previousText,
-            previousSelection: selectionRef.current,
-            nextText: text,
-        });
-        latestNativeTextRef.current = text;
+    }, []);
+    const publishSelection = React.useCallback((selection: TextInputState['selection']) => {
         selectionRef.current = selection;
+        props.onSelectionChange?.(selection);
+        props.onStateChange?.({ text: textRef.current, selection });
+    }, [props.onSelectionChange, props.onStateChange]);
 
+    const onChange = React.useCallback<NativeComposerInputProps['onChange']>((event) => {
+        const { text, selection, eventCount, references } = event.nativeEvent;
+        recordGeometry(event.nativeEvent);
+        eventCountRef.current = eventCount;
+        textRef.current = text;
+        selectionRef.current = selection;
         recordLargeTextInputDiagnostic({
-            phase: 'native-change',
-            platform: Platform.OS,
-            surface: 'agentInput',
-            textLength: text.length,
-            selection,
-            valueLength: controlledValueRef.current.length,
+            phase: 'native-change', platform: Platform.OS, surface: 'agentInput',
+            textLength: text.length, selection, valueLength: controlledValueRef.current.length,
         });
-
-        onChangeText(text);
-
-        if (onStateChange) {
-            onStateChange({ text, selection });
-        }
-        if (onSelectionChange) {
-            onSelectionChange(selection);
-        }
-    }, [onChangeText, onStateChange, onSelectionChange]);
-
-    const handleContentSizeChange = React.useCallback((e: NativeTextInputContentSizeChangeEvent) => {
-        const measuredHeight = e.nativeEvent.contentSize?.height;
-        if (typeof measuredHeight !== 'number' || !Number.isFinite(measuredHeight)) {
-            return;
-        }
-        const nextHeight = Math.max(0, Math.ceil(measuredHeight));
-        if (lastReportedContentHeightRef.current === nextHeight) {
-            return;
-        }
-        lastReportedContentHeightRef.current = nextHeight;
+        publishSelection(selection);
+        const restored = references.flatMap(reference => {
+            const binding = bindingsRef.current.get(bindingKey(reference.ref, reference.token));
+            return binding ? [{ ...binding, start: reference.start, end: reference.end }] : [];
+        });
+        props.onReferencesChange?.(boundComposerEditorReferences(text, restored));
+        props.onChangeText(text);
+    }, [recordGeometry, props.onChangeText, props.onReferencesChange, publishSelection]);
+    const onSelection = React.useCallback<NativeComposerInputProps['onSelection']>((event) => {
+        recordGeometry(event.nativeEvent);
+        const selection = event.nativeEvent.selection;
+        if (selection.start !== selectionRef.current.start || selection.end !== selectionRef.current.end) publishSelection(selection);
+    }, [recordGeometry, publishSelection]);
+    const onContentHeightChange = React.useCallback<NativeComposerInputProps['onContentHeightChange']>((event) => {
+        const measured = event.nativeEvent.height;
+        if (!Number.isFinite(measured)) return;
+        const height = Math.max(0, Math.ceil(measured));
+        if (lastHeightRef.current === height) return;
+        lastHeightRef.current = height;
+        setContentHeight(height);
         recordLargeTextInputDiagnostic({
-            phase: 'native-content-size',
-            platform: Platform.OS,
-            surface: 'agentInput',
-            textLength: latestNativeTextRef.current.length,
-            contentHeight: nextHeight,
-            maxHeight: normalizedMaxHeight,
+            phase: 'native-content-size', platform: Platform.OS, surface: 'agentInput',
+            textLength: textRef.current.length, contentHeight: height, maxHeight,
         });
-        onContentHeightChange?.(nextHeight);
-    }, [normalizedMaxHeight, onContentHeightChange]);
+        props.onContentHeightChange?.(height);
+    }, [maxHeight, props.onContentHeightChange]);
 
-    const handleSelectionChange = React.useCallback((e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
-        if (e.nativeEvent.selection) {
-            const liveText = latestNativeTextRef.current;
-            const selection = clampTextSelection(e.nativeEvent.selection, liveText.length);
+    // Stable paint props avoid repainting every native attachment for an ordinary text edit.
+    const nativeTheme = React.useMemo<NativeComposerInputProps['theme']>(() => ({
+        text: typeof textStyle.color === 'string' ? resolveInk(textStyle.color) ?? textStyle.color : theme.colors.input.text,
+        placeholder: resolveInk(props.placeholderTextColor ?? theme.colors.input.placeholder) ?? theme.colors.input.placeholder,
+        chipForeground: theme.colors.text.primary,
+        chipGlyphForeground: theme.colors.text.secondary,
+        chipBackground: referenceChipFill(theme.colors.text.primary),
+        selection: theme.colors.border.focus,
+        warning: theme.colors.state.warning.foreground,
+        success: theme.colors.state.success.foreground,
+        muted: theme.colors.text.secondary,
+        link: theme.colors.text.link,
+    }), [textStyle.color, resolveInk, theme, props.placeholderTextColor]);
+    const nativeTypography = React.useMemo<NativeComposerInputProps['typography']>(() => ({
+        fontFamily: textStyle.fontFamily,
+        fontSize: textStyle.fontSize ?? MULTI_TEXT_INPUT_BASE_FONT_SIZE,
+        lineHeight: textStyle.lineHeight ?? MULTI_TEXT_INPUT_BASE_LINE_HEIGHT,
+        fontWeight: textStyle.fontWeight === undefined ? undefined : String(textStyle.fontWeight),
+        chipFontFamily: Typography.default('medium').fontFamily,
+        monoFontFamily: Typography.mono().fontFamily,
+        chipHeight: COMPOSER_REFERENCE_CHIP_HEIGHT * uiFontScale,
+        chipRadius: NATIVE_REFERENCE_CHIP_ANATOMY.radius * uiFontScale,
+        chipPaddingLeft: NATIVE_REFERENCE_CHIP_ANATOMY.paddingLeft * uiFontScale,
+        chipPaddingRight: NATIVE_REFERENCE_CHIP_ANATOMY.paddingRight * uiFontScale,
+        chipGlyphSize: NATIVE_REFERENCE_CHIP_ANATOMY.glyphSize * uiFontScale,
+        chipGap: NATIVE_REFERENCE_CHIP_ANATOMY.gap * uiFontScale,
+        chipMaxLabelWidth: COMPOSER_REFERENCE_CHIP_PHONE_MAX_LABEL_WIDTH * uiFontScale,
+    }), [textStyle, uiFontScale, theme.borderRadius.sm]);
+    const nativePadding = React.useMemo(() => ({
+        top: props.paddingTop ?? 0, bottom: props.paddingBottom ?? 0, left: props.paddingLeft ?? 0, right: props.paddingRight ?? 0,
+    }), [props.paddingTop, props.paddingBottom, props.paddingLeft, props.paddingRight]);
 
-            // Only update if selection actually changed
-            if (selection.start !== selectionRef.current.start || selection.end !== selectionRef.current.end) {
-                selectionRef.current = selection;
-
-                if (onSelectionChange) {
-                    onSelectionChange(selection);
-                }
-                if (onStateChange) {
-                    onStateChange({ text: liveText, selection });
-                }
-            }
-        }
-    }, [onSelectionChange, onStateChange]);
-
-    // Imperative handle for direct control
     React.useImperativeHandle(ref, () => ({
-        setTextAndSelection: (text: string, selection: { start: number; end: number }) => {
-            const nextSelection = clampTextSelection(selection, text.length);
-            latestNativeTextRef.current = text;
-            if (inputRef.current) {
-                inputRef.current.setNativeProps({
-                    text,
-                    selection: nextSelection,
-                });
-            }
-
+        setTextAndSelection(text, selection) {
+            const nextSelection = clampSelection(selection, text.length, boundReferences.filter(reference => text.slice(reference.start, reference.end) === reference.token));
+            textRef.current = text;
             selectionRef.current = nextSelection;
+            inputRef.current?.setTextAndSelection(text, nextSelection);
+            props.onChangeText(text);
+            publishSelection(nextSelection);
+        },
+        setSelection(selection) {
+            if (textRef.current !== props.value) return;
+            const nextSelection = clampSelection(selection, textRef.current.length, boundReferences);
+            inputRef.current?.setSelection(nextSelection);
+            publishSelection(nextSelection);
+        },
+        getText: () => textRef.current,
+        flushPendingTextChange: () => textRef.current,
+        focus: () => { inputRef.current?.focus(); },
+        blur: () => { inputRef.current?.blur(); },
+        measureInWindow: callback => { inputRef.current?.measureInWindow(callback); },
+        getReactNodeTag: () => inputTagRef.current ?? findNodeHandle(inputRef.current as unknown as React.Component | null),
+        getCaretRect: () => caretRectRef.current,
+        subscribeCaretRect(listener) {
+            caretListenersRef.current.add(listener);
+            return () => { caretListenersRef.current.delete(listener); };
+        },
+        offsetAtPoint: async point => await inputRef.current?.offsetAtPoint(point.x, point.y) ?? null,
+        setDropCaret: offset => { inputRef.current?.setDropCaret(offset); },
+    }), [props.value, props.onChangeText, publishSelection, boundReferences]);
 
-            onChangeText(text);
-            if (onStateChange) {
-                onStateChange({ text, selection: nextSelection });
-            }
-            if (onSelectionChange) {
-                onSelectionChange(nextSelection);
-            }
-        },
-        setSelection: (selection: { start: number; end: number }) => {
-            if (latestNativeTextRef.current !== value) {
-                return;
-            }
-            const nextSelection = clampTextSelection(selection, value.length);
-            if (inputRef.current) {
-                inputRef.current.setNativeProps({
-                    selection: nextSelection,
-                });
-            }
-
-            selectionRef.current = nextSelection;
-
-            if (onStateChange) {
-                onStateChange({ text: value, selection: nextSelection });
-            }
-            if (onSelectionChange) {
-                onSelectionChange(nextSelection);
-            }
-        },
-        getText: () => latestNativeTextRef.current,
-        flushPendingTextChange: () => latestNativeTextRef.current,
-        focus: () => {
-            inputRef.current?.focus();
-        },
-        blur: () => {
-            inputRef.current?.blur();
-        },
-        measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => {
-            inputRef.current?.measureInWindow(callback);
-        },
-        getReactNodeTag: () => findNodeHandle(inputRef.current) ?? null,
-        getInputElement: () => null,
-    }), [onChangeText, onStateChange, onSelectionChange, value]);
-
-    return (
-        <View style={{ width: '100%' }} onLayout={props.onLayout}>
-            <TextInput
-                ref={inputRef}
-                testID={props.testID}
-                style={{
-                    width: '100%',
-                    fontSize: MULTI_TEXT_INPUT_BASE_FONT_SIZE,
-                    color: theme.colors.input.text,
-                    textAlignVertical: 'top',
-                    padding: 0,
-                    paddingTop: props.paddingTop,
-                    paddingBottom: props.paddingBottom,
-                    paddingLeft: props.paddingLeft,
-                    paddingRight: props.paddingRight,
-                    ...Typography.default(),
-                    ...props.textStyle,
-                    minHeight: resolvedInputMinHeight,
-                    maxHeight: normalizedMaxHeight,
-                }}
-                placeholder={placeholder}
-                placeholderTextColor={placeholderInk}
-                value={value}
-                onChangeText={handleTextChange}
-                onContentSizeChange={handleContentSizeChange}
-                onKeyPress={handleKeyPress}
-                onSelectionChange={handleSelectionChange}
-                multiline={true}
-                scrollEnabled={true}
-                autoCapitalize="sentences"
-                autoCorrect={true}
-                keyboardType="default"
-                disableFullscreenUI={true}
-                returnKeyType={resolveNativeReturnKeyType(props.submitBehavior)}
-                autoComplete="off"
-                autoFocus={props.autoFocus}
-                editable={props.editable}
-                textContentType="none"
-                submitBehavior={props.submitBehavior ?? 'newline'}
-                onSubmitEditing={props.onSubmitEditing ? () => props.onSubmitEditing?.() : undefined}
-                onFocus={props.onFocus}
-                onBlur={props.onBlur}
-                accessibilityLabel={props.accessibilityLabel}
-                accessibilityHint={props.accessibilityHint}
-                accessibilityRole={props.accessibilityRole}
-                accessibilityState={props.accessibilityState}
-            />
-        </View>
-    );
+    return <View style={{ width: '100%' }} onLayout={props.onLayout}>
+        <NativeComposerInput
+            ref={inputRef}
+            testID={props.testID}
+            style={{ width: '100%', height: Math.min(maxHeight, Math.max(minHeight, contentHeight ?? minHeight)) }}
+            value={props.value}
+            mostRecentEventCount={eventCountRef.current}
+            references={nativeReferences}
+            decorations={props.decorations ?? NO_DECORATIONS}
+            theme={nativeTheme}
+            typography={nativeTypography}
+            padding={nativePadding}
+            maxHeight={maxHeight}
+            minHeight={minHeight}
+            editable={props.editable !== false}
+            placeholder={props.placeholder ?? ''}
+            returnKeyType={props.submitBehavior === 'submit' || props.submitBehavior === 'blurAndSubmit' ? 'send' : 'default'}
+            submitBehavior={props.submitBehavior ?? 'newline'}
+            autoFocus={props.autoFocus === true}
+            autoCorrect={true}
+            autoCapitalize="sentences"
+            initialScrollY={props.initialScrollY}
+            scrollRestoreToken={props.scrollRestoreToken}
+            referenceMenuLabels={{ open: t('common.open'), remove: t('common.remove') }}
+            accessibilityLabel={props.accessibilityLabel}
+            accessibilityHint={props.accessibilityHint}
+            accessibilityRole={props.accessibilityRole}
+            accessibilityState={props.accessibilityState}
+            onChange={onChange}
+            onSelection={onSelection}
+            onContentHeightChange={onContentHeightChange}
+            onKeyPress={event => {
+                const key = normalizeKeyboardKeyPressEvent(event.nativeEvent);
+                if (key) props.onKeyPress?.({ ...key, inputState: { text: textRef.current, selection: selectionRef.current } });
+            }}
+            onScroll={event => { recordGeometry(event.nativeEvent); props.onScrollYChange?.(event.nativeEvent.y); }}
+            onFocus={event => { if (event) recordGeometry(event.nativeEvent); props.onFocus?.(); }}
+            onBlur={props.onBlur}
+            onSubmitEditing={props.onSubmitEditing}
+            onReferencePress={event => {
+                if (props.onReferencePress) props.onReferencePress(event.nativeEvent.ref);
+                else boundReferences.find(reference => reference.ref === event.nativeEvent.ref)?.onOpen?.();
+            }}
+            onDecorationPress={event => { void openExternalUrl(event.nativeEvent.url, { platformOS: Platform.OS }); }}
+        />
+    </View>;
 });
-
 MultiTextInput.displayName = 'MultiTextInput';

@@ -4,6 +4,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { zhHans as actionTitlesZhHans } from './actionTitles/zh-Hans';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
@@ -1284,6 +1285,7 @@ function plural({
 
 const zhHansValues = {
     fileReviewNote: fileReviewNoteTranslations['zh-Hans'],
+    composerReferences: composerReferenceTranslations['zh-Hans'],
     hunkReview: hunkReviewTranslations['zh-Hans'],
   panes: { mainColumn: paneMainColumnTranslations['zh-Hans'], emptyEditor: paneEmptyEditorTranslations['zh-Hans'], shortcutsSheet: paneShortcutsSheetTranslations['zh-Hans'] },
   sessionCoordinator: {

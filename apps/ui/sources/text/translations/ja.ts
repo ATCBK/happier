@@ -4,6 +4,7 @@ import { fileTrackTranslations } from './fileTrackTranslations.shared';
 import { ja as actionTitlesJa } from './actionTitles/ja';
 import { actionPresentationTranslations } from './actionPresentationTranslations';
 import { fileReviewNoteTranslations } from './fileReviewNoteTranslations.shared';
+import { composerReferenceTranslations } from './composerReferenceTranslations.shared';
 import { hunkReviewTranslations } from './hunkReviewTranslations.shared';
 import { capabilityKitTranslations } from './capabilityKitTranslations';
 
@@ -1268,6 +1269,7 @@ const settingsSessionHandoffTranslationExtensions = {
 
 const jaValues = {
     fileReviewNote: fileReviewNoteTranslations['ja'],
+    composerReferences: composerReferenceTranslations['ja'],
     hunkReview: hunkReviewTranslations['ja'],
   panes: { mainColumn: paneMainColumnTranslations['ja'], emptyEditor: paneEmptyEditorTranslations['ja'], shortcutsSheet: paneShortcutsSheetTranslations['ja'] },
   sessionCoordinator: {
