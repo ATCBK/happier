@@ -237,7 +237,7 @@ function bindHost(params: Readonly<{
 }
 
 describe('Account plugin Data storage host', () => {
-    describe('in-flight encryption identity admission', () => {
+    describe('authenticated encryption identity admission', () => {
         function createHost(initialCredentials: StoredCredentials = plainCredentials) {
             let credentials: StoredCredentials = initialCredentials;
             let baseUrl = 'https://data.example.test';
@@ -290,8 +290,8 @@ describe('Account plugin Data storage host', () => {
 
                 // Home committed the new mode, but its socket publication has
                 // deliberately not reached the reader. Final sealing must see it.
-                serverFact = currentnessFor(encryptedCredentials);
-                await expect(account.kv.set('cursor', { value: 'private' })).rejects.toMatchObject({
+                serverFact = { ...currentnessFor(encryptedCredentials), version: 2, updatedAt: 2 };
+                await expect(account.kv.set('cursor', { value: 'private' }, { expectedVersion: 'absent' })).rejects.toMatchObject({
                     code: 'plugin_account_storage_unavailable',
                 });
                 expect(get).toHaveBeenCalledTimes(2);
@@ -378,7 +378,7 @@ describe('Account plugin Data storage host', () => {
             }
         });
 
-        it('shares overlapping identity acquisitions in one invocation, retaining each Collection cursor read and later freshness', async () => {
+        it('reads unheld identities freshly for every operation, retaining each Collection cursor and later freshness', async () => {
             let release!: () => void;
             const gate = new Promise<void>(resolve => { release = resolve; });
             let currentness: AccountEncryptionCurrentnessResponse = currentnessFor(plainCredentials);
@@ -394,13 +394,13 @@ describe('Account plugin Data storage host', () => {
                 await vi.waitFor(() => expect(get).toHaveBeenCalled());
                 release();
                 expect(await Promise.all(reads)).toEqual([null, null, { rows: [], changeCursor: 17 }]);
-                expect(get).toHaveBeenCalledTimes(1);
+                expect(get).toHaveBeenCalledTimes(3);
                 expect(post).toHaveBeenCalledTimes(3);
 
                 // A later operation must observe a mode change, not a settled fact.
                 currentness = currentnessFor(encryptedCredentials);
                 await expect(collection.get('later')).rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' });
-                expect(get).toHaveBeenCalledTimes(2);
+                expect(get).toHaveBeenCalledTimes(4);
                 expect(post).toHaveBeenCalledTimes(3);
             } finally { release(); get.mockRestore(); }
         });
@@ -426,7 +426,7 @@ describe('Account plugin Data storage host', () => {
             } finally { release(); get.mockRestore(); }
         });
 
-        it('cancels one equivalent reader independently and retires the shared transport when its last reader leaves', async () => {
+        it('cancels each unheld reader transport independently', async () => {
             let release!: () => void;
             let gate = new Promise<void>(resolve => { release = resolve; });
             const get = vi.spyOn(axios, 'get').mockImplementation(async () => {
@@ -442,23 +442,24 @@ describe('Account plugin Data storage host', () => {
                 await vi.waitFor(() => expect(get).toHaveBeenCalled());
                 first.abort();
                 expect(await cancelled).toMatchObject({ code: 'plugin_collection_cancelled' });
-                expect(get.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
+                expect(get.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+                expect(get.mock.calls[1]?.[1]?.signal?.aborted).toBe(false);
                 release();
                 await expect(retained).resolves.toBeNull();
-                expect(get).toHaveBeenCalledTimes(1);
+                expect(get).toHaveBeenCalledTimes(2);
                 expect(post).toHaveBeenCalledTimes(1);
 
                 gate = new Promise<void>(resolve => { release = resolve; });
                 const last = new AbortController();
                 const fresh = collection.get('last', { signal: last.signal }).catch((error: unknown) => error);
-                await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+                await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(3));
                 last.abort();
                 expect(await fresh).toMatchObject({ code: 'plugin_collection_cancelled' });
-                expect(get.mock.calls[1]?.[1]?.signal?.aborted).toBe(true);
+                expect(get.mock.calls[2]?.[1]?.signal?.aborted).toBe(true);
             } finally { release(); get.mockRestore(); }
         });
 
-        it('does not retain a failed shared identity read for the next operation', async () => {
+        it('does not retain a failed unheld identity read for the next operation', async () => {
             let release!: () => void;
             const gate = new Promise<void>(resolve => { release = resolve; });
             let failed = true;
@@ -474,11 +475,11 @@ describe('Account plugin Data storage host', () => {
                 await vi.waitFor(() => expect(get).toHaveBeenCalled());
                 release();
                 for (const result of await Promise.all(reads)) expect(result).toMatchObject({ code: 'plugin_account_storage_unavailable' });
-                expect(get).toHaveBeenCalledTimes(1);
+                expect(get).toHaveBeenCalledTimes(2);
                 expect(post).not.toHaveBeenCalled();
                 failed = false;
                 await expect(collection.get('recovered')).resolves.toBeNull();
-                expect(get).toHaveBeenCalledTimes(2);
+                expect(get).toHaveBeenCalledTimes(3);
             } finally { release(); get.mockRestore(); }
         });
     });
@@ -2134,7 +2135,7 @@ describe('Account plugin Data storage host', () => {
         expect(post).toHaveBeenCalledOnce();
     });
 
-    it.each(['put', 'forget'] as const)('preserves a confirmed server rollback for Collection %s', async (operation) => {
+    it.each(['put', 'forget'] as const)('preserves a retryable confirmed server rollback for Collection %s', async (operation) => {
         const account = bindHost({
             post: async () => ({
                 status: 503,
@@ -2149,7 +2150,7 @@ describe('Account plugin Data storage host', () => {
         await expect(result).rejects.toMatchObject({
             code: 'database_transaction_conflict_exhausted',
             details: { error: 'database_transaction_conflict_exhausted', statusCode: 503 },
-            retryable: false,
+            retryable: true,
         } satisfies Partial<PluginError>);
     });
 

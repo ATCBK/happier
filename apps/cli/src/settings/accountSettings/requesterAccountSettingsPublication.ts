@@ -1,5 +1,6 @@
 import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
-import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import type { AccountEncryptionIdentity } from '@happier-dev/sync-client';
+import { fetchAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentness';
 import { acquireRequesterAccountEncryptionCurrentness, waitForObservation,
   sameRequesterAccountEncryptionCurrentness, type RequesterAccountSettingsObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -10,7 +11,7 @@ import { normalizeAccountSettingsVersionHint } from './accountSettingsVersion';
 /** Settings belongs to the captured Account/Home lifetime, independently of catalog demand. */
 export function createRequesterAccountSettingsPublication(input: Readonly<{
   observation: ReturnType<typeof acquireRequesterAccountEncryptionCurrentness>;
-  currentness: AccountEncryptionCurrentnessResponse;
+  currentness: AccountEncryptionIdentity;
   operationContext: SavedSecretOperationContextV1;
 }>) {
   const context = input.operationContext;
@@ -18,12 +19,13 @@ export function createRequesterAccountSettingsPublication(input: Readonly<{
   const retirement = new AbortController();
   let publication = new AbortController();
   let highestVersion = context.readSnapshot()?.settingsVersion ?? 0;
+  let needsFreshSettingsWitness = false;
   let ready = true;
   let pending: Promise<boolean | Readonly<{ error: unknown }>> | null = null;
   const invalidate = () => { publication.abort(); publication = new AbortController(); ready = false; pending = null; };
   const observe = (event: RequesterAccountSettingsObservation, reobserve = false) => {
     if (retirement.signal.aborted) return;
-    if (event.kind === 'disconnected') { invalidate(); return; }
+    if (event.kind === 'disconnected') { needsFreshSettingsWitness = true; invalidate(); return; }
     const update = event.kind === 'settings' ? AccountSettingsV2GetResponseSchema.safeParse(event.update) : null;
     highestVersion = Math.max(highestVersion, context.readSnapshot()?.settingsVersion ?? 0);
     const version = normalizeAccountSettingsVersionHint(update?.success ? update.data.version
@@ -31,7 +33,8 @@ export function createRequesterAccountSettingsPublication(input: Readonly<{
     if (version !== null) {
       if (version < highestVersion || !reobserve && ready && version === highestVersion) return;
       highestVersion = version;
-    } else if (event.kind !== 'reconnected') { invalidate(); return; }
+    } else if (event.kind !== 'reconnected') { needsFreshSettingsWitness = true; invalidate(); return; }
+    if (event.kind === 'reconnected') needsFreshSettingsWitness = true;
     invalidate();
     if (update && !update.success) return;
     const captured = publication;
@@ -39,15 +42,24 @@ export function createRequesterAccountSettingsPublication(input: Readonly<{
     pending = (async () => {
       const fact = await input.observation.read(captured.signal);
       if (!current()) return false;
+      if (!update?.success && needsFreshSettingsWitness) {
+        // Missing Settings publication is recovered from a fresh Home witness,
+        // never from the cursor of an otherwise unchanged socket identity.
+        const witness = await fetchAccountEncryptionCurrentness({ token: context.credentials.token,
+          serverBaseUrl: context.serverHttpBaseUrl, signal: captured.signal });
+        if (!current() || !sameRequesterAccountEncryptionCurrentness(witness, fact)) return false;
+        highestVersion = Math.max(highestVersion, witness.settingsVersion ?? highestVersion);
+      }
       const next = await runWithServerHttpBaseUrl(context.serverHttpBaseUrl, () => update?.success
         ? applyAccountSettingsV2Update({ credentials: context.credentials, update: update.data,
           publication: 'invocation', expectedAccountEncryptionMode: fact.mode, shouldCommit: current })
         : bootstrapAccountSettingsContext({ credentials: context.credentials, mode: 'blocking', refresh: 'force',
           publication: 'invocation', expectedAccountEncryptionMode: fact.mode, honorAccountSettingsModeEnv: false, signal: captured.signal,
-          minSettingsVersion: Math.max(highestVersion, fact.settingsVersion ?? 0), shouldCommit: current }));
+          minSettingsVersion: highestVersion, shouldCommit: current }));
       if (!current() || next.source !== 'network' || next.settingsVersion < highestVersion
         || !await context.replaceAccountSettings(next) || !current()) return false;
       highestVersion = next.settingsVersion;
+      needsFreshSettingsWitness = false;
       ready = true;
       for (const listener of listeners) listener();
       return true;

@@ -51,9 +51,12 @@ encryption-currentness admission. Missing or malformed readiness remains unknown
 not inferred from key presence. This endpoint is development-only; it is absent
 from the inspected 0.2.11 stable/preview and current 0.2 predecessor contracts.
 
-In 0.3 development, the CLI's
-`api/client/accountEncryptionCurrentnessObservation.ts` owns the live Account/Home
-observation shared by requester admission and connected-service mode reads.
+In 0.3 development,
+`packages/sync-client/src/account/accountEncryptionCurrentnessObservation.ts` owns
+the live encryption-identity fact, pending initialization and invalidation state.
+The CLI's `api/client/accountEncryptionCurrentnessObservation.ts` supplies its
+existing admitted Account/Home lifetime and managed socket; UI adapters attach
+the same state owner to the existing focused and concurrent Home sockets.
 Only exact credentials independently authenticated by a live admitted holder
 can borrow that observation; other credentials use their own fresh HTTP read.
 When the transport credential loses its last holder, the existing observation
@@ -62,6 +65,17 @@ transport events and HTTP responses cannot publish through that handover.
 Readers outside a subscribed lifetime retain fresh HTTP reads. A disconnected
 or invalidated observation grants no currentness; canceling one reader leaves
 other subscription holders active.
+
+Observed encryption identity does not contain `version` or `settingsVersion`.
+The former is the Account-wide sequence, not an encryption-only revision.
+Exact cursor witnesses and final authority checks keep a fresh server observation
+point: UI mode/storage readers identify that phase with `usage:'fresh-authority'`.
+This includes read-only checks after opening private Secrets or catalogs, not
+only mutation/sealing checks. They do not join an earlier identity bootstrap or
+wait for a socket update. Socket delivery withdraws or changes an identity in
+that dispatch; no TTL, polling interval or additional revocation grace period is
+introduced. Actual HTTP/RPC authentication and captured Home/lifetime checks
+remain independent of the observed identity.
 
 After the Account-mode decision, each persisted row or domain envelope remains
 authoritative for its representation until the canonical transition owner rewrites
@@ -2983,8 +2997,9 @@ that every requester lifecycle or a loaded cross-account journey is verified.
 
 In 0.3 development, a host process shares one encryption-currentness
 observation across live requester custody and its authenticated Machine connection
-for each exact Account and Home. The API-owned
-`accountEncryptionCurrentnessObservation.ts` is the single fact owner. Each admission owner confirms the
+for each exact Account and Home. The portable sync-client observation is the
+single fact owner; CLI/UI wrappers translate transport and Settings/Follow events,
+not a second settled mode cache. Each admission owner confirms the
 credential's Account with the authenticated profile read before registering
 that observation. The existing authenticated
 `update-account` publication carries the committed mode and key fingerprints;
@@ -2996,13 +3011,15 @@ decisions. A subsequent admission can re-read unknown state. Unrelated profile
 updates and other Accounts do not change the observation. The last custody
 holder releases the channel when its invocation, Session runtime or Machine client retires.
 When the channel cannot be constructed, the existing fresh HTTP path remains.
-Ordinary Account storage and the daemon's memory, connected-account, Project-row
-and Machine-key maintenance readers consume that same encryption identity while a holder exists;
+Descriptive Account storage and daemon memory, connected-account, Project-row
+and Machine-key readers can consume that encryption identity while a holder exists;
 their content, credential, signed-request and native-effect admission remain
 independent. Exact Account-cursor witnesses and Settings-history normalization's
 Settings-version witnesses use fresh HTTP; an encryption identity observation
-cannot supply those newer revisions. A subscribed unknown/disconnected fact refuses identity reads instead
-of consulting the legacy mode TTL. Scopes without a holder retain fresh HTTP.
+cannot supply those newer revisions. A subscribed unknown/disconnected fact
+refuses identity reads; it does not consult a settled mode TTL. Final private
+disclosure and sealing phases retain fresh authority. Scopes without a holder
+retain fresh HTTP.
 The Machine client registers only after its authenticated Profile matches the
 credential subject; an initial missing currentness route releases its holder and
 leaves the existing readers usable with older Homes. Transient initial failures
@@ -3204,7 +3221,11 @@ In 0.3 development, recovering an existing-Session draft demands its scoped Sess
 mode and cipher, not full Session content. The canonical exact reader can initialize
 that encryption context after its ordinary access, key and currentness checks,
 without opening owner metadata, decrypting metadata or Agent state, or publishing a
-Session entity. Draft collection recovery and its readiness/outbox ordering remain
+Session entity. Its strict Session batch demand explicitly sets `includeTurns:false`;
+ordinary full snapshots still require their turns projection. The shared typed read
+owner distinguishes these parts in its demand key, shares only pending parsed
+transport observations, and leaves access, mode/key admission and publication with
+each caller. Draft collection recovery and its readiness/outbox ordering remain
 unchanged. Unavailable context fails closed without publishing a locked Session shell.
 
 ## On-wire formats (mode-aware fields)

@@ -50,7 +50,7 @@ import type {
 
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
-import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { readObservedAccountEncryptionCurrentness, waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { readStoredCredentials, type Credentials, type StoredCredentials } from '@/persistence';
 import {
@@ -651,14 +651,6 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
     };
 
     const createBoundRequestContext = (lifecycle: BoundAccountDataLifecycle) => {
-        // This context belongs to one captured invocation/candidate lifetime,
-        // not the registry. Retain only pending identity reads, never settled
-        // facts or the exact Collection/Account cursor witnesses read elsewhere.
-        const pendingEncryptionIdentityReads = new Map<string, {
-            operation: Promise<AccountEncryptionCurrentnessResponse>;
-            controller: AbortController;
-            readers: number;
-        }>();
         const assertCurrentAccount = async (
             credentials: StoredCredentials,
             operationSignal?: AbortSignal,
@@ -691,6 +683,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
         const currentEncryption = async (
             current: StoredCredentials,
             operationSignal?: AbortSignal,
+            freshness: 'observed' | 'fresh' = 'fresh',
         ): Promise<Readonly<{
             mode: 'plain' | 'e2ee';
             material: AccountScopedCryptoMaterial | null;
@@ -698,34 +691,17 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             const signal = signalFor(operationSignal);
             try {
                 const currentness = await runTracedExternalActionInnerStage('collection.encryption.currentness', async () => {
-                    const key = JSON.stringify([current.token, resolveBaseUrl(), currentAccountScopeKey()]);
-                    let pending = pendingEncryptionIdentityReads.get(key);
-                    if (!pending) {
-                        const controller = new AbortController();
-                        pending = {
-                            operation: resolveAccountEncryptionCurrentness(current,
-                                composeOperationSignal(lifecycle.signal, controller.signal)),
-                            controller,
-                            readers: 0,
-                        };
-                        pendingEncryptionIdentityReads.set(key, pending);
-                        const captured = pending;
-                        const settled = () => {
-                            if (pendingEncryptionIdentityReads.get(key) === captured) pendingEncryptionIdentityReads.delete(key);
-                        };
-                        void pending.operation.then(settled, settled);
-                    }
-                    pending.readers++;
-                    try {
-                        // The existing observation owner supplies independent
-                        // reader cancellation; this creates no new observation.
-                        return await waitForObservation(pending.operation, signal);
-                    } finally {
-                        if (--pending.readers === 0) {
-                            if (pendingEncryptionIdentityReads.get(key) === pending) pendingEncryptionIdentityReads.delete(key);
-                            pending.controller.abort();
-                        }
-                    }
+                    // ApiMachine's authenticated holder owns the subscription.
+                    // Borrow only its exact credential/Home identity; absent
+                    // holders retain this operation's fresh transport and signal.
+                    const observed = freshness === 'observed' && !params.resolveAccountEncryptionCurrentness
+                        ? readObservedAccountEncryptionCurrentness({
+                            token: current.token, serverBaseUrl: resolveBaseUrl(), signal,
+                        })
+                        : null;
+                    return await (observed ?? waitForObservation(
+                        resolveAccountEncryptionCurrentness(current, signal), signal,
+                    ));
                 });
                 await assertCurrentAccount(current, operationSignal);
                 if (currentness.mode === 'plain') {
@@ -1283,7 +1259,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         if (sourceRow.alreadyStaged) continue;
 
                         const sourceCredentials = await requestContext.currentCredentials();
-                        const sourceEncryption = await requestContext.currentEncryption(sourceCredentials);
+                        const sourceEncryption = await requestContext.currentEncryption(sourceCredentials, undefined, 'observed');
                         const logical = mergeLogicalRow<PluginAccountCollectionValue<PluginAccountCollectionDefinition>>({
                             collection: source,
                             row: sourceRow,
@@ -1307,6 +1283,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         }
 
                         const targetCredentials = await requestContext.currentCredentials();
+                        // A mode/key commit can precede its socket publication.
                         const targetEncryption = await requestContext.currentEncryption(targetCredentials);
                         const targetOperation = splitLogicalPut({
                             collection: target,
@@ -1495,7 +1472,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
 
             const readAccountKvSnapshot = async (operationSignal?: AbortSignal): Promise<AccountKvSnapshot> => {
                 const credentials = await currentCredentials(operationSignal);
-                const encryption = await currentEncryption(credentials, operationSignal);
+                const encryption = await currentEncryption(credentials, operationSignal, 'observed');
                 const signal = signalFor(operationSignal);
                 let response: Readonly<{ status: number; data: unknown }>;
                 try {
@@ -1562,6 +1539,8 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                 row: PluginAccountStorageRowV1;
                 operationSignal?: AbortSignal;
             }>): Promise<'updated' | 'conflict'> => {
+                // Final sealing keeps a fresh Home witness even when opening
+                // the row borrowed the incumbent subscription's identity.
                 const encryption = await currentEncryption(input.snapshot.credentials, input.operationSignal);
                 await assertCurrentAccount(input.snapshot.credentials, input.operationSignal);
                 let content: unknown;
@@ -1846,6 +1825,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     measurement: PluginCollectionMutationRequestMeasurementV1;
                 }>> => {
                     const credentials = await currentCredentials(operationSignal);
+                    // Measurement and mutation share this fresh pre-sealing boundary.
                     const encryption = await currentEncryption(credentials, operationSignal);
                     let absenceEpoch: number | undefined;
                     for (const operation of operations) {
@@ -2024,7 +2004,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         // with the contract in Protocol so the daemon and the
                         // direct Plugin UI client cannot drift.
                         const credentials = await currentCredentials(options?.signal);
-                        const encryption = await currentEncryption(credentials, options?.signal);
+                        const encryption = await currentEncryption(credentials, options?.signal, 'observed');
                         await assertCurrentAccount(credentials, options?.signal);
                         const resolved = resolvePluginCollectionIdentityTagV1({
                             contract: collection.contract,
@@ -2048,7 +2028,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     },
                     async get(rowId: string, options?: Readonly<{ signal?: AbortSignal }>) {
                         const credentials = await currentCredentials(options?.signal);
-                        const encryption = await currentEncryption(credentials, options?.signal);
+                        const encryption = await currentEncryption(credentials, options?.signal, 'observed');
                         let requestBody: ReturnType<typeof PluginCollectionGetRequestV1Schema.parse>;
                         try {
                             requestBody = PluginCollectionGetRequestV1Schema.parse({
@@ -2138,7 +2118,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     },
                     async query(requestInput: PluginCollectionQuery, options?: Readonly<{ signal?: AbortSignal }>) {
                         const credentials = await currentCredentials(options?.signal);
-                        const encryption = await currentEncryption(credentials, options?.signal);
+                        const encryption = await currentEncryption(credentials, options?.signal, 'observed');
                         if (!collection.contract.indexes.some((index) => index.id === requestInput.index)) {
                             throw dataError(COLLECTION_INVALID_VALUE_CODE, 'Collection query names an undeclared index');
                         }
