@@ -7,10 +7,44 @@ type SpeechLine =
   | Readonly<{ kind: 'prose' | 'code' | 'closing' }>;
 
 /** Parser context only: no accumulated assistant text or code is retained. */
-export type VoiceSpeechTextState = Readonly<{ fence: SpeechFence | null; line: SpeechLine }>;
+export type VoiceSpeechTextState = Readonly<{
+  fence: SpeechFence | null;
+  line: SpeechLine;
+  emphasis: readonly string[];
+  previousCharacter: string;
+}>;
 
-function normalizeSpeechMarkup(prose: string): string {
-  return prose
+type SpeechEmphasisContext = { emphasis: string[]; previousCharacter: string };
+
+function removeSpeechEmphasis(text: string, context: SpeechEmphasisContext): string {
+  const normalized = text.replace(/\*{1,2}|_{1,2}|~~/g, (marker: string, offset: number) => {
+    const before = text[offset - 1] ?? context.previousCharacter;
+    const after = text[offset + marker.length] ?? '';
+    const active = context.emphasis.indexOf(marker);
+    if (marker.startsWith('*')
+      && /\d[ \t]*$/u.test(`${context.previousCharacter}${text.slice(0, offset)}`)
+      && /^[ \t]*[+-]?(?:\d|\.\d)/u.test(text.slice(offset + marker.length))) return marker;
+    const token = text.slice(offset + marker.length).match(/^\S*/u)?.[0] ?? '';
+    const closesInToken = token.replace(/[.,!?;:)]+$/u, '').endsWith(marker);
+    const glob = marker.startsWith('*') && !closesInToken
+      && (/^(?:[/\\]|\.[\p{L}\p{N}_?*\[])/u.test(token) || (marker === '*' && /\.[\p{L}\p{N}_]/u.test(token)));
+    if (glob) return marker;
+    if (active !== -1 && !/\s/u.test(before)) {
+      context.emphasis.splice(active, 1);
+      return '';
+    }
+    if (active === -1 && !/\w/u.test(before) && after && !/\s/u.test(after)) {
+      context.emphasis.push(marker);
+      return '';
+    }
+    return marker;
+  });
+  context.previousCharacter = text.at(-1) ?? context.previousCharacter;
+  return normalized;
+}
+
+function normalizeSpeechMarkup(prose: string, context: SpeechEmphasisContext): string {
+  const text = prose
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/\bhttps?:\/\/(?:www\.)?([^\s/?#)]+)[^\s)]*/gi, '$1')
@@ -18,11 +52,8 @@ function normalizeSpeechMarkup(prose: string): string {
     .replace(/^[ \t]*#{1,6}[ \t]+/gm, '')
     .replace(/^[ \t]*>[ \t]?/gm, '')
     .replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, '')
-    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '')
-    .replace(/(\*\*|__)(?=\S)([\s\S]*?\S)\1/g, '$2')
-    .replace(/(^|[^\w*])\*(?=\S)([^*\n]*?\S)\*(?!\w)/g, '$1$2')
-    .replace(/(^|[^\w])_(?=\S)([^_\n]*?\S)_(?!\w)/g, '$1$2')
-    .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '$1');
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gm, '');
+  return removeSpeechEmphasis(text, context);
 }
 
 /**
@@ -36,6 +67,10 @@ export function normalizeVoiceSpeechTextChunk(
 ): Readonly<{ text: string; state: VoiceSpeechTextState }> {
   let fence = state?.fence ?? null;
   let line: SpeechLine = state?.line ?? { kind: 'start', indent: 0 };
+  const context: SpeechEmphasisContext = {
+    emphasis: [...state?.emphasis ?? []],
+    previousCharacter: state?.previousCharacter ?? '',
+  };
   let prose = '';
   const input = markdown.replace(/\r\n?/g, '\n') + (final ? '\n' : '');
   for (const char of input) {
@@ -82,7 +117,8 @@ export function normalizeVoiceSpeechTextChunk(
       if (char.trim()) line = { kind: 'code' };
     } else if (line.kind === 'prose') prose += char;
   }
-  return { text: normalizeSpeechMarkup(prose), state: { fence, line } };
+  const text = normalizeSpeechMarkup(prose, context);
+  return { text, state: { fence, line, ...context } };
 }
 
 /** Complete-text speech uses the same policy as streamed speech effects. */
@@ -156,9 +192,17 @@ export function segmentSentencesForSynthesis(text: string): string[] {
 }
 
 export function speechTextEndAtOrBefore(text: string, end: number): number {
+  if (end <= 0 || end >= text.length) return end;
   const previous = text.charCodeAt(end - 1);
   const next = text.charCodeAt(end);
-  return previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff ? end - 1 : end;
+  const cut = previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff ? end - 1 : end;
+  const marker = text[cut - 1];
+  if (marker === '*' || marker === '_' || marker === '~') {
+    let start = cut;
+    while (start > 0 && text[start - 1] === marker) start -= 1;
+    if (start > 0) return start;
+  }
+  return cut;
 }
 
 /** The output event budget stays coalesced after the first useful sentence. */

@@ -13,7 +13,9 @@ describe('VoiceAgentOutputEventV1', () => {
     ['## Summary\n- **Fixed** the `parser` bug\n> _really_ fixed', 'Summary\nFixed the parser bug\nreally fixed'],
     ['See [the docs](https://example.com/a/b) and ![diagram](x.png).', 'See the docs and diagram.'],
     ['Open https://www.github.com/happier-dev/happier/pull/1 now.', 'Open github.com now.'],
-    ['Set max_retry_count to 2 * 3.', 'Set max_retry_count to 2 * 3.'],
+    ['Set max_retry_count to 2 * 3, 2*3, 2 *3, and 2* 3.', 'Set max_retry_count to 2 * 3, 2*3, 2 *3, and 2* 3.'],
+    ['Use *.ts and file* and **/*.ts and *test.ts, with max_retry_count and 2*3.', 'Use *.ts and file* and **/*.ts and *test.ts, with max_retry_count and 2*3.'],
+    ['Read **file.ts** with *file.ts*.', 'Read file.ts with file.ts.'],
     ['```\nls -la\n```', ''],
     ['Before.\n~~~py\nprint(1)\n~~~\nAfter.', 'Before.\nAfter.'],
     ['Example:\n````md\n```ts\nconst a = 1;\n```\n````\nThat is all.', 'Example:\nThat is all.'],
@@ -43,6 +45,32 @@ describe('VoiceAgentOutputEventV1', () => {
     expect(ingestVoiceAgentOutputEventV1(state, {
       v: 1, kind: 'turn_final', turnId: 'turn-1', seq: state.nextSeq, text,
     }).effects).toEqual([{ kind: 'persist_final', text }]);
+  });
+
+  it.each(['**', '*', '__', '_', '~~'])('normalizes %s emphasis across real speech segment boundaries while emitting the first sentence', marker => {
+    const text = `${marker}Hello. World.${marker} Use *.ts and **/*.ts and file* with max_retry_count and 2 * 3.`;
+    let remaining = text;
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    const spoken: string[] = [];
+    const firstLength = resolveVoiceAgentOutputSpeechSegmentLength(remaining, { force: false, firstSegment: true });
+    expect(firstLength).toBeGreaterThan(0);
+    for (const length of [firstLength, remaining.length - firstLength]) {
+      const result = ingestVoiceAgentOutputEventV1(state, {
+        v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text: remaining.slice(0, length),
+      });
+      state = result.state;
+      remaining = remaining.slice(length);
+      spoken.push(...result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text));
+      if (spoken.length === 1) expect(spoken[0]).toBe('Hello.');
+    }
+    const final = ingestVoiceAgentOutputEventV1(state, {
+      v: 1, kind: 'turn_final', turnId: 'turn-1', seq: state.nextSeq, text,
+    });
+    spoken.push(...final.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text));
+    expect(spoken.join(' ').replace(/\s+/gu, ' ').trim())
+      .toBe('Hello. World. Use *.ts and **/*.ts and file* with max_retry_count and 2 * 3.');
+    expect(final.effects.at(-1)).toEqual({ kind: 'persist_final', text });
   });
 
   it.each([true, false])('never speaks code split by the wire envelope (closed: %s)', closed => {
@@ -98,6 +126,42 @@ describe('VoiceAgentOutputEventV1', () => {
     expect(ingestVoiceAgentOutputEventV1(state, {
       v: 1, kind: 'turn_final', turnId: 'turn-1', seq: state.nextSeq, text,
     }).effects).toEqual([{ kind: 'persist_final', text }]);
+  });
+
+  it('preserves identifier punctuation when a wire event starts inside the identifier', () => {
+    const text = `${'x'.repeat(16_381)}max_retry_count and file* with 2 * 3 and *.ts.`;
+    let remaining = text;
+    let spoken = '';
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    while (remaining) {
+      const length = resolveVoiceAgentOutputSpeechSegmentLength(remaining, { force: true, firstSegment: state.nextSeq === 0 });
+      const result = ingestVoiceAgentOutputEventV1(state, {
+        v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text: remaining.slice(0, length),
+      });
+      state = result.state;
+      spoken += result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text).join('');
+      remaining = remaining.slice(length);
+    }
+    expect(spoken).toBe(text);
+  });
+
+  it('does not speak emphasis delimiters crossing the wire hard cut', () => {
+    const text = `**${'a'.repeat(16_381)}**`;
+    let remaining = text;
+    let spoken = '';
+    let state = createVoiceAgentOutputTurnV1('turn-1');
+    while (remaining) {
+      const length = resolveVoiceAgentOutputSpeechSegmentLength(remaining, { force: true, firstSegment: state.nextSeq === 0 });
+      const result = ingestVoiceAgentOutputEventV1(state, {
+        v: 1, kind: 'speech_segment', turnId: 'turn-1', seq: state.nextSeq,
+        segmentId: `segment-${state.nextSeq}`, text: remaining.slice(0, length),
+      });
+      state = result.state;
+      spoken += result.effects.filter(effect => effect.kind === 'speak').map(effect => effect.text).join('');
+      remaining = remaining.slice(length);
+    }
+    expect(spoken).toBe('a'.repeat(16_381));
   });
 
   it('accepts the four provider-neutral output channels and rejects unbounded identifiers/text', () => {
