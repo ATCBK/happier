@@ -37,6 +37,148 @@ proof. This is not a second accounting ledger or an inferred attribution shim.
 - Do not keep aliases or adapters solely for an atomic internal rename/move whose old path never shipped.
 - The predecessor rule preserves observable wire/data/state behavior, not `../0.2`'s internal architecture.
 
+## Composer inline references (0.3 development)
+
+This is an unreleased, one-way 0.3 format change. Current writers persist
+`[label](happier-ref:<scheme>:<opaque>)` at the reference's position in text.
+Protocol's [token grammar](runtime-core.md#session-input-and-inline-references)
+uses the existing percent-encoded MentionRef destination. Identity stays in
+the envelope's positionless `mentions[]`, draft reference ranges and attachment
+records; the token alone cannot authorize or create a reference. Upload
+descriptors gain optional `id`, matching the tray id and structured image input
+id. Existing contributed attachments retain `instanceId`. Image ordinals are
+derived, never persisted. The token bound is derived from existing label/ref
+bounds and escaping; other mention and resolved-context bounds are unchanged.
+
+The retained reader is for 0.2-created data:
+
+- Messages with legacy `@`/`$` tokens keep the Markdown text and appended
+  references row. `messageDisplayText.ts#stripLegacyAttachmentsBlock` hides the
+  old `[attachments]` suffix where structured attachments replace it. Dispatch
+  preserves an existing legacy listing once rather than duplicating it in the
+  new reference block.
+- Positioned legacy drafts load through `parseComposerStructuredInputMentionsForText`
+  and `sessionDraftLegacyMigration.ts`. Their shared normalization rewrites
+  each bound range into the inline grammar and shifts subsequent ranges before
+  saving the current shape. Pending edits and rewind/fork hydration recover
+  ranges from exact token occurrences.
+- New references render inline; legacy references without inline tokens keep
+  the row. A hand-typed workspace path may still appear in that row through
+  the canonical path scan. That is text detection, not another token writer.
+
+Observed predecessor basis, 2026-10-21: `../0.2` HEAD
+`8a088dd70f57ccf43fade3543fb6a3e874bee12a`. Its
+`packages/protocol/src/mentionRefV1.ts` defines positionless typed mentions,
+the existing destination encoding and `maxTokenChars: 256`; its attachment
+producers append `[attachments]` text and its draft readers retain ranges.
+These are retained-data inputs, not an obligation for a 0.2 binary to read 0.3
+writes. Under the all-component upgrade there is no 0.3-to-0.2 writer, alias,
+dual format or old-binary rollback contract. Keep the historical reader while
+0.2-created messages and drafts remain supported; undeployed 0.3 intermediates
+do not get additional compatibility paths.
+
+## Public-profile integration boundary (0.3 development)
+
+Public-profile publication is an unfinished new capability, distinct from the
+implemented username operations below. A feature-missing server must not be
+treated as supporting it, and a public-profile request must not normalize into
+the existing private Usage path or a generic Account-KV/Artifact write. Existing
+private recap inputs, seven styles and three formats retain their own support.
+
+Historical Accounts and Usage without eligibility evidence remain readable by
+their existing private owners. The approved public population excludes unknown
+and Team attribution; absence of older evidence is partial/unavailable public
+coverage, not proof of personal eligibility or a reason to rewrite history.
+`UsageQuery.population` selects `public_eligible_personal` explicitly; omitted
+or explicit `all_personal_history` retains ordinary behavior. The canonical
+transport omits that default so older strict request parsers keep accepting
+ordinary reads. The new public selection is gated by `account.publicProfiles`;
+an unsupported server cannot silently fall back to the broader private query.
+The scoped accounting owner reconciles all baselines before excluding unknown,
+workspace-subscription and Team-credential contributions. Public detail uses
+the same exact admitted turns, not every turn in a mixed Session. Whole-Session
+message counts do not establish that membership and are omitted for this
+selection. Excluded history remains partial coverage.
+
+Current Session ownership is Account-owned (`Session.accountId`); Team/Group
+grants and `primaryTeamId` authored context do not transfer that ownership.
+No Team-owned Session input exists in the current model. This is not a claim
+that Team credentials or proved Team subscriptions are personal.
+
+Publication, snapshot and nested authority writes now use closed schemas at
+`account/publicProfile.ts` and `account/publicProfilePublication.ts`. Their
+stored readers drop unknown presentation fields and field ids; missing consent
+is false and malformed known consent or facts fail closed. The additive
+publication table does not publish historical Accounts or change their keys.
+No released route, mixed-version publication or active supporting-server
+guarantee is claimed before the consumed integration exists.
+
+## Account username intent and release (0.3 development)
+
+`Account.username` remains the single service-scoped identity used by Friends.
+The canonical username policy and transaction-taking mutation in
+`apps/server/sources/app/social/usernameUpdate.ts` admit explicit changes,
+provider fill/unlink, provisioning and provider-reset transfer. The existing
+authenticated social profile's provider-suggestion fallback is presentation,
+not ownership of a username.
+
+The additive identity migration preserves retained username bytes, including
+underscore/hyphen and customized-policy names. It initializes
+`usernameAutoFillEnabled` to false for retained non-null names of unknown origin,
+and true for null names and new unclaimed Accounts. Explicit set, including a
+same-name replay, and release disable auto-fill. Only a matching name assigned
+while auto-fill remains enabled can clear on identity unlink; a matching linked
+provider login alone does not prove retained provenance. Existing holders may
+retain names newly excluded by reserved-name or configurable claim policy.
+
+`ReleasedUsername` stores only name and expiry. Explicit release clears the
+Account name and creates a 30-day hold in the same transaction. No claimant,
+including the former holder or provider fill, can acquire it before expiry.
+Repeat release does not extend expiry, rename creates no hold, and Account
+erasure does not remove a hold. Recovery transfer of an Account's actual current
+name preserves its intent bit without a voluntary-release hold; a different
+desired name is a new claim.
+
+The existing username POST preserves its request, success and 400/409 error
+envelopes for older clients. New reserved/held conflicts map to its existing
+`invalid-username`/`username-taken` errors. The new strict check and release
+operations have their own closed schemas; no input can supply an internal
+mutation role. Against a server missing either operation, current UI/CLI Action
+transport reports `unsupported_action`; it does not simulate release through an
+empty set or infer availability locally. Ordinary username set keeps its own
+older-server support. These changes do not advertise public-profile capability
+or add profile-only admission; Friends eligibility remains in force.
+
+The prospective predecessor inspected on 2026-10-21 was `../0.2` HEAD
+`8a088dd70f57ccf43fade3543fb6a3e874bee12a`, with clean scoped status and
+`diff HEAD` for Account schema, social policy/update, username route/UI adapter,
+GitHub/OIDC writers and OAuth finalize routes. It has nullable unique usernames,
+trim/lowercase normalization, configurable defaults of 3–32 characters and
+`^[a-z0-9_-]+$`, and the original Friends-gated set envelopes. Its direct provider
+and finalize writers establish retained-data input shapes, not a requirement to
+preserve those internal owners or matching-login provenance inference.
+
+Public stable/preview release pages were read on 2026-10-21 and resolved to
+immutable `server-v0.2.16` / `server-v0.2.16-preview.1` at
+`22ac8263cfdbcdb845441b9044ff18199cf7652e`, and
+`ui-web-v0.2.17` / `ui-web-v0.2.17-preview.19` at
+`b8d1c449c46ab4dfa8637db36b66f643d149e66d`. Source comparisons confirm this
+username seam. The immutable server
+[stable manifest](https://github.com/happier-dev/happier/releases/download/server-v0.2.16/linux-x64.json)
+and [preview manifest](https://github.com/happier-dev/happier/releases/download/server-v0.2.16-preview.1/linux-x64.json)
+identify those versions, channels, versioned archive URLs and build commit, with
+workflow run `37794037498`; publication timestamps are respectively
+`2026-10-08T16:02:29.363Z` and `2026-10-08T16:09:18.975Z`. This is public
+publication metadata. The immutable UI
+[stable checksum file](https://github.com/happier-dev/happier/releases/download/ui-web-v0.2.17/checksums-happier-ui-web-v0.2.17.txt)
+and [preview checksum file](https://github.com/happier-dev/happier/releases/download/ui-web-v0.2.17-preview.19/checksums-happier-ui-web-v0.2.17-preview.19.txt)
+were also readable and name the corresponding versioned web archives. No
+archive/signature verification or evidence of which binary a particular service
+deploys is claimed. Deployment provenance remains unverified.
+Additive schema does not establish safe old/new server writers sharing one
+database: an older writer bypasses intent and holds. Such coexistence is not
+claimed or implemented by this identity vertical.
+
 ## Machine RPC method absence (0.3 development)
 
 The Home distinguishes unsupported Machine operations from temporary routing
@@ -2273,8 +2415,19 @@ Artifact and the caller's live effective membership in that Team; personal or
 other-Team grants alone do not preserve it. Exact reads, source-filtered history,
 summaries and recipient-key census consume the same Run access owner.
 Cursors bind both Account and source/filter scope. `workflow.run.summaries`
-reads the requested saved-workflow ids in one indexed batch and returns latest,
-recent and Needs-you facts with byte-bounded `remainingSourceArtifactIds`.
+has two exclusive development request shapes. `{sourceArtifactIds,recent}`
+retains saved-workflow latest, recent and Needs-you facts with byte-bounded
+`remainingSourceArtifactIds`. `{automationIds}` returns each requested
+Automation's latest caller-admitted managed Workflow Run status, or an answered
+null, with byte-bounded `remainingAutomationIds`. Latest order is
+`createdAt DESC, id DESC`; inline sources and different Automations sharing a
+saved source retain distinct Automation identity. Requested ids filter access;
+they do not grant it. The Automation result contains public state, custody,
+attention and creation time, not accepted snapshots or private progress.
+Its capture is released before result materialization and exact byte paging;
+returned Run members undergo fresh admission before disclosure. Neither shape
+imposes a row-count cap. Remaining ids preserve input order and are unanswered,
+not null results.
 The development attention list accepts an explicit `projection: 'membership'`
 for consumers such as the closed Inbox badge that need admitted membership but
 not private display facts. Omission keeps the full list projection. Membership

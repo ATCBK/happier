@@ -671,7 +671,12 @@ and retired mounts or Artifact identities cannot adopt late results. A pending
 load is not evidence of a plugin crash or of an unknown Action outcome.
 The surface disclosure fence distinguishes a pending Account-mode read from a
 terminal refusal: it shows loading while withholding context, and shows an error
-only after refusal. A cancellable Account-selected Artifact acquisition also
+only after refusal. An ineligible or retired mount reports unavailable, not a
+pending read. The shared surface and Composer scope hooks reconcile currentness
+on each render, including transitions behind a stable callback; a ready scope
+does not need a catalog refresh or callback replacement to start disclosure.
+This adds no deadline to the canonical Account-mode reader. A cancellable
+Account-selected Artifact acquisition also
 waits for the initial Availability projection before reading bytes. The existing
 Account lifetime and mount signal retire that wait; a retired native load cannot
 quarantine healthy bytes or latch an error onto its successor mount. A loaded
@@ -887,6 +892,23 @@ eligible origin is establishing, rather than becoming an unavailable tombstone.
 Machine presence updates that leave the resolved target set unchanged do not
 republish the installed/runtime catalog.
 
+In the unreleased UI implementation, the existing Availability reader store,
+Machine execution-origin producer and Account-lifetime AppShell publisher prepare
+their descriptive slices when their actual source inputs change. Union and
+Connected Account descriptor publications structurally share unchanged rows;
+React and imperative readers consume the retained snapshots rather than rebuilding
+or serializing them. Source identity includes the relevant Account lifetime,
+Home, platform and ready locale, not only a daemon generation or changes cursor.
+Heartbeat callbacks still reach the Machine producer even when the storage root
+reference is unchanged. Declaration-only consumers do not subscribe to executable
+activation diagnostics.
+
+Prepared declarations are not cached permission decisions. Account intent,
+currentness, exact target custody and invocation admission remain fresh on access;
+new untrusted data is validated at its acquisition boundary. A frozen wrapper is
+not proof that nested input was validated or made immutable. Retirement and
+same-generation replacement must still withdraw the affected published slices.
+
 In 0.3 development source, AppShell origin reporting includes bundled and
 registered development occurrences without an Account materialization. Their
 Home identity comes from the canonical routing-profile identity owner. Page
@@ -967,7 +989,16 @@ preserve the Home's confirmed transaction rollback as
 HTTP 503 rollback parser; a failed transport, malformed acknowledgement or
 unqualified database failure remains outcome-unknown. This acknowledgement
 classification does not retry the mutation or change Collection CAS or approval
-execution custody.
+execution custody. The daemon marks a confirmed rollback retryable so existing
+idempotent callers, including Channels polling, can recover on their ordinary
+retry path. Uncertain mutation outcomes retain their separate custody.
+
+In unreleased 0.3 source, thread Session creation uses the Session owner's
+canonical creation key and persisted birth facts. Launching a runner for an
+already committed row does not require a second fresh-create settlement.
+Direct recovery failures and background failures expose the same content-free
+Session failure codes through the existing diagnostic classifier; launch
+messages and conversation content remain excluded.
 
 In 0.3 development source, an app-bundled UI inventory retains the exact
 Collection reader references compiled from its manifest. Availability passes
@@ -1158,10 +1189,30 @@ The host [picture catalog](../apps/ui/sources/components/atmosphere/pictureCatal
 merges the built-in pictures with admitted contributions. Plugin ids are qualified
 as `pluginId/localId`, including in the existing picture selection and remembered
 look keys. Selecting one downloads and caches its full and thumbnail URLs through
-the existing device-local picture store. Until bytes are available, or after the
-contribution disappears, the atmosphere resolver shows the Home default. Authors
+the existing device-local picture store. On Home and Projects, until bytes are
+available or after the contribution disappears, the atmosphere resolver shows the Home default. Authors
 must provide image hosts usable by the client, including browser CORS support,
 and credit the picture's licence; no Happier image proxy is added.
+
+The development profile-copy boundary reuses that presentation, catalog and Look
+logic, without inheriting Home moments, Session activity or global glass. A private
+profile preview reports unavailable selected pixels instead of substituting Home
+or a previous image. The [local preparer](../apps/ui/sources/components/atmosphere/preparePublicProfileAtmosphere.ts)
+retains a lossless PNG and frozen effective Look/credit/crop metadata without an
+upload or library write. The [selected-copy contract](../packages/protocol/src/account/publicProfileAtmosphere.ts)
+also admits already-prepared WebP; the media owner normalizes stored copies to PNG.
+The descriptor captures the existing adaptive-haze decision as a render input,
+not another editable preference: released builtin Looks adapt legibility, while
+own pictures and customized Looks remain as composed. The copy shape omits local
+picture addresses, plugin ids, source-URL fields and inactive remembered Looks;
+this does not inspect or redact text authored into the selected pixels or credit.
+Only reviewed Publish/Update may send it;
+public delivery must bind it to the applied edition and recheck current profile
+admission before bytes or validators. Visitors never load the plugin or fetch its
+image URLs. Later plugin/default changes, device deletion and facts refresh must
+not re-resolve or alter the copy. The preparer, custody and static-raster seams
+are implemented; their profile consumer and public route integration remain open.
+These are development contracts, not a claim of released profile availability.
 
 Plugin UI scenes use their existing `planetAt` declaration for placement (`x`,
 `y`, `r`, and `rise`) and optional `style: 'airy' | 'balanced' | 'rich'`,
@@ -1652,6 +1703,12 @@ optional, read-only development fact grants no execution authority; every
 invocation still passes the host's fresh guards. Omission supplies no readiness
 edge. Both native and hosted transports use the same context producer.
 
+In unreleased 0.3 source, ordinary workspace title, focus and history publications
+retain the navigation adapter and mounted plugin controller when their owners are
+unchanged, so pending Resource reads can finish. Navigation commands read current
+focus and history when invoked. Account, Machine and occurrence replacement keep
+their existing controller retirement rules.
+
 In 0.3 development source, public `WidgetFrame` and the core widget adapter share the same frame and controlled `disclosure` contract. The frame's `source` slot takes a name, or a bound-source descriptor (`binding: 'pin' | 'follow'`, `text`, optional `compactText` and `accessibilityLabel`): the frame draws the pin or follow glyph, keeps the short form when it narrows, and names the line for assistive tech, so a group's pinned value and a follower's "Following group · value" are one recipe for core and plugin frames. `HappierSegmentedChoiceRow` and its model `resolveHappierSegmentedChoiceRow` (public `/components`) own the "label + inline segmented choice" row, where an unavailable option stays visible and says why; core's configuration and menu rows resolve their segments through the same model. Collapse belongs to the current viewer; it keeps the body mounted and hidden without changing widget layout, input or Resource identity. Public `/components` also owns tree keyboard/focus semantics (`HappierTreeNode` and `useHappierTreeInteraction`), using explicit parent keys rather than filesystem path spelling. Filesystem trees translate their domain rows into that owner.
 
 The rows inside a widget body and the lines-added/removed readout have one neutral owner each in public `/components`: `HappierWidgetGlanceRow` (mark, name, tag, quiet or attention fact, one trailing element; one pressable when it leads somewhere) and `HappierDiffStat` with its formatter `formatHappierDiffStat`. The root adapters `WidgetGlanceRow` and `DiffStat` supply the plugin theme and faces; core's `components/widgets/glance/WidgetGlanceRow.tsx` and `components/workspaces/scm/DiffStat.tsx` supply core's text owner (font scale), glyphs, density-aware spacing and inks. The version-control inks travel as the optional same-realm palette facts `versionControlAdded` / `versionControlRemoved`; a hosted frame without them draws the snapshot's success and danger inks. A plugin's glance row lays out on the regular spacing steps, because the public snapshot carries no density fact for them.
@@ -1691,6 +1748,39 @@ real-device feel remains a separate QA check.
 
 The app shell supplies plugin-column physical focus eligibility through the existing presentation provider, using its dock visibility and peek focus facts. Hover previews may remain presented without receiving programmatic focus; deferred or exiting peek content cannot receive it. Columns explicitly do not publish semantic current UI context: that authority remains with the active page's existing owner.
 
+### Composer inline references and decorations (0.3 development)
+
+The host's composer document is the one owner of text, selection, typed
+reference ranges, attachment identity and revision. References selected from
+the picker or inserted through a drop or **Mention in composer** become atomic
+inline chips. The shared
+[`composerReferenceInsertion.ts`](../apps/ui/sources/components/sessions/composer/composerReferenceInsertion.ts)
+plans insertion at the active word, caret or release-point offset; all JS-facing
+offsets refer to token-bearing composer text. Chips require typed bindings;
+plain pasted text never creates one. Discussions use those same ranges rather
+than a second mention-span model. The [Session input owner](runtime-core.md#session-input-and-inline-references)
+defines token grammar, readable markers and the single Agent reference block.
+
+`composer.transaction.apply` retains expected-revision admission. Its
+`attachment.add` operation accepts optional `mentionAt: { start, end }` in the
+captured snapshot's text. The host first mints or reuses the attachment instance
+through the existing attachment-add owner, then inserts its bound token in the
+same transaction. Omitting the range attaches without mentioning. Authors do
+not supply an instance identity or reconstruct one from text. Removing a chip
+keeps its attachment; removing the attachment removes its chips. Submission
+drops orphan attachment tokens. Image ordinals are derived from tray/message
+image order, keyed by id, rather than persisted in tokens or attachment records.
+
+Mounted `setDecorations(key, decorations)` ranges are revision-bound presentation over the same
+text: highlight, muted, warning, success, code or link treatment, with optional
+accessible labels. Web draws them through editor decorations; native draws
+them through text spans. The current native `AgentInput` also retains a legacy
+above-input feedback row; removing that duplicate presentation is still an
+integration obligation. The input-lock notice remains a separate state.
+A decoration supplies neither
+reference identity nor submission authority. See the [public composer guide](../apps/docs/content/docs/plugins/guides/composer.mdx)
+for the mounted API and attachment insertion example.
+
 ### Entity drag sources and drop targets (0.3 development)
 
 `definePlugin` declares `dragSources` and `dropTargets` through the existing contribution catalog. Each source has a declared JSON reference schema and a client execution reference; each target declares accepted built-in or qualified `plugin:<pluginId>/<localId>` kinds and an explicit host/contributed Action allowlist. `activate(api)` registers only admitted local ids through `api.dragSources.register` and `api.dropTargets.register`. These families have client occurrence rights, not daemon or Session runtime rights.
@@ -1722,6 +1812,21 @@ Interactive grips use `HappierDragGripTrigger`, including the core `EntityDragGr
 These are development / Developer Preview authoring contracts. Source tests and generated exports do not certify a published SDK or a loaded browser/native journey.
 
 ### Configured widgets (0.3 development)
+
+Public-profile snapshot templates remain an incomplete extension of this same
+declaration/projection owner. `widgets/widgetPublicSnapshotV1.ts` specializes the
+existing declarative grammar to inert nodes and a symbolic public-profile data
+source. The public projector validates field paths against the closed disclosure
+schemas, applies current consent, then freezes only visible values. Its generated
+schema rejects executable nodes and literal precomputed metrics too. An unknown
+optional stored presentation is skipped; malformed known content is rejected.
+The builtin declaration/body connection, public component export and compiled,
+mounted external-author flow are not established by this schema alone.
+Resource-free HTML and frozen literals do not prove revocable public field
+provenance. Host-private `/presentation` is not an author API; external
+authors use admitted public `/components` exports. The
+[public-profile page](../apps/docs/content/docs/accounts/public-profiles.mdx)
+records current availability and the draft/disclosure distinction.
 
 Widget Views use the same contribution catalog and Surface Registry as other plugin UI. Their App/Session target is an executable data context, not a physical placement allowlist. Each configured instance has its own identity and closed field bindings, defined by [`widgets`](../packages/protocol/src/widgets/widgetInstanceV1.ts); field descriptors, predicates and options reuse the neutral [`inputs`](../packages/protocol/src/inputs/index.ts) owner. The shared [`WidgetSurface`](../apps/ui/sources/components/widgets/surface/WidgetSurface.tsx) body consumes that admission and the incumbent installed-surface controller. Host layouts retain their own frames and persistence.
 
@@ -3943,6 +4048,16 @@ file without exposing the provider-local path, so inline text and the original
 message remain dispatchable. Text and PDF text-layer context uses the attachment
 context contract, not the separate reference-preview ceiling. These are source
 contracts, not a claim of a verified composed loaded-runtime journey.
+
+In unreleased 0.3 Email content shaping, named `message/rfc822` parts remain
+original decoded `.eml` files even when their MIME disposition is `inline`
+and their transfer encoding is 7bit, 8bit or binary. The same Email parser
+adds their readable content as untrusted forwarded text and retains nested
+files; unnamed inline messages remain readable body content. Polling and
+attachment fetch share that parser for first-party and external raw transports,
+and the existing Channels descriptor/fetch/Session-upload path carries the files.
+Existing native MIME part identities, including flattened inline descendants,
+remain stable.
 
 Channels' unreleased 0.3 ingress compares attachment identity through the
 shared attachment codec. Email's retained slash-joined MIME part paths and

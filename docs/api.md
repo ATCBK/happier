@@ -9,6 +9,100 @@ This document covers the HTTP API surface and authentication flows. For WebSocke
 
 We intentionally avoid the full REST verb palette because many operations span multiple entities or have non-CRUD semantics.
 
+## Account usernames (0.3 development source)
+
+An Account has one service-scoped username, also used by Friends. Authenticated
+username operations use the request-effective Home policy. Friends must be
+enabled, and either username-based identity must be allowed or the Account must
+have the required identity-provider connection. These identity operations do not
+publish an anonymous profile or enable Friends.
+
+`POST /v1/account/username` retains the strict `{ username: string }` request and
+`{ username: string }` success response. The server trims and lowercases input.
+The legacy errors remain HTTP 400 `invalid-username`, `username-disabled` or
+`friends-disabled`, and HTTP 409 `username-taken`. New reserved spellings use
+`invalid-username`; an active released-name hold uses `username-taken`. An
+existing holder may retain the same name even when current new-claim policy
+would refuse it.
+
+`POST /v1/account/username/check` accepts the same strict request and returns
+`{ username, availability, suggestions }`. Availability is `available`,
+`unavailable`, `invalid` or `reserved`. The normalized username and any
+suggestions come from the same policy and admission owner used by mutations.
+Suggestions are advisory: the two candidate spellings may produce fewer than
+two results when policy or existing claims exclude them. No result identifies
+another holder or reserves a name; the final set can still conflict.
+
+`POST /v1/account/username/release` accepts the strict empty object `{}` and
+returns `{ username: null, released: boolean, reservedUntilMs: number | null }`.
+A successful release atomically clears the current name and holds it for
+30 days against every claimant, including its former holder and provider
+auto-fill. Repeating release after the name is cleared returns
+`{ username: null, released: false, reservedUntilMs: null }`, keeps auto-fill
+disabled and does not extend the hold. Renaming is distinct from release and
+creates no hold.
+
+The corresponding Actions are `account.username.set`, `account.username.check`
+and `account.username.release`. Mutation approval follows the existing Action
+policy and per-surface Settings overrides; approval does not bypass server
+eligibility or admission. Provider fill/unlink, provisioning and provider-reset
+transfer delegate to `app/social/usernameUpdate.ts`, rather than writing another
+username namespace. See the [username compatibility contract](compatibility.md#account-username-intent-and-release-03-development).
+These additions describe development source, not released availability.
+
+## Public-profile integration status (0.3 development)
+
+Public-profile publication is an unfinished 0.3 capability. The source now
+contains the closed `PublicProfileV1` disclosure contracts, a single policy
+projector and an Account-associated publication lifecycle. The supporting server
+feature resolver is deliberately absent: declaring `account.publicProfiles`
+does not advertise support, and a missing enabled bit fails closed. Eligible-fact
+preparation and the actual shared page/body renderer remain required
+before publication can be offered. This is not a released endpoint guarantee.
+
+`account/publicProfile.ts` owns field consent, snapshot facts and tolerant stored
+readers; writes reject unknown fields recursively. `projectPublicProfile` masks
+facts and identity before compiling symbolic widget bindings into inert data.
+Tokens-hidden mixes retain shares while losing absolute token amounts in every
+lens. Weekly mixes accept shares only; weekly peaks also require peak-parallel
+consent. Stored unknown field ids grant no consent, and malformed known consent
+or facts fail closed. Private widget Artifacts remain drafts; the public layout
+is an explicitly applied inline copy.
+
+`account/publicProfilePublication.ts` separates reviewed prepared request bodies
+from author Action intents. The server lifecycle serializes consent and snapshot
+writes in one `AccountPublicProfile` row. A policy hide prunes stored facts even
+when Usage is offline; layout-only updates preserve current consent. Refresh
+replaces permitted facts only for an already published record and cannot publish,
+resume, change policy, apply a draft layout or remove an operator restriction.
+Pause retains the owner's edition; unpublish removes it and preserves only an
+independent restriction when present. These disclosures do not change Account
+encryption mode or keys.
+
+Whole-Account erasure withdraws the edition in its terminal retirement
+transaction, before retryable physical object deletion. Failed object cleanup
+therefore cannot retain public disclosure. An erasure refused before retirement,
+including pending Account-mode transition cleanup, leaves the edition unchanged.
+
+Publication also requires configured public ingress and
+`HAPPIER_PUBLIC_PROFILE_REPORT_URL`. The latter is a live, Home-editable optional
+string admitting HTTPS or mailto destinations; there is no Cloud default.
+Current Account identity and the effective service configuration supply URLs,
+including any public path prefix. Request Host and private Artifact/KV references
+are not publication authority. Anonymous representation admission must precede
+ETag comparison; renderer and loaded-runtime proof remain outstanding. See
+[Actions](actions.md) and the published
+[development guide](../apps/docs/content/docs/accounts/public-profiles.mdx).
+
+The development Home reclaim transport is
+`POST /v1/home/public-profiles/:accountId/handle-reclaim` with strict
+`{username,reason,notice}`. It rechecks the actual principal's Home capability
+and exact reviewed username, and answers `{username:null,reclaimed}`. A changed
+username returns HTTP 409 `username-changed`; an already-cleared Account is an
+acknowledged no-op. Reclaim uses the canonical username/withdrawal owners and
+retains restriction. Audit and the existing owner text-feed notice commit with
+the identity change; `/v1/feed` remains authenticated independently of Friends.
+
 ## Workspace execution config (0.3 development source)
 
 Authenticated Account transport exposes the private checkout config at
@@ -2196,6 +2290,14 @@ editor resolves changed addresses on a reachable Machine of the containing Home;
 without one, saving that address is disabled. Unchanged retained selectors remain
 editable without resolving them again. This is a 0.3 development Action, not a
 claim of released availability.
+
+The development `scm.hostingRepository.get` Action observes repository visibility
+through that same Machine's hosting contribution and Connected Account boundary.
+It requires an explicit Machine but no checkout. Only an observed public result
+contains the repository's label and credential-free HTTPS link; private, unknown,
+unsupported and failed results disclose neither. A caller's retained selector or
+claimed visibility does not authorize a public project link. Older hosts without
+this operation remain unavailable rather than substituting a clone or URL guess.
 
 The Sources controller owns the editable creation draft (name, address,
 default ref, contained subdirectory and audience). It combines these fields with

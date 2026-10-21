@@ -4,6 +4,64 @@ The host owns the executable Session and turn lifecycle. An Agent plugin supplie
 
 This page describes **0.3 development source**, not a shipped release or a completed live-validation gate. It is the standing architecture reference; approved plans remain the execution contract for their assigned work.
 
+## Session input and inline references
+
+The composer persists token-bearing text. Protocol's
+[`inlineReferenceTokenV1.ts`](../packages/protocol/src/runtime/input/inlineReferenceTokenV1.ts)
+owns `[label](happier-ref:<scheme>:<opaque>)`: the destination is the existing
+percent-encoded MentionRef identity, and the nonempty label folds line breaks
+to spaces and escapes `\`, `[` and `]`. The prefix is exported once as
+`INLINE_REFERENCE_HREF_PREFIX_V1`. Labels are advisory presentation; tokens
+do not create identity. A draft chip requires a matching typed reference range;
+a message chip requires a matching envelope mention or attachment record.
+Unbound tokens project to their label as plain text.
+
+[`renderSessionInputContextPromptV1`](../packages/protocol/src/sessions/messages/sessionInputPromptContextV1.ts)
+owns prompt composition. Its `references` input feeds
+[`projectSessionInputReferencesV1`](../packages/protocol/src/sessions/messages/sessionInputReferenceProjectionV1.ts),
+which rewrites tokens in place and renders one `<happier_references v="1">`
+block for the distinct selected references. Ordinary input places that block
+before the user text; `userTextPlacement: 'beforeContext'` preserves a native
+command's first-line grammar while applying the same projection. Provenance,
+browser and Discussion context retain their separate meanings and blocks.
+
+| Bound reference | Readable marker |
+| --- | --- |
+| Dispatched image | `[Image #N]` |
+| Other uploaded file or composer attachment | `[File: name]` |
+| Uploaded directory | `[Folder: name]` |
+| Workspace file or folder | `@path` or `@path/`, quoted when needed |
+| Session | `@Session "label"` |
+| Skill or vendor plugin | `$name` or `@name` |
+| Workflow or widget | `@Workflow "label"` or `@Widget "label"` |
+| Contributed reference | Its trigger and resolved label |
+
+The CLI's
+[`resolveStructuredInputProviderContext`](../apps/cli/src/agent/runtime/turns/resolveStructuredInputProviderContext.ts)
+builds reference facts after finalizing dispatched image order. Image numbers
+are derived by id from that order and never persisted. Upload descriptors in
+`attachments.v1` and structured image inputs carry the tray id; contributed
+attachments use their existing `instanceId`. An attachment retained after its
+chip is deleted remains in the block without an in-text marker.
+
+Session entries carry an id and read-with-a-tool guidance, never pasted
+transcripts. Workflow and widget entries use current send-time identity/title
+resolution and a read Action when one exists; unavailable references are data,
+not a failed send. Contributed context is escaped as data. Existing resolved
+context budgets remain in force; replay reservation measures the bounded
+reference portion in UTF-16 units. Upload listings remain outside that budget.
+
+New writes use this single projection rather than appending an upload listing
+to message text. The [legacy reader](compatibility.md#composer-inline-references-03-development)
+preserves 0.2-created messages and normalizes positioned legacy drafts.
+[`messageStructuredReferences.ts`](../apps/ui/sources/components/sessions/transcript/references/messageStructuredReferences.ts)
+owns inline bindings, legacy row entries and image numbers; its path scan
+excludes inline-token ranges. Human readers share
+[`messageDisplayText.ts`](../apps/ui/sources/components/sessions/transcript/messageDisplayText.ts),
+while only the bound Markdown renderer consumes token-bearing source.
+
+## Session and turn lifecycle
+
 Codex app-server can finish a native turn while an already-started tool is still running. The
 host records the missing result truthfully. A later result for that exact native
 thread, turn and known tool call corrects the same transcript row through the

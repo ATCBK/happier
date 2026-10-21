@@ -1211,6 +1211,17 @@ and null `lastName`; this compatibility projection does not split a chosen name.
 The old storage columns remain read-compatibility data, not competing writers.
 This is an undeployed 0.3 development-source contract.
 
+`home.public_profiles.handle_reclaim` is a separate Home-administration identity
+Action. It names the captured Account and exact current username, an audited
+reason and the notice disclosed to that Account. The canonical username owner
+withdraws the publication while retaining any operator restriction, clears the
+name and disables provider auto-fill. It creates no voluntary-release hold.
+The same transaction writes the Home audit and existing Account text-feed
+notice (`public_profile_handle_reclaim` repeat key). A stale reviewed name
+returns a conflict; replay after successful clear is a no-op with no second
+notice. Default approval is waivable through ordinary Action settings but never
+grants Home privilege. The rendered operator/owner flow remains integration work.
+
 ### Work authoring surface parity (development)
 
 Role reads and mutations, including Account role creation, overrides and applying
@@ -1897,6 +1908,15 @@ earlier estimates remain raw facts and are not counted again. This differs from
 running a new query for one day, whose narrower population may not admit that
 report. Daily, Flow and the single-series projection share this temporal owner.
 
+Active days and current/best streaks use the shared calendar-day summary at the
+query's offset and range, not a count of hourly or monthly series buckets. The
+current streak ends today or yesterday; the best streak is period-local. Missing
+calendar evidence remains unavailable rather than zero. Execution-source shares
+use reconciled token contributions and witnessed `happier`, `outside` or unknown
+execution attribution. Native capture alone does not establish outside execution;
+unknown contributions stay in the denominator and a missing denominator has no
+measured share.
+
 In 0.3 development source, `includeAccounting` defaults to true. Capacity sets
 it to false through the shared widget demand owner: the same query identity and
 Account Resource then read allowance and selector facts without accounting,
@@ -2069,6 +2089,38 @@ while private Session detail is pending; each query keeps its own fixed-offset
 calendar. Changing or clearing the hours also reprojects retained witnessed
 intervals, without inferring missing busy duration.
 
+In 0.3 development source, the same `usage.query` slice additionally exposes
+shared chart facts, not another analytics reader. `howYouWork.runLengths`
+contains deduplicated closed-turn wall durations (including waits), per-Agent
+median/p90 and separate open, cropped and invalid counts. Missing terminal
+observations are not completed samples. Anonymous Agent/duration observations
+reuse `summarizeUsageRunLengthObservations`, the same quantile owner, without
+inventing lifecycle identities or timestamps. `howYouWork.steering` joins accepted
+inputs and permission answers to historical turn Agents and answer hours;
+follow-ups remain distinct from steers, unpaired answers have no wait latency,
+and rates use only witnessed same-Agent busy time. `collaboration` preserves
+typed directed spawn/run/native/review/plan/report/replay/handoff evidence;
+missing launcher identity or time stays Unknown, and current manager membership
+does not establish historical launch provenance.
+
+`howYouWork.agentCalendar` folds full reconciled contributions into Agent
+day/week/hour metrics before selecting joint leaders. Its full-period summary,
+weekday/hour and hour-of-day reductions deduplicate Sessions and sweep actual
+dated busy spans; callers must not sum bucket Session counts or peaks. Period
+Agent membership and nullable token/cost shares use that same full population,
+including Unknown attribution. Absent measurement-presence evidence cannot
+turn a zero-valued context observation into a measured share. It also derives observed
+Agent active days, normalized weekly token shares and clipped witnessed weekly
+peaks. Costs retain the selected canonical money basis. Configured day/night
+shares use recorded hourly activity, not busy time or human presence; no window
+means unavailable. Coarse machine kinds remain unavailable without evidence.
+Calendar shaping follows existing Activity/model-timeline demand and steering
+follows transcript demand. `mergedOutcomes` delegates to the canonical Work
+allocation: merged PRs linked to period work, merges actually dated in the
+period and undated merged PRs are separate facts. Optional or null projections
+mean unavailable, not zero. These private result fields do not authorize public
+disclosure; public population admission and field policy remain separate.
+
 `usage.recap.compose` returns a strict private selected-field preview from that
 same authorized query slice. One result supports Daybreak (default), Sigil,
 Editorial, Glass, Holo, Skyline and Terminal, with square, story and
@@ -2213,11 +2265,26 @@ Compose produces data without publishing, rendering an image or opening a
 share sheet. `usage.recap.export` is client-placed: it composes the same selected
 facts, then returns strict PNG file bytes with their field manifest and as-of.
 A headless caller receives compose data and explicit image unavailability, not
-a fabricated image. The client renderer uses the same recap card as the preview;
-Copy, Save and Share explicitly deliver the returned file. Cancellation or
+a fabricated image. The client renderer uses the same recap card as the preview.
+`usage.recap.deliver` accepts the same closed source intent plus `copy`, `save`
+or `share`, never caller-supplied image bytes or paths, and owns explicit client
+delivery through compose, rendering and the existing image-delivery adapter.
+Its result distinguishes delivered, cancelled, unavailable and failed outcomes.
+Android chooser presentation returns `failed` with `outcome_unobservable` and
+`handoff: 'presented'`: completion is unknown, not a proven delivery failure,
+and callers must not automatically retry. Browser download acknowledgement is
+only a handoff, not proof that a file was persisted; native Save retains the
+system sheet's semantics, not a promised photo-library write. Cancellation or
 Account retirement prevents a late render from disclosing bytes. These are
 development-source contracts; source checks do not establish loaded UI or release
 availability.
+
+An explicit `{source:{kind:'public_profile'}}` recap reads the captured Account's
+currently admitted public view through `/v1/account/public-profile/view` rather
+than re-querying private Usage or accepting a supplied snapshot or username.
+Only admitted public fields reach the existing style model; unavailable public
+source never falls back to private data. Public source transport and host UI
+integration remain development work, not an available publication workflow.
 
 The optional How-you-work footprint is also a deliberate data result. No
 applicable licensed, versioned method has been admitted for the available

@@ -89,6 +89,26 @@ locked/inconsistent/migration-required result before content disclosure or mutat
 while preserving the stored value; it must not become absence, defaults, or a
 fallback to the other branch.
 
+### Public-profile disclosure boundary (development integration)
+
+The [public-profile development contract](../apps/docs/content/docs/accounts/public-profiles.mdx)
+requires explicit plaintext disclosure for both Account modes. The development
+publication row and domain actions store only the admitted disclosure without
+changing Account mode or key columns. The media lifecycle and consumed public
+renderer remain incomplete, and the server does not advertise support. Private Usage, settings and draft
+Artifact reads retain the Account-mode and envelope admission above. Locked or
+inconsistent E2EE source material cannot become an empty synchronized profile.
+
+Reviewed Publish/Apply must carry only consented generated facts and, when
+selected, the exact normalized public image/settings copy. That image is a
+separate server-readable disclosure, including text already baked into its
+pixels; masking generated fields cannot redact it. Private selection/preview
+must upload no image. Facts refresh may retain the applied copy but cannot read
+new local images, draft layouts or plugin definitions. Publication must neither
+change Account mode nor create, require or upload Account key material for a
+plain Account. The private physical file backend is a custody boundary, not
+proof that these deliberately disclosed bytes are client E2EE.
+
 ### Raw Account-KV cipher and lazy re-seal (0.3 development)
 
 `packages/protocol/src/crypto/accountKvCipher.ts` owns raw Account-KV cipher
@@ -2481,6 +2501,14 @@ or retired RPC material remains a refusal, including for server-origin reads.
   context. It rejects a substituted plain marker before payload emission and never
   follows Machine replacement redirects. Ordinary
   `callMachineRpc` retains its existing replacement behavior.
+- In 0.3 development, `POST /v1/machines/read-batch` transports selected exact
+  reads through the same access/opening owner as `GET /v1/machines/:id`, including
+  ephemeral runners. Absence and unavailable access remain indistinguishable.
+  This does not turn the ordinary persistent-Machine census into an exact lookup.
+  UI readers share only pending parsed observations for the same captured
+  Home/credential and demand; each borrower keeps its key/access/currentness
+  checks. Fresh maintenance, custody and mutation-confirmation witnesses do not
+  borrow an earlier ordinary read.
 - In 0.3 development, the normal Machine census can publish pending display shells
   before fresh keys open. Activity-ordered hydration uses the existing concurrency
   owner and releases the JavaScript thread between cohorts. After publishing
@@ -4374,6 +4402,9 @@ Home-administration and self-erasure routes return HTTP 409 with
 Account's status and credentials unchanged, and the caller retries the same authenticated
 request. Once cleanup is ready, erasure uses the existing disable/revoke, idempotent object
 deletion, and final row-deletion sequence.
+Public-profile withdrawal commits with terminal disable, before external object deletion;
+pending physical cleanup retains object locators but not the public edition. An earlier
+transition-cleanup refusal leaves that edition unchanged alongside status and credentials.
 An administrator erasing their own Account must pass initial administrative admission; only
 that admitted invocation may continue through its own revocation. An independent administrator
 is checked again before final row deletion. This adds no separate erasure state or cleanup owner.
