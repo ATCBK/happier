@@ -32,7 +32,10 @@ go out when publication recovers without another Session message. Recovery uses
 the same delivery custody, preserving the rule against resending delivered replies.
 Failed transcript reads also leave the saved frontier unchanged and return to
 the supervisor's existing recovery cycle; diagnostic logs retain typed failure
-codes without transcript content.
+codes without transcript content. In unreleased development source, the same
+diagnostics distinguish typed unavailability, deferred transcript approval,
+paused projection and pages with no eligible reply. A deferred approval does
+not start a repeating approval-request loop.
 
 ## The two halves
 

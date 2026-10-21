@@ -22,6 +22,8 @@ import {
   readConversationPermissionWaitMediationSource,
   redriveConversationOutwardDelivery,
   type ConversationOutwardDeliveryRecord,
+  type ConversationOutwardDeliveryResult,
+  type ConversationOutwardDeliveryRecoveryResult,
   type ConversationPermissionWaitMediationSource,
 } from './outwardDelivery.js';
 import {
@@ -41,7 +43,6 @@ import {
   createConversationSessionProjectionCollectionStore,
   hasConversationInputOriginFromBinding,
   projectConversationSessionTranscriptPage,
-  type ConversationSessionProjectionResult,
 } from './sessionProjection.js';
 
 const RECONCILIATION_INTERVAL_MS = 1_000;
@@ -231,38 +232,47 @@ type OutwardDeliveryWorkFailureBoundary =
 function logOutwardDeliverySupervisorWorkFailure(
   context: BackgroundServiceContext,
   boundary: OutwardDeliveryWorkFailureBoundary,
-  identifiers?: Readonly<{ connectionId?: string; bindingId?: string; error?: unknown }>,
-): void {
-  if (context.signal.aborted) return;
-  if (isInactiveSupervisorCollectionFailure(identifiers?.error)) return;
-  context.services.logger.warn('[Channels] outward delivery supervisor work failed', {
-    boundary,
-    ...(classifySupervisorFailure(identifiers?.error) ?? {}),
-    ...(identifiers?.connectionId === undefined ? {} : { connectionId: identifiers.connectionId }),
-    ...(identifiers?.bindingId === undefined ? {} : { bindingId: identifiers.bindingId }),
-  });
-}
-
-/**
- * A history gap is a typed result, not a thrown error: projection returns it
- * and leaves the frontier unchanged, so the next wake repeats the same rejected
- * or unusable cursor forever. Discarding that value hid a permanently stuck
- * binding behind a healthy-looking cycle. The reason is a closed literal, so
- * this carries no session, endpoint, or transcript content.
- */
-function logConversationSessionProjectionHistoryGap(
-  context: BackgroundServiceContext,
-  input: Readonly<{
-    bindingId: string;
-    reason: Extract<ConversationSessionProjectionResult, Readonly<{ kind: 'historyGap' }>>['reason'];
+  identifiers?: Readonly<{
+    connectionId?: string;
+    bindingId?: string;
+    error?: unknown;
+    outcome?: Readonly<{ code: string; retryable: boolean; informational: boolean }>;
   }>,
 ): void {
   if (context.signal.aborted) return;
-  context.services.logger.warn('[Channels] Session projection cannot advance its transcript frontier', {
-    boundary: 'transcript-projection',
-    bindingId: input.bindingId,
-    reason: input.reason,
+  if (isInactiveSupervisorCollectionFailure(identifiers?.error)) return;
+  const informational = identifiers?.outcome?.informational === true;
+  context.services.logger[informational ? 'info' : 'warn'](
+    informational ? '[Channels] outward delivery supervisor work completed' : '[Channels] outward delivery supervisor work failed',
+    {
+      boundary,
+      ...(classifySupervisorFailure(identifiers?.error) ?? {}),
+      ...(identifiers?.outcome === undefined ? {} : {
+        code: identifiers.outcome.code,
+        retryable: identifiers.outcome.retryable,
+      }),
+      ...(identifiers?.connectionId === undefined ? {} : { connectionId: identifiers.connectionId }),
+      ...(identifiers?.bindingId === undefined ? {} : { bindingId: identifiers.bindingId }),
+    },
+  );
+}
+
+function logOutwardDeliverySupervisorDeliveryOutcome(
+  context: BackgroundServiceContext,
+  boundary: 'delivery-operation' | 'transcript-projection',
+  identifiers: Readonly<{ connectionId?: string; bindingId?: string }>,
+  result: ConversationOutwardDeliveryResult | ConversationOutwardDeliveryRecoveryResult,
+  retryable: boolean,
+): boolean {
+  if (result.kind === 'settled' && result.custody.state === 'delivered') return false;
+  const prefix = boundary === 'transcript-projection' ? 'channels_projection_' : 'channels_delivery_';
+  const code = `${prefix}${'reason' in result ? result.reason
+    : 'custody' in result ? result.custody.state : result.kind}`;
+  logOutwardDeliverySupervisorWorkFailure(context, boundary, {
+    ...identifiers,
+    outcome: { code, retryable, informational: result.kind === 'retired' },
   });
+  return true;
 }
 
 function isProjectionConnectionCurrent(value: JsonValue, connectionId: string): boolean {
@@ -443,6 +453,17 @@ export async function runConversationOutwardDeliveryCycle(
     if (custody.state === 'retryDue') noteDeadline(custody.retryNotBefore ?? now());
     if (custody.state === 'attempting' && custody.startedAt !== undefined) noteDeadline(custody.startedAt + staleAttemptAfterMs);
   };
+  // Retained redrive and first projection share the same recovery decision.
+  // A failed pre-custody read has no durable row to wake it later.
+  const noteDeliveryResult = (result: ConversationOutwardDeliveryResult): boolean => {
+    if ('custody' in result) noteCustody(result.custody);
+    if (result.kind === 'settlementPending' || (result.kind === 'notAttempted'
+      && ['custodyUnavailable', 'connectionUnavailable', 'custodyChangedBeforeAttempt'].includes(result.reason))) {
+      noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+      return true;
+    }
+    return 'custody' in result && result.custody.state === 'retryDue';
+  };
   const workFailed = (boundary: OutwardDeliveryWorkFailureBoundary, detail: Parameters<typeof logOutwardDeliverySupervisorWorkFailure>[2] = {}) => {
     noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
     logOutwardDeliverySupervisorWorkFailure(context, boundary, detail);
@@ -492,7 +513,11 @@ export async function runConversationOutwardDeliveryCycle(
       });
       if ('custody' in result) noteCustody(result.custody);
       if (result.kind === 'notAttempted' && result.reason === 'attemptStillCurrent') noteCustody(record.custody);
-      if (result.kind === 'settlementPending' || (result.kind === 'notAttempted' && result.reason === 'custodyUnavailable')) noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+      const retryable = result.kind === 'settlementPending' || (result.kind === 'notAttempted' && result.reason === 'custodyUnavailable');
+      if (retryable) noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+      logOutwardDeliverySupervisorDeliveryOutcome(context, 'delivery-operation', {
+        connectionId: record.obligation.connectionId, bindingId: record.obligation.bindingId,
+      }, result, retryable);
       return;
     }
     const result = await redriveConversationOutwardDeliveryThroughProviderAction({
@@ -505,9 +530,10 @@ export async function runConversationOutwardDeliveryCycle(
       now,
       signal: context.signal,
     });
-    if ('custody' in result) noteCustody(result.custody);
-    if (result.kind === 'settlementPending' || (result.kind === 'notAttempted'
-      && ['custodyUnavailable', 'connectionUnavailable', 'custodyChangedBeforeAttempt'].includes(result.reason))) noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+    const retryable = noteDeliveryResult(result);
+    logOutwardDeliverySupervisorDeliveryOutcome(context, 'delivery-operation', {
+      connectionId: record.obligation.connectionId, bindingId: record.obligation.bindingId,
+    }, result, retryable);
   };
 
   let nextDeliveryCursor = input.deliveryCursor;
@@ -678,7 +704,7 @@ export async function runConversationOutwardDeliveryCycle(
     // attempted or ambiguous effects retain their ordinary custody truth.
     if (mediation.truncated || !isUnattemptedPermissionWait(record)) continue;
     try {
-      await redriveConversationOutwardDelivery({
+      const result = await redriveConversationOutwardDelivery({
         store: deliveryStore,
         record,
         attemptId: createAttemptId(),
@@ -693,6 +719,9 @@ export async function runConversationOutwardDeliveryCycle(
           throw new Error('A non-pending permission wait must not reach provider delivery.');
         },
       });
+      logOutwardDeliverySupervisorDeliveryOutcome(context, 'delivery-operation', {
+        connectionId: record.obligation.connectionId, bindingId: record.obligation.bindingId,
+      }, result, noteDeliveryResult(result));
     } catch (error) {
       workFailed('permission-mediation', {
         error,
@@ -709,6 +738,7 @@ export async function runConversationOutwardDeliveryCycle(
   });
   for (const bindingId of bindingIds) {
     if (context.signal.aborted) break;
+    let observedDeliveryOutcome = false;
     try {
       const projected = await projectConversationSessionTranscriptPage({
         actions: context.services.actions,
@@ -739,8 +769,9 @@ export async function runConversationOutwardDeliveryCycle(
             now,
             signal: context.signal,
           });
-          if ('custody' in result) noteCustody(result.custody);
-          if (result.kind === 'settlementPending') noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
+          const retryable = noteDeliveryResult(result);
+          observedDeliveryOutcome = logOutwardDeliverySupervisorDeliveryOutcome(context,
+            'transcript-projection', { bindingId }, result, retryable) || observedDeliveryOutcome;
           if (result.kind === 'retired' || ((result.kind === 'settled' || result.kind === 'suppressed')
             && isConversationDeliveryAutomaticTerminal(result.custody))) {
             await markConversationSessionInputRepliesProjected({ stateCollection, relations, seq: item.seq, signal: context.signal });
@@ -754,10 +785,23 @@ export async function runConversationOutwardDeliveryCycle(
       if (projected.kind === 'blocked' && projected.reason === 'publicationBarrier') {
         noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
       }
-      if (projected.kind === 'historyGap') {
-        if (projected.disposition === 'recorded') {
-          logConversationSessionProjectionHistoryGap(context, { bindingId, reason: projected.reason });
+      // Typed outcomes used to disappear here, leaving no way to distinguish
+      // a parked frontier, a deferred Action and a page with no eligible reply.
+      // Emit one content-free result through the same work record as thrown
+      // failures. An approval deferral must not create a timed approval loop.
+      if (!(projected.kind === 'unavailable' && projected.reason === 'cancelled')
+        && !((projected.kind === 'advanced' || projected.kind === 'idle') && projected.deliveredItemCount > 0)
+        && !(observedDeliveryOutcome && projected.kind === 'blocked' && projected.reason === 'deliveryPending')) {
+        const retryable = projected.kind === 'blocked'
+          || (projected.kind === 'unavailable' && projected.reason === 'frontierUnavailable');
+        const informational = projected.kind === 'advanced' || projected.kind === 'idle';
+        const code = `channels_projection_${'reason' in projected ? projected.reason : projected.kind}`;
+        if (projected.kind === 'unavailable' && retryable) {
+          noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
         }
+        logOutwardDeliverySupervisorWorkFailure(context, 'transcript-projection', {
+          bindingId, outcome: { code, retryable, informational },
+        });
       }
     } catch (error) {
       // Projection never receives a local replacement owner; its unchanged
