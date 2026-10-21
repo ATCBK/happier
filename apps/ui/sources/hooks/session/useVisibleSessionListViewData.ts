@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { normalizeSessionListBackgroundWorkAttentionMode, type SessionListBackgroundWorkAttentionMode } from '@/sync/domains/session/listing/sessionListBackgroundWorkAttention';
 import { useShallow } from 'zustand/react/shallow';
 import { storage } from '@/sync/domains/state/storage';
 import { projectSessionArchivesToListViewData, readSessionArchiveOperationsForServers } from '@/sync/domains/session/listing/sessionArchiveState';
@@ -86,6 +87,7 @@ type SessionListDataState = Readonly<{
     sessionAttentionStandingPolicy: SessionAttentionStandingPolicy;
     sessionListAttentionPromotionMode: SessionListAttentionPromotionMode;
     sessionListWorkingPlacementMode: SessionListWorkingPlacementMode;
+    backgroundWorkAttentionMode: SessionListBackgroundWorkAttentionMode;
     sessionListFolderSortModeV1: SessionListFolderSortModeV1;
     sessionListOrderingModeV1: SessionListOrderingModeV1;
     sessionListSectionModeV1: SessionListOrderingSectionMode;
@@ -226,6 +228,7 @@ function buildVisibleSessionListIndexForState(
                 standingPolicy: state.sessionAttentionStandingPolicy,
             }
             : DISABLED_ATTENTION_PROMOTION_OPTIONS,
+        backgroundWorkAttentionMode: state.backgroundWorkAttentionMode,
         workingPlacement: state.sessionListWorkingPlacementMode !== 'off'
             ? {
                 mode: state.sessionListWorkingPlacementMode,
@@ -380,6 +383,7 @@ type RetainedVisibleSessionListProjection = Readonly<{
     sessionAttentionStandingPolicy: SessionAttentionStandingPolicy;
     sessionListAttentionPromotionMode: SessionListAttentionPromotionMode;
     sessionListWorkingPlacementMode: SessionListWorkingPlacementMode;
+    backgroundWorkAttentionMode: SessionListBackgroundWorkAttentionMode;
     sessionListFolderSortModeV1: SessionListFolderSortModeV1;
     sessionListOrderingModeV1: SessionListOrderingModeV1;
     sessionListSectionModeV1: SessionListOrderingSectionMode;
@@ -501,6 +505,7 @@ function canReuseRetainedVisibleSessionListProjection(params: Readonly<{
         && areAttentionStandingPoliciesEqual(cached.sessionAttentionStandingPolicy, params.state.sessionAttentionStandingPolicy)
         && cached.sessionListAttentionPromotionMode === params.state.sessionListAttentionPromotionMode
         && cached.sessionListWorkingPlacementMode === params.state.sessionListWorkingPlacementMode
+        && cached.backgroundWorkAttentionMode === params.state.backgroundWorkAttentionMode
         && cached.sessionListFolderSortModeV1 === params.state.sessionListFolderSortModeV1
         && cached.sessionListOrderingModeV1 === params.state.sessionListOrderingModeV1
         && cached.sessionListSectionModeV1 === params.state.sessionListSectionModeV1
@@ -636,6 +641,7 @@ function useVisibleSessionListComputation(
             sessionAttentionStandingPolicy: state.sessionAttentionStandingPolicy,
             sessionListAttentionPromotionMode: state.sessionListAttentionPromotionMode,
             sessionListWorkingPlacementMode: state.sessionListWorkingPlacementMode,
+            backgroundWorkAttentionMode: state.backgroundWorkAttentionMode,
             sessionListFolderSortModeV1: state.sessionListFolderSortModeV1,
             sessionListOrderingModeV1: state.sessionListOrderingModeV1,
             sessionListSectionModeV1: state.sessionListSectionModeV1,
@@ -788,6 +794,7 @@ function useSessionListDataState(
     const openApprovalSessionIdList = useOpenApprovalSessionIds();
     const hideInactiveSessions = useSetting('hideInactiveSessions') === true;
     const sessionListWorkingPlacementMode = normalizeSessionListWorkingPlacementMode(useSetting('sessionListWorkingPlacementModeV1'));
+    const backgroundWorkAttentionMode = normalizeSessionListBackgroundWorkAttentionMode(useSetting('sessionListBackgroundWorkAttentionModeV1'));
     const sessionListFolderSortModeV1 = normalizeSessionListFolderSortModeV1(useLocalSetting('sessionListFolderSortModeV1'));
     const sessionListOrderingModeV1 = normalizeSessionListOrderingModeV1(useSetting('sessionListOrderingModeV1'));
     const sessionListSectionModeV1 = normalizeSessionListOrderingSectionMode(useSetting('sessionListSectionModeV1'));
@@ -939,6 +946,7 @@ function useSessionListDataState(
         sessionAttentionStandingPolicy,
         sessionListAttentionPromotionMode,
         sessionListWorkingPlacementMode,
+        backgroundWorkAttentionMode,
         sessionListFolderSortModeV1,
         sessionListOrderingModeV1,
         sessionListSectionModeV1,
@@ -963,6 +971,7 @@ function useSessionListDataState(
         sessionAttentionStandingPolicy,
         sessionListAttentionPromotionMode,
         sessionListWorkingPlacementMode,
+        backgroundWorkAttentionMode,
         sessionListFolderSortModeV1,
         sessionListOrderingModeV1,
         sessionListSectionModeV1,

@@ -72,6 +72,7 @@ const sourceData = vi.hoisted(() => ({
     hideInactiveSessions: false,
     sessionListAttentionPromotionMode: 'off' as 'off' | 'global' | 'withinGroups',
     sessionListAttentionStandingDefault: false,
+    backgroundWorkAttentionMode: 'keepWorking' as 'keepWorking' | 'keepWorkingUnread' | 'showUnread',
     sessionListWorkingPlacementMode: 'off' as 'off' | 'global' | 'withinGroups',
     sessionListOrderingModeV1: 'custom' as 'custom' | 'created' | 'updated',
     sessionListSectionModeV1: 'activity' as 'activity' | 'single',
@@ -119,6 +120,7 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
                 if (key === 'hideInactiveSessions') return sourceData.hideInactiveSessions;
                 if (key === 'sessionListAttentionPromotionModeV1') return sourceData.sessionListAttentionPromotionMode;
                 if (key === 'sessionListAttentionStandingDefaultV1') return sourceData.sessionListAttentionStandingDefault;
+                if (key === 'sessionListBackgroundWorkAttentionModeV1') return sourceData.backgroundWorkAttentionMode;
                 if (key === 'sessionListWorkingPlacementModeV1') return sourceData.sessionListWorkingPlacementMode;
                 if (key === 'sessionListOrderingModeV1') return sourceData.sessionListOrderingModeV1;
                 if (key === 'sessionListSectionModeV1') return sourceData.sessionListSectionModeV1;
@@ -189,6 +191,7 @@ describe('useVisibleSessionListViewData', () => {
         sourceData.sessionListAttentionPromotionMode = 'off';
         sourceData.sessionListAttentionStandingDefault = false;
         sourceData.sessionListWorkingPlacementMode = 'off';
+        sourceData.backgroundWorkAttentionMode = 'keepWorking';
         sourceData.sessionListOrderingModeV1 = 'custom';
         sourceData.sessionListSectionModeV1 = 'activity';
         sourceData.sessionListFolderSortModeV1 = 'foldersFirst';
@@ -1656,6 +1659,45 @@ describe('useVisibleSessionListViewData', () => {
             'session:shared-session:server-b:active:none',
         ]);
         await hook.unmount();
+    });
+
+    it.each([
+        ['global', 'global'], ['withinGroups', 'withinGroups'],
+        ['global', 'withinGroups'], ['withinGroups', 'global'],
+        ['off', 'global'], ['global', 'off'],
+        ['off', 'withinGroups'], ['withinGroups', 'off'],
+    ] as const)('reacts to background unread preference changes with attention %s and working %s', async (attentionMode, workingMode) => {
+        sourceData.sessionListAttentionPromotionMode = attentionMode;
+        sourceData.sessionListWorkingPlacementMode = workingMode;
+        sourceData.activeData = [{
+            type: 'session', serverId: 'server-a', section: 'active', groupKey: 'group-a', groupKind: 'active',
+            session: makeRenderableSession('background-unread', {
+                active: true, activeAt: Date.now(), presence: 'online', seq: 5, lastViewedSessionSeq: 1,
+                hasUnreadMessages: true, latestTurnStatus: 'completed', latestTurnStatusObservedAt: Date.now(),
+                runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+                runtimeActivityObservedAt: Date.now(), runtimeActivityRevision: 1,
+            }),
+        }];
+        const hook = await renderHook(() => useReminderListViewData());
+        const sessionRow = () => hook.getCurrent()?.find((item) => item.type === 'session');
+        expect(sessionRow()?.workingPlacementReason).toBe(workingMode === 'off' ? undefined : 'working');
+        sourceData.backgroundWorkAttentionMode = 'keepWorkingUnread';
+        await hook.rerender();
+        expect(sessionRow()?.workingPlacementReason).toBe(workingMode === 'off' ? undefined : 'working');
+        sourceData.backgroundWorkAttentionMode = 'showUnread';
+        await hook.rerender();
+        expect(sessionRow()?.attentionPromotionReason).toBe(attentionMode === 'off' ? undefined : 'unread');
+        sourceData.backgroundWorkAttentionMode = 'keepWorking';
+        await hook.rerender();
+        expect(sessionRow()?.workingPlacementReason).toBe(workingMode === 'off' ? undefined : 'working');
+        expect(sessionRow()).toMatchObject({ session: { hasUnreadMessages: true } });
+        const retainedSessionListViewData = hook.getCurrent();
+        await hook.unmount();
+        sourceData.backgroundWorkAttentionMode = 'showUnread';
+        const remounted = await renderHook(() => useReminderListViewData('all', { retainedSessionListViewData }));
+        expect(remounted.getCurrent()?.find((item) => item.type === 'session')?.attentionPromotionReason)
+            .toBe(attentionMode === 'off' ? undefined : 'unread');
+        await remounted.unmount();
     });
 
     it('passes the within-groups attention placement setting into visible list derivation', async () => {

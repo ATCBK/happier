@@ -72,6 +72,28 @@ function makeScopedSessionList(
 describe('buildInboxSessionState', () => {
     const now = 1_000_000;
 
+    it('does not offer a completed foreground turn for review while background work continues', () => {
+        const session = makeUnreadRenderable({
+            activeAt: now,
+            runtimeActivityState: 'active',
+            runtimeActivityActiveCount: 1,
+            runtimeActivityObservedAt: now,
+        });
+        const input = {
+            sessions: [],
+            sessionListViewDataByServerId: { background: makeScopedSessionList('background', [session]) },
+            nowMs: now,
+        };
+        expect(buildInboxSessionState(input).reviewSessions).toEqual([]);
+        expect(buildInboxSessionSummary(input).hasContent).toBe(false);
+        expect(buildInboxSessionState({
+            ...input,
+            sessionListViewDataByServerId: {
+                background: makeScopedSessionList('background', [{ ...session, runtimeActivityState: 'idle', runtimeActivityActiveCount: 0 }]),
+            },
+        }).reviewSessions.map(({ reason }) => reason)).toEqual(['ready']);
+    });
+
     it('does not surface or mark a still-working session merely because streaming made it unread', () => {
         const working = makeUnreadRenderable({
             id: 'working-unread',

@@ -77,9 +77,8 @@ export function resolveSessionRowPresentation(input: Readonly<{
      */
     standing?: boolean;
 }>): SessionRowPresentation {
-    // Background work only speaks for a row with nothing of its own to say: unread, pending, ready and
-    // every higher attention state keep their indicator, so a reply awaiting the person is never
-    // disguised as work still running.
+    // Classification owns whether background unread work presents as working or unread. Preserve
+    // that result here; legacy quiet inputs still show that background work continues.
     const backgroundActiveUsesWorkingIndicator = input.backgroundActive === true
         && input.attentionState === 'quiet';
     const signalIndicator = backgroundActiveUsesWorkingIndicator
@@ -110,6 +109,10 @@ export function resolveSessionRowPresentation(input: Readonly<{
 
     if (input.attentionState === 'working' && input.workingRetained === true) {
         return { attentionIndicator, titleTone, secondaryLine: 'status', statusTextKey: 'status.workingRetained' };
+    }
+
+    if (input.attentionState === 'working' && input.backgroundActive === true) {
+        return { attentionIndicator, titleTone, secondaryLine: 'status', backgroundActivityStatusLine: true };
     }
 
     if (

@@ -316,7 +316,7 @@ describe('buildSessionListRowModel', () => {
             hasPendingPermissionRequests: true,
             hasPendingUserActionRequests: true,
             pendingRequestObservedAt: NOW_MS - 10,
-            // Read: an unread completed turn would rightly present as Ready for review instead.
+            // Read: isolate request clearing from the independent unread signal.
             lastViewedSessionSeq: 10,
         });
         const item = createSessionItem(rowSession);
@@ -589,7 +589,34 @@ describe('buildSessionListRowModel', () => {
         expect(model.presentation.statusTextKey).toBeUndefined();
     });
 
-    it('keeps pending attention over background activity with precise neutral secondary copy', () => {
+    it.each(['keepWorking', 'keepWorkingUnread', 'showUnread'] as const)('preserves unread and background work with %s attention policy', (backgroundWorkAttentionMode) => {
+        const session = createRenderable('background-unread', {
+                active: true, activeAt: NOW_MS, hasUnreadMessages: true, lastViewedSessionSeq: 9,
+                latestTurnStatus: 'completed', latestTurnStatusObservedAt: NOW_MS,
+                runtimeActivityState: 'active', runtimeActivityActiveCount: 1,
+                runtimeActivityObservedAt: NOW_MS, runtimeActivityRevision: 1,
+        });
+        const model = buildSessionListRowModel({
+            item: createSessionItem(session),
+            isFirst: true, isLast: true, isSingle: true,
+            settings: createSettings({ backgroundWorkAttentionMode }),
+        });
+        expect(model.attention.rowState).toBe(backgroundWorkAttentionMode === 'keepWorking' ? 'working' : 'unread');
+        expect(model.hasUnreadMessages).toBe(true);
+        expect(model.presentation.attentionIndicator).toBe(backgroundWorkAttentionMode === 'keepWorking' ? 'working' : 'unread');
+        expect(model.presentation.statusTextKey).toBeUndefined();
+        expect(model.status.state).toBe('background_active');
+        const readModel = buildSessionListRowModel({
+            item: createSessionItem({ ...session, hasUnreadMessages: false, lastViewedSessionSeq: 10 }),
+            isFirst: true, isLast: true, isSingle: true,
+            settings: createSettings({ backgroundWorkAttentionMode }),
+        });
+        expect(readModel.hasUnreadMessages).toBe(false);
+        expect(readModel.attention.rowState).toBe('working');
+        expect(readModel.presentation.attentionIndicator).toBe('working');
+    });
+
+    it('keeps queued messages and unread independent of background work with neutral secondary copy', () => {
         const model = buildSessionListRowModel({
             item: createSessionItem(createRenderable('s1', {
                 active: true,
@@ -616,11 +643,11 @@ describe('buildSessionListRowModel', () => {
         expect(model.status.state).toBe('background_active');
         expect(model.status.statusColor).toBe('default-token');
         expect(model.status.statusDotColor).toBe('default-token');
-        expect(model.attention.listState).toBe('pending');
-        expect(model.attention.rowState).toBe('pending');
+        expect(model.attention.listState).toBe('thinking');
+        expect(model.attention.rowState).toBe('working');
         expect(model.hasUnreadMessages).toBe(true);
         expect(model.pendingCount).toBe(2);
-        expect(model.presentation.attentionIndicator).toBe('pending');
+        expect(model.presentation.attentionIndicator).toBe('working');
         expect(model.presentation.secondaryLine).toBe('status');
         expect(model.presentation.backgroundActivityStatusLine).toBe(true);
         expect(model.presentation.statusTextKey).toBeUndefined();

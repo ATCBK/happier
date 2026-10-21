@@ -92,9 +92,7 @@ describe('projectSessionListPlacement', () => {
         });
     });
 
-    it('places a completed turn awaiting review in Ready ahead of background activity', () => {
-        // The foreground turn ended with a reply the person has not read (often a question), while a
-        // background agent keeps running. That reply is what needs them; the background work does not.
+    it('keeps unread completed turns working until background work settles, with optional unread promotion', () => {
         const nowMs = 10_000;
         const backgroundActiveCompletedTurn = {
             active: true,
@@ -114,6 +112,20 @@ describe('projectSessionListPlacement', () => {
         expect(projectSessionListPlacement({
             nowMs,
             session: makeSession(backgroundActiveCompletedTurn),
+        }).kind).toBe('working');
+        expect(projectSessionListPlacement({
+            nowMs,
+            backgroundWorkAttentionMode: 'showUnread',
+            session: makeSession(backgroundActiveCompletedTurn),
+        }).kind).toBe('unread');
+        expect(projectSessionListPlacement({
+            nowMs,
+            backgroundWorkAttentionMode: 'keepWorkingUnread',
+            session: makeSession(backgroundActiveCompletedTurn),
+        }).kind).toBe('working');
+        expect(projectSessionListPlacement({
+            nowMs,
+            session: makeSession({ ...backgroundActiveCompletedTurn, runtimeActivityState: 'idle', runtimeActivityActiveCount: 0 }),
         }).kind).toBe('ready');
         expect(projectSessionListPlacement({
             nowMs,
@@ -181,6 +193,23 @@ describe('projectSessionListPlacement', () => {
         });
 
         expect(placement.kind).not.toBe('working');
+    });
+
+    it.each(['active', 'unknown'] as const)('does not call an unread completed turn ready when background activity is %s after disconnection', (runtimeActivityState) => {
+        expect(projectSessionListPlacement({
+            nowMs: 1_000_000,
+            session: makeSession({
+                active: false,
+                presence: 1,
+                latestTurnStatus: 'completed',
+                latestReadyEventSeq: 4,
+                lastViewedSessionSeq: 1,
+                hasUnreadMessages: true,
+                runtimeActivityState,
+                runtimeActivityActiveCount: 1,
+                runtimeActivityObservedAt: 1,
+            }),
+        }).kind).toBe('unread');
     });
 
     it.each([

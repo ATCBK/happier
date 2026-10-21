@@ -212,6 +212,15 @@ describe('settings domain: sessionListViewData rebuilds', () => {
         expect(get().sessionListViewData).not.toBe(initial);
     });
 
+    it('invalidates session list projections when background unread placement changes', () => {
+        const { get } = createHarness();
+        get().applySettingsLocal({ sessionListInactiveGroupingV1: 'project' });
+        const previous = get().sessionListViewData;
+        get().applySettingsLocal({ sessionListBackgroundWorkAttentionModeV1: 'showUnread' });
+        expect(get().settings.sessionListBackgroundWorkAttentionModeV1).toBe('showUnread');
+        expect(get().sessionListViewData).not.toBe(previous);
+    });
+
     it('rebuilds sessionListViewData when the working placement setting changes', () => {
         const { get } = createHarness();
 

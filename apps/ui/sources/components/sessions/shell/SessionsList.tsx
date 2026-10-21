@@ -1,4 +1,5 @@
 import React from 'react';
+import { normalizeSessionListBackgroundWorkAttentionMode } from '@/sync/domains/session/listing/sessionListBackgroundWorkAttention';
 import {
     View,
     Platform,
@@ -638,6 +639,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         storageKind: props.storageKind,
     });
     const sessionListWorkingIndicatorStyle = useSetting('sessionListNarrowWorkingIndicatorStyle');
+    const backgroundWorkAttentionMode = normalizeSessionListBackgroundWorkAttentionMode(useSetting('sessionListBackgroundWorkAttentionModeV1'));
     const sessionListAgentActivityCountEnabled = useSetting('sessionListAgentActivityCountEnabled');
     const sessionListIdentityDisplay = useSessionListIdentityDisplay();
     const sessionListActiveColorMode = useSetting('sessionListActiveColorModeV1');
@@ -935,6 +937,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             activeColorMode: normalizeActiveColorMode(sessionListActiveColorMode),
             workingIndicatorMode: normalizeWorkingIndicatorMode(sessionListWorkingIndicatorStyle),
             workingTextMode: 'static',
+            backgroundWorkAttentionMode,
             statusColors: theme.colors.status,
             hideInactiveSessions,
             showServerBadge,
@@ -971,6 +974,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         sessionListActiveColorMode,
         sessionListIdentityDisplay,
         sessionListWorkingIndicatorStyle,
+        backgroundWorkAttentionMode,
         sessionTagsEnabled,
         sessionTagsV1,
         showPinnedServerBadge,
@@ -2083,6 +2087,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         sessionListStatusColors: rowPresentationSettings.statusColors,
         sessionListSurfaceDataActive: surfaceOwnership.dataActive,
         sessionListWorkingIndicatorMode: rowPresentationSettings.workingIndicatorMode,
+        sessionListBackgroundWorkAttentionMode: rowPresentationSettings.backgroundWorkAttentionMode,
         sessionTagsEnabled: sessionTagsEnabled === true,
         sessionTagsSignature,
         showStructuralDragHandles,
@@ -2121,6 +2126,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         rowPresentationSettings.identityDisplay,
         rowPresentationSettings.statusColors,
         rowPresentationSettings.workingIndicatorMode,
+        rowPresentationSettings.backgroundWorkAttentionMode,
         sessionListOrderingMode,
         sessionListSectionMode,
         surfaceOwnership.dataActive,

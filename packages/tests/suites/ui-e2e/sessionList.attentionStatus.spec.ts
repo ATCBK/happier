@@ -46,7 +46,8 @@ const sessionListTestIds = {
   attentionPromotionModeTrigger: 'settings-session-attentionPromotionMode-trigger',
   workingPlacementModeTrigger: 'settings-session-workingPlacementMode-trigger',
   densityOption: (density: 'narrow' | 'cozy' | 'detailed') => `dropdown-option-${density}`,
-  placementOption: (placement: 'off' | 'global' | 'withinGroups') => `dropdown-option-${placement}`,
+  settingOption: (option: string) => `dropdown-option-${option}`,
+  backgroundWorkAttentionModeTrigger: 'settings-session-backgroundWorkAttentionMode-trigger',
   densityTrigger: 'settings-session-sessionListDensity-trigger',
   workingStatusAnimatedTextToggle: 'settings-session-workingStatusAnimatedText-toggle',
   workingStatusAnimatedTextItem: 'settings-session-workingStatusAnimatedText-item',
@@ -323,16 +324,16 @@ async function chooseSessionListDensity(params: Readonly<{
   await params.page.getByTestId(sessionListTestIds.densityOption(params.density)).click();
 }
 
-async function chooseSessionListPlacementMode(params: Readonly<{
+async function chooseSessionListSettingOption(params: Readonly<{
   page: Page;
   baseUrl: string;
   triggerTestId: string;
-  placement: 'off' | 'global' | 'withinGroups';
+  option: 'off' | 'global' | 'withinGroups' | 'keepWorking' | 'keepWorkingUnread' | 'showUnread';
 }>): Promise<void> {
   await gotoDomContentLoadedWithRetries(params.page, `${params.baseUrl}/settings/session?happier_hmr=0`, 180_000);
   await expect(params.page.getByTestId(params.triggerTestId)).toHaveCount(1, { timeout: 60_000 });
   await params.page.getByTestId(params.triggerTestId).click();
-  await params.page.getByTestId(sessionListTestIds.placementOption(params.placement)).click();
+  await params.page.getByTestId(sessionListTestIds.settingOption(params.option)).click();
 }
 
 async function disableWorkingStatusAnimatedText(params: Readonly<{
@@ -664,11 +665,11 @@ test.describe('ui e2e: session list attention', () => {
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
       await waitForInitialAppUi({ page, timeoutMs: 180_000 });
 
-      await chooseSessionListPlacementMode({
+      await chooseSessionListSettingOption({
         page,
         baseUrl: uiBaseUrl,
         triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
-        placement: 'withinGroups',
+        option: 'withinGroups',
       });
       await disableWorkingStatusAnimatedText({ page, baseUrl: uiBaseUrl });
       await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'cozy' });
@@ -728,17 +729,17 @@ test.describe('ui e2e: session list attention', () => {
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
       await waitForInitialAppUi({ page, timeoutMs: 180_000 });
 
-      await chooseSessionListPlacementMode({
+      await chooseSessionListSettingOption({
         page,
         baseUrl: uiBaseUrl,
         triggerTestId: sessionListTestIds.attentionPromotionModeTrigger,
-        placement: 'global',
+        option: 'global',
       });
-      await chooseSessionListPlacementMode({
+      await chooseSessionListSettingOption({
         page,
         baseUrl: uiBaseUrl,
         triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
-        placement: 'global',
+        option: 'global',
       });
       await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'narrow' });
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
@@ -861,14 +862,14 @@ test.describe('ui e2e: session list attention', () => {
     }
   });
 
-  test('presents an unread completed turn as Ready for review while background work continues', async ({ page }) => {
+  test('presents background replies through all three attention modes and returns to Working once read', async ({ page }) => {
     test.setTimeout(240_000);
     if (!server || !token || !uiBaseUrl) throw new Error('missing session list attention fixtures');
 
     const session = await createPlainSession({
       baseUrl: server.baseUrl,
       token,
-      title: 'Ready over background e2e',
+      title: 'Background reply attention modes',
     });
     const browserDiagnostics = collectBrowserDiagnostics({ page });
     let publisher: SocketCollector | null = null;
@@ -877,17 +878,17 @@ test.describe('ui e2e: session list attention', () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 300_000);
       await waitForInitialAppUi({ page, timeoutMs: 180_000 });
-      await chooseSessionListPlacementMode({
+      await chooseSessionListSettingOption({
         page,
         baseUrl: uiBaseUrl,
         triggerTestId: sessionListTestIds.attentionPromotionModeTrigger,
-        placement: 'global',
+        option: 'global',
       });
-      await chooseSessionListPlacementMode({
+      await chooseSessionListSettingOption({
         page,
         baseUrl: uiBaseUrl,
         triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
-        placement: 'global',
+        option: 'global',
       });
       await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'cozy' });
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
@@ -910,17 +911,45 @@ test.describe('ui e2e: session list attention', () => {
         latestTurnStatus: 'completed',
       });
 
-      // The foreground reply waits on the person; the background agent beside it does not.
+      for (const mode of ['keepWorking', 'keepWorkingUnread', 'showUnread'] as const) {
+        await chooseSessionListSettingOption({
+          page, baseUrl: uiBaseUrl,
+          triggerTestId: sessionListTestIds.backgroundWorkAttentionModeTrigger,
+          option: mode,
+        });
+        await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+        await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: session.id });
+        await expectRowInSection({
+          page,
+          headerTestId: mode === 'showUnread' ? sessionListTestIds.attentionHeader : sessionListTestIds.workingHeader,
+          sessionId: session.id,
+        });
+        await expect(readySubtitle(page, session.id)).toHaveCount(0);
+        const spinner = page.getByTestId(`session-row-attention-indicator-spinner-${session.id}-secondary`);
+        if (mode === 'keepWorking') {
+          await expect(spinner).toHaveCount(1);
+          await expect(page.getByTestId(`session-row-unread-indicator-${session.id}-secondary`)).toHaveCount(0);
+          await expect(page.getByTestId(`session-row-unread-center-${session.id}-secondary`)).toHaveCount(1);
+          await row(page, session.id).screenshot({ path: test.info().outputPath('working-unread.png') });
+        } else {
+          await expect(spinner).toHaveCount(0);
+          await expect(page.getByTestId(`session-list-attention-indicator-${session.id}-secondary-unread`)).toHaveCount(1);
+        }
+        await row(page, session.id).click();
+        await expect(page).toHaveURL(new RegExp(`/session/${session.id}(?:\\?|$)`), { timeout: 90_000 });
+        await expectRowInSection({ page, headerTestId: sessionListTestIds.workingHeader, sessionId: session.id });
+        await expect(spinner).toHaveCount(1);
+        await expect(page.getByTestId(`session-row-unread-indicator-${session.id}-secondary`)).toHaveCount(0);
+        await expect(page.getByTestId(`session-row-unread-center-${session.id}-secondary`)).toHaveCount(0);
+        if (mode === 'keepWorking') await row(page, session.id).screenshot({ path: test.info().outputPath('working-read.png') });
+      }
+      // A new unread completed reply becomes ready only after reported work settles.
+      await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
+      await seedReadyMarker({ baseUrl: server.baseUrl, token, sessionId: session.id });
+      await publishRuntimeActivity({ socket: publisher, sessionId: session.id, snapshot: { state: 'idle', activeCount: 0 } });
       await expectRowInSection({ page, headerTestId: sessionListTestIds.attentionHeader, sessionId: session.id });
-      await expect(readySubtitle(page, session.id)).toHaveCount(1, { timeout: 60_000 });
-      await expect(page.getByTestId(sessionListTestIds.secondaryReadyIndicator(session.id))).toHaveCount(1, { timeout: 60_000 });
-      await expect(page.getByTestId(`session-row-attention-indicator-spinner-${session.id}`)).toHaveCount(0);
+      await expect(readySubtitle(page, session.id)).toHaveCount(1);
 
-      // Once read, the still-running background work places it in Working again.
-      await row(page, session.id).click();
-      await expect(page).toHaveURL(new RegExp(`/session/${session.id}(?:\\?|$)`), { timeout: 90_000 });
-      await expectRowInSection({ page, headerTestId: sessionListTestIds.workingHeader, sessionId: session.id });
-      await expect(readySubtitle(page, session.id)).toHaveCount(0, { timeout: 60_000 });
     } catch (error) {
       throw appendBrowserDiagnostics(error, browserDiagnostics().replaceAll(token, '[redacted]'));
     } finally {
@@ -945,17 +974,17 @@ test.describe('ui e2e: session list attention', () => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
       await waitForInitialAppUi({ page, timeoutMs: 180_000 });
-      await chooseSessionListPlacementMode({
+      await chooseSessionListSettingOption({
         page,
         baseUrl: uiBaseUrl,
         triggerTestId: sessionListTestIds.attentionPromotionModeTrigger,
-        placement: 'global',
+        option: 'global',
       });
-      await chooseSessionListPlacementMode({
+      await chooseSessionListSettingOption({
         page,
         baseUrl: uiBaseUrl,
         triggerTestId: sessionListTestIds.workingPlacementModeTrigger,
-        placement: 'global',
+        option: 'global',
       });
       await chooseSessionListDensity({ page, baseUrl: uiBaseUrl, density: 'cozy' });
       await gotoDomContentLoadedWithRetries(page, `${uiBaseUrl}/?happier_hmr=0`, 180_000);
