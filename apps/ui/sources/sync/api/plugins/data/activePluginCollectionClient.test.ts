@@ -1185,6 +1185,34 @@ describe('active Account Collection direct client', () => {
         }
     });
 
+    it.each(['mutate', 'forget'] as const)('preserves a confirmed server rollback for Collection %s', async (operation) => {
+        const harness = await loadClient({
+            responseForDataPath: () => new Response(JSON.stringify({
+                error: 'database_transaction_conflict_exhausted', statusCode: 503,
+            }), { status: 503 }),
+        });
+        const collection = harness.createActivePluginCollectionClient({ contract });
+        const result = operation === 'forget'
+            ? collection.forget('channel-1', 1)
+            : collection.mutate([{ kind: 'delete', rowId: 'channel-1', expectedRevision: 1 }]);
+
+        await expect(result).resolves.toEqual({ status: 'rejected', code: 'database_transaction_conflict_exhausted' });
+    });
+
+    it.each([
+        { status: 500, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } },
+        { status: 503, data: { error: 'database_transaction_conflict_exhausted' } },
+        { status: 503, data: { error: 'database_connection_unavailable', statusCode: 503 } },
+    ])('keeps an unconfirmed server mutation failure unknown ($status/$data.error)', async (response) => {
+        const harness = await loadClient({
+            responseForDataPath: () => new Response(JSON.stringify(response.data), { status: response.status }),
+        });
+
+        await expect(harness.createActivePluginCollectionClient({ contract }).mutate([{
+            kind: 'delete', rowId: 'channel-1', expectedRevision: 1,
+        }])).resolves.toEqual({ status: 'unavailable', reason: 'mutation-outcome-unknown' });
+    });
+
     it.each(['lost', 'malformed', 'http-error'] as const)('reports an issued mutation with %s acknowledgement as outcome unknown', async (settlement) => {
         const harness = await loadClient({
             responseForDataPath: () => {

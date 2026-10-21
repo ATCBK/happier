@@ -36,6 +36,8 @@ import {
 } from '@/sync/http/accountStoredContentCompatibility';
 import { captureServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
 
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+
 import { watchActivePluginCollectionChanges } from './pluginCollectionChangeWatch';
 
 export type ActivePluginCollectionUnavailableReasonV1 =
@@ -452,7 +454,7 @@ export async function requestCollectionOperation(input: Readonly<{
     kind?: 'read' | 'mutation';
     options?: ActivePluginCollectionOperationOptionsV1;
 }>): Promise<
-    | Readonly<{ status: 'response'; ok: boolean; body: unknown }>
+    | Readonly<{ status: 'response'; ok: boolean; httpStatus: number; body: unknown }>
     | ActivePluginCollectionUnavailableV1
 > {
     const method = input.method ?? 'POST';
@@ -509,7 +511,7 @@ export async function requestCollectionOperation(input: Readonly<{
             input.operation.serverSnapshot,
         );
         if (input.kind !== 'mutation' && currentnessAfterBody) return unavailable(currentnessAfterBody);
-        return { status: 'response', ok: response.ok, body };
+        return { status: 'response', ok: response.ok, httpStatus: response.status, body };
     } catch {
         // An interrupted mutation stays outcome-unknown: cancelling the request
         // cannot establish that the server did not apply it.
@@ -614,7 +616,9 @@ function mapReadError(value: unknown): ActivePluginCollectionUnavailableV1 | Act
     return unavailable('response-invalid');
 }
 
-function mapMutationError(value: unknown): ActivePluginCollectionUnavailableV1 | ActivePluginCollectionRejectedV1 {
+function mapMutationError(value: unknown, httpStatus: number): ActivePluginCollectionUnavailableV1 | ActivePluginCollectionRejectedV1 {
+    const rollback = readHomeDomainConfirmedRollbackV1(httpStatus, value);
+    if (rollback) return rejected(rollback.code);
     const parsed = PluginCollectionMutationErrorV1Schema.safeParse(value);
     if (!parsed.success) return unavailable('mutation-outcome-unknown');
     if (parsed.data.error === 'collection_relation_restricted') {
@@ -925,7 +929,7 @@ export function createActivePluginCollectionClient<
                 options,
             });
             if (response.status === 'unavailable') return response;
-            if (!response.ok) return mapMutationError(response.body);
+            if (!response.ok) return mapMutationError(response.body, response.httpStatus);
             const result = PluginCollectionMutationResultV1Schema.safeParse(response.body);
             if (!result.success) return unavailable('mutation-outcome-unknown');
             return result.data.status === 'conflict'
@@ -975,7 +979,7 @@ export function createActivePluginCollectionClient<
                 options,
             });
             if (response.status === 'unavailable') return response;
-            if (!response.ok) return mapMutationError(response.body);
+            if (!response.ok) return mapMutationError(response.body, response.httpStatus);
             const result = PluginCollectionForgetResultV1Schema.safeParse(response.body);
             return result.success ? result.data : unavailable('mutation-outcome-unknown');
         } finally {
