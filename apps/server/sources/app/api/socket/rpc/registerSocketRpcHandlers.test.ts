@@ -3829,6 +3829,22 @@ expect(socket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.ERROR, expect.objectC
         expect(daemonSocket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.UNREGISTERED, { method });
     });
 
+    it("does not tell a machine its client RPC went away when the cluster census itself failed", async () => {
+        const { io, addToRoom, createRoomAwareSocket, fetchSockets } = createRoomAwareIo();
+        const uiSocket = createRoomAwareSocket({ id: "ui-socket", data: { clientType: "user-scoped" } });
+        const daemonSocket = createRoomAwareSocket({ id: "daemon-socket", data: { clientType: "machine-scoped", machineId: "machine-1" } });
+        addToRoom("machine:machine-1:user-1", daemonSocket);
+        const method = `machine-1:${RPC_METHODS.UI_BROWSER_RECORDING_CAPTURE_FRAME}`;
+        registerSocketRpcHandlers({ userId: "user-1", socket: uiSocket as any, io });
+        await triggerSocketHandler(uiSocket, SOCKET_RPC_EVENTS.REGISTER, { method });
+        daemonSocket.emit.mockClear();
+
+        // A census that threw (e.g. one Redis peer timing out) is unknown, not an empty room.
+        fetchSockets.mockImplementationOnce(async () => { throw new Error("timeout reached: only 22 responses received out of 23"); });
+        await triggerSocketHandler(uiSocket, SOCKET_RPC_EVENTS.UNREGISTER, { method });
+        expect(daemonSocket.emit).not.toHaveBeenCalledWith(SOCKET_RPC_EVENTS.UNREGISTERED, { method });
+    });
+
     it.each([RPC_METHODS.UI_BROWSER_RECORDING_CAPTURE_FRAME, 'ui.actions.contributed.execute', 'ui.actions.execute.v1',
         mountedWorkReadClientRpcMethod('session.work.get', 'work-lead'), mountedWorkReadClientRpcMethod('inbox.get')])("hydrates a reconnecting machine socket from existing %s registrations", async (rpcMethod) => {
         const { io, addToRoom, createRoomAwareSocket } = createRoomAwareIo();

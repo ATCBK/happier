@@ -794,19 +794,20 @@ function emitMachineScopedRpcAvailability(params: Readonly<{
     params.io.to(getMachineSocketRoom(params.userId, parsed.machineId)).emit(params.event, { method: params.method });
 }
 
-async function hasRegisteredRpcTargets(params: Readonly<{
+/** `unknown` when the census failed: like `rpcTargetDiscovery`, an unsuccessful census proves neither presence nor absence. */
+async function readRegisteredRpcTargetPresence(params: Readonly<{
     userId: string;
     io: Server;
     method: string;
-}>): Promise<boolean> {
+}>): Promise<"present" | "absent" | "unknown"> {
     try {
         const targets = await params.io
             .in(buildRpcMethodRoom({ userId: params.userId, method: params.method }))
             .fetchSockets();
-        return targets.length > 0;
+        return targets.length > 0 ? "present" : "absent";
     } catch (error) {
         log({ module: "websocket-rpc", level: "error" }, `Error checking rpc handler availability: ${error}`);
-        return false;
+        return "unknown";
     }
 }
 
@@ -816,7 +817,7 @@ async function emitMachineScopedRpcUnregisteredWhenUnavailable(params: Readonly<
     method: string;
 }>): Promise<void> {
     if (!parseMachineScopedRpcMethod(params.method)) return;
-    if (await hasRegisteredRpcTargets(params)) return;
+    if (await readRegisteredRpcTargetPresence(params) !== "absent") return;
     emitMachineScopedRpcAvailability({
         ...params,
         event: SOCKET_RPC_EVENTS.UNREGISTERED,
