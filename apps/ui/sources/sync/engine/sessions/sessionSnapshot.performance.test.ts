@@ -21,8 +21,13 @@ import { storage } from '@/sync/domains/state/storage';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import { buildSessionListCacheEntriesFromRenderables } from '@/sync/domains/state/warmCacheAdapters';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { act, createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { useSessionDisplayTitles, readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
+import { useSessionDisplayNameProjections } from '@/sync/store/hooks';
+import { readComposerSessionSuggestionDisplay } from '@/sync/domains/input/suggestionSession';
+import { t } from '@/text';
 
-import { fetchAndApplySessions } from './sessionSnapshot';
+import { buildRenderableFromRowAndCache, fetchAndApplySessions } from './sessionSnapshot';
 
 const QUERY: SessionListQueryV1 = {
     v: 1, storage: 'active', includeInactive: true, scope: 'my_work',
@@ -97,6 +102,7 @@ it('settles demanded Session hydration without sweeping older rows on refresh an
 });
 
 afterEach(() => {
+    standardCleanup();
     vi.restoreAllMocks();
     vi.useRealTimers();
     storage.setState(initialState, true);
@@ -122,6 +128,59 @@ function createOwnerChoicesPage() {
     return SessionListQueryResponseV1Schema.parse({ sessions: rows, nextCursor: null, hasNext: false,
         attentionNextCursor: null, attentionHasNext: false });
 }
+
+it('names Account-opened owner envelopes before Session content hydration through the shared title and mention readers', async () => {
+    const secret = new Uint8Array(32).fill(17);
+    const credentials = { token: 'owner-title', secret: encodeBase64(secret) };
+    const currentness = { mode: 'e2ee' as const, version: 1, signingKeyFingerprint: 'signing', contentKeyFingerprint: 'content', updatedAt: 1 };
+    const encryption = await Encryption.create(secret);
+    const cipher = await encryption.openEncryption(new Uint8Array(32).fill(29));
+    const [sharedMetadata] = await cipher.encrypt([{ v: 1, summary: { text: 'Not opened shared title', updatedAt: 1 } }]);
+    const base = createOwnerChoicesPage().sessions[0]!;
+    const ownerEnvelope = (name?: string, key = secret) => ownerEnvelopes.sealSessionOwnerMetadataEnvelopeV1({
+        material: { type: 'legacy', secret: key }, ownerMetadata: { v: 1,
+            workspace: { path: '/private/owner-worktree', host: 'private-owner-host', ...(name ? { name } : {}) } },
+        randomBytes: length => new Uint8Array(length).fill(11),
+    });
+    const rows = [
+        { ...base, id: 'named-owner', ownerMetadata: ownerEnvelope('Owner release review') },
+        { ...base, id: 'untitled-owner', ownerMetadata: ownerEnvelope() },
+        { ...base, id: 'unreadable-owner', ownerMetadata: ownerEnvelope('Must not disclose', new Uint8Array(32).fill(53)) },
+        { ...base, id: 'foreign-recipient', ownerMetadata: null, effectiveAccess: { v: 1 as const, level: 'view' as const,
+            sources: [{ kind: 'team' as const, teamId: 'team', requiredByTeamPolicy: false }],
+            capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'view' }) } },
+    ].map(row => ({ ...row, encryptionMode: 'e2ee' as const, metadata: encodeBase64(sharedMetadata!), dataEncryptionKey: null }));
+    const home = 'owner-title-home';
+    const projected = Object.fromEntries(rows.map(row => [row.id, buildRenderableFromRowAndCache(row, credentials, currentness, undefined)]));
+    storage.setState({ sessions: { 'named-owner': createSessionFixture({ id: 'named-owner', serverId: 'other-home',
+        metadata: { name: 'Wrong Home', host: 'other', path: '/wrong' } }) }, sessionListRowsByServerId: { [home]: projected } });
+    const addresses = rows.map(row => ({ serverId: home, sessionId: row.id }));
+    const titles = await renderHook(() => useSessionDisplayTitles(addresses));
+    expect(titles.getCurrent()).toEqual(['Owner release review', t('session.untitled'),
+        t('session.access.lockedTitleFallback'), t('session.access.lockedTitleFallback')]);
+    const readable = await renderHook(() => useSessionDisplayNameProjections(addresses, readableSessionDisplayTitle));
+    expect(readable.getCurrent()).toEqual(['Owner release review', t('session.untitled'), null, null]);
+    expect(addresses.map(address => readComposerSessionSuggestionDisplay(address)?.title)).toEqual(titles.getCurrent());
+    expect(rows.map(row => encryption.getSessionEncryption(row.id))).toEqual([null, null, null, null]);
+    expect(rows.map(row => projected[row.id]!.encryptedContentAvailability)).toEqual([undefined, undefined, 'encrypted_content_unavailable', undefined]);
+    expect(projected['named-owner']?.metadata?.path).toBe('');
+    expect(projected['named-owner']?.metadata?.host).not.toBe('private-owner-host');
+    const retained = titles.getCurrent();
+    await act(async () => { storage.setState(state => ({ sessions: { ...state.sessions,
+        'named-owner': { ...state.sessions['named-owner']!, thinking: true, metadata: { name: 'Other Home changed', host: 'other', path: '/wrong' } },
+    } })); });
+    expect(titles.getCurrent()).toBe(retained);
+    const changedRow = { ...rows[0]!, ownerMetadata: ownerEnvelope('Renamed owner') };
+    await act(async () => { storage.setState({ sessionListRowsByServerId: { [home]: { ...projected,
+        'named-owner': buildRenderableFromRowAndCache(changedRow, credentials, currentness, undefined, undefined, projected['named-owner']),
+    } } }); });
+    expect(titles.getCurrent()[0]).toBe('Renamed owner');
+    await act(async () => { storage.setState({ sessionListRowsByServerId: { [home]: { ...projected,
+        'named-owner': buildRenderableFromRowAndCache({ ...changedRow, ownerMetadata: ownerEnvelope() }, credentials, currentness, undefined,
+            undefined, storage.getState().sessionListRowsByServerId[home]!['named-owner']),
+    } } }); });
+    expect(titles.getCurrent()[0]).toBe(t('session.untitled'));
+});
 
 it('lists cold encrypted owner rows from proved visibility before Session content hydration', async () => {
     const secret = new Uint8Array(32).fill(31);
