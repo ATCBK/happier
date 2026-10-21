@@ -333,8 +333,9 @@ describe('Machine-list settlement through sync and the real store', () => {
             expect(snapshot()).toMatchObject({ inventoryStatus, executionEligibleMachineIds: ['active'] });
             for (const status of ['error', 'signedOut'] as const) {
                 storage.setState({ machineListStatusByServerId: { [inventory.serverId]: status } });
-                expect(liveRows().size).toBe(0);
-                expect(snapshot()).toMatchObject({ executionEligibleMachineIds: [] });
+                // A failed read never proves the admitted row gone; a signed-out Home withdraws it.
+                expect([...liveRows()].map(machine => machine.id)).toEqual(status === 'error' ? ['active'] : []);
+                expect(snapshot()).toMatchObject({ executionEligibleMachineIds: status === 'error' ? ['active'] : [] });
             }
         } finally {
             releaseActive.resolve();
