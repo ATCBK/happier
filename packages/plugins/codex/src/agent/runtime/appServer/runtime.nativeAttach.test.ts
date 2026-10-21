@@ -33,14 +33,15 @@ describe('native Codex attachment preparation', () => {
       env: Object.freeze({ HAPPIER_MCP_MODE: 'session' }),
     }) });
     const launches: Array<readonly string[]> = [];
-    await withFixture(async ({ openConfiguredSession }) => {
+    await withFixture(async ({ openConfiguredSession, requests }) => {
       await openConfiguredSession();
       expect(launches[0]).toEqual(expect.arrayContaining([
         'mcp_servers.happier.command="happier-mcp"',
         'mcp_servers.happier.args=["serve"]',
         'mcp_servers.happier.env={HAPPIER_MCP_MODE="session"}',
       ]));
-      expect(launches[0]?.some(arg => arg.startsWith('model_provider='))).toBe(false);
+      expect(requests.find(request => request.method === 'thread/start')?.params)
+        .not.toHaveProperty('modelProvider');
     }, { mcpServers, observer: {
       recordAppServerRequest() {}, recordLaunch: launch => { launches.push(launch.argv); },
     } });
