@@ -68,6 +68,7 @@ import type { CustomModalInjectedProps } from '@/modal/types';
 import { buildReviewedManagedMachineDeleteInput, qualifyManagedMachineDeleteReview, type ManagedMachineDeleteReview } from './managedMachineDeleteReview';
 import { MANAGED_PROVISIONER_MARK_SIZE, useManagedProvisionerPresentation } from './useManagedProvisionerPresentation';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 
 const execute = createFrontDoorActionExecute();
 type Execute = ReturnType<typeof createDefaultActionExecutor>['execute'];
@@ -195,15 +196,21 @@ export function ManagedMachineSections(props: SectionProps) {
         if (!props.current || !binding?.isCurrent() || !policyController) return;
         const abort = new AbortController();
         const retirement = binding.onRetire(() => { abort.abort(); setPolicyParent(null); });
+        const timeout = setTimeout(() => {
+            if (abort.signal.aborted || !binding.isCurrent()) return;
+            abort.abort();
+            setParentReadFailed(true);
+        }, DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS);
         void readManagedMachinePolicyParent({ machine, controller: policyController, binding, signal: abort.signal,
             onApprovalPending: registration => approvalRequestRef.current(registration) }).then(result => {
-                if (abort.signal.aborted || !binding.isCurrent()) return;
-                if (result.kind === 'ready') setPolicyParent(result.parent); else setParentReadFailed(true);
-            }).catch(() => {
-                // An unavailable parent cannot enable Reset; the live row stays readable and says why it is read-only.
-                if (!abort.signal.aborted) setParentReadFailed(true);
-            });
-        return () => { abort.abort(); retirement.dispose(); };
+            if (abort.signal.aborted || !binding.isCurrent()) return;
+            clearTimeout(timeout);
+            if (result.kind === 'ready') setPolicyParent(result.parent); else setParentReadFailed(true);
+        }).catch(() => {
+            // An unavailable parent cannot enable Reset; the live row stays readable and says why it is read-only.
+            if (!abort.signal.aborted) { clearTimeout(timeout); setParentReadFailed(true); }
+        });
+        return () => { clearTimeout(timeout); abort.abort(); retirement.dispose(); };
     }, [props.binding, props.current, parentControllerAvailable, parentReadKey, parentReadRevision]);
     const policy = proposedPolicy ?? machine;
     const supportedIntents = policyParent?.capabilities.supportedIntents ?? machine.reviewedFacts?.retentionCapabilities.supportedIntents ?? [];

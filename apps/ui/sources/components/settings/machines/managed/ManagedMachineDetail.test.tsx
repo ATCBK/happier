@@ -64,9 +64,11 @@ import { commitWebServerUrlOverride } from '@/sync/domains/server/url/bootstrapA
 import { resolveCompactAppDestinations, resolveDestinationRefFromHref } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { WorkspaceRouteBody as ManagedMachineRouteBody } from '@/app/(app)/machines/managed/[id]';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 
 const operationRpcBoundary = vi.hoisted(() => ({ answer: null as unknown, registryAnswer: null as unknown, schemaAnswer: null as unknown,
     requests: [] as Array<Readonly<{ serverId?: string | null; accountId?: string | null; machineId: string; method: string }>> }));
+const policyParentBoundary = vi.hoisted(() => ({ pending: false }));
 let restoreActionExecutorModuleLoader: (() => void) | undefined;
 beforeEach(async () => { restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader(); });
 
@@ -97,6 +99,11 @@ vi.mock('@/modal', async () => {
     return createModalModuleMock({ confirmResult: true, renderCustomModals: true }).module;
 });
 vi.mock('@/text', async () => await vi.importActual<typeof import('@/text')>('@/text'));
+vi.mock('./managedMachinePolicyParent', async importOriginal => {
+    const actual = await importOriginal<typeof import('./managedMachinePolicyParent')>();
+    return { ...actual, readManagedMachinePolicyParent: (input: Parameters<typeof actual.readManagedMachinePolicyParent>[0]) =>
+        policyParentBoundary.pending ? new Promise<never>(() => {}) : actual.readManagedMachinePolicyParent(input) };
+});
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     return createServerScopedMachineRpcBoundaryMock(async params => {
@@ -113,6 +120,7 @@ afterEach(() => {
     retireActiveServerAccountScopeLifetime(); resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks();
     vi.unstubAllGlobals();
     operationRpcBoundary.answer = null; operationRpcBoundary.registryAnswer = null; operationRpcBoundary.schemaAnswer = null;
+    policyParentBoundary.pending = false;
     resetMachineProjectionReadsForTests();
     operationRpcBoundary.requests = []; actionOperationStore.reset();
 });
@@ -2033,6 +2041,47 @@ describe('managed Machine detail', () => {
             retention: machine.retention, wakeOnAcceptedMessage: machine.wakeOnAcceptedMessage,
         });
         expect(screen.tree.findByType(ManagedMachinePolicySection).props.keep.disabled).toBe(true);
+    });
+    it('settles a Keep parent read that never answers into the existing unavailable state', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-keep-timeout.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_keep_timeout');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
+        const launch: ManagedMachineV1['launch'] = { provider: { pluginId: 'custom.provisioner', localId: 'native' },
+            schemaVersion: 1, name: 'Timeout resource', choices: {} };
+        const machine: ManagedMachineV1 = { id: 'managed-keep-timeout', homeId: 'srv_managed_keep_timeout', custodianAccountId: 'owner', launch,
+            controller: { machineId: 'controller', installationId: 'installation' }, enrolledMachineId: 'ordinary-enrolled',
+            resource: { contributionRef: launch.provider, schemaVersion: 1, value: {} }, allocation: 'bound', creationState: 'active',
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
+        storage.getState().applyMachines([createMachineFixture({ id: machine.controller.machineId,
+            installationId: machine.controller.installationId, activeAt: Date.now() })], true,
+            { sourceServerId: resolveServerProfileScopeIdForIdentifier(target.id) });
+        setRuntimeFetch(async input => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/machines/managed/actions/list') return Response.json({ machines: [machine] });
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        policyParentBoundary.pending = true;
+        const realSetTimeout = globalThis.setTimeout;
+        let expire: (() => void) | undefined;
+        vi.spyOn(globalThis, 'setTimeout').mockImplementation(((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+            if (timeout === DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS) {
+                expire = () => { if (typeof handler === 'function') handler(...args); };
+                return 1;
+            }
+            return realSetTimeout(handler, timeout, ...args);
+        }) as typeof globalThis.setTimeout);
+        const screen = await renderScreen(<ManagedEnrolledMachineSections enrolledMachineId={machine.enrolledMachineId!} serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        await flushHookEffects({ cycles: 20 });
+        expect(expire).toBeDefined();
+        await act(async () => expire?.());
+        expect(screen.tree.findByType(ManagedMachinePolicySection).props.keep).toMatchObject({
+            capabilitiesAvailable: false,
+            unavailableReason: t('managedRetention.waitsForProvider', { provider: t('common.machine') }),
+        });
+        await screen.unmount();
     });
     it('mounts the enrolled association with the immutable receipt and removes it on read refusal', async () => {
         const target = await upsertAndActivateServer({ serverUrl: 'https://enrolled-managed-detail.test', scope: 'tab' });

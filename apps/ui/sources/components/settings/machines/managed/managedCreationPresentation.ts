@@ -109,7 +109,13 @@ export function canRetryManagedInstallation(machine: ManagedMachineV1, operation
         || lifecycle.kind === 'cleanupPending' || lifecycle.kind === 'absent' || lifecycle.kind === 'volumeLost') return false;
     if (!operation) return !machine.enrolledMachineId;
     operation = currentManagedCreationOperation(machine, operation, context);
+    if (!operation) return false;
     const snapshot = operation?.snapshot;
+    // Power, retention and inspection operations can become the newest visible
+    // receipt after a failed install. They do not enroll the retained resource
+    // and must not erase its same-resource Retry install affordance.
+    if (snapshot.actionId !== 'machines.managed.acquire'
+        && snapshot.actionId !== 'machines.managed.bootstrap.retry') return !machine.enrolledMachineId;
     return operation?.observation === 'available' && !operation.isUnavailableProjection
         && snapshot?.state === 'failed' && snapshot.scope.machineId === machine.controller.machineId
         && (snapshot.actionId === 'machines.managed.acquire' || snapshot.actionId === 'machines.managed.bootstrap.retry')

@@ -391,6 +391,34 @@ describe('managed creation presentation', () => {
       }),
     ).toBe(false);
   });
+  it('keeps an unenrolled resource retryable after a later power operation replaces the visible operation', () => {
+    const powerOperation: ActionOperationProjection = {
+      serverId: machine.homeId,
+      observation: 'available',
+      isUnavailableProjection: false,
+      snapshot: {
+        version: 1,
+        operationId: 'resume-after-install-failure',
+        revision: 1,
+        actionId: 'machines.managed.power.set',
+        state: 'succeeded',
+        scope: { accountId: 'owner', machineId: machine.controller.machineId },
+        title: 'Resume machine',
+        createdAt: 3,
+        startedAt: 3,
+        settledAt: 4,
+        cancellation: 'supported',
+        domainRef: {
+          kind: 'managedMachine',
+          id: machine.id,
+          resource: machine.resource,
+          controller: machine.controller,
+        },
+        result: { kind: 'accepted' },
+      },
+    };
+    expect(canRetryManagedInstallation(machine, powerOperation)).toBe(true);
+  });
   it.each([
     ['managed.intent.busy', 'busy'],
     ['managed.intent.activity-unknown', 'activityUnknown'],
