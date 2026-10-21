@@ -408,10 +408,10 @@ describe('current Agent runtime daemon service authority client', () => {
       ok: false,
       error: {
         code: 'provider_endpoint_unavailable',
-        message: 'provider_endpoint_unavailable',
+        message: 'PRIVATE_PROVIDER_RESPONSE',
       },
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
-    await expect(openCurrentRunnerTeamCredentialProviderBinding({
+    const refusal = await openCurrentRunnerTeamCredentialProviderBinding({
       authority,
       operation: {
         kind: 'provider_broker.binding.open',
@@ -420,7 +420,11 @@ describe('current Agent runtime daemon service authority client', () => {
         agentTargetKey: 'agent:acme.plugin/acme-agent',
         modelId: 'model-1',
       },
-    })).rejects.toMatchObject({
+    }).then(() => null, (error: unknown) => error);
+    expect(refusal).toBeInstanceOf(Error);
+    expect(refusal).toMatchObject({
+      message: 'provider_endpoint_unavailable',
+      stack: expect.stringContaining('openCurrentRunnerTeamCredentialProviderBinding'),
       code: 'provider_endpoint_unavailable',
       retryable: true,
       action: 'retry',

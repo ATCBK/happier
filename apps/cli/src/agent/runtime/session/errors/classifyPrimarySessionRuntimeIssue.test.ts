@@ -8,8 +8,15 @@ import { createHttpStatusError } from '@/api/client/httpStatusError';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { AccountEncryptionCurrentnessUnavailableError } from '@/api/client/accountEncryptionCurrentness';
 import { McpServerCatalogUnavailableError } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
+  it('retains a closed Provider refusal code without its private binding context', () => {
+    const refusal = createProviderErrorV1('provider_compatibility_unverified', { connectionId: 'private-resource' });
+    expect(readSessionPreparationFailureDiagnostic(refusal)).toEqual({
+      originalCode: 'provider_compatibility_unverified', reason: 'unknown', contextSource: 'unknown',
+    });
+  });
   it('lets required unreachable MCP preparation recover while real missing material remains closed', () => {
     expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: new McpServerCatalogUnavailableError('unreachable') }))
       .toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });

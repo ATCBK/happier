@@ -9871,7 +9871,7 @@ describe('runHostSessionRuntime', () => {
       reason: code === 'role_source_incomplete' ? 'unknown'
         : code === 'context_source_unavailable' || code === 'role_overrides_unavailable' ? 'scope-retired' : 'unavailable',
       contextSource: code === 'context_source_unavailable' || code === 'role_overrides_unavailable' ? 'account_lifetime' : 'unknown',
-      phase: 'skills_preparation',
+      phase: 'agent_runtime_open',
     });
     expect(JSON.stringify(diagnosticFields)).not.toContain('private');
     expect(harness.session.enqueueSessionTurnMutation).toHaveBeenCalledWith(expect.objectContaining({
@@ -12896,6 +12896,154 @@ describe('runHostSessionRuntime', () => {
 
     expect(order, JSON.stringify(hostEvents)).toEqual(['provider:priority-user', 'host:step-after-user', 'provider:step-after-user']);
     expect(prompts).toEqual([expect.stringContaining('USER_FIRST'), 'WORKFLOW_AFTER_USER']);
+  });
+
+  it.each(['session_changed', 'reconnect'] as const)('re-observes an internal Follow failure on %s and admits the same Discussion original into Pending', async recovery => {
+    onTestFinished(installEmptyProjectAccountRowsHttpBoundary());
+    const accountGet = vi.mocked(axios.get).getMockImplementation();
+    if (!accountGet) throw new Error('Expected the canonical Account HTTP boundary');
+    const [{ createApiSessionSocketStub, resolveApiSessionSocketDefaultAck }, { createSocketTransportAdapter },
+      { FeaturesResponseSchema }, { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SessionFollowObservePendingRequestV1Schema,
+        SessionFollowObservePendingResponseV1Schema, deriveDiscussionFollowInputLocalIdV1 }] = await Promise.all([
+      import('@/testkit/backends/apiSessionSocketHarness'), import('@happier-dev/sync-client'),
+      import('@happier-dev/protocol/features/payload/featuresResponseSchema'),
+      import('@happier-dev/protocol/sessions/follow/sessionFollowTransportV1'),
+    ]);
+    const destination = 'c123456789012345678901234';
+    const harness = createHarness(destination);
+    harness.opts.credentials = { token: 'discussion-reobserve-token', encryption: null };
+    const addressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 2, participantSessionId: destination };
+    const localId = deriveDiscussionFollowInputLocalIdV1(addressing);
+    const actor = { v: 1, accountId: 'owner', profile: null };
+    const question = { id: addressing.messageId, discussionId: addressing.discussionId, localId: 'question', seq: 2,
+      authorAccountId: 'owner', accountActor: actor, producerV1: null, createdAt: 1,
+      content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'What changed?' },
+        { t: 'mention', participant: { kind: 'session', sessionId: destination } }] } },
+      mentionedAccountIds: [], addressingV1: { throughSeq: 2, participantSessionIds: [destination] } };
+    const features = FeaturesResponseSchema.parse({ features: {
+      sessions: { enabled: true, conversations: { enabled: true } }, sharing: { enabled: true, session: { enabled: true } },
+    }, capabilities: {} });
+    const home = 'https://discussion-reobserve.example';
+    const originalFetch = globalThis.fetch;
+    const fetchBoundary = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+      if (url.origin === home) return url.pathname === '/v1/features'
+        ? Response.json(features) : new Response('{}', { status: 404 });
+      return await originalFetch(input, init);
+    });
+    const target = createSessionRecordFixture({ id: destination, encryptionMode: 'plain', active: true,
+      metadata: JSON.stringify({ machineId: 'machine-1', path: '/repo', claudeSessionId: 'native',
+        runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } }) });
+    const get = vi.spyOn(axios, 'get').mockImplementation(async (url, ...options) => {
+      const path = new URL(String(url)).pathname;
+      if (path === `/v2/sessions/${destination}`) return { status: 200, data: { session: target } };
+      if (path === '/v1/auth/ping') return { status: 200, data: {} };
+      if (path.endsWith('/messages/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      if (path.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+      } };
+      return await accountGet(url, ...options);
+    });
+    const request = vi.spyOn(axios, 'request').mockImplementation(async config => {
+      const path = new URL(String(config.url)).pathname;
+      if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200, data: {
+        sessions: [], nextCursor: null, hasNext: false } };
+      if (path.endsWith('/messages')) return { status: 200, data: { messages: [question], hasMoreOlder: false, messageSeq: 2 } };
+      if (path === '/v1/discussions/discussion') return { status: 200, data: { discussion: {
+        id: 'discussion', ownerAccountId: 'owner', encryptionMode: 'plain', anchor: null, access: 'owner', keyReadiness: true,
+        dataEncryptionKey: null, creationLocalId: 'creation', titleContent: { t: 'plain', v: { v: 1, title: 'Question' } },
+        latestMessage: { id: question.id, localId: question.localId, seq: 2, authorAccountId: 'owner', accountActor: actor,
+          producerV1: null, createdAt: 1 }, messageSeq: 2, lastReadSeq: 0, unreadCount: 1, unreadMentionCount: 0,
+        recentAuthorAccountIds: ['owner'], archivedAt: null, capabilities: { postMessages: true, rename: true, archive: true,
+          restore: false, askAgent: true, sendToSession: true, manageAccess: true, leave: false },
+      } } };
+      throw new Error(`Unexpected Discussion HTTP boundary: ${path}`);
+    });
+    // Only HTTP and authenticated Socket.IO boundaries are substituted. Host waiting,
+    // invalidation registration, observe parsing, intake and Pending admission stay real.
+    let observations = 0;
+    const responses: ReturnType<typeof SessionFollowObservePendingResponseV1Schema.parse>[] = [];
+    const admissions: Parameters<NonNullable<ApiSessionClientOptions['machineAdmissionTransport']>>[0][] = [];
+    const answer = (event: string, payload: unknown) => {
+      if (event !== SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1) return resolveApiSessionSocketDefaultAck(event, payload);
+      expect(SessionFollowObservePendingRequestV1Schema.parse(payload).sessionId).toBe(destination);
+      observations += 1;
+      const response = SessionFollowObservePendingResponseV1Schema.parse(observations === 1
+        ? { ok: false, v: 1, error: 'internal' }
+        : { ok: true, v: 1, sessionId: destination, publisherGeneration: '17', currentSourceSessionIds: [],
+          observations: admissions.length ? [] : [{ source: { kind: 'discussion', discussionId: 'discussion' },
+            destinationSessionId: destination, addressing, policy: { preset: 'quiet' },
+            event: { kind: 'needs_you', type: 'decision', mode: 'wait' } }] });
+      responses.push(response);
+      return response;
+    };
+    const socket = createApiSessionSocketStub({ disconnectReason: 'transport close', emitWithAck: answer });
+    const reconnectedSocket = createApiSessionSocketStub({ emitWithAck: answer });
+    let connections = 0;
+    let invalidations = 0;
+    const sourceHome = new ApiSessionClient(harness.opts.credentials.token, createPlainSessionFixture({ id: destination }), {
+      metadataAuthority: { kind: 'shared_editor' }, localMachineId: 'machine-1',
+      getServerFeaturesSnapshot: () => ({ status: 'ready', features }),
+      machineAdmissionTransport: async admission => { admissions.push(admission); return { status: 'accepted', localId: admission.localId }; },
+      onSessionFollowInvalidated: () => { invalidations += 1; publishSessionFollowWakeInvalidation(); },
+      transport: { serverId: 'discussion-reobserve-home', serverUrl: home,
+        createAccountUpdatesSocket: () => socket as never,
+        createSessionSocketTransport: () => {
+          const current = connections++ === 0 ? socket : reconnectedSocket;
+          return { socket: current as never, transport: createSocketTransportAdapter(current as never) };
+        } },
+    });
+    harness.session.getServerBinding = sourceHome.getServerBinding.bind(sourceHome);
+    harness.session.getServerFeaturesSnapshot = sourceHome.getServerFeaturesSnapshot.bind(sourceHome);
+    harness.session.getMachineAdmissionTransport = sourceHome.getMachineAdmissionTransport.bind(sourceHome);
+    harness.session.runSessionFollowSourceRequest = sourceHome.runSessionFollowSourceRequest.bind(sourceHome);
+    harness.session.observePendingSessionFollow = sourceHome.observePendingSessionFollow.bind(sourceHome);
+    harness.session.acknowledgeSessionFollow = vi.fn();
+    harness.session.hasPendingProviderInput = vi.fn(() => admissions.length > 0);
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => mode.permissionMode,
+      { batcher: combinePermissionModeQueuedPrompts });
+    harness.deps.createPermissionModeQueueStateFn = () => ({ messageQueue: queue, rebindSession: () => undefined,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode: () => undefined,
+      getCurrentPermissionModeUpdatedAt: () => 0, setCurrentPermissionModeUpdatedAt: () => undefined });
+    const controller = new AbortController();
+    harness.deps.runPermissionModePromptLoopFn = async (params: Parameters<typeof runPermissionModePromptLoop>[0]) => {
+      await runPermissionModePromptLoop({ ...params, getAbortSignal: () => controller.signal,
+        shouldExit: () => controller.signal.aborted });
+    };
+    let running: Promise<void> | undefined;
+    try {
+      // Finish the initial connection invalidation before testing recovery from
+      // the later failed observation; it must not accidentally repair the case.
+      await vi.waitFor(() => expect(invalidations).toBe(1));
+      running = runHostSessionRuntime(harness.opts, harness.config, harness.deps);
+      await vi.waitFor(() => expect(observations).toBe(1));
+      expect(responses).toEqual([{ ok: false, v: 1, error: 'internal' }]);
+      expect(admissions).toEqual([]);
+      expect(harness.runtime.sendTurnPrompt).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(socket.getHandler('session')).toBeTypeOf('function'));
+      if (recovery === 'session_changed') socket.trigger('session', { id: 'reobserve-original', createdAt: 2,
+        body: { t: 'session-changed', sessionId: destination } });
+      else {
+        socket.disconnect();
+        // Match the existing Session reconnect integration fixture's allowance
+        // for the connection supervisor's own reconnect schedule.
+        await vi.waitFor(() => expect(reconnectedSocket.connect).toHaveBeenCalledTimes(1), { timeout: 3_000 });
+        await vi.waitFor(() => expect(invalidations).toBe(2));
+      }
+      await vi.waitFor(() => expect(admissions).toHaveLength(1));
+      expect(observations).toBeGreaterThanOrEqual(2);
+      expect(admissions[0]).toMatchObject({ localId, sessionId: destination, requestedAction: { v: 1, kind: 'enqueue' },
+        reply: { mode: 'return', discussion: addressing }, content: { t: 'plain', v: { meta: {
+          happierInputRequestV1: { discussionAddressing: addressing, replyIntent: { mode: 'return' } },
+        } } } });
+      expect(harness.session.acknowledgeSessionFollow).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      try { await running; } finally {
+        await sourceHome.close(); get.mockRestore(); request.mockRestore(); fetchBoundary.mockRestore();
+      }
+    }
   });
 
   it.each(['follower', 'manager'] as const)('commits one stable %s Follow wake identity before delivery and ACKs that identity', async (relation) => {
