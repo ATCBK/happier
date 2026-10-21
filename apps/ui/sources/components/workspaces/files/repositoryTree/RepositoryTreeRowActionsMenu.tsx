@@ -43,7 +43,7 @@ const FILE_MENU_ITEM_ICONS: Readonly<Record<string, ItemAction['icon']>> = {
     openWithBlame: 'clock-counter-clockwise',
     copyPath: 'copy',
     copyLink: 'link',
-    mentionInComposer: 'paperclip',
+    mentionInComposer: 'at',
     saveAsArtifact: 'file-arrow-up',
     download: 'download',
     shareFile: 'share-network',

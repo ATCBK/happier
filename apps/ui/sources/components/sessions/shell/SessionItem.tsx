@@ -1072,8 +1072,9 @@ const SessionItemContent = React.memo(
             }];
         }, [dragEnabled, organize.active, organize.available, rowActionIconColor]);
         const leadingMenuItems = React.useMemo(
-            () => [...workspaceOpen.items, ...(mentionScope && mentionScope.serverId === serverId ? [{ id: 'entity.mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer') }] : []), ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...organizeMenuItems],
-            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, workspaceOpen.items, mentionScope, serverId],
+            () => [...workspaceOpen.items, ...(mentionScope && mentionScope.serverId === serverId ? [{ id: 'entity.mentionInComposer', title: t('entityDragDrop.composer.mentionInComposer'),
+                icon: <Icon name="at" size={16} color={rowActionIconColor} /> }] : []), ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...organizeMenuItems],
+            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, workspaceOpen.items, mentionScope, serverId, rowActionIconColor],
         );
 
         const handleSelectLeadingMenuItem = React.useCallback(async (itemId: string): Promise<boolean> => {
