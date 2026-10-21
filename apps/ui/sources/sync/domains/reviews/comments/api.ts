@@ -35,7 +35,7 @@ async function resolveDefaultEventStorageContext(): Promise<ReviewCommentEventSt
         throw new Error('review_comment_credentials_unavailable');
     }
     const accountId = parseToken(credentials.token);
-    const mode = (await fetchAccountEncryptionMode(credentials)).mode;
+    const mode = (await fetchAccountEncryptionMode(credentials, { usage: 'fresh-authority' })).mode;
     if (mode === 'plain') return { accountId, mode };
     try {
         return {

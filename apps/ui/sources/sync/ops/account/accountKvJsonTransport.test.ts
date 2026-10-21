@@ -8,6 +8,7 @@ import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
 import { legacyAccountKvVectors } from '../../../../../../packages/protocol/src/crypto/fixtures/accountKvLegacyV0';
 import { createAccountKvHttpFixture } from '@/dev/testkit/fixtures/accountKvHttpFixture';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import { createSocketAccountEncryptionObservation } from '@/sync/api/account/apiAccountEncryptionMode';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
@@ -23,7 +24,7 @@ const mounted = vi.hoisted(() => ({ encryption: null as Encryption | null,
 vi.mock('@/sync/runtime/getSyncSingleton', () => ({ getSyncSingleton: () => mounted }));
 
 const key = 'workspace:tabs:v1';
-const credentials: AuthCredentials = { token: 'Account-A' };
+const credentials: AuthCredentials = { token: createAccountTokenForTests('Account-A') };
 const plain = (value: unknown) => encodeBase64StoredJsonContentEnvelope({ t: 'plain', v: value });
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const currentness = { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 };
@@ -37,7 +38,7 @@ describe('Account KV JSON transport', () => {
         const material = createAccountScopedCryptoMaterialSnapshotV1({
             accountEncryptionMode: 'e2ee', material: { type: 'legacy', secret },
         });
-        mounted.credentials = { token: 'Account-A', secret: encodeBase64(secret, 'base64url') };
+        mounted.credentials = { token: credentials.token, secret: encodeBase64(secret, 'base64url') };
         return {
             credentials: mounted.credentials,
             currentness: { ...currentness, mode: 'e2ee', signingKeyFingerprint: 'current-signing',

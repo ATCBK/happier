@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createAccountScopedCryptoMaterialSnapshotV1, openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
@@ -48,6 +49,93 @@ afterEach(async () => { vi.restoreAllMocks(); await homes.reset(); });
 
 // Dynamic import keeps the existing Action-owner RED runnable before this new API producer lands.
 describe('Project Trust captured UI Account API', () => {
+    it.each(['read', 'list'] as const)('reuses owned identity for initial Trust %s while preserving fresh disclosure and writer authority', async operation => {
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        const { createProjectTrustClientForAccount } = await import('./apiProjectTrust');
+        let socket: import('socket.io-client').Socket | undefined;
+        installDisconnectedServerSocketBoundary(current => {
+            socket = current;
+            configureConnectedServerSocketBoundary(current);
+        });
+        const path = `${PROJECT_TRUST_ROUTE_V1}/${operation}`;
+        const payload = operation === 'read' ? { status: 'present', revision: 4, content: { t: 'plain', v: value } }
+            : { rows: [{ project, revision: 4, content: { t: 'plain', v: value } }] };
+        let authorityReads = 0;
+        let committedChange = false;
+        let requested = createDeferred<void>();
+        let bodyReady = createDeferred<void>();
+        setRuntimeFetch(async (url, init) => {
+            const requestPath = new URL(String(url)).pathname;
+            if (requestPath === '/v1/account/encryption/currentness') {
+                authorityReads++;
+                return Response.json(committedChange ? { ...createPlainAccountEncryptionCurrentnessFixture(),
+                    mode: 'e2ee', version: 2, updatedAt: 2, signingKeyFingerprint: 'changed-signing',
+                    contentKeyFingerprint: 'changed-content', recipientEnvelopeReadiness: { status: 'available' } }
+                    : createPlainAccountEncryptionCurrentnessFixture());
+            }
+            if (requestPath === path) return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+                requested.resolve(undefined);
+                void bodyReady.promise.then(() => {
+                    controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+                    controller.close();
+                });
+            } }), { headers: { 'Content-Type': 'application/json' } });
+            return homes.request(url, init);
+        });
+        const captured = await captureLazyActionAccountContext(scope.serverId);
+        let pending: Promise<unknown> | undefined;
+        try {
+            // Key preparation is an existing separate phase, outside the storage-read counts.
+            await captured.resolveAccountEncryption();
+            const endpointUrl = 'https://trust-api.test';
+            const initialRequest = createServerFetchAtEndpoint({ endpointUrl, serverId: scope.serverId, credentials: captured.credentials });
+            apiSocket.initialize({ endpoint: endpointUrl, token: captured.credentials.token, credentials: captured.credentials,
+                serverId: scope.serverId, generation: getActiveServerSnapshot().generation, request: initialRequest,
+                isCurrent: captured.accountLifetime.isCurrent }, null);
+            await vi.waitFor(() => expect(socket?.connected).toBe(true));
+            const binding = apiSocket.getAccountEncryptionObservationBinding(captured.credentials);
+            if (!binding) throw new Error('Missing admitted Account socket binding');
+            await binding.read();
+            // Explicitly bind this phase fixture. Production Action binding has its own seam test.
+            const request = createServerFetchAtEndpoint({ endpointUrl, serverId: scope.serverId,
+                credentials: captured.credentials, isCurrent: captured.accountLifetime.isCurrent,
+                accountEncryptionObservation: binding });
+            const client = createProjectTrustClientForAccount({ ...captured, request });
+            for (const changeBeforeDisclosure of [false, true]) {
+                requested = createDeferred<void>();
+                bodyReady = createDeferred<void>();
+                const before = authorityReads;
+                const reading = operation === 'read' ? client.read(project) : client.list(project);
+                const outcome = reading.then(result => ({ status: 'resolved' as const, result }),
+                    (error: unknown) => ({ status: 'rejected' as const, error }));
+                pending = outcome;
+                await Promise.race([requested.promise, outcome.then(() => { throw new Error('Trust read settled before its held body'); })]);
+                expect(authorityReads - before).toBe(0);
+                committedChange = changeBeforeDisclosure;
+                bodyReady.resolve(undefined);
+                if (changeBeforeDisclosure) await expect(outcome).resolves.toMatchObject({ status: 'rejected',
+                    error: { code: 'project_trust_encryption_material_unavailable' } });
+                else {
+                    await expect(outcome).resolves.toMatchObject({ status: 'resolved', result: operation === 'read'
+                        ? { status: 'present', revision: 4, value } : [{ project, revision: 4, value }] });
+                    const beforeWriter = authorityReads;
+                    await client.remember({ ...value, currentEffectDigest: value.reviewedEffectDigest, expectedRevision: 4 });
+                    expect(authorityReads - beforeWriter).toBe(1);
+                }
+                expect(authorityReads - before).toBe(changeBeforeDisclosure ? 1 : 2);
+            }
+        } finally {
+            bodyReady.resolve(undefined);
+            await pending;
+            apiSocket.disconnect();
+            captured.dispose();
+            installDisconnectedServerSocketBoundary();
+            installHomeGovernanceBoundaries(homes);
+        }
+    });
     it('remembers only the captured Account’s currently accepted exact checkout, not another Account’s rows or a moved root', async () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const { decideProjectSetupConsent } = await import('@/components/projects/projectSetup/projectSetupConsentDecision');

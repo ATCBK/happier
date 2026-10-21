@@ -167,6 +167,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
     const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: mode });
     let materialReadStatus = 200;
     let beforeMaterialRead: (() => void | Promise<void>) | undefined;
+    let observeTrustRead: ((path: string) => void) | undefined;
     let beforeCatalogRead: ((path: string) => void | Promise<void>) | undefined;
     let beforeProfileRead: (() => void) | undefined;
     let beforeHistoryRead: (() => void | Promise<void>) | undefined;
@@ -188,6 +189,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         serverIdentityId: `srv_secret_operations_${mode}${options.home ?? ''}`, accountId, credentials,
         request: async (rawUrl, init) => {
             const path = new URL(String(rawUrl)).pathname;
+            if (path === '/v1/account/encryption' || path === '/v1/account/encryption/currentness') observeTrustRead?.(path);
             if (path === '/health') return Response.json({});
             if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: accountId }));
             if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
@@ -313,6 +315,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         setProfileReadStatus(value: number) { profileReadStatus = value; },
         setMaterialReadStatus(value: number) { materialReadStatus = value; },
         setBeforeMaterialRead(value: (() => void | Promise<void>) | undefined) { beforeMaterialRead = value; },
+        setTrustReadObserver(value: ((path: string) => void) | undefined) { observeTrustRead = value; },
         setBeforeCatalogRead(value: ((path: string) => void | Promise<void>) | undefined) { beforeCatalogRead = value; },
         setBeforeProfileRead(value: (() => void) | undefined) { beforeProfileRead = value; },
         setBeforeHistoryRead(value: (() => void | Promise<void>) | undefined) { beforeHistoryRead = value; },
@@ -1409,11 +1412,18 @@ describe('Saved Secret operations through their real Account and Action owners',
         }
         if (observation === 'retired-scope') await openAccount('plain', { home: 'verification-other-home' });
         if (observation === 'changed-account-key') account.setBeforeMaterialRead(() => account.rotateServerContentKey());
+        const finalTrustReads: string[] = [];
+        if (mode === 'e2ee' && observation === 'matching') {
+            let materialRead = false;
+            account.setBeforeMaterialRead(() => { materialRead = true; });
+            account.setTrustReadObserver(path => { if (materialRead) finalTrustReads.push(path); });
+        }
         const verify = Reflect.get(result, 'verifyOutcome');
         const verified = typeof verify === 'function' ? await verify() : result;
         expect(verified).toMatchObject(observation === 'matching' ? { ok: true } : { ok: false, reason: 'outcome_unknown' });
         expect(account.writes.map(write => write.path)).toEqual([SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.promote']]);
         expect(account.resources.size).toBe(2);
+        if (mode === 'e2ee' && observation === 'matching') expect(finalTrustReads).toEqual(['/v1/account/encryption/currentness']);
     });
     it.each(['rename', 'rotate'] as const)('current picker %s preserves resource identity and never recreates a Settings credential', async action => {
         const account = await openAccount();

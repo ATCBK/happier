@@ -12,6 +12,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
+import type { AccountEncryptionReadUsage } from '@/sync/api/account/apiAccountEncryptionMode';
 import { getRandomBytes } from '@/platform/cryptoRandom';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
 
@@ -107,10 +108,10 @@ export async function fetchProjectTrustInventory(params: Readonly<{
 
 /** Internal port for the already-admitted projectAction family, using that invocation's captured Account. */
 export function createProjectTrustClientForAccount(account: Account) {
-    async function modeContext() {
+    async function modeContext(usage: AccountEncryptionReadUsage = 'fresh-authority') {
         try {
             const { encryption } = await account.resolveAccountEncryption();
-            const storage = await resolveAccountStorageContext(account.credentials, { encryption, request: account.request });
+            const storage = await resolveAccountStorageContext(account.credentials, { encryption, request: account.request, usage });
             account.assertCurrent();
             return { mode: storage.mode, material: materialFor(account.credentials, storage.mode) };
         } catch (error) {
@@ -126,7 +127,7 @@ export function createProjectTrustClientForAccount(account: Account) {
     }
     async function read(projectInput: QualifiedProjectTrustProjectV1, signal?: AbortSignal): Promise<OpenedProjectTrustRead> {
         const project = QualifiedProjectTrustProjectV1Schema.parse(projectInput);
-        const context = await modeContext();
+        const context = await modeContext('identity');
         const response = await readResponse((path, init) => account.request(path, init, { retry: 'none' }), `${PROJECT_TRUST_ROUTE_V1}/read`, { project }, signal, account.assertCurrent);
         account.assertCurrent();
         const raw = await responseJson(response); account.assertCurrent();
@@ -159,7 +160,7 @@ export function createProjectTrustClientForAccount(account: Account) {
     return {
         read,
         async list(project?: QualifiedProjectTrustProjectV1, signal?: AbortSignal): Promise<readonly OpenedProjectTrustRow[]> {
-            const context = await modeContext();
+            const context = await modeContext('identity');
             const rows = await fetchProjectTrustInventory({ credentials: account.credentials, mode: context.mode,
                 request: (path, init) => account.request(path, init, { retry: 'none' }), project, signal, assertCurrent: account.assertCurrent });
             await verifyReadMode(context.mode);

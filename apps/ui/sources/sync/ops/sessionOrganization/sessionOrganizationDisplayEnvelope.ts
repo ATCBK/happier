@@ -95,7 +95,7 @@ export async function prepareSessionOrganizationDisplayEnvelope(params: Readonly
     request?: (path: string, init?: RequestInit) => Promise<Response>;
 }>): Promise<SessionOrganizationContentEnvelope> {
     const accountMode = params.accountMode
-        ?? (await fetchAccountEncryptionMode(params.credentials, { request: params.request })).mode;
+        ?? (await fetchAccountEncryptionMode(params.credentials, { request: params.request, usage: 'fresh-authority' })).mode;
     const envelope = prepareSessionOrganizationDisplayEnvelopeForAccountModeV1({
         envelope: plainEnvelope(params.value), accountMode,
         material: accountMode === 'plain' ? null
