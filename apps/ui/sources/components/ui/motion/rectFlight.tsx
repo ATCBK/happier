@@ -16,10 +16,43 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
 
 import { motionTokens } from './motionTokens';
 import { reanimatedMotionTokens } from './reanimatedMotionTokens';
-import { interpolateRectFlip, rectFlipFrame, rectFlipLegProgress, type RectFlipFrame, type RectFlipOrigin, type WindowFlightRect } from './rectFlipGeometry';
+import { interpolateRectFlip, rectFlipFrame, rectFlipLegProgress, rectFlipTransform, type RectFlipFrame, type RectFlipOrigin, type WindowFlightRect } from './rectFlipGeometry';
 
 export { coverRectFlipOrigin, interpolateRectFlip } from './rectFlipGeometry';
 export type { RectFlipFrame, RectFlipOrigin, WindowFlightRect } from './rectFlipGeometry';
+
+/** Capture includes an in-flight browser transform, so the next flight can retarget from it. */
+export function captureElementFlightRect(element: HTMLElement): WindowFlightRect {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left, y: rect.top, width: rect.width, height: rect.height };
+}
+
+export function cancelElementRectFlight(element: HTMLElement, animationId: string): void {
+    for (const animation of element.getAnimations?.() ?? []) {
+        if (animation.id === animationId) animation.cancel();
+    }
+}
+
+/** The DOM adapter of the same destination-local FLIP geometry used by the shared-value flight. */
+export function playElementRectFlight(element: HTMLElement, origin: WindowFlightRect, options: Readonly<{
+    animationId: string;
+    durationMs: number;
+    /** Retained columns take their new size once before travelling; their contents never scale. */
+    translateOnly?: boolean;
+}>): Animation | null {
+    cancelElementRectFlight(element, options.animationId);
+    if (!element.isConnected || typeof element.animate !== 'function') return null;
+    const target = captureElementFlightRect(element);
+    if (target.width === 0 || target.height === 0) return null;
+    const from = rectFlipTransform(options.translateOnly ? { ...origin, width: target.width, height: target.height } : origin, target);
+    if (from.translateX === 0 && from.translateY === 0 && from.scaleX === 1 && from.scaleY === 1) return null;
+    const animation = element.animate([
+        { transform: `translate(${from.translateX}px, ${from.translateY}px) scale(${from.scaleX}, ${from.scaleY})`, transformOrigin: 'left top' },
+        { transform: 'translate(0px, 0px) scale(1, 1)', transformOrigin: 'left top' },
+    ], { duration: options.durationMs, easing: motionTokens.easingCss.standard });
+    animation.id = options.animationId;
+    return animation;
+}
 
 /** A rectangle in a container's coordinates. */
 export type FlightRect = Readonly<{ x: number; y: number; w: number; h: number }>;
@@ -210,16 +243,19 @@ export function useRectFlip(options: Readonly<{ reducedMotion?: boolean; initial
     }, [backdropFrom, closing, fades, from, progress, reducedMotion, to]);
 
     const frame = useDerivedValue(() => interpolateRectFlip(from.value, to.value, rectFlipLegProgress(progress.value, closing.value, backdropFrom.value)));
-    const style = useAnimatedStyle<ViewStyle>(() => ({
-        opacity: fades.value ? progress.value : 1,
-        transformOrigin: 'left top',
-        transform: [
-            { translateX: frame.value.imageRect.x - target.value.x },
-            { translateY: frame.value.imageRect.y - target.value.y },
-            { scaleX: frame.value.imageRect.width / target.value.width },
-            { scaleY: frame.value.imageRect.height / target.value.height },
-        ],
-    }));
+    const style = useAnimatedStyle<ViewStyle>(() => {
+        const transform = rectFlipTransform(frame.value.imageRect, target.value);
+        return {
+            opacity: fades.value ? progress.value : 1,
+            transformOrigin: 'left top',
+            transform: [
+                { translateX: transform.translateX },
+                { translateY: transform.translateY },
+                { scaleX: transform.scaleX },
+                { scaleY: transform.scaleY },
+            ],
+        };
+    });
     const clipStyle = useAnimatedStyle<ViewStyle>(() => ({
         position: 'absolute', left: target.value.x, top: target.value.y,
         width: target.value.width, height: target.value.height, overflow: 'hidden',

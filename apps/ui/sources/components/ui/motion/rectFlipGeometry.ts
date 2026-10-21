@@ -3,6 +3,17 @@ export type WindowFlightRect = Readonly<{ x: number; y: number; width: number; h
 export type RectFlipFrame = Readonly<{ imageRect: WindowFlightRect; clipRect: WindowFlightRect }>;
 export type RectFlipOrigin = WindowFlightRect | RectFlipFrame;
 
+/** Destination-local transform for a visible window-space rectangle. */
+export function rectFlipTransform(rect: WindowFlightRect, target: WindowFlightRect) {
+    'worklet';
+    return {
+        translateX: rect.x - target.x,
+        translateY: rect.y - target.y,
+        scaleX: rect.width / target.width,
+        scaleY: rect.height / target.height,
+    };
+}
+
 export function rectFlipFrame(origin: RectFlipOrigin): RectFlipFrame {
     'worklet';
     return 'imageRect' in origin ? origin : { imageRect: origin, clipRect: origin };
