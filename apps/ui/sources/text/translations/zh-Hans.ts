@@ -9338,6 +9338,7 @@ const zhHansValues = {
         authorizationRefused: "授权被拒绝",
       },
     },
+        toolPolicyUnsupportedAuth: "Codex 无法通过所选登录方式应用此次运行的工具权限。",
   },
 
   tools: {

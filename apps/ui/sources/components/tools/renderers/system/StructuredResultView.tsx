@@ -10,6 +10,7 @@ import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 import { toolTextBlock, type ToolDisplayTextProjector } from '../core/toolDisplayTextTypes';
 import { ToolFindText, useToolFindState } from '../core/ToolFindText';
+import { resolveToolActionFailure, toolActionOutcomeLabel } from '../../shell/presentation/resolveToolActionFailure';
 
 
 function truncate(text: string, maxChars: number): string {
@@ -74,8 +75,10 @@ function getPaths(result: unknown): string[] {
     return direct ?? [];
 }
 
-function getText(result: unknown): string | null {
-    const parsed = maybeParseJson(result);
+function getText(tool: ToolViewProps['tool']): string | null {
+    const failure = resolveToolActionFailure(tool);
+    if (failure) return failure.summary ?? toolActionOutcomeLabel(failure.outcome);
+    const parsed = maybeParseJson(tool.result);
     if (typeof parsed === 'string' && parsed.trim()) return parsed;
     const obj = asRecord(parsed);
     if (!obj) return null;
@@ -107,7 +110,7 @@ export const projectStructuredResultDisplayText: ToolDisplayTextProjector = (too
     if (tool.state === 'running' && !streams) return [];
     const diff = getDiff(tool.result);
     const paths = getPaths(tool.result);
-    const text = getText(tool.result);
+    const text = getText(tool);
     const stdout = streams?.stdout?.trim() ? streams.stdout : null;
     const stderr = streams?.stderr?.trim() ? streams.stderr : null;
     return [
@@ -136,7 +139,7 @@ export const StructuredResultView = React.memo<ToolViewProps>(({ tool, messageId
     const streams = extractStdStreams(tool.result);
     const diff = getDiff(tool.result);
     const paths = getPaths(tool.result);
-    const text = getText(tool.result);
+    const text = getText(tool);
 
     // When running, only render stdio-like streams (avoid showing partial diffs/paths).
     if (tool.state === 'running' && !streams) return null;

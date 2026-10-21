@@ -9803,6 +9803,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
         authorizationRefused: "A autorização foi recusada",
       },
     },
+        toolPolicyUnsupportedAuth: "O Codex não pode aplicar as permissões de ferramentas desta execução com o método de início de sessão selecionado.",
   },
 
   tools: {

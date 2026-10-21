@@ -234,7 +234,8 @@ function ToolFullViewContent({ tool, owningMessageId, sessionId, serverId, metad
 
     if (canRenderTaskTranscript && normalizedSessionId) {
         const transcriptHeader =
-            messages.length === 0 && (SpecializedFullView || showSidechainHydrationStatus) ? (
+            (messages.length === 0 || normalizedToolName === 'SubAgentRun' && toolForRendering.state !== 'running')
+                && (SpecializedFullView || showSidechainHydrationStatus) ? (
                 <TextSelectabilityScope selectable>
                     <>
                         {SpecializedFullView ? (

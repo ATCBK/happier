@@ -20,6 +20,7 @@ const REFUSAL_CODES: ReadonlySet<string> = new Set([
     'unsupported_action', 'permission_denied', 'credential_scope_denied', 'action_disabled', 'present_user_required',
     'approval_rejected', 'subtree_denied', 'policy_denied_field', 'target_declined', 'denied', 'workspace_write_denied',
     'run_access_denied', 'review_comment_permission_denied',
+    'codex_tool_restriction_unsupported_auth',
 ]);
 const REFUSAL_CAUSES: ReadonlySet<string> = new Set(['external_authorization_refused']);
 
@@ -61,6 +62,7 @@ export function resolveToolActionFailure(tool: ToolCall): ToolActionFailurePrese
         outcome: refused ? 'refused' : 'failed',
         code: failure.code,
         cause: failure.cause,
-        summary: resolveCauseSummary(failure.cause),
+        summary: failure.code === 'codex_tool_restriction_unsupported_auth'
+            ? t('toolView.actionOutcome.cause.toolPolicyUnsupportedAuth') : resolveCauseSummary(failure.cause),
     };
 }

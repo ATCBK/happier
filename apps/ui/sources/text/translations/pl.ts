@@ -9516,6 +9516,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
         authorizationRefused: "Autoryzacja została odrzucona",
       },
     },
+        toolPolicyUnsupportedAuth: "Codex nie może zastosować uprawnień narzędzi tego uruchomienia przy wybranej metodzie logowania.",
   },
 
   tools: {

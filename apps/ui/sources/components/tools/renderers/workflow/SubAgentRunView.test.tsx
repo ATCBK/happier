@@ -224,6 +224,19 @@ describe('SubAgentRunView', () => {
         expect(collectHostText(tree).join(' ')).toContain('Execution failed while reviewing');
     });
 
+    it('presents the typed host failure in words while keeping raw diagnostics out of the result body', async () => {
+        const screen = await renderScreen(<SubAgentRunView tool={{
+            name: 'SubAgentRun', state: 'error', input: { runId: 'run_1' },
+            createdAt: 1, startedAt: 1, completedAt: 2, description: null,
+            result: { status: 'failed', runId: 'run_1',
+                error: { code: 'codex_tool_restriction_unsupported_auth', message: 'private diagnostic' } },
+        }} metadata={null} messages={[]} />);
+        const text = screen.getTextContent();
+        expect(text).toContain('toolView.actionOutcome.cause.toolPolicyUnsupportedAuth');
+        expect(text).not.toContain('private diagnostic');
+        expect(text).not.toContain('codex_tool_restriction_unsupported_auth');
+    });
+
     it('coerces error tool state to completed for structured timeout fallback', async () => {
         let tree!: renderer.ReactTestRenderer;
         tree = (await renderScreen(<SubAgentRunView

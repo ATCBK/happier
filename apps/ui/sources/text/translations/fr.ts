@@ -9519,6 +9519,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
         authorizationRefused: "L’autorisation a été refusée",
       },
     },
+        toolPolicyUnsupportedAuth: "Codex ne peut pas appliquer les permissions d’outils de cette exécution avec le mode de connexion choisi.",
   },
 
     tools: {

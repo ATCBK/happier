@@ -8917,6 +8917,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
             authorizationRefused: "S’ha rebutjat l’autorització",
           },
         },
+            toolPolicyUnsupportedAuth: "Codex no pot aplicar els permisos d’eines d’aquesta execució amb el mètode d’inici de sessió seleccionat.",
     },
 
       tools: {

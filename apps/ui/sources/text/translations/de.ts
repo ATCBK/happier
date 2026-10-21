@@ -9615,6 +9615,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
             authorizationRefused: "Die Autorisierung wurde abgelehnt",
           },
         },
+            toolPolicyUnsupportedAuth: "Codex kann die Werkzeugberechtigungen dieses Laufs mit der gewählten Anmeldemethode nicht anwenden.",
     },
 
     tools: {

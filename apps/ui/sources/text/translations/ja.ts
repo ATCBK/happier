@@ -9986,6 +9986,7 @@ localTailscale: {
         authorizationRefused: "認可が拒否されました",
       },
     },
+        toolPolicyUnsupportedAuth: "選択したサインイン方法では、Codex はこの実行のツール権限を適用できません。",
   },
 
   tools: {

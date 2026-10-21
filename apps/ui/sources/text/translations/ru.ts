@@ -9536,6 +9536,7 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
         authorizationRefused: "Авторизация отклонена",
       },
     },
+        toolPolicyUnsupportedAuth: "Codex не может применить разрешения инструментов этого запуска с выбранным способом входа.",
   },
 
   tools: {

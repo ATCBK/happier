@@ -17,6 +17,14 @@ function actionCall(actionId: string, outcome: unknown): ToolCall {
 }
 
 describe('resolveToolActionFailure', () => {
+    it('explains a host Run tool-policy refusal without exposing its diagnostic code', () => {
+        const tool: ToolCall = { ...actionCall('execution.run.start', {}), name: 'SubAgentRun', state: 'error',
+            input: { runId: 'run_1' }, result: { status: 'failed', runId: 'run_1',
+                error: { code: 'codex_tool_restriction_unsupported_auth', message: 'private diagnostic' } } };
+        expect(resolveToolActionFailure(tool)).toMatchObject({ outcome: 'refused',
+            code: 'codex_tool_restriction_unsupported_auth', summary: expect.any(String) });
+        expect(resolveToolActionFailure(tool)?.summary).not.toContain('codex_tool_restriction_unsupported_auth');
+    });
     it('presents a policy refusal as refused, with the cause in words and the typed code kept', () => {
         const tool = actionCall('session.stop', {
             errorCode: 'unsupported_action', error: 'unsupported_action:session.stop', details: { cause: 'target_outside_led_subtree' },

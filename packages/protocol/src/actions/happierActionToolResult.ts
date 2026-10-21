@@ -1,6 +1,7 @@
 import { maybeParseJson } from '../activity/parseJson.js';
 import { resolveToolEnvelopeMetaV2 } from '../tools/v2/meta.js';
 import { isShellToolNameAlias } from '../tools/v2/aliases.js';
+import { SubAgentRunResultV2Schema } from '../tools/v2/schemas.js';
 
 const PREFIXES = ['mcp__happier__', 'happier__', 'happier_'] as const;
 
@@ -124,10 +125,17 @@ function readFailureCause(details: unknown): string | null {
 
 /**
  * The typed Action failure a first-party Happier tool call returned: the executor's
- * `{ errorCode, error, details? }` outcome, or a Session spawn's `{ type: 'error', code }`.
+ * `{ errorCode, error, details? }` outcome, a Session spawn's `{ type: 'error', code }`,
+ * or the host SubAgentRun marker's schema-validated terminal error.
  * Other MCP servers' results are never read, whatever keys they carry.
  */
 export function readHappierActionToolFailure(toolName: string, input: unknown, result: unknown): HappierActionToolFailure | null {
+    // SubAgentRun is the host's own transcript marker, not an arbitrary MCP result.
+    if (toolName === 'SubAgentRun') {
+        const parsed = SubAgentRunResultV2Schema.safeParse(readHappierActionToolPayload(result));
+        return parsed.success && (parsed.data.status === 'failed' || parsed.data.status === 'timeout') && parsed.data.error
+            ? { code: parsed.data.error.code, cause: null } : null;
+    }
     // Persisted tool calls are read at a boundary: a record without a name is not a first-party call.
     if (typeof toolName !== 'string' || firstPartyName(readHappierActionToolName(toolName, input).trim()) === null) return null;
     for (const candidate of readHappierActionToolResultCandidates(result, input)) {

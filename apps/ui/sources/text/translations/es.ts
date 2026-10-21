@@ -9683,6 +9683,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
         authorizationRefused: "Se rechazó la autorización",
       },
     },
+        toolPolicyUnsupportedAuth: "Codex no puede aplicar los permisos de herramientas de esta ejecución con el método de inicio de sesión seleccionado.",
   },
 
     tools: {

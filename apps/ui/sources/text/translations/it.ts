@@ -9905,6 +9905,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
         authorizationRefused: "L’autorizzazione è stata rifiutata",
       },
     },
+        toolPolicyUnsupportedAuth: "Codex non può applicare i permessi degli strumenti di questa esecuzione con il metodo di accesso selezionato.",
   },
 
     tools: {

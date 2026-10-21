@@ -15,6 +15,15 @@ function mcpTextResult(payload: unknown) {
 const input = { actionId: 'session.stop', input: { sessionId: 's1' } };
 
 describe('readHappierActionToolFailure', () => {
+  it('reads the host SubAgentRun terminal failure without treating a successful result or another tool as a failure', () => {
+    const result = { status: 'failed', runId: 'run_1', callId: 'call_1', sidechainId: 'call_1',
+      error: { code: 'codex_tool_restriction_unsupported_auth', message: 'Codex cannot enforce this policy.' } };
+    expect(readHappierActionToolFailure('SubAgentRun', { runId: 'run_1' }, result)).toEqual({
+      code: 'codex_tool_restriction_unsupported_auth', cause: null,
+    });
+    expect(readHappierActionToolFailure('SubAgentRun', { runId: 'run_1' }, { ...result, status: 'succeeded' })).toBeNull();
+    expect(readHappierActionToolFailure('mcp__other__run', {}, result)).toBeNull();
+  });
   it('reads a typed Action failure and its cause from the MCP text envelope', () => {
     const result = mcpTextResult({
       errorCode: 'unsupported_action', error: 'unsupported_action:session.stop', details: { cause: 'target_outside_led_subtree' },

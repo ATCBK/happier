@@ -11445,6 +11445,7 @@ const enToolView = {
     },
   },
 };
+      toolPolicyUnsupportedAuth: 'Codex cannot apply this run’s tool permissions with the selected sign-in method.',
 
 const enTools = {
   common: {
