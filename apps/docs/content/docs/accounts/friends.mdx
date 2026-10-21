@@ -50,6 +50,9 @@ Disconnecting GitHub:
 You have one username on each Account service. Choosing a name, including saving
 the same name again, prevents a later provider connection from replacing it.
 Releasing it also prevents provider auto-fill from silently claiming another.
+When public profiles are enabled in 0.3 development, these Account identity
+operations are available independently of Friends. This does not enable Friends
+or publish a profile.
 
 Availability checks return the normalized spelling and may offer alternatives
 when a name is taken. An alternative is a suggestion, not a reservation: another
@@ -96,6 +99,9 @@ This happens when the user’s GitHub login cannot be used as a unique server us
 
 ### Username policy (when username-based friends are enabled)
 
+Profile-enabled claims in 0.3 development use the same validation policy, even
+when Friends is disabled.
+
 - `FRIENDS_USERNAME_MIN_LEN` (default `3`)
 - `FRIENDS_USERNAME_MAX_LEN` (default `32`)
 - `FRIENDS_USERNAME_REGEX` (default `^[a-z0-9_-]+$`)
@@ -140,15 +146,15 @@ Optional:
 - `POST /v1/friends/add`: send a friend request.
 - `POST /v1/friends/remove`: remove a friend.
 - `GET /v1/friends`: list friends/relationships.
-- `POST /v1/account/username`: claim/update a username (requires auth; available when Friends is enabled and either username-based friends are enabled or GitHub is connected).
+- `POST /v1/account/username`: claim/update a username (requires auth; available when Friends is enabled and either username-based friends are enabled or GitHub is connected). Enabled public profiles also admit this operation in 0.3 development, independently of Friends.
   - Body: `{ "username": "alice" }`
   - Success: `200 { "username": "alice" }`
   - Errors:
-    - `400 { "error": "friends-disabled" }` when Friends is disabled
-    - `400 { "error": "username-disabled" }` when username-based friends are disabled and the user has no GitHub identity
+    - `400 { "error": "friends-disabled" }` when Friends is disabled and public profiles do not admit the operation
+    - `400 { "error": "username-disabled" }` when username-based friends are disabled, the user has no GitHub identity, and public profiles do not admit the operation
     - `400 { "error": "invalid-username" }` when the username fails validation, including a new reserved-name claim in 0.3 development
     - `409 { "error": "username-taken" }` when the username is already in use or under a release hold in 0.3 development
-- In 0.3 development, `POST /v1/account/username/check` checks availability without reserving a name, and `POST /v1/account/username/release` explicitly releases the current name. Both require authentication and the same Friends/identity eligibility as username editing.
+- In 0.3 development, `POST /v1/account/username/check` checks availability without reserving a name, and `POST /v1/account/username/release` explicitly releases the current name. Both require authentication and the same admission as username editing, including profile-enabled admission independently of Friends.
 
 ## Related
 

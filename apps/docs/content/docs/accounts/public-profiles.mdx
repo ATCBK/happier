@@ -14,11 +14,15 @@ to your Account.
 
 ## Current status
 
-Typed publication storage, lifecycle and report configuration are present in
-development source. The eligible-fact builder, public rendering and complete
-host preparation still need integration. There are no publication setup steps
-to follow yet. Creating a username or enabling Friends does not publish a profile;
-the same username is intended to serve both features on that Account service.
+Development source includes eligible-fact preparation in the app and CLI,
+publication storage, report configuration and anonymous delivery. Supporting
+servers advertise the capability by default, with an operator opt-out;
+see [feature availability](/extras/feature-flags). The complete owner workflow,
+applied-image HTML header and loaded-runtime validation remain unfinished, so
+there are no publication setup steps to follow yet. Creating a username or
+enabling Friends does not publish a profile. Profiles and Friends use the same
+username on that Account service; profile-enabled username operations do not
+require Friends to be enabled.
 Existing [Session sharing](/accounts/session-sharing) remains a separate flow.
 
 ## Consent and private drafts
@@ -54,21 +58,23 @@ Look, library or plugin changes must not alter the applied image.
 ## Sharing and withdrawal
 
 Existing private recap images keep their seven styles and three formats.
-Public link, badge and card support are not available as a complete workflow.
+Development delivery includes HTML and JSON, SVG badges, SVG or PNG cards and
+PNG social previews; these are not yet available as a complete user workflow.
 Development-only native daemon wiring checks for facts-only refresh after 24
-hours, but data preparation and publication integration remain incomplete.
+hours. Preparation is connected, but the complete publication and refresh
+journey remains unverified.
 It requires the refresh Action to be Allowed specifically for CLI; permission
 on another surface does not authorize unattended refresh. Producing a snippet
 is separate from actually copying it.
 
-The planned lifecycle distinguishes pause, unpublish and username release.
+The development lifecycle distinguishes pause, unpublish and username release.
 Unpublish keeps the username and private drafts; explicit release applies the
 30-day hold described in
 [Friends](/accounts/friends#choosing-or-releasing-a-username-03-development).
 
-The intended origin-revocation flow must check current policy and state before
-serving content. Copies already downloaded, pasted into a README, proxied or
-unfurled elsewhere cannot be recalled. The planned noindex default is a crawler
+Development server reads check current policy and state before serving content
+or accepting a cached-response validator. Copies already downloaded, pasted into
+a README, proxied or unfurled elsewhere cannot be recalled. The noindex default is a crawler
 instruction, not a secrecy guarantee.
 
 Report is intended to open this service's operator contact, without submitting
