@@ -11724,6 +11724,10 @@ const ACTION_SPECS_WITHOUT_APPROVAL_SUFFIX = Object.freeze(defineActionSpecs([
     },
     outputSchema: PetChooseResultV1Schema,
     inputSchema: PetChooseInputV1Schema,
+    // Empty input is the chooser navigation; a typed selection reads from the spec description.
+    approvalPresentation: { summary: (input: unknown) => (
+      input !== null && typeof input === 'object' && Object.keys(input).length === 0 ? 'Open pet settings.' : null
+    ) },
   },
   {
     id: 'ui.voice_agent.teleport', approval: {result: 'optional',flow: 'deferred'},
