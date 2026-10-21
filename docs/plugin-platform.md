@@ -2613,7 +2613,7 @@ supply indexing when selected in daemon-local Search settings. A declaration
 alone creates neither an index nor user consent. Per-source readiness is a
 worker projection, and native windows resolve through `pageTranscript`.
 
-In 0.3 development, observation reconciliation may receive the host's optional
+In 0.3 development, observation reconciliation and transcript reads may receive the host's optional
 `observation: { lifetime, changedFiles? }` read hint. The lifetime ends with the
 physical observation demand, separately from each invocation's cancellation.
 An omitted file list requires full native freshness checks; an empty list means
@@ -2621,6 +2621,11 @@ the host's attached directory observation has reported no changes. Plugins may
 ignore the hint and perform those checks. It grants no path or Session authority.
 Codex retains directory, filename and stripped metadata facts only for that demand,
 invalidates named writes and structural changes, and releases them on retirement.
+Transcript refreshes reuse that same demanded inventory instead of reopening
+unrelated rollout heads. Without a dirty-file hint they still revalidate native
+file versions. Memory ingestion receives the same physical observation lifetime
+from its accounting demand; retiring the demand releases its facts. Calls without
+observation demand use fresh discovery.
 Source-wide file consumers share the existing directory attachments for content
 delivery; exact-file observation remains for paths outside those admitted trees.
 
