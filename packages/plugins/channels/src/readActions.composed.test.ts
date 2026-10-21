@@ -124,6 +124,10 @@ describe('registered Channels Account read Actions', () => {
           conflict: { kind: 'occurrenceEvidenceMismatch' }, matchedBindings: [] } };
       expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema), census)).toBe(true);
       await state.put(census, { expectedRevision: 'absent' });
+      expect(await kit.invokeAction('connection/list-v1', {}, { surface: 'agent' })).toMatchObject({ connections: [{
+        recommendedRecovery: { action: { pluginId: 'happier.channels', localId: 'connection/poll-retry-v1' },
+          input: { connectionId: 'connection-1', expectedRevision: 1, authorityEpoch: 1 }, reason: 'occurrenceEvidenceMismatch' },
+      }] });
       const ingress = await kit.invokeAction('ingress/attention-v1', { limit: 1 }, { surface: 'agent' });
       expect(ingress)
         .toMatchObject({ obligations: [{ kind: 'occurrenceConflict', censusId, connectionId: 'connection-1', revision: 1 }] });

@@ -2513,6 +2513,7 @@ async function markIngressCensusOccurrenceConflict(input: Readonly<{
   census: Readonly<{ row: StateRow; value: IngressCensusRecord }>;
 }>): Promise<void> {
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
+  await logIngressEvidenceDifferences(input);
   const shell = ingressShell(input.entry.observation);
   let connection = input.connection;
   let census = input.census;
@@ -2574,6 +2575,46 @@ async function markIngressCensusOccurrenceConflict(input: Readonly<{
     connection = rereadConnection;
     census = rereadCensus;
   }
+}
+
+/** Closed ingress schemas supply field names; Event payloads remain opaque. */
+async function logIngressEvidenceDifferences(input: Readonly<{
+  context: PluginInvocationContext;
+  entry: ConversationIngressObservedEntryV1;
+  connection: Readonly<{ value: ChannelConnectionRecord }>;
+  census: Readonly<{ value: IngressCensusRecord }>;
+}>): Promise<void> {
+  function fields(path: string, left: JsonValue | undefined, right: JsonValue | undefined): string[] {
+    if (left !== undefined && right !== undefined && pluginJsonValuesEqual(left, right)) return [];
+    if (Array.isArray(left) && Array.isArray(right)) {
+      return Array.from({ length: Math.max(left.length, right.length) }, (_, index) => (
+        fields(`${path}[${index}]`, left[index], right[index])
+      )).flat();
+    }
+    if (left !== undefined && right !== undefined && isJsonRecord(left) && isJsonRecord(right)) {
+      return [...new Set([...Object.keys(left), ...Object.keys(right)])].sort().flatMap(key => (
+        fields(`${path}.${key}`, left[key], right[key])
+      ));
+    }
+    return [path];
+  }
+  const census = input.census.value.payload;
+  const normalized = normalizedIngressDiscriminant(input.entry.observation);
+  const differingFields = census.compacted === null
+    ? fields('normalizedIngress', ingressReplayEvidence(census.normalizedIngress), ingressReplayEvidence(normalized))
+    : fields('compacted.shell', census.compacted.shell, ingressShell(normalized));
+  if (census.compacted === null) {
+    if (!pluginJsonValuesEqual(census.eventCandidate, input.entry.eventCandidate)) differingFields.push('eventCandidate');
+  } else if (normalized.kind === 'fullText' && await deriveIngressCensusReplayDigest({
+    routingIdentityKey: input.connection.value.payload.routingIdentityKey,
+    text: normalized.observation.message.text,
+    attachments: normalized.observation.message.attachments,
+    eventCandidate: input.entry.eventCandidate,
+  }) !== census.compacted.replayDigest) differingFields.push('compacted.replayDigest');
+  input.context.services.logger.warn('[Channels] ingress occurrence evidence differs', {
+    code: 'channels_ingress_occurrence_conflict',
+    connectionId: input.connection.value.id, censusId: input.census.value.id, differingFields,
+  });
 }
 
 /**
@@ -7645,6 +7686,7 @@ function isEligibleCheckpointedPollConnection(
 async function readEligibleCheckpointedPollConnection(input: Readonly<{
   context: PluginInvocationContext;
   connectionId: string;
+  revalidateOccurrenceConflict?: Readonly<{ configurationRevision: number; authorityEpoch: number }>;
 }>): Promise<Readonly<{ row: StateRow; value: ChannelConnectionRecord }> | undefined> {
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
   const raw = await collection.get(input.connectionId, { signal: input.context.signal });
@@ -7658,6 +7700,11 @@ async function readEligibleCheckpointedPollConnection(input: Readonly<{
     );
   }
   if (!isEligibleCheckpointedPollConnection(connection)) return undefined;
+  const revalidation = input.revalidateOccurrenceConflict;
+  if (revalidation !== undefined && (
+    connection.value.payload.configurationRevision !== revalidation.configurationRevision
+    || connection.value.payload.authorityEpoch !== revalidation.authorityEpoch
+  )) return undefined;
 
   const conflict = await readConversationIngressConflictCensus({
     context: input.context,
@@ -7669,9 +7716,61 @@ async function readEligibleCheckpointedPollConnection(input: Readonly<{
       'The retained Channel conflict index row is not a canonical ingress census conflict.',
     );
   }
-  return conflict === undefined
+  return conflict === undefined || revalidation !== undefined
     ? connection
     : undefined;
+}
+
+/** The existing approved poll retry may re-observe a conflict, never adopt it. */
+export async function revalidateConversationIngressConflictForInvocation(input: Readonly<{
+  connectionId: string;
+  expectedRevision: number;
+  authorityEpoch: number;
+}>, context: PluginInvocationContext): Promise<void> {
+  const conflict = await readConversationIngressConflictCensus({ context, connectionId: input.connectionId });
+  if (conflict === undefined) return;
+  if (conflict === 'invalid') throw pluginError('channels_ingress_conflict_invalid', 'The retained conflict is not a canonical census.');
+  await runConversationCheckpointedPollForInvocation({ connectionId: input.connectionId, waitMs: 0,
+    revalidateOccurrenceConflict: { configurationRevision: input.expectedRevision, authorityEpoch: input.authorityEpoch },
+  }, context);
+}
+
+async function revalidateCheckpointedPollConflicts(input: Readonly<{
+  context: PluginInvocationContext;
+  connection: Readonly<{ row: StateRow; value: ChannelConnectionRecord }>;
+  observations: readonly ConversationIngressObservedEntryV1[];
+}>): Promise<void> {
+  const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
+  while (true) {
+    const page = await collection.query({ index: CHANNEL_STATE_INDEX_ID.byConnectionBindingV2,
+      prefix: [input.connection.value.id, null, CHANNEL_STATE_RECORD_KIND.ingressCensus, true],
+      order: 'asc', limit: 1,
+    }, { signal: input.context.signal });
+    if (page.rows.length === 0) return;
+    const census = asIngressCensus(readStateRow(page.rows[0]) ?? null);
+    if (census === undefined || census.value.payload.conflict?.kind !== 'occurrenceEvidenceMismatch') {
+      throw pluginError('channels_ingress_conflict_invalid', 'The retained conflict is not a canonical census.');
+    }
+    const entry = input.observations.find(candidate => (
+      ingressShell(candidate.observation).occurrenceId === censusIngressShell(census.value.payload).occurrenceId
+    ));
+    if (entry === undefined
+      || entry.observation.kind !== (census.value.payload.normalizedIngress?.kind ?? 'fullText')
+      || !await matchesIngressCensus({ census: census.value.payload,
+        routingIdentityKey: input.connection.value.payload.routingIdentityKey, entry,
+      })) {
+      if (entry !== undefined) await logIngressEvidenceDifferences({ ...input, census, entry });
+      throw pluginError('channels_ingress_occurrence_conflict', 'The provider has not re-presented matching immutable ingress evidence.');
+    }
+    const cleared = await collection.batch([
+      { kind: 'assert', rowId: input.connection.row.rowId, expectedRevision: input.connection.row.revision },
+      { kind: 'put', expectedRevision: census.row.revision, value: {
+        ...census.value, [CHANNEL_STATE_FIELD.attention]: false, [CHANNEL_STATE_FIELD.updatedAt]: Date.now(),
+        payload: { ...census.value.payload, conflict: null },
+      } },
+    ], { signal: input.context.signal });
+    if (cleared.status === 'conflict') throw pluginError('channels_ingress_stale_authority', 'The exact conflict changed before revalidation committed.', true);
+  }
 }
 
 function createCurrentCheckpointedPollInput(input: Readonly<{
@@ -7897,13 +7996,16 @@ async function readCheckpointedPollBindings(input: Readonly<{
 export async function runConversationCheckpointedPollForInvocation(input: Readonly<{
   connectionId: string;
   waitMs?: number;
+  revalidateOccurrenceConflict?: Readonly<{ configurationRevision: number; authorityEpoch: number }>;
 }>, context: PluginInvocationContext, pairing?: ConversationPairingManager): Promise<ConversationCheckpointedPollRunResult> {
   const waitMs = input.waitMs ?? MAX_CONVERSATION_RECEIVE_WAIT_MS;
   if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > MAX_CONVERSATION_RECEIVE_WAIT_MS) {
     throw new Error('Checkpointed poll wait must be a bounded non-negative safe integer.');
   }
   assertNotAborted(context.signal);
-  const connection = await readEligibleCheckpointedPollConnection({ context, connectionId: input.connectionId });
+  const eligibility = { context, connectionId: input.connectionId,
+    ...(input.revalidateOccurrenceConflict === undefined ? {} : { revalidateOccurrenceConflict: input.revalidateOccurrenceConflict }) };
+  const connection = await readEligibleCheckpointedPollConnection(eligibility);
   if (connection === undefined) {
     await confirmConversationCheckpointedPollStopForInvocation({ connectionId: input.connectionId }, context);
     return { kind: 'ineligible' };
@@ -7988,7 +8090,7 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
   // The host has already enforced the route around this invocation. The
   // Account reread independently proves that the captured row is still current
   // before the poll result may be applied.
-  let current = await readEligibleCheckpointedPollConnection({ context, connectionId: input.connectionId });
+  let current = await readEligibleCheckpointedPollConnection(eligibility);
   if (
     current === undefined
     || current.row.revision !== connection.row.revision
@@ -8040,10 +8142,7 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
       return { kind: 'ineligible' };
     }
     if (transferSettlement.kind === 'settled') {
-      const settledCurrent = await readEligibleCheckpointedPollConnection({
-        context,
-        connectionId: input.connectionId,
-      });
+      const settledCurrent = await readEligibleCheckpointedPollConnection(eligibility);
       if (
         settledCurrent === undefined
         || settledCurrent.row.revision !== transferSettlement.revision

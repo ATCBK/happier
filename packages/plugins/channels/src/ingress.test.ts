@@ -1224,6 +1224,7 @@ function createIngressHarness(options: IngressHarnessOptions = {}) {
 
   // The fixture supplies only genuine host boundaries: Account collection and Session admission.
   const services = {
+    logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     storage: { account: { collection: () => collection } },
     actions: { execute, executeAdmittedTargetedOperationWithExecutionOrigin },
     targetedContributions: targetedTelegramPollContribution(options.readAdmittedProviderContributions),
@@ -7978,6 +7979,61 @@ describe('Conversation checkpointed-poll ingress', () => {
     expect(providerCalls).toBe(1);
     expect(currentCheckpoint(harness.rows)).toEqual(checkpointBefore);
     expect(harness.rows.get(conflicted.rowId)).toEqual(conflicted);
+  });
+
+  it.each(['matching', 'changed', 'absent'] as const)('revalidates a latched occurrence through the exact poll retry Action: %s evidence', async (evidence) => {
+    const original = observation({ messageRevision: 'revalidate:1', occurrenceId: 'telegram:update:revalidate', messageText: 'private original body' });
+    const changed = observation({ messageRevision: 'revalidate:1', occurrenceId: 'telegram:update:revalidate',
+      occurredAt: fullTextIngress(original).occurredAt, messageText: 'private changed body' });
+    let pollCalls = 0;
+    const harness = createIngressHarness({ pollExecution: (): JsonValue => {
+      pollCalls += 1;
+      return pollCalls === 1 || evidence === 'absent'
+        ? { kind: 'checkpointOnly', checkpointAfterBatch: { cursor: 'baseline' } }
+        : { kind: 'batch', observations: [(evidence === 'matching' ? original : changed).entry],
+          checkpointAfterBatch: { cursor: 'recovered' } };
+    } });
+    await runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context);
+    await ingestConversationProviderObservationForInvocation(original, harness.context);
+    await expect(ingestConversationProviderObservationForInvocation(changed, harness.context))
+      .rejects.toMatchObject({ code: 'channels_ingress_occurrence_conflict' });
+    const census = [...harness.rows.values()].find(row => row.value['record-kind'] === 'ingress-census');
+    if (census === undefined) throw new Error('Expected retained conflicting census.');
+    const checkpointBefore = currentCheckpoint(harness.rows);
+    const kit = await createPluginTestkit({ manifest: PLUGIN_MANIFEST, module: CHANNELS_PLUGIN,
+      services: harness.context.services });
+    try {
+      const retry = kit.invokeAction('connection/poll-retry-v1', { connectionId: 'connection-1', expectedRevision: 1,
+        authorityEpoch: channelConnection().payload.authorityEpoch }, { surface: 'agent' });
+      if (evidence === 'matching') {
+        await expect(retry).resolves.toMatchObject({ kind: 'retryScheduled' });
+        expect(harness.rows.get(census.rowId)?.value).toMatchObject({ attention: false, payload: { conflict: null } });
+        expect(currentCheckpoint(harness.rows)?.value).toMatchObject({ payload: { opaqueToken: { cursor: 'recovered' } } });
+        expect(harness.send).toHaveBeenCalledOnce();
+        expect(harness.rows.get('binding-1')).toBeDefined();
+      } else {
+        await expect(retry).rejects.toMatchObject({ code: 'channels_ingress_occurrence_conflict' });
+        expect(harness.rows.get(census.rowId)).toEqual(census);
+        expect(currentCheckpoint(harness.rows)).toEqual(checkpointBefore);
+        expect(harness.send).toHaveBeenCalledOnce();
+      }
+      expect(pollCalls).toBe(2);
+    } finally { await kit.dispose(); }
+  });
+
+  it('logs only canonical evidence field paths for an occurrence mismatch', async () => {
+    const original = observation({ messageRevision: 'diagnostic:1', messageText: 'private original body' });
+    const harness = createIngressHarness();
+    await ingestConversationProviderObservationForInvocation(original, harness.context);
+    await expect(ingestConversationProviderObservationForInvocation(observation({ messageRevision: 'diagnostic:1',
+      occurredAt: fullTextIngress(original).occurredAt, messageText: 'private changed body' }), harness.context))
+      .rejects.toMatchObject({ code: 'channels_ingress_occurrence_conflict' });
+    expect(harness.context.services.logger.warn).toHaveBeenCalledWith('[Channels] ingress occurrence evidence differs', {
+      code: 'channels_ingress_occurrence_conflict',
+      connectionId: 'connection-1', censusId: expect.any(String),
+      differingFields: ['normalizedIngress.observation.message.text'],
+    });
+    expect(JSON.stringify(vi.mocked(harness.context.services.logger.warn).mock.calls)).not.toContain('private');
   });
 
   it('lets a conflict fence win before a pending checkpoint commit without moving checkpoint bytes', async () => {

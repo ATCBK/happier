@@ -189,6 +189,7 @@ import {
   prepareConversationCheckpointTransferFence,
   prepareConversationIngressObligationForConnectionDeletion,
   isConversationSenderConfiguredForEndpoint,
+  revalidateConversationIngressConflictForInvocation,
 } from './ingress.js';
 import {
   resolveConversationOutwardDeliveryCustodyInAccountCollection,
@@ -2731,7 +2732,8 @@ export async function updateConversationConnectionForInvocation(
 /**
  * A failed provider poll can be retried only by the user holding the exact
  * current connection revision and authority epoch. This clears no other
- * lifecycle field and deliberately performs no provider Action. Automatic
+ * lifecycle field. A retained occurrence conflict is re-observed through the
+ * same poll owner and clears only when immutable evidence matches. Automatic
  * backoff may replace a blocked failure while its human approval is pending;
  * that bookkeeping does not invalidate consent for the same connection.
  */
@@ -2763,6 +2765,7 @@ export async function retryConversationConnectionPollForInvocation(
     );
   }
   if (current.lifecycle.pollFailure === null) {
+    await revalidateConversationIngressConflictForInvocation(request, context);
     return { kind: 'retryScheduled', connectionId: request.connectionId, revision: current.configurationRevision, authorityEpoch: request.authorityEpoch };
   }
   const value = withConversationConnectionLifecycle({
@@ -2794,6 +2797,7 @@ export async function retryConversationConnectionPollForInvocation(
     if (isPluginError(cause)) throw cause;
   }
   if (persistedRevision !== undefined) {
+    await revalidateConversationIngressConflictForInvocation(request, context);
     return {
       kind: 'retryScheduled',
       connectionId: request.connectionId,
@@ -2810,6 +2814,7 @@ export async function retryConversationConnectionPollForInvocation(
       && settled.lifecycle.authorityEpoch === request.authorityEpoch
       && settled.lifecycle.pollFailure === null
     ) {
+      await revalidateConversationIngressConflictForInvocation(request, context);
       return {
         kind: 'retryScheduled',
         connectionId: request.connectionId,

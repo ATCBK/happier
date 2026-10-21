@@ -21,8 +21,10 @@ export function recommendConversationConnectionRecovery(row: ConversationConnect
   if (row.deletionState !== 'none') return recommendConversationRecovery(actions.connectionDelete,
     { connectionId: row.connectionId, expectedRevision: row.revision }, 'connectionDeleting',
     row.deletionState === 'finalizingDelete' ? 'cleanupInProgress' : 'transportStopUnconfirmed');
-  if (row.attention.ingressConflict !== null) return recommendConversationRecovery(actions.connectionDelete,
-    { connectionId: row.connectionId, expectedRevision: row.revision }, 'occurrenceEvidenceMismatch');
+  if (row.attention.ingressConflict !== null) return row.selectedTransport === 'checkpointedPull'
+    ? recommendConversationRecovery(actions.connectionPollRetry, exact, 'occurrenceEvidenceMismatch')
+    : recommendConversationRecovery(actions.connectionDelete,
+      { connectionId: row.connectionId, expectedRevision: row.revision }, 'occurrenceEvidenceMismatch');
   if (row.attention.endpointRetargetOwed) return recommendConversationRecovery(actions.connectionTransfer,
     { connectionId: row.connectionId, expectedRevision: row.revision }, 'endpointRetargetOwed', 'setupSelectionRequired');
   if (row.attention.oldTransportStopUnconfirmed && !row.attention.acceptedPossibleLoss) return recommendConversationRecovery(actions.connectionTransfer,
