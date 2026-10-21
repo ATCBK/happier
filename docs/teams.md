@@ -69,6 +69,28 @@ role or roster access. Without `viewRoster`, `counts.groups` and
 `counts.archivedGroups` are `null`; waiting invitations retain their separate
 Team-manager qualification. A denied or inactive viewer receives no counts.
 
+## Brokered Provider credentials
+
+In 0.3 development source, an authorized Team member can use a brokered Provider
+credential held by another Account on the same Home. The member's Machine presents the
+Home-signed Team resource/consumer grant over the native Machine carrier to the
+custodian's Machine. The hub binds the signed custodian, target Machine and
+EndpointId to itself and the initiator EndpointId to the authenticated peer;
+the initiator Account need not equal the custodian Account. Home remains the
+resource, membership and consumer-currentness authority, and the source
+credential stays with its custodian.
+
+Team and Account broker consumers share the endpoint-discovery owner described
+in [Providers](providers.md). For a failed Team launch, read the recipient's
+`[ProviderBroker] Endpoint discovery refused` record for the closed cause,
+discovery duration and grant-refresh outcome, then the custodian's
+`[ProviderBroker] Machine stream admission refused` record for the admission
+class. `broker_refresh_refused` identifies a Home refresh refusal before native
+can reduce it to a socket close. A socket close with an accepted refresh still
+needs hub/transport evidence; a long daemon-service request alone does not
+identify the layer that waited. These diagnostics describe development source,
+not proof that a particular loaded daemon or cross-Account live replay passed.
+
 ## Identity
 
 `Team.id` is opaque and immutable. Names are presentation:
