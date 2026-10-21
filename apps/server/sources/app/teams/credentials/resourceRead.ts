@@ -28,7 +28,7 @@ import {
     listTeamCredentialDirectSourceMembersInTx,
     parsePublishedTeamCredentialSourceVersions,
     projectTeamCredentialDirectSourceCurrentnesses,
-    resolveTeamCredentialDirectSourceCurrentnessInTx,
+    resolveTeamCredentialSourceMemberCurrentnessInTx,
     resolveTeamCredentialResourceSourceInTx,
     resolveTeamCredentialResourceSourcesInTx,
     type TeamCredentialResourceSourceResolution,
@@ -590,7 +590,8 @@ async function readCurrentDirectMaterialReferencesInTx(
     const currentSourceVersions = new Map<string, string | null>();
     if (source !== null) {
         for (const memberKey of currentMembersByKey.keys()) {
-            const currentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+            const currentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+                deliveryMode: 'direct',
                 custodianAccountId: row.custodianAccountId,
                 source,
                 sourceMemberKey: memberKey,

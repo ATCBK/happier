@@ -18,7 +18,7 @@ import {
 } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
 import {
     listTeamCredentialDirectSourceMembersInTx,
-    resolveTeamCredentialDirectSourceCurrentnessInTx,
+    resolveTeamCredentialSourceMemberCurrentnessInTx,
     resolveTeamCredentialResourceSourceInTx,
     resolveTeamCredentialResourceSourcesInTx,
 } from "./resourceSourceResolver";
@@ -268,7 +268,8 @@ describe("Team credential source identity", () => {
             service,
             connectedAccountId: ref.accountId,
         });
-        const resolveCurrentness = () => inTx(tx => resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+        const resolveCurrentness = () => inTx(tx => resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+            deliveryMode: 'direct',
             custodianAccountId: owner.id,
             source,
             sourceMemberKey,
@@ -404,7 +405,8 @@ describe("Team credential source identity", () => {
             service,
             connectedAccountId: ref.accountId,
         });
-        await expect(inTx(tx => resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+        await expect(inTx(tx => resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+            deliveryMode: 'direct',
             custodianAccountId: owner.id,
             source,
             sourceMemberKey: exactPoolMemberKey,

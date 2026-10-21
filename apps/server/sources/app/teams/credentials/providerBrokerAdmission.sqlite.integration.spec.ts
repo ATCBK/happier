@@ -53,6 +53,13 @@ import * as privacyKit from 'privacy-kit';
 import { openAccountConnectionProviderBroker, admitAccountConnectionProviderBroker } from '@/app/providers/providerBrokerAdmission';
 import { verifyProviderBrokerRouteGrantSignatureV1, verifyProviderBrokerRouteGrantSignatureV2 } from '@/app/machines/peer/mediation/signProviderBrokerRouteGrantV1';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { resolveTeamCredentialSourceMemberCurrentnessInTx } from './resourceSourceResolver';
+import {
+    createServiceAccountTokenIdentityFields,
+    createQualifiedConnectedAccountGroupDigest,
+    createQualifiedConnectedAccountServiceDigest,
+    createQualifiedConnectedAccountIdentityDigest,
+} from '@/app/api/routes/connect/qualifiedConnectedAccounts/identity';
 
 const TEST_AUTHENTICATION = {
     env: process.env,
@@ -201,7 +208,7 @@ async function createBrokerFixture(
     const brokerPresence = { state: 'known' as const, machineIds: new Set([broker.id]) };
     type FixtureResource = Readonly<{ id: string; revision: number; sourceBindingJson: string }>;
     const connectionIdOf = (resource: FixtureResource) =>
-        (JSON.parse(resource.sourceBindingJson) as { connectionId: string }).connectionId;
+        (JSON.parse(resource.sourceBindingJson) as { connectionId?: string }).connectionId ?? 'connected-source-projection';
     let requestSequence = 0;
     return {
         requester,
@@ -300,6 +307,7 @@ async function createBrokerFixture(
             requestId: string;
             generation?: boolean;
             modelId?: string;
+            sourceMemberKey?: string;
             resolveExecutionRunCurrentness?: OpenInput['resolveExecutionRunCurrentness'];
         }>) => await admitTeamCredentialProviderBrokerRequest({
             authenticatedBrokerAccountId: custodian.id,
@@ -307,7 +315,7 @@ async function createBrokerFixture(
                 v: 1,
                 authority: input.authority,
                 expectedResourceRevision: input.resource.revision,
-                sourceMemberKey: providerSourceMemberKey(connectionIdOf(input.resource), 'apiKey'),
+                sourceMemberKey: input.sourceMemberKey ?? providerSourceMemberKey(connectionIdOf(input.resource), 'apiKey'),
                 requestId: `${label}-${input.requestId}`,
                 requestFacts: {
                     generation: input.generation ?? false,
@@ -366,6 +374,64 @@ describe('Team credential Provider broker admission', () => {
         });
     }, 180_000);
     afterAll(async () => { await harness?.close(); });
+
+    it.each(['connected_account', 'connected_pool'] as const)(
+        'admits brokered OAuth %s without granting direct export and rejects withdrawn membership',
+        async kind => {
+            const fixture = await createBrokerFixture(`oauth-${kind}`);
+            const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+            const ref = { service, accountId: 'oauth-source' };
+            const credential = await db.serviceAccountToken.create({ data: {
+                accountId: fixture.custodian.id,
+                ...createServiceAccountTokenIdentityFields({ ref, authenticationModeId: 'device' }),
+                token: Buffer.from('private-source-token'),
+                metadata: { v: 4, storage: 'stored_envelope_v1', credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa', values: {} },
+            } });
+            const groupId = 'oauth-pool';
+            const pool = await db.connectedServiceAuthGroup.create({ data: {
+                accountId: fixture.custodian.id, servicePluginId: service.pluginId, serviceLocalId: service.localId,
+                qualifiedServiceDigest: createQualifiedConnectedAccountServiceDigest(service),
+                qualifiedGroupDigest: createQualifiedConnectedAccountGroupDigest({ service, groupId }),
+                groupId, displayName: 'OAuth source pool', policyJson: '{}',
+            } });
+            await db.connectedServiceAuthGroupMember.create({ data: {
+                groupDbId: pool.id, accountId: fixture.custodian.id, credentialId: credential.id,
+                qualifiedServiceDigest: createQualifiedConnectedAccountServiceDigest(service),
+                qualifiedGroupDigest: createQualifiedConnectedAccountGroupDigest({ service, groupId }),
+                qualifiedIdentityDigest: createQualifiedConnectedAccountIdentityDigest(ref), priority: 0, enabled: true,
+            } });
+            const initial = await fixture.createResource(`oauth-${kind}`);
+            const resource = await db.teamCredentialResource.update({ where: { id: initial.id }, data: {
+                sourceBindingJson: JSON.stringify(kind === 'connected_pool'
+                    ? { v: 1, kind, target: { kind: 'group', service, groupId }, poolIncarnation: pool.id }
+                    : { v: 1, kind, target: { kind: 'account', account: ref }, credentialIncarnation: credential.id }),
+            } });
+            const session = await fixture.createSession();
+            await fixture.selectForSession(session.id, resource, TEST_AUTHENTICATION);
+            const opened = await fixture.open({ resource, sessionId: session.id, authentication: TEST_AUTHENTICATION });
+            expect(opened.ok).toBe(true);
+            if (!opened.ok) throw new Error(opened.reasonCode);
+            const sourceMemberKey = computeTeamCredentialSourceMemberKeyV1({
+                kind: 'connected_account', service, connectedAccountId: ref.accountId,
+            });
+            expect(await inTx(tx => resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+                custodianAccountId: fixture.custodian.id, source: JSON.parse(resource.sourceBindingJson),
+                sourceMemberKey, deliveryMode: 'direct',
+            }))).toEqual({ status: 'unavailable', reason: 'unsupported_direct_source' });
+            expect(await fixture.catalog({ resource, authority: opened.authority })).toMatchObject({ ok: true });
+            expect(await fixture.admit({ resource, authority: opened.authority, sourceMemberKey, requestId: 'current' }))
+                .toMatchObject({ ok: true });
+            if (kind === 'connected_pool') {
+                await db.connectedServiceAuthGroupMember.update({
+                    where: { groupDbId_credentialId: { groupDbId: pool.id, credentialId: credential.id } }, data: { enabled: false },
+                });
+            } else {
+                await db.serviceAccountToken.delete({ where: { id: credential.id } });
+            }
+            expect(await fixture.admit({ resource, authority: opened.authority, sourceMemberKey, requestId: 'withdrawn' }))
+                .toMatchObject({ ok: false, reasonCode: kind === 'connected_pool' ? 'resource_changed' : 'resource_unavailable' });
+        },
+    );
 
     it('projects the accepted Team model witness on owner detail even before runner activation', async () => {
         const fixture = await createBrokerFixture('accepted-attach');

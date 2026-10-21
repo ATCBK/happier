@@ -22,7 +22,7 @@ import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracki
 import { resolveTeamCredentialBrokerMachineForOpenInTx } from './brokerMachineEligibility';
 import { resolveTeamCredentialBrokerPlacementInTx, resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';
 import { resolveTeamCredentialEntitlementInTx } from './resourceAccess';
-import { resolveTeamCredentialDirectSourceCurrentnessInTx } from './resourceSourceResolver';
+import { resolveTeamCredentialSourceMemberCurrentnessInTx } from './resourceSourceResolver';
 import { admitTeamCredentialOperationBindingInTx, type TeamCredentialOperationConsumer } from './sessionBinding';
 import { admitTeamCredentialUsageInTx } from './teamCredentialUsageAdmission';
 import { signProviderBrokerRouteGrantV1 } from '@/app/machines/peer/mediation/signProviderBrokerRouteGrantV1';
@@ -1195,7 +1195,8 @@ async function admitTeamCredentialProviderBrokerRequestInTx(
             executionRun,
         });
         if (!authorized.ok) return authorized;
-        const sourceMemberCurrentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+        const sourceMemberCurrentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+            deliveryMode: 'brokered',
             custodianAccountId: grant.target.custodianAccountId,
             source: authorized.source,
             sourceMemberKey: request.sourceMemberKey,
@@ -1244,7 +1245,8 @@ async function admitTeamCredentialProviderBrokerRequestInTx(
         brokerPresence: input.brokerPresence,
     });
     if (!authorized.ok) return authorized;
-    const sourceMemberCurrentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+    const sourceMemberCurrentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+        deliveryMode: 'brokered',
         custodianAccountId: grant.target.custodianAccountId,
         source: authorized.source,
         sourceMemberKey: request.sourceMemberKey,

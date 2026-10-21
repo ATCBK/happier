@@ -24,7 +24,7 @@ import { logger } from "@/utils/logging/log";
 
 import { registerTeamCredentialResourceRoutes } from "./registerTeamCredentialResourceRoutes";
 import { projectTeamCredentialResourceSummaryInTx } from "./resourceRead";
-import { resolveTeamCredentialDirectSourceCurrentnessInTx } from "./resourceSourceResolver";
+import { resolveTeamCredentialSourceMemberCurrentnessInTx } from "./resourceSourceResolver";
 import { inTx } from "@/storage/inTx";
 import { recordConnectedServiceAccountProfileChange } from "@/app/api/routes/connect/connectedServicesAccountProfileChange";
 import { TEAM_CHANGE_ENTITY_ID } from "../teamChanges";
@@ -3143,7 +3143,8 @@ describe("Team credential resource routes (SQLite integration)", () => {
         } });
         const sourceMember = { kind: "connected_account" as const, service, connectedAccountId: disclosedAccount.accountId };
         const sourceMemberKey = computeTeamCredentialSourceMemberKeyV1(sourceMember);
-        const currentSource = await inTx((tx) => resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+        const currentSource = await inTx((tx) => resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+            deliveryMode: 'direct',
             custodianAccountId: custodian.id,
             source,
             sourceMemberKey,
@@ -3653,7 +3654,8 @@ describe("Team credential resource routes (SQLite integration)", () => {
         } });
         const sourceMember = { kind: "connected_account" as const, service, connectedAccountId: sourceAccount.accountId };
         const sourceMemberKey = computeTeamCredentialSourceMemberKeyV1(sourceMember);
-        const currentness = await inTx(tx => resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+        const currentness = await inTx(tx => resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+            deliveryMode: 'direct',
             custodianAccountId: custodian.id,
             source: JSON.parse((resource.sourceBindingJson)),
             sourceMemberKey,

@@ -285,13 +285,13 @@ export async function resolveTeamCredentialResourceSourceInTx(
     return projectConnectedPoolSourceResolution(source, current);
 }
 
-export type TeamCredentialDirectSourceCurrentness =
+export type TeamCredentialSourceMemberCurrentness =
     | Readonly<{
         status: "current";
         sourceMember: TeamCredentialSourceMemberV1;
         sourceCredentialIncarnation: string | null;
         sourceVersion: string | null;
-        directExportSupport: "supported";
+        directExportSupport: "supported" | "unsupported";
     }>
     | Readonly<{ status: "unavailable"; reason: "invalid_source_binding" | "source_missing" | "source_changed" | "unsupported_direct_source" }>;
 
@@ -299,7 +299,7 @@ export type TeamCredentialDirectSourceCurrentness =
 export function projectTeamCredentialDirectSourceCurrentnesses(
     source: unknown,
     resolution: TeamCredentialResourceSourceResolution | null,
-): readonly Extract<TeamCredentialDirectSourceCurrentness, { status: 'current' }>[] {
+): readonly (Extract<TeamCredentialSourceMemberCurrentness, { status: 'current' }> & { directExportSupport: 'supported' })[] {
     const parsed = TeamCredentialSourceBindingV1Schema.safeParse(source);
     if (!parsed.success || resolution?.status !== 'current') return [];
     const binding = parsed.data;
@@ -391,15 +391,17 @@ export async function listTeamCredentialDirectSourceMembersInTx(
  * supplies only the opaque member incarnation; it never supplies revisions or
  * an authoritative version. Provider Settings remain E2EE and therefore need
  * their separate published-currentness owner rather than being guessed here.
+ * Brokered use requires current membership, not permission to export secrets.
  */
-export async function resolveTeamCredentialDirectSourceCurrentnessInTx(
+export async function resolveTeamCredentialSourceMemberCurrentnessInTx(
     tx: Tx,
     params: Readonly<{
         custodianAccountId: string;
         source: unknown;
         sourceMemberKey: string;
+        deliveryMode: 'direct' | 'brokered';
     }>,
-): Promise<TeamCredentialDirectSourceCurrentness> {
+): Promise<TeamCredentialSourceMemberCurrentness> {
     const parsed = TeamCredentialSourceBindingV1Schema.safeParse(params.source);
     if (!parsed.success) return { status: "unavailable", reason: "invalid_source_binding" };
     const source = parsed.data;
@@ -441,6 +443,10 @@ export async function resolveTeamCredentialDirectSourceCurrentnessInTx(
             current.contributionContractVersion,
         );
         if (current.directExportContract === null || contributionContractVersion === null) {
+            if (params.deliveryMode === 'brokered') return {
+                status: "current", sourceMember, sourceCredentialIncarnation: current.incarnation,
+                sourceVersion: null, directExportSupport: "unsupported",
+            };
             return { status: "unavailable", reason: "unsupported_direct_source" };
         }
         return {
@@ -489,14 +495,18 @@ export async function resolveTeamCredentialDirectSourceCurrentnessInTx(
     const contributionContractVersion = directContributionContractVersion(
         current.contributionContractVersion,
     );
-    if (current.directExportContract === null || contributionContractVersion === null) {
-        return { status: "unavailable", reason: "unsupported_direct_source" };
-    }
     const sourceMember = {
         kind: "connected_account" as const,
         service: ref.service,
         connectedAccountId: ref.accountId,
     };
+    if (current.directExportContract === null || contributionContractVersion === null) {
+        if (params.deliveryMode === 'brokered') return {
+            status: "current", sourceMember, sourceCredentialIncarnation: current.incarnation,
+            sourceVersion: null, directExportSupport: "unsupported",
+        };
+        return { status: "unavailable", reason: "unsupported_direct_source" };
+    }
     return {
         status: "current",
         sourceMember,

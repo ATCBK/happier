@@ -13,7 +13,7 @@ import { qualifyTeamCredentialOperationInTx } from "./resourceRead";
 import {
     parsePublishedTeamCredentialSourceVersions,
     listTeamCredentialDirectSourceMembersInTx,
-    resolveTeamCredentialDirectSourceCurrentnessInTx,
+    resolveTeamCredentialSourceMemberCurrentnessInTx,
     resolveTeamCredentialResourceSourceInTx,
 } from "./resourceSourceResolver";
 import { matchesTeamCredentialRecipientBinding } from "./recipientMaterialCurrentness";
@@ -135,7 +135,8 @@ export async function readTeamCredentialDirectMaterialCensusInTx(
     const memberKeys = members.map(computeTeamCredentialSourceMemberKeyV1);
     const currentSourceVersions = new Map<string, string | null>();
     for (const memberKey of memberKeys) {
-        const currentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+        const currentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+            deliveryMode: 'direct',
             custodianAccountId: resource.custodianAccountId,
             source,
             sourceMemberKey: memberKey,
@@ -310,7 +311,8 @@ export async function prepareTeamCredentialRecipientMaterialInTx(
     if (sourceResolution.status !== "current") {
         return { ok: false as const, reason: sourceResolution.reason === "invalid_source_binding" ? "resource_corrupt" as const : "source_changed" as const };
     }
-    const sourceCurrentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+    const sourceCurrentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+        deliveryMode: 'direct',
         custodianAccountId: resource.custodianAccountId,
         source,
         sourceMemberKey: input.sourceMemberKey,
@@ -459,7 +461,8 @@ export async function readTeamCredentialRecipientMaterialInTx(
     if (!resource.enabled) return { ok: false, reason: "disabled" };
     const source = parseResourceSource(resource.sourceBindingJson);
     if (!source) return { ok: false, reason: "resource_corrupt" };
-    const sourceCurrentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+    const sourceCurrentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+        deliveryMode: 'direct',
         custodianAccountId: resource.custodianAccountId,
         source,
         sourceMemberKey: input.sourceMemberKey,
@@ -635,7 +638,8 @@ export async function readCurrentTeamCredentialRecipientMaterialInTx(
             ? "resource_corrupt" as const
             : "source_changed" as const };
     }
-    const sourceCurrentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+    const sourceCurrentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+        deliveryMode: 'direct',
         custodianAccountId: resource.custodianAccountId,
         source,
         sourceMemberKey,
@@ -770,7 +774,8 @@ export async function upsertTeamCredentialRecipientMaterialInTx(
     if (!isModeCompatible(input.recipientMode, stored)) return { ok: false, reason: "invalid_material" };
     const source = parseResourceSource(resource.sourceBindingJson);
     if (!source) return { ok: false, reason: "resource_corrupt" };
-    const sourceCurrentness = await resolveTeamCredentialDirectSourceCurrentnessInTx(tx, {
+    const sourceCurrentness = await resolveTeamCredentialSourceMemberCurrentnessInTx(tx, {
+        deliveryMode: 'direct',
         custodianAccountId: resource.custodianAccountId,
         source,
         sourceMemberKey: input.sourceMemberKey,
