@@ -1,12 +1,12 @@
 import fastify from 'fastify';
-import axios from 'axios';
 import { describe, expect, it } from 'vitest';
-import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema, normalizePluginReleaseFactsV1, resolvePluginAccountExecutionSelectionV1, computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
+import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema, normalizePluginReleaseFactsV1, computePluginAccountBundledDeclarationDigestV1 } from '@happier-dev/protocol/plugins/availability';
 import type { DaemonPluginStructuredMessageActionMountedBinding } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { deriveMountedPluginInvocationCaller } from './mountedPluginInvocationCaller';
+import { readCurrentAccountPluginExecutionSelection } from '../accountPluginActivationSource';
 
 describe('Account nested Action caller provenance', () => {
     it('uses current Account declaration custody without a Machine occurrence and retires changed or disabled callers', async () => {
@@ -33,11 +33,8 @@ describe('Account nested Action caller provenance', () => {
             const binding = { pluginId, contributionLocalId: 'aggregate', occurrenceId: 'invoking-process-only',
                 sourceCustody: { kind: 'account_release' as const, pluginId, version: manifest.version, archiveDigestSha256 } };
             const registry = { contributes: {} };
-            const resolveAccountExecutionSelection = async (currentPluginId: string) => resolvePluginAccountExecutionSelectionV1({ pluginId: currentPluginId,
-                intentRead: PluginAvailabilityIntentReadActionOutputV1Schema.parse((await axios.post(
-                    `http://account-provenance.test${PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read']}`,
-                    { pluginId: currentPluginId }, { headers: { Authorization: 'Bearer fixture' } },
-                )).data),
+            const resolveAccountExecutionSelection = async (currentPluginId: string) => readCurrentAccountPluginExecutionSelection({ pluginId: currentPluginId,
+                serverUrl: 'http://account-provenance.test', credentials: { token: 'fixture', encryption: null },
                 bundled: { manifest: currentManifest, sourceCustody: { kind: 'bundled_first_party', packagedRuntime: {
                     kind: 'source_declaration', packageName: '@acme/portable', declarationDigest: computePluginAccountBundledDeclarationDigestV1(currentManifest),
                 } }, custodyId: computePluginAccountBundledDeclarationDigestV1(currentManifest) },

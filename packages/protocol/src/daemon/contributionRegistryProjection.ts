@@ -323,8 +323,8 @@ export const DaemonContributionRegistryProjectionDescribeRequestSchema = lazyZod
   }).check(z.superRefine(rejectMismatchedClientPlatforms)),
   z.looseObject({
     ...DaemonContributionRegistryProjectionClientContextV1Shape,
-    /** A roster read needs Agent metadata, not the machine-wide UI catalog. */
-    selection: z.optional(z.literal('agents')),
+    /** Named reads project only the catalog slice required by their caller. */
+    selection: z.optional(z.enum(['agents', 'settings', 'connectedAccountAdmission'])),
   }).check(z.superRefine((value, context) => {
     rejectMismatchedClientPlatforms(value, context);
     if ('skillIds' in value) context.addIssue({ code: 'custom', path: ['skillIds'], message: 'Skill ids require the skills selection' });

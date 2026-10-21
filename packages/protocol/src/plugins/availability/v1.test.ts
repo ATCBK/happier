@@ -87,6 +87,20 @@ describe('Plugin Account availability v1', () => {
     expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: {
       ...read, intent: { ...read.intent!, desiredVersion: '2.0.0' },
     }, bundled })).toEqual({ kind: 'unavailable', code: 'plugin_release_unavailable' });
+    const release = normalizePluginReleaseFactsV1({
+      ref: { pluginId: bundled.manifest.id, version: bundled.manifest.version },
+      archiveDigestSha256: `sha256:${'a'.repeat(64)}`, normalizedManifest: bundled.manifest,
+      collectionContracts: [], uiSlots: [], packageAssetArchive: packageAssetArchive(),
+    });
+    const selectedRead = { ...read, release, intent: { ...read.intent!, desiredVersion: release.ref.version } };
+    const account = availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id, intentRead: selectedRead, bundled });
+    expect(account.kind).toBe('available');
+    if (account.kind !== 'available') throw new Error('Expected Account release');
+    expect(account.release).toBe(release);
+    expect(account.manifest).toBe(release.normalizedManifest);
+    expect(availability.resolvePluginAccountExecutionSelectionV1({ pluginId: bundled.manifest.id,
+      intentRead: { ...selectedRead, intent: { ...selectedRead.intent, enabled: false } }, bundled,
+    })).toEqual({ kind: 'unavailable', code: 'plugin_disabled' });
   });
   it('compares complete generated compatibility metadata beyond former count and byte cutoffs', () => {
     const entries = Array.from({ length: 129 }, (_, index) => {

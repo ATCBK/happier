@@ -3,7 +3,7 @@ import { computeCanonicalDomainSeparatedHexDigest } from '../../crypto/canonical
 import type { PluginUiArtifactDigestV1 } from '../ui/artifactIntegrity.js';
 import type { PluginSourceCustodyV1 } from '../runtime/sourceCustody.js';
 import type { PluginPortableReleaseManifestV1 } from './compatibilityProjectionV1.js';
-import { normalizePluginReleaseFactsV1, type PluginAccountAvailabilityIntentReadResponseV1, type PluginReleaseFactsV1 } from './v1.js';
+import type { PluginAccountAvailabilityIntentReadResponseV1, PluginReleaseFactsV1 } from './v1.js';
 
 /** Cross-host correspondence of the canonical manifest parser's output,
  * independent of each host's executable bytes. Acquisition/selection already
@@ -17,20 +17,32 @@ export function computePluginAccountBundledDeclarationDigestV1(
   ])}`;
 }
 
-/** Content custody changes for declaration-only edits as well as portable bundle changes. */
-export function computePluginAccountBundledCustodyIdV1(input: Readonly<{
+type PluginAccountBundledCustodyInput = Readonly<{
   packageName: string;
   manifest: PluginPortableReleaseManifestV1;
   artifacts: readonly Readonly<{ artifactId: string; digest: PluginUiArtifactDigestV1 }>[];
-}>): string {
-  return computeCanonicalDomainSeparatedHexDigest('happier.plugin.account.bundled-custody.v1', [
+}>;
+
+/** One immutable declaration acquisition supplies both content correspondence and custody. */
+export function computePluginAccountBundledCustodyV1(input: PluginAccountBundledCustodyInput): Readonly<{
+  declarationDigest: `sha256:${string}`;
+  custodyId: string;
+}> {
+  const declarationDigest = computePluginAccountBundledDeclarationDigestV1(input.manifest);
+  const custodyId = computeCanonicalDomainSeparatedHexDigest('happier.plugin.account.bundled-custody.v1', [
     createCanonicalJsonSigningInput({ packageName: input.packageName,
-      declarationDigest: computePluginAccountBundledDeclarationDigestV1(input.manifest),
+      declarationDigest,
       artifacts: input.artifacts.map(({ artifactId, digest }) => ({ artifactId, digest }))
         .sort((left, right) => left.artifactId.localeCompare(right.artifactId)
         || left.digest.localeCompare(right.digest)),
     }),
   ]);
+  return Object.freeze({ declarationDigest, custodyId });
+}
+
+/** Content custody changes for declaration-only edits as well as portable bundle changes. */
+export function computePluginAccountBundledCustodyIdV1(input: PluginAccountBundledCustodyInput): string {
+  return computePluginAccountBundledCustodyV1(input).custodyId;
 }
 
 export type PluginAccountExecutionSelectionV1 =
@@ -47,8 +59,9 @@ export type PluginAccountExecutionSelectionV1 =
     }>;
 
 /**
- * One Account selection policy for invoking hosts. Callers prove the captured
- * Account read is loaded; this owner never treats a Machine occurrence as custody.
+ * One Account selection policy for invoking hosts. Acquisition validates and
+ * snapshots canonical release facts; callers prove the captured Account read is
+ * loaded. This policy runs afresh without repeating that immutable acquisition.
  */
 export function resolvePluginAccountExecutionSelectionV1(input: Readonly<{
   pluginId: string;
@@ -69,13 +82,12 @@ export function resolvePluginAccountExecutionSelectionV1(input: Readonly<{
     if (!release || release.ref.pluginId !== input.pluginId || release.ref.version !== intent.desiredVersion) {
       return { kind: 'unavailable', code: 'plugin_release_unavailable' };
     }
-    const normalized = normalizePluginReleaseFactsV1(release);
     const sourceCustody: PluginSourceCustodyV1 = Object.freeze({
-      kind: 'account_release', pluginId: normalized.ref.pluginId,
-      version: normalized.ref.version, archiveDigestSha256: normalized.archiveDigestSha256,
+      kind: 'account_release', pluginId: release.ref.pluginId,
+      version: release.ref.version, archiveDigestSha256: release.archiveDigestSha256,
     });
-    return Object.freeze({ kind: 'available', manifest: normalized.normalizedManifest,
-      sourceCustody, custodyId: createCanonicalJsonSigningInput(sourceCustody), release: normalized });
+    return Object.freeze({ kind: 'available', manifest: release.normalizedManifest,
+      sourceCustody, custodyId: createCanonicalJsonSigningInput(sourceCustody), release });
   }
   if (!input.bundled || input.bundled.manifest.id !== input.pluginId
     || input.bundled.sourceCustody.kind !== 'bundled_first_party' || !input.bundled.custodyId.trim()) {

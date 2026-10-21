@@ -61,20 +61,9 @@ describe('bundled daemon contribution describe cost', () => {
                 resolveServerFeaturesSnapshot: async () => { serverFeatureReads += 1; return undefined; },
             });
             const handler = handlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)!;
-            const full = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
-                machineId: 'test-machine', locale: 'fr-FR',
-            }));
-            const selected = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({ machineId: 'test-machine', selection: 'agents' }));
-            expect(serverFeatureReads).toBeGreaterThan(0);
-            expect(installedPackageReads).toBeGreaterThan(0);
-            expect(executionOriginContextReads).toBeGreaterThan(0);
-            serverFeatureReads = 0;
-            installedPackageReads = 0;
-            executionOriginContextReads = 0;
             const settings = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
                 machineId: 'test-machine', locale: 'fr-FR', selection: 'settings',
             }));
-            expect(settings.projection.settingsById).toEqual(full.projection.settingsById);
             expect(settings.projection).toMatchObject({ installedPackagesById: {}, agentsById: {}, actionsById: {},
                 toolsById: {}, commandsById: {}, resourcesById: {}, familiesById: {}, diagnostics: [] });
             expect(settings.automationEligibleEvents).toBeUndefined();
@@ -85,6 +74,23 @@ describe('bundled daemon contribution describe cost', () => {
             const admission = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
                 machineId: 'test-machine', locale: 'fr-FR', selection: 'connectedAccountAdmission',
             }));
+            expect(admission.projection).toMatchObject({ agentsById: {}, toolsById: {}, commandsById: {}, settingsById: {}, diagnostics: [] });
+            expect(admission.automationEligibleEvents).toBeUndefined();
+            expect(admission.composerSurfaceCatalog).toBeUndefined();
+            expect(serverFeatureReads).toBe(0);
+            expect(installedPackageReads).toBe(1);
+            expect(executionOriginContextReads).toBe(1);
+            serverFeatureReads = 0;
+            installedPackageReads = 0;
+            executionOriginContextReads = 0;
+            const full = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({
+                machineId: 'test-machine', locale: 'fr-FR',
+            }));
+            const selected = DaemonContributionRegistryProjectionDescribeResponseSchema.parse(await handler({ machineId: 'test-machine', selection: 'agents' }));
+            expect(serverFeatureReads).toBeGreaterThan(0);
+            expect(installedPackageReads).toBeGreaterThan(0);
+            expect(executionOriginContextReads).toBeGreaterThan(0);
+            expect(settings.projection.settingsById).toEqual(full.projection.settingsById);
             expect(admission.projection.installedPackagesById).toEqual(full.projection.installedPackagesById);
             expect(admission.projection.actionsById).toEqual(full.projection.actionsById);
             expect(admission.projection.resourcesById).toEqual(full.projection.resourcesById);
@@ -92,12 +98,6 @@ describe('bundled daemon contribution describe cost', () => {
                 connectedAccounts: full.projection.familiesById.connectedAccounts,
                 machineProvisioners: full.projection.familiesById.machineProvisioners,
             });
-            expect(admission.projection).toMatchObject({ agentsById: {}, toolsById: {}, commandsById: {}, settingsById: {}, diagnostics: [] });
-            expect(admission.automationEligibleEvents).toBeUndefined();
-            expect(admission.composerSurfaceCatalog).toBeUndefined();
-            expect(serverFeatureReads).toBe(0);
-            expect(installedPackageReads).toBe(1);
-            expect(executionOriginContextReads).toBe(1);
             const byteSize = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
             const families = Object.fromEntries(Object.entries(full.projection).map(([id, value]) => [id, byteSize(value)]));
             console.info(JSON.stringify({ method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,

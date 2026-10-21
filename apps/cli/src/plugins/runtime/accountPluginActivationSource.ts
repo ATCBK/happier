@@ -4,7 +4,7 @@ import axios from 'axios';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentReadActionOutputV1Schema,
     PluginAvailabilityIntentsListActionOutputV1Schema, PLUGIN_ACCOUNT_AVAILABILITY_INTENT_PAGE_SIZE,
-    resolvePluginAccountExecutionSelectionV1, computePluginAccountBundledCustodyIdV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1,
+    resolvePluginAccountExecutionSelectionV1, computePluginAccountBundledCustodyIdV1, isPluginUiReleaseSlotCompatibleWithArtifactLinkV1, normalizePluginReleaseFactsV1,
     type PluginAvailabilityIntentReadActionOutputV1, type PluginAccountExecutionSelectionV1 } from '@happier-dev/protocol/plugins/availability';
 import { createPluginUiArtifactArchiveV1, decodePluginUiArtifactArchiveBodyV1, openPluginUiArtifactArchiveV1,
     type PluginUiArtifactsManifestEntryV2 } from '@happier-dev/protocol/plugins/ui';
@@ -40,20 +40,22 @@ async function postAvailability(input: AccountReadBinding, path: string, body: u
     return response.data;
 }
 
-function assertReadIdentity(pluginId: string, response: PluginAvailabilityIntentReadActionOutputV1): void {
+function snapshotIntentRead(pluginId: string, response: PluginAvailabilityIntentReadActionOutputV1): PluginAvailabilityIntentReadActionOutputV1 {
     if ((response.intent && response.intent.pluginId !== pluginId)
         || (response.release && response.release.ref.pluginId !== pluginId)
         || response.uiArtifacts.some(link => link.release.pluginId !== pluginId)
         || response.packageAssets.some(link => link.release.pluginId !== pluginId)) {
         throw new Error('plugin_account_execution_identity_mismatch');
     }
+    return Object.freeze({ ...response,
+        release: response.release ? normalizePluginReleaseFactsV1(response.release) : null,
+    });
 }
 
 async function readIntent(input: AccountReadBinding & Readonly<{ pluginId: string }>) {
     const response = PluginAvailabilityIntentReadActionOutputV1Schema.parse(await postAvailability(input,
         PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intent.read'], { pluginId: input.pluginId }));
-    assertReadIdentity(input.pluginId, response);
-    return response;
+    return snapshotIntentRead(input.pluginId, response);
 }
 
 /** One strict Account read for provenance consumers; it owns no cache or occurrence. */
@@ -98,9 +100,9 @@ export async function resolveAccountPluginActivationSources(input: AccountPlugin
             }));
         if (!input.isCurrent()) throw new Error('plugin_account_execution_retired');
         for (const entry of page.intentReads) {
-            assertReadIdentity(entry.pluginId, entry.response);
+            const response = snapshotIntentRead(entry.pluginId, entry.response);
             if (reads.has(entry.pluginId)) throw new Error('plugin_account_execution_duplicate_read');
-            reads.set(entry.pluginId, entry.response);
+            reads.set(entry.pluginId, response);
         }
         if (page.nextCursor && cursor && page.nextCursor <= cursor) throw new Error('plugin_account_execution_invalid_cursor');
         cursor = page.nextCursor ?? undefined;

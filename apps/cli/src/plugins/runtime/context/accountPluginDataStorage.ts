@@ -791,7 +791,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                 if (response.status >= 200 && response.status < 300) return response.data;
                 const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
                 if (rollback) {
-                    throw dataError(rollback.code, 'Account Collection transaction rolled back', false, rollback.details);
+                    throw dataError(rollback.code, 'Account Collection transaction rolled back', true, rollback.details);
                 }
                 throw input.parseError(response.data, response.status)
                     ?? (input.kind === 'mutation' ? dataError(
