@@ -18,7 +18,7 @@ describe('Provider Action placement declarations', () => {
           agentTargetKey: input.agentTargetKey, catalogSourceKey: input.catalogSourceKey } }),
       expect.objectContaining({ path: 'agentTargetKey', reference: { kind: 'agent', id: 'codex' } }),
       expect.objectContaining({ path: 'connectionId', reference: { kind: 'providerConnection', id: input.connectionId,
-        catalogSourceKey: input.catalogSourceKey } }),
+        catalogSourceKey: input.catalogSourceKey, agentTargetKey: input.agentTargetKey } }),
     ]));
     expect(rows[0]).toMatchObject({ path: 'modelId' });
   });

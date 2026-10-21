@@ -3,7 +3,7 @@ import { installApprovalCommonModuleMocks } from './approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { renderHook, flushHookEffects } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protocol/teams';
+import { TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams';
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { describeApprovalActionFields } from '@happier-dev/protocol/actions/actionApprovalPresentation';
 import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
@@ -132,25 +132,26 @@ describe('Provider approval reference reading', () => {
         harness.answer(home, `${directory.method} ${directory.path.split('?')[0]}`,
             { body: { items: [teamSummaryFixture({ id: resource.teamId, name: 'Platform' })], nextCursor: null } });
         const catalog = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: resource.teamId });
-        harness.answer(home, `${catalog.method} ${catalog.path.split('?')[0]}`, { body: { resources: [resource] } });
+        harness.answer(home, `${catalog.method} ${catalog.path.split('?')[0]}`, { select: input => {
+            const { application } = TeamCredentialResourceReadInputV1Schema.parse(input);
+            return { body: { resources: [application ? resource : { ...resource, providerModels: [],
+                sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } } }] } };
+        } });
         const fields = describeApprovalActionFields({ actionId, actionArgs: input });
         const connection = fields.rows.find(row => row.path === 'connectionId');
         if (!connection || connection.kind !== 'value') throw new Error('Missing connection');
-        const hook = await renderHook(() => ({
-            title: useApprovalRequestTitle({ storedTitle: null, actionId, actionArgs: input }, home),
-            connection: useApprovalReferenceReading(connection.reference, connection.value, home),
-        }), { flushOptions: { cycles: 25 } });
+        const hook = await renderHook(() => useApprovalReferenceReading(connection.reference, connection.value, home),
+            { flushOptions: { cycles: 25 } });
         await flushHookEffects({ cycles: 25 });
         await vi.waitFor(() => {
-            expect(hook.getCurrent().connection.text).toContain(resource.displayName);
-            expect(hook.getCurrent().connection.text).toContain('Platform');
-            expect(hook.getCurrent().title.title).toContain('GPT-5.6 Luna');
+            expect(hook.getCurrent().text).toBe(`${resource.displayName} · Platform`);
         });
-        expect(hook.getCurrent().title.title).not.toContain('Unavailable');
+        const title = await renderHook(() => useApprovalRequestTitle({ storedTitle: null, actionId, actionArgs: input }, home));
+        await vi.waitFor(() => expect(title.getCurrent().title).toContain('GPT-5.6 Luna'));
         const account = await captureLazyActionAccountContext(home);
         try {
             const reading = await readApprovalReferenceForConfirmation(connection.reference, account);
-            expect(reading.text).toBe(hook.getCurrent().connection.text);
+            expect(reading.text).toBe(hook.getCurrent().text);
         } finally { account.dispose(); }
     });
 });

@@ -118,6 +118,10 @@ and placement are visible, including explicit resets. SavedSecret references
 and public-header values are excluded. Where inputs contain only an identity
 and proposed values, this is a proposed-change summary, not an old/new catalog
 diff or an inferred display name.
+In development source, a model confirmation's connection reference retains its
+Agent target. Team approval readers use that target to demand the application-qualified
+entitled catalog and match the existing opaque confirmation source, displaying
+`Resource name · Team name` without reading the custodian's private connection.
 
 Development approval floors distinguish a display-only connection rename from
 consequential configuration. `providers.connections.update` is safe only for

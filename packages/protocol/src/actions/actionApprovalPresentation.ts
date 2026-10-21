@@ -158,7 +158,7 @@ export type ApprovalActionReference =
   | Readonly<{ kind: 'home'; id: string }>
   | Readonly<{ kind: 'account'; id: string }>
   | Readonly<{ kind: 'setting'; id: string }>
-  | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string; catalogSourceKey?: string }>
+  | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string; catalogSourceKey?: string; agentTargetKey?: string }>
   | Readonly<{ kind: 'providerModel'; id: string; connectionId: string; agentTargetKey: string; catalogSourceKey?: string }>
   | Readonly<{ kind: 'providerContribution'; id: string }>
   | Readonly<{ kind: 'managedMachine'; id: string; homeId: string }>
@@ -242,7 +242,9 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
       ? { catalogSourceKey: input.catalogSourceKey } : {};
     if (field.path === 'connectionId') {
       const name = isRecord(input) && typeof input.displayName === 'string' ? input.displayName.trim() : '';
-      return { kind: 'providerConnection', id: value.trim(), ...catalogSourceKey, ...(name ? { displayName: name } : {}) };
+      const agentTargetKey = isRecord(input) && typeof input.agentTargetKey === 'string' ? input.agentTargetKey : null;
+      return { kind: 'providerConnection', id: value.trim(), ...catalogSourceKey, ...(name ? { displayName: name } : {}),
+        ...(agentTargetKey ? { agentTargetKey } : {}) };
     }
     if (field.path === 'contributionKey') return { kind: 'providerContribution', id: value.trim() };
     if (field.path === 'modelId' && isRecord(input) && typeof input.connectionId === 'string'

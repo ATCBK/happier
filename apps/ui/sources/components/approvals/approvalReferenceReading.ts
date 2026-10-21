@@ -112,6 +112,7 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
         : reference?.kind === 'providerModel' ? reference.connectionId : null;
     const providerCatalog = useProviderCatalogForServer(providerConnectionId ? approvalServerId : null);
     const teamCatalog = useHomeTeamCredentialModelCatalog({ serverId: approvalServerId,
+        agentTargetKey: reference?.kind === 'providerConnection' || reference?.kind === 'providerModel' ? reference.agentTargetKey : null,
         enabled: Boolean(providerConnectionId && !providerCatalog?.data?.connections.some(row => row.id === providerConnectionId)) });
     const declarations = readAccountProviderDeclarations();
     const syncLink = useWorkspaceSyncRelationshipSummary(reference?.kind === 'workspaceSyncRelationship' ? reference.id : null, approvalServerId ?? undefined);
