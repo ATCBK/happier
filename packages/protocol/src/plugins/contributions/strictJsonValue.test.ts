@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  assertStrictPluginJsonValue,
   cloneStrictPluginJsonValue,
   cloneStrictPluginJsonValueWithTraversalLimits,
   measureSerializedStrictPluginJsonUtf8Bytes,
@@ -21,6 +22,30 @@ function serializedUtf8Bytes(value: unknown): number {
 }
 
 describe('cloneStrictPluginJsonValue', () => {
+  it('walks external data once, then reuses its immutable proof through nested boundary checks', () => {
+    const input = { identity: { pluginId: 'acme.count' }, values: [1, 2] };
+    const descriptors = vi.spyOn(Object, 'getOwnPropertyDescriptors');
+    try {
+      const admitted = cloneStrictPluginJsonValue(input, 'external');
+      expect(descriptors.mock.calls.length).toBe(3);
+      descriptors.mockClear();
+      const wrappers: unknown[] = [];
+      for (let index = 0; index < 100; index += 1) {
+        assertStrictPluginJsonValue(admitted, 'verified');
+        wrappers.push(cloneStrictPluginJsonValue({ payload: admitted }, 'wrapper'));
+      }
+      // Only the new untrusted wrapper is visited on each boundary crossing;
+      // the admitted subtree is never walked again (including assertion-only reads).
+      expect(descriptors.mock.calls.length).toBe(100);
+      for (const wrapper of wrappers) expect(Reflect.get(wrapper as object, 'payload')).toBe(admitted);
+      input.values.push(3);
+      const changed = cloneStrictPluginJsonValue(input, 'external');
+      expect(changed).toMatchObject({ values: [1, 2, 3] });
+      expect(admitted).toMatchObject({ values: [1, 2] });
+      console.info('R-C strict JSON admission counts', { initialObjects: 3, admittedRechecks: 100, admittedSubtreeWalks: 0 });
+    } finally { descriptors.mockRestore(); }
+  });
+
   it('reuses only its own deeply frozen snapshots without walking them again', () => {
     const authored = { identity: { pluginId: 'acme.agent', localId: 'review' }, values: [1, 2] };
     const normalized = cloneStrictPluginJsonValue(authored, 'catalog');
