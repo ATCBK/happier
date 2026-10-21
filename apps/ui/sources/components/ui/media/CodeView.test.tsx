@@ -2,7 +2,6 @@ import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
 import { installMediaCommonModuleMocks } from './mediaTestHelpers';
 
 
@@ -22,11 +21,12 @@ const useSettingSpy = vi.fn((key: string): number | null => {
     return null;
 });
 
-installMediaCommonModuleMocks({
-    storage: async () => createStorageModuleStub({
-        useSetting: (key: string) => useSettingSpy(key),
-    }),
-});
+// CodeView reads its setting through the leaf settings read hooks, not the aggregate storage module.
+vi.mock('@/sync/store/settingsReadHooks', () => ({
+    useSetting: (key: string) => useSettingSpy(key),
+}));
+
+installMediaCommonModuleMocks();
 
 describe('CodeView', () => {
     it('renders CodeBlockView with the provided code and language', async () => {

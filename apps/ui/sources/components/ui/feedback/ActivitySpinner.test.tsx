@@ -36,7 +36,7 @@ vi.mock('react-native-unistyles', async () => {
     });
 });
 
-vi.mock('@/sync/store/hooks', async () => {
+vi.mock('@/sync/store/settingsReadHooks', async () => {
     const { createUseLocalSettingMock } = await import('@/dev/testkit/mocks/storage');
     return { useLocalSetting: createUseLocalSettingMock({ values: localSettingValues as Partial<LocalSettings> }) };
 });

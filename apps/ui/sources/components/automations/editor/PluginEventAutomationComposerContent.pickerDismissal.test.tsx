@@ -55,11 +55,16 @@ vi.mock('@/sync/domains/state/storage', async () => {
     });
 });
 
-vi.mock('@/sync/domains/state/storageStore', () => ({
-    getStorage: () => ({
-        getState: () => ({ localSettings: { uiContentWidthMode: 'medium' } }),
-    }),
-}));
+vi.mock('@/sync/domains/state/storageStore', () => {
+    // Shared presentation reads local settings through the leaf `settingsReadHooks`, which calls the
+    // store as a selector hook; the persistent store stays the deterministic boundary.
+    const state = { localSettings: { uiContentWidthMode: 'medium', uiFontScale: 1, uiItemDensity: 'comfortable' } };
+    return {
+        getStorage: () => Object.assign(<T,>(selector: (value: typeof state) => T) => selector(state), {
+            getState: () => state,
+        }),
+    };
+});
 
 vi.mock('@/components/plugins/shared/InstalledPluginBrandMark', () => ({
     InstalledPluginBrandMark: () => null,

@@ -77,6 +77,24 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     });
 });
 
+// Shared presentation reads local settings through the leaf settings read hooks.
+vi.mock('@/sync/store/settingsReadHooks', async (importOriginal) => {
+    const ReactModule = await import('react');
+    return {
+        ...await importOriginal<typeof import('@/sync/store/settingsReadHooks')>(),
+        useLocalSetting: (key: string) => {
+            const mode = ReactModule.useSyncExternalStore(
+                contentWidthSetting.subscribe,
+                () => contentWidthSetting.state.mode,
+                () => contentWidthSetting.state.mode,
+            );
+            if (key === 'uiContentWidthMode') return mode;
+            if (key === 'uiFontScale') return 1;
+            return undefined;
+        },
+    };
+});
+
 vi.mock('@/sync/domains/state/storageStore', () => ({
     getStorage: () => ({
         getState: () => ({ localSettings: { uiContentWidthMode: contentWidthSetting.state.mode } }),

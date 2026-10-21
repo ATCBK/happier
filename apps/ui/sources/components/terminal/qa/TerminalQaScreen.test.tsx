@@ -45,9 +45,18 @@ vi.mock('@/auth/routing/devRoutePolicy', () => ({
 }));
 
 vi.mock('@/sync/domains/state/storage', () => ({
-    useLocalSettingMutable: (key: string) => key === 'terminalRendererPreference'
-        ? [settingState.preference, settingState.setPreference]
-        : [settingState.quarantine, settingState.setQuarantine],
+    useLocalSetting: () => settingState.quarantine,
+    useLocalSettingMutable: () => [settingState.preference, settingState.setPreference],
+}));
+
+vi.mock('@/sync/domains/state/storageStore', () => ({
+    getStorage: () => ({
+        getState: () => ({
+            applyLocalSettings: (delta: { terminalNativeRendererQuarantine?: unknown }) => {
+                settingState.setQuarantine(delta.terminalNativeRendererQuarantine);
+            },
+        }),
+    }),
 }));
 
 vi.mock('@happier-dev/terminal-native', () => ({

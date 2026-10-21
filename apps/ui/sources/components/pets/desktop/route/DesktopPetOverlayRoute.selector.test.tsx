@@ -1256,9 +1256,9 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         expect(screen.findByTestId('desktop-pet-overlay-tray-item-session-close-reply')).not.toBeNull();
         expect(screen.findByTestId('desktop-pet-overlay-tray-reply-input-session-close-reply')).toBeNull();
-        expect(applyLocalSettingsMock).not.toHaveBeenCalledWith(expect.objectContaining({
-            petsDismissedCompanionTrayItemKeys: expect.anything(),
-        }));
+        expect(storage.getState().localSettings.petsDismissedCompanionTrayItemKeys).not.toEqual(expect.arrayContaining([
+            expect.stringContaining('session-close-reply'),
+        ]));
     });
 
     it('keeps quick reply open when activity timestamps refresh for the same session', async () => {
@@ -1354,11 +1354,10 @@ describe('DesktopPetOverlayRoute selectors', () => {
 
         expect(screen.findByTestId(itemTestID)).toBeNull();
         expect(screen.findByTestId('desktop-pet-overlay-context-toggle')).toBeNull();
-        expect(applyLocalSettingsMock).toHaveBeenCalledWith({
-            petsDismissedCompanionTrayItemKeys: expect.arrayContaining([
-                JSON.stringify(['waiting', 'server-pets', 'session-dismiss', '1']),
-            ]),
-        });
+        // Dismissal persists through the store's own local-settings writer, not the Settings-write hook.
+        expect(storage.getState().localSettings.petsDismissedCompanionTrayItemKeys).toEqual(expect.arrayContaining([
+            JSON.stringify(['waiting', 'server-pets', 'session-dismiss', '1']),
+        ]));
     });
 
     it('persists dismissed tray items until the same session has newer activity', async () => {
@@ -1436,7 +1435,9 @@ describe('DesktopPetOverlayRoute selectors', () => {
         expect(input.props.multiline).toBe(true);
         expect(input.props.numberOfLines).toBe(1);
         expect(input.props.onKeyPress).toEqual(expect.any(Function));
-        expect(inputStyle?.outlineStyle).toBe('none');
+        // The shared TextInput owns focus presentation: no outline is drawn on pointer focus.
+        expect(inputStyle?.outlineWidth).toBe(0);
+        expect(inputStyle?.outlineColor).toBe('transparent');
         expect(inputStyle?.resize).toBe('none');
         expect(inputStyle?.overflowY).toBe('hidden');
         expect(inputStyle?.height).toBe(30);
