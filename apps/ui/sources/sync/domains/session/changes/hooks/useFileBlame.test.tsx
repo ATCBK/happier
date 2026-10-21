@@ -108,6 +108,27 @@ describe('useFileBlame', () => {
         expect(blame.mock.calls.map((call) => call[1].expectedHash)).toEqual([input.content!.hash, input.content!.hash]);
     });
 
+    it('reloads identical saved bytes when the canonical SCM revision advances', async () => {
+        const hook = await renderHook(useFileBlame, { initialProps: { ...input, revision: 1 } });
+        blame.mockResolvedValueOnce({ success: true, ranges: [{ startLine: 1, lineCount: 2, commitIndex: 0 }],
+            commits: [{ sha: 'a'.repeat(40), shortSha: 'aaaaaaa', authorName: 'Alex', authoredAtMs: 1, summary: 'Committed' }] });
+        await hook.rerender({ ...input, revision: 2 });
+        expect(hook.getCurrent().runs).toMatchObject([{ kind: 'commit', lineCount: 2 }]);
+    });
+
+    it('refreshes the displayed file before retrying stale blame, without polling a repeated stale result', async () => {
+        const refreshed = createDeferred<void>();
+        const refreshContent = vi.fn(() => refreshed.promise);
+        blame.mockResolvedValue({ success: false, errorCode: 'stale_file', error: 'Changed' });
+        const hook = await renderHook(useFileBlame, { initialProps: { ...input, refreshContent } });
+        expect(refreshContent).toHaveBeenCalledOnce();
+        expect(blame).toHaveBeenCalledOnce();
+        await act(async () => refreshed.resolve());
+        expect(blame).toHaveBeenCalledTimes(2);
+        expect(refreshContent).toHaveBeenCalledOnce();
+        expect(hook.getCurrent().stale).toBe(true);
+    });
+
     it('retains the same saved-file blame while an explicit refresh is pending', async () => {
         const pending = createDeferred<ScmBlameFileResponse>();
         const hook = await renderHook(() => useFileBlame(input));

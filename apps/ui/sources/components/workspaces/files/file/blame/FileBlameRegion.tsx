@@ -8,6 +8,7 @@ import { AgentIcon } from '@/agents/registry/AgentIcon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import type { EditorDecoration, TextEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Popover } from '@/components/ui/popover';
@@ -347,6 +348,10 @@ function BlameCell({
   line: BlameLine | null;
   width: number;
   compact: boolean;
+  revision?: string | number | null;
+  refreshContent?: () => Promise<void>;
+  /** The mounted code editor's existing decoration channel; Markdown rich editing has no gutter. */
+  editor?: TextEditorHandle | null;
   agentId: string | null;
   recency: number;
   active: boolean;
@@ -453,6 +458,7 @@ export type FileBlameRegionInput = Readonly<{
 }>;
 
 export type FileBlameRegion = Readonly<{
+  runs: readonly FileBlameRun[];
   /** Pass to `CodeLinesView renderLeadingLane`; undefined while blame is off. */
   renderLeadingLane: ((line: CodeLine) => React.ReactNode) | undefined;
   /** The run card, mounted once beside the code view. */
@@ -502,6 +508,8 @@ export function useFileBlameRegion(
     readBlame: input.readBlame,
     session,
     labels,
+    revision: input.revision,
+    refreshContent: input.refreshContent,
   });
   const [nowMs] = React.useState(() => Date.now());
   const [openRunId, setOpenRunId] = React.useState<string | null>(null);
@@ -557,6 +565,23 @@ export function useFileBlameRegion(
     setOpenRunId((current) => (current === run.id ? null : run.id));
   }, []);
   const active = input.enabled && input.readBlame && blame.runs.length > 0;
+  const editorDecorations = React.useMemo<readonly EditorDecoration[]>(() => active ? blame.runs.map((run) => ({
+    layer: 'blame', id: `blame:${run.id}`, startLine: run.startLine, lineCount: run.lineCount, runId: run.id,
+  })) : [], [active, blame.runs]);
+  React.useEffect(() => {
+    const editor = input.editor;
+    if (!editor?.setDecorations) return;
+    editor.setDecorations('blame', editorDecorations);
+    return () => editor.setDecorations?.('blame', []);
+  }, [input.editor, editorDecorations]);
+  React.useEffect(() => {
+    if (!active || !input.editor?.onDecorationPress) return;
+    return input.editor.onDecorationPress((layer, decoration) => {
+      if (layer !== 'blame' || !('runId' in decoration)) return;
+      const run = blame.runs.find((entry) => entry.id === decoration.runId);
+      if (run) openRun(run);
+    });
+  }, [active, input.editor, blame.runs, openRun]);
   const renderLeadingLane = React.useMemo(
     () =>
       active
@@ -703,7 +728,7 @@ export function useFileBlameRegion(
         : blame.error
           ? { tone: 'danger', text: t('files.blame.failed') }
           : null;
-  return { renderLeadingLane, card, note, emphasizedLines: open, refresh: blame.refresh };
+  return { runs: blame.runs, renderLeadingLane, card, note, emphasizedLines: open, refresh: blame.refresh };
 }
 
 /** The region's one note above the code (lab BL1 N): quiet, one line, said once. */

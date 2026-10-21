@@ -22,6 +22,10 @@ export type UseFileBlameInput = Readonly<{
     session?: FileBlameSession | null;
     enabled: boolean;
     readBlame: boolean;
+    /** Canonical SCM refresh completion; HEAD can change while file bytes stay identical. */
+    revision?: string | number | null;
+    /** Refresh saved bytes before retrying the Machine's typed stale-file response. */
+    refreshContent?: () => Promise<void>;
     /** The File page supplies its canonical primary-Turn label by identity, never a file-change count. */
     labels: Readonly<{ uncommitted: string; turn: (turnId: string) => string }>;
 }>;
@@ -49,7 +53,7 @@ export function useFileBlame(input: UseFileBlameInput): UseFileBlameResult {
     const resourceKey = active ? JSON.stringify([
         scope?.machineId, scope?.rootPath, scope?.serverId, scope?.accountId, input.path, content?.hash,
     ]) : null;
-    const key = resourceKey ? JSON.stringify([resourceKey, refreshVersion]) : null;
+    const key = resourceKey ? JSON.stringify([resourceKey, refreshVersion, input.revision ?? null]) : null;
     const machineId = scope?.machineId;
     const rootPath = scope?.rootPath;
     const serverId = scope?.serverId;
@@ -109,6 +113,16 @@ export function useFileBlame(input: UseFileBlameInput): UseFileBlameResult {
     const response = currentSnapshot?.response;
     const errorCode = response && !response.success ? response.errorCode ?? null : null;
     const noHistory = errorCode === 'untracked' || errorCode === 'unsupported_path';
+    const stale = errorCode === 'stale_file';
+    const refreshContent = React.useRef(input.refreshContent);
+    refreshContent.current = input.refreshContent;
+    React.useEffect(() => {
+        if (!stale || !refreshContent.current) return;
+        let current = true;
+        void refreshContent.current().then(() => { if (current) refresh(); }, () => {});
+        return () => { current = false; };
+        // A repeated stale result waits for explicit refresh or new saved bytes. It never polls.
+    }, [stale, resourceKey, refresh]);
     const runs = React.useMemo(() => {
         if (!currentSnapshot || !content) return NO_RUNS;
         const blame = currentSnapshot.response;
@@ -123,6 +137,6 @@ export function useFileBlame(input: UseFileBlameInput): UseFileBlameResult {
     return {
         runs, loading: key !== null && currentSnapshot?.key !== key,
         error: response && !response.success && !noHistory ? response.error ?? null : null,
-        errorCode, stale: errorCode === 'stale_file', noHistory, refresh,
+        errorCode, stale, noHistory, refresh,
     };
 }

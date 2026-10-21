@@ -9,6 +9,7 @@ import {
   renderHook,
 } from '@/dev/testkit';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
+import type { TextEditorHandle, CodeEditorHandle } from '@/components/ui/code/editor/codeEditorTypes';
 import {
   BlameCard,
   useFileBlameRegion,
@@ -86,6 +87,21 @@ beforeEach(() => {
 });
 
 describe('useFileBlameRegion', () => {
+  it('binds the same saved-file runs to editor decorations and opens their card on press', async () => {
+    const setDecorations = vi.fn<CodeEditorHandle['setDecorations']>();
+    let press: Parameters<CodeEditorHandle['onDecorationPress']>[0] | undefined;
+    const unsubscribe = vi.fn();
+    const editor: TextEditorHandle = { getValue: () => input.content!.text, flushPendingChange: async () => {},
+      setDecorations, onDecorationPress: (callback) => { press = callback; return unsubscribe; } };
+    const hook = await renderHook(useFileBlameRegion, { initialProps: { ...input, editor } });
+    const decorations = setDecorations.mock.calls.at(-1)?.[1];
+    expect(decorations).toMatchObject([{ layer: 'blame', startLine: 1, lineCount: 2 }, { layer: 'blame', startLine: 3, lineCount: 1 }]);
+    await act(async () => press?.('blame', decorations![0]!));
+    expect(hook.getCurrent().emphasizedLines).toMatchObject({ kind: 'commit', startLine: 1 });
+    await hook.rerender({ ...input, editor, enabled: false });
+    expect(setDecorations).toHaveBeenLastCalledWith('blame', []);
+    expect(unsubscribe).toHaveBeenCalled();
+  });
   it('adds no column and asks nothing while blame is off', async () => {
     const hook = await renderHook(() =>
       useFileBlameRegion({ ...input, enabled: false }),
