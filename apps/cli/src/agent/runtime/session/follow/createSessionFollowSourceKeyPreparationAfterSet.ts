@@ -11,9 +11,20 @@ import { resolveSessionOwningMachineId } from '@/session/services/resolveSession
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { isAuthenticationStatus, readHttpStatus } from '@/api/client/httpStatusError';
 import { logger } from '@/ui/logger';
-import { AccountEncryptionCurrentnessUnavailableError } from '@/api/client/connectedServiceCredentialApi';
 
 import { prepareSessionFollowSourceKey } from './prepareSessionFollowSourceKey';
+
+/** The shared Session transport adapter wraps Account currentness failures; the HTTP status stays on the cause chain. */
+function readCauseChainHttpStatus(error: unknown): number | null {
+  const seen = new Set<unknown>();
+  for (let current = error; current && typeof current === 'object' && !seen.has(current);
+    current = (current as { cause?: unknown }).cause) {
+    seen.add(current);
+    const status = readHttpStatus(current);
+    if (status !== null) return status;
+  }
+  return null;
+}
 
 export type SessionFollowSourceKeyPreparationAfterSet = (input: Readonly<{
   sourceSessionId: string;
@@ -79,7 +90,7 @@ export function createSessionFollowSourceKeyPreparationAfterSet(input: Readonly<
         signal?.throwIfAborted();
         // Keep the typed HTTP cause; never serialize messages, bodies, URLs,
         // request config, headers or arbitrary native error codes.
-        const httpStatus = readHttpStatus(error instanceof AccountEncryptionCurrentnessUnavailableError ? error.cause : error);
+        const httpStatus = readCauseChainHttpStatus(error);
         try {
           logger.warnLocalFile('[Session Follow source-key preparation] Transport refused', {
             cause, httpStatus, errorCode: isAuthenticationStatus(httpStatus) ? 'not_authenticated' : 'transport_exception',
