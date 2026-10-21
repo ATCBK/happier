@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import type { ChildProcess } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -38,20 +39,28 @@ import { SessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBr
 import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
+import { createSpawnHappyCliEnvScope, withTempHappyCliEntrypoint } from '@/testkit/process/spawnHappyCliHarness';
 import { logger } from '@/ui/logger';
 import { executeSpawnSessionRequest } from './executeSpawnSessionRequest';
+import { readOrCreateDeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
 
 // Only process creation is replaced. Production daemon preparation creates
 // the bootstrap/attach files; the admitted external Agent runs in this worker.
-const os = vi.hoisted(() => ({ runner: null as null | ((args: readonly string[], environment: NodeJS.ProcessEnv) => void), pid: 0,
-  child: null as ChildProcess | null }));
-vi.mock('@/utils/spawnHappyCLI', async importOriginal => {
-  const actual = await importOriginal<typeof import('@/utils/spawnHappyCLI')>();
-  const { spawn } = await import('node:child_process');
-  // This is the OS process adapter, not a domain service. Source validation
-  // does not package a separate CLI runtime to replace process creation.
-  return { ...actual, spawnHappyCLI: (...args: Parameters<typeof actual.spawnHappyCLI>) => {
-    if (os.runner && args[0].some(value => value === '--existing-session')) {
+const os = { runner: null as null | ((args: readonly string[], environment: NodeJS.ProcessEnv) => void), pid: 0,
+  child: null as ChildProcess | null,
+  observed: [] as Array<{ executable: string; existingSessionFlag: boolean; argc: number }>,
+};
+function installProcessBoundary(): void {
+  // Node's genuine CJS adapter is mutable; synchronize its named ESM bindings
+  // so source modules loaded outside Vitest's mock graph use the same boundary.
+  const require = createRequire(import.meta.url);
+  const actual: typeof import('node:child_process') = require('node:child_process');
+  const spawn = actual.spawn;
+  vi.spyOn(actual, 'spawn').mockImplementation((...args: Parameters<typeof actual.spawn>) => {
+    if (os.runner) os.observed.push({ executable: String(args[0]).split(/[\\/]/u).at(-1) ?? '',
+      existingSessionFlag: Array.isArray(args[1]) && args[1].includes('--existing-session'),
+      argc: Array.isArray(args[1]) ? args[1].length : 0 });
+    if (os.runner && Array.isArray(args[1]) && args[1].some(value => value === '--existing-session')) {
       // Startup markers validate live OS identity. Keep an owned process at
       // this boundary while the actual Agent runtime executes in this worker.
       const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
@@ -62,13 +71,14 @@ vi.mock('@/utils/spawnHappyCLI', async importOriginal => {
       os.pid = child.pid;
       const run = os.runner;
       os.runner = null;
-      const environment = args[1]?.env ?? {};
-      setImmediate(() => run(args[0], environment));
+      const environment = args[2]?.env ?? {};
+      setImmediate(() => run(args[1] as string[], environment));
       return child;
     }
-    return actual.spawnHappyCLI(...args);
-  } };
-});
+    return spawn(...args);
+  });
+  syncBuiltinESMExports();
+}
 
 // The source integration resolver handles cross-package aliases relative to their owner.
 const server = '../../../../server/sources/';
@@ -97,6 +107,7 @@ afterEach(async () => {
   os.runner = null;
   await closeControlledRunner();
   resetActiveAccountSettingsSnapshotForTests(); vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
 
 describe('Team Pool Session launch through Action/CLI and an external Agent', () => {
@@ -112,8 +123,30 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
   }, 180_000);
   afterAll(async () => { await harness?.close(); });
 
-  it('runs gpt-5.5 with an answer distinct from its prompt through recipient confirmation, CLI/RPC ingress and protected attach', async () => {
+  it('runs gpt-5.5 with an answer distinct from its prompt through recipient confirmation, CLI/RPC ingress and protected attach', async ({ onTestFailed }) => withTempHappyCliEntrypoint(async entrypoint => {
+    let phase = 'setup';
+    let runnerFailure: string | null = null;
+    const answersObserved: string[] = [];
+    const completedIngresses: string[] = [];
+    let readLaunchPhases: () => unknown = () => [];
+    let readLaunchMessages: () => readonly string[] = () => [];
+    onTestFailed(() => { console.error('Team Pool deciding failure', { phase, runnerFailure, answersObserved, completedIngresses,
+      launchPhases: readLaunchPhases(), launchMessages: readLaunchMessages(), os: os.observed }); });
     const surface = 'shared';
+    const launchEnv = createSpawnHappyCliEnvScope();
+    launchEnv.patch({ HAPPIER_CLI_SUBPROCESS_RUNTIME: 'node', HAPPIER_CLI_SUBPROCESS_ENTRYPOINT: entrypoint,
+      HAPPIER_MANAGED_NODE_BIN: process.execPath, HAPPIER_CLI_SUBPROCESS_PREFER_TSX: '0',
+      // The executor may itself be launched by a runtime-backed Stack. That
+      // immutable-closure identity is not this disposable OS fixture's runtime.
+      HAPPIER_CLI_SUBPROCESS_RUNTIME_BACKED: undefined,
+      HAPPIER_CLI_SUBPROCESS_DIST_ENTRYPOINT: undefined,
+      HAPPIER_CLI_SUBPROCESS_DAEMON_DIST_CLOSURE_FINGERPRINT: undefined,
+      HAPPIER_CLI_SUBPROCESS_STACK_RUNTIME_STATE_PATH: undefined,
+      HAPPIER_WINDOWS_SESSION_RUNNER_BINARY: undefined,
+      HAPPIER_STACK_REPO_DIR: undefined,
+      HAPPIER_STACK_CLI_ROOT_DIR: undefined,
+      HAPPIER_STACK_STACK: undefined,
+    });
     const directory = await mkdtemp(join(tmpdir(), 'happier-team-pool-journey-'));
     // The native CLI is an OS boundary: install the same version-only shim
     // used by the managed-gateway composition; no native credential is supplied.
@@ -251,10 +284,14 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         setActiveAccountSettingsSnapshot(recipientSnapshot);
         const api = await ApiClient.create(credentials);
         api.setLocalMachineId(worker.machineId);
+        const deviceLocalSecretStorage = await readOrCreateDeviceLocalSecretStorage({ path: join(directory, 'device-local-key.json') });
+        installProcessBoundary();
         // One process owns its applied registry for both independent ingress cases.
         for (const surface of ['cli', 'rpc'] as const) {
+        phase = `${surface}:launch`;
         const requestStart = requests.length;
         const tracked = new Map<number, import('../types').TrackedSession>();
+        const awaiters = new Map<number, (session: import('../types').TrackedSession) => void>();
         const resolvers = new Map<number, (result: import('@/session/shared/spawnSessionContract').SpawnSessionResult) => void>();
         const timeouts = new Map<number, NodeJS.Timeout>();
         let runner: Promise<void> | undefined;
@@ -263,6 +300,9 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
         const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(41));
         const lifetime = new AbortController();
         os.runner = (args, environment) => { runner = (async () => {
+          phase = `${surface}:startup-custody`;
+          const startup = tracked.get(os.pid);
+          if (!startup || await startup.acceptedSpawnMarkerGate === false) throw new Error('Daemon did not accept startup custody');
           const index = args.indexOf('--existing-session'); sessionId = args[index + 1]!;
           const attachPath = environment.HAPPIER_SESSION_ATTACH_FILE;
           if (!attachPath) throw new Error('Real daemon omitted protected attach');
@@ -275,6 +315,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             completeActivitySnapshot: { state: 'idle', activeCount: 0 } });
           expect(registered, JSON.stringify(registered, (_key, value) => typeof value === 'bigint' ? String(value) : value))
             .toMatchObject({ status: 'registered' });
+          phase = `${surface}:native-plan`;
           const plan = await new SessionHostBridge().createSessionRuntime(worker.agentId, {
             credentials, directory, happyHomeDir: worker.happyHomeDir, existingSessionId: sessionId, sessionAttachFilePath: attachPath,
             backendTarget: { kind: 'agent', identity: { pluginId: 'acme.managed-run', localId: 'agent' } },
@@ -298,6 +339,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
             return opened;
           } });
           const session = createNativeSessionClientTestPort(sessionId);
+          phase = `${surface}:native-runtime`;
           const presentation = createCurrentSessionPresentationHost({ session, signal: lifetime.signal });
           const runtime = await plan.config.createSessionRuntime?.({ directory, metadata: {}, machineId: worker.machineId,
             session, currentSessionPresentation: presentation.bindCurrentSession, transcriptSession: {}, messageBuffer: {},
@@ -312,34 +354,58 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           const events: unknown[] = [];
           const unsubscribe = operations.subscribeRuntimeEvents(event => events.push(event));
           try {
+            phase = `${surface}:native-prompt`;
             await operations.sendTurnPrompt('TEAM_POOL_NATIVE_PROMPT', { turnId: 'team-turn', localId: 'team-input', userMessageSeq: 1 });
             expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', channel: 'assistant', text: 'TEAM_POOL_NATIVE_SENTINEL' }));
+            answersObserved.push(surface);
           } finally {
+            phase = `${surface}:native-close`;
             unsubscribe?.();
             await operations.resetOrDisposeRuntime();
             await presence.closePublisher({ socket: publisherSocket });
           }
           await expect(readFile(attachPath)).rejects.toMatchObject({ code: 'ENOENT' });
-          const timer = timeouts.get(os.pid); if (timer) clearTimeout(timer);
-          resolvers.get(os.pid)?.({ type: 'success', sessionId });
+          phase = `${surface}:webhook`;
+          // The real waiter projects the Home-created settlement already held
+          // by daemon custody; a handwritten success would discard that receipt.
+          const completed = tracked.get(os.pid);
+          const acceptWebhook = awaiters.get(os.pid);
+          if (!completed || !acceptWebhook) throw new Error('Daemon webhook custody is unavailable');
+          acceptWebhook(completed);
         })(); void runner.catch(error => {
+          runnerFailure = String(error);
+          phase = `${surface}:runner-refused`;
           const timer = timeouts.get(os.pid); if (timer) clearTimeout(timer);
           resolvers.get(os.pid)?.({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: String(error) });
         }); };
         const handler = createSpawnNewSessionLifecycleActionHandler({ serverId: configuration.activeServerId,
           spawnSession: options => executeSpawnSessionRequest({ options, credentials, api,
+            deviceLocalSecretStorage,
             activatePurposeBindings: worker.gateway!.purposeBindingOwner.activatePurposeBindings,
             activateSessionPurposeBindings: worker.gateway!.purposeBindingOwner.activateSessionPurposeBindings,
             connectedServicesMaterializationBaseDir: join(directory, 'connected-services'), connectedServiceRefreshCoordinator: null,
             connectedServiceQuotasCoordinator: null, connectedServiceRuntimeRegistry: { registerTarget() {} },
-            pidToTrackedSession: tracked, pidToAwaiter: new Map(), pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts,
+            pidToTrackedSession: tracked, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers, pidToSpawnWebhookTimeout: timeouts,
             spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
             resolveCanonicalTrackedSessionId: pid => tracked.get(pid)?.happySessionId ?? '', onChildExited() {},
             processEnv: { ...process.env, RUN_NATIVE_API_KEY: '', HAPPIER_HOME_DIR: worker.happyHomeDir }, resolveProvidersFeatureEnabled: () => true }) });
         try {
           // Observe the logging boundary without replacing launch logic; a
           // cleanup refusal must not hide the original preparation diagnostic.
-          const startupDiagnostics = vi.spyOn(logger, 'debug');
+          const launchMessages: string[] = [];
+          const writeDebug = logger.debug.bind(logger);
+          const startupDiagnostics = vi.spyOn(logger, 'debug').mockImplementation((...args) => {
+            if (/source-dev|Using regular|tmux|Spawn process phase/iu.test(args[0])) launchMessages.push(args[0]);
+            writeDebug(...args);
+          });
+          readLaunchMessages = () => launchMessages;
+          const launchPhases: unknown[] = [];
+          const writeInfo = logger.infoFile.bind(logger);
+          vi.spyOn(logger, 'infoFile').mockImplementation((...args) => {
+            if (args[0] === '[DAEMON RUN] Spawn preparation phase') launchPhases.push(args[1]);
+            writeInfo(...args);
+          });
+          readLaunchPhases = () => launchPhases;
           const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
             sessionSpawnDirectTargetTransport: createMachineSessionDirectTargetTransport({ machineId: worker.machineId, spawnLifecycleHandler: handler }) });
           const result = await createActionExecutor(deps).execute('session.spawn_new', {
@@ -352,13 +418,15 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
           }, { surface, authority: 'present_user', actionCaller: { kind: 'host' } });
           expect(runner, JSON.stringify({ result, diagnostics: startupDiagnostics.mock.calls.filter(([message]) =>
             /failed|refused|cleanup/iu.test(message)) })).toBeDefined();
-          await runner;
+          await expect(runner, JSON.stringify({ result, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
+            message === '[DAEMON RUN] Session spawn failed after startup preparation') })).resolves.toBeUndefined();
           expect(result, JSON.stringify({ result, preparationFailures: startupDiagnostics.mock.calls.filter(([message]) =>
             message === '[DAEMON RUN] Session spawn failed after startup preparation') })).toMatchObject({ ok: true, result: { type: 'success' } });
           expect(requests.slice(requestStart)).toEqual([{ model: 'gpt-5.5', input: 'TEAM_POOL_NATIVE_PROMPT' }]);
           expect(await db.sessionTeamCredentialBinding.findMany({ where: { sessionId } })).toEqual(expect.arrayContaining([
             expect.objectContaining({ slotKind: 'provider_model:brokered', resourceId: resource.id }),
           ]));
+          completedIngresses.push(surface);
         } finally { lifetime.abort(); for (const timer of timeouts.values()) clearTimeout(timer); await closeControlledRunner(); }
         }
       });
@@ -366,7 +434,7 @@ describe('Team Pool Session launch through Action/CLI and an external Agent', ()
       await app.close(); await new Promise<void>(resolve => carrier.close(() => resolve()));
       await releaseSource?.();
       await source.controller.shutdown(); source.disposeCredentialBoundary(); await worker.cleanup();
-      env.restore(); reloadConfiguration(); await rm(directory, { recursive: true, force: true });
+      env.restore(); launchEnv.restore(); reloadConfiguration(); await rm(directory, { recursive: true, force: true });
     }
-  });
+  }));
 });
