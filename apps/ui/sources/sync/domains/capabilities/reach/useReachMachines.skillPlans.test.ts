@@ -409,6 +409,9 @@ it('composes concrete ACP inventory and the Account catalog into distinct config
         expect(name).toContain('review configured agent');
         expect(name).toContain('build configured agent');
         expect(name).not.toContain('absent configured agent');
+        // A sentence that lists Agents gets each instance title on its own, never one joined "a and b" entry.
+        expect(hook.getCurrent().names.names.agentNames(['codex', 'custom-acp']).slice(-2).sort())
+            .toEqual(['build configured agent', 'review configured agent']);
         expect(hook.getCurrent().names.identityById.get('custom-acp')).toBeUndefined();
         expect(hook.getCurrent().names.identityById.get('agent:happier.agent.custom-acp/custom-acp:definition:review')?.entry.title)
             .toBe('review configured agent');

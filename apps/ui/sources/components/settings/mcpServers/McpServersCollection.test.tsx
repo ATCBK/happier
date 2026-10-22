@@ -421,7 +421,7 @@ describe('MCP servers collection and tools', () => {
         function Tools() {
             const tools = useMcpServerTools(server.id, catalogRevision);
             return <McpServerToolsSection testID="tools" status={tools.status} list={tools.list}
-                agentName={id => id} installedAgentIds={[]} onChange={async patch => { lastError = await tools.set(patch); return lastError; }} />;
+                agentNames={ids => ids} installedAgentIds={[]} onChange={async patch => { lastError = await tools.set(patch); return lastError; }} />;
         }
         const screen = await renderSettingsView(<Tools />);
         await vi.waitFor(() => expect(screen.findByTestId('tools:tool:write:allow')).not.toBeNull());

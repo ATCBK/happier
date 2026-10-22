@@ -8,7 +8,7 @@ import type { SkillMachineTruth } from './useSkillMachineTruth';
  */
 export function summarizeMachines(
   shown: readonly SkillMachineTruth[],
-  agentName: (agentId: string) => string,
+  agentNames: (agentIds: readonly string[]) => readonly string[],
 ): Readonly<{ summary: string; note: string | undefined }> {
   const online = shown.filter((entry) => entry.machine.online === true);
   const offline = shown.filter((entry) => entry.machine.offline).length;
@@ -24,7 +24,7 @@ export function summarizeMachines(
     groups.set(key, group);
   }
   const clauses = [...groups.values()].map((group) => {
-    const agents = group.agents.map(agentName).join(', ');
+    const agents = agentNames(group.agents).join(', ');
     return group.machines.length === 1
       ? t('capabilities.skillDetail.machines.summaryOn', { agents, machine: group.machines[0]! })
       : t('capabilities.skillDetail.machines.summaryOnMany', { agents, count: group.machines.length });

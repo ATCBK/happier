@@ -14,14 +14,16 @@ import {
   type ScopePlace,
 } from './capabilityScopeModel';
 
+const agentTitle = (id: string) =>
+  (
+    ({ claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }) as Record<
+      string,
+      string
+    >
+  )[id] ?? id;
 const names: WhereItsOnNames = {
-  agentName: (id) =>
-    (
-      ({ claude: 'Claude', codex: 'Codex', gemini: 'Gemini' }) as Record<
-        string,
-        string
-      >
-    )[id] ?? id,
+  agentName: agentTitle,
+  agentNames: (ids) => ids.map(agentTitle),
   machineName: (id) =>
     (({ a: 'MacBook Pro', b: 'nl2', nl2: 'nl2' }) as Record<string, string>)[
       id

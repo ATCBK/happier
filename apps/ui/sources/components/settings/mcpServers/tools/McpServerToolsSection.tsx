@@ -55,7 +55,7 @@ export type McpToolAgentNotes = Readonly<{
 /** The per-Agent truth from the projected facts (D24): who loads on demand, who ignores settings, who blocks. */
 export function describeMcpToolAgents(
   perAgent: McpServerToolsList['perAgent'],
-  agentName: (agentId: string) => string,
+  agentNames: (agentIds: readonly string[]) => readonly string[],
   installedAgentIds: readonly string[],
 ): McpToolAgentNotes {
   const installed = new Set(installedAgentIds);
@@ -64,9 +64,11 @@ export function describeMcpToolAgents(
       agent: McpServerToolsList['perAgent']['agents'][number],
     ) => boolean,
   ) =>
-    perAgent.agents
-      .filter((agent) => installed.has(agent.agentId) && predicate(agent))
-      .map((agent) => agentName(agent.agentId));
+    agentNames(
+      perAgent.agents
+        .filter((agent) => installed.has(agent.agentId) && predicate(agent))
+        .map((agent) => agent.agentId),
+    );
   return {
     onDemand: names((agent) => agent.loading === 'on_demand'),
     notApply: names((agent) => agent.approval === null && agent.off === null),
@@ -85,7 +87,7 @@ export const McpServerToolsSection = React.memo(function McpServerToolsSection(
   props: Readonly<{
     status: 'loading' | 'ready' | 'unavailable';
     list: McpServerToolsList | null;
-    agentName: (agentId: string) => string;
+    agentNames: (agentIds: readonly string[]) => readonly string[];
     /** The Agents installed on the person's machines (D24 names only these). */
     installedAgentIds: readonly string[];
     onChange: (patch: McpServerToolSettingsPatchV1) => Promise<string | null>;
@@ -156,7 +158,7 @@ export const McpServerToolsSection = React.memo(function McpServerToolsSection(
 
   const notes =
     list && list.perAgent.status === 'ready'
-      ? describeMcpToolAgents(list.perAgent, props.agentName, props.installedAgentIds)
+      ? describeMcpToolAgents(list.perAgent, props.agentNames, props.installedAgentIds)
       : null;
   const footLines = notes
     ? [

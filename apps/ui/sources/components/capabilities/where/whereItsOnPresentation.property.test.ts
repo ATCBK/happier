@@ -10,6 +10,7 @@ import { sayWhereItsOn, shortWhereItsOn, type WhereItsOnNames, type WhereItsOnSe
  */
 const names: WhereItsOnNames = {
     agentName: (id) => `agent-${id}`,
+    agentNames: (ids) => ids.map((id) => `agent-${id}`),
     machineName: (id) => `machine-${id}`,
     projectName: (key) => `project-${key}`,
     folderLabel: (machineId, root) => `${root} on machine-${machineId}`,

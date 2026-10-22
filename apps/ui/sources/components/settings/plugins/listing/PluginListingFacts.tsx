@@ -9,6 +9,7 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 
+import { pluginListingAddsTitles } from '../model/pluginContributionKindLabel';
 import type { PluginMarketplaceCatalogEntry } from '../readPluginMarketplaceCatalog';
 
 function realmLabels(entry: PluginMarketplaceCatalogEntry): readonly string[] {
@@ -55,19 +56,22 @@ export function PluginListingAddsSection(
     testID?: string;
   }>,
 ) {
-  if (props.entry.contributions.length === 0) return null;
+  const adds = pluginListingAddsTitles(props.entry.contributions);
+  if (adds.length === 0) return null;
   return (
     <ItemGroup
       title={t('settingsPlugins.catalog.adds')}
       {...(props.description ? { description: props.description } : {})}
     >
-      <Item
-        testID={props.testID}
-        title={props.entry.contributions.join(', ')}
-        titleLines={0}
-        mode="info"
-        showChevron={false}
-      />
+      {adds.map((title, index) => (
+        <Item
+          key={title}
+          testID={index === 0 ? props.testID : undefined}
+          title={title}
+          mode="info"
+          showChevron={false}
+        />
+      ))}
     </ItemGroup>
   );
 }

@@ -48,9 +48,13 @@ export function useWhereItsOnNames(input: Readonly<{
     const machines = new Map(input.machines.map((machine) => [machine.machineId, machine.name]));
     const projectNames = new Map(projects.map((project) => [project.projectKey, project.name]));
     const machineName = (machineId: string) => machines.get(machineId) ?? machineId;
+    const instanceTitles = (agentId: string) => {
+      const titles = identities.filter(identity => identity.entry.agentId === agentId).map(identity => identity.entry.title);
+      return titles.length > 0 ? titles : [agentId];
+    };
     return {
-      agentName: (agentId) => joinList(identities.filter(identity => identity.entry.agentId === agentId)
-        .map(identity => identity.entry.title)) || agentId,
+      agentName: (agentId) => joinList(instanceTitles(agentId)),
+      agentNames: (agentIds) => [...new Set(agentIds.flatMap(instanceTitles))],
       machineName,
       projectName: (projectKey) => projectNames.get(projectKey) ?? projectKey,
       folderLabel: (machineId, root) => `${formatPathRelativeToHome(root)} · ${machineName(machineId)}`,

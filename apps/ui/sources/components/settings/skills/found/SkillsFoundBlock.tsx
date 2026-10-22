@@ -131,7 +131,7 @@ export const SkillsFoundBlock = React.memo(function SkillsFoundBlock(
       {rows.map((row) => {
         const machine = machineById.get(row.machineId);
         const busy = adding.has(row.item.path);
-        const agents = foundAgentIds(row.item).map(names.agentName);
+        const agents = names.agentNames(foundAgentIds(row.item));
         return (
           <CapabilityRow
             key={`${row.machineId}:${row.item.path}`}

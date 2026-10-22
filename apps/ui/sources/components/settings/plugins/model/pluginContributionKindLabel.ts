@@ -115,3 +115,49 @@ function shelfKeyFor(kind: PluginContributionKind): PluginKindShelfKey | null {
   kind satisfies never;
   return null;
 }
+
+/**
+ * What a listing adds, in people words: the title of the shelf a manifest family belongs to ("agents" → "Agents",
+ * "mcp" → "MCP tools"). Plumbing families (actions, settings, events, hooks …) are not something a person adds, so
+ * they have no title and are not listed.
+ */
+function listingFamilyTitle(family: string): string | null {
+  switch (family) {
+    case 'agents':
+      return pluginKindShelfTitle('agent');
+    case 'skills':
+      return t('capabilities.skills.title');
+    case 'machineProvisioners':
+      return pluginKindShelfTitle('machines');
+    case 'providers':
+    case 'scmHostingProviders':
+    case 'scmBackends':
+    case 'languageServers':
+    case 'roles':
+    case 'workflows':
+    case 'inputTypes':
+    case 'mcp':
+      return pluginKindShelfTitle(family);
+    case 'connectedAccountDescriptors':
+      return pluginKindShelfTitle('connectedAccounts');
+    case 'voiceProviders':
+    case 'voiceModelPacks':
+      return pluginKindShelfTitle('voice');
+    case 'composerAttachments':
+    case 'composerControls':
+    case 'composerRegions':
+      return pluginKindShelfTitle('composer');
+    case 'ui':
+      return pluginKindShelfTitle('pluginUi');
+    case 'browserTargets':
+    case 'browserActions':
+      return pluginKindShelfTitle('pluginBrowser');
+    default:
+      return null;
+  }
+}
+
+/** The distinct, people-worded things a listing adds, in the order its manifest declares them. */
+export function pluginListingAddsTitles(families: readonly string[]): readonly string[] {
+  return [...new Set(families.map(listingFamilyTitle).filter((title): title is string => title !== null))];
+}

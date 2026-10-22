@@ -334,7 +334,7 @@ export function McpServerWhereAndTools(
         testID="mcp.server.tools"
         status={detail.tools.status}
         list={detail.tools.list}
-        agentName={detail.names.agentName}
+        agentNames={detail.names.agentNames}
         installedAgentIds={detail.agentIds}
         onChange={detail.tools.set}
         errorCode={detail.tools.errorCode}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolvePluginKindShelf } from './pluginContributionKindLabel';
+import { pluginListingAddsTitles, resolvePluginKindShelf } from './pluginContributionKindLabel';
 
 describe('plugin kind shelf', () => {
     it('recognizes language-server plugins above generic panels and dependencies without displacing agents', () => {
@@ -21,5 +21,13 @@ describe('plugin kind shelf', () => {
         expect(resolvePluginKindShelf(['managedDependencies', 'accountCollections', 'dragSources', 'dropTargets', 'agent'])?.key)
             .toBe('agent');
         expect(resolvePluginKindShelf(['managedDependencies', 'accountCollections', 'dragSources', 'dropTargets', 'atmospherePictures'])).toBeNull();
+    });
+});
+
+describe('what a listing adds', () => {
+    it('says the manifest families in people words, once each, and leaves plumbing families out', () => {
+        expect(pluginListingAddsTitles(['agents', 'skills', 'mcp'])).toEqual(['Agents', 'Skills', 'MCP tools']);
+        expect(pluginListingAddsTitles(['voiceProviders', 'actions', 'voiceModelPacks', 'settings'])).toEqual(['Voice']);
+        expect(pluginListingAddsTitles(['actions', 'events'])).toEqual([]);
     });
 });

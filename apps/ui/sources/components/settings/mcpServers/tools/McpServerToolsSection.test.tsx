@@ -130,7 +130,7 @@ async function mount(
       testID="tools"
       status="ready"
       list={list}
-      agentName={(id) => NAMES[id] ?? id}
+      agentNames={(ids) => ids.map((id) => NAMES[id] ?? id)}
       installedAgentIds={installedAgentIds}
       onChange={onChange}
     />,
@@ -159,7 +159,7 @@ describe('McpServerToolsSection', () => {
       tools: tools.map(tool => ({ ...tool, tokens: 1, setting: 'inherit', source: 'server_default' })),
     });
     const screen = await renderScreen(<McpServerToolsSection testID="projection" status="ready" list={projected}
-      agentName={id => id} installedAgentIds={[]} onChange={async () => null} />);
+      agentNames={ids => ids} installedAgentIds={[]} onChange={async () => null} />);
     for (const tool of tools) {
       const decision = resolveMcpToolDecisionV1({ policy: { default: serverDefault, overrides: {} },
         toolName: tool.name, annotations: tool.annotations, permissionMode: 'default' });

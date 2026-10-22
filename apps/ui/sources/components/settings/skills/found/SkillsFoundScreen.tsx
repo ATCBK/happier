@@ -128,7 +128,7 @@ export const SkillsFoundScreen = React.memo(function SkillsFoundScreen() {
       onCheckAgain={checkAgain}
       libraryIdByName={libraryIdByName}
       libraryPending={libraryPending}
-      agentName={names.agentName}
+      agentNames={names.agentNames}
       onScan={scan}
       adopt={found.adopt}
       readBoth={found.readBoth}
@@ -153,7 +153,7 @@ export const SkillsFoundPage = React.memo(function SkillsFoundPage(
     onCheckAgain: () => void;
     libraryIdByName: ReadonlyMap<string, string>;
     libraryPending: boolean;
-    agentName: (agentId: string) => string;
+    agentNames: (agentIds: readonly string[]) => readonly string[];
     onScan: (machineId: string) => Promise<void>;
     adopt: ReturnType<typeof useFoundSkills>['adopt'];
     readBoth: ReturnType<typeof useFoundSkills>['readBoth'];
@@ -201,7 +201,7 @@ export const SkillsFoundPage = React.memo(function SkillsFoundPage(
           scan={scanOf(machine)}
           libraryIdByName={props.libraryIdByName}
           libraryPending={props.libraryPending}
-          agentName={props.agentName}
+          agentNames={props.agentNames}
           onScan={props.onScan}
           adopt={props.adopt}
           readBoth={props.readBoth}
@@ -232,7 +232,7 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
     libraryIdByName: ReadonlyMap<string, string>;
     /** The library is still being read: Compare keeps its place, off, rather than appearing late. */
     libraryPending: boolean;
-    agentName: (agentId: string) => string;
+    agentNames: (agentIds: readonly string[]) => readonly string[];
     onScan: (machineId: string) => Promise<void>;
     adopt: ReturnType<typeof useFoundSkills>['adopt'];
     readBoth: ReturnType<typeof useFoundSkills>['readBoth'];
@@ -329,7 +329,7 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
           description={item.description}
           facts={{
             presentation: 'row',
-            extra: foundFacts(group, props.agentName, homeDir),
+            extra: foundFacts(group, props.agentNames, homeDir),
           }}
           note={
             kind === 'masks' ? (
@@ -476,12 +476,12 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
 /** "Claude, Codex and 7 more read it · From the frontend plugin": who reads it, then provenance, then where it lives. */
 function foundFacts(
   group: FoundRowGroup,
-  agentName: (agentId: string) => string,
+  agentNames: (agentIds: readonly string[]) => readonly string[],
   homeDir: string | undefined,
 ): readonly (string | Readonly<{ text: string; mono: true }>)[] {
   const { item } = group;
   const facts: (string | Readonly<{ text: string; mono: true }>)[] = [];
-  const agents = group.agents.map(agentName);
+  const agents = agentNames(group.agents);
   if (agents.length > 0) {
     facts.push(t('capabilities.skillsFound.readBy', { agents: formatAgentNameListFolded(agents), count: agents.length }));
   }

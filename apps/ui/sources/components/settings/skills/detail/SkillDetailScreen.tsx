@@ -64,6 +64,7 @@ import {
   useSkillDetail,
   type SkillDetailModel,
 } from './useSkillDetail';
+import type { WhereItsOnNames } from '@/components/capabilities/where/whereItsOnPresentation';
 import { summarizeMachines } from './skillMachineSummary';
 import {
   useSkillMachineTruth,
@@ -390,7 +391,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
           />
         </ItemGroup>
       ) : null}
-      <SkillMachines truth={truth} agentName={places.names.agentName} />
+      <SkillMachines truth={truth} names={places.names} />
       {read ? (
         <SkillDetailsDisclosure
           testID="skill.detail.details"
@@ -439,7 +440,7 @@ function MachineAgents(props: Readonly<{ agentIds: readonly string[]; machineId:
 /** One machine's row in "On your machines": its own preview's words online, the projection dated offline. */
 function machineRow(
   entry: SkillMachineTruth,
-  agentName: (agentId: string) => string,
+  names: Pick<WhereItsOnNames, 'agentName' | 'agentNames'>,
 ): CapabilityMachineTruthRow {
   const { machine } = entry;
   const name = machine.name ?? machine.machineId;
@@ -474,21 +475,21 @@ function machineRow(
       masked = true;
       notes.push(
         t('capabilities.skillDetail.machines.masked', {
-          agent: agentName(agentId),
+          agent: names.agentName(agentId),
           machine: name,
         }),
       );
     } else if (fact.kind === 'failed')
       notes.push(
         t('capabilities.skillDetail.machines.previewFailed', {
-          agent: agentName(agentId),
+          agent: names.agentName(agentId),
         }),
       );
   }
   if (entry.cannotLoad.length > 0)
     notes.push(
       t('capabilities.skillDetail.machines.cantLoad', {
-        agents: entry.cannotLoad.map(agentName).join(', '),
+        agents: names.agentNames(entry.cannotLoad).join(', '),
       }),
     );
   if (pending && delivered.length === 0)
@@ -514,16 +515,16 @@ function machineRow(
 function SkillMachines(
   props: Readonly<{
     truth: readonly SkillMachineTruth[];
-    agentName: (agentId: string) => string;
+    names: Pick<WhereItsOnNames, 'agentName' | 'agentNames'>;
   }>,
 ) {
-  const { truth, agentName } = props;
+  const { truth, names } = props;
   // Online machines first (their answers are live), then offline ones with last-known facts.
   const shown = truth
     .filter((entry) => entry.machine.agentIds.length > 0)
     .sort((a, b) => Number(a.machine.offline) - Number(b.machine.offline));
-  const rows = shown.map((entry) => machineRow(entry, agentName));
-  const { summary, note } = summarizeMachines(shown, agentName);
+  const rows = shown.map((entry) => machineRow(entry, names));
+  const { summary, note } = summarizeMachines(shown, names.agentNames);
   return (
     <CapabilityMachineTruth
       testID="skill.detail.machines"

@@ -248,7 +248,7 @@ const SkillsHomepageBody = React.memo(function SkillsHomepageBody(
         />
       )}
       {loading || unavailable ? null : (
-        <PresentSentence present={present} agentName={names.agentName} />
+        <PresentSentence present={present} agentNames={names.agentNames} />
       )}
       {firstVisit && !empty ? (
         <View style={styles.acts}>
@@ -555,8 +555,8 @@ function useReachTravel(
 }
 
 /** One quiet line of the present: what reaches whom, what needs a look, who catches up later. */
-function PresentSentence(props: Readonly<{ present: SkillsPresent; agentName: (agentId: string) => string }>) {
-  const { present, agentName } = props;
+function PresentSentence(props: Readonly<{ present: SkillsPresent; agentNames: (agentIds: readonly string[]) => readonly string[] }>) {
+  const { present, agentNames } = props;
   const named = present.kind === 'reach'
     ? present.agentIds
     : present.kind === 'unsupported'
@@ -564,8 +564,8 @@ function PresentSentence(props: Readonly<{ present: SkillsPresent; agentName: (a
       : NO_AGENTS;
   const unsupported = present.kind === 'reach' ? present.unsupportedAgentIds : NO_AGENTS;
   // The names the legend and Where it's on show, from the page's own places: an Agent instance reads by title, never by its runtime id.
-  const agents = React.useMemo(() => named.map(agentName), [named, agentName]);
-  const unsupportedNames = React.useMemo(() => unsupported.map(agentName), [unsupported, agentName]);
+  const agents = React.useMemo(() => agentNames(named), [named, agentNames]);
+  const unsupportedNames = React.useMemo(() => agentNames(unsupported), [unsupported, agentNames]);
   let text: string;
   // The part of the sentence that needs the person (amber, as the lab's "2 need a look").
   let attention = '';

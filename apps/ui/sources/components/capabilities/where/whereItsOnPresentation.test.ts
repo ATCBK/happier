@@ -15,8 +15,10 @@ import {
     type WhereItsOnNames,
 } from './whereItsOnPresentation';
 
+const agentTitle = (id: string) => ({ claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode' } as Record<string, string>)[id] ?? id;
 const names: WhereItsOnNames = {
-    agentName: (id) => ({ claude: 'Claude', codex: 'Codex', gemini: 'Gemini', opencode: 'OpenCode' } as Record<string, string>)[id] ?? id,
+    agentName: agentTitle,
+    agentNames: (ids) => ids.map(agentTitle),
     machineName: (id) => ({ mbp: 'MacBook Pro', nl2: 'nl2', win: 'Windows desktop', a: 'A' } as Record<string, string>)[id] ?? id,
     projectName: (key) => key,
     folderLabel: (machineId, root) => `${root.replace('/home/me', '~')} on ${machineId}`,
@@ -124,6 +126,17 @@ describe('describeReach', () => {
             .toBe(`Available to Claude on m1, m2, m3, and ${t('capabilities.detail.moreMachines', { count: 3 })}`);
         const four = describeReach(many.slice(0, 4), many.slice(0, 4).map(row => ({ machineId: row.machineId, online: true })), names, () => 'full');
         expect(formatWhereItsOnConsequence(four, names)).toBe('Available to Claude on m1, m2, m3, and m4');
+    });
+    it('composes every instance title of a shared runtime once, so a sentence never nests lists', () => {
+        const acpTitles: Record<string, readonly string[]> = { 'custom-acp': ['QA Alpha', 'QA Beta'], claude: ['Claude'], opencode: ['OpenCode'] };
+        const instanced: WhereItsOnNames = {
+            ...names,
+            agentName: (id) => (acpTitles[id] ?? [id]).join(' and '),
+            agentNames: (ids) => [...new Set(ids.flatMap((id) => acpTitles[id] ?? [id]))],
+        };
+        const rows = [{ machineId: 'mbp', agents: ['claude', 'custom-acp', 'opencode'].map(agentId => ({ agentId, enabled: true, decidedBy: null })) }];
+        const consequence = describeReach(rows, [{ machineId: 'mbp', online: true }], instanced, () => 'full');
+        expect(formatWhereItsOnConsequence(consequence, instanced)).toBe('Available to Claude, QA Alpha, QA Beta, and OpenCode on MacBook Pro');
     });
     const projection = [
         { machineId: 'mbp', agents: [{ agentId: 'claude', enabled: true, decidedBy: null }, { agentId: 'gemini', enabled: true, decidedBy: null }] },

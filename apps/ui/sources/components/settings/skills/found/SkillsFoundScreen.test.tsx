@@ -39,7 +39,7 @@ it('bulk-adds only addable native rows, retains their positions while settling, 
             items: result.items.map(item => item.name === 'one' || item.name === 'two' ? { ...item, inLibrary: `library-${item.name}` } : item) } }; };
         const props: React.ComponentProps<typeof SkillsFoundPage> = { machines: [machine('nl2')], scanOf: () => scan,
             canCheckAgain: true, checking: false, onCheckAgain: () => {}, libraryIdByName: new Map([['masked', 'library-masked']]),
-            libraryPending: false, agentName: id => id, onScan, adopt, readBoth: async () => null };
+            libraryPending: false, agentNames: ids => ids, onScan, adopt, readBoth: async () => null };
         const screen = await renderScreen(<SkillsFoundPage {...props} />);
         expect(screen.findByTestId('skills.found.action.nl2.plugin')).not.toBeNull();
         expect(screen.getTextContent()).toContain('Make a copy');

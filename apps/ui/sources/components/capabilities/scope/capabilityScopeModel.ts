@@ -175,7 +175,7 @@ export function describeScope(read: ScopeRead, place: ScopePlace, names: WhereIt
   const getting = agentIds.filter(gets);
   const missing = agentIds.filter((agentId) => !gets(agentId));
   if (getting.length > 0 && missing.length > 0) {
-    return `${t('capabilities.scopeSection.onFor', { agents: joinList(getting.map(names.agentName)) })} · ${t('capabilities.scopeSection.notFor', { agents: joinList(missing.map(names.agentName)) })}`;
+    return `${t('capabilities.scopeSection.onFor', { agents: joinList(names.agentNames(getting)) })} · ${t('capabilities.scopeSection.notFor', { agents: joinList(names.agentNames(missing)) })}`;
   }
   const decided = read.general[0]?.decidedBy ?? null;
   if (decided === null) return t('capabilities.where.off');
