@@ -21,6 +21,18 @@ describe('media zoom geometry', () => {
         expect(clampPan({ x: 120, y: 0 }, bounds)).toEqual({ x: 120, y: 0 });
     });
 
+    it('keeps small-image double-tap zoom above fit and below the four-fit maximum at either DPR', () => {
+        for (const dpr of [1, 2]) {
+            const bounds = resolveZoomBounds({ width: 100, height: 100 }, { width: 1024, height: 768 }, dpr);
+            expect(bounds).toMatchObject({ min: 1, max: 4, doubleTap: 2 });
+            expect(bounds.doubleTap).toBeGreaterThan(bounds.min);
+            expect(bounds.doubleTap).toBeLessThanOrEqual(bounds.max);
+        }
+        // A large picture still stops a double-tap at three-fit, not at the maximum.
+        expect(resolveZoomBounds({ width: 4000, height: 2000 }, { width: 500, height: 500 }, 1))
+            .toMatchObject({ min: 0.125, natural: 1, doubleTap: 0.375 });
+    });
+
     it('keeps the content under a moving pinch focal point attached to the fingers', () => {
         expect(focalZoom({ scale: 1, x: 20, y: -10 }, 2, { x: 100, y: 50 }, { x: 120, y: 60 }))
             .toEqual({ scale: 2, x: -40, y: -60 });

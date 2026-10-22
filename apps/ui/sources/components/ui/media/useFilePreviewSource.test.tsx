@@ -14,6 +14,7 @@ import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/e
 import { createMachineReadBatchResponseFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { useFilePreviewSource } from './useFilePreviewSource';
 import { buildImageCompareModel, projectImageComparePreview } from '@/components/workspaces/scm/review/imageCompare/imageCompareModel';
+import { useImageCompare } from '@/components/workspaces/scm/review/imageCompare/useImageCompare';
 
 const files = vi.hoisted(() => new Map<string, { exists: boolean; chunks: Uint8Array[]; closed: number; deletes: number }>());
 const handoffs = vi.hoisted(() => ({ copies: [] as string[], shares: [] as number[][] }));
@@ -207,6 +208,40 @@ describe('useFilePreviewSource', () => {
         await vi.waitFor(() => expect(hook.getCurrent().status).toBe('loaded'));
         expect(files.get(hook.getCurrent().uri!)?.chunks.flatMap(chunk => [...chunk])).toEqual([97, 98, 99]);
         await hook.unmount();
+    });
+
+    it.each([false, true])('settles two added-image Review consumers when one leaves an in-flight read (failure: %s)', async (failed) => {
+        interruptTransfer = failed;
+        const gate = transfer.deferNextOpen();
+        const input = { enabled: true, scope: fixture.scope, filePath: `added-compare-${failed}.png`,
+            source: { kind: 'workingTree' as const, changeKind: 'added', area: 'both' as const, signature: `added-compare-${failed}` } };
+        const first = await renderHook(() => useImageCompare(input));
+        const second = await renderHook(() => useImageCompare({ ...input, scope: { ...fixture.scope } }));
+        try {
+            await vi.waitFor(() => expect(transfer.httpRequests.some(request => request.url.endsWith('/open'))).toBe(true));
+            expect(transfer.prepares).toHaveLength(1);
+            expect(second.getCurrent().before).toEqual({ kind: 'added' });
+            expect(second.getCurrent().after).toEqual({ kind: 'noPreview', reason: 'loading' });
+            const pendingRead = transfer.httpRequests.find(request => request.url.endsWith('/open'))!;
+            await first.unmount();
+            expect(pendingRead.signal?.aborted).toBe(false);
+            await act(async () => { gate.resolve(); });
+            if (failed) {
+                await vi.waitFor(() => expect(second.getCurrent().after).toMatchObject({ kind: 'unavailable', reason: { kind: 'loadFailed' } }));
+                expect(second.getCurrent().gallery).toHaveLength(0);
+            } else {
+                await vi.waitFor(() => expect(second.getCurrent().after.kind).toBe('present'));
+                const after = second.getCurrent().after;
+                if (after.kind !== 'present') throw new Error('Expected a settled Review image');
+                expect(files.get(after.uri)?.chunks.flatMap(chunk => [...chunk])).toEqual([97, 98, 99]);
+                expect(second.getCurrent().gallery).toHaveLength(1);
+            }
+            expect(transfer.prepares).toHaveLength(1);
+        } finally {
+            gate.resolve();
+            await first.unmount();
+            await second.unmount();
+        }
     });
 
     it('reports the shared transfer progress while a workspace preview downloads', async () => {

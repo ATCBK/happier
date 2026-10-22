@@ -423,6 +423,9 @@ const StageViewer = React.forwardRef<ViewerHandle, StageViewerProps>(
                           onIntrinsicSize={handleIntrinsicSize}
                           onError={setFailed}
                           fullResolution={fullResolution}
+                          // Pictures already fitting at 1× enlarge their pixels, not a downsampled photograph.
+                          pixelated={item.kind === 'image' && fullResolution && size !== null
+                            && resolveZoomBounds(size, viewportSize, PixelRatio.get()).min === 1}
                           testID="media-stage-image"
                         />
                       </View>

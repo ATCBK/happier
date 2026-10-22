@@ -169,7 +169,7 @@ function VideoPlayer(
         onFullscreenEnter={() => props.onFullscreenChange(true)}
         onFullscreenExit={() => props.onFullscreenChange(false)}
         contentFit="contain"
-        style={styles.fill}
+        style={VIDEO_FILL}
         accessibilityLabel={props.title}
       />
       {status === 'loading' || status === 'idle' ? (
@@ -439,6 +439,13 @@ export function MediaPlayerBody(props: MediaPlayerBodyProps) {
   );
 }
 
+/**
+ * The player fills its well. A plain style on purpose: on web `VideoView` spreads `style` straight onto the
+ * `<video>` element, where a Unistyles entry does not apply, so the element kept its natural 1280 × 720 and ran
+ * past the well (its controls off-screen at 390).
+ */
+const VIDEO_FILL = { width: '100%', height: '100%' } as const;
+
 const styles = StyleSheet.create((theme) => ({
   page: {
     flex: 1,
@@ -500,10 +507,6 @@ const styles = StyleSheet.create((theme) => ({
   scrubber: {
     flex: 1,
     minWidth: 0,
-  },
-  fill: {
-    width: '100%',
-    height: '100%',
   },
   centre: {
     alignItems: 'center',
