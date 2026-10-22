@@ -195,6 +195,7 @@ function teamExternalGroupBindingActionRow<
 function teamCredentialActionRow<TActionId extends TeamCredentialHomeActionIdV1>(input: Readonly<{
   id: TActionId;
   approval: PreNormalizedActionSpec['approval'];
+  mcp?: boolean;
   title: string;
   description: string;
   safety: 'safe' | 'danger';
@@ -225,9 +226,7 @@ function teamCredentialActionRow<TActionId extends TeamCredentialHomeActionIdV1>
     };
   }
   if (input.id === 'teams.credentials.test') return { ...row, requiredAuthority: 'present_user' as const };
-  return input.id === 'teams.credentials.preparation.get'
-    ? { ...row, surfaces: { ...row.surfaces, mcp: true } as const }
-    : row;
+  return row;
 }
 
 /**
@@ -280,6 +279,8 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     bindings: { mcpToolName: 'teams_members_history_prepare' },
   },
   ...TEAM_CREDENTIAL_HOME_ACTION_IDS_V1.map((id) => teamCredentialActionRow({
+    mcp: id === 'teams.credentials.preparation.get' || id === 'teams.credentials.create'
+      || id === 'teams.credentials.entitled.list',
     id, approval: ['teams.credentials.create', 'teams.credentials.update', 'teams.credentials.audience.set', 'teams.credentials.delete', 'teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll'].includes(id) ? { result: 'required', flow: 'deferred' } : { result: 'required' },
     title: {
       'teams.credentials.list': 'List Team credentials',
@@ -385,6 +386,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.create', approval: {result: 'required'},
+    mcp: true,
     title: 'Create Team',
     description: 'Create a Team in this Home. A repeated request key returns the same Team rather than a second one.',
     safety: 'safe',
@@ -464,6 +466,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.archive', approval: {result: 'required',flow: 'deferred'},
+    mcp: true,
     title: 'Archive Team',
     description: 'Archive a Team, ending ordinary member access until it is restored. Waiting invitations are permanently revoked.',
     safety: 'danger',
@@ -476,6 +479,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.restore', approval: {result: 'required',flow: 'deferred'},
+    mcp: true,
     approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Restore Team',
     description: 'Restore an archived Team and its members\' access.',
@@ -516,6 +520,7 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.members.add', approval: {result: 'required',flow: 'deferred'},
+    mcp: true,
     approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Add Team member',
     description: 'Admit an existing Home Account to a Team with an explicit role and history horizon.',

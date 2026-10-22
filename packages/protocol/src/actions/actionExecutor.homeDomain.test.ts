@@ -9,6 +9,8 @@ import { ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES } from '../crypto/encryptedDataKey
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
 import { ActionsSettingsV1Schema } from './actionSettings.js';
+import { NO_TEAM_CAPABILITIES_V1 } from '../teams/capabilities.js';
+import { TeamSummaryV1Schema } from '../teams/projections.js';
 
 const roleSetInput = { accountId: 'account-2', homeRole: 'admin' } as const;
 
@@ -46,6 +48,66 @@ function homeAccountRow(): HomeAccountRowV1 {
 }
 
 describe('createActionExecutor (Home governance and Teams)', () => {
+  it.each(['teams.archive', 'teams.restore'] as const)(
+    'discovers %s on MCP and executes its Home intent only after deferred approval', async (actionId) => {
+      const input = { v: 1 as const, teamId: 'team-1' };
+      const output = TeamSummaryV1Schema.parse({
+        id: input.teamId, name: 'Research', description: null, logo: null,
+        archivedAt: actionId === 'teams.archive' ? 1 : null,
+        recovery: null, viewerRole: 'owner', capabilities: NO_TEAM_CAPABILITIES_V1,
+        counts: null, admission: { historyChoice: { admin: 'choice', member: 'choice', guest: 'hidden' } },
+        policy: { v: 1, sessionCreationPolicy: 'private_default', externalSharingPolicy: 'allowed',
+          defaultSessionHistoryAccess: 'from_membership', admissionMode: 'invite_only', authenticationPolicy: null },
+      });
+      let stored: ApprovalRequest | null = null;
+      const effects: unknown[] = [];
+      // Only the Home HTTP and approval persistence boundaries are replaced.
+      // Discovery, availability, approval routing, transitions and replay stay real.
+      const deps = {
+        homeDomainAction: async (request) => { effects.push(request); return output; },
+        approvalsCreate: async ({ request }) => {
+          stored = ApprovalRequestV2Schema.parse(request);
+          return { artifactId: 'team-lifecycle-approval' };
+        },
+        approvalsGet: async () => stored,
+        approvalsUpdate: async ({ request }) => {
+          const transition = transitionStoredApproval(stored, request);
+          if (!transition.ok) return transition;
+          stored = ApprovalRequestV2Schema.parse(request);
+          return { ok: true as const };
+        },
+        isApprovalExecutionOriginCurrent: async () => true,
+      } satisfies Pick<ActionExecutorDeps, 'homeDomainAction' | 'approvalsCreate' | 'approvalsGet'
+        | 'approvalsUpdate' | 'isApprovalExecutionOriginCurrent'>;
+      const executor = createActionExecutor(deps as ActionExecutorDeps);
+      const context = { surface: 'mcp' as const, authority: 'account_automation' as const,
+        serverId: 'home-1', runtimeAccountId: 'account-1', actionRequestId: `request-${actionId}`,
+        actionCaller: { kind: 'host' as const } };
+      const discovery = await executor.execute('action.spec.search', { query: actionId }, context);
+      expect(discovery).toMatchObject({ ok: true, result: { actionSpecs: expect.arrayContaining([
+        expect.objectContaining({ id: actionId, safety: 'danger', surfaces: expect.objectContaining({ mcp: true }) }),
+      ]) } });
+      await expect(executor.execute(actionId, input, context)).resolves.toMatchObject({
+        ok: true, result: { kind: 'approval_request_created', artifactId: 'team-lifecycle-approval' },
+      });
+      expect(effects).toEqual([]);
+      expect(stored).toMatchObject({ actionId, actionArgs: input,
+        approval: { result: 'required', flow: 'deferred' },
+        executionOriginV1: { authority: 'account_automation', surface: 'mcp', accountId: 'account-1' } });
+      if (!stored) throw new Error('Missing Team lifecycle approval');
+      const decidedAtMs = Date.now();
+      const approved = ApprovalRequestV2Schema.parse({ ...stored, status: 'approved', updatedAtMs: decidedAtMs,
+        decision: { kind: 'approve', decidedAtMs } });
+      expect(transitionStoredApproval(stored, approved)).toMatchObject({ ok: true });
+      stored = approved;
+      await expect(executor.replayApprovedApprovalRequest({ artifactId: 'team-lifecycle-approval' }))
+        .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(effects).toMatchObject([{ actionId, input,
+        context: { surface: 'mcp', authority: 'account_automation', runtimeAccountId: 'account-1' } }]);
+      expect(stored).toMatchObject({ status: 'executed', execution: { result: output } });
+    },
+  );
+
   it('returns a one-time external API key to the caller without exposing it to after observers', async () => {
     const key = {
       keyId: '123e4567-e89b-42d3-a456-426614174000',

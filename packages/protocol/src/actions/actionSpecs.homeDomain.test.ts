@@ -13,6 +13,7 @@ import { serializeActionSpec } from './actionCatalog.js';
 import { getActionSpec, listActionSpecs, PublicActionIdSchema } from './actionSpecs.js';
 import { PluginInvocableActionIdSchema } from './pluginActionSurface.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 
 describe('Home runtime Action parity', () => {
   it('publishes the target and supported assignment choice for organization deletion', () => {
@@ -489,12 +490,19 @@ describe('Home and Teams Action family', () => {
     }
   });
 
-  it('keeps automation rows off MCP while making human-approved invitations requestable', () => {
+  it('exposes the consumed Team lifecycle and invitation intents on MCP', () => {
+    const mcpActions = new Set(['teams.create', 'teams.archive', 'teams.restore', 'teams.members.add',
+      'teams.invitations.create', 'teams.invitations.reissue']);
     for (const actionId of LANE_01_ACTION_IDS) {
-      expect(getActionSpec(actionId).surfaces.mcp).toBe(
-        actionId === 'teams.invitations.create' || actionId === 'teams.invitations.reissue',
-      );
+      expect(getActionSpec(actionId).surfaces.mcp, actionId).toBe(mcpActions.has(actionId));
     }
+  });
+
+  it.each(['teams.create', 'teams.members.add', 'teams.credentials.create', 'teams.credentials.entitled.list',
+    'teams.archive', 'teams.restore'] as const)('admits %s through normalized MCP discovery', (actionId) => {
+    expect(resolveActionSurfaceAvailability({ actionId, surface: 'mcp' }))
+      .toMatchObject({ available: true, reason: 'available' });
+    expect(getActionSpec(actionId).requiredAuthority).toBe('account_automation');
   });
 
   /**

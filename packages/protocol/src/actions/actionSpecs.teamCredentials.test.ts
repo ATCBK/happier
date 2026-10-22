@@ -51,7 +51,8 @@ describe('Team credential Action contracts', () => {
         ui: true,
         cli: true,
         agent: true,
-        mcp: id === 'teams.credentials.test' || String(id) === 'teams.credentials.preparation.get',
+        mcp: id === 'teams.credentials.test' || String(id) === 'teams.credentials.preparation.get'
+          || id === 'teams.credentials.create' || id === 'teams.credentials.entitled.list',
         api: id !== 'teams.credentials.test',
         plugin: true,
       });
