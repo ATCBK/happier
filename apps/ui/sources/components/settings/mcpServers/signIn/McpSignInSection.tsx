@@ -526,7 +526,7 @@ export function McpSignInSection(props: Props) {
           {view.state === 'no_machine_online' ? <Text variant="body" style={styles.body}>{t('capabilities.mcpSignIn.noMachineBody')}</Text> : null}
         </View>
         <FieldItem label={t('capabilities.mcpSignIn.callbackUrl')}>
-          <FieldTextInput testID={`${testID}:callback-url`} value={MCP_OAUTH_CALLBACK_URL_V1} editable={false} monospace
+          <FieldTextInput testID={`${testID}:callback-url`} value={MCP_OAUTH_CALLBACK_URL_V1} onChangeText={() => {}} editable={false} monospace
             accessibilityLabel={t('capabilities.mcpSignIn.callbackUrl')}
             trailing={<IconButton testID={`${testID}:copy-callback`} iconName={callbackCopied ? 'check' : 'copy'} variant="plain" size={20}
               accessibilityLabel={t(callbackCopied ? 'common.copied' : 'common.copy')}
