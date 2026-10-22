@@ -10724,6 +10724,8 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
       }) => `Download ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Caricamento non riuscito',
       failureReasons: {
+          carrierUnavailable: 'Nessuna connessione di trasferimento disponibile',
+          carrierInterrupted: 'Connessione di trasferimento interrotta',
           declined: "Non approvato",
           tooLarge: "Troppo grande per il caricamento",
           unconfirmed: "Non è certo che sia finito · controlla la cartella",

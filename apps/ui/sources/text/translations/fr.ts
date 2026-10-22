@@ -10343,6 +10343,8 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
       }) => `Téléchargement de ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Échec de l’envoi',
       failureReasons: {
+          carrierUnavailable: 'Aucune connexion de transfert disponible',
+          carrierInterrupted: 'Connexion de transfert interrompue',
           declined: "Non approuvé",
           tooLarge: "Trop volumineux pour l’envoi",
           unconfirmed: "Impossible de confirmer la fin · vérifiez le dossier",

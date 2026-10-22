@@ -10623,6 +10623,8 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
       }) => `Baixando ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Não foi possível enviar',
       failureReasons: {
+          carrierUnavailable: 'Nenhuma conexão de transferência disponível',
+          carrierInterrupted: 'Conexão de transferência interrompida',
           declined: "Não aprovado",
           tooLarge: "Grande demais para enviar",
           unconfirmed: "Não foi possível confirmar a conclusão · verifique a pasta",

@@ -10354,6 +10354,8 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
                     `Lädt herunter: ${name} · ${downloaded} / ${totalBytes}`,
                 uploadFailed: 'Upload fehlgeschlagen',
                 failureReasons: {
+                    carrierUnavailable: 'Keine Übertragungsverbindung verfügbar',
+                    carrierInterrupted: 'Übertragungsverbindung unterbrochen',
                     declined: "Nicht genehmigt",
                     tooLarge: "Zu groß zum Hochladen",
                     unconfirmed: "Unklar, ob es abgeschlossen wurde · Ordner prüfen",

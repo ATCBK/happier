@@ -10505,6 +10505,8 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
       }) => `Descargando ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'No se pudo subir',
       failureReasons: {
+          carrierUnavailable: 'No hay conexión de transferencia disponible',
+          carrierInterrupted: 'Conexión de transferencia interrumpida',
           declined: "No aprobado",
           tooLarge: "Demasiado grande para subirlo",
           unconfirmed: "No se sabe si terminó · revisa la carpeta",

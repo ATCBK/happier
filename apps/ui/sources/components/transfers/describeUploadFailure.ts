@@ -3,6 +3,8 @@ import type { TransferFailureReason } from '@/sync/domains/transfers/runtime/tra
 
 export function describeUploadFailureReason(reason: TransferFailureReason, machineName: string): string {
     switch (reason) {
+        case 'carrierUnavailable': return t('files.transfers.failureReasons.carrierUnavailable');
+        case 'carrierInterrupted': return t('files.transfers.failureReasons.carrierInterrupted');
         case 'unreachable': return t('projects.checkouts.notAnswering', { machine: machineName });
         case 'declined': return t('files.transfers.failureReasons.declined');
         case 'permission': return t('errors.permissionDenied');

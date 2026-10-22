@@ -7,6 +7,9 @@ describe('classifyTransferFailure', () => {
     it.each([
         ['a Machine that stopped answering', { errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE }, 'unreachable'],
         ['a Home that cannot be reached', { errorCode: 'home_unreachable' }, 'unreachable'],
+        ['no eligible transfer carrier', { errorCode: 'machine_carrier_unavailable' }, 'carrierUnavailable'],
+        ['a selected carrier interrupted during transfer', { errorCode: 'machine_carrier_transport_failed' }, 'carrierInterrupted'],
+        ['a thrown carrier interruption', { thrown: Object.assign(new Error('transport failed'), { errorCode: 'machine_carrier_transport_failed' }) }, 'carrierInterrupted'],
         ['a transport deadline nothing the person did caused', { thrown: new DOMException('signal timed out', 'TimeoutError') }, 'unreachable'],
         ['an approval the person cancelled', { errorCode: 'approval_canceled' }, 'declined'],
         ['an approval that was rejected', { errorCode: 'approval_rejected' }, 'declined'],

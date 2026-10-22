@@ -9657,6 +9657,8 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                 `Descarregant ${name} · ${downloaded} / ${totalBytes}`,
             uploadFailed: "No s'ha pogut pujar",
             failureReasons: {
+                carrierUnavailable: 'Cap connexió de transferència disponible',
+                carrierInterrupted: 'Connexió de transferència interrompuda',
                 declined: "No aprovat",
                 tooLarge: "Massa gran per pujar-lo",
                 unconfirmed: "No es pot confirmar que s’hagi acabat · comprova la carpeta",

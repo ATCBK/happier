@@ -19,9 +19,10 @@ export function readTransferFailureCode(error: unknown): string | undefined {
 /**
  * Why a finite transfer ended, in the words a transfer surface has for it. Every failure has exactly one reason, so a
  * status line never says only that something failed: the Machine stopped answering, the person did not approve it, a
- * permission refused it, it is too large, the result is not known, or the Machine could not take it.
+ * permission refused it, its carrier is unavailable/interrupted, it is too large, the result is not known, or the
+ * Machine could not take it. A carrier failure is not evidence of a Machine-side refusal.
  */
-export type TransferFailureReason = 'unreachable' | 'declined' | 'permission' | 'tooLarge' | 'unconfirmed' | 'other';
+export type TransferFailureReason = 'unreachable' | 'carrierUnavailable' | 'carrierInterrupted' | 'declined' | 'permission' | 'tooLarge' | 'unconfirmed' | 'other';
 
 const REACHABILITY_CODES: ReadonlySet<string> = new Set([MACHINE_RPC_TIMEOUT_ERROR_CODE, 'server_unreachable', 'home_unreachable']);
 const DECLINED_CODES: ReadonlySet<string> = new Set(['approval_canceled', 'approval_rejected', 'approval_stale']);
@@ -45,6 +46,8 @@ const TOO_LARGE_CODE = /too_large|max_bytes|quota_exceeded/i;
 export function classifyTransferFailure(failure: Readonly<{ errorCode?: string | undefined; thrown?: unknown }>): TransferFailureReason {
     const code = failure.errorCode ?? readTransferFailureCode(failure.thrown);
     if (code === undefined) return 'other';
+    if (code === 'machine_carrier_unavailable') return 'carrierUnavailable';
+    if (code === 'machine_carrier_transport_failed') return 'carrierInterrupted';
     if (REACHABILITY_CODES.has(code)) return 'unreachable';
     if (DECLINED_CODES.has(code)) return 'declined';
     if (PERMISSION_CODES.has(code)) return 'permission';

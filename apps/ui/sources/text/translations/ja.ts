@@ -10802,6 +10802,8 @@ localTailscale: {
       }) => `ダウンロード中 ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'アップロードできませんでした',
       failureReasons: {
+          carrierUnavailable: '転送接続を利用できません',
+          carrierInterrupted: '転送接続が中断されました',
           declined: "承認されませんでした",
           tooLarge: "サイズが大きすぎます",
           unconfirmed: "完了したか確認できません · フォルダを確認してください",

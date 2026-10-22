@@ -10356,6 +10356,8 @@ encryptedUnavailable: "Зашифрованные данные недоступ�
       }) => `Скачивание ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Не удалось загрузить',
       failureReasons: {
+          carrierUnavailable: 'Нет доступного соединения для передачи',
+          carrierInterrupted: 'Соединение для передачи прервано',
           declined: "Не одобрено",
           tooLarge: "Слишком большой для загрузки",
           unconfirmed: "Не удалось подтвердить завершение · проверьте папку",

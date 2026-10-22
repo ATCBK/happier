@@ -8390,6 +8390,8 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 `正在下載 ${name} · ${downloaded} / ${totalBytes}`,
             uploadFailed: '無法上傳',
             failureReasons: {
+                carrierUnavailable: '沒有可用的傳輸連線',
+                carrierInterrupted: '傳輸連線已中斷',
                 declined: "未獲核准",
                 tooLarge: "檔案過大，無法上傳",
                 unconfirmed: "無法確認是否完成 · 請檢查資料夾",

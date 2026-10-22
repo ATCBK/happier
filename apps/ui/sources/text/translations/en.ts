@@ -12304,6 +12304,8 @@ const enFiles = {
     }) => `Downloading ${name} · ${downloaded} / ${totalBytes}`,
     uploadFailed: "Couldn't upload",
     failureReasons: {
+        carrierUnavailable: 'No transfer connection available',
+        carrierInterrupted: 'Transfer connection interrupted',
         declined: "Not approved",
         tooLarge: "Too large to upload",
         unconfirmed: "Not sure it finished · check the folder",

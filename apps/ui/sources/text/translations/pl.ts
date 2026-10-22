@@ -10335,6 +10335,8 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
       }) => `Pobieranie ${name} · ${downloaded} / ${totalBytes}`,
       uploadFailed: 'Nie udało się wysłać',
       failureReasons: {
+          carrierUnavailable: 'Brak dostępnego połączenia transferu',
+          carrierInterrupted: 'Połączenie transferu przerwane',
           declined: "Nie zatwierdzono",
           tooLarge: "Za duży do wysłania",
           unconfirmed: "Nie wiadomo, czy się zakończyło · sprawdź folder",
