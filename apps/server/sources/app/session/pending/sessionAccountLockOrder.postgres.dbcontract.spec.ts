@@ -145,7 +145,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("S
             throw new Error("Use the disposable PostgreSQL DB-contract harness");
         }
         vi.stubEnv("HAPPIER_WEB_LATENCY_TRACE", "1");
-        const sink = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+        const sink = vi.spyOn(logger, "debug").mockImplementation(() => undefined);
         const account = await db.account.create({ data: createSignedAccountContentBinding() });
         const session = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}" } });
         const requestId = randomUUID();

@@ -1,5 +1,5 @@
 import { resolveCurrentSessionRecipientAccountIdsBySessionInTx } from "@/app/session/access/sessionRecipients";
-import { inReadSnapshot, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { getTransactionContext, inReadSnapshot, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { getDbProviderFromEnv } from "@/storage/prisma";
 import { resolveDbSqlDialect } from "@/config/databaseProvider";
 import { getSessionLifecycleAutomationPublicationAudienceInTx } from "@/app/workflows/workflowPublicationAudience";
@@ -14,6 +14,23 @@ export type SessionAccountCursorLockOptions = Readonly<{
      * Pure census only: every fence and publication recheck repeats this read. */
     readAdditionalAccountIdsInTx?: (tx: Tx) => Promise<readonly string[]>;
 }>;
+
+interface HeldSessionAudience {
+    sessionIds: readonly string[];
+    additionalAccountIds: readonly string[];
+    intent: AccountAdmissionIntent;
+    includeLifecyclePublications: boolean;
+    readAdditionalAccountIdsInTx: SessionAccountCursorLockOptions['readAdditionalAccountIdsInTx'];
+    projectionSessionIds: ReadonlySet<string>;
+    accountIds: ReadonlySet<string>;
+}
+
+const heldSessionAudiences = Symbol('held-session-audiences');
+type SessionAudienceContext = { [heldSessionAudiences]?: HeldSessionAudience[] };
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+    return left.length === right.length && left.every((id, index) => id === right[index]);
+}
 
 /** One census serves pre-attempt discovery and transactional currentness checks. */
 export async function readSessionAccountCursorAudienceInTx(
@@ -74,6 +91,24 @@ export async function acquireSessionAccountCursorLocksInTx(
     // SQLite has one database writer rather than independently lockable rows.
     if (provider === "sqlite") return [];
     const audience = await readSessionAccountCursorAudienceInTx(tx, sessionIds, additionalAccountIds, options);
+    const requestedSessionIds = [...new Set(sessionIds)].sort();
+    const requestedAccountIds = [...new Set(additionalAccountIds)].sort();
+    const held = (getTransactionContext(tx) as SessionAudienceContext)[heldSessionAudiences]?.find(scope =>
+        sameIds(scope.sessionIds, requestedSessionIds)
+        && sameIds(scope.additionalAccountIds, requestedAccountIds)
+        && scope.intent === (options?.intent ?? "content")
+        && scope.includeLifecyclePublications === (options?.includeLifecyclePublications === true)
+        && scope.readAdditionalAccountIdsInTx === options?.readAdditionalAccountIdsInTx
+        && audience.accountIds.every(id => scope.accountIds.has(id))
+        && audience.projectionSessionIds.every(id => scope.projectionSessionIds.has(id)));
+    if (held) {
+        // Reentry rereads currentness, but a completed same-attempt admission
+        // already holds the resources and owns their terminal validation.
+        return audience.accountIds;
+    }
+    // A changed scope still goes through canonical admission. In particular,
+    // the transaction may itself add a Follow resource for an already-admitted
+    // Account; replaying that write would never make its new resource preexist.
     return fenceSessionAccountCursorAudienceInTx(tx, audience, sessionIds, additionalAccountIds, options);
 }
 
@@ -124,6 +159,16 @@ export async function fenceSessionAccountCursorAudienceInTx(
     beforeAccountChangePublication(tx, accountIds, async client => {
         const current = await readSessionAccountCursorAudienceInTx(client, sessionIds, additionalAccountIds, options);
         assertAccountChangePublicationAudienceInTx(client, current.accountIds);
+    });
+    const context = getTransactionContext(tx) as SessionAudienceContext;
+    (context[heldSessionAudiences] ??= []).push({
+        sessionIds: [...new Set(sessionIds)].sort(),
+        additionalAccountIds: [...new Set(additionalAccountIds)].sort(),
+        intent: options?.intent ?? "content",
+        includeLifecyclePublications: options?.includeLifecyclePublications === true,
+        readAdditionalAccountIdsInTx: options?.readAdditionalAccountIdsInTx,
+        projectionSessionIds: admittedSessionIds,
+        accountIds: admittedAccountIds,
     });
     return accountIds;
 }
