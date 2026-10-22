@@ -18,7 +18,7 @@ import { workStatusGlyphColor, workStatusWordStyle } from '@/components/work/sta
 import { getStorage, useWorkflowRun, useServerScopedMachine } from '@/sync/domains/state/storage';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
@@ -138,7 +138,8 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
     const observedMachines = React.useMemo(() => machine ? [machine] : [], [machine]);
     const presenceNowMs = useMachinePresenceNowMs(observedMachines);
     useMachineReachabilityRevision(dataActive && machine !== null);
-    const machineReachable = machine ? isMachineReachable(inScope ? scope : null, machine, presenceNowMs) : undefined;
+    const machineReachability = machine ? resolveMachineReachability(inScope ? scope : null, machine, presenceNowMs) : 'unknown';
+    const machineReachable = machineReachability === 'unknown' ? undefined : machineReachability === 'reachable';
     const machineName = getMachineDisplayName(machine);
     const resultEnabled = props.includeResult === true && dataActive && summary != null
         && isTerminalWorkflowRunState(summary.state);

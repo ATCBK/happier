@@ -108,7 +108,7 @@ export const CLOSED_DETAIL: Detail = {
  */
 export function useSessionCapabilitiesDetail(
   serverId: string | null,
-  machineOnline: boolean,
+  machineOnline: boolean | null,
   onFactsChanged: () => void,
   target: SheetTarget,
   modelInput: ModelInput,
@@ -304,7 +304,7 @@ function SessionCapabilitiesSheet(
   const [known] = React.useState(props.readKnown);
   const { detail, renderMark } = useSessionCapabilitiesDetail(
     props.serverId,
-    props.base.machineOnline !== false,
+    props.base.machineOnline === undefined ? true : props.base.machineOnline,
     props.onRetry,
     props.target,
     props.modelInput,
@@ -468,7 +468,7 @@ export function useNewSessionCapabilitiesChip(
     draft: NewSessionCapabilitiesDraft;
     machineName: string;
     /** REACH's presence for the draft's machine; omitted where no machine is chosen yet (authoring). */
-    machineOnline?: boolean;
+    machineOnline?: boolean | null;
   }>,
 ): Readonly<{
   chip: AgentInputExtraActionChip;
@@ -525,7 +525,7 @@ export function useExistingSessionCapabilitiesChip(
   params: Readonly<{
     target: Extract<SessionCapabilitiesTarget, { kind: 'session' }>;
     machineName: string;
-    machineOnline: boolean;
+    machineOnline: boolean | null;
     /** No turn running and no approval waiting: the D34 Restart may run. */
     turnSettled: boolean;
     stop: () => Promise<boolean>;

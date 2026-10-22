@@ -14,6 +14,7 @@ import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixt
 import type { FileFindSeedHandoff } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
 import { ExternalSessionsCandidatesListRequestSchema, ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 const rpc = vi.hoisted(() => vi.fn());
 const homes = createHomeGovernanceHarness();
@@ -96,11 +97,35 @@ beforeEach(async () => {
     // deferred batch dispatch. These cases observe search state, not timer duration.
     vi.useFakeTimers({ toFake: ['Date'] });
 });
-afterEach(async () => { standardCleanup(); vi.useRealTimers(); await connection?.dispose(); connection = undefined; vi.restoreAllMocks(); await homes.reset(); });
+afterEach(async () => { standardCleanup(); clearMachineRequestReachabilityForTest(); vi.useRealTimers(); await connection?.dispose(); connection = undefined; vi.restoreAllMocks(); await homes.reset(); });
 
 async function flush() { await flushHookEffects(); }
 
 describe('History unified conversation search', () => {
+    it('does not present a retained offline Machine as observed after its Home withdraws presence', async () => {
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return DEFAULT_MEMORY_SETTINGS;
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) return ExternalSessionsCandidatesListResponseSchema.parse({ ok: true, candidates: [], nextCursor: null });
+            throw new Error(`Unexpected presence transport ${call.method}`);
+        });
+        const screen = await renderScreen(<ExternalSessionsBrowseScreen
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} />);
+        const readList = () => screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
+        await waitForHomeGovernance(async () => { await flush(); expect(readList().props.loading).toBe(false); });
+        const original = storage.getState().machines['machine-1']!;
+        await act(async () => {
+            const offline = { ...original, active: false, activeAt: Date.now() - 120_000 };
+            storage.setState({ machines: { ...storage.getState().machines, [offline.id]: offline },
+                machineListByServerId: { ...storage.getState().machineListByServerId, [serverId]: [offline] } });
+        });
+        expect(readList().props.offline).toBe(true);
+        const scope = { serverId, accountId: 'history-account' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(readList().props.offline).toBe(false);
+        await act(async () => captureMachinePresenceObservation(scope)(['machine-1']));
+        expect(readList().props.offline).toBe(true);
+    });
     it.each(['control', 'return'] as const)('admits an explicit %s submit during indexed lookup and settles a partial hit or complete empty scan', async submit => {
         const pendingStatus = createDeferred<unknown>();
         let statusReads = 0;

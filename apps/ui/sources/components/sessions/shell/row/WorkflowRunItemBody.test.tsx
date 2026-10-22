@@ -16,6 +16,7 @@ import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 
 const http = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(http);
@@ -42,6 +43,7 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 afterEach(async () => {
+    clearMachineRequestReachabilityForTest();
     await standardCleanup();
     await http.reset();
     singleton?.dispose();
@@ -118,6 +120,22 @@ async function initializeRun() {
 }
 
 describe('opened habit History result', () => {
+    it('does not call pending Stop offline after its Home withdraws Machine presence', async () => {
+        const { home } = await initializeRun();
+        const machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
+        storage.setState({ machines: { [machine.id]: machine } });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(createWorkflowRunSummaryFixture({
+            id: 'habit-run', revision: 4, state: 'cancelled', workflowCustodyState: 'pending', attentionRequired: true,
+        }))]);
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id} presentation="work" />);
+        await act(async () => withdrawMachinePresenceForScope({ serverId: home.id, accountId: 'account-1' }));
+        expect(screen.getTextContent()).not.toContain('workflows.run.stopWhenMachineReconnects');
+        await act(async () => {
+            storage.setState({ machines: { [machine.id]: { ...machine, active: false, activeAt: Date.now() - 120_000 } } });
+            captureMachinePresenceObservation({ serverId: home.id, accountId: 'account-1' })([machine.id]);
+        });
+        expect(screen.getTextContent()).toContain('workflows.run.stopWhenMachineReconnects');
+    });
     it('uses offline Stop presentation until the exact Machine reconnects', async () => {
         const { home } = await initializeRun();
         const machine = createMachineFixture({ id: 'machine-1', active: false, activeAt: Date.now() - 120_000,

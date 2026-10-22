@@ -143,7 +143,7 @@ import { WorkspaceSyncRelationshipList } from '@/components/workspaces/sync/Work
 import { openWorkspaceSyncAddMachine } from '@/components/workspaces/sync/openWorkspaceSyncAddMachine';
 import { openWorkspaceSyncRelationshipDetails } from '@/components/workspaces/sync/openWorkspaceSyncRelationshipDetails';
 import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/session/listing/sessionWorkspaceDisplayPresentation';
-import { isMachineOnline } from '@/utils/sessions/machineUtils';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { getSessionMachineLabel } from '@/utils/sessions/machineDisplayNames';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
@@ -416,6 +416,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
     const reachableMachineTarget = useSessionReachableMachineTarget(session.id, sessionServerId);
     const reachableMachineId = reachableMachineTarget?.machineId ?? null;
     const currentExecutionMachineId = reachableMachineId ?? sourceMachineIdForHandoff;
+    const currentExecutionMachinePresence = useMachinePresenceSummary(sessionServerId, currentExecutionMachineId);
     const currentExecutionMachine = sessionServerId && currentExecutionMachineId
         ? (machineListByServerId[sessionServerId] ?? [])
             .find((machine) => machine.id === currentExecutionMachineId)
@@ -911,7 +912,8 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         const confirmed = await Modal.confirm(
             t('sessionInfo.deleteSession'),
             resolveSessionDeleteWarning({
-                metadata, machineOnline: currentExecutionMachine ? isMachineOnline(currentExecutionMachine) : false,
+                metadata, machineOnline: currentExecutionMachinePresence.reachability === 'unknown'
+                    ? null : currentExecutionMachinePresence.reachability === 'reachable',
                 defaultWarning: t('sessionInfo.deleteSessionWarning'),
                 offlineManagedWarning: t('sessionDirectoryRecovery.offlineDelete', { machine: currentExecutionMachineLabel ?? metadata?.host ?? t('status.unknown') }),
             }),
@@ -923,7 +925,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         );
         if (!confirmed) return;
         await performDelete();
-    }, [currentExecutionMachine, currentExecutionMachineLabel, metadata, performDelete]);
+    }, [currentExecutionMachinePresence.reachability, currentExecutionMachineLabel, metadata, performDelete]);
 
     const handleRenameSession = useCallback(async () => {
         if (!canRenameSession) return;

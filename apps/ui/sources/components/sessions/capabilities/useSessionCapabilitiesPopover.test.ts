@@ -74,13 +74,15 @@ it('edits only the authoring draft and does not request a Machine preview before
 
 it('reads a draft check that failed against a machine REACH says is away as offline, not as a failure', async () => {
     transport.mockRejectedValue(new Error('rpc timed out'));
-    const hook = await renderHook((machineOnline: boolean) => {
+    const hook = await renderHook<ReturnType<typeof useNewSessionCapabilitiesPopover>, boolean | null>((machineOnline) => {
         const [selection, setSelection] = React.useState<SessionCapabilitySelectionV1>({});
         return useNewSessionCapabilitiesPopover({ machineId: 'machine', directory: '/repo', agentId: 'codex', enabled: true,
             selection, setSelection }, { ...presentation, machineOnline });
     }, { initialProps: false });
     await act(async () => hook.getCurrent().demandPreview());
     await vi.waitFor(() => expect(hook.getCurrent().model.state).toBe('machine_unreachable'));
+    await hook.rerender(null);
+    expect(hook.getCurrent().model.state).toBe('resolving');
     await hook.rerender(true);
     expect(hook.getCurrent().model.state).toBe('error');
 });
@@ -236,10 +238,12 @@ it('says the session\'s machine is away when its check fails while it is offline
     homes.answer(serverId, 'GET /v1/artifacts', { body: [] });
     transport.mockRejectedValue(new Error('machine unreachable'));
     const target = { kind: 'session' as const, sessionId, serverId, readOnly: false };
-    const hook = await renderHook((machineOnline: boolean) => useExistingSessionCapabilitiesPopover(target, { ...presentation, machineOnline }),
+    const hook = await renderHook<ReturnType<typeof useExistingSessionCapabilitiesPopover>, boolean | null>((machineOnline) => useExistingSessionCapabilitiesPopover(target, { ...presentation, machineOnline }),
         { initialProps: false });
     await act(async () => { hook.getCurrent().demandPreview(); });
     await vi.waitFor(() => expect(hook.getCurrent().model.state).toBe('machine_unreachable'));
+    await hook.rerender(null);
+    expect(hook.getCurrent().model.state).toBe('resolving');
     await hook.rerender(true);
     expect(hook.getCurrent().model.state).toBe('error');
 });

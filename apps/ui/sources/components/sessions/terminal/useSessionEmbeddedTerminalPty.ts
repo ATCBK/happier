@@ -1,7 +1,6 @@
 import * as React from 'react';
 import type { SessionTerminalTargetV1 } from '@happier-dev/protocol';
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
-import { resolveSessionMachineReachability } from '@/components/sessions/model/resolveSessionMachineReachability';
 
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
@@ -21,7 +20,7 @@ export function useSessionEmbeddedTerminalPty(params: Readonly<{
     terminalRef: React.MutableRefObject<EmbeddedTerminalRendererHandle | null>;
 }>) {
     const machineTarget = useSessionMachineTarget(params.sessionId, params.serverId);
-    const { machineReachable, machineRpcTargetAvailable } = useSessionMachineReachability(params.sessionId, params.serverId);
+    const { machineReachable, machineReachability, machineRpcTargetAvailable } = useSessionMachineReachability(params.sessionId, params.serverId);
     const target = params.terminalTarget;
     const explicitMachineId = target?.kind === 'machine_shell' || target?.kind === 'terminal_view' ? target.machineId : null;
     const explicitMachinePresence = useMachinePresenceSummary(params.serverId, explicitMachineId);
@@ -43,7 +42,9 @@ export function useSessionEmbeddedTerminalPty(params: Readonly<{
         readOnly: target?.kind === 'terminal_view',
         workspace: target?.kind === 'terminal_view' ? target.workspace : undefined,
         sessionId: params.sessionId,
-        machineReachable: explicitMachineId ? resolveSessionMachineReachability({ machineIsKnown: explicitMachinePresence.machineIsKnown ?? explicitMachinePresence.reachability !== 'unknown', machineIsOnline: explicitMachinePresence.reachability === 'reachable' }) : machineReachable,
+        machineReachable: explicitMachineId
+            ? explicitMachinePresence.reachability === 'unknown' ? null : explicitMachinePresence.reachability === 'reachable'
+            : machineReachability === 'unknown' ? null : machineReachable,
         machineRpcTargetAvailable: explicitMachineId ? true : machineRpcTargetAvailable,
         terminalKey: params.terminalKey,
         scopeId: params.scopeId,

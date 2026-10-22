@@ -108,7 +108,6 @@ import { useDaemonMergedProjectionInputs } from "@/agents/backendCatalog/useDaem
 import { readCurrentProjectedAgentCapabilities, supportsAgentLifecycleCapability } from "@/agents/backendCatalog/currentAgentCapabilities";
 import { parsePermissionIntentAlias, readExternalSessionOperationState, resolveAgentIdFromSessionMetadata } from "@happier-dev/agents";
 import { useInSessionAgentPickerControls } from "@/components/sessions/agentPicker/useInSessionAgentPickerControls";
-import { isMachineReachable as readMachineReachable } from "@/sync/domains/machines/reachability/machineReachability";
 import { isAskHappierStatusOfferState } from "@/components/sessions/bots/askHappierEntry";
 import { useAskHappierOpener } from "@/components/sessions/bots/useAskHappierOffer";
 import { useResumeCapabilityOptions } from "@/agents/hooks/useResumeCapabilityOptions";
@@ -1523,13 +1522,13 @@ export function useSessionComposerController({
             authorization: session.pendingActivationAuthorization,
             activeAt: session.activeAt,
             active: session.active,
-            machineReachable: isMachineReachable,
+            machineReachable: machineReachability === 'unknown' ? null : isMachineReachable,
             canWrite: hasWriteAccess,
             resumingAt: sessionRuntimeStatusSource.resumingAt,
             pendingMessages,
             managedWakeProjection,
         });
-    }, [hasWriteAccess, isComposerSending, isMachineReachable, managedWakeProjection, pendingMessages, session.active, session.activeAt, session.pendingActivationAuthorization, sessionRuntimeStatusSource.resumingAt]);
+    }, [hasWriteAccess, isComposerSending, isMachineReachable, machineReachability, managedWakeProjection, pendingMessages, session.active, session.activeAt, session.pendingActivationAuthorization, sessionRuntimeStatusSource.resumingAt]);
     const [pendingActivationActionBusy, setPendingActivationActionBusy] = React.useState(false);
     const goalControlMachineId = controlMachineTarget?.machineId ?? machineId;
     const goalControlMachineRecord = useMachine(typeof goalControlMachineId === 'string' ? goalControlMachineId : '');
@@ -1550,16 +1549,15 @@ export function useSessionComposerController({
         // — so reading it here would block every ordinary Session.
         storageKind: getSessionStorageKind(session),
         canEditSession: hasWriteAccess,
-        machinePresence: sessionMachineRecord
-            ? (readMachineReachable(sessionAccountScope, sessionMachineRecord) ? 'online' as const : 'offline' as const)
-            : 'unknown' as const,
+        machinePresence: machineReachability === 'unknown' ? 'unknown' as const
+            : machineReachability === 'reachable' ? 'online' as const : 'offline' as const,
         // The Session's transcript sequence, which only a written transcript
         // record advances. Zero is therefore the one state in which a switch
         // provably carries nothing — and it is read from the Session row the
         // screen already holds rather than from a transcript page that may not
         // be loaded.
         hasConversationToCarry: session.seq > 0,
-    }), [hasWriteAccess, isMachineReachable, providerAgentTargetKey, session, sessionAccountScope, sessionMachineRecord]);
+    }), [hasWriteAccess, machineReachability, providerAgentTargetKey, session]);
     // `session.continuation.inspect` is answered by the machine hosting the
     // Session, so an answer only holds for as long as BOTH runtimes behind it do:
     // this realtime connection, and the daemon that answered. A daemon that
@@ -4595,7 +4593,7 @@ export function useSessionComposerController({
             const replayCfg = resolveHappierReplayConfig(storage.getState().settings);
             if (replayCfg.enabled) {
                 if (!isMachineReachable) {
-                    maybeAlert(t('session.machineOfflineCannotResume'));
+                    maybeAlert(t(machineReachability === 'unknown' ? 'newSession.machineUnavailableStatus' : 'session.machineOfflineCannotResume'));
                     return false;
                 }
 
@@ -4636,7 +4634,8 @@ export function useSessionComposerController({
             if (pendingActivationPresentation?.primaryAction === 'process_when_online') {
                 return await handlePendingActivationRequest('process_when_online');
             }
-            maybeAlert(t(pendingActivationPresentation?.titleKey ?? 'session.machineOfflineCannotResume'));
+            maybeAlert(t(pendingActivationPresentation?.titleKey ?? (machineReachability === 'unknown'
+                ? 'newSession.machineUnavailableStatus' : 'session.machineOfflineCannotResume')));
             return false;
         }
 
@@ -4673,7 +4672,7 @@ export function useSessionComposerController({
             maybeAlert(t('session.resumeFailed'), readRpcErrorCode(error));
             return false;
         }
-    }, [actionExecutor, agentId, handlePendingActivationRequest, pendingActivationPresentation, sessionAccountLifetime, sessionAccountScopeKey, sessionRouteServerId, executionRunsEnabled, isMachineReachable, isResumable, reachableMachineTarget, router, session, sessionActionDefaultBackend, sessionId, sessionMachineAccessRemoved]);
+    }, [actionExecutor, agentId, handlePendingActivationRequest, pendingActivationPresentation, sessionAccountLifetime, sessionAccountScopeKey, sessionRouteServerId, executionRunsEnabled, isMachineReachable, machineReachability, isResumable, reachableMachineTarget, router, session, sessionActionDefaultBackend, sessionId, sessionMachineAccessRemoved]);
     handleUsageLimitRecoveryResumeNowRef.current = handleResumeSession;
 
     const handleManagedWakeRecovery = React.useCallback(async (action: 'inspect' | 'retry' | 'resume' | 'withdraw') => {
@@ -4771,6 +4770,7 @@ export function useSessionComposerController({
         isSessionActive,
         isResumable,
         isMachineReachable,
+        machineReachability,
         allowInputWhileInactive: persistedVoiceComposerRouting?.kind === 'adapter_text',
         providerName,
         machineName,
@@ -5212,7 +5212,7 @@ export function useSessionComposerController({
         const sessionCapabilities = useExistingSessionCapabilitiesChip({
             target: sessionCapabilitiesTarget,
             machineName: sessionMachineRecord ? getMachineSentenceName(sessionMachineRecord) : t('common.machine'),
-            machineOnline: isMachineReachable,
+            machineOnline: machineReachability === 'unknown' ? null : isMachineReachable,
             turnSettled: !isRuntimeFreshActiveTurn,
             stop: stopSessionForCapabilities,
             resume: resumeSessionForCapabilities,

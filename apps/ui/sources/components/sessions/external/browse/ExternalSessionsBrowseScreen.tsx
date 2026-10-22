@@ -26,6 +26,7 @@ import { PopoverScope } from '@/components/ui/popover';
 import { Modal } from '@/modal';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { useMachineListForServer, useSetting } from '@/sync/domains/state/storage';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import {
     machineAdministrationTargetsEqual,
@@ -636,10 +637,8 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
             setAutoLinkMutationPending(false);
         }
     }, [accountSettingsTargetAvailable, autoLinkPolicyScope, expectedSettingsScope, resolveCurrentOperationTarget, settingsVersion]);
-    const selectedMachineIsOffline = React.useMemo(() => {
-        if (!effectiveSelectedMachineId) return false;
-        return machines?.find((machine) => machine.id === effectiveSelectedMachineId)?.active === false;
-    }, [effectiveSelectedMachineId, machines]);
+    const selectedMachinePresence = useMachinePresenceSummary(effectiveSelectedServerId, effectiveSelectedMachineId);
+    const selectedMachineIsOffline = selectedMachinePresence.reachability === 'unreachable';
     const selectedMachineLabel = React.useMemo(() => {
         if (lockScope) {
             const machine = machines?.find((candidate) => candidate.id === effectiveSelectedMachineId);

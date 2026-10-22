@@ -44,7 +44,7 @@ export function sessionCapabilityApplyNotice(input: Readonly<{
     pendingApply: PendingApply;
     applyTiming: Readonly<{ mcp: CapabilityApplyTimingV1; skills: CapabilityApplyTimingV1 }> | null;
     change: SessionCapabilityApplyChange | null;
-    machineOnline: boolean; machineName: string; turnSettled: boolean;
+    machineOnline: boolean | null; machineName: string; turnSettled: boolean;
     translate?: (key: `capabilities.session.apply.${SessionCapabilityApplyNoticeKey}`, params: Readonly<{ item: string; machine: string }>) => string;
 }>): SessionCapabilityApplyNotice | null {
     const pending = input.pendingApply.mcp || input.pendingApply.skills;
@@ -66,6 +66,7 @@ export function sessionCapabilityApplyNotice(input: Readonly<{
     let key: SessionCapabilityApplyNoticeKey;
     let restart: SessionCapabilityApplyNotice['restart'] = null;
     if (timing?.t === 'missing_resume_snapshot' || timing?.t === 'missing_resume_identity') key = 'cannotResume';
+    else if (input.machineOnline === null) key = 'saved';
     else if (!input.machineOnline) key = 'offline';
     else if (timing?.t === 'restart_to_apply') {
         const by = timing.restartBy;

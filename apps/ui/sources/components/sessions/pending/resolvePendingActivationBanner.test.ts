@@ -12,6 +12,14 @@ const rows = [
 ];
 
 describe('resolvePendingActivationBanner', () => {
+    it('keeps unknown Machine queues generic and closed until observed reachability returns', () => {
+        const input = { activeAt: 100, active: false, machineReachable: null, canWrite: true, pendingMessages: rows };
+        expect(resolvePendingActivationBanner(input)).toMatchObject({ kind: 'queued', primaryAction: null });
+        expect(resolvePendingActivationBanner({ ...input, authorization: waiting })).toMatchObject({ kind: 'waiting', primaryAction: null });
+        expect(resolvePendingActivationBanner({ ...input, authorization: failed })).toMatchObject({ kind: 'failed', primaryAction: null });
+        expect(resolvePendingActivationBanner({ ...input, pendingMessages: [{ ...rows[0], pendingActivationHoldReason: 'resume_not_requested' }] }))
+            .toMatchObject({ kind: 'queued', primaryAction: null });
+    });
     it.each(['runtime_start_failed', 'managed_start_denied'] as const)('rearms the same failed stopped wake and gives current power refusal precedence (%s)', failureCode => {
         const authorization = PendingActivationAuthorizationV1Schema.parse({ ...failed, failureCode });
         const managed = {

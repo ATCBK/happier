@@ -9,6 +9,12 @@ import { buildSkillComposerGroups, pickSkillComposerRow } from '@/sync/domains/s
 import { SessionCapabilitySelectionAuthoringV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 describe('the single session capability apply notice', () => {
+    it('retains saved pending changes without an offline claim or restart action while Machine presence is unknown', () => {
+        expect(sessionCapabilityApplyNotice({ pendingApply: { mcp: true, skills: false },
+            applyTiming: { mcp: { t: 'restart_to_apply', restartBy: 'user' }, skills: { t: 'next_turn' } },
+            change: null, machineOnline: null, machineName: 'QA', turnSettled: true,
+        })).toMatchObject({ key: 'saved', restart: null });
+    });
     const translate = (key: string, params?: Readonly<Record<string, string>>) => JSON.stringify([key, params ?? {}]);
     it.each([
         [{ t: 'next_turn' }, 'Changes apply at the next turn'],
@@ -128,7 +134,7 @@ describe('the single session capability apply notice', () => {
         const pick = await pickSkillComposerRow(row, { setItem: (kind, id, state) => {
             selection = setSessionCapabilitySelectionItemV1(selection, kind, id, state);
         } });
-        expect(pick).toEqual({ ok: true, mention: { kind: 'happier.skill', ref: 'skill:skill', token: '$review', label: 'review' } });
+        expect(pick).toEqual({ ok: true, mention: { kind: 'happier.skill', ref: 'skill:skill', token: '[review](happier-ref:skill:skill)', label: 'review' } });
         const pickedMetadata = writeSessionCapabilitySelectionToMetadataV1({}, selection, { sessionActive: true });
         const sheetMetadata = writeSessionCapabilitySelectionToMetadataV1({}, setSessionCapabilitySelectionItemV1({}, 'skill', 'skill', 'on'), { sessionActive: true });
         const notice = (metadata: unknown) => sessionCapabilityApplyNotice({ pendingApply: readPendingCapabilityApplyV1(metadata),

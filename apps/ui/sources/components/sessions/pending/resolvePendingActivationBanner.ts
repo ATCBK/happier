@@ -36,7 +36,7 @@ export function resolvePendingActivationBanner(input: Readonly<{
     authorization?: PendingActivationAuthorizationV1 | null;
     activeAt: number;
     active: boolean;
-    machineReachable: boolean;
+    machineReachable: boolean | null;
     canWrite: boolean;
     resumingAt?: number | null;
     pendingMessages: readonly PendingMessage[];
@@ -52,9 +52,9 @@ export function resolvePendingActivationBanner(input: Readonly<{
             || managedWakeProjection.kind === 'agentStartFailed' && managedWakeProjection.canRequestWake)
         ? rows.find(row => row.pendingActivationHoldReason) : undefined;
     if (held) return {
-        kind: 'queued_offline', row: held, holdReason: held.pendingActivationHoldReason,
+        kind: input.machineReachable === false ? 'queued_offline' : 'queued', row: held, holdReason: held.pendingActivationHoldReason,
         ...(held.pendingActivationHoldReason === 'managed_power_required' ? { titleKey: 'managedWake.refused' as const } : {}),
-        primaryAction: held.pendingActivationHoldReason === 'managed_power_required' ? null : 'process_when_online',
+        primaryAction: input.machineReachable === null || held.pendingActivationHoldReason === 'managed_power_required' ? null : 'process_when_online',
         secondaryAction: null, settingsAction: 'settings',
     };
     if (managedWakeProjection) {
@@ -63,7 +63,7 @@ export function resolvePendingActivationBanner(input: Readonly<{
         const row = input.pendingMessages.filter(isEligiblePendingUserRow)
             .find(candidate => candidate.localId === input.authorization?.requestId) ?? null;
         return {
-            kind: managedWakeProjection.kind === 'agentStartFailed' ? 'failed' : input.machineReachable ? 'waiting' : 'waiting_offline',
+            kind: managedWakeProjection.kind === 'agentStartFailed' ? 'failed' : input.machineReachable === false ? 'waiting_offline' : 'waiting',
             managedWakeProjection, row,
             primaryAction: row && managedWakeProjection.canRetryAgentStart ? 'retry'
                 : row && managedWakeProjection.canResumeRuntime ? 'resume'
@@ -83,7 +83,7 @@ export function resolvePendingActivationBanner(input: Readonly<{
             return {
                 kind: 'failed',
                 row,
-                primaryAction: row
+                primaryAction: row && input.machineReachable !== null
                     ? (input.machineReachable ? 'retry' : 'process_when_online')
                     : null,
                 secondaryAction: row ? 'keep_queued' : null,
@@ -91,7 +91,7 @@ export function resolvePendingActivationBanner(input: Readonly<{
             };
         }
         return {
-            kind: input.machineReachable ? 'waiting' : 'waiting_offline',
+            kind: input.machineReachable === false ? 'waiting_offline' : 'waiting',
             row,
             primaryAction: null,
             secondaryAction: row ? 'keep_queued' : null,
@@ -100,9 +100,9 @@ export function resolvePendingActivationBanner(input: Readonly<{
     }
     if (rows.length === 0) return null;
     return {
-        kind: input.machineReachable ? 'queued' : 'queued_offline',
+        kind: input.machineReachable === false ? 'queued_offline' : 'queued',
         row: rows[0],
-        primaryAction: input.machineReachable ? 'resume' : 'process_when_online',
+        primaryAction: input.machineReachable === null ? null : input.machineReachable ? 'resume' : 'process_when_online',
         secondaryAction: null,
         settingsAction: 'settings',
     };

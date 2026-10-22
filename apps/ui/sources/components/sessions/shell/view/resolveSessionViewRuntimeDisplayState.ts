@@ -5,6 +5,7 @@ import { getSessionLocalControlState } from '@/sync/domains/session/control/sess
 import { getPreferredLanguage, t } from '@/text';
 import { LruMap } from '@/utils/cache/lruMap';
 import { readSessionListShellCacheMaxEntriesFromEnv } from '../sessionListShellCacheConfig';
+import type { SessionMachineReachability } from '@/sync/domains/machines/reachability/resolveSessionMachineReachability';
 
 export type SessionViewRuntimeDisplayState = Readonly<{
     localControlState: ReturnType<typeof getSessionLocalControlState>;
@@ -21,6 +22,7 @@ type Input = Readonly<{
     isSessionActive: boolean;
     isResumable: boolean;
     isMachineReachable: boolean;
+    machineReachability: SessionMachineReachability;
     allowInputWhileInactive: boolean;
     providerName: string;
     machineName: string;
@@ -42,6 +44,7 @@ function buildCacheKey(input: Input): string {
         input.isSessionActive ? 1 : 0,
         input.isResumable ? 1 : 0,
         input.isMachineReachable ? 1 : 0,
+        input.machineReachability,
         input.allowInputWhileInactive ? 1 : 0,
         input.providerName,
         input.machineName,
@@ -64,7 +67,7 @@ export function resolveSessionViewRuntimeDisplayState(input: Input): SessionView
     const inactiveUi = getInactiveSessionUiState({
         isSessionActive: input.isSessionActive,
         isResumable: input.isResumable,
-        isMachineOnline: input.isMachineReachable,
+        isMachineOnline: input.machineReachability === 'unknown' ? null : input.isMachineReachable,
         isArchived: input.session.archivedAt != null,
         allowInputWhileInactive: input.allowInputWhileInactive,
     });

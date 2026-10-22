@@ -56,7 +56,7 @@ export type SessionCapabilitiesModelInput = Readonly<{
         pendingApply: Extract<SessionCapabilitiesGetOutputV1, { ok: true }>['pendingApply'];
         applyTiming: Readonly<{ mcp: CapabilityApplyTimingV1; skills: CapabilityApplyTimingV1 }> | null;
     }>;
-    change?: SessionCapabilityApplyChange | null; machineOnline?: boolean; machineName?: string; turnSettled?: boolean;
+    change?: SessionCapabilityApplyChange | null; machineOnline?: boolean | null; machineName?: string; turnSettled?: boolean;
 }>;
 
 function formatTokenCount(value: number): string {
@@ -129,7 +129,7 @@ export function buildSessionCapabilitiesModel(input: SessionCapabilitiesModelInp
     const applyTiming = timing && input.change?.kind === 'native_skill'
         ? { ...timing, skills: input.nativeSkills?.applyTiming ?? timing.mcp } : timing;
     const notice = sessionCapabilityApplyNotice({ pendingApply, applyTiming,
-        change: input.change ?? null, machineOnline: input.machineOnline !== false, machineName: input.machineName ?? '', turnSettled: input.turnSettled === true });
+        change: input.change ?? null, machineOnline: input.machineOnline === undefined ? true : input.machineOnline, machineName: input.machineName ?? '', turnSettled: input.turnSettled === true });
     // A group whose rows can't change in this running session says so once, where its trailing words sit (INV-2).
     const newSessionsOnly = (rows: readonly SessionCapabilityRowModel[]) => rows.length > 0 && rows.every(row => row.readOnlyReason === 'new_sessions_only');
     const trailing = (rows: readonly SessionCapabilityRowModel[], words: string) => newSessionsOnly(rows)

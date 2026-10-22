@@ -87,6 +87,7 @@ describe('session action presentation', () => {
         expect(warning).not.toContain(metadata.path);
         expect(resolveSessionDeleteWarning({ ...input, metadata: {} })).toBe(input.defaultWarning);
         expect(resolveSessionDeleteWarning({ ...input, metadata, machineOnline: true })).toBe(input.defaultWarning);
+        expect(resolveSessionDeleteWarning({ ...input, metadata, machineOnline: null })).toBe(input.defaultWarning);
     });
     it('uses unarchive-specific info copy', () => {
         const props = createSessionActionInfoItemProps({

@@ -8,6 +8,7 @@ import { AccountEncryptionCurrentnessResponseSchema, sealSessionOwnerMetadataEnv
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture,
     createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -44,6 +45,7 @@ let releaseQuery: (() => void) | undefined;
 
 beforeEach(() => network.resetRequests());
 afterEach(async () => {
+    clearMachineRequestReachabilityForTest();
     releaseQuery?.();
     releaseQuery = undefined;
     standardCleanup();
@@ -220,8 +222,17 @@ describe('SessionFollowDestinationPickerModal', () => {
         }]);
         expect(onClose).not.toHaveBeenCalled();
         expect(screen.findByTestId('session-follow-source-key-waiting')).not.toBeNull();
+        const scope = { serverId: fixture.home.id, accountId: 'follow-picker-account' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        await flushHookEffects();
+        const attemptsBeforeRecovery = fixture.order.length;
+        await act(async () => captureMachinePresenceObservation({ ...scope, accountId: 'another-account' })(['runner-a']));
+        expect(fixture.order).toHaveLength(attemptsBeforeRecovery);
+        await act(async () => captureMachinePresenceObservation(scope)(['runner-a']));
+        await vi.waitFor(() => expect(fixture.order).toHaveLength(attemptsBeforeRecovery + 1));
+        const attemptsBeforeRetry = fixture.order.length;
         await screen.pressByTestIdAsync('session-follow-source-key-waiting');
-        await vi.waitFor(() => expect(fixture.order).toEqual(['set', 'prepare', 'prepare']));
+        await vi.waitFor(() => expect(fixture.order).toHaveLength(attemptsBeforeRetry + 1));
     });
 
     it('asks for a daemon update instead of offering a retry the outdated runtime cannot satisfy', async () => {

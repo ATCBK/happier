@@ -44,14 +44,14 @@ export function useSessionViewerMachine(
   sessionId: string,
   serverId: string | null,
   source: SessionViewerSource,
-): Readonly<{ name: string; online: boolean; targetTitle: string | null }> {
+): Readonly<{ name: string; online: boolean | null; targetTitle: string | null }> {
   const facts = useOptionalSessionViewerController()?.facts[source];
   const stated = facts?.machineName ?? null;
   const machineId = useSessionViewerMachineId(sessionId, serverId);
   const presence = useMachinePresenceSummary(serverId, machineId);
   return {
     name: resolveSessionViewerMachineName(stated, presence.name) ?? '',
-    online: presence.reachability === 'reachable',
+    online: presence.reachability === 'unknown' ? null : presence.reachability === 'reachable',
     targetTitle: facts?.targetTitle ?? null,
   };
 }

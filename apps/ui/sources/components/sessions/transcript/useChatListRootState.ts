@@ -204,12 +204,13 @@ export function useChatListRootState(props: ChatListProps) {
                 machineId: operationMachineSubscriptionTarget,
                 machineOnline:
                     operationMachine !== null && operationMachineReachable,
-                machineStatusKnown: operationMachine !== null,
+                machineStatusKnown: operationMachine !== null && operationPresence.reachability !== 'unknown',
                 serverId: sessionServerId,
             }
     ), [
         operationMachine,
         operationMachineReachable,
+        operationPresence.reachability,
         operationMachineSubscriptionTarget,
         sessionServerId,
     ]);

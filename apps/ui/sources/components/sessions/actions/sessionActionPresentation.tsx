@@ -29,11 +29,11 @@ import { readSessionAnswersWorkerQuestionsV1 } from '@happier-dev/protocol/promp
 /** Shared delete copy: deleting an offline managed session cannot remove its computer's folder yet. */
 export function resolveSessionDeleteWarning(input: Readonly<{
     metadata: unknown;
-    machineOnline: boolean;
+    machineOnline: boolean | null;
     defaultWarning: string;
     offlineManagedWarning: string;
 }>): string {
-    return !input.machineOnline && readSessionDirectoryKind(input.metadata) === 'managed'
+    return input.machineOnline === false && readSessionDirectoryKind(input.metadata) === 'managed'
         ? `${input.defaultWarning}\n\n${input.offlineManagedWarning}`
         : input.defaultWarning;
 }

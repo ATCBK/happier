@@ -252,7 +252,7 @@ export function SessionViewerControls(
           <HappierIdentityCapsule
             name={machineName}
             leading={
-              <StatusDot
+              online === null ? null : <StatusDot
                 color={
                   online
                     ? theme.colors.status.connected

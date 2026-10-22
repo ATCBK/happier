@@ -14,15 +14,15 @@ import { Typography } from '@/constants/Typography';
  */
 export function SessionViewerMachineMark(props: Readonly<{
   name: string;
-  online?: boolean;
+  online?: boolean | null;
   testID?: string;
 }>): React.ReactElement {
   const { theme } = useUnistyles();
   return (
     <View style={stylesheet.root} testID={props.testID}>
-      <StatusDot
+      {typeof props.online === 'boolean' ? <StatusDot
         color={props.online === false ? theme.colors.status.disconnected : theme.colors.status.connected}
-      />
+      /> : null}
       <Text style={stylesheet.name} numberOfLines={1}>{props.name}</Text>
     </View>
   );

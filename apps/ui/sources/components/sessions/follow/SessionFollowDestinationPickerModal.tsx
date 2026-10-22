@@ -14,7 +14,6 @@ import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { setSessionFollowSource } from '@/sync/api/session/sessionFollowSourcesApi';
 import { resolveSessionListQueryPresentation } from '@/sync/domains/session/listing/sessionListIndexPresentation';
 import { useSessionListQuerySourceState } from '@/sync/domains/session/listing/useSessionListQuerySourceState';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
@@ -26,6 +25,7 @@ import {
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
 import { getSessionName, getSessionSubtitle } from '@/utils/sessions/sessionUtils';
+import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 
 import {
     resolveSessionFollowDestinationTargets,
@@ -129,7 +129,7 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
         ? candidates.find((candidate) => candidate.id === committedRelation.destinationSessionId) ?? null
         : null;
     const destinationMachineId = destinationForPreparation
-        ? resolveSessionMachineId(readSessionOwnerMetadataView(destinationForPreparation))
+        ? resolveSessionMachineId(destinationForPreparation.metadata)
         : null;
     const preparationRequestRef = React.useRef<AbortController | null>(null);
     React.useEffect(() => () => {
@@ -140,8 +140,10 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
     const destinationMachine = destinationMachineId
         ? (machinesByServerId[fixedAddress.serverId] ?? []).find((machine) => machine.id === destinationMachineId) ?? null
         : null;
+    const destinationMachinePresence = useMachinePresenceSummary(fixedAddress.serverId, destinationMachineId);
     const retryReadinessSignature = committedRelation ? [
         online ? 'online' : 'offline',
+        destinationMachinePresence.reachability,
         destinationMachineId ?? '',
         destinationMachine?.active === true ? 'active' : 'inactive',
         String(destinationMachine?.activeAt ?? ''),

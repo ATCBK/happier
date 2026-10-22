@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createMachineFixture, createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { act, createMachineFixture, createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
+import { clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope, captureMachinePresenceObservation } from '@/sync/domains/machines/reachability/machineReachability';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 const home = createHomeGovernanceHarness();
@@ -17,7 +18,7 @@ beforeEach(async () => {
     await home.addHome({ name: 'Viewer Home', serverUrl: 'https://viewer-machine.example.test',
         serverIdentityId: serverId, accountId: 'account' });
 });
-afterEach(async () => { standardCleanup(); getStorage().setState(initialStorage, true); await home.reset(); });
+afterEach(async () => { standardCleanup(); clearMachineRequestReachabilityForTest(); getStorage().setState(initialStorage, true); await home.reset(); });
 
 function seed(machineSeed: Parameters<typeof createMachineFixture>[0] | null) {
     const session = createSessionFixture({ id: 's1', serverId, active: true, metadata: { machineId: 'm1', path: '/repo', host: 'host-1' } });
@@ -30,6 +31,19 @@ function seed(machineSeed: Parameters<typeof createMachineFixture>[0] | null) {
 }
 
 describe('the Machine name the viewer says', () => {
+    it('retains Machine identity without an offline dot while its Home presence is withdrawn', async () => {
+        seed({ active: false, activeAt: Date.now() - 120_000 });
+        const hook = await renderHook(() => useSessionViewerMachine('s1', serverId, 'computer'));
+        expect(hook.getCurrent().online).toBe(false);
+        const name = hook.getCurrent().name;
+        const scope = { serverId, accountId: 'account' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        expect(hook.getCurrent()).toMatchObject({ name, online: null });
+        await act(async () => captureMachinePresenceObservation({ ...scope, accountId: 'another-account' })(['m1']));
+        expect(hook.getCurrent().online).toBeNull();
+        await act(async () => captureMachinePresenceObservation(scope)(['m1']));
+        expect(hook.getCurrent().online).toBe(false);
+    });
     it('keeps a hydrating Machine title out of Computer recovery sentences', async () => {
         seed({ metadata: null, availability: undefined });
         const hook = await renderHook(() => ({

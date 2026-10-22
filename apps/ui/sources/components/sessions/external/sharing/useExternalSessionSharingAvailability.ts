@@ -78,7 +78,7 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
     const [sourcePresence, operationPresence] = useMachinePresenceSummaries(machineScopeServerId, [
         externalSessionLink?.machineId ?? '', operationMachineId ?? '',
     ]);
-    const sourceMachineReachability = !machineScopeSettled || machine === null
+    const sourceMachineReachability = !machineScopeSettled || machine === null || sourcePresence?.reachability === 'unknown'
         ? null
         : sourcePresence?.reachability === 'reachable';
     const operationMachineReachable = operationPresence?.reachability === 'reachable';
@@ -121,7 +121,7 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
         ? null
         : sourceMachineReachability === false
             ? t('externalSessions.sharingSourceMachineOffline')
-            : machineScopeSettled && machineScopeServerId !== null
+            : machineScopeSettled && machineScopeServerId !== null && machine === null
                 ? t('externalSessions.sharingSourceMachineMissing')
                 : t('externalSessions.sharingActionAwaitingAvailability');
     const updateSharedCopySubtitle = sourceMachineUnavailableReason
@@ -166,12 +166,12 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
             ? presentExternalSessionOperationProgress(operationOwnerHydration.progress, {
                 observationContext: 'hydrated',
                 originAvailability: resolveExternalSessionOperationOriginAvailability({
-                    machineStatusKnown: operationMachine !== null,
+                    machineStatusKnown: operationMachine !== null && operationPresence?.reachability !== 'unknown',
                     machineOnline: operationMachine !== null && operationMachineReachable,
                 }),
             })
             : null
-    ), [operationMachine, operationMachineReachable, operationOwnerHydration.progress]);
+    ), [operationMachine, operationMachineReachable, operationPresence?.reachability, operationOwnerHydration.progress]);
     const canResumePartialImport = sharingPresentation.action === 'resume_awaiting_action_owner'
         && operationPresentation !== null
         && operationOwnerHydration.progress !== null

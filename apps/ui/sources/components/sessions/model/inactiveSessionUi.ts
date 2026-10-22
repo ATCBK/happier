@@ -9,7 +9,7 @@ export type InactiveSessionUiState = Readonly<{
 export function getInactiveSessionUiState(opts: {
     isSessionActive: boolean;
     isResumable: boolean;
-    isMachineOnline: boolean;
+    isMachineOnline: boolean | null;
     /** Archived sessions say so; sending resumes one, and resuming unarchives it. */
     isArchived?: boolean;
     allowInputWhileInactive?: boolean;
@@ -30,6 +30,9 @@ export function getInactiveSessionUiState(opts: {
         };
     }
 
+    if (opts.isMachineOnline === null) {
+        return { shouldShowInput: true, inactiveStatusTextKey: null, noticeKind: 'none' };
+    }
     if (!opts.isMachineOnline) {
         return {
             shouldShowInput: true,
