@@ -533,7 +533,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
     const source = createSharedBotContributedContext('session');
     let effects = 0;
     const runtime = createExternalActionRuntime('session', 'acme.account', () => { effects += 1; },
-      undefined, undefined, undefined, undefined, 'writesRemote', undefined, { surfaces: ['agent'], executionTarget: 'account' });
+      undefined, () => null, undefined, undefined, 'writesRemote', undefined, { surfaces: ['agent'], executionTarget: 'account' });
     const row: { request: TargetActionApprovalRequestV1 | null } = { request: null };
     let notifyCreated!: () => void;
     const created = new Promise<void>(resolve => { notifyCreated = resolve; });
@@ -569,6 +569,7 @@ describe('createDaemonExternalActionContributedInvoker', () => {
         return;
       }
       expect(first).toEqual({ created: true });
+      expect(row.request?.replayPlacement).toBeUndefined();
       await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount('account-write')).toBe(1));
       const decide = createTargetActionApprovalDecision({ read: async () => row.request, update, hasLiveInvocation: () => true,
         isRequesterSourceCurrent: async request => {
