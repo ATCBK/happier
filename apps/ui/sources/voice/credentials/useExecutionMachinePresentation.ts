@@ -9,7 +9,7 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { accountSettingsScopeKeySuffix } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { useVoiceTargetStore } from '@/voice/runtime/voiceTargetStore';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
-import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 
 export type VoiceExecutionMachinePresentation = Readonly<{
   selectedMachineId: string | null;
@@ -43,8 +43,8 @@ export function resolveVoiceExecutionMachinePresentationFromState(state: ReturnT
  * Credential settings use this for both display and request invalidation.
  */
 function useVoiceExecutionMachineState<Value>(select: (state: ReturnType<typeof storage.getState>) => Value): Value {
-  useMachineReachabilityRevision();
   const scope = useAccountSettingsScope();
+  useMachinePresenceMembership(scope?.serverId ?? null);
   useVoiceTargetStore((state) => scope
     ? state.autoTargetMachineByScope[accountSettingsScopeKeySuffix(scope)]
     : undefined);

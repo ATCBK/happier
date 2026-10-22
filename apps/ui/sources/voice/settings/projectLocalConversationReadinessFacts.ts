@@ -46,7 +46,8 @@ export function projectLocalConversationProviderReadiness(
 ): VoiceRoleReadiness {
   const daemon = facts.daemonRouteReadiness;
   return daemon && (daemon.code === 'server_feature_disabled' || daemon.code === 'execution_machine_missing'
-    || daemon.code === 'execution_machine_incompatible' || projected.code === 'execution_machine_missing')
+    || daemon.code === 'execution_machine_incompatible' || daemon.code === 'execution_machine_unknown'
+    || projected.code === 'execution_machine_missing')
     ? daemon : projected;
 }
 

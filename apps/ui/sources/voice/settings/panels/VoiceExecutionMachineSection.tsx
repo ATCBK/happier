@@ -10,8 +10,8 @@ import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Icon } from '@/components/ui/icons/Icon';
 import { SelectionListFilterChip } from '@/components/ui/selectionList/SelectionListFilterChips';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
-import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
+import { useMachinePresenceMembership } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import {
   voiceSettingsParse,
   type VoiceSettings,
@@ -55,7 +55,7 @@ export function VoiceExecutionMachineSection(props: Readonly<{
       secrets: settings.secrets,
   }));
   const settingsScope = useAccountSettingsScope();
-  useMachineReachabilityRevision();
+  const presenceMembership = useMachinePresenceMembership(settingsScope?.serverId ?? null);
   const purposes = useConnectedAccountCatalog('purposes', settingsScope);
   // The one machine projection the runtime uses: Automatic names the machine it would use now,
   // whether a conversation has already remembered it or it is the first online candidate.
@@ -130,7 +130,7 @@ export function VoiceExecutionMachineSection(props: Readonly<{
     autoSubtitle: t('settingsVoice.local.executionMachine.autoSubtitle'),
     onlineLabel: t('settingsVoice.local.executionMachine.onlineLabel'),
     offlineLabel: t('settingsVoice.local.executionMachine.offlineLabel'),
-  }), [machines, settingsScope, theme.colors.text.secondary]);
+  }), [machines, settingsScope, theme.colors.text.secondary, presenceMembership]);
 
   if (!requiresExecutionMachine && !revealRequested) return null;
 
@@ -161,6 +161,7 @@ export function VoiceExecutionMachineSection(props: Readonly<{
     const fixedMachine = fixedMachineId ? machines.find((machine) => machine.id === fixedMachineId) ?? null : null;
     const shownMachineId = fixedMachineId || stickyAutoMachineId;
     const shownMachine = shownMachineId ? machines.find((machine) => machine.id === shownMachineId) ?? null : null;
+    const reachability = shownMachine ? resolveMachineReachability(settingsScope, shownMachine) : 'unknown';
     const valueLabel = selectedId === 'auto'
       ? (stickyAutoItem ? `${t('settingsVoice.local.executionMachine.autoTitle')} · ${stickyAutoItem.title}` : t('settingsVoice.local.executionMachine.autoTitle'))
       : (selectedItem?.title ?? missingMachineLabel);
@@ -173,7 +174,9 @@ export function VoiceExecutionMachineSection(props: Readonly<{
           showLabel: true,
           valueLabel,
           icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} />,
-          ...(shownMachine ? { presence: isMachineReachable(settingsScope, shownMachine) ? 'online' as const : 'offline' as const } : {}),
+          ...(shownMachine ? { reservePresence: true } : {}),
+          ...(reachability === 'reachable' ? { presence: 'online' as const }
+            : reachability === 'unreachable' ? { presence: 'offline' as const } : {}),
           options: items.map((item) => ({ id: item.id, label: item.title, subtitle: item.subtitle, icon: item.icon })),
           selectedId,
           onChange: selectMachine,

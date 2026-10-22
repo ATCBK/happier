@@ -101,7 +101,16 @@ export function resolveVoiceDaemonHeavyAudioReadiness(input: Readonly<{
             recoveryAction: 'select_execution_machine',
         });
     }
-    if (input.executionMachineSelectionKind === 'selected_unknown') return null;
+    if (input.executionMachineSelectionKind === 'selected_unknown') {
+        return Object.freeze({
+            role: input.role,
+            providerId: input.providerId,
+            status: 'unavailable',
+            code: 'execution_machine_unknown',
+            reasonKey: 'voice.readiness.execution_machine_unknown',
+            recoveryAction: 'retry',
+        });
+    }
     if (!input.executionMachineId) {
         return Object.freeze({
             role: input.role,

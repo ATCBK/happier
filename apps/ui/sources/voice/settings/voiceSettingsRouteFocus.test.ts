@@ -41,5 +41,6 @@ describe('voice settings route focus', () => {
     expect(resolveVoiceSettingsRecoveryFocus('configure_credential')).toBe('provider');
     expect(resolveVoiceSettingsRecoveryFocus('switch_provider')).toBe('provider');
     expect(resolveVoiceSettingsRecoveryFocus('none')).toBeNull();
+    expect(resolveVoiceSettingsRecoveryFocus('retry')).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { storage } from '@/sync/domains/state/storageStore';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 import { listMachinesForVoiceTool } from './machinesList';
 import { createVoiceSettingsAccountTestHarness } from '@/voice/settings/panels/voiceSettingsAccountTestHarness';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
@@ -17,6 +17,20 @@ beforeEach(async () => {
 });
 
 afterEach(clearMachineRequestReachabilityForTest);
+
+it('keeps retained input presence unknown until the exact Account observes the Machine, including a fresh offline row', async () => {
+    const machine = createMachineFixture({ id: 'voice-machine', activeAt: Date.now() });
+    const { serverId } = account.scope;
+    storage.setState({ machineListByServerId: { [serverId]: [machine] }, machineListStatusByServerId: { [serverId]: 'idle' } });
+    withdrawMachinePresenceForScope(account.scope);
+    expect(await listMachinesForVoiceTool({ purpose: 'input', serverId })).toMatchObject({ items: [{ machineId: machine.id, presence: 'unknown' }] });
+    captureMachinePresenceObservation({ ...account.scope, accountId: 'another-account' })([machine.id]);
+    expect(await listMachinesForVoiceTool({ purpose: 'input', serverId })).toMatchObject({ items: [{ presence: 'unknown' }] });
+    machine.active = false;
+    machine.activeAt = Date.now() - 60_001;
+    captureMachinePresenceObservation(account.scope)([machine.id]);
+    expect(await listMachinesForVoiceTool({ purpose: 'input', serverId })).toMatchObject({ items: [{ presence: 'offline' }] });
+});
 
 it('provides decoded platform facts to Action input consumers without guessing an absent architecture', async () => {
     const metadata = createMachineFixture().metadata;

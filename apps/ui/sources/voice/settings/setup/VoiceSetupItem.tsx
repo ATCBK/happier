@@ -36,6 +36,7 @@ import { resolveVoiceProviderReadinessPresentation, translateVoiceReadiness } fr
 import { useVoiceConversationsReadinessInputs } from '@/voice/settings/useVoiceConversationsReadinessInputs';
 import { useVoiceSettingsMutable } from '@/voice/settings/useVoiceSettingsMutable';
 import { resolveVoiceSettingsRecoveryFocus } from '@/voice/settings/voiceSettingsRouteFocus';
+import { recoverVoiceSettingsReadiness } from '@/voice/settings/voiceSettingsRecovery';
 
 import { useVoiceSetupItem, VOICE_SETUP_STEP_ID } from './useVoiceSetupItem';
 import { VoiceSetupPanel, type VoiceSetupPanelActions, type VoiceSetupPanelModel } from './VoiceSetupPanel';
@@ -96,10 +97,10 @@ export function useVoiceSetupBlock(input: Readonly<{ layout: 'card' | 'row'; spa
     }, [canStart, live, onToggle]);
     const actions = React.useMemo((): Omit<VoiceSetupPanelActions, 'onClose'> => ({
         onSelectService: readinessModel.selectService,
-        onRecover: () => {
-            const focus = resolveVoiceSettingsRecoveryFocus(recoveryAction) ?? 'provider';
+        onRecover: () => recoverVoiceSettingsReadiness(recoveryAction, (action) => {
+            const focus = resolveVoiceSettingsRecoveryFocus(action) ?? 'provider';
             router.push({ pathname: SETTINGS_ROUTES.voiceConversations, params: { focus } } as never);
-        },
+        }),
         onAllowMicrophone: allow,
         onOpenSystemSettings: Platform.OS === 'web' ? null : () => { void Linking.openSettings().catch(() => {}); },
         onTry: tryIt,

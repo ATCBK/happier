@@ -25,7 +25,7 @@ export type VoiceSettingsRouteFocus = 'privacy' | 'provider' | 'execution_machin
 export function resolveVoiceSettingsRecoveryFocus(
   action: VoiceRoleReadiness['recoveryAction'],
 ): Exclude<VoiceSettingsRouteFocus, 'privacy'> | null {
-  if (action === 'none') return null;
+  if (action === 'none' || action === 'retry') return null;
   if (action === 'select_execution_machine') return 'execution_machine';
   if (action === 'install_model') return 'local';
   return 'provider';

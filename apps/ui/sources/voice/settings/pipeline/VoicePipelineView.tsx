@@ -10,6 +10,7 @@ import type { VoiceSettingsPipeline, VoiceSettingsPipelineStep } from '@/voice/s
 import { VoicePipelineCard, type VoicePipelineStep } from './VoicePipelineCard';
 import { presentVoicePipeline } from './presentVoicePipeline';
 import { translateVoiceReadiness } from '../panels/voiceProviderReadinessPresentation';
+import { recoverVoiceSettingsReadiness } from '../voiceSettingsRecovery';
 
 const MARK_PX = 17;
 
@@ -66,10 +67,11 @@ export const VoicePipelineView = React.memo(function VoicePipelineView(props: Re
                 tone: step.readiness.tone,
                 message: step.readiness.message,
                 progress: step.readiness.progress,
-                action: step.readiness.recoveryAction && step.readiness.actionLabel && onRecoveryAction
+                action: step.readiness.recoveryAction && step.readiness.actionLabel
+                    && (step.readiness.recoveryAction === 'retry' || onRecoveryAction)
                     ? {
                         label: step.readiness.actionLabel,
-                        onPress: () => onRecoveryAction(step.readiness!.recoveryAction!),
+                        onPress: () => recoverVoiceSettingsReadiness(step.readiness!.recoveryAction!, onRecoveryAction),
                         testID: `${props.testID ?? 'settings.voice.pipeline'}.${step.key}.recover`,
                     }
                     : undefined,
@@ -81,10 +83,10 @@ export const VoicePipelineView = React.memo(function VoicePipelineView(props: Re
         tone: card.tone,
         message: card.message,
         progress: card.progress,
-        action: card.recoveryAction && card.actionLabel && onRecoveryAction
+        action: card.recoveryAction && card.actionLabel && (card.recoveryAction === 'retry' || onRecoveryAction)
             ? {
                 label: card.actionLabel,
-                onPress: () => onRecoveryAction(card.recoveryAction!),
+                onPress: () => recoverVoiceSettingsReadiness(card.recoveryAction!, onRecoveryAction),
                 testID: `${props.testID ?? 'settings.voice.pipeline'}.recover`,
             }
             : undefined,

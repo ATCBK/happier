@@ -748,7 +748,7 @@ export function useVoiceConversationsReadinessModel(props: {
         accountGroupsEnabled,
       })
     : undefined;
-  const checkedProviderReadiness = selectedProviderRow
+  const projectedCheckedProviderReadiness = selectedProviderRow
     ? resolveVoicePassiveSetupReadiness({
         registry,
         role: selectedProviderRow.entry.roles[0]!,
@@ -766,6 +766,9 @@ export function useVoiceConversationsReadinessModel(props: {
         },
       })
     : selectedUnavailableReadiness;
+  const checkedProviderReadiness = selectedProviderRow?.providerId === 'local_conversation' && projectedCheckedProviderReadiness
+    ? projectLocalConversationProviderReadiness(localConversationReadinessFacts, projectedCheckedProviderReadiness)
+    : projectedCheckedProviderReadiness;
   const selectedProviderReadiness = selectedProviderRow?.readiness
     ?? selectedUnavailableReadiness;
   const checkedProviderReadinessPresentation = checkedProviderReadiness

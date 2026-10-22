@@ -166,6 +166,7 @@ export function resolveVoiceDictationReadiness(input: Readonly<{
     daemonPrerequisiteReadiness?.code === 'server_feature_disabled'
     || daemonPrerequisiteReadiness?.code === 'execution_machine_missing'
     || daemonPrerequisiteReadiness?.code === 'execution_machine_incompatible'
+    || daemonPrerequisiteReadiness?.code === 'execution_machine_unknown'
   ) {
     return daemonPrerequisiteReadiness;
   }

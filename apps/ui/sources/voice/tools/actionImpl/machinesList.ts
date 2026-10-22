@@ -5,7 +5,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getMachineDisplayName, isMachineDisplayHydrating, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 
 export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: string; limit?: number; refresh?: boolean; purpose?: 'input' }>): Promise<unknown> {
@@ -39,7 +39,10 @@ export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: str
       machineId: normalizeNonEmptyString(m?.id),
       label: names?.get(m.id) ?? resolveVoiceMachineLabel(m),
       ...(params.purpose === 'input' ? { named: isMachineVisibleForSelection(m) && !isMachineDisplayHydrating(m),
-        presence: isMachineReachable(scope, m) ? 'online' : 'offline',
+        presence: (() => {
+          const verdict = resolveMachineReachability(scope, m);
+          return verdict === 'reachable' ? 'online' : verdict === 'unreachable' ? 'offline' : 'unknown';
+        })(),
         platform: normalizeNonEmptyString(m?.metadata?.platform), arch: normalizeNonEmptyString(m?.metadata?.arch),
         revokedAt: m.revokedAt, replacedByMachineId: m.replacedByMachineId } : {}),
       ...(normalizeNonEmptyString(m?.metadata?.host) ? { host: normalizeNonEmptyString(m?.metadata?.host) } : {}),

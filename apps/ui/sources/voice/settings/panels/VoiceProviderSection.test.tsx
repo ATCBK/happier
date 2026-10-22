@@ -386,6 +386,87 @@ await import('./VoiceProviderSection');
 await import('./BundledConversationSettingsSection');
 
 describe('VoiceProviderSection', () => {
+    it.each([true, false])('retries withdrawn Machine presence through a fresh Home read (online=%s)', async (online) => {
+        const { VoiceProviderSection } = await import('./VoiceProviderSection');
+        const { useVoiceExecutionMachinePresentation } = await import('@/voice/credentials/useExecutionMachinePresentation');
+        const { withdrawMachinePresenceForScope, captureMachinePresenceObservation } = await import('@/sync/domains/machines/reachability/machineReachability');
+        const { readLocalConversationVoiceSettings, writeLocalConversationVoiceSettings } = await import('@/sync/domains/settings/voiceSettings');
+        passiveSetupBoundary.machineTarget = { daemonStateVersion: 1, isOnline: true };
+        const defaults = readLocalConversationVoiceSettings(accountFixture.settings.voice);
+        accountFixture.replaceVoice(writeLocalConversationVoiceSettings({ ...accountFixture.settings.voice,
+            providerId: 'local_conversation', executionMachine: { mode: 'fixed', machineId: 'machine-1' },
+        }, { ...defaults, stt: { ...defaults.stt, provider: 'local_neural',
+            localNeural: { ...defaults.stt.localNeural, execution: 'daemon' } } }));
+        const voice = accountFixture.settings.voice;
+        const setVoice = vi.fn();
+        const navigate = vi.fn();
+        let selectionKind = '';
+        function MountedPresenceReadiness() {
+            const machine = useVoiceExecutionMachinePresentation();
+            selectionKind = machine.selectionKind;
+            return <VoiceProviderSection voice={voice} setVoice={setVoice} happierVoiceSupported={true} platformOs="web"
+                executionMachineId={machine.machineId} executionMachineSelectedId={machine.selectedMachineId}
+                executionMachineSelectionKind={machine.selectionKind} onRecoveryAction={navigate}
+                localAvailability={{ daemon: { featureEnabled: true, route: 'direct', modelState: 'unknown',
+                    runtimeState: 'unknown', pcmCapture: 'available' } }} />;
+        }
+        const screen = await renderScreen(<MountedPresenceReadiness />);
+        const response = createDeferred<Response>();
+        const request = accountFixture.request.getMockImplementation()!;
+        const { readMachineOnlineGraceMsFromEnv } = await import('@/utils/sessions/machineUtils');
+        const presenceGraceMs = readMachineOnlineGraceMsFromEnv();
+        const freshMachine = (id: string) => ({
+            ...createPlainMachineRowFixture({ id, accountId: accountFixture.scope.accountId }),
+            active: online, activeAt: online ? Date.now() : Date.now() - presenceGraceMs - 1, daemonStateVersion: 1,
+        });
+        let freshRead = false;
+        accountFixture.request.mockImplementation((url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/machines') {
+                freshRead = true;
+                return response.promise;
+            }
+            // Adjacent exact reads must observe the same Home fact as its census.
+            if (freshRead && path === '/v1/machines/read-batch' && init?.method === 'POST') {
+                return Promise.resolve(createMachineReadBatchResponseFixture(init.body, freshMachine));
+            }
+            if (freshRead && path === '/v1/machines/machine-1') {
+                return Promise.resolve(Response.json({ machine: freshMachine('machine-1') }));
+            }
+            return request(url, init);
+        });
+        await act(async () => { withdrawMachinePresenceForScope(accountFixture.scope); });
+        expect(selectionKind).toBe('selected_unknown');
+        expect(screen.getTextContent()).toContain(tLoose('voice.readiness.execution_machine_unknown'));
+        expect(screen.getTextContent()).toContain(t('common.retry'));
+        const retry = findAllHostTestInstances(screen.tree.root, node => typeof node.props.testID === 'string'
+            && node.props.testID.startsWith('settings.voice.conversations.pipeline')
+            && node.props.testID.endsWith('.recover') && typeof node.props.onPress === 'function')[0];
+        expect(retry).toBeDefined();
+        await act(async () => { retry!.props.onPress(); });
+        await vi.waitFor(() => expect(freshRead).toBe(true));
+        await act(async () => {
+            const otherScope = { ...accountFixture.scope, accountId: 'another-account' };
+            withdrawMachinePresenceForScope(otherScope);
+            captureMachinePresenceObservation(otherScope)(['machine-1']);
+        });
+        expect(selectionKind).toBe('selected_unknown');
+        if (!online) {
+            // A fresh negative follows the existing heartbeat's grace; it does not
+            // falsify the Machine owner's monotonic presence preservation.
+            vi.useFakeTimers({ toFake: ['Date'] });
+            onTestFinished(() => { vi.useRealTimers(); });
+            vi.setSystemTime(Date.now() + presenceGraceMs * 2 + 2);
+        }
+        await act(async () => { response.resolve(Response.json([freshMachine('machine-1')])); });
+        await vi.waitFor(() => expect(selectionKind).toBe(online ? 'resolved' : 'selected_unreachable'));
+        if (!online) expect(screen.getTextContent()).toContain(tLoose('voice.readiness.execution_machine_incompatible'));
+        expect(navigate).not.toHaveBeenCalled();
+        expect(setVoice).not.toHaveBeenCalled();
+        expect(storage.getState().settings.voice).toBe(voice);
+        await screen.unmount();
+    }, 120_000);
+
     it('retains normalized Voice input identity while propagating Machine and settings changes', async () => {
         const { useVoiceConversationsReadinessModel } = await import('./VoiceProviderSection');
         const voiceSettings = await import('@/sync/domains/settings/voiceSettings');

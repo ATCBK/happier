@@ -88,6 +88,21 @@ describe('resolveVoiceDictationReadiness', () => {
     daemonPcmCapture: 'available',
   });
 
+  it('keeps an unobserved daemon target retryable ahead of stale runtime and model facts', () => {
+    const defaults = readLocalConversationVoiceSettings(voiceSettingsDefaults);
+    const voice = writeLocalConversationVoiceSettings(voiceSettingsDefaults, { ...defaults,
+      stt: { ...defaults.stt, provider: 'local_neural',
+        localNeural: { ...defaults.stt.localNeural, execution: 'daemon' } },
+    });
+    expect(resolveVoiceDictationReadiness({
+      connectedPurposes: { v: 1, bindings: [] }, registry,
+      settings: settingsParse({ voice: { ...voice, dictation: { ...voice.dictation, sttBinding: 'same_as_local' } } }),
+      platform: 'web', executionMachineId: null, executionMachineSelectionKind: 'selected_unknown',
+      localAvailability: { ...daemonReadyAvailability, daemon: { ...daemonReadyAvailability.daemon!,
+        runtimeState: 'unknown', modelState: 'unknown' } },
+    })).toMatchObject({ status: 'unavailable', code: 'execution_machine_unknown', recoveryAction: 'retry' });
+  });
+
   it('projects device Dictation as ready only when native speech recognition is known available', () => {
     expect(resolveVoiceDictationReadiness({
       connectedPurposes: { v: 1, bindings: [] },

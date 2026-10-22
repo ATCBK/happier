@@ -16,6 +16,8 @@ import { VoiceProviderContributionSchema } from '@happier-dev/protocol';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createVoiceSettingsAccountTestHarness } from './voiceSettingsAccountTestHarness';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
+import { useVoiceExecutionMachinePresentation, type VoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
 
 // Static settings imports reach Sync before collection-time boundary configuration.
 vi.mock('socket.io-client', async (importOriginal) => (
@@ -58,6 +60,11 @@ vi.mock('react-native-unistyles', async () => {
   const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
   return createUnistylesMock();
 });
+
+// Native/browser portal measurement is the system boundary; menu logic remains real.
+vi.mock('@/components/ui/popover', async (importOriginal) => (
+  await import('@/dev/testkit/mocks/popover')
+).createInlinePopoverModuleMock(importOriginal));
 
 
 
@@ -176,6 +183,68 @@ function agentRealtimeRegistry(): VoiceProviderRegistry {
 }
 
 describe('VoiceExecutionMachineSection', () => {
+  it('expires the mounted picker and selected target through the shared presence clock without a store write', async () => {
+    const voice = localVoice('local_conversation');
+    account.replaceVoice(voice);
+    storage.getState().applyMachines([createMachineFixture({ activeAt: Date.now() })], true,
+      { sourceServerId: account.scope.serverId, sourceAccountId: account.scope.accountId });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    onTestFinished(() => { vi.useRealTimers(); });
+    let latest: VoiceExecutionMachinePresentation | undefined;
+    function Surface() {
+      latest = useVoiceExecutionMachinePresentation();
+      return <VoiceExecutionMachineSection voice={voice} setVoice={() => {}} intent="advanced" />;
+    }
+    const screen = await renderSettingsView(<Surface />);
+    const subtitle = () => screen.tree.root.findByType(DropdownMenu).props.items.find((item: { id: string }) => item.id === 'machine-1')?.subtitle;
+    expect(latest?.selectionKind).toBe('resolved');
+    expect(subtitle()).toBe(t('settingsVoice.local.executionMachine.onlineLabel'));
+    const rows = storage.getState().machineListByServerId;
+    await act(async () => { vi.advanceTimersByTime(60_001); });
+    expect(storage.getState().machineListByServerId).toBe(rows);
+    expect(latest?.selectionKind).toBe('selected_unreachable');
+    expect(subtitle()).toBe(t('settingsVoice.local.executionMachine.offlineLabel'));
+    await screen.unmount();
+  });
+
+  it.each(['section', 'chip'] as const)('updates the mounted %s without replacing Machine rows on withdrawal and re-observation', async (presentation) => {
+    onTestFinished(clearMachineRequestReachabilityForTest);
+    onTestFinished(() => { vi.useRealTimers(); });
+    const voice = localVoice('local_conversation');
+    account.replaceVoice(voice);
+    storage.getState().applyMachines([createMachineFixture({ active: true, activeAt: Date.now() })], true,
+      { sourceServerId: account.scope.serverId, sourceAccountId: account.scope.accountId });
+    const screen = await renderSettingsView(<VoiceExecutionMachineSection voice={voice} setVoice={() => {}}
+      intent="advanced" presentation={presentation} />);
+    const chip = () => screen.tree.root.findAll((node) => node.props.filter?.testID === 'settings.voice.executionMachine.chip')[0]!;
+    const read = () => presentation === 'section'
+      ? screen.tree.root.findByType(DropdownMenu).props.items.find((item: { id: string }) => item.id === 'machine-1')?.subtitle
+      : chip().props.filter.options.find((item: { id: string }) => item.id === 'machine-1')?.subtitle;
+    expect(read()).toBe(t('settingsVoice.local.executionMachine.onlineLabel'));
+    if (presentation === 'section') {
+      await act(async () => { screen.tree.root.findByType(DropdownMenu).props.onOpenChange(true); });
+    }
+    const rows = storage.getState().machineListByServerId;
+    await act(async () => { withdrawMachinePresenceForScope(account.scope); });
+    expect(storage.getState().machineListByServerId).toBe(rows);
+    expect(read()).toBe(t('common.unknown'));
+    if (presentation === 'chip') expect(chip().props.filter.presence).toBeUndefined();
+    await act(async () => { captureMachinePresenceObservation({ ...account.scope, accountId: 'other-account' })(['machine-1']); });
+    expect(read()).toBe(t('common.unknown'));
+    await act(async () => { captureMachinePresenceObservation(account.scope)(['machine-1']); });
+    expect(read()).toBe(t('settingsVoice.local.executionMachine.onlineLabel'));
+    const lastSeenAt = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(lastSeenAt + 60_002);
+    await act(async () => {
+      storage.getState().applyMachines([createMachineFixture({ active: false, activeAt: lastSeenAt + 1 })], true,
+        { sourceServerId: account.scope.serverId, sourceAccountId: account.scope.accountId });
+    });
+    expect(read()).toBe(t('settingsVoice.local.executionMachine.offlineLabel'));
+    if (presentation === 'chip') expect(chip().props.filter.presence).toBe('offline');
+    await screen.unmount();
+  });
+
   beforeEach(() => {
     useVoiceTargetStore.setState({ autoTargetMachineByScope: {} });
     vi.clearAllMocks();

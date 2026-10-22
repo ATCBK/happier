@@ -1399,9 +1399,9 @@ describe('VoiceExecutionTransport (persistence)', () => {
     const controller = createVoiceExecutionTransport();
 
     await expect(controller.sendTurn(VOICE_AGENT_GLOBAL_SESSION_ID, 'hello')).rejects.toMatchObject({
-      message: 'Target machine daemon is offline. Start or reconnect the daemon before starting local voice.',
       code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
       pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
+      cause: expect.objectContaining({ code: 'VOICE_AGENT_TARGET_MACHINE_OFFLINE' }),
     });
 
     expect(daemonStart).not.toHaveBeenCalled();

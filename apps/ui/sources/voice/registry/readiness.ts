@@ -41,7 +41,7 @@ export type VoiceRoleReadiness = Readonly<{
   status: 'ready' | 'needs_setup' | 'unavailable' | 'installing' | 'incompatible';
   code: string;
   reasonKey: string;
-  recoveryAction: 'none' | 'select_provider' | 'open_provider_settings' | 'select_execution_machine' | 'configure_credential' | 'review_credential_access' | 'configure_endpoint' | 'install_model' | 'switch_provider';
+  recoveryAction: 'none' | 'retry' | 'select_provider' | 'open_provider_settings' | 'select_execution_machine' | 'configure_credential' | 'review_credential_access' | 'configure_endpoint' | 'install_model' | 'switch_provider';
 }>;
 
 export function projectHostedModeAvailabilityReadiness(input: Readonly<{
@@ -148,7 +148,7 @@ function projectRequirement(
   if (fact === 'incompatible') {
     return result(role, providerId, 'incompatible', `${requirement}_incompatible`, RECOVERY_BY_REQUIREMENT[requirement]);
   }
-  return result(role, providerId, 'unavailable', `${requirement}_unknown`, RECOVERY_BY_REQUIREMENT[requirement]);
+  return result(role, providerId, 'unavailable', `${requirement}_unknown`, requirement === 'execution_machine' ? 'retry' : RECOVERY_BY_REQUIREMENT[requirement]);
 }
 
 /** Sole owner for descriptor and selected-mode requirement projection. */

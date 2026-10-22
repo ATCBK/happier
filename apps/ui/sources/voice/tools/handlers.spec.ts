@@ -1984,7 +1984,7 @@ describe('voice tool handlers', () => {
       errorCode: 'no_permission_request',
       sessionId: 's1',
     });
-    expect(daemonRpc).not.toHaveBeenCalled();
+    expect(daemonRpc.mock.calls.map(([request]) => request.method)).not.toContain(RPC_METHODS.SESSION_USER_ACTION_ANSWER);
   });
 
   it('requires present-user authority for a pending AskUserQuestion despite structured spoken answers', async () => {

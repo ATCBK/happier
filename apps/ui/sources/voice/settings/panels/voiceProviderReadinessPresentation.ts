@@ -48,7 +48,7 @@ export function resolveVoiceProviderReadinessPresentation(
     reason: summary,
     action: readiness.recoveryAction === 'none'
       ? null
-      : translate(`voice.readiness.actions.${readiness.recoveryAction}`),
+      : translate(readiness.recoveryAction === 'retry' ? 'common.retry' : `voice.readiness.actions.${readiness.recoveryAction}`),
     short: translate(`voice.readiness.short.${resolveVoiceReadinessShort(readiness.code)}`),
   };
 }
