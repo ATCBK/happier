@@ -2,7 +2,7 @@ import { join, resolve } from 'node:path';
 
 import { coerceHappyMonorepoRootFromPath } from '../paths/paths.mjs';
 import { inspectDependencyRefresh, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
-import { ensureUiPostinstallOutputs } from '../proc/pm.mjs';
+import { ensureServerGeneratedProviderOutputs, ensureUiPostinstallOutputs } from '../proc/pm.mjs';
 
 // Worktree callers retain their frozen-lockfile/output policy, while dependency freshness,
 // serialization, and successful refresh recording stay owned by the package-manager layer.
@@ -21,6 +21,9 @@ export async function withPnpmInstallGuard({ installDir, componentDir = installD
     onDependenciesReady: () => ensureUiPostinstallOutputs(uiDir, installDir, { env, quiet, force: refreshed }),
   }, async ({ env: installEnv }) => {
     await install({ env: installEnv });
+    if (String(installEnv.HAPPIER_DEV_TARGET_EXECUTION ?? '').trim() === '1') {
+      await ensureServerGeneratedProviderOutputs(join(installDir, 'apps', 'server'), installDir, { env: installEnv, quiet });
+    }
     // Complete lifecycle outputs after replacing dependency bytes.
     // Complete the same mandatory UI preparation as the PM refresh owner
     // before it publishes readiness for this installed tree.

@@ -70,14 +70,17 @@ export async function adoptInstalledDependencies({
   env = process.env,
   withDependencyRefresh: withDependencyRefreshImpl = withDependencyRefresh,
 } = {}) {
+  const readiness = await inspectDependencyRefresh({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env });
+  if (readiness.workerPnpmModules !== null) {
+    // Worker adoption only reuses proven bytes. Recheck inside read custody so
+    // a tree replaced while waiting can never reach a no-op writer refresh.
+    return await withDependencyConsumption({ installDir: repoDir, env }, async () => {
+      await assertDependenciesReady({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env });
+      return { refreshed: false, reason: 'up-to-date' };
+    });
+  }
   if (!existsSync(join(repoDir, 'node_modules'))) {
     throw new Error(`[local] cannot adopt dependencies at ${repoDir}: node_modules is missing`);
-  }
-  const readiness = await inspectDependencyRefresh({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env });
-  if (readiness.workerPnpmTreeNeedsCleanInstall) {
-    // Adoption may reuse current worker proof, but cannot certify an old or
-    // externally replaced tree without the worker's canonical cold install.
-    await assertDependenciesReady({ installDir: repoDir, componentDir: join(repoDir, 'apps', 'stack'), env });
   }
   return await withDependencyRefreshImpl(
     {
@@ -121,8 +124,12 @@ export async function bootstrapRemoteDependencies({
     return;
   }
   let refreshed = false;
-  const installAndPrepare = async () => {
-    await installInitialDependenciesImpl({ repoDir, env });
+  const installAndPrepare = async ({ env: installEnv = env } = {}) => {
+    await installInitialDependenciesImpl({ repoDir, env: installEnv });
+    if (String(installEnv.HAPPIER_DEV_TARGET_EXECUTION ?? '').trim() === '1' && !isYarnWorkspace(repoDir)) {
+      const { ensureServerGeneratedProviderOutputs } = await import('../proc/pm.mjs');
+      await ensureServerGeneratedProviderOutputs(join(repoDir, 'apps', 'server'), repoDir, { env: installEnv });
+    }
     refreshed = true;
   };
   // Every role reads the same installed tree. Complete the canonical UI

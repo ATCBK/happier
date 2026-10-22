@@ -446,7 +446,7 @@ async function readPackageJsonIfExists(pkgJsonPath) {
   return await readJson(pkgJsonPath);
 }
 
-async function ensureServerGeneratedProviderOutputs(componentDir, installDir, { quiet = false, env: envIn, pm: pmIn } = {}) {
+export async function ensureServerGeneratedProviderOutputs(componentDir, installDir, { quiet = false, env: envIn, pm: pmIn } = {}) {
   const componentPkgJsonPath = join(componentDir, 'package.json');
   const componentPkg = await readPackageJsonIfExists(componentPkgJsonPath);
   if (componentPkg?.name !== '@happier-dev/server') {
@@ -730,20 +730,23 @@ async function ensureComponentDependenciesInstalled(
     // mutable, but dependency inputs remain owned by the source checkout.
     preserveLockfile: String(env?.HAPPIER_DEV_TARGET_EXECUTION ?? '').trim() === '1',
   });
-  const installAndPrepare = async () => {
-    await runPm(pm, installArgs, { cwd: installDir, stdio, env });
+  const installAndPrepare = async (installEnv = env) => {
+    await runPm(pm, installArgs, { cwd: installDir, stdio, env: installEnv });
+    if (pm.name === 'pnpm' && String(installEnv.HAPPIER_DEV_TARGET_EXECUTION ?? '').trim() === '1') {
+      await ensureServerGeneratedProviderOutputs(join(installDir, 'apps', 'server'), installDir, { quiet, env: installEnv, pm });
+    }
     const uiDir = sharedUiDir ?? componentDir;
     // The full installed tree belongs to every worker role. A markdown sentinel
     // cannot prove changed patches or generated worker/webview assets are current.
-    await ensureUiPostinstallOutputs(uiDir, installDir, { quiet, env, pm, force: true });
+    await ensureUiPostinstallOutputs(uiDir, installDir, { quiet, env: installEnv, pm, force: true });
   };
-  const refreshDependencies = async () => {
+  const refreshDependencies = async ({ env: installEnv = env } = {}) => {
     await ensureCanonicalPnpmReady();
     if (!quiet) {
       // eslint-disable-next-line no-console
       console.log(`[local] refreshing ${label} dependencies (pnpm-lock.yaml/pnpm-workspace.yaml/package.json/patches changed)...`);
     }
-    await installAndPrepare();
+    await installAndPrepare(installEnv);
   };
 
   if (await pathExists(nodeModules)) {
@@ -790,13 +793,13 @@ async function ensureComponentDependenciesInstalled(
     return;
   }
 
-  const installFirstRun = async () => {
+  const installFirstRun = async ({ env: installEnv = env } = {}) => {
     await ensureCanonicalPnpmReady();
     if (!quiet) {
       // eslint-disable-next-line no-console
       console.log(`[local] installing ${label} dependencies (first run)...`);
     }
-    await installAndPrepare();
+    await installAndPrepare(installEnv);
   };
   if (pm.name === 'pnpm') {
     await withDependencyRefresh(

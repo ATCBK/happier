@@ -101,7 +101,10 @@ test('worker pnpm admission cleans an unproven tree once and binds proof to inst
   await withDependencyRefreshLock({ installDir: fixture.root, env }, async () => {
     queuedAdoption = adoptInstalledDependencies({ repoDir: fixture.root, env });
     const waiters = `${resolveDependencyRefreshLockPath(fixture.root, env)}.waiters`;
-    while (!(await readdir(waiters)).some(name => /^\d+\.json$/.test(name))) {
+    while (!(await readdir(waiters).catch(error => {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    })).some(name => /^\d+\.json$/.test(name))) {
       await new Promise(resolve => setTimeout(resolve, 5));
     }
     // Replace manager output after the initial inspection but before admission
