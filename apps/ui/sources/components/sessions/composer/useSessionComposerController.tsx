@@ -5287,9 +5287,9 @@ export function useSessionComposerController({
             route: {
                 phase: session.active === true || (!modelSelectionDisposition?.proposedSelectionV2 && !modelSelectionDisposition?.contextSelection)
                     ? 'running' : 'draft',
-                selection: requestedRouteSelection ?? modelSelectionDisposition?.proposedSelectionV2?.ref ?? modelSelectionDisposition?.contextSelection ?? null,
-                appliedSelection: modelSelectionDisposition?.activeSelection ?? null,
-                reportedSelection: modelSelectionDisposition?.lastAppliedSelection ?? null,
+                selection: requestedRouteSelection ?? modelSelectionDisposition?.proposedSelectionV2?.ref ?? modelSelectionDisposition?.contextRouteSelection ?? null,
+                appliedSelection: modelSelectionDisposition?.activeRouteSelection ?? null,
+                reportedSelection: modelSelectionDisposition?.lastAppliedRouteSelection ?? null,
                 appliedProviderSource: providerLaunchBinding ? {
                     connectionId: providerLaunchBinding.connectionId, ...providerLaunchBinding.displaySnapshot,
                 } : null,
