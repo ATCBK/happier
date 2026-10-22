@@ -289,14 +289,16 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
     const previousFile = (id: string) => join(directory, fileName(id).replace('.sqlite', '.previous.sqlite'));
     const dbFor = (id: string) => {
         if (closed) throw Object.assign(new Error('Scan index closed'), { code: 'closed' });
-        let db = databases.get(id); if (!db) { db = openProtectedSqliteDatabaseSync(file(id)); db.exec('PRAGMA auto_vacuum=INCREMENTAL'); db.exec(schema()); normalizeRelations(db);
+        const existing = databases.get(id); if (existing) return existing;
+        const db = openProtectedSqliteDatabaseSync(file(id));
+        db.exec('PRAGMA auto_vacuum=INCREMENTAL'); db.exec(schema()); normalizeRelations(db);
             if (metadata(db, 'baselineState')) normalizeRelations(db, '', 'baseline_');
             db.prepare("DELETE FROM meta WHERE key='previousAttached'").run(); saveMetadata(db, 'volumeId', id);
             installScanAggregation(db);
             if (readState(db)?.status === 'running') transaction(db, () => {
                 db.exec('INSERT OR IGNORE INTO dirty_scan_nodes SELECT ref FROM entries'); reaggregateScan(db, now());
             });
-            databases.set(id, db); } return db;
+            databases.set(id, db); return db;
     };
     function selected(scanId?: string) {
         let latest: { volumeId: string; db: SqliteDatabaseSync; state: DiskScanStateV1 } | undefined;

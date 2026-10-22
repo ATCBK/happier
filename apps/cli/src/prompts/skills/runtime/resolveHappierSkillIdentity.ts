@@ -1,15 +1,21 @@
 import type { AgentSessionSkillDelivery } from '@happier-dev/plugin-sdk/agents/runtime';
 import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 
+type DeliveredSkillItem = AgentSessionSkillDelivery['items'][number];
+// Name reads need only the admitted identity; native-path reads also need the item directory.
+type SkillIdentityDelivery = Readonly<{
+  items: readonly (Pick<DeliveredSkillItem, 'skillId' | 'name' | 'digest'> & Partial<Pick<DeliveredSkillItem, 'directory'>>)[];
+}>;
+
 export function resolveHappierSkillIdentity(
   input: Readonly<{ name?: string; path?: string }>,
-  delivery: Pick<AgentSessionSkillDelivery, 'items'> | undefined,
+  delivery: SkillIdentityDelivery | undefined,
   happyHomeDir?: string,
 ): string | null {
   if (!delivery) return null;
   if (input.path) {
     for (const item of delivery.items) {
-      if (isCanonicalAbsolutePathInsideRoot(item.directory, input.path)
+      if ((item.directory !== undefined && isCanonicalAbsolutePathInsideRoot(item.directory, input.path))
         || (happyHomeDir && isCanonicalAbsolutePathInsideRoot(
           `${happyHomeDir}/skills/cache/${item.digest.slice('sha256:'.length)}`, input.path,
         ))) return item.skillId;

@@ -99,7 +99,7 @@ export function createRunnerManagedProviderHttpBindingRequest(
             } };
         } catch (error) {
             const details = isPluginError(error) ? error.details : undefined;
-            const cause = details && typeof details === 'object' && !Array.isArray(details) ? details.cause : undefined;
+            const cause: unknown = details && typeof details === 'object' && !Array.isArray(details) ? Reflect.get(details, 'cause') : undefined;
             const admission = ProviderBrokerAdmissionFailureCodeV1Schema.safeParse(
                 cause && typeof cause === 'object' && 'code' in cause ? cause.code : undefined,
             );
