@@ -181,16 +181,19 @@ export async function projectSessionManagerForRowsInTx<T extends SessionManagerP
     });
     const sessionEdges = edges.filter(hasSessionFollowSessionSource);
     const relatedIds = [...new Set(sessionEdges.flatMap((edge) => [edge.sourceSessionId, edge.destinationSessionId]))];
-    const accessWhere = input.accessMode === 'legacy_owner_or_direct' && !input.authentication.sessionRuntimePrincipal
-        ? buildSessionAccessWhere({ accountId: input.accountId, capability: 'readTranscript', mode: 'legacy_owner_or_direct' })
-        : (await resolveEffectiveSessionAccessWhere({
-            tx, accountId: input.accountId, capability: 'readTranscript', mode: 'effective_access_v1',
-            authentication: input.authentication, collectiveAccessSnapshot: input.collectiveAccessSnapshot,
-        })).where;
-    const related = await tx.session.findMany({
-        where: { AND: [accessWhere, { id: { in: relatedIds } }] },
-        select: REPORT_SESSION_SELECT,
-    });
+    let related: ReportSessionRow[] = [];
+    if (relatedIds.length > 0) {
+        const accessWhere = input.accessMode === 'legacy_owner_or_direct' && !input.authentication.sessionRuntimePrincipal
+            ? buildSessionAccessWhere({ accountId: input.accountId, capability: 'readTranscript', mode: 'legacy_owner_or_direct' })
+            : (await resolveEffectiveSessionAccessWhere({
+                tx, accountId: input.accountId, capability: 'readTranscript', mode: 'effective_access_v1',
+                authentication: input.authentication, collectiveAccessSnapshot: input.collectiveAccessSnapshot,
+            })).where;
+        related = await tx.session.findMany({
+            where: { AND: [accessWhere, { id: { in: relatedIds } }] },
+            select: REPORT_SESSION_SELECT,
+        });
+    }
     const readable = new Map(related.filter((row) => row.accountId === input.accountId || isSessionTranscriptShareable(row))
         .map((row) => [row.id, row]));
     const contributions: SessionManagerContribution[] = [];
