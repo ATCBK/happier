@@ -23,7 +23,7 @@ import { readBuiltInSettingDeclarationV1 } from './settings/settingsDeclarations
 import { ReachPlaceV1Schema } from '../reach/reachPlaceV1.js';
 import { ReachRuleDraftV1Schema } from '../reach/reachRuleV1.js';
 import { ReachRulesChangeV1Schema } from '../reach/reachRulesChangeV1.js';
-import { parseBackendTargetKeyV2, readBackendTargetRefV2 } from '../backends/targets/backendTargetRefV2.js';
+import { BackendTargetRefV2InputSchema, parseBackendTargetKeyV2, readBackendTargetRefV2 } from '../backends/targets/backendTargetRefV2.js';
 import {
   PluginChangePendingReviewResultSchema,
   type PluginChangePendingReviewResult,
@@ -163,6 +163,10 @@ export type ApprovalActionReference =
   | Readonly<{ kind: 'providerConnection'; id: string; displayName?: string; catalogSourceKey?: string; agentTargetKey?: string }>
   | Readonly<{ kind: 'providerModel'; id: string; connectionId: string; agentTargetKey: string; catalogSourceKey?: string }>
   | Readonly<{ kind: 'providerContribution'; id: string }>
+  /** An Agent's own model (no Provider connection): read by the Agent catalog's title for it. */
+  | Readonly<{ kind: 'agentModel'; id: string; agentTargetKey: string }>
+  /** The Connected Account (or pool) one connected service is bound to: read as "Service · account". */
+  | Readonly<{ kind: 'connectedAccount'; service: string } & ({ accountId: string } | { groupId: string })>
   | Readonly<{ kind: 'managedMachine'; id: string; homeId: string }>
   | Readonly<{ kind: 'artifact' | 'skill' | 'mcpServer' | 'project' | 'agent' | 'registrySource'; id: string }>
   | Readonly<{ kind: 'machine'; id: string; workspaceRoot?: string }>
@@ -193,7 +197,37 @@ function describeApprovalKeyReference(key: string | undefined, value: unknown): 
  * reference moves its raw id.
  */
 function isTechnicalApprovalKey(key: string | undefined): boolean {
-  return key === 'v' || key === 'expectedRevision' || key === 'expectedIntentRevision';
+  return key === 'v' || key === 'expectedRevision' || key === 'expectedIntentRevision'
+    // A retry key makes a request idempotent; it says nothing about what the request does.
+    || key === 'creationKey' || key === 'idempotencyKey';
+}
+
+/** An Agent target (a target key or a typed target) read as the Agent it names. */
+function readApprovalAgentReference(value: unknown): ApprovalActionReference | undefined {
+  const target = BackendTargetRefV2InputSchema.safeParse(value);
+  if (!target.success) return undefined;
+  try {
+    return { kind: 'agent', id: readBackendTargetRefV2(target.data).backendId };
+  } catch {
+    // Non-bundled identities are resolved by the host's Agent catalog, not by a protocol registry.
+    try {
+      const persisted = typeof target.data === 'string' ? parseBackendTargetKeyV2(target.data) : target.data;
+      if (persisted.kind === 'agent' && 'identity' in persisted) return { kind: 'agent', id: persisted.definitionId
+        ?? `${persisted.identity.pluginId}/${persisted.identity.localId}` };
+    } catch { /* Malformed references remain literal approval context. */ }
+  }
+  return undefined;
+}
+
+/** A model selection (`{ ref: { agentTargetKey, providerConnectionId, modelId } }`) read as the model it chose. */
+function readApprovalModelReference(value: unknown): ApprovalActionReference | undefined {
+  const ref = isRecord(value) && isRecord(value.ref) ? value.ref : null;
+  if (!ref || typeof ref.modelId !== 'string' || !ref.modelId.trim() || typeof ref.agentTargetKey !== 'string') return undefined;
+  if (typeof ref.providerConnectionId === 'string' && ref.providerConnectionId.trim()) {
+    return { kind: 'providerModel', id: ref.modelId, connectionId: ref.providerConnectionId, agentTargetKey: ref.agentTargetKey };
+  }
+  return ref.providerConnectionId === null || ref.providerConnectionId === undefined
+    ? { kind: 'agentModel', id: ref.modelId, agentTargetKey: ref.agentTargetKey } : undefined;
 }
 
 function describeApprovalReference(actionId: string, field: ActionInputFieldHint, values: readonly unknown[], input: unknown): ApprovalActionReference | undefined {
@@ -211,6 +245,10 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
     }
     return undefined;
   }
+  const leaf = field.path.split('.').at(-1);
+  // Declared target fields name an Agent and a model wherever an Action carries them.
+  if (leaf === 'agentTarget') return readApprovalAgentReference(value);
+  if (leaf === 'modelSelection') return readApprovalModelReference(value);
   if (typeof value !== 'string' || !value.trim()) return undefined;
   if (actionId.startsWith('machines.managed.') && field.path === 'managedId'
       && isRecord(input) && typeof input.homeId === 'string' && input.homeId.trim()) {
@@ -233,7 +271,8 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
     if (field.path === 'relationshipId') return { kind: 'workspaceSyncRelationship', id: value };
     if (field.path === 'sourceWorkspaceRefId') return { kind: 'workspace', id: value };
   }
-  if (field.path === 'machineId' && (actionId.startsWith('mcp.') || actionId.startsWith('skills.') || actionId.startsWith('machines.terminal.') || actionId.startsWith('providers.'))) return { kind: 'machine', id: value };
+  // A Machine id names a Machine on every Action (`machineId`, `executionTarget.machineId`).
+  if (leaf === 'machineId') return { kind: 'machine', id: value };
   if ((actionId === 'skills.rules.set' || actionId === 'mcp.rules.set') && field.path === 'change.write.agentId') return { kind: 'agent', id: value };
   if (actionId.startsWith('registries.sources.') && field.path === 'sourceId') return { kind: 'registrySource', id: value };
   if (field.path === 'anchor' && isSettingsDeclarationActionIdV1(actionId) && readBuiltInSettingDeclarationV1(value)) {
@@ -254,18 +293,7 @@ function describeApprovalReference(actionId: string, field: ActionInputFieldHint
       return { kind: 'providerModel', id: value, connectionId: input.connectionId,
         agentTargetKey: input.agentTargetKey, ...catalogSourceKey };
     }
-    if (field.path === 'agentTargetKey') {
-      try {
-        return { kind: 'agent', id: readBackendTargetRefV2(value).backendId };
-      } catch {
-        // Non-bundled identities are resolved by the host's Agent catalog, not by a protocol registry.
-        try {
-          const target = parseBackendTargetKeyV2(value);
-          if (target.kind === 'agent') return { kind: 'agent', id: target.definitionId
-            ?? `${target.identity.pluginId}/${target.identity.localId}` };
-        } catch { /* Malformed references remain literal approval context. */ }
-      }
-    }
+    if (field.path === 'agentTargetKey') return readApprovalAgentReference(value);
   }
   const key = field.path.split('.').at(-1);
   const reference = field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'session'
@@ -500,7 +528,31 @@ function formatApprovalEntryValue(key: string | undefined, value: unknown): stri
 
 /** The `…At` convention every Protocol shape uses for an epoch-millisecond moment (`createdAt`, `archivedAt`). */
 function isApprovalTimestamp(key: string | undefined, value: unknown): boolean {
-  return key !== undefined && /[a-z]At$/.test(key) && typeof value === 'number' && Number.isInteger(value) && value >= 1e12;
+  return key !== undefined && /[a-z]At(Ms)?$/.test(key) && typeof value === 'number' && Number.isInteger(value) && value >= 1e12;
+}
+
+/** A value that stands for "not set": a `null`, or a moment of `0` (`updatedAtMs: 0`). */
+function isApprovalSentinelValue(key: string | undefined, value: unknown): boolean {
+  return value === null || value === 0 && key !== undefined && /[a-z]At(Ms)?$/.test(key);
+}
+
+/**
+ * A typed value people read as one word or one path: `{ kind: 'managed' }` reads "Managed",
+ * `{ kind: 'path', path: '/repo' }` reads "/repo" (its kind names its only other member).
+ */
+function readApprovalKindValue(value: unknown): string | null {
+  if (!isRecord(value) || typeof value.kind !== 'string') return null;
+  const others = Object.keys(value).filter((key) => key !== 'kind');
+  if (others.length === 0) return formatApprovalEntryValue('kind', value.kind);
+  const member = others.length === 1 && others[0] === value.kind ? value[value.kind] : undefined;
+  return typeof member === 'string' && member.trim() ? member.trim() : null;
+}
+
+/** A set value with its bookkeeping (`{ value, updatedAtMs }`): the value is what people read. */
+function readApprovalStampedValue(value: unknown): { value: unknown } | null {
+  if (!isRecord(value) || !Object.hasOwn(value, 'value')) return null;
+  return Object.keys(value).every((key) => key === 'value' || key === 'updatedAt' || key === 'updatedAtMs')
+    && isApprovalScalar(value.value) ? { value: value.value } : null;
 }
 
 function isEmptyApprovalValue(value: unknown): boolean {
@@ -528,6 +580,7 @@ function appendApprovalStructuredEntries(
     const keyReference = describeApprovalKeyReference(key, value);
     const reference = keyReference?.kind === 'session' ? undefined : keyReference;
     const technical = !reference && (isTechnicalApprovalKey(key) || isEmptyApprovalValue(value)
+      || isApprovalSentinelValue(key, value)
       || widgetStructure && key !== undefined && ['id', 'instanceId', 'groupId', 'artifactId', 'pluginId', 'localId', 'pageId', 'area', 'layoutId', 'kind'].includes(key));
     output.push({
       label, value: formatApprovalEntryValue(key, value), depth,
@@ -535,6 +588,16 @@ function appendApprovalStructuredEntries(
       ...(technical ? { technical: true as const } : {}),
       ...(isApprovalTimestamp(key, value) ? { valueFormat: 'timestamp' as const } : {}),
     });
+    return;
+  }
+  const stamped = !widgetStructure ? readApprovalStampedValue(value) : null;
+  if (stamped) {
+    appendApprovalStructuredEntries(key, label, stamped.value, depth, output, widgetStructure);
+    return;
+  }
+  const kindValue = !widgetStructure ? readApprovalKindValue(value) : null;
+  if (kindValue !== null && isRecord(value) && Object.keys(value).length === 2) {
+    output.push({ label, value: kindValue, depth });
     return;
   }
   const discriminatorOnly = !widgetStructure && isRecord(value) && Object.keys(value).length === 1
@@ -550,6 +613,18 @@ function appendApprovalStructuredEntries(
     // A group led by its kind whose other members are plain words reads as one line too
     // ("Owner  Core page · Usage · Main"), not a heading over Kind / Page id / Area.
     output.push({ label, value: kindLed, depth });
+    return;
+  }
+  if (!widgetStructure && key === 'options' && isRecord(value)) {
+    // Configuration options read as flat "Label  Value" lines; the group's own name adds nothing.
+    for (const [optionKey, option] of Object.entries(value)) {
+      const chosen = readApprovalStampedValue(option)?.value ?? option;
+      if (typeof chosen === 'string' && APPROVAL_WORD_VALUE.test(chosen)) {
+        output.push({ label: humanizeApprovalKey(optionKey), value: humanizeApprovalKey(chosen), depth });
+      } else {
+        appendApprovalStructuredEntries(optionKey, humanizeApprovalKey(optionKey), option, depth, output, widgetStructure);
+      }
+    }
     return;
   }
   output.push({ label, value: null, depth });
@@ -581,6 +656,25 @@ function appendApprovalStructuredMembers(value: unknown, depth: number, output: 
     ? value.map((item, index) => [undefined, String(index + 1), item])
     : Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, humanizeApprovalKey(key), item]);
   for (const [key, label, item] of members) appendApprovalStructuredEntries(key, label, item, depth, output, widgetStructure);
+}
+
+/**
+ * The connected services a session is created with, one line per bound Account or pool; the client names it.
+ * The ids stay in Technical details beside it. A binding that names no Account (native sign-in) has no line.
+ */
+function describeApprovalConnectedServices(value: unknown): readonly ApprovalStructuredValueEntry[] | undefined {
+  const bindings = isRecord(value) && isRecord(value.bindingsByServiceId) ? value.bindingsByServiceId : null;
+  if (!bindings) return undefined;
+  const entries = Object.entries(bindings).flatMap(([service, binding]): ApprovalStructuredValueEntry[] => {
+    if (!isRecord(binding) || binding.source !== 'connected') return [];
+    const groupId = binding.selection === 'group' && typeof binding.groupId === 'string' ? binding.groupId.trim() : '';
+    const accountId = binding.selection !== 'group' && typeof binding.profileId === 'string' ? binding.profileId.trim() : '';
+    const id = groupId || accountId;
+    if (!id) return [];
+    return [{ label: 'Connected account', value: id, depth: 0,
+      reference: { kind: 'connectedAccount', service, ...(groupId ? { groupId } : { accountId }) } }];
+  });
+  return entries.length > 0 ? entries : undefined;
 }
 
 /** Readable entries for one structured JSON value; scalars and flat lists read fine as they are. */
@@ -775,6 +869,9 @@ export function describeApprovalActionFields(input: Readonly<{
       continue;
     }
     const reference = reachPlace ? describeApprovalPlaceReference(values[0]) : describeApprovalReference(input.actionId, field, values, presentationInput);
+    // A typed value that reads as one word or path ("Directory  /repo") needs no entries under it.
+    const kindValue = field.widget === 'json' && !reference && !place?.success && values.length === 1
+      ? readApprovalKindValue(values[0]) : null;
     // A typed reference already reads by its name; entries are for values nothing else can read.
     let entries = (rulesAction && field.path === 'change.rules' || field.path === 'where.rules') ? describeApprovalRuleEntries(values)
       : rulesAction && field.path.startsWith('items.') && values.length > 1 ? values.map(value => ({
@@ -799,6 +896,10 @@ export function describeApprovalActionFields(input: Readonly<{
       entries = entries.map(entry => entry.depth === 0 && entry.label === 'Kind'
         ? { ...entry, label: 'Method', value: methods[entry.value ?? ''] ?? entry.value } : entry);
     }
+    if (field.path.split('.').at(-1) === 'connectedServices' && values.length === 1) {
+      entries = describeApprovalConnectedServices(values[0]) ?? entries;
+    }
+    if (kindValue !== null) entries = undefined;
     const technical = !reference && (isTechnicalApprovalKey(field.path.split('.').at(-1))
       || technicalPaths.includes(field.path)
       || values.length > 0 && values.every(isEmptyApprovalValue) && !(rulesAction && field.path === 'change.rules')
@@ -818,7 +919,9 @@ export function describeApprovalActionFields(input: Readonly<{
         ? { ...entry, technical: true as const } : entry);
     }
     rows.push({
-      kind: 'value', path: field.path, title: field.title, value,
+      // An intent read as its value ("Directory intent" → "Directory  /repo") is named by what it is.
+      kind: 'value', path: field.path, title: kindValue !== null ? field.title.replace(/\s+intent$/i, '') : field.title,
+      value: kindValue ?? value,
       ...(selectedOptions?.some(option => option.labelKey) ? { selectedOptions: selectedOptions.map(({ label, labelKey }) => ({
         label, ...(labelKey ? { labelKey } : {}),
       })) } : {}),
@@ -876,7 +979,8 @@ export function describeActionResultFields(input: Readonly<{ result: unknown; ac
       || typeof value === 'string' && !value.trim());
     rows.push({
       kind: 'value', path: key, title: humanizeApprovalKey(key),
-      value: formatApprovalFieldValues([value], { preserveStructuredValues: true }) ?? '',
+      value: typeof value === 'string' ? formatApprovalEntryValue(key, value)
+        : formatApprovalFieldValues([value], { preserveStructuredValues: true }) ?? '',
       ...(reference ? { reference } : {}),
       ...(typeof value === 'boolean' ? { valueFormat: 'boolean' as const }
         : isApprovalTimestamp(key, value) ? { valueFormat: 'timestamp' as const } : {}),

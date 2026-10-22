@@ -830,7 +830,8 @@ describe('approval field presentation', () => {
       { label: 'Kind', value: 'Create', depth: 0 },
       { label: 'Board', value: null, depth: 0 },
       { label: 'Title', value: 'Launch plan', depth: 1 },
-      { label: 'Board id', value: 'null', depth: 1 },
+      // An unset value stays exact in the literal and reads under Technical details.
+      { label: 'Board id', value: 'null', depth: 1, technical: true },
       { label: 'Tags', value: 'ui, qa', depth: 1 },
       { label: 'Items', value: null, depth: 1 },
       { label: '1', value: null, depth: 2 },
@@ -1176,8 +1177,10 @@ describe('approval field presentation', () => {
       expect(presentation.unrepresentable, actionId).toBeNull();
       if (typeof actionArgs !== 'object' || actionArgs === null) throw new Error(`Expected object Action input for ${actionId}`);
       for (const [path, value] of Object.entries(actionArgs)) {
+        // A value that is only its kind (`{ kind: 'absent' }`) reads as that word, like a chosen option.
+        const kindOnly = typeof value === 'object' && value !== null && Object.keys(value).join() === 'kind';
         expect(presentation.rows, `${actionId}:${path}`).toContainEqual(expect.objectContaining({
-          path, value: typeof value === 'object' ? JSON.stringify(value) : String(value),
+          path, value: kindOnly ? 'Absent' : typeof value === 'object' ? JSON.stringify(value) : String(value),
         }));
       }
     }

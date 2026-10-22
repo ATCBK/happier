@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { t } from '@/text';
 import { storage, useArtifact, useMachineDisplayNamesById, useProjectAccountRows, useServerScopedMachine, useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -35,6 +36,9 @@ import type { TeamCredentialResourceCatalogEntryV1 } from '@happier-dev/protocol
 import { useHomeTeamCredentialModelCatalog } from '@/hooks/teams/useHomeTeamCredentialModelCatalog';
 import { readTeam, readTeamCredentialResourceCatalogs } from '@/sync/store/teams/teamsSnapshots';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
+import { resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { useProjectedQualifiedConnectedAccountTargetPresentations, type ProjectedQualifiedConnectedAccountTarget } from '@/hooks/server/connectedServices/useProjectedQualifiedConnectedAccountTargetPresentations';
+import { parseQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 type ApprovalReference = ApprovalActionReference;
 
 export type ApprovalReferenceReading = Readonly<{ text: string; named: boolean; resolving?: boolean; subject?: 'managedMachine';
@@ -126,7 +130,16 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const workspaceMachineNames = useMachineDisplayNamesById(workspaceMachineId ? [workspaceMachineId] : []);
     const workspace = workspaceRefId ? endpointFor(workspaceRefId, workspaceRefs, workspaceMachineNames, approvalServerId ?? undefined) : null;
     const { managedMachine, managedEnrolledMachine, managedMachineLoading } = useManagedReferenceSources(reference, approvalServerId);
-    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine,
+    const connectedAccountTargets = React.useMemo((): readonly ProjectedQualifiedConnectedAccountTarget[] => {
+        const service = reference?.kind === 'connectedAccount' ? parseQualifiedPluginContributionKey(reference.service) : null;
+        if (reference?.kind !== 'connectedAccount' || !service) return [];
+        return [{ key: CONNECTED_ACCOUNT_KEY, target: 'groupId' in reference
+            ? { kind: 'group', service, groupId: reference.groupId }
+            : { kind: 'account', account: { service, accountId: reference.accountId } } }];
+    }, [reference]);
+    const connectedAccount = useProjectedQualifiedConnectedAccountTargetPresentations(approvalServerId, connectedAccountTargets)
+        .presentationsByKey[CONNECTED_ACCOUNT_KEY];
+    return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine, connectedAccount,
         managedMachine, managedEnrolledMachine, managedMachineLoading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
         syncLink, workspace, teamResources: teamCatalog.resources, teamNameById: teamCatalog.teamNameById,
         teamCatalogLoading: teamCatalog.condition?.reason === 'loading' });
@@ -159,8 +172,11 @@ export function useManagedMachineName(serverId: string | null, managedId: string
     return readManagedMachineName(sources) || null;
 }
 
+const CONNECTED_ACCOUNT_KEY = 'connectedAccount';
+
 type ApprovalReferenceSources = {
     serverId: string | null;
+    connectedAccount?: { accessibilityLabel: string };
     sessionReading: Pick<ReturnType<typeof useApprovalSessionReading>, 'name' | 'machineId' | 'status'>;
     viewer: ReturnType<typeof useAccountSettingsScope>;
     ownHome: boolean;
@@ -236,6 +252,16 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
     if (reference?.kind === 'providerContribution') {
         const declaration = declarations.find(row => areProviderContributionKeysEqualV1(row.contributionKey, reference.id));
         return { text: declaration?.definition.name ?? t('common.unavailable'), named: true };
+    }
+    if (reference?.kind === 'connectedAccount') {
+        // "Service · account" from the one connected-account naming rule; until it is read, the generic name.
+        return sources.connectedAccount ? { text: sources.connectedAccount.accessibilityLabel, named: true }
+            : { text: t('connectedServices.fallbackName'), named: false };
+    }
+    if (reference?.kind === 'agentModel') {
+        // The Agent catalog's own title for its model ("GPT-6 Luna"), as every Session surface reads it.
+        const title = resolveRunNativeModelLabel(reference.agentTargetKey)(reference.id);
+        return { text: title ?? reference.id, named: true };
     }
     if (reference?.kind === 'providerModel') {
         const resource = findApprovalProviderSource(reference, sources.teamResources);

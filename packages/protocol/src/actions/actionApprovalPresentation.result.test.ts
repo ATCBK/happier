@@ -73,6 +73,12 @@ describe('Action result presentation', () => {
     ]);
   });
 
+  it('reads a discriminator as words, like an argument does', () => {
+    expect(describeActionResultFields({ result: { type: 'pending' } })?.rows).toEqual([
+      { kind: 'value', path: 'type', title: 'Type', value: 'Pending' },
+    ]);
+  });
+
   it('reads an empty result as nothing, and leaves a non-object result to its caller', () => {
     expect(
       describeActionResultFields({ result: { success: true } })?.rows,

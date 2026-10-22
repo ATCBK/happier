@@ -123,9 +123,10 @@ describe('approval field semantics shared by card and page', () => {
         'Kind Session',
         'Session id session-1',
         'Empty ""',
-        'Absent null',
       ])
         expect(text).toContain(entry);
+      // An unset (`null`) member reads under Technical details, like an empty list or object.
+      expect(text).not.toContain('Absent null');
       expect(text).not.toContain(JSON.stringify(value));
     },
   );

@@ -243,12 +243,15 @@ function formatApprovalTimestamp(value: string): string {
 }
 
 /**
- * A key over a name names the thing, not its id: "Session id" beside a Session's title reads
- * "Session", a Home's server id reads "Home". The exact id keeps its key in Technical details.
+ * A key over a name names the thing, not its handle: "Session id" beside a Session's title reads
+ * "Session", "Agent target" reads "Agent", "Model selection" reads "Model", a Home's server id reads
+ * "Home". The exact value keeps its key in Technical details.
  */
 function nameApprovalReferenceLabel(label: string, reference: ApprovalReference | undefined, named: boolean): string {
-    if (!reference || !named || !/\sid$/i.test(label)) return label;
-    const stem = label.replace(/\s+id$/i, '');
+    const handle = /(\s+(id|key|target|selection))+$/i;
+    if (!reference || !named || !handle.test(label)) return label;
+    const stem = label.replace(handle, '');
+    if (!stem) return label;
     return reference.kind === 'home' && /^server$/i.test(stem) ? t('common.home') : stem;
 }
 
