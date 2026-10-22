@@ -6,8 +6,20 @@ import { InputFieldHintSchema } from './inputFields.js';
 import { resolveEffectiveInputFields } from './inputFieldRuntime.js';
 import { projectInputOptionsDependencies } from './inputOptionsDependencies.js';
 import * as usageQuery from './usageQuery.js';
+import { createStoredReadSchema } from '../json/storedReadSchema.js';
 
 describe('shared UsageQuery', () => {
+  it('preserves rolling intent through stored reads without admitting malformed or mixed period modes', () => {
+    const stored = createStoredReadSchema(UsageQuerySchema);
+    for (const period of [{ relative: '90days' }, { startMs: 100, endMs: 200 }, {}]) {
+      expect(stored.parse({ period }).period).toEqual(period);
+    }
+    expect(stored.parse({ period: { relative: '90days', retired: true } }).period).toEqual({ relative: '90days' });
+    for (const period of [{ relative: 'invalid' }, { relative: '90days', startMs: 100 }, { relative: 'invalid', endMs: 200 }]) {
+      expect(stored.safeParse({ period }).success).toBe(false);
+      expect(UsageQuerySchema.safeParse({ period }).success).toBe(false);
+    }
+  });
   it('keeps accounting-only consumers on an explicit tokens/cost boundary rather than else-tokens', () => {
     expect(usageQuery.UsageAccountingMetricSchema.parse('tokens')).toBe('tokens');
     expect(usageQuery.UsageAccountingMetricSchema.parse('cost')).toBe('cost');

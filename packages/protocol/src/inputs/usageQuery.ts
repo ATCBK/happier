@@ -20,7 +20,8 @@ export const UsageQuerySchema = lazyZodSchema(() => {
   const clauses = UsageAnalyticsQueryRequestSchema.shape;
   const filters = UsageAnalyticsQueryFiltersSchema.shape;
   return z.strictObject({
-    period: z._default(z.union([clauses.dateRange._zod.def.innerType, z.strictObject({ relative: UsageRelativePeriodSchema,
+    // Explicit exclusion keeps stored-read projections from dropping rolling intent into an empty absolute range.
+    period: z._default(z.union([z.extend(clauses.dateRange._zod.def.innerType, { relative: z.optional(z.never()) }), z.strictObject({ relative: UsageRelativePeriodSchema,
       startMs: z.optional(z.never()), endMs: z.optional(z.never()) })]), {}),
     agents: z._default(filters.agentIds._zod.def.innerType, []),
     machines: z._default(filters.machineIds._zod.def.innerType, []),
@@ -90,7 +91,7 @@ export function getUsageQueryBatchKey(value: unknown): string {
 
 /** Resolve rolling intent only at the read boundary; persisted inputs and semantic keys stay relative. */
 export function resolveUsageQueryPeriod(query: Pick<UsageQuery, 'period' | 'timeZoneOffsetMinutes'>, nowMs: number): NonNullable<UsageAnalyticsQueryRequest['dateRange']> {
-  if (!('relative' in query.period)) return query.period;
+  if (query.period.relative === undefined) return query.period;
   const relative = query.period.relative;
   const today = resolveUsageBucketBounds('day', nowMs, query.timeZoneOffsetMinutes).bucketStartMs;
   if (relative === 'today') return { startMs: today, endMs: nowMs };
@@ -150,14 +151,14 @@ const relativePeriodLabels = {
  */
 export function readUsagePeriodOptions(value: unknown): readonly InputOption[] {
   const stored = value === undefined ? undefined : UsageQuerySchema.shape.period.safeParse(value);
-  const range = stored?.success && !('relative' in stored.data) ? stored.data : null;
+  const range = stored?.success && stored.data.relative === undefined ? stored.data : null;
   // An unbounded range is All time as the Usage page stores it; it takes the All time slot, never a second one.
   const unbounded = range !== null && range.startMs === undefined && range.endMs === undefined;
   const options = UsageRelativePeriodSchema.options.map((relative): InputOption => {
     const value: InputOption['value'] = relative === 'all' && unbounded ? {} : { relative };
     return { value, label: relativePeriodLabels[relative] };
   });
-  if (range !== null && !unbounded) options.push({ value: range, label: 'Custom range' });
+  if (range !== null && !unbounded) options.push({ value: projectNativeJsonValueForTransport(range), label: 'Custom range' });
   return options;
 }
 
