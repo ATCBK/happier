@@ -87,6 +87,7 @@
     "sources/app/api/routes/actions/externalActionExecutionAuthorization.sqlite.integration.spec.ts",
     // The owner tuple compatibility seam exercises the real CLI producer through the server route.
     "sources/app/session/sessionOwnerOpenAttestationTuple.sqlite.integration.spec.ts",
+    "sources/app/discussions/sessionDiscussions.sqlite.integration.spec.ts",
     // Browser code and its unit fixture are checked by tsconfig.publicViewer.json.
     "sources/app/api/routes/share/artifactHtmlViewer.ts",
     "sources/app/api/routes/share/publicDeclarativeViewer.ts",

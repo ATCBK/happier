@@ -46,7 +46,7 @@ describe('qualified quota current credential organization', () => {
         store.__resetQualifiedConnectedAccountQuotaSnapshotStore();
         organizationId = 'org-a'; providerAccountId = 'provider-work'; credentialFailure = false;
         boundary = await createQualifiedQuotaTestHarness({ request: async input => {
-            if (new URL(String(input)).pathname !== '/v4/connect/qualified/credential') return;
+            if (new URL(String(input)).pathname !== '/v4/connect/qualified/credential') return null;
             if (credentialFailure) return Response.json({ error: 'offline' }, { status: 400 });
             return Response.json(QualifiedConnectedAccountCredentialSnapshotV4Schema.parse({
                 ref, authenticationModeId: 'manual', revisionSemantics: 'revisioned',

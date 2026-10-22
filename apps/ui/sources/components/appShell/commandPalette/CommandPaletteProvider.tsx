@@ -40,6 +40,7 @@ import { readPluginUiContributionOrigin } from '@/sync/domains/plugins/ui/projec
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import {
     createPluginContributedActionController,
+    type PluginContributedActionController,
     type PluginContributedActionCurrentSnapshot,
 } from '@/components/plugins/actions/pluginContributedActionController';
 import {
@@ -95,7 +96,13 @@ export function readActiveSessionIdFromRoute(
  * never falls back to an unrelated app-scoped machine; doing so would turn a
  * contextual Action into a second execution target selector.
  */
-export function useCommandPalettePluginActionPresentation(activeSessionId: string | null) {
+export type CommandPalettePluginActionPresentation = Readonly<{
+    controller: PluginContributedActionController;
+    scope: 'global' | 'session';
+    signal: AbortSignal;
+}>;
+
+export function useCommandPalettePluginActionPresentation(activeSessionId: string | null): CommandPalettePluginActionPresentation | undefined {
     const appShellProjection = useAppShellPluginUiProjection();
     const currentUiContextReader = useOptionalCurrentUiContextReader();
     const destinationNavigation = usePluginSurfaceDestinationNavigationBinding();

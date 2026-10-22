@@ -372,7 +372,9 @@ export async function postPreparedDiscussionMessageInTx(tx: Tx, input: ExactDisc
     // A committed explicit body answers the original, even when its native
     // final was empty or failed before the person approved publication. Only
     // the verified host final-return path preserves a non-answer outcome.
-    const terminalOutcome = input.terminalReturn && originalOutcome?.kind !== 'answer' ? originalOutcome : undefined;
+    const terminalOutcome = input.terminalReturn && originalOutcome && originalOutcome.kind !== 'answer'
+        ? { kind: originalOutcome.kind }
+        : undefined;
     if (returned?.success && producer && returnProgress) producer = { ...producer,
         ...(returnProgress.workflow ? { runId: returnProgress.workflow.runId } : {}),
         ...(returnProgress.actionRequestAttributionV1 ? { actionRequestAttributionV1: returnProgress.actionRequestAttributionV1 } : {}),
