@@ -252,7 +252,7 @@ export async function deliverEmailMessage(input: unknown, context: PluginInvocat
       ? { kind: 'notDelivered', retry: 'after', retryAfterMs: raw.retryAfterMs, code: raw.reason }
       : { kind: 'notDelivered', retry: raw.reason === 'network' || raw.reason === 'rateLimited' ? 'safe' : 'never', code: raw.reason };
     const mail = await parseProviderEmail(Buffer.from(raw.mimeBase64, 'base64'), { quotedHistory: 'never', stripSignatures: false, bodyFormat: 'text' }, context);
-    if (isPluginError(mail)) return { kind: 'notDelivered', retry: 'safe', code: mail.code };
+    if (isPluginError(mail)) return { kind: 'notDelivered', retry: 'safe', code: 'providerInvocationUnavailable' };
     const trust = evaluateEmailTrust({ ...mail, strategy: config.trustStrategy });
     const actor = classifyEmailActor({ ...mail, mailbox: config.mailbox, trust });
     const candidate = mail.from === null ? null : normalizeEmailAddress(mail.from);

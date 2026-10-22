@@ -33,7 +33,11 @@ describe('Email parser runtime recovery', () => {
     const baseline = checkpoint();
     // Only the module-loading boundary is faulted; the MIME parser stays real.
     // Email Actions, trust, Channels admission, Collection CAS and backoff stay real.
-    vi.doMock('mailparser', () => { throw new SyntaxError('Synthetic private module detail must never reach poll evidence'); });
+    // A throwing mock factory is wrapped by Vitest in an ordinary Error.
+    // Fault the module export read so the native SyntaxError category survives.
+    vi.doMock('mailparser', () => ({ get simpleParser() {
+      throw new SyntaxError('Synthetic private module detail must never reach poll evidence');
+    } }));
     f.setMessages([['opaque-incoming', incoming], ['second', Buffer.from(incoming.toString().replaceAll('incoming@example.com', 'second@example.com'))]]);
     await expect(journey.poll()).resolves.toMatchObject({ kind: 'retry' });
     const failed = (await f.state.get(connection.connectionId))!.value;
@@ -43,7 +47,7 @@ describe('Email parser runtime recovery', () => {
     expect(checkpoint()).toEqual(baseline);
     expect(admitted).toEqual([]);
     expect([...f.state.rows.values()].filter(row => row.value['record-kind'] === 'ingress-census')).toEqual([]);
-    await expect(f.invoke(ids.messageDeliver, delivery)).resolves.toMatchObject({ kind: 'notDelivered', retry: 'safe', code: 'email_parser_syntax_error' });
+    await expect(f.invoke(ids.messageDeliver, delivery)).resolves.toMatchObject({ kind: 'notDelivered', retry: 'safe', code: 'providerInvocationUnavailable' });
     await expect(f.invoke(ids.attachmentFetch, { ...connection, messageId: '<incoming@example.com>', attachmentIds: ['mime:1'] }))
       .rejects.toMatchObject({ code: 'email_parser_syntax_error', retryable: true });
     expect(f.submissions).toEqual([]);
