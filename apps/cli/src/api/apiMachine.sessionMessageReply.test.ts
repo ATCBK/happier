@@ -90,8 +90,9 @@ it('recovers a refused reply advertisement and delivers a fresh Workflow leaf th
   let localId = '';
   const admitted: unknown[] = [];
   // Home HTTP/Socket.IO and native process launch are the substituted boundaries.
-  // Capability lifecycle, fresh Session creation, Workflow authoring, protected
-  // input admission and exact reply observation run through their real owners.
+  // Capability lifecycle, fresh Session creation, Workflow input authoring and
+  // exact reply observation run through their real CLI owners. The enqueue
+  // transport below models the server's capability refusal, not its admission service.
   const socket = createApiSessionSocketStub({ emit: acknowledgeRegistration, emitWithAck: (event, raw) => {
     if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) {
       const request = MachineUpdateOperationProtocolCapabilitiesRequestV1Schema.parse(raw);
@@ -111,7 +112,8 @@ it('recovers a refused reply advertisement and delivers a fresh Workflow leaf th
     }
     return { result: 'success', version: 1, daemonState: raw && typeof raw === 'object' && 'daemonState' in raw ? raw.daemonState : null };
   } });
-  bindApiSessionSocketMock(io, socket);
+  io.mockImplementation((_url: string, options: { auth?: { clientType?: string } }) =>
+    options.auth?.clientType === 'machine-scoped' ? socket : createApiSessionSocketStub());
   const session = () => createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain',
     machineId: 'target-machine', metadata: JSON.stringify({ machineId: 'target-machine', path: '/repo', ...birth }) });
   vi.spyOn(axios, 'get').mockImplementation(async url => {
@@ -160,7 +162,7 @@ it('recovers a refused reply advertisement and delivers a fresh Workflow leaf th
         serverId: configuration.activeServerId, machineId: 'target-machine', workDepth: 0, originRunId: 'run-1', machineAdmissionTransport }),
       resolveSharedRunConversation: async () => null, resolveProducerConversation: async () => null,
       resolveExistingSessionConversation: async () => null });
-    await expect(execute({ runId: 'run-1', step: { kind: 'step', id: 'work', document: { text: 'Review', references: [], attachments: [] },
+    const result = await execute({ runId: 'run-1', step: { kind: 'step', id: 'work', document: { text: 'Review', references: [], attachments: [] },
       input: [], result: { kind: 'text' } }, invocation: { kind: 'happier.workflow-progress.v1', blockKind: 'step',
         invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: 'inv-1' },
       input: { text: 'Review', references: [], attachments: [], values: [] },
@@ -168,7 +170,8 @@ it('recovers a refused reply advertisement and delivers a fresh Workflow leaf th
         connectedServices: { v: 2, bindingsByServiceId: {} } }, executionTarget: { kind: 'session' },
       authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
       workspace: { machineId: 'target-machine', directory: '/repo', checkoutRootPath: '/repo' },
-      beforeInputAdmission: async () => {}, onInputAccepted: async () => {} })).resolves.toMatchObject({ kind: 'completed', result: '' });
+      beforeInputAdmission: async () => {}, onInputAccepted: async () => {} });
+    expect(result, JSON.stringify(result)).toMatchObject({ kind: 'completed', result: '' });
     expect(birth).toBeDefined();
     expect(admitted).toEqual([expect.objectContaining({ sessionId, targetMachineId: 'target-machine', reply: { mode: 'wait' } })]);
   } finally { await client.shutdown(); }
@@ -271,7 +274,7 @@ it.each([false, true])('recovers a Discussion result through the actual Session 
     expect(body.witness).toBeUndefined();
     const request = DiscussionAgentPostRequestV1Schema.parse(body.request);
     publications.push(request);
-    expect(request.replyReturn).toEqual({ serverId: configuration.activeServerId, requestLocalId: 'original', acceptedTurnId: 'accepted-turn' });
+    expect(request.replyReturn).toEqual({ serverId: 'srv_reply_home', requestLocalId: 'original', acceptedTurnId: 'accepted-turn' });
     expect(request.request.replyTarget).toEqual({ kind: 'message', messageId: 'question-1' });
     returned = true;
     return { ok: true, result: { v: 1, ok: true, value: { messageSeq: 2, message: {

@@ -78,10 +78,12 @@ describe('ApiMachineClient filesystem handlers', () => {
       await expectPathMissing(join(workspace, 'pending'));
       // The admitted owner-local path already has the verified Account fact;
       // it does not acquire an actor by calling a native filesystem handler.
-      await expect(executor.execute('daemon.filesystem.createDirectory', input, {
+      const ownerLocalApproval = await executor.execute('daemon.filesystem.createDirectory', input, {
         surface: 'rpc', authority: 'account_automation', serverId: 'home', runtimeAccountId: 'verified-requester',
         externalActionTarget: { kind: 'machine', machineId: 'machine-test' },
-      })).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'approval' } });
+      });
+      expect(ownerLocalApproval, JSON.stringify(ownerLocalApproval)).toMatchObject({ ok: true,
+        result: { kind: 'approval_request_created', artifactId: 'approval' } });
       expect(approvals).toEqual([expect.objectContaining({ actionArgs: input,
         executionOriginV1: expect.objectContaining({ serverId: 'home', machineId: 'machine-test', accountId: 'verified-requester' }),
       })]);
