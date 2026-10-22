@@ -796,8 +796,13 @@ Team rows also carry an opaque confirmation source key, without the private
 Account or Pool target. The worker model-projection RPC accepts a
 `teamCredentialModel` and returns its locally computed compatibility and
 fingerprint. The recipient uses that result with the existing Account
-confirmation Action (`catalogSourceKey`, revision zero). The same confirmation
-matcher checks the source, Agent, model scope and actual adapter fingerprint;
+confirmation Action (`catalogSourceKey`, revision zero). The shared Protocol
+Action executor matches worker compatibility against the requesting Account's private
+catalog; a worker custodian's `confirmed` bit never supplies recipient consent.
+UI, CLI and MCP adapters supply their captured Account catalog readers to that executor.
+After saving consent, selection rereads the worker and that same Account catalog
+before committing. The shared Protocol confirmation matcher checks the source,
+Agent, model scope and actual adapter fingerprint;
 launch recomputes them before materialization. Confirmed rows stay experimental
 and account-unverified. Ordinary Pool member changes and access-token refresh do not
 change this static compatibility confirmation. A changed target or compatibility
