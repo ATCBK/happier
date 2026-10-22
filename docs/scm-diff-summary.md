@@ -39,8 +39,30 @@ that evidence privately for replacement generation and keeps the description
 under the existing summary edit/revision/Undo contract. Draft requests bypass
 analysis-cache reuse because the Session's testing context can change without a
 code change. They never invoke PR creation, push or browser navigation. The PR
-form's visible drafting control and composed loaded-runtime verification remain
-integration work; this contract is not a claim of released UI availability.
+form (`GitPullRequestForm`, in the Git sidebar and in Details) offers the draft as
+one quiet action beside the body. It invokes the Action for the form's head/base
+as a branch comparison through the shared Session summary binding
+(`useGitPullRequestBodyDraft`), so progress, model choice, typed failures and
+Machine presence are the ones every summary surface already shows. An arriving
+description fills the body only when the person has neither typed since asking nor
+had text there to lose; otherwise it is held beside the body as "Use description"
+or "Keep mine". This is unreleased 0.3 source behavior, not a claim of released
+UI availability.
+
+The Session draft repository retains the description request and any unapplied
+candidate with the form. Moving between the sidebar and Details keeps the request
+for the same Machine, Session directory and head/base comparison. The admitted
+request observes the existing captured Account lifetime, surviving a form remount
+while still rejecting publication after Account retirement. Late request updates read the
+current draft before writing, preserving text entered in another placement. The
+saved result identity and revision distinguish new output from an older summary.
+
+After capture, draft and ordinary generation failures use the same strict result
+builder: requested outputs, failed progress with a typed `reasonCode`, and explicit
+remaining analysis coverage accompany the captured inventory. Unavailable template
+evidence returns `DIFF_UNAVAILABLE`; model refusal returns `MODEL_UNAVAILABLE` and
+the existing model-selection action. Other known pre-Start failures use
+`SUMMARY_FAILED`. Cancellation still propagates through the containing operation.
 
 ### Demanded entry history (unreleased 0.3)
 
@@ -353,10 +375,10 @@ review continuation consume the same enabled/coherent/subject-aware selection;
 none may dispatch a disabled built-in through an alternate entrance. See
 [Triage sources](triage-sources.md) for the catalog owner.
 
-Current comparison/generation sources do not supply a repository PR template.
+Ordinary generation does not request a repository PR template. Explicit PR
+description drafting uses the committed-template evidence path described above.
 The Git PR writer applies its existing template only when no body was supplied;
-it does not replace an explicit draft with generated prose. Template-aware
-`suggestedPrBody` generation therefore has no current supplied-template path.
+it does not replace an explicit draft with generated prose.
 
 - [`comparison.ts`](../packages/protocol/src/scm/comparison.ts) owns source
   selectors, captured inventory, occurrence identities and path classification.
