@@ -977,7 +977,13 @@ constant diagnostic. The daemon logs source-open/currentness and application
 failure stages as well. These records omit request/response content and exception
 text. Unexpected application exceptions return the existing typed
 `broker_unavailable` refusal; the file diagnostic includes only recognized error
-names and system, Fastify or Axios error codes. In 0.3 development, the Test
+names and system, Fastify or Axios error codes, a closed failed phase and an
+application request id. Private broker requests also carry the host-generated
+broker request id used for Home admission, distinguishing Home admission,
+source opening and upstream forwarding without logging URLs, headers or bodies.
+In development, broker resource reads and Home admissions follow the containing
+request's cancellation rather than a separate ten-second HTTP cutoff.
+In 0.3 development, the Test
 result's optional, closed `code` preserves the
 exact admitted application refusal or the carrier's public failure classification;
 `source_unavailable` alone does not establish an absent or expired credential.
