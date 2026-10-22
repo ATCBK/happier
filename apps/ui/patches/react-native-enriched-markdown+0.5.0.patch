@@ -4659,6 +4659,18 @@ diff --git a/node_modules/react-native-enriched-markdown/src/normalizeMarkdownSt
    strong: { fontFamily: '', fontWeight: 'bold', color: undefined },
    em: {
      fontFamily: '',
+diff --git a/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.web.ts b/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.web.ts
+--- a/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.web.ts
++++ b/node_modules/react-native-enriched-markdown/src/normalizeMarkdownStyle.web.ts
+@@ -118,7 +118,7 @@
+     borderWidth: 1,
+     padding: 16,
+   },
+-  link: { fontFamily: '', color: '#2563EB', underline: true },
++  link: { fontFamily: '', color: '#2563EB', underline: true, referenceChips: '' },
+   strong: { fontFamily: '', fontWeight: 'bold', color: undefined },
+   em: {
+     fontFamily: '',
 diff --git a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts b/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts
 --- a/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts
 +++ b/node_modules/react-native-enriched-markdown/src/types/MarkdownStyleInternal.ts
