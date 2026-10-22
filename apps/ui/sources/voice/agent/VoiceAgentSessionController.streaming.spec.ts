@@ -926,7 +926,8 @@ describe('VoiceExecutionTransport (streaming)', () => {
     const controller = createVoiceExecutionTransport();
     await controller.ensureRunning('s1');
 
-    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ bootstrapMode: 'ready_handshake', bootstrapTimeoutMs: 60_000 }));
+    expect(daemonStart).toHaveBeenCalledWith(expect.objectContaining({ bootstrapMode: 'ready_handshake' }));
+    expect(daemonStart.mock.calls.at(-1)?.[0]).not.toHaveProperty('bootstrapTimeoutMs');
   });
 
   it('prefetches relevant agent installables before starting a daemon voice agent session', async () => {

@@ -53,7 +53,8 @@ export type VoiceAgentStartParams = Readonly<{
    */
   bootstrapMode?: 'ready_handshake' | 'none';
   /**
-   * Optional timeout budget for bootstrap handshakes.
+   * Optional READY response budget for legacy callers, after native provisioning
+   * and prompt admission. This never limits execution-run startup preparation.
    * When omitted, the backend default response-completion timeout applies.
    */
   bootstrapTimeoutMs?: number;

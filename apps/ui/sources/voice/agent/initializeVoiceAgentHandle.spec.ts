@@ -664,6 +664,7 @@ describe('initializeVoiceAgentHandle', () => {
             });
 
             expect(handle.backend).toBe('daemon');
+            expect(admittedStart()).not.toHaveProperty('bootstrapTimeoutMs');
             expect(buildBackendTargetKeyV2(admittedStart().backendTarget)).toBe(buildAgentUniverseBackendTargetKey('opencode'));
             expect(admittedStart()).toMatchObject({
                 chatModelId: 'chat-model',

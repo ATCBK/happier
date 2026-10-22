@@ -64,8 +64,8 @@ export type VoiceAgentStartParams = Readonly<{
    */
   bootstrapMode?: 'ready_handshake' | 'none';
   /**
-   * Daemon-only: timeout budget for bootstrap handshakes.
-   * Used to avoid leaving the UI in "starting" when a provider stalls during prewarm.
+   * Daemon-only: explicit legacy READY response budget, after native provisioning
+   * and prompt admission. Ordinary starts use the daemon's response budget.
    */
   bootstrapTimeoutMs?: number;
   transcript?: Readonly<{ persistenceMode?: VoiceAgentTranscriptPersistenceMode; epoch?: number }>;

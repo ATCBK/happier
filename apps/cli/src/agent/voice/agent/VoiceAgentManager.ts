@@ -736,8 +736,6 @@ export class VoiceAgentManager {
     const startSignal = options?.signal
       ? AbortSignal.any([startOccurrence.abortController.signal, options.signal])
       : startOccurrence.abortController.signal;
-    let bootstrapFailure: VoiceAgentError | null = null;
-    let bootstrapTimer: NodeJS.Timeout | null = null;
     const cancelStart = (): void => {
       startOccurrence.cancelled = true;
       void startOccurrence.provisionalCleanup?.().catch(() => {});
@@ -750,7 +748,7 @@ export class VoiceAgentManager {
         || startOccurrence.cancelled
         || this.startingVoiceAgents.get(voiceAgentId) !== startOccurrence
       ) {
-        throw bootstrapFailure ?? new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent start was cancelled');
+        throw new VoiceAgentError('VOICE_AGENT_START_FAILED', 'Voice agent start was cancelled');
       }
     };
     const createRuntime = options?.createRuntime ?? this.createRuntime;
@@ -808,30 +806,11 @@ export class VoiceAgentManager {
       const clearCommitBuffer = () => {
         if (instanceForCleanup) instanceForCleanup.commitBuffer = '';
       };
-      // Provisioning, prompt admission and READY completion share one budget.
-      // Expiry retires the same start occurrence as caller cancellation.
-      const bootstrapBudgetMs = this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs);
-      const bootstrapDeadlineMs = this.getNowMs() + bootstrapBudgetMs;
-      const bootstrapExpired = new Promise<never>((_resolve, reject) => {
-        bootstrapTimer = setTimeout(() => {
-          bootstrapFailure = new VoiceAgentError(
-            'VOICE_AGENT_START_FAILED', `Voice agent bootstrap timed out after ${bootstrapBudgetMs}ms`,
-          );
-          reject(bootstrapFailure);
-          startOccurrence.abortController.abort(bootstrapFailure);
-        }, bootstrapBudgetMs);
-        bootstrapTimer.unref?.();
-      });
-      const awaitBootstrap = <T>(work: Promise<T>): Promise<T> => Promise.race([work, bootstrapExpired]);
-      const chatSessionId = await awaitBootstrap((async () => {
-        return (
-          await chatBackend.provisionRuntime(
-            resume.chatSessionId
-              ? { resumeRuntimeId: resume.chatSessionId }
-              : undefined,
-          )
-        ).runtimeId;
-      })());
+      // Execution-run provisioning follows the native runtime's lifetime and
+      // transport budgets. A model-response deadline cannot bound preparation.
+      const { runtimeId: chatSessionId } = await chatBackend.provisionRuntime(
+        resume.chatSessionId ? { resumeRuntimeId: resume.chatSessionId } : undefined,
+      );
       ensureCurrentStart();
 
       const instance: VoiceAgentInstance = {
@@ -905,7 +884,7 @@ export class VoiceAgentManager {
       instance.unsubscribeChatMessages = this.subscribeToChatBackend(instance, chatBackend, instance.chatGeneration);
 
       if (resume.commitSessionId) {
-        await awaitBootstrap(this.ensureCommitBackendSession(instance));
+        await this.ensureCommitBackendSession(instance);
         ensureCurrentStart();
       }
 
@@ -922,10 +901,10 @@ export class VoiceAgentManager {
           memoryRecallGuidanceEnabled: instance.memoryRecallGuidanceEnabled,
           systemAppendBlocks: instance.systemAppendBlocks,
         });
-        await awaitBootstrap(this.deliverPrompt(instance.chatBackend, instance.chatSessionId, prompt));
+        await this.deliverPrompt(instance.chatBackend, instance.chatSessionId, prompt);
         ensureCurrentStart();
         if (instance.chatBackend.waitForTurnCompletion) {
-          await awaitBootstrap(instance.chatBackend.waitForTurnCompletion(Math.max(1, bootstrapDeadlineMs - this.getNowMs())));
+          await instance.chatBackend.waitForTurnCompletion(this.resolveResponseTimeoutMs(params.bootstrapTimeoutMs));
           ensureCurrentStart();
         }
         if (!isVoiceAgentReadyHandshakeReply(instance.chatBuffer)) {
@@ -968,7 +947,6 @@ export class VoiceAgentManager {
       }
       throw new VoiceAgentError('VOICE_AGENT_START_FAILED', e instanceof Error ? e.message : 'start failed');
     } finally {
-      if (bootstrapTimer) clearTimeout(bootstrapTimer);
       startSignal.removeEventListener('abort', cancelStart);
       if (this.startingVoiceAgents.get(voiceAgentId) === startOccurrence) {
         this.startingVoiceAgents.delete(voiceAgentId);

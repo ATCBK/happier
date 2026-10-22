@@ -32,7 +32,6 @@ import {
     DEFAULT_AGENT_ID,
 } from '@/agents/catalog/catalog';
 import { sessionExecutionRunGet, sessionExecutionRunList, sessionExecutionRunStop } from '@/sync/ops/sessionExecutionRuns';
-import { resolveVoiceAgentBootstrapTimeoutMs } from '@/voice/agent/resolveVoiceAgentBootstrapTimeoutMs';
 import { assertDaemonVoiceAgentRuntimeSupported } from '@/voice/agent/assertDaemonVoiceAgentRuntimeSupported';
 import { recoverUnavailableGlobalVoiceAutoMachine } from '@/voice/agent/recoverUnavailableGlobalVoiceAutoMachine';
 import { applyRecoveredGlobalVoiceMachineDecision } from '@/voice/agent/applyRecoveredGlobalVoiceMachineDecision';
@@ -76,7 +75,6 @@ type InitializeVoiceAgentHandleParams = Readonly<{
 
 type VoiceAgentBootstrapConfig = Readonly<{
     bootstrapMode: 'ready_handshake' | 'none';
-    bootstrapTimeoutMs: number;
     disabledActionIds: readonly string[];
     initialContext: string;
 }>;
@@ -106,7 +104,6 @@ function resolveVoiceAgentBootstrapConfig(args: Readonly<{
             && !shouldUseImmediateVoiceWelcome(args.settings, args.agentCfg)
                 ? 'ready_handshake'
                 : 'none',
-        bootstrapTimeoutMs: resolveVoiceAgentBootstrapTimeoutMs(readLocalConversationSettingsFromAccountSettings(args.settings)),
         disabledActionIds: resolveDisabledVoiceActionIdsFromState(storage.getState() as any),
         initialContext: args.initialContext,
     };
@@ -139,7 +136,6 @@ function buildVoiceAgentStartArgsBase(args: Readonly<{
         idleTtlSeconds: args.idleTtlSeconds,
         initialContext: args.bootstrap.initialContext,
         bootstrapMode: args.bootstrap.bootstrapMode,
-        bootstrapTimeoutMs: args.bootstrap.bootstrapTimeoutMs,
         disabledActionIds: args.bootstrap.disabledActionIds,
     };
 }

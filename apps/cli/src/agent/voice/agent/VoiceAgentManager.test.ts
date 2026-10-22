@@ -3181,8 +3181,8 @@ describe('VoiceAgentManager', () => {
     }
   });
 
-  it.each(['provisioning', 'delivery', 'completion'] as const)(
-    'shares the bootstrap deadline across provisioning, delivery and completion while %s is pending',
+  it.each(['provisioning', 'delivery'] as const)(
+    'leaves %s under the runtime lifetime rather than the READY response deadline',
     async (phase) => {
       vi.useFakeTimers();
       let releaseOpen!: () => void;
@@ -3191,10 +3191,14 @@ describe('VoiceAgentManager', () => {
       const sending = new Promise<void>((resolve) => { releaseSend = resolve; });
       let opened = false;
       let sent = false;
-      let bootstrapStartedAt = 0;
       const backend = createDeterministicBackend('bootstrap-budget', {
-        async onOpen() { opened = true; bootstrapStartedAt = Date.now(); await opening; },
-        async onSend() { sent = true; await sending; },
+        async onOpen() { opened = true; await opening; },
+        async onSend(request, publish) {
+          sent = true;
+          await sending;
+          publish({ kind: 'message-delta', turnId: request.delivery.turnId, channel: 'assistant', text: 'READY' });
+          publish({ kind: 'turn-complete', turnId: request.delivery.turnId });
+        },
       });
       const manager = new VoiceAgentManager({ createRuntime: () => backend });
       let outcome = 'pending';
@@ -3208,21 +3212,18 @@ describe('VoiceAgentManager', () => {
       const observed = started.then(() => { outcome = 'started'; }, () => { outcome = 'failed'; });
       try {
         await vi.waitFor(() => expect(opened).toBe(true));
-        // Provisioning consumes part of the same budget as the READY response.
-        await vi.advanceTimersByTimeAsync(5_000);
-        if (phase !== 'provisioning') {
+        if (phase === 'delivery') {
           releaseOpen();
           await vi.waitFor(() => expect(sent).toBe(true));
-          await vi.advanceTimersByTimeAsync(5_000);
-          if (phase === 'completion') releaseSend();
         }
-        await vi.advanceTimersByTimeAsync(bootstrapStartedAt + 15_000 - Date.now() - 1);
+        // Valid preparation can outlast both the old 60 s UI default and the
+        // ordinary response budget. No model response is being awaited yet.
+        await vi.advanceTimersByTimeAsync(180_000);
         expect(outcome).toBe('pending');
-        await vi.advanceTimersByTimeAsync(1);
-        expect(outcome).toBe('failed');
-        await expect(started).rejects.toMatchObject({ code: 'VOICE_AGENT_START_FAILED' });
-        expect(manager.readCurrentRuntimeOccurrence('bootstrap-budget')).toBeNull();
-        expect(manager.isTurnInFlight('bootstrap-budget')).toBe(false);
+        expect(manager.isTurnInFlight('bootstrap-budget')).toBe(true);
+        releaseOpen();
+        releaseSend();
+        await expect(started).resolves.toMatchObject({ voiceAgentId: 'bootstrap-budget' });
       } finally {
         releaseOpen();
         releaseSend();
