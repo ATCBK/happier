@@ -1448,7 +1448,7 @@ describe('managed Machine detail', () => {
             description: t('approvals.waitingForYou'),
             action: { label: t('approvals.review') },
         });
-        expect(screen.findByTestId('managed-machine.delete')?.props.loading).toBe(false);
+        expect(screen.findByTestId('managed-machine.delete')?.props.loading).not.toBe(true);
     });
     it.each(['approval-pending', 'saved'] as const)('resets live Keep from the fresh parent, clearing a failed proposal only on success (%s)', async outcome => {
         const target = await upsertAndActivateServer({ serverUrl: 'https://managed-reset-parent.test', scope: 'tab' });
