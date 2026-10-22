@@ -73,6 +73,10 @@ async function home(mode: 'plain' | 'e2ee', events: string[], options: {
   retireSessionAccess?: boolean;
   allowedTerminalSecurity?: boolean;
   authorityCeiling?: 'account_automation';
+  beforeEncryptionRead?: () => Promise<void>;
+  passiveReadDelayMs?: number;
+  invalidEncryptionResponse?: boolean;
+  inventoryUnavailable?: boolean;
 } = {}) {
   const seed = new Uint8Array(32).fill(19);
   const publicKey = ed25519.getPublicKey(seed);
@@ -90,9 +94,15 @@ async function home(mode: 'plain' | 'e2ee', events: string[], options: {
     const controller = { ...machine, id: 'alice-controller', installationId: 'controller-installation',
       installationPublicKey: encodeBase64(controllerPublicKey),
       access: { ...machine.access, custodian: { accountId: 'alice', displayName: 'Alice' } } };
-    if (request.url === '/v1/account/encryption') return respond({ mode, updatedAt: 1 });
+    if (request.url === '/v1/account/encryption') {
+      await options.beforeEncryptionRead?.();
+      if (options.passiveReadDelayMs) await new Promise(resolve => setTimeout(resolve, options.passiveReadDelayMs));
+      return respond(options.invalidEncryptionResponse ? { mode: 'invalid' } : { mode, updatedAt: 1 });
+    }
     if (request.url === '/v1/machines') {
       options.onInventoryRead?.();
+      if (options.passiveReadDelayMs) await new Promise(resolve => setTimeout(resolve, options.passiveReadDelayMs));
+      if (options.inventoryUnavailable) { response.statusCode = 503; return respond({ error: 'unavailable' }); }
       return respond(options.finiteWake ? [machine, controller] : [machine]);
     }
     if (request.url === '/ping') return respond({ status: 'ok' });
@@ -601,6 +611,49 @@ describe('ordinary CLI requester Account custody on the existing Action carrier'
         expect(events.indexOf('disclosed')).toBeLessThan(events.indexOf('dispatch'));
       } finally { Object.assign(configuration, originalConfiguration); }
     });
+  });
+
+  it('overlaps passive Home mode and inventory reads but joins both before authorization or dispatch', async () => {
+    const events: string[] = [];
+    const measured = await home('plain', [], { custodianAccountId: 'bob', originalOwnAction: 'machines.work.summary.get', passiveReadDelayMs: 20 });
+    const request = { actionId: 'machines.work.summary.get', input: ownMachineInput,
+      requestId: 'request-1', target: { kind: 'machine', machineId: 'alice-machine' } as const,
+      credentials: { token: token(), encryption: null }, serverIdentityId: homeIdentityId };
+    await dispatchOriginalAccountAction({ ...request, serverHttpBaseUrl: measured.url });
+    const samples = [];
+    for (let sample = 0; sample < 3; sample++) {
+      const started = performance.now();
+      expect(await dispatchOriginalAccountAction({ ...request, serverHttpBaseUrl: measured.url })).toMatchObject({ ok: true, result: ownMachineResult });
+      samples.push(Math.round(performance.now() - started));
+    }
+    console.info('Original Account dispatch (20ms mode and inventory HTTP boundaries)', { samples });
+    let releaseMode!: () => void;
+    let inventoryRead = false;
+    const modeGate = new Promise<void>(resolve => { releaseMode = resolve; });
+    const target = await home('plain', events, { custodianAccountId: 'bob', originalOwnAction: 'machines.work.summary.get',
+      beforeEncryptionRead: () => modeGate, onInventoryRead: () => { inventoryRead = true; } });
+    const pending = dispatchOriginalAccountAction({ actionId: 'machines.work.summary.get', input: ownMachineInput,
+      requestId: 'request-1', target: { kind: 'machine', machineId: 'alice-machine' },
+      credentials: { token: token(), encryption: null }, serverHttpBaseUrl: target.url, serverIdentityId: homeIdentityId });
+    try {
+      await vi.waitFor(() => expect(inventoryRead).toBe(true));
+      expect(events).toEqual([]);
+      expect(target.readReceived()).toBeUndefined();
+    } finally {
+      releaseMode();
+      await expect(pending).resolves.toMatchObject({ ok: true, result: ownMachineResult });
+    }
+  });
+
+  it('preserves mode refusal when concurrent inventory also fails, without minting or dispatching', async () => {
+    const events: string[] = [];
+    const target = await home('plain', events, { invalidEncryptionResponse: true, inventoryUnavailable: true });
+    expect(await dispatchOriginalAccountAction({ actionId: 'machines.work.summary.get', input: ownMachineInput,
+      requestId: 'request-1', target: { kind: 'machine', machineId: 'alice-machine' },
+      credentials: { token: token(), encryption: null }, serverHttpBaseUrl: target.url, serverIdentityId: homeIdentityId }))
+      .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+    expect(events).toEqual([]);
+    expect(target.readReceived()).toBeUndefined();
   });
 
   it('cancels own remote origination during Home inventory before disclosure or dispatch', async () => {

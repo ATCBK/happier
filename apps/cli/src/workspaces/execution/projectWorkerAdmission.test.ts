@@ -75,6 +75,38 @@ function harness(runAtMost: number | null = 1) {
 }
 
 describe('finite target admission and real reservation custody', () => {
+  it('checks live service admission without waiting for unrelated finite-policy IO', async () => {
+    const drain = createDaemonAdmissionDrain();
+    let memory: { totalBytes: number; availableBytes: number } | null = { totalBytes: 100, availableBytes: 1 };
+    let policyReads = 0;
+    // The installed policy reader reaches Home metadata. Delay only that IO
+    // boundary; the real drain, memory and reservation owners remain active.
+    const readPolicy = async () => {
+      policyReads += 1;
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return { status: 'ready' as const, policy: { accepting: false, runAtMost: 1 }, source: 'stored' as const, metadataVersion: 1 };
+    };
+    const admission = createProjectWorkerAdmission({ machineId: scope.machineId, readPolicy,
+      admissionDrain: drain, readMemory: () => memory });
+    const demand = { bytes: 20, basis: { kind: 'declared' } } as const;
+    const started = performance.now();
+    const observations = [];
+    for (let fence = 0; fence < 13; fence++) observations.push(await admission.observeServiceEligibility(demand, { includeLoad: false }));
+    console.info('Service admission (13 fences, 20ms policy boundary)', { elapsedMs: Math.round(performance.now() - started), policyReads });
+    expect(observations.every(observation => observation.eligible)).toBe(true);
+    expect(policyReads).toBe(0);
+    memory = { totalBytes: 10, availableBytes: 1 };
+    expect(await admission.observeServiceEligibility(demand, { includeLoad: false })).toMatchObject({ eligible: false, reason: 'memory_insufficient' });
+    memory = null;
+    expect(await admission.observeServiceEligibility(demand, { includeLoad: false })).toEqual({ eligible: false, reason: 'memory_unavailable' });
+    expect(await admission.observeServiceEligibility(undefined, { includeLoad: false })).toEqual({ eligible: true });
+    drain.beginTemporaryDrain();
+    expect(await admission.observeServiceEligibility(undefined, { includeLoad: false })).toEqual({ eligible: false, reason: 'draining' });
+    drain.resume();
+    expect(await admission.observeServiceEligibility(undefined, { includeLoad: false })).toEqual({ eligible: true });
+    expect(admission.dependencies()).toEqual([]);
+  });
+
   it('observes service eligibility independently of finite accepting and capacity without pumping work', async () => {
     const h = harness();
     const demand = { bytes: 20, basis: { kind: 'declared' } } as const;

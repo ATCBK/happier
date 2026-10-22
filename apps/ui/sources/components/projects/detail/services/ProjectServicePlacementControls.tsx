@@ -267,6 +267,8 @@ export function ProjectServicePlacementControls(
     source: ProjectServiceSource;
     serviceName: string;
     declaration?: ProjectServiceDeclarationFacts;
+    /** Native custody already observed by the row; presentation only while its placement reader is unread. */
+    nativeTarget?: ServiceRow['target'];
     /** Changes whenever the Services feed observes this service's lifecycle; the binding is then re-read. */
     lifecycleKey?: string;
   }>,
@@ -329,7 +331,11 @@ function ProjectServicePlacementControlsBody(props: React.ComponentProps<typeof 
   const ready = state.kind === 'ready' ? state.value : null;
   const observed = placement.displayPlacement?.actual ?? null;
   const actual = ready?.actual.status === 'present' ? ready.actual.target : null;
-  const displayedActual = observed?.status === 'present' ? observed.target : null;
+  // Regrouping remounts this reader. The row's completed native observation
+  // already knows where it runs; retained desired/actual placement cannot contradict it.
+  // Fresh placement still replaces retention and alone admits save/Move.
+  const displayedActual = state.kind === 'loading' && props.nativeTarget
+    ? props.nativeTarget : observed?.status === 'present' ? observed.target : null;
   const runsOn = placement.displayPlacement?.placement.runsOn ?? null;
   const portable = props.declaration?.portable === true;
   const label = useWorkerDestinationLabel(props.source.serverId, runsOn, props.source.machineId);
@@ -736,6 +742,8 @@ export function createProjectServicePlacementRenderer(
         source={source}
         serviceName={declaration.selection.name}
         declaration={declarations[declaration.selection.name]}
+        nativeTarget={row.target.sourceClass?.kind === 'managed_service' && row.target.serviceState !== undefined
+          ? row.target : undefined}
         // The feed's observed lifecycle of this row re-reads the actual binding (Start/Stop/reconnect).
         lifecycleKey={JSON.stringify([row.status, row.target.machineId, row.target.serviceState ?? '', row.target.id,
           row.target.sourceClass?.kind === 'managed_service' ? row.target.sourceClass.managedServiceId : null])}

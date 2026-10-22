@@ -59,6 +59,7 @@ import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttri
 import type { prepareRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
 import { readRequesterHomeWithinActionLifetime } from '../sessionEncryption/requesterCurrentness';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 /** The installed host's passive source Action composition; it never reads a remote OS path. */
 export function createProjectFiniteSourceManifestInspector(params: Readonly<{
@@ -128,13 +129,15 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
     });
     let result: Awaited<ReturnType<typeof executor.execute>>;
     try {
-      result = await phase('source_action', () => executor.execute('projects.inspect', { workspace: {
+      result = await phase('source_action', () => runTracedExternalActionStage('projects.inspect',
+        params.ingress.callerInputAuthorization?.binding.requestId ?? params.ingress.transportRequestId,
+        'source_inspection', () => executor.execute('projects.inspect', { workspace: {
         serverId: source.serverId, workspaceId: source.id,
         machineId: source.machineId, rootPath: source.rootPath,
       } }, { ...context,
         ...(!params.ingress.localActionContext?.surface && !params.ingress.sessionActionOrigin ? { surface: 'api' as const } : {}),
         externalActionTarget: { kind: 'machine', machineId: source.machineId },
-      }));
+      })));
     } catch (error) {
       await assertSourceCurrent();
       const code = error instanceof Error && 'code' in error && typeof error.code === 'string'

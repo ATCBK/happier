@@ -39,7 +39,7 @@ it.each(['session_detail_invalid_response', 'session_detail_projection_unavailab
   },
 );
 
-it.each(['session.stop', 'session.archive', 'session.unarchive', 'session.status.get', 'projects.script.run', 'projects.compute.exec', 'approval.request.decide', 'plugins.list'])('traces %s admission and real executor phases without caller content', async actionId => {
+it.each(['session.stop', 'session.archive', 'session.unarchive', 'session.status.get', 'projects.script.run', 'projects.compute.exec', 'projects.inspect', 'localServices.launcher.start', 'approval.request.decide', 'plugins.list'])('traces %s admission and real executor phases without caller content', async actionId => {
   vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', actionId === 'plugins.list' || actionId === 'session.archive' || actionId === 'session.unarchive' ? '0' : '1');
   const log = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
   const rootRequestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';

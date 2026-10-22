@@ -208,13 +208,23 @@ function ScopedObservationProvider(props: Readonly<{
   const entries = React.useMemo(() => {
       const current = retainedEntries;
       let next: Map<string, Entry> | null = null;
+      // Retention bridges row remounts, not removal from the canonical operation
+      // store (for example after worker history is replaced). Reconnecting records
+      // remain there and keep their uncertainty; a missing record cannot own a Move.
+      for (const [name, entry] of current) {
+        if (actionOperationSelectors.selectById(actionOperationStore.getSnapshot(), {
+          serverId: props.source.serverId, operationId: entry.attachment.operationId,
+        })) continue;
+        next ??= new Map(current);
+        next.delete(name);
+      }
       for (const operation of received) {
         const { snapshot } = operation;
         const domain = snapshot.domainRef;
         if (domain?.kind !== 'projectService' || domain.declaration.selection.kind !== 'manifest'
           || cleared.current.has(snapshot.operationId)) continue;
         const name = domain.declaration.selection.name;
-        const previous = current.get(name);
+        const previous = (next ?? current).get(name);
         if (previous?.attachment.operationId === snapshot.operationId) continue;
         const retained = previous && actionOperationSelectors.selectById(actionOperationStore.getSnapshot(), {
           serverId: props.source.serverId, operationId: previous.attachment.operationId,

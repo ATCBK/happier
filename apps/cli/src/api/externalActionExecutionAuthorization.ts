@@ -45,7 +45,7 @@ import type { ManagedWakeTargetV1 } from '@happier-dev/protocol/machines/managed
 import { MachineEnvironmentApplyInputV1Schema, MANAGED_CONTROL_ACTION_IDS_V1, type MachineEnvironmentApplyInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
-import { refuseExternalActionPhase, traceExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
+import { refuseExternalActionPhase, traceExternalActionInnerStage, runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
 import { projectExternalActionRunNowIdempotencyKeyV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
 import { createHttpStatusError } from '@/api/client/httpStatusError';
@@ -338,6 +338,7 @@ export function dispatchOriginalAccountAction(input: OriginalAccountActionInput)
  */
 export async function dispatchOriginalAccountAction(input: OriginalAccountActionInput & Readonly<{ foreignTargetOnly?: true }>): Promise<ActionExecuteResult | null> {
   const fail = (errorCode: string): ActionExecuteResult => ({ ok: false, errorCode, error: errorCode });
+  const phase = <T>(name: string, read: () => T | Promise<T>) => runTracedExternalActionInnerStage(`dispatch.${name}`, read);
   input.signal?.throwIfAborted();
   const claims = decodeJwtPayload(input.credentials.token);
   const provenance = readAuthTokenProvenance(claims, { allowLegacyHome: false });
@@ -345,7 +346,7 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
   const homeUrl = normalizeServerHttpBaseUrl(input.serverHttpBaseUrl);
   if (input.target.kind === 'session' && input.actionId !== 'session.message.send') return fail('target_unavailable');
   const requiresMachineProof = requiresOriginalAccountMachineActionProof(input.actionId, input.input);
-  const isCurrent = async () => !input.signal?.aborted && (!input.isCurrent || await input.isCurrent());
+  const isCurrent = async () => !input.signal?.aborted && (!input.isCurrent || await phase('currentness', () => input.isCurrent!()));
   if (!await isCurrent()) return fail('target_unavailable');
   // This branch only chooses the incumbent own-account path. Home still owns
   // authentication and the destination owns its Action admission.
@@ -353,8 +354,8 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
   if (input.foreignTargetOnly) {
     if (input.target.kind !== 'machine') return fail('target_unavailable');
     const machineId = input.target.machineId;
-    machines = await listCurrentAccountMachines({ token: input.credentials.token, serverHttpBaseUrl: homeUrl,
-      ...(input.signal ? { signal: input.signal } : {}) });
+    machines = await phase('machine_inventory', () => listCurrentAccountMachines({ token: input.credentials.token, serverHttpBaseUrl: homeUrl,
+      ...(input.signal ? { signal: input.signal } : {}) }));
     if (!await isCurrent()) return fail('target_unavailable');
     const own = machines.find(row => row.id === machineId);
     const ordinary = readAuthTokenProvenance(claims, { allowLegacyHome: true });
@@ -372,17 +373,27 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
   const headers = { Authorization: `Bearer ${input.credentials.token}`, 'Content-Type': 'application/json',
     ...(kind === 'terminal' || input.authority === 'account_automation'
       ? { [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' } : {}) };
-  const mode = await readAccountEncryptionModeOnce({ request: () => axios.get<unknown>(`${homeUrl}/v1/account/encryption`, {
-    headers, ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
-  }) });
+  // Both are passive reads under the same authenticated requester. Join them
+  // before interpreting mode/ownership, minting authority or disclosing material.
+  const [modeRead, inventoryRead] = await Promise.allSettled([
+    phase('account_mode', () => readAccountEncryptionModeOnce({ request: () => axios.get<unknown>(`${homeUrl}/v1/account/encryption`, {
+      headers, ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
+    }) })),
+    input.target.kind === 'machine' && !machines
+      ? phase('machine_inventory', () => listCurrentAccountMachines({ token: input.credentials.token, serverHttpBaseUrl: homeUrl,
+        ...(input.signal ? { signal: input.signal } : {}) })) : machines,
+  ]);
+  // Preserve mode refusal/error precedence while settling both passive reads.
+  if (modeRead.status === 'rejected') throw modeRead.reason;
+  const mode = modeRead.value;
   if (mode.kind !== 'resolved') return fail('content_unavailable');
+  if (inventoryRead.status === 'rejected') throw inventoryRead.reason;
+  machines = inventoryRead.value;
   let machine: CurrentAccountMachineInventoryItem | undefined;
   let foreign = false;
   if (input.target.kind === 'machine') {
     const machineId = input.target.machineId;
-    machines ??= await listCurrentAccountMachines({ token: input.credentials.token, serverHttpBaseUrl: homeUrl,
-      ...(input.signal ? { signal: input.signal } : {}) });
-    machine = machines.find(row => row.id === machineId);
+    machine = machines?.find(row => row.id === machineId);
     // Offline remains a retained target; current Home admission still decides
     // whether the requested Action can reach this installation.
     if (!machine || machine.kind !== 'persistent' || machine.revokedAt !== null || machine.replacedByMachineId !== null
@@ -415,8 +426,8 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
     if (!input.serverIdentityId) return fail('admission_unavailable');
     if (foreign && !input.onRequesterSessionCredentialDisclosure) return fail('requester_credential_disclosure_required');
     const readInstalledMachine = async (observed: CurrentAccountMachineInventoryItem) => {
-      const installed = await readExternalActionInstalledMachine({ serverHttpBaseUrl: homeUrl,
-        machineId: observed.id, headers, ...(input.signal ? { signal: input.signal } : {}) });
+      const installed = await phase('installed_machine', () => readExternalActionInstalledMachine({ serverHttpBaseUrl: homeUrl,
+        machineId: observed.id, headers, ...(input.signal ? { signal: input.signal } : {}) }));
       if (!installed || installed.access?.accessState !== 'ready'
         || installed.access.custodian.accountId !== observed.access?.custodian.accountId
         || installed.access.resourceMode !== observed.access?.resourceMode || !await isCurrent()) return null;
@@ -424,10 +435,10 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
     };
     const installed = await readInstalledMachine(machine);
     if (!installed) return fail('admission_unavailable');
-    const minted = await mintExternalActionExecutionAuthorization({ actionId, envelope, machineId: machine.id,
+    const minted = await phase('mint_authorization', () => mintExternalActionExecutionAuthorization({ actionId, envelope, machineId: machine.id,
       pat: input.credentials.token, serverHttpBaseUrl: homeUrl,
       ...(input.authority === 'account_automation' ? { authorityCeiling: 'account_automation' as const } : {}),
-      ...(input.signal ? { signal: input.signal } : {}) });
+      ...(input.signal ? { signal: input.signal } : {}) }));
     if (!minted.ok) return fail(minted.code);
     const root = minted.authorization.binding;
     if (!('authentication' in root) || root.authentication.kind !== authentication.data.kind
@@ -492,9 +503,9 @@ export async function dispatchOriginalAccountAction(input: OriginalAccountAction
   input.signal?.throwIfAborted();
   if (!await isCurrent()) return fail('target_unavailable');
   try {
-    const response = await axios.post<unknown>(`${homeUrl}${EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1}${actionId}`, body, {
+    const response = await phase('delivery', () => axios.post<unknown>(`${homeUrl}${EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1}${actionId}`, body, {
       headers, ...(input.signal ? { signal: input.signal } : {}), validateStatus: () => true,
-    });
+    }));
     // A received operation receipt remains true even when observation retired.
     if (isExternalActionSubmittedUnknownHttpResponse(response.status, response.data)) return fail('outcome_unknown');
     if (response.status < 200 || response.status >= 300) {

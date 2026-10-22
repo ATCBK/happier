@@ -435,7 +435,10 @@ function activeSnapshotPublicationIsCurrent(params: Readonly<{
   snapshot: NonNullable<ReturnType<typeof getActiveAccountSettingsSnapshot>>;
   lifetimeToken: number;
 }>): boolean {
-  return getActiveAccountSettingsSnapshot() === params.snapshot
+  const active = getActiveAccountSettingsSnapshot();
+  // Catalog subscribers can replace the aggregate synchronously during
+  // publication. They do not retire unchanged Settings in this Account lifetime.
+  return active !== null && sameSettingsPublication(active, params.snapshot)
     && getActiveAccountSettingsSnapshotLifetimeToken() === params.lifetimeToken;
 }
 

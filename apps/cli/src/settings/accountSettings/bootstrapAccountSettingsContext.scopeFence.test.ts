@@ -9,7 +9,10 @@ import {
 } from './bootstrapAccountSettingsContext';
 import {
   getActiveAccountSettingsSnapshot,
+  getActiveAccountSettingsSnapshotLifetimeToken,
+  beginActivePromptLibraryCatalogRefresh,
   setActiveAccountSettingsSnapshot,
+  subscribeActiveAccountSettingsSnapshot,
 } from './activeAccountSettingsSnapshot';
 import type { AccountSettingsCache } from './accountSettingsCache';
 import { createAccountSettingsScopeKey } from './accountSettingsScopeKey';
@@ -29,6 +32,24 @@ describe('bootstrapAccountSettingsContext active Account scope fence', () => {
   afterEach(() => {
     resetInMemoryAccountSettingsContextForTests();
     vi.restoreAllMocks();
+  });
+
+  it('does not retire a Settings publication when a subscriber refreshes an independent catalog in the same Account', async () => {
+    const unsubscribe = subscribeActiveAccountSettingsSnapshot((_previous, next) => {
+      if (next?.scopeKey) beginActivePromptLibraryCatalogRefresh({ scopeKey: next.scopeKey,
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
+    });
+    try {
+      const context = await bootstrapAccountSettingsContext({ credentials: { token: 'same-account', encryption: null },
+        mode: 'blocking', refresh: 'force', deps: {
+          resolveCachePath: () => '/tmp/same-account-settings', readCache: async () => null,
+          fetchFromServer: async () => ({ settingsContent: { t: 'plain', v: {} }, settingsVersion: 1 }),
+          writeCache: async () => {}, applySideEffects: () => {},
+        } });
+      expect(context).toMatchObject({ source: 'network', settingsVersion: 1 });
+      expect(getActiveAccountSettingsSnapshot()).toMatchObject({ scopeKey: context.scopeKey,
+        settingsVersion: 1, promptLibraryCatalog: { status: 'loading' } });
+    } finally { unsubscribe(); }
   });
 
   it('does not let a late Account A bootstrap replace the active Account B snapshot', async () => {

@@ -138,7 +138,7 @@ import { isMachineTerminalActionId } from '@happier-dev/protocol/actions/specs/m
 import { verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { MachineInstallationPublicKeySchema } from '@happier-dev/protocol/machines/identity/installationIdentity';
-import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
+import { runTracedExternalActionStage, runTracedExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
 import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
 
 type CliActionExecutor = ReturnType<typeof createCliActionExecutor>;
@@ -1702,7 +1702,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           && actionId !== 'machines.managed.acquire'
         ) {
           await measureActionStartPhaseV1(context, 'account_settings',
-            () => ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl()));
+            () => runTracedExternalActionInnerStage('cli.account_settings',
+              () => ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl())));
         }
         const executor = await resolveExecutor(credentials, undefined, routing);
         return await executor.prepare(actionId, input, context);
@@ -1711,8 +1712,9 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
         const listAccessFailure = resolveActionSessionListAccessFailure(args[0], args[2]);
         if (listAccessFailure) return listAccessFailure;
         const [actionId, input, rawContext] = args;
-        const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
-          actionId, rawContext?.actionRequestId, stage, operation);
+        const trace = <T>(stage: string, operation: () => T | Promise<T>) => rawContext?.actionRequestId
+          ? runTracedExternalActionStage(actionId, rawContext.actionRequestId, stage, operation)
+          : runTracedExternalActionInnerStage(stage, operation);
         const credentials = await trace('cli.credentials', readCurrentCredentials);
         if (!credentials) {
           return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
@@ -1766,7 +1768,8 @@ function createCliActionExecutionCoreFromCredentials(params: Readonly<{
           && actionId !== 'machines.managed.acquire'
         ) {
           await measureActionStartPhaseV1(context, 'account_settings',
-            () => ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl()));
+            () => runTracedExternalActionInnerStage('cli.account_settings',
+              () => ensureCliActionPolicySettings(credentials, resolveActionServerApiUrl())));
         }
         const executor = await measureActionStartPhaseV1(originalContext, 'credentialed_factory',
           () => resolveExecutor(credentials, sessionMemoryEnabled, routing));

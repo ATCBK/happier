@@ -58,6 +58,7 @@ function isTracedRequest(actionId: unknown, rootRequestId: unknown): boolean {
       || actionId === 'session.status.get' || actionId === 'plugins.list' || actionId === 'action.invoke'
       || process.env.HAPPIER_WEB_LATENCY_TRACE === '1'
         && (actionId === 'approval.request.decide' || actionId === 'projects.script.run' || actionId === 'projects.compute.exec'
+          || actionId === 'projects.inspect' || actionId === 'localServices.launcher.start'
           || actionId === 'projects.worker.status' || actionId === 'projects.service.relocate'
           || actionId === 'machines.provisioners.list' || actionId === 'machines.provisioners.check' || actionId === 'machines.provisioners.options'))
       && isUuidDiagnosticRequestId(rootRequestId));

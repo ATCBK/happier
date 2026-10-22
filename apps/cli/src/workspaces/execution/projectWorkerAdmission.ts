@@ -98,6 +98,20 @@ export function createProjectWorkerAdmission(options: Readonly<{
     if (memoryDemand.bytes > observation.totalBytes) return { reason: 'memory_insufficient', observedMemory: observation };
     return {};
   }
+  function observeServiceEligibility(memoryDemand: ProjectMemoryDemandV1 | undefined,
+    options: Readonly<{ includeLoad: false }>): Promise<Omit<ProjectWorkerServiceEligibility, 'load'>>;
+  function observeServiceEligibility(memoryDemand?: ProjectMemoryDemandV1): Promise<ProjectWorkerServiceEligibility>;
+  async function observeServiceEligibility(memoryDemand?: ProjectMemoryDemandV1,
+    observation?: Readonly<{ includeLoad: false }>): Promise<Omit<ProjectWorkerServiceEligibility, 'load'> | ProjectWorkerServiceEligibility> {
+    // Service admission consumes only live drain/memory. Finite policy is an
+    // optional load projection; callers enforcing admission need no Home read.
+    const policy = observation?.includeLoad === false ? undefined : await readPolicy();
+    const assessment = options.admissionDrain.isQuiescing() ? { reason: 'draining' as const } : assessMemory(memoryDemand);
+    const { reason } = assessment;
+    return { eligible: reason === undefined, ...(reason ? { reason } : {}),
+      ...(policy ? { load: observedLoad(policy) } : {}),
+      ...('observedMemory' in assessment && assessment.observedMemory ? { observedMemory: assessment.observedMemory } : {}) };
+  }
   async function assessAdmission(memoryDemand?: ProjectMemoryDemandV1) {
     const policy = await readPolicy();
     let reason: ProjectWorkerFiniteEligibility['reason'];
@@ -227,14 +241,7 @@ export function createProjectWorkerAdmission(options: Readonly<{
       return { eligible: reason === undefined, ...(reason ? { reason } : {}), load: observedLoad(policy),
         ...(observedMemory ? { observedMemory } : {}) };
     },
-    async observeServiceEligibility(memoryDemand?: ProjectMemoryDemandV1): Promise<ProjectWorkerServiceEligibility> {
-      const policy = await readPolicy();
-      const assessment = options.admissionDrain.isQuiescing() ? { reason: 'draining' as const } : assessMemory(memoryDemand);
-      const { reason } = assessment;
-      // Finite policy is a load observation, not service acceptance or a lifetime slot.
-      return { eligible: reason === undefined, ...(reason ? { reason } : {}), load: observedLoad(policy),
-        ...('observedMemory' in assessment && assessment.observedMemory ? { observedMemory: assessment.observedMemory } : {}) };
-    },
+    observeServiceEligibility,
     async load(): Promise<WorkerLoadObservationV1> {
       await notifyChanged();
       return observedLoad(await readPolicy());

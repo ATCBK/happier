@@ -175,7 +175,7 @@ describe('accepted Project Service declaration starter', () => {
         expect(h.copies()).toBe(0);
         expect(h.owner.listProjectServices()).toEqual([]);
     });
-    it.each(['revoked', 'cancelled'] as const)('overlaps independent admission reads but never reviews a Service after %s admission', async scenario => {
+    it.each(['revoked', 'cancelled'] as const)('avoids finite-policy IO and never reviews a Service after %s admission', async scenario => {
         const h = await fixture(false, undefined, false, 'portable');
         const api = await ApiClient.create(h.runtime.credentials);
         let policyRead = false;
@@ -197,9 +197,9 @@ describe('accepted Project Service declaration starter', () => {
             verifyMachineAdmissionCurrent: async () => { admissionRead = true; return pendingAdmission; } }, h.context);
         try {
             await vi.waitFor(() => expect(admissionRead).toBe(true));
-            // Finite load reads are independent of the in-flight Home admission
-            // read. SOURCE inspection/copy and effects must still wait for both.
-            await vi.waitFor(() => expect(policyRead).toBe(true));
+            // Service acceptance needs live drain/memory, not finite load.
+            // SOURCE inspection, copy and effects still wait for authority.
+            expect(policyRead).toBe(false);
             expect(h.post.mock.calls.some(([url]) => String(url).endsWith('/v1/actions/projects.inspect'))).toBe(false);
         } finally {
             if (scenario === 'cancelled') transport.abort();

@@ -175,7 +175,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             // currentness around both, and wait for both before using any data.
             const [admitted, eligibility] = await Promise.all([
                 phase('machine_admission', () => ingress.verifyMachineAdmissionCurrent!()),
-                phase('service_eligibility', () => runtime.workerAdmission.observeServiceEligibility()),
+                phase('service_eligibility', () => runtime.workerAdmission.observeServiceEligibility(undefined, { includeLoad: false })),
             ]);
             if (!admitted) throw new ServiceStartRefusal('machine_admission_changed');
             if (!eligibility.eligible) throw new ServiceStartRefusal(eligibility.reason ?? 'project_service_admission_unavailable');
@@ -216,7 +216,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             await phase('source_receiving_placement', () => assertPlacement(choice));
             if (request.targetId !== createProjectServiceDeclarationTargetIdV1(association.workspace, selection)) throw new ServiceStartRefusal('launcher_target_unknown');
             if (!manifest || !service) throw new ServiceStartRefusal('project_service_not_found');
-            const eligibility = await phase('source_memory_eligibility', () => runtime.workerAdmission.observeServiceEligibility(manifest?.workspace?.memoryDemand));
+            const eligibility = await phase('source_memory_eligibility', () => runtime.workerAdmission.observeServiceEligibility(manifest?.workspace?.memoryDemand, { includeLoad: false }));
             if (!eligibility.eligible) throw new ServiceStartRefusal(eligibility.reason ?? 'project_service_admission_unavailable');
             await assertCurrent();
             if (!runtime.resolveWorkerTarget || !runtime.prepareDequeue) throw new ServiceStartRefusal('workspace_sync_source_unavailable');
@@ -298,7 +298,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             || !sameStrictJsonValue(approval.setup.project, plan.project))) {
             throw new ServiceStartRefusal('project_service_effect_changed');
         }
-        const eligibility = await phase('target_memory_eligibility', () => runtime.workerAdmission.observeServiceEligibility(plan.manifest?.workspace?.memoryDemand));
+        const eligibility = await phase('target_memory_eligibility', () => runtime.workerAdmission.observeServiceEligibility(plan.manifest?.workspace?.memoryDemand, { includeLoad: false }));
         if (!eligibility.eligible) throw new ServiceStartRefusal(eligibility.reason ?? 'project_service_admission_unavailable');
         await assertCurrent();
         if (worker && (digest(plan.fileBasis) !== digest(worker.snapshot.basis) || digest(plan.manifest) !== digest(worker.manifest))) throw new ServiceStartRefusal('project_service_effect_changed');
@@ -582,7 +582,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             const prepareCopy = async (signal: AbortSignal) => {
                 const source = initialSource;
                 if (!source) return;
-                const eligibility = await source.runtime.workerAdmission.observeServiceEligibility(source.manifest.workspace?.memoryDemand);
+                const eligibility = await source.runtime.workerAdmission.observeServiceEligibility(source.manifest.workspace?.memoryDemand, { includeLoad: false });
                 if (!eligibility.eligible) throw new ServiceStartRefusal(eligibility.reason ?? 'project_service_admission_unavailable');
                 context.operationProgress?.update({ phase: 'copying', label: 'Copying current files' });
                 await source.runtime.prepareDequeue!({ workspace: source.basis.source, choice: source.choice, basis: source.basis, signal });
