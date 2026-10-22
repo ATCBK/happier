@@ -385,7 +385,8 @@ describe('mounted managed configurator', () => {
         const choices = [{ id: 'west-small', title: 'West small', launch: { cpu: 2 }, nativeFacts, prices: prices('1') },
             { id: 'west-other-network', title: 'West other network', launch: { cpu: 3 }, nativeFacts, prices: prices('2') },
             { id: 'east-other-image', title: 'East other image', launch: { cpu: 4 }, prices: prices('3'), nativeFacts: {
-                ...nativeFacts, image: { id: 'other', title: 'Other image' }, location: { id: 'east', title: 'East' } } }];
+                ...nativeFacts, image: { id: 'other', title: 'Other image' }, location: { id: 'east', title: 'East' } } },
+            { id: 'windows', title: 'Windows', available: false, nativeFacts: { ...nativeFacts, image: { id: 'windows', title: 'Windows' } } }];
         for (const [actionId, result] of [['machines.provisioners.list', { controller: defaultController, provisioners: [provisioner] }],
             ['machines.provisioners.check', { available: true }], ['machines.provisioners.options', { choices }]] as const)
             harness.answer(serverId, `/v1/actions/${actionId}`, { select: value => {
@@ -402,6 +403,10 @@ describe('mounted managed configurator', () => {
         await act(async () => sizes?.props.onChange('small'));
         await act(async () => screen.pressByTestId('managed-config.locations:west'));
         expect(screen.getTextContent()).toContain(t('managedMachines.price.unavailable', { provider: 'Virtual machine' }));
+        // A choice says why it can't be picked: one never offered here, one only not with the other picks.
+        expect(screen.getTextContent()).toContain(t('managedMachines.options.notOffered', { provider: 'Virtual machine' }));
+        expect(screen.getTextContent()).toContain(t('managedMachines.options.unavailableWithChoices'));
+        expect(screen.getTextContent()).not.toContain(t('managedMachines.options.unavailable'));
         await act(async () => screen.pressByTestId('managed-config.images:other'));
         expect(screen.findByTestId('managed-config.create')?.props.disabled).toBe(true);
         await act(async () => screen.pressByTestId('managed-config.locations:east'));

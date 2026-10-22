@@ -194,6 +194,83 @@ describe('managed Machine detail', () => {
         expect(screen.tree.findByType(ManagedMachineSections).props.machine).toEqual(machine);
         await screen.unmount();
     });
+    it('holds the managing computer as a pending value, never "Loading…" in its sentences, until its name is read', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-controller-pending.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_controller_pending');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
+        const provider = { pluginId: 'custom.provisioner', localId: 'native' };
+        const controller = { machineId: 'controller', installationId: 'installation' };
+        const launch = { provider, schemaVersion: 1, name: 'Local sandbox', choices: {} };
+        const machine: ManagedMachineV1 = { id: 'controller-pending', homeId: 'srv_managed_controller_pending', custodianAccountId: 'owner',
+            launch, controller, allocation: 'bound', creationState: 'active',
+            resource: { contributionRef: provider, schemaVersion: 1, value: { resourceId: 'native-id' } },
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+            reviewedFacts: { launch, controller, optionStatus: 'current', billing: { location: 'local', stoppedBilling: 'not-billed' },
+                prerequisites: [], retentionCapabilities: { supportedIntents: ['start', 'stop', 'delete'] },
+                retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } };
+        const serverId = resolveServerProfileScopeIdForIdentifier(target.id) || target.id;
+        const named = createMachineFixture({ id: controller.machineId, installationId: controller.installationId, updatedAt: Date.now() });
+        // Presence arrived before the machine list: the row exists, its name is still being read.
+        const { availability: _availability, ...hydrating } = { ...named, metadata: null };
+        storage.setState({ machineListByServerId: { [serverId]: [hydrating as typeof named] } });
+        setRuntimeFetch(async input => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (url.pathname === '/v1/machines/managed/actions/get') return Response.json(machine);
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        await flushHookEffects({ cycles: 30 });
+        expect(screen.getTextContent()).not.toContain(t('common.loading'));
+        expect(screen.getTextContent()).toContain(t('managedController.fixedLocalUnnamed'));
+        expect(screen.findByTestId('managed-machine.controller.pending')).not.toBeNull();
+        expect(screen.findByTestId('managed-machine.detail.receipt:fact:controller:pending')).not.toBeNull();
+        await act(async () => storage.setState({ machineListByServerId: { [serverId]: [named] } }));
+        await flushHookEffects({ cycles: 10 });
+        const { getMachineDisplayName } = await import('@/utils/sessions/machineDisplayNames');
+        const name = getMachineDisplayName(named);
+        expect(screen.getTextContent()).toContain(t('managedController.fixedLocal', { controller: name }));
+        expect(screen.getTextContent()).toContain(t('managedMachines.price.runsOn', { computer: name }));
+        expect(screen.findByTestId('managed-machine.controller.pending')).toBeNull();
+        await screen.unmount();
+    });
+    it('closes a resource that no longer exists to its state and its record, with nothing left to manage or bill', async () => {
+        vi.spyOn(await import('react-native'), 'useWindowDimensions').mockReturnValue({ width: 1440, height: 900, scale: 1, fontScale: 1 });
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-ended-record.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_ended_record');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
+        const provider = { pluginId: 'custom.provisioner', localId: 'native' };
+        const controller = { machineId: 'controller', installationId: 'installation' };
+        const launch = { provider, schemaVersion: 1, name: 'Local sandbox', choices: {} };
+        const machine: ManagedMachineV1 = { id: 'ended-record', homeId: 'srv_managed_ended_record', custodianAccountId: 'owner',
+            launch, controller, allocation: 'confirmed-absent', creationState: 'active',
+            resource: { contributionRef: provider, schemaVersion: 1, value: { resourceId: 'native-id' } },
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+            reviewedFacts: { launch, controller, optionStatus: 'current', billing: { location: 'local', stoppedBilling: 'not-billed' },
+                prerequisites: [], retentionCapabilities: { supportedIntents: ['start', 'stop', 'delete'] },
+                retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } };
+        const serverId = resolveServerProfileScopeIdForIdentifier(target.id) || target.id;
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: controller.machineId,
+            installationId: controller.installationId, updatedAt: Date.now() })] } });
+        setRuntimeFetch(async input => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (url.pathname === '/v1/machines/managed/actions/get') return Response.json(machine);
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        await flushHookEffects({ cycles: 30 });
+        expect(screen.findByTestId('managed-machine.detail.receipt:fact:controller')).not.toBeNull();
+        expect(screen.findByTestId('managed-machine.controller')).toBeNull();
+        expect(screen.findByTestId('managed-machine.recipe')).toBeNull();
+        expect(screen.findByTestId('managed-machine.detail.receipt:cost')).toBeNull();
+        expect(screen.getTextContent()).not.toContain(t('managedMachines.price.noBill'));
+        await screen.unmount();
+    });
     it.each(['provider', 'credential'] as const)('offers the canonical %s recovery from current native facts without installation retry', async removed => {
         const target = await upsertAndActivateServer({ serverUrl: `https://managed-missing-${removed}.test`, scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, `srv_managed_missing_${removed}`);
@@ -2393,6 +2470,34 @@ describe('managed Machine detail', () => {
             expect(screen.findByTestId('managed-machine.read-state')).not.toBeNull();
         } finally {
             detail.resolve(Response.json(machine));
+            await flushHookEffects({ cycles: 20 });
+        }
+    });
+    it('opens on a neutral header that claims no state while both reads are pending', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-detail-pending-header.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_detail_pending_header');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner') });
+        const list = createDeferred<Response>();
+        const detail = createDeferred<Response>();
+        setRuntimeFetch(async (input) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/machines/managed/actions/list') return list.promise;
+            if (path === '/v1/machines/managed/actions/get') return detail.promise;
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const screen = await renderScreen(<ManagedMachineDetail managedId="pending-header" serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        try {
+            await flushHookEffects({ cycles: 20 });
+            const header = screen.tree.findByType(ManagedReceiptPageLayout).props.header;
+            expect(header.title).toBe(t('machineDetailPage.placeholderTitle'));
+            expect(header.description).toBeUndefined();
+            expect(screen.getTextContent()).not.toContain(t('managedMachines.detail.creationDescription'));
+        } finally {
+            list.resolve(Response.json({ machines: [] }));
+            detail.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
             await flushHookEffects({ cycles: 20 });
         }
     });

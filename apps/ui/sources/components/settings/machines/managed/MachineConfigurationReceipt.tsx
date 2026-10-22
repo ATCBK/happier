@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HappierSkeletonBlock, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton, RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
@@ -12,6 +12,7 @@ import { MeterBar } from '@/components/ui/lists/MeterBar';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
 import type { MachineEnvironmentV1 } from '@happier-dev/protocol/machines/managed/machineEnvironmentV1';
 import { describeMachineEnvironment } from './MachineEnvironmentSection';
@@ -46,7 +47,8 @@ export type ManagedReceiptModel = Readonly<{
   spec: string;
   onRename?: () => void;
   facts: readonly ManagedReceiptFact[];
-  cost: ManagedReceiptCost;
+  /** `null` for a resource that no longer exists: nothing runs or bills, so the receipt is only its record. */
+  cost: ManagedReceiptCost | null;
   /** The exact reviewed recipe; rendering is owned by the shared Environment section. */
   environment?: MachineEnvironmentV1;
   keep?: Omit<
@@ -119,16 +121,20 @@ export const MachineConfigurationReceipt = React.memo(
               <View style={styles.factValue}>
                 {fact.leading ?? null}
                 {/* A value wraps whole in the narrow aside (an image file name runs three lines), never clipped mid-name. */}
-                <Text style={styles.factText} numberOfLines={3}>
-                  {fact.value}
-                </Text>
+                {fact.value === null ? <ReceiptPendingValue testID={`${props.testID}:fact:${fact.id}:pending`} /> : (
+                  <Text style={styles.factText} numberOfLines={3}>
+                    {fact.value}
+                  </Text>
+                )}
               </View>
             }
           />
         ))}
-        <SectionContentRow testID={`${props.testID}:cost`}>
-          <ReceiptCost cost={model.cost} />
-        </SectionContentRow>
+        {model.cost ? (
+          <SectionContentRow testID={`${props.testID}:cost`}>
+            <ReceiptCost cost={model.cost} />
+          </SectionContentRow>
+        ) : null}
         {model.keep ? (
           <SectionContentRow>
             <ManagedMachineKeepControl
@@ -233,7 +239,9 @@ function ReceiptCost(props: Readonly<{ cost: ManagedReceiptCost }>) {
   return (
     <View style={styles.cost}>
       {/* Where it runs labels the figure, as a price's label does; beside it, the two read as one phrase. */}
-      <Text style={styles.quietLine}>{t('managedMachines.price.runsOn', { computer: cost.computer })}</Text>
+      {cost.computer === null ? <ReceiptPendingValue /> : (
+        <Text style={styles.quietLine}>{t('managedMachines.price.runsOn', { computer: cost.computer })}</Text>
+      )}
       <View style={styles.bigRow}>
         <Text style={styles.big}>{t('managedMachines.price.noBill')}</Text>
       </View>
@@ -256,6 +264,17 @@ function ReceiptCost(props: Readonly<{ cost: ManagedReceiptCost }>) {
           <Text style={styles.sourceText}>{cost.note}</Text>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/** A value still being read holds its line with the shared pending bar, never a "Loading…" word in the copy. */
+function ReceiptPendingValue(props: Readonly<{ testID?: string }>) {
+  const { theme } = useUnistyles();
+  const reducedMotion = useReducedMotionPreference();
+  return (
+    <View style={styles.pendingValue} testID={props.testID}>
+      <HappierSkeletonBlock width={96} height={8} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
     </View>
   );
 }
@@ -310,6 +329,10 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s6,
     flexShrink: 1,
     justifyContent: 'flex-end',
+  },
+  pendingValue: {
+    height: rowDescription.lineHeight,
+    justifyContent: 'center',
   },
   factText: {
     ...Typography.default('medium'),

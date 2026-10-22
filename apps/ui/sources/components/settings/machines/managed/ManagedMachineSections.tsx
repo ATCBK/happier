@@ -41,7 +41,8 @@ import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccou
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
-import { getMachineDisplayName, readMachineName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineDisplayName, isMachineDisplayHydrating, readMachineName } from '@/utils/sessions/machineDisplayNames';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { machineCapabilitiesInvoke } from '@/sync/ops/capabilities';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
@@ -95,6 +96,18 @@ type SectionProps = Readonly<{
  * left, the immutable receipt beside them with native controls at its foot. A phone reads the same
  * sections with Keep it as a summary row, then the receipt.
  */
+const PENDING_READ = Object.freeze({ kind: 'loading' } as const);
+
+/** The managing computer's name, `null` while the machine list is still reading it, or "Unknown" once read without it. */
+function controllerNameOrPending(controller: Parameters<typeof getMachineDisplayName>[0], list: readonly unknown[] | null | undefined): string | null {
+    if (controller ? isMachineDisplayHydrating(controller) : !list) return null;
+    return getMachineDisplayName(controller) ?? t('common.unknown');
+}
+
+function controllerRequired(name: string | null): string {
+    return name === null ? t('managedMachines.controller.requiredUnnamed') : t('managedMachines.controller.required', { controller: name });
+}
+
 export function ManagedMachineSections(props: SectionProps) {
     const { machine } = props;
     const { theme } = useUnistyles();
@@ -108,7 +121,9 @@ export function ManagedMachineSections(props: SectionProps) {
     useMachineReachabilityRevision();
     const controllerMachinesRef = React.useRef(controllerMachines);
     controllerMachinesRef.current = controllerMachines;
-    const controllerName = getMachineDisplayName(controller) ?? t('common.unknown');
+    // Until the machine list has read the controller's name it is pending (`null`): rows hold their place and
+    // sentences that would name it say "the computer that manages it", never "Loading…" or "Unknown".
+    const controllerName = controllerNameOrPending(controller, controllerMachines);
     // The page's name for this resource: its enrolled Machine's, else what Create was given.
     const machineName = readMachineName(enrolledMachine) ?? machine.launch.name;
     const credentialTargets = React.useMemo(() => managedCredentialReceiptTargets(machine.launch), [machine.launch]);
@@ -474,6 +489,7 @@ export function ManagedMachineSections(props: SectionProps) {
         }
     };
     const resourceGone = machine.observation?.availability === 'absent' || machine.observation?.storage === 'lost';
+    const resourceConfirmedAbsent = machine.allocation === 'confirmed-absent' || machine.observation?.availability === 'absent';
     const canRebuild = canMutate && bound && machine.creationState === 'active' && !resourceGone
         && requiredController !== null && controllerPresence?.online === true && supportedIntents.includes('rebuild');
     const reviewRebuild = () => fireAndForget((async () => {
@@ -519,10 +535,14 @@ export function ManagedMachineSections(props: SectionProps) {
         localized: provisionerPresentation.localized,
         homeName: resolveHomeDisplayLabel(getServerProfileById(props.serverId), props.serverId), preset: machine.preset, created: true,
         nativeLifetimePresented: policyParent?.capabilities.finiteOnly === true,
-        controllerName: getMachineDisplayName(controllerMachines?.find(candidate =>
-            candidate.id === (machine.reviewedFacts?.controller ?? machine.controller).machineId
-            && candidate.installationId === (machine.reviewedFacts?.controller ?? machine.controller).installationId)) ?? t('common.unknown'),
+        // The reviewed controller is usually the current one: then it is the same name, pending or read, as the page's.
+        controllerName: sameStrictJsonValue(machine.reviewedFacts?.controller ?? machine.controller, machine.controller) ? controllerName
+            : controllerNameOrPending(controllerMachines?.find(candidate =>
+                candidate.id === (machine.reviewedFacts?.controller ?? machine.controller).machineId
+                && candidate.installationId === (machine.reviewedFacts?.controller ?? machine.controller).installationId), controllerMachines),
         credentialPresentations: credentialPresentation.presentationsByKey }),
+        // A resource that no longer exists neither runs nor bills: its receipt is only the record of how it was made.
+        ...(resourceConfirmedAbsent ? { cost: null } : {}),
         ...(receiptActions.length ? { secondary: receiptActions } : {}) };
     const credentialRowKeys = new Set(managedCredentialReceiptTargets(machine.launch).map(target => target.key));
     const credentialNames = receipt.facts.filter(fact => credentialRowKeys.has(fact.id)).map(fact => fact.value).join(', ');
@@ -548,12 +568,12 @@ export function ManagedMachineSections(props: SectionProps) {
             activeAt: enrolledMachine.activeAt,
         } } : {}),
         providerAvailable: requiredController && provisionerPresentation.projectionReady ? provisionerPresentation.title !== null : undefined,
-        ...(controller && controllerPresence ? { controller: { name: controllerName, online: controllerPresence.online } } : {}) };
+        ...(controller && controllerPresence && controllerName !== null ? { controller: { name: controllerName, online: controllerPresence.online } } : {}) };
     const keep: ManagedKeepProps = { policy, inherited: false, defaultPolicy: policyParent?.policy,
         finiteOnly: policyParent?.capabilities.finiteOnly,
         capabilitiesAvailable: policyParent !== null,
         // Until the controller answers, the rule is read-only: say who it waits for, or that it is being read.
-        unavailableReason: controllerPresence?.online === false ? t('managedMachines.controller.required', { controller: controllerName })
+        unavailableReason: controllerPresence?.online === false ? controllerRequired(controllerName)
             // Checking and its failure read as one calm line each, so the card keeps its height between them.
             : parentReadFailed ? t('managedRetention.waitsForProvider', { provider: providerName ?? t('common.machine') })
                 : providerName ? t('managedMachines.options.loading', { provider: providerName }) : undefined,
@@ -589,7 +609,7 @@ export function ManagedMachineSections(props: SectionProps) {
                 if (!result.supported || !result.response.ok) { answeringRef.current = null; setError('managed_request_failed'); }
             }), { tag: 'ManagedMachineSections.answerPrompt' });
     } : undefined;
-    const resourceEnded = machine.allocation === 'confirmed-absent' || machine.observation?.availability === 'absent';
+    const resourceEnded = resourceConfirmedAbsent;
     const canCancelCreation = !machine.enrolledMachineId && machine.creationState === 'active' && machine.allocation !== 'confirmed-absent';
     const cancelCreation = () => fireAndForget(run('machines.managed.cancel', { ...target, expectedIntentRevision: machine.intentRevision }),
         { tag: 'ManagedMachineSections.cancel' });
@@ -641,14 +661,17 @@ export function ManagedMachineSections(props: SectionProps) {
                     closeKeepSheet();
                     keepSheetRef.current = showManagedKeepSheet(keepChannel, 'managed-machine.policy-sheet');
                 } } : undefined} />}
-        {requiredController ? <ManagedMachineControllerSection testID="managed-machine.controller"
-            description={t('managedMachines.controller.required', { controller: controllerName })}
+        {/* A resource that no longer exists has nothing left to manage; the receipt keeps where it was managed from. */}
+        {resourceEnded ? null : requiredController ? <ManagedMachineControllerSection testID="managed-machine.controller"
+            description={controllerRequired(controllerName)}
             controller={{ name: controllerName, icon: machineMark, online: controllerPresence!.online,
                 presence: controllerPresence!.label, move: billing?.location === 'local' ? { kind: 'fixed' }
                     : canMove ? { kind: 'movable', onPress: () => fireAndForget(reviewMove(), { tag: 'ManagedMachineSections.moveReview' }) }
                         : { kind: 'unavailable' } }} />
+            : controllerName === null ? <ItemGroup title={t('managedMachines.config.managedFrom')} description={controllerRequired(null)}>
+                <ItemLoadStateRows state={PENDING_READ} rows={1} lines={2} testID="managed-machine.controller.pending" /></ItemGroup>
             : <ItemGroup title={t('managedMachines.config.managedFrom')}><Item title={controllerName}
-                subtitle={t('managedMachines.controller.required', { controller: controllerName })} mode="info" showChevron={false}
+                subtitle={controllerRequired(controllerName)} mode="info" showChevron={false}
                 testID="managed-machine.controller-unavailable" accessoryLayout="adaptive" rightElement={canMove ?
                     <RoundButton title={t('managedController.moveShort')} display="secondary" size="small"
                         testID="managed-machine.controller-unavailable:move"
@@ -666,7 +689,8 @@ export function ManagedMachineSections(props: SectionProps) {
                         : presence?.label ?? t('common.unknown'), online: presence?.online ?? false, current, reachable };
             })} onMove={moveController} /> : null}
         {/* A phone reads the receipt right after; the same recipe rows above it would repeat it. */}
-        {compact ? null : <ManagedMachineRecipeSection testID="managed-machine.recipe" rows={recipeRows} />}
+        {/* Ended, the receipt beside it is the whole record; the same rows again would only repeat it. */}
+        {compact || resourceEnded ? null : <ManagedMachineRecipeSection testID="managed-machine.recipe" rows={recipeRows} />}
         {currentRebuildReview ? <>
             {(['host', 'child'] as const).map(scope => <ItemGroup key={scope} title={t(`managedMachines.rebuildReview.${scope}`)}>
                 {currentRebuildReview.effects.map((effect, index) => effect.scope === scope ? <Item key={index}

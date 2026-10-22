@@ -70,8 +70,12 @@ function ManagedMachineDetailBody(props: ManagedMachineDetailProps) {
             ? t('managedMachines.detail.missing') : t('managedMachines.detail.loadFailed');
     return <ManagedReceiptPageLayout testID="managed-machine.detail" compact={layout?.mode !== 'split'}
         // Retry belongs to the state that needs it (the read card, or the freshness of a stale read on the state), never the header.
-        header={{ title: showHeaderIdentity ? headerMachine!.launch.name : t('managedMachines.detail.unreadTitle'), leading: mark,
-            description: (showHeaderIdentity ? identity?.description : null) ?? t('managedMachines.detail.creationDescription'),
+        // A pending read claims nothing: the neutral machine header (as a machine page while it loads) until
+        // the record or its list row names it; the "Created machine" copy belongs only to a settled failed read.
+        header={{ title: showHeaderIdentity ? headerMachine!.launch.name
+                : loading ? t('machineDetailPage.placeholderTitle') : t('managedMachines.detail.unreadTitle'), leading: mark,
+            description: showHeaderIdentity ? identity?.description ?? undefined
+                : loading ? undefined : t('managedMachines.detail.creationDescription'),
             meta: [{ key: 'home', text: homeName }, ...(showHeaderIdentity ? identity?.meta ?? [] : [])] }}
         /* The sections own the receipt beside them, with Stop and Delete at its foot. */
         receipt={null}>

@@ -201,11 +201,15 @@ export const managedMachines: ManagedMachinesTranslations = {
             loading: ({ provider }: { provider: string }) => `Optionen für ${provider} werden geprüft…`,
             error: "Optionen konnten nicht geprüft werden.",
             unavailable: "Diese Option ist nicht mehr verfügbar.",
+            unavailableOn: ({ computer }: { computer: string }) => `Läuft nicht auf ${computer}.`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} bietet das hier nicht an.`,
+            unavailableWithChoices: "Nicht mit deinen anderen Optionen verfügbar.",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `Warten auf ${controller}`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `Dein ${provider}-Konto liegt auf ${controller}, und das ist offline. ${name} wird erstellt, sobald es wieder da ist.`,
             required: ({ controller }: { controller: string }) => `${controller} verwaltet diesen Rechner und muss online sein.`,
+            requiredUnnamed: "Der Computer, der diesen Rechner verwaltet, muss online sein.",
         },
         creation: {
             setup: "Einrichten",
@@ -462,6 +466,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveHere: "Verwaltung hierher verschieben",
         description: ({ provider }: { provider: string }) => `Starten, Stoppen und Löschen laufen auf dem Rechner, der das ${provider}-Konto hat.`,
         fixedLocal: ({ controller }: { controller: string }) => `Dieser Rechner ist auf ${controller} gespeichert. Die Verwaltung kann nicht auf einen anderen Rechner verschoben werden.`,
+        fixedLocalUnnamed: "Dieser Rechner ist auf dem Computer gespeichert, der ihn verwaltet. Die Verwaltung kann nicht auf einen anderen Rechner wechseln.",
         pending: "Eine Anbieteraktion kann noch abgeschlossen werden, nachdem du die Verwaltung verschoben hast. Es können weiter Kosten anfallen.",
     },
     managedCleanup: {

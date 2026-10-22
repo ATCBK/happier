@@ -201,11 +201,15 @@ export const managedMachines: ManagedMachinesTranslations = {
             loading: ({ provider }: { provider: string }) => `Проверка вариантов для ${provider}…`,
             error: "Не удалось проверить варианты.",
             unavailable: "Этот вариант больше недоступен.",
+            unavailableOn: ({ computer }: { computer: string }) => `Не запускается на ${computer}.`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} здесь это не предлагает.`,
+            unavailableWithChoices: "Недоступно с другими выбранными параметрами.",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `Ожидание ${controller}`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `Ваш аккаунт ${provider} находится на ${controller}, который не в сети. ${name} будет создана, когда он вернётся.`,
             required: ({ controller }: { controller: string }) => `${controller} управляет этой машиной и должен быть в сети.`,
+            requiredUnnamed: "Компьютер, который управляет этой машиной, должен быть в сети.",
         },
         creation: {
             setup: "Настроить",
@@ -462,6 +466,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveHere: "Перенести управление сюда",
         description: ({ provider }: { provider: string }) => `Запуск, остановка и удаление выполняются на машине, где находится аккаунт ${provider}.`,
         fixedLocal: ({ controller }: { controller: string }) => `Эта машина хранится на ${controller}. Управление нельзя перенести на другую машину.`,
+        fixedLocalUnnamed: "Эта машина хранится на компьютере, который ею управляет. Управление нельзя перенести на другую машину.",
         pending: "Действие у провайдера может завершиться уже после переноса управления. Расходы могут продолжаться.",
     },
     managedCleanup: {

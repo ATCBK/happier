@@ -509,7 +509,7 @@ function ManagedMachineConfigurationViewBody(props: ManagedMachineConfigurationV
 
     const creationDisabledNotice = accountSettings.settings?.managedMachineCreationEnabled === false && !props.presetOnly
         ? <ManagedCreationDisabledBanner testID="managed-config.creation-disabled" /> : null;
-    const summaryPrice = receipt.cost.kind === 'price' ? receipt.cost.prices[0] : undefined;
+    const summaryPrice = receipt.cost?.kind === 'price' ? receipt.cost.prices[0] : undefined;
     const selectedTitle = draft?.selected ? localized(provisioner?.contribution.pluginId ?? '', draft.selected.title) : title;
     const summaryLabel = summaryPrice?.label ? localized(provisioner?.contribution.pluginId ?? '', summaryPrice.label) : null;
     // The bar names the rate it shows, then the same size, place and Keep facts as the receipt.
@@ -683,7 +683,13 @@ function ManagedConfiguratorNativeChoices(props: Readonly<{
     const selected = managedConfiguratorDimensionSelection(draft);
     // While a read is running, the last answer stands: a row is only gone once a settled read lacks it.
     const settled = draft.optionStatus !== 'loading';
-    const unavailable = (available: boolean) => !available && settled || props.disabled ? t('managedMachines.options.unavailable') : undefined;
+    // A choice says why it can't be picked: never offered here (this computer can't run it, or the provider
+    // doesn't offer it), or only not with the other picks.
+    const notHere = draft.provisioner.descriptor.billing.location === 'local'
+        ? t('managedMachines.options.unavailableOn', { computer: props.computer })
+        : t('managedMachines.options.notOffered', { provider: props.localized(pluginId, draft.provisioner.descriptor.title) });
+    const unavailable = (available: boolean, selectable: boolean) => props.disabled ? t('managedMachines.options.unavailable')
+        : available || !settled ? undefined : selectable ? t('managedMachines.options.unavailableWithChoices') : notHere;
     const sizes = managedConfiguratorDimensionChoices(draft, 'size').flatMap(({ choice, available, selectable }) => {
         const size = choice.nativeFacts?.size;
         if (!size) return [];
@@ -694,7 +700,7 @@ function ManagedConfiguratorNativeChoices(props: Readonly<{
             spec: props.localized(pluginId, size.title), ...(hourly ? { hourly: formatProviderAmount(hourly) } : {}),
             ...(monthly ? { monthly: formatProviderAmount(monthly) } : {}),
             headroom: draft.provisioner.descriptor.billing.location === 'local' ? describeLocalHeadroom(size, draft.check?.localResources) : undefined,
-            unavailableReason: unavailable(available), selectable: selectable && !props.disabled }];
+            unavailableReason: unavailable(available, selectable), selectable: selectable && !props.disabled }];
     });
     const imageChoices = managedConfiguratorDimensionChoices(draft, 'image');
     const previews = useManagedImagePreviews({ serverId: props.serverId, controllerMachineId: draft.controller.machineId,
@@ -709,14 +715,14 @@ function ManagedConfiguratorNativeChoices(props: Readonly<{
         return image ? [{ id: image.id, name: props.localized(pluginId, image.title),
             ...(preview ? { preview: <ManagedImagePreview source={preview}
                 accessibilityLabel={image.preview?.accessibilityLabel ? props.localized(pluginId, image.preview.accessibilityLabel) : undefined} /> } : {}),
-            description: unavailable(available) ?? (image.description ? props.localized(pluginId, image.description) : ''), unavailableReason: unavailable(available),
+            description: unavailable(available, selectable) ?? (image.description ? props.localized(pluginId, image.description) : ''), unavailableReason: unavailable(available, selectable),
             selectable: selectable && !props.disabled }] : [];
     });
     const locations = managedConfiguratorDimensionChoices(draft, 'location').flatMap(({ choice, available, selectable }) => {
         const location = choice.nativeFacts?.location;
         // The country comes only from the provider's own ISO code, named in the reader's language.
         return location ? [{ id: location.id, city: props.localized(pluginId, location.title), countryCode: location.countryCode,
-            country: countryName(location.countryCode, getPreferredLanguage()), unavailableReason: unavailable(available), selectable: selectable && !props.disabled }] : [];
+            country: countryName(location.countryCode, getPreferredLanguage()), unavailableReason: unavailable(available, selectable), selectable: selectable && !props.disabled }] : [];
     });
     const firstPrice = managedConfiguratorDimensionChoices(draft, 'size').flatMap(({ choice }) => choice.prices ?? [])[0];
     const billing = draft.provisioner.descriptor.billing;

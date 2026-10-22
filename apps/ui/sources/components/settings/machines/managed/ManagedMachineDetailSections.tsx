@@ -8,6 +8,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { StatusDot } from '@/components/ui/status/StatusDot';
 import { t } from '@/text';
@@ -149,7 +150,8 @@ export const ManagedScopeRuleRow = React.memo(function ManagedScopeRuleRow(
 });
 
 export type ManagedControllerModel = Readonly<{
-  name: string;
+  /** `null` while its name is still being read: the row holds its place and no sentence names it yet. */
+  name: string | null;
   icon: React.ReactNode;
   online: boolean;
   presence: string;
@@ -159,6 +161,8 @@ export type ManagedControllerModel = Readonly<{
     | Readonly<{ kind: 'fixed' }>
     | Readonly<{ kind: 'unavailable' }>;
 }>;
+
+const PENDING = Object.freeze({ kind: 'loading' } as const);
 
 export const ManagedMachineControllerSection = React.memo(
   function ManagedMachineControllerSection(
@@ -175,11 +179,15 @@ export const ManagedMachineControllerSection = React.memo(
         title={t('managedMachines.config.managedFrom')}
         description={
           controller.move.kind === 'fixed'
-            ? t('managedController.fixedLocal', { controller: controller.name })
+            ? controller.name === null
+              ? t('managedController.fixedLocalUnnamed')
+              : t('managedController.fixedLocal', { controller: controller.name })
             : props.description
         }
       >
-        <Item
+        {controller.name === null ? (
+          <ItemLoadStateRows state={PENDING} rows={1} lines={2} testID={`${props.testID}.pending`} />
+        ) : <Item
           testID={props.testID}
           title={controller.name}
           subtitle={controller.presence}
@@ -206,7 +214,7 @@ export const ManagedMachineControllerSection = React.memo(
               />
             ) : undefined
           }
-        />
+        />}
       </ItemGroup>
     );
   },

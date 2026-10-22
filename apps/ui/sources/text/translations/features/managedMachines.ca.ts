@@ -201,11 +201,15 @@ export const managedMachines: ManagedMachinesTranslations = {
             loading: ({ provider }: { provider: string }) => `Comprovant les opcions de ${provider}…`,
             error: "No s’han pogut comprovar les opcions.",
             unavailable: "Aquesta opció ja no està disponible.",
+            unavailableOn: ({ computer }: { computer: string }) => `No es pot executar a ${computer}.`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} no ho ofereix aquí.`,
+            unavailableWithChoices: "No disponible amb les altres opcions.",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `Esperant ${controller}`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `El teu compte de ${provider} és a ${controller}, que està fora de línia. ${name} es crearà quan torni.`,
             required: ({ controller }: { controller: string }) => `${controller} gestiona aquesta màquina i ha d’estar en línia.`,
+            requiredUnnamed: "L’ordinador que gestiona aquesta màquina ha d’estar en línia.",
         },
         creation: {
             setup: "Configura",
@@ -462,6 +466,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveHere: "Mou la gestió aquí",
         description: ({ provider }: { provider: string }) => `Iniciar, aturar i eliminar s’executen a la màquina que té el compte de ${provider}.`,
         fixedLocal: ({ controller }: { controller: string }) => `Aquesta màquina està emmagatzemada a ${controller}. La gestió no es pot moure a una altra màquina.`,
+        fixedLocalUnnamed: "Aquesta màquina està emmagatzemada a l’ordinador que la gestiona. La gestió no es pot moure a una altra màquina.",
         pending: "És possible que una acció del proveïdor acabi després de moure la gestió. Els càrrecs poden continuar.",
     },
     managedCleanup: {

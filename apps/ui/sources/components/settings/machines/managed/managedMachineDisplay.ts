@@ -76,7 +76,8 @@ export type ManagedLocationOption = Readonly<{
 export type ManagedReceiptFact = Readonly<{
   id: string;
   label: string;
-  value: string;
+  /** `null`: the value is still being read; the receipt holds its place with a pending bar. */
+  value: string | null;
   leading?: React.ReactNode;
 }>;
 
@@ -90,7 +91,8 @@ export type ManagedReceiptCost =
   | Readonly<{ kind: 'unpriced'; provider: string }>
   | Readonly<{
       kind: 'local';
-      computer: string;
+      /** `null` while the computer's name is still being read. */
+      computer: string | null;
       meters: readonly Readonly<{
         id: string;
         label: string;

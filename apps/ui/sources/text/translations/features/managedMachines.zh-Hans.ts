@@ -201,11 +201,15 @@ export const managedMachines: ManagedMachinesTranslations = {
             loading: ({ provider }: { provider: string }) => `正在检查 ${provider} 的选项…`,
             error: "无法检查选项。",
             unavailable: "此选项已不再可用。",
+            unavailableOn: ({ computer }: { computer: string }) => `无法在 ${computer} 上运行。`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} 在这里不提供此项。`,
+            unavailableWithChoices: "与你的其他选择不兼容。",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `正在等待 ${controller}`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `你的 ${provider} 账户在 ${controller} 上，而它目前离线。它恢复在线后将创建 ${name}。`,
             required: ({ controller }: { controller: string }) => `${controller} 管理这台机器，需要保持在线。`,
+            requiredUnnamed: "管理这台机器的计算机需要在线。",
         },
         creation: {
             setup: "设置",
@@ -462,6 +466,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveHere: "将管理移到这里",
         description: ({ provider }: { provider: string }) => `启动、停止和删除操作在持有 ${provider} 账户的机器上执行。`,
         fixedLocal: ({ controller }: { controller: string }) => `这台机器存储在 ${controller} 上。管理无法移到另一台机器。`,
+        fixedLocalUnnamed: "这台机器存储在管理它的计算机上。管理无法移到另一台机器。",
         pending: "移动管理后，提供方的操作可能仍会完成。费用可能会继续产生。",
     },
     managedCleanup: {

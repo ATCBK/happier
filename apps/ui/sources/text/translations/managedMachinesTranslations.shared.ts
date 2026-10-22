@@ -207,11 +207,15 @@ export const managedMachinesEn = {
             loading: ({ provider }: { provider: string }) => `Checking choices for ${provider}…`,
             error: "Choices couldn’t be checked.",
             unavailable: "This choice is no longer available.",
+            unavailableOn: ({ computer }: { computer: string }) => `Can’t run on ${computer}.`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} doesn’t offer this here.`,
+            unavailableWithChoices: "Not available with your other choices.",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `Waiting for ${controller}`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `Your ${provider} account is on ${controller}, which is offline. ${name} is created when it’s back.`,
             required: ({ controller }: { controller: string }) => `${controller} manages this machine and needs to be online.`,
+            requiredUnnamed: "The computer that manages this machine needs to be online.",
         },
         creation: {
             allow: "Allow creating machines",
@@ -469,6 +473,7 @@ export const managedMachinesEn = {
         moveHere: "Move management here",
         description: ({ provider }: { provider: string }) => `Start, stop and delete run on the machine that holds the ${provider} account.`,
         fixedLocal: ({ controller }: { controller: string }) => `This machine is stored on ${controller}. Management can’t move to another machine.`,
+        fixedLocalUnnamed: "This machine is stored on the computer that manages it. Management can’t move to another machine.",
         pending: "A provider action may still finish after you move management. Charges may continue.",
     },
     managedCleanup: {

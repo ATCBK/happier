@@ -23,7 +23,9 @@ export function managedCredentialReceiptTargets(launch: ValidatedLaunchSnapshotV
 
 export type ManagedConfigurationReceiptInput = Readonly<{
     launch: ValidatedLaunchSnapshotV1; reviewedFacts?: ManagedConfigurationFactsV1;
-    providerTitle: string; controllerName?: string; caption?: string; mark?: React.ReactNode;
+    providerTitle: string;
+    /** The managing computer's name; `null` while it is still being read (shown as a pending value, never as words). */
+    controllerName?: string | null; caption?: string; mark?: React.ReactNode;
     homeName?: string; preset?: ManagedConfigurationFactsV1['preset']; presetPolicy?: MachineRetentionOverrideV1;
     /** Future preset display may use its actual descriptor, without resolving allocation policy. */
     declaredBilling?: BillingCapabilitiesV1;
@@ -44,7 +46,7 @@ export type ManagedConfigurationReceiptInput = Readonly<{
 }>;
 export function buildManagedConfigurationReceipt(input: ManagedConfigurationReceiptInput): ManagedReceiptModel {
     const facts = input.reviewedFacts;
-    const controllerName = input.controllerName ?? (facts ? t('common.unknown') : undefined);
+    const controllerName = input.controllerName === null ? null : input.controllerName ?? (facts ? t('common.unknown') : undefined);
     const rows: ManagedReceiptModel['facts'][number][] = [];
     const nativeLabels: string[] = [];
     const localized = (value: PluginLocalizedStringV2) => input.localized
@@ -81,7 +83,7 @@ export function buildManagedConfigurationReceipt(input: ManagedConfigurationRece
             : `${buildQualifiedPluginContributionKey(credential.purpose.consumer)} · ${credential.purpose.purpose}`,
             value: account.primaryLabel });
     }
-    if (controllerName) rows.push({ id: 'controller', label: t('managedMachines.config.managedFrom'), value: controllerName });
+    if (controllerName !== undefined) rows.push({ id: 'controller', label: t('managedMachines.config.managedFrom'), value: controllerName });
     if (input.homeName) rows.push({ id: 'home', label: t('managedMachines.receipt.joins'), value: input.homeName });
     const preset = facts?.preset ?? input.preset;
     const presetLine = preset ? preset.name
@@ -119,7 +121,7 @@ export function buildManagedConfigurationReceipt(input: ManagedConfigurationRece
         name: input.launch.name, spec: sizeSpec ?? (nativeLabels.length ? nativeLabels.join(' · ') : input.providerTitle), facts: rows,
         ...(facts?.environment ?? input.environment ? { environment: facts?.environment ?? input.environment } : {}),
         cost: firstPrice ? { kind: 'price', prices: [presentPrice(firstPrice), ...otherPrices.map(presentPrice)] }
-            : billingLocation === 'local' ? describeLocalCost({ computer: controllerName ?? input.providerTitle, size,
+            : billingLocation === 'local' ? describeLocalCost({ computer: controllerName === null ? null : controllerName ?? input.providerTitle, size,
                 resources: input.created ? undefined : facts?.localResources, omitHeadroom: input.created === true })
                 : { kind: 'unpriced', provider: input.providerTitle } };
 }
@@ -159,7 +161,7 @@ export function describeManagedSize(title: string, size: NativeSizeFact): string
  * reported free when the choices were read. Only measured facts become meters; a missing measurement
  * says it is unknown rather than drawing an invented share.
  */
-function describeLocalCost(input: Readonly<{ computer: string; size?: NativeSizeFact; resources?: ManagedLocalResourceFactsV1;
+function describeLocalCost(input: Readonly<{ computer: string | null; size?: NativeSizeFact; resources?: ManagedLocalResourceFactsV1;
     omitHeadroom: boolean }>): ManagedReceiptCost {
     const { computer, size, resources } = input;
     const meters: Extract<ManagedReceiptCost, { kind: 'local' }>['meters'][number][] = [];
@@ -171,7 +173,7 @@ function describeLocalCost(input: Readonly<{ computer: string; size?: NativeSize
         value: t('managedMachines.receipt.coresOfFree', { count: cores.used, free: String(cores.free) }) });
     if (memory) meters.push({ id: 'memory', label: t('managedMachines.config.columns.memory'), fraction: Math.min(1, memory.used / memory.free),
         value: t('managedMachines.receipt.amountOfFree', { amount: formatHappierDataBytes(memory.used, { kind: 'memory' }), free: formatHappierDataBytes(memory.free, { kind: 'memory' }) }) });
-    if (input.omitHeadroom) return { kind: 'local', computer, meters: [] };
+    if (input.omitHeadroom || computer === null) return { kind: 'local', computer, meters: input.omitHeadroom ? [] : meters };
     if (!cores && !memory) return { kind: 'local', computer, meters, note: t('managedMachines.receipt.headroomUnknown', { computer }) };
     if (cores && cores.used > cores.free || memory && memory.used > memory.free) {
         return { kind: 'local', computer, meters, note: t('managedMachines.receipt.exceedsFree', { computer }) };

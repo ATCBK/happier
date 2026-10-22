@@ -201,11 +201,15 @@ export const managedMachines: ManagedMachinesTranslations = {
             loading: ({ provider }: { provider: string }) => `${provider} の選択肢を確認しています…`,
             error: "選択肢を確認できませんでした。",
             unavailable: "この選択肢は利用できなくなりました。",
+            unavailableOn: ({ computer }: { computer: string }) => `${computer} では実行できません。`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} ではここで提供されていません。`,
+            unavailableWithChoices: "ほかの選択とは組み合わせられません。",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `${controller} を待っています`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `${provider} アカウントはオフラインの ${controller} にあります。${controller} が戻ると ${name} が作成されます。`,
             required: ({ controller }: { controller: string }) => `このマシンは ${controller} が管理しており、${controller} がオンラインである必要があります。`,
+            requiredUnnamed: "このマシンを管理しているコンピューターがオンラインである必要があります。",
         },
         creation: {
             setup: "セットアップ",
@@ -462,6 +466,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveHere: "管理をここに移動",
         description: ({ provider }: { provider: string }) => `開始、停止、削除は ${provider} アカウントを保持しているマシンで実行されます。`,
         fixedLocal: ({ controller }: { controller: string }) => `このマシンは ${controller} に保存されています。管理を別のマシンに移動することはできません。`,
+        fixedLocalUnnamed: "このマシンは管理しているコンピューターに保存されています。管理を別のマシンに移動することはできません。",
         pending: "管理を移動した後も、プロバイダーの操作が完了する場合があります。料金が発生し続けることがあります。",
     },
     managedCleanup: {

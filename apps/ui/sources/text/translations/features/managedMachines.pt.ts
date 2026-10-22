@@ -201,11 +201,15 @@ export const managedMachines: ManagedMachinesTranslations = {
             loading: ({ provider }: { provider: string }) => `Verificando opções de ${provider}…`,
             error: "Não foi possível verificar as opções.",
             unavailable: "Esta opção não está mais disponível.",
+            unavailableOn: ({ computer }: { computer: string }) => `Não pode ser executado em ${computer}.`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} não oferece isso aqui.`,
+            unavailableWithChoices: "Indisponível com suas outras escolhas.",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `Aguardando ${controller}`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `Sua conta de ${provider} está em ${controller}, que está offline. ${name} será criada quando ele voltar.`,
             required: ({ controller }: { controller: string }) => `${controller} gerencia esta máquina e precisa estar online.`,
+            requiredUnnamed: "O computador que gerencia esta máquina precisa estar online.",
         },
         creation: {
             setup: "Configurar",
@@ -462,6 +466,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveHere: "Mover o gerenciamento para cá",
         description: ({ provider }: { provider: string }) => `Iniciar, parar e excluir são executados na máquina que tem a conta de ${provider}.`,
         fixedLocal: ({ controller }: { controller: string }) => `Esta máquina está armazenada em ${controller}. O gerenciamento não pode ser movido para outra máquina.`,
+        fixedLocalUnnamed: "Esta máquina está armazenada no computador que a gerencia. O gerenciamento não pode ser movido para outra máquina.",
         pending: "Uma ação do provedor ainda pode terminar depois que você mover o gerenciamento. As cobranças podem continuar.",
     },
     managedCleanup: {

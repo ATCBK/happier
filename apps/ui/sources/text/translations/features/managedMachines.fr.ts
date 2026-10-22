@@ -201,11 +201,15 @@ export const managedMachines: ManagedMachinesTranslations = {
             loading: ({ provider }: { provider: string }) => `Vérification des options pour ${provider}…`,
             error: "Les options n’ont pas pu être vérifiées.",
             unavailable: "Cette option n’est plus disponible.",
+            unavailableOn: ({ computer }: { computer: string }) => `Ne peut pas tourner sur ${computer}.`,
+            notOffered: ({ provider }: { provider: string }) => `${provider} ne le propose pas ici.`,
+            unavailableWithChoices: "Indisponible avec tes autres choix.",
         },
         controller: {
             waiting: ({ controller }: { controller: string }) => `En attente de ${controller}`,
             waitingDetail: ({ provider, controller, name }: { provider: string; controller: string; name: string }) => `Ton compte ${provider} se trouve sur ${controller}, qui est hors ligne. ${name} sera créée à son retour.`,
             required: ({ controller }: { controller: string }) => `${controller} gère cette machine et doit être en ligne.`,
+            requiredUnnamed: "L’ordinateur qui gère cette machine doit être en ligne.",
         },
         creation: {
             setup: "Configurer",
@@ -462,6 +466,7 @@ export const managedMachines: ManagedMachinesTranslations = {
         moveHere: "Transférer la gestion ici",
         description: ({ provider }: { provider: string }) => `Le démarrage, l’arrêt et la suppression s’exécutent sur la machine qui détient le compte ${provider}.`,
         fixedLocal: ({ controller }: { controller: string }) => `Cette machine est stockée sur ${controller}. La gestion ne peut pas être transférée vers une autre machine.`,
+        fixedLocalUnnamed: "Cette machine est stockée sur l’ordinateur qui la gère. La gestion ne peut pas être transférée vers une autre machine.",
         pending: "Une action du fournisseur peut encore se terminer après le transfert de la gestion. Des frais peuvent continuer.",
     },
     managedCleanup: {

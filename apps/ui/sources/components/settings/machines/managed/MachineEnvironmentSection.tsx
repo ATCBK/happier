@@ -364,7 +364,7 @@ export const MachineEnvironmentSection = React.memo(
 /** The receipt's read-only environment lines: what each new machine is set up with. */
 export function describeMachineEnvironment(
   environment: MachineEnvironmentV1 | undefined,
-): ManagedReceiptFact[] {
+): (ManagedReceiptFact & Readonly<{ value: string }>)[] {
   if (!environment) return [];
   const adapter = environment.toolchain
     ? environmentAdapters().find(
