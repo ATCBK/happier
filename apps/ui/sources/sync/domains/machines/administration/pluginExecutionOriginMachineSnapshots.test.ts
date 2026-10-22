@@ -190,8 +190,20 @@ describe('execution-origin Machine publication', () => {
         const connection = connect(pair);
         const first = connection.getSnapshot();
         const state = storage.getState();
+        const project = vi.spyOn(inventory, 'resolveAllProfileMachineInventorySnapshots');
+        const serialize = vi.spyOn(origins, 'serializePluginMachineExecutionOriginMachineFacts');
+        for (let index = 0; index < 100; index += 1) {
+            storage.getState().applyMachines([{ ...machine }], false, { sourceServerId: home.id });
+            expect(storage.getState()).toBe(state);
+            expect(connection.getSnapshot()).toBe(first);
+            connection.readCurrent();
+        }
+        expect(project).not.toHaveBeenCalled();
+        expect(serialize).not.toHaveBeenCalled();
         storage.getState().applyMachines([{ ...machine, activeAt: now + 2 }], false, { sourceServerId: home.id });
         expect(storage.getState()).toBe(state);
+        expect(project).toHaveBeenCalledTimes(1);
+        expect(serialize).toHaveBeenCalledTimes(1);
         expect(connection.getSnapshot().key).not.toBe(first.key);
         expect(connection.getSnapshot().eligibilityKey).toBe(first.eligibilityKey);
         expect(connection.readCurrent().readMachineFact({ serverIdentityId: home.serverIdentityId, machineId: machine.id }).activeAt).toBe(now + 2);

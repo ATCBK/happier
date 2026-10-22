@@ -14,6 +14,7 @@ import type { PluginSelectedArtifactIdentity } from './artifactLease';
 import { createPluginArtifactDaemonSource, type PluginArtifactDaemonByteFetcher } from './artifactDaemonSource';
 import { createPluginAccountAvailabilityReaderStore } from './reader';
 import { PluginMachineMaterializationV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { DaemonPluginUiArtifactBytesReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 
 const digest = `sha256:${'a'.repeat(64)}` as const;
 const transport = { machineId: 'machine-a', serverId: 'server-a' } as const;
@@ -85,7 +86,7 @@ describe('daemon Artifact byte source', () => {
 
     it('keeps an explicit byte route when the Account inventory is unavailable', async () => {
         const store = createPluginAccountAvailabilityReaderStore();
-        const fetchArtifactBytes = vi.fn(async () => okResponse('hostedWeb'));
+        const fetchArtifactBytes = vi.fn<PluginArtifactDaemonByteFetcher>(async () => DaemonPluginUiArtifactBytesReadResponseSchema.parse(okResponse('hostedWeb')));
         const source = createPluginArtifactDaemonSource({ transport, family: 'hostedWeb', fetchArtifactBytes,
             availability: { reader: store.bind({ serverId: 'missing-home', accountId: 'owner' }), serverId: transport.serverId } });
         expect(await source.fetch({ artifact })).toEqual(new Map([['index.html', entryBytes]]));
