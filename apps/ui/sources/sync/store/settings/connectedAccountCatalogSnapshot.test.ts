@@ -1,14 +1,26 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { applyConnectedAccountCatalogSnapshot, beginConnectedAccountCatalogLoad, getConnectedAccountCatalogValue,
+import { applyAcknowledgedConnectedAccountCatalog, applyConnectedAccountCatalogSnapshot, beginConnectedAccountCatalogLoad, getConnectedAccountCatalogValue,
     resetConnectedAccountCatalogSnapshotsForTests, subscribeConnectedAccountCatalogSnapshots } from './connectedAccountCatalogSnapshot';
 
 afterEach(resetConnectedAccountCatalogSnapshotsForTests);
 const scope = { serverId: 'home', accountId: 'account' };
 const ready = { status: 'ready' as const, revision: 3, record: { key: 'purposes' as const,
-    value: { v: 1 as const, bindings: [{ purpose: { consumer: { pluginId: 'plugin', localId: 'consumer' }, purpose: 'api' },
-        target: { kind: 'account' as const, account: { service: { pluginId: 'service', localId: 'native' }, accountId: 'default' } } }] } } };
+    value: { v: 1 as const, bindings: [{ purpose: { consumer: { pluginId: 'acme.plugin', localId: 'consumer' }, purpose: 'api' },
+        target: { kind: 'account' as const, account: { service: { pluginId: 'acme.service', localId: 'native' }, accountId: 'default' } } }] } } };
 
 describe('Connected Account catalog publication', () => {
+    it.each(['snapshot', 'acknowledgement'] as const)('owns an immutable purpose value rather than retaining %s aliases', source => {
+        const receipt = structuredClone(ready);
+        if (source === 'snapshot') applyConnectedAccountCatalogSnapshot(scope, 'purposes', receipt, true);
+        else applyAcknowledgedConnectedAccountCatalog(scope, receipt.record, receipt.revision, true);
+        const published = getConnectedAccountCatalogValue(scope, 'purposes').value!;
+        receipt.record.value.bindings[0]!.purpose.purpose = 'changed';
+        receipt.record.value.bindings[0]!.target.account.accountId = 'changed';
+        expect(published.bindings[0]!.purpose.purpose).toBe('api');
+        expect(published.bindings[0]!.target).toEqual(ready.record.value.bindings[0]!.target);
+        expect(Object.isFrozen(published.bindings[0]!.purpose.consumer)).toBe(true);
+        expect(Object.isFrozen(published.bindings[0]!.target)).toBe(true);
+    });
     it('publishes only the addressed catalog and retains unchanged selection identity', () => {
         let notifications = 0;
         subscribeConnectedAccountCatalogSnapshots(() => { notifications += 1; });

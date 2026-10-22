@@ -21,6 +21,7 @@ import { readConnectedAccountDescriptorProjection, type ConnectedAccountDescript
 import { projectNativeJsonValueForTransport, sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { PluginUiPlatformV1 } from '@happier-dev/protocol/plugins/ui';
 import { createPluginActionInputSelectionFactsPublication, type PluginActionInputSelectionSnapshot } from '@/components/plugins/surfaces/pluginActionInputSelectionFacts';
+import { admitAgentConnectedAccountPurposeDeclarations } from '@happier-dev/protocol/account/settings/connected-services';
 
 import { resolveAgentMarkAgentId } from './resolveAgentMarkAgentId';
 
@@ -155,6 +156,11 @@ export function publishDaemonMergedProjectionInputs(params: Readonly<{
     });
     const published: DaemonMergedProjectionInputs = {
         ...adapted,
+        mergedProviderProjectionById: Object.freeze(Object.fromEntries(Object.entries(adapted.mergedProviderProjectionById).map(([id, agent]) => [id,
+            agent.identity && agent.connectedAccounts ? Object.freeze({ ...agent,
+                connectedAccounts: admitAgentConnectedAccountPurposeDeclarations(agent.identity, agent.connectedAccounts),
+            }) : agent,
+        ]))),
         discoveredBackendIds: Object.freeze(Object.keys(adapted.mergedBackendProjectionById)),
         pluginProjectionV2: params.projection,
         pluginUiProjectionPlatform: platform,

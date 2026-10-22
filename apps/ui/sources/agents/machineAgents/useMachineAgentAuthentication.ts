@@ -43,7 +43,7 @@ export function useMachineAgentAuthentication(input: Readonly<{
         'connectedServicesByAgentId' | 'credentialSelectionsByAgentId'> => {
         // A lost Machine projection leaves last-known authentication intact; it does not select native.
         if (!projection.inputs) return {};
-        const agents = Object.entries(projection.inputs?.pluginProjectionV2?.agentsById ?? {});
+        const agents = Object.entries(projection.inputs.mergedProviderProjectionById);
         const descriptors = projection.inputs.connectedAccountProjection;
         const resolution = mergeConnectedAccountDescriptorProjections(descriptors ? [descriptors] : []);
         const entries = resolution.kind === 'error' ? [] : projectConnectedServiceRegistryEntries({
@@ -51,7 +51,7 @@ export function useMachineAgentAuthentication(input: Readonly<{
             descriptors: resolution.descriptors, conflicts: resolution.conflicts, errorReason: null,
         });
         const connectedServicesByAgentId = projectMachineAgentConnectedServices({
-            agents: agents.map(([agentId, agent]) => ({ agentId, connectedAccounts: agent.connectedAccounts })),
+            agents: agents.map(([agentId, agent]) => ({ agentId, connectedAccounts: agent.connectedAccounts ?? undefined })),
             profile, accountTransport: resolveConnectedAccountUiNegotiation(features), entries, now: Date.now(),
             titleForService: entry => resolveConnectedServiceRegistryEntryDisplayName(entry, t, localize),
         });

@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { accountSettingsParse } from './accountSettings.js';
 import { QualifiedConnectedAccountPurposeBindingsV1RecordSchema, QualifiedConnectedAccountPurposeBindingsV1Schema } from '../../connect/connectedAccountPurposeBindings.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../../connect/connectedAccountPurposeIdentity.js';
 import {
+  admitAgentConnectedAccountPurposeBindings,
+  admitAgentConnectedAccountPurposeDeclarations,
   projectAgentConnectedAccountPurposeDefaultsToSessionBindings,
   resolveAgentConnectedAccountPurposeDefaults,
   writeAgentConnectedAccountPurposeDefault,
@@ -82,6 +85,118 @@ const EARLIER_0_3_TEAM_PURPOSE_TARGET = {
 } as const;
 
 describe('Agent default authentication (one store)', () => {
+  it('admits the complete current catalog beyond the legacy Settings reader limit', () => {
+    const bindings = Array.from({ length: 257 }, (_, index) => ({
+      purpose: { consumer: codex, purpose: `purpose-${index}` },
+      target: { kind: 'account' as const, account: { service: codexService, accountId: 'work' } },
+    }));
+    const catalog = QualifiedConnectedAccountPurposeBindingsV1RecordSchema.parse({ v: 1, bindings });
+    const purposeBindings = admitAgentConnectedAccountPurposeBindings(catalog);
+    expect(purposeBindings.bindings).toHaveLength(bindings.length);
+    expect(resolveAgentConnectedAccountPurposeDefaults({ settings: {}, agentId: 'codex', consumer: codex, purposeBindings,
+      declarations: admitAgentConnectedAccountPurposeDeclarations(codex, [{ purpose: 'purpose-256', service: codexService }]),
+    })[0]?.target).toEqual(bindings[256]!.target);
+  });
+
+  it('joins owned immutable acquisitions without reparsing, while raw aliases and copied proofs still validate', () => {
+    const consumer = { ...codex };
+    const rawDeclarations = [{ purpose: 'model-openai', service: { ...codexService } }];
+    const rawBindings = { v: 1, bindings: [{ purpose: { consumer: { ...codex }, purpose: 'model-openai' },
+      target: { kind: 'account', account: { service: { ...codexService }, accountId: 'work' } } }] };
+    const declarations = admitAgentConnectedAccountPurposeDeclarations(consumer, rawDeclarations);
+    const purposeBindings = admitAgentConnectedAccountPurposeBindings(rawBindings);
+    // Admission facts never become part of the persisted shape.
+    expect(QualifiedConnectedAccountPurposeBindingsV1RecordSchema.parse(purposeBindings)).toEqual(rawBindings);
+    rawDeclarations[0]!.purpose = '';
+    rawBindings.bindings[0]!.target.account.accountId = 'changed';
+    consumer.localId = 'changed';
+    const input = { settings: {}, agentId: 'codex', consumer: codex, declarations, purposeBindings };
+    const parse = vi.spyOn(QualifiedConnectedAccountPurposeV1Schema, 'parse');
+    try {
+      for (let index = 0; index < 100; index++) {
+        expect(resolveAgentConnectedAccountPurposeDefaults(input)[0]).toMatchObject({
+          purpose: { consumer: codex, purpose: 'model-openai' },
+          target: { kind: 'account', account: { service: codexService, accountId: 'work' } },
+        });
+      }
+      expect(parse).toHaveBeenCalledTimes(0);
+      expect(Object.isFrozen(purposeBindings.bindings[0]!.target)).toBe(true);
+      expect(Object.isFrozen(declarations[0]!.service)).toBe(true);
+      // Copying a carrier does not transfer its admission.
+      const copiedBindings = Object.defineProperties({}, Object.getOwnPropertyDescriptors(purposeBindings));
+      expect(resolveAgentConnectedAccountPurposeDefaults({ ...input, purposeBindings: copiedBindings as typeof purposeBindings })[0]?.target)
+        .toEqual(purposeBindings.bindings[0]!.target);
+      expect(parse).toHaveBeenCalledTimes(1);
+      const copiedDeclarations = Object.defineProperties([], Object.getOwnPropertyDescriptors(declarations));
+      resolveAgentConnectedAccountPurposeDefaults({ ...input, declarations: copiedDeclarations });
+      expect(parse).toHaveBeenCalledTimes(2);
+      // A real consumer change must qualify anew rather than reuse the old consumer's prepared key.
+      expect(resolveAgentConnectedAccountPurposeDefaults({ ...input, consumer: claude })[0]?.target).toBeNull();
+      expect(parse).toHaveBeenCalledTimes(3);
+      expect(() => resolveAgentConnectedAccountPurposeDefaults({ ...input, declarations: rawDeclarations })).toThrow();
+      expect(() => resolveAgentConnectedAccountPurposeDefaults({ ...input, purposeBindings: {
+        v: 1, bindings: [{ ...purposeBindings.bindings[0]!, purpose: { consumer: codex, purpose: '' } }],
+      } })).toThrow();
+    } finally { parse.mockRestore(); }
+  });
+
+  it('refuses rebuilt admission facts on replacement binding and declaration carriers', () => {
+    const purposeBindings = admitAgentConnectedAccountPurposeBindings({ v: 1, bindings: [{
+      purpose: { consumer: codex, purpose: 'model-openai' },
+      target: { kind: 'account', account: { service: codexService, accountId: 'work' } },
+    }] });
+    const declarations = admitAgentConnectedAccountPurposeDeclarations(codex, codexDeclarations);
+    const input = { settings: {}, agentId: 'codex', consumer: codex, declarations, purposeBindings };
+    const rebuildReflectedFacts = <T extends object>(source: object, replacement: T): T => {
+      for (const symbol of Object.getOwnPropertySymbols(source)) {
+        const facts: unknown = Object.getOwnPropertyDescriptor(source, symbol)?.value;
+        if (facts && typeof facts === 'object') {
+          Object.defineProperty(replacement, symbol, { value: { ...facts, owner: replacement } });
+        }
+      }
+      return replacement;
+    };
+    const replacementBindings = rebuildReflectedFacts(purposeBindings, { v: 1 as const, bindings: [{
+      purpose: { consumer: codex, purpose: '' },
+      target: { kind: 'account' as const, account: { service: codexService, accountId: 'other' } },
+    }] });
+    expect(() => resolveAgentConnectedAccountPurposeDefaults({ ...input, purposeBindings: replacementBindings })).toThrow();
+    replacementBindings.bindings[0]!.purpose.purpose = 'model-openai';
+    expect(resolveAgentConnectedAccountPurposeDefaults({ ...input, purposeBindings: replacementBindings })[0]?.target)
+      .toEqual(replacementBindings.bindings[0]!.target);
+    const replacementDeclarations = rebuildReflectedFacts(declarations, [{ purpose: '', service: codexService }]);
+    expect(() => resolveAgentConnectedAccountPurposeDefaults({ ...input, declarations: replacementDeclarations })).toThrow();
+    replacementDeclarations[0]!.purpose = 'another-purpose';
+    expect(resolveAgentConnectedAccountPurposeDefaults({ ...input, declarations: replacementDeclarations })[0]?.target).toBeNull();
+  });
+
+  it('keeps indexed defaults immutable through both reflection and returned target aliases', () => {
+    const purposeBindings = admitAgentConnectedAccountPurposeBindings({ v: 1, bindings: [{
+      purpose: { consumer: codex, purpose: 'model-openai' },
+      target: { kind: 'account', account: { service: codexService, accountId: 'work' } },
+    }] });
+    const declarations = admitAgentConnectedAccountPurposeDeclarations(codex, codexDeclarations);
+    const input = { settings: {}, agentId: 'codex', consumer: codex, declarations, purposeBindings };
+    const expected = { kind: 'account', account: { service: codexService, accountId: 'work' } };
+    for (const symbol of Object.getOwnPropertySymbols(purposeBindings)) {
+      const facts: unknown = Object.getOwnPropertyDescriptor(purposeBindings, symbol)?.value;
+      if (!facts || typeof facts !== 'object' || !('index' in facts)) continue;
+      const index = facts.index;
+      if (!index || typeof index !== 'object' || !('defaultFor' in index) || typeof index.defaultFor !== 'function') continue;
+      const exposed: unknown = index.defaultFor(JSON.stringify([codex.pluginId, codex.localId, 'model-openai']));
+      if (exposed && typeof exposed === 'object') {
+        Reflect.set(exposed, 'target', { kind: 'account', account: { service: codexService, accountId: 'mutated-through-proof' } });
+      }
+    }
+    const target = resolveAgentConnectedAccountPurposeDefaults(input)[0]?.target;
+    expect(target).toEqual(expected);
+    if (!target || target.kind !== 'account') throw new Error('Expected admitted account default');
+    expect(Reflect.set(target.account, 'accountId', 'mutated-through-output')).toBe(false);
+    expect(Reflect.set(target.account.service, 'localId', 'mutated-service')).toBe(false);
+    expect(resolveAgentConnectedAccountPurposeDefaults(input)[0]?.target).toEqual(expected);
+    expect(purposeBindings.bindings[0]!.target).toEqual(expected);
+  });
+
   it('does not resurrect either retained predecessor carrier after an explicit empty purpose catalog is admitted', () => {
     const consumer = { pluginId: 'happier.agent.antigravity', localId: 'antigravity' };
     const service = { pluginId: 'happier.agent.antigravity', localId: 'antigravity-account' };
@@ -294,6 +409,10 @@ describe('Agent default authentication (one store)', () => {
     expect(next.connectedServicesDefaultAuthByAgentIdV1.bindingsByAgentId).toHaveProperty('claude');
     expect(resolveAgentConnectedAccountPurposeDefaults({
       settings: next, purposeBindings: written.connectedAccountPurposeBindingsV1, agentId: 'codex', consumer: codex, declarations: codexDeclarations,
+    })[0]).toMatchObject({ target: null, teamResource });
+    expect(resolveAgentConnectedAccountPurposeDefaults({ settings: next, agentId: 'codex', consumer: codex,
+      purposeBindings: admitAgentConnectedAccountPurposeBindings(written.connectedAccountPurposeBindingsV1),
+      declarations: admitAgentConnectedAccountPurposeDeclarations(codex, codexDeclarations),
     })[0]).toMatchObject({ target: null, teamResource });
 
     // A personal choice replaces the Team default: one purpose, one default.

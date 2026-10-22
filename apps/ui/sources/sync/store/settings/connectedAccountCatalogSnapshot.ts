@@ -2,6 +2,7 @@ import type { ConnectedAccountCatalogDiagnosticV1, ConnectedAccountCatalogKeyV1,
 import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
+import { admitAgentConnectedAccountPurposeBindings } from '@happier-dev/protocol/account/settings/connected-services';
 
 export type ConnectedAccountCatalogValue<K extends ConnectedAccountCatalogKeyV1> = Extract<ConnectedAccountCatalogRecordV1, { key: K }>['value'];
 export type ConnectedAccountCatalogValueSnapshot<K extends ConnectedAccountCatalogKeyV1> = Readonly<{
@@ -15,6 +16,11 @@ const snapshots = new Map<string, StoredSnapshot>();
 const listeners = new Set<() => void>();
 const loading = Object.freeze({ status: 'loading', value: null, revision: 'absent', stale: true } as const);
 const snapshotKey = (scope: ServerAccountScope, key: ConnectedAccountCatalogKeyV1) => `${serverAccountScopeKeySuffix(scope)}:${key}`;
+function admitCatalogRecord(record: ConnectedAccountCatalogRecordV1): ConnectedAccountCatalogRecordV1 {
+    return record.key === 'purposes'
+        ? { key: 'purposes', value: admitAgentConnectedAccountPurposeBindings(record.value) }
+        : record;
+}
 export function subscribeConnectedAccountCatalogSnapshots(listener: () => void): () => void {
     listeners.add(listener); return () => { listeners.delete(listener); };
 }
@@ -30,6 +36,7 @@ export function applyAcknowledgedConnectedAccountCatalog(scope: ServerAccountSco
     revision: number, current: boolean): void {
     const old = getConnectedAccountCatalogValue(scope, record.key);
     if (!canPublishCatalogReceipt({ current, revision, retainedRevision: old.revision })) return;
+    record = admitCatalogRecord(record);
     snapshots.set(snapshotKey(scope, record.key), { scope, key: record.key, catalog: { status: 'loading' },
         value: { status: 'loading', value: record.value, revision, stale: true, reason: 'loading' } });
     for (const listener of [...listeners]) listener();
@@ -37,6 +44,10 @@ export function applyAcknowledgedConnectedAccountCatalog(scope: ServerAccountSco
 export function applyConnectedAccountCatalogSnapshot(scope: ServerAccountScope, key: ConnectedAccountCatalogKeyV1,
     catalog: ConnectedAccountCatalogSnapshotV1, current: boolean): void {
     if (!current || (catalog.status === 'unavailable' && catalog.reason === 'scope-retired')) return;
+    if ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.record.key === key) {
+        try { catalog = { ...catalog, record: admitCatalogRecord(catalog.record) }; }
+        catch { catalog = { status: 'unavailable', reason: 'invalid-stored-content' }; }
+    }
     const addressedKey = snapshotKey(scope, key);
     const old = snapshots.get(addressedKey)?.value;
     let next: ConnectedAccountCatalogValueSnapshot<ConnectedAccountCatalogKeyV1>;

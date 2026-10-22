@@ -23,10 +23,11 @@ import {
   type QualifiedConnectedAccountPurposeBindingsV1,
   type QualifiedConnectedAccountPurposeTeamResourceSelectionV1,
 } from '../../connect/connectedAccountPurposeBindings.js';
-import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
+import { QualifiedConnectedAccountPurposeV1Schema, type QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
+import { normalizeStrictJsonValue } from '../../json/strictJsonValue.js';
 import { buildQualifiedPluginContributionKey } from '../../plugins/contributionIdentity.js';
 import { resolveGeneratedSessionPresentationAgentIdV1 } from '../../agents/generated/sessionPresentationCompatV1.js';
-import { sameQualifiedConnectedAccountRef } from '../../connect/qualifiedConnectedAccountPersistence.js';
+import { ConnectedAccountServiceIdentityV1Schema, sameQualifiedConnectedAccountRef } from '../../connect/qualifiedConnectedAccountPersistence.js';
 import { sameQualifiedConnectedAccountGroupRef } from '../../connect/qualifiedConnectedAccountProjectionsV4.js';
 
 const AgentIdSettingsKeySchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
@@ -357,6 +358,51 @@ export function migrateLegacyAgentConnectedAccountPurposeDefaultsForActivation(i
     : { status: 'unavailable', reason: 'invalid-stored-content' };
 }
 
+const admittedPurposeBindings = new WeakMap<QualifiedConnectedAccountPurposeBindingsV1, ReturnType<typeof indexAgentPurposeBindings>>();
+const admittedPurposeDeclarations = new WeakMap<readonly AgentConnectedAccountPurposeDeclaration[], AdmittedPurposeDeclarations>();
+
+function indexAgentPurposeBindings(durable: QualifiedConnectedAccountPurposeBindingsV1) {
+  const defaults = new Map<string, AgentConnectedAccountPurposeDefaultValue | 'team'>([
+    ...durable.bindings.map(binding => [qualifiedPurposeKey(binding.purpose), Object.freeze({ target: binding.target, teamResource: null })] as const),
+    ...(durable.teamResourceSelections ?? []).map(entry => [qualifiedPurposeKey(entry.purpose), 'team'] as const),
+  ]);
+  const teams = new Map((durable.teamResourceSelections ?? []).map(entry => [qualifiedPurposeKey(entry.purpose), entry] as const));
+  // Admitted targets and Team rows belong to the deep-frozen catalog; only these wrappers are new.
+  return Object.freeze({ defaultFor: (key: string) => defaults.get(key), teamFor: (key: string) => teams.get(key) });
+}
+
+type AgentPurposeEntry = Readonly<{ key: string; purpose: QualifiedConnectedAccountPurposeV1; service: AgentConnectedAccountPurposeDeclaration['service'] }>;
+type AdmittedPurposeDeclarations = Readonly<{
+  consumer: QualifiedConnectedAccountPurposeV1['consumer'];
+  entries: readonly AgentPurposeEntry[];
+}>;
+
+/** Acquire an immutable purpose catalog; admission facts never survive a wire/JSON copy. */
+export function admitAgentConnectedAccountPurposeBindings(input: unknown): QualifiedConnectedAccountPurposeBindingsV1 {
+  // Acquisition receives the current catalog shape, not the bounded legacy Settings carrier.
+  // Strict JSON owns the deep frozen copy; the catalog schema owns validation.
+  const value = normalizeStrictJsonValue(QualifiedConnectedAccountPurposeBindingsV1RecordSchema.parse(input)) as QualifiedConnectedAccountPurposeBindingsV1;
+  admittedPurposeBindings.set(value, indexAgentPurposeBindings(value));
+  return value;
+}
+
+/** Acquire Agent purpose declarations at projection publication, preserving their other declared fields. */
+export function admitAgentConnectedAccountPurposeDeclarations<T extends AgentConnectedAccountPurposeDeclaration>(
+  consumer: QualifiedConnectedAccountPurposeV1['consumer'], declarations: readonly T[],
+): readonly T[] {
+  const entries = declarations.map(declaration => {
+    const purpose = QualifiedConnectedAccountPurposeV1Schema.parse({ consumer, purpose: declaration.purpose });
+    const service = ConnectedAccountServiceIdentityV1Schema.parse(declaration.service);
+    return { key: qualifiedPurposeKey(purpose), purpose, service };
+  });
+  const copied = normalizeStrictJsonValue(declarations) as readonly T[];
+  const value = Object.freeze([...copied]);
+  const facts: AdmittedPurposeDeclarations = {
+    consumer: Object.freeze({ ...consumer }), entries: normalizeStrictJsonValue(entries) as readonly AgentPurposeEntry[] };
+  admittedPurposeDeclarations.set(value, Object.freeze(facts));
+  return value;
+}
+
 /**
  * THE Agent default-authentication reader. An admitted purpose catalog is the
  * sole authority, including when empty. Only callers at the genuine predecessor
@@ -373,29 +419,23 @@ export function resolveAgentConnectedAccountPurposeDefaults(input: Readonly<{
   const legacy = input.purposeBindings === undefined ? readLegacyDefaultAuthSettings(input.settings)
     .bindingsByAgentId[input.agentId.trim()]
     ?.bindingsByServiceId : undefined;
-  const durableByPurposeKey = new Map<string, AgentConnectedAccountPurposeDefaultValue | 'team'>([
-    ...durable.bindings.map((binding) => [
-      qualifiedPurposeKey(binding.purpose),
-      { target: binding.target, teamResource: null },
-    ] as const),
-    ...(durable.teamResourceSelections ?? []).map((entry) => [qualifiedPurposeKey(entry.purpose), 'team'] as const),
-  ]);
-  const teamSelectionByPurposeKey = new Map(
-    (durable.teamResourceSelections ?? []).map((entry) => [qualifiedPurposeKey(entry.purpose), entry] as const),
-  );
+  const index = admittedPurposeBindings.get(durable) ?? indexAgentPurposeBindings(durable);
+  const declarationFacts = admittedPurposeDeclarations.get(input.declarations);
+  const entries = declarationFacts
+      && declarationFacts.consumer.pluginId === input.consumer.pluginId && declarationFacts.consumer.localId === input.consumer.localId
+    ? declarationFacts.entries
+    : input.declarations.map(declaration => {
+        const purpose = { consumer: { pluginId: input.consumer.pluginId, localId: input.consumer.localId }, purpose: declaration.purpose };
+        return { key: qualifiedPurposeKey(purpose), purpose,
+          service: { pluginId: declaration.service.pluginId, localId: declaration.service.localId } };
+      });
   const seen = new Set<string>();
   const defaults: AgentConnectedAccountPurposeDefault[] = [];
-  for (const declaration of input.declarations) {
-    const purpose = {
-      consumer: { pluginId: input.consumer.pluginId, localId: input.consumer.localId },
-      purpose: declaration.purpose,
-    };
-    const key = qualifiedPurposeKey(purpose);
+  for (const { key, purpose, service } of entries) {
     if (seen.has(key)) continue;
     seen.add(key);
-    const service = { pluginId: declaration.service.pluginId, localId: declaration.service.localId };
-    const durableValue = durableByPurposeKey.get(key);
-    const teamSelection = teamSelectionByPurposeKey.get(key);
+    const durableValue = index.defaultFor(key);
+    const teamSelection = index.teamFor(key);
     const teamResource = durableValue === 'team' && teamSelection
       ? teamResourceDefaultForService(teamSelection, service)
       : null;

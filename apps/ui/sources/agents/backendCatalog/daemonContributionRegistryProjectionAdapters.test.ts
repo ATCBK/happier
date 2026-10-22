@@ -64,6 +64,9 @@ describe('daemon contribution registry projection adapters', () => {
 
     it('owns immutable adapted rows without freezing or retaining aliases to the raw V2 input', () => {
         const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 19,
+            agentsById: { review: { id: 'review', title: 'Review', identity: { pluginId: 'acme.review', localId: 'review' },
+                connectedAccounts: [{ purpose: 'primary', service: { pluginId: 'acme.review', localId: 'account' }, credentialKinds: ['oauth'] }],
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } } },
             installedPackagesById: { 'acme.review': { id: 'acme.review', displayName: 'Review', enabled: true,
                 source: { kind: 'local', locator: '/plugins/review' } } },
             actionsById: { 'acme.review/refresh': { id: 'refresh', pluginId: 'acme.review', occurrenceId: 'review-current',
@@ -71,6 +74,11 @@ describe('daemon contribution registry projection adapters', () => {
                 inputHints: { title: 'Refresh', submitLabel: 'Refresh', fields: [{ path: 'reason', title: 'Reason', widget: 'textarea', required: true }] } } },
         });
         const published = publishDaemonMergedProjectionInputs({ projection });
+        const purposes = published.mergedProviderProjectionById.review!.connectedAccounts!;
+        expect(Object.isFrozen(purposes)).toBe(true);
+        expect(Object.isFrozen(purposes[0]!.service)).toBe(true);
+        expect(Reflect.set(projection.agentsById.review!.connectedAccounts![0]!, 'purpose', 'changed')).toBe(true);
+        expect(purposes[0]!.purpose).toBe('primary');
         const row = published.pluginProjectionById['acme.review']!;
         const hint = projection.actionsById['acme.review/refresh']!.inputHints?.fields?.[0];
         if (!hint) throw new Error('Expected authored form field');
@@ -83,6 +91,7 @@ describe('daemon contribution registry projection adapters', () => {
         expect(Object.isFrozen(row.actions)).toBe(true);
         expect(Object.isFrozen(row.actions[0]?.localizedPresentation?.inputHints?.fields?.[0])).toBe(true);
         const changed = publishDaemonMergedProjectionInputs({ projection }, published);
+        expect(changed.mergedProviderProjectionById.review!.connectedAccounts![0]!.purpose).toBe('changed');
         expect(changed).not.toBe(published);
         expect(changed.pluginProjectionV2).toBe(projection);
         expect(changed.pluginProjectionById['acme.review']?.installedPackage?.source.locator).toBe('/plugins/changed');
