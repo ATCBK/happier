@@ -1949,15 +1949,24 @@ These are development / Developer Preview authoring contracts. Source tests and 
 
 ### Configured widgets (0.3 development)
 
-Public-profile snapshot templates remain an incomplete extension of this same
+In 0.3 development source, widget Views and reusable definitions may declare
+`publicPresentation: { kind: 'declarative', document }` through this same
 declaration/projection owner. `widgets/widgetPublicSnapshotV1.ts` specializes the
 existing declarative grammar to inert nodes and a symbolic public-profile data
 source. The public projector validates field paths against the closed disclosure
 schemas, applies current consent, then freezes only visible values. Its generated
 schema rejects executable nodes and literal precomputed metrics too. An unknown
 optional stored presentation is skipped; malformed known content is rejected.
-The builtin declaration/body connection, public component export and compiled,
-mounted external-author flow are not established by this schema alone.
+`widgetPublicSnapshotPreparationV1.ts` resolves the selected private area once
+and copies its admitted templates into the reviewed public layout. The external
+authoring fixture contributes a template through an installed View, selects it
+from the projected inventory, compiles the copy and renders its masked output.
+Public-profile destinations use the same copy/setup and widget Actions, with
+snapshot-only presentation inputs; private Usage queries and network overrides
+are refused. Selecting a destination saves a private draft. Public Apply has
+its own reviewed Action admission, and later definition/plugin changes cannot
+change the applied edition. These source contracts do not certify a loaded
+browser journey or released package availability.
 Resource-free HTML and frozen literals do not prove revocable public field
 provenance. Host-private `/presentation` is not an author API; external
 authors use admitted public `/components` exports. The
@@ -2250,6 +2259,16 @@ token `theme.colors.dataAccent` for series without an explicit `color`, deriving
 their ordered ramp against `theme.colors.surface`. Older theme snapshots omit
 that token; the same renderer falls back to `theme.colors.accent`. Use
 `usePluginTheme()` to consume the mounted theme rather than copying host colors.
+
+Private Usage and public profiles also share the original Daily, Rhythm, Period
+summary, Breakdowns, Outcomes, Recap, Footprint and Coverage bodies in
+[`presentation/usage/charts`](../packages/plugin-ui/src/presentation/usage/charts/).
+External authors use their theme adapters from public `/components`. Private app
+adapters retain queries, hooks, drill actions, disclosures and sharing; public
+adapters supply only policy-projected models and host-localized labels. Public
+Daily and Rhythm use ordinal activity levels, Outcomes uses the admitted merged
+count, and Footprint retains its insufficient-basis state with tokens shown only
+when independently shared. The server's cold renderer consumes these same bodies.
 
 For bounded lists, public `/components` and root exports
 `leadHappierListRows(rows, expanded)` and `HappierListOverflowFooter` share the
