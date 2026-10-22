@@ -11,6 +11,7 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
 import type { StoredCredentials } from '@/persistence';
 import { parseSettingsFromContent, sealAccountSettingsV2RawContent } from './updateAccountSettingsV2WithRetry';
 import { resolveAccountSettingsScopeKey } from './accountSettingsScopeKey';
+import { runWithRequesterSessionCurrentnessCheckpoint, runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
 
 // Keep Protocol's completion evidence with the captured credential lifetime, Account and Home.
 // Protocol still recaptures head/destination authority; this never caches admission.
@@ -56,19 +57,29 @@ export async function normalizeCliAccountSettingsHistoryAfterTransfer(input: Rea
   const unavailable = (status: number, message: string): never => {
     throw new AccountSettingsHistoryUnavailableError(status, message);
   };
-  return normalizeAccountSettingsHistoryClientV1({ checkpoint, destinationAuthority: input.destinationAuthority,
+  // Optional history work can outlive the catalog's first-ready publication.
+  // Own its read checkpoint rather than borrowing one that can finish earlier.
+  // Only an actual history mutation leaves it for fresh requester authority.
+  return runWithRequesterSessionCurrentnessCheckpoint(() => normalizeAccountSettingsHistoryClientV1({ checkpoint, destinationAuthority: input.destinationAuthority,
     ...(input.savedSecretRecovery ? { savedSecretRecovery: input.savedSecretRecovery } : {}),
     ...(input.expectedProfileTransferRevision === undefined ? {} : { expectedProfileTransferRevision: input.expectedProfileTransferRevision }), ports: {
     isCurrent,
     unavailable,
     request: async (path, request) => {
-      const options = { headers: headersFor({ method: request.method, path,
-        ...(request.body === undefined ? {} : { body: request.body }) }),
-        validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}) };
-      const response = request.method === 'GET'
-        ? await axios.get<unknown>(`${serverBaseUrl}${path}`, options)
-        : await axios.post<unknown>(`${serverBaseUrl}${path}`, request.body, options);
-      return { status: response.status, data: response.data };
+      const dispatch = async () => {
+        const options = { headers: headersFor({ method: request.method, path,
+          ...(request.body === undefined ? {} : { body: request.body }) }),
+          validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}) };
+        const response = request.method === 'GET'
+          ? await axios.get<unknown>(`${serverBaseUrl}${path}`, options)
+          : await axios.post<unknown>(`${serverBaseUrl}${path}`, request.body, options);
+        return { status: response.status, data: response.data };
+      };
+      if (request.method === 'GET') return dispatch();
+      return runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
+        if (!await isCurrent()) unavailable(0, 'Captured Account Settings scope retired');
+        return dispatch();
+      });
     },
     readCurrentness: () => fetchAccountEncryptionCurrentness({ token: input.credentials.token,
       serverBaseUrl, authorizationHeaders: headersFor({ method: 'GET', path: '/v1/account/encryption/currentness' }),
@@ -87,5 +98,5 @@ export async function normalizeCliAccountSettingsHistoryAfterTransfer(input: Rea
       credentials: input.credentials, emptyEnvelopeKind: content.t })).raw,
     resealSnapshot: (raw, recorded) => sealAccountSettingsV2RawContent({ credentials: input.credentials,
       raw, envelopeKind: recorded.t, randomBytes: size => new Uint8Array(randomBytes(size)) }),
-  } });
+  } }));
 }

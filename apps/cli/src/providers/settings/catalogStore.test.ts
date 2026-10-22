@@ -25,29 +25,129 @@ import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
 
-it.each(['readCatalogForMutation', 'readCatalog'] as const)('shares requester Home verification within %s and rechecks the next read', async method => {
+it.each(['readCatalogForMutation', 'readCatalog', 'prepare', 'refresh'] as const)('shares requester Home verification within %s and rechecks the next read', async method => {
   const f = await createProjectSessionRuntimeFixture();
   await f.bootstrap.ensureAccountSettingsCurrent();
   const get = vi.mocked(axios.get).getMockImplementation()!;
   let profileReads = 0;
+  let profileReadsAtRow = 0;
   vi.mocked(axios.get).mockImplementation(async (url, options) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/profile') profileReads++;
-    if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
-      status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 0,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') {
+      if (profileReadsAtRow === 0) profileReadsAtRow = profileReads;
+      return { status: 200, data: {
+        status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+    }
     if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
     const history = emptyAccountSettingsHistoryCaptureResponse(path);
     if (history) return history;
     return get(url, options);
   });
   const store = createCliProviderConnectionsStoreForOperation({ operationContext: f.bootstrap.savedSecretOperationContext });
+  const expectedScopeKey = f.bootstrap.savedSecretOperationContext.readSnapshot()!.scopeKey!;
   let admissionProfileReads = 0;
-  const read = () => method === 'readCatalogForMutation' ? store.readCatalogForMutation()
-    : store.readCatalog({ onReadyBeforeCleanup: async () => { admissionProfileReads = profileReads; } });
+  const read = () => method === 'prepare' || method === 'refresh'
+    ? (method === 'prepare' ? prepareProviderConnectionsCatalogForCli : refreshProviderConnectionsCatalogForCli)({
+      expectedScopeKey,
+      operationContext: f.bootstrap.savedSecretOperationContext,
+    })
+    : method === 'readCatalogForMutation' ? store.readCatalogForMutation()
+      : store.readCatalog({ onReadyBeforeCleanup: async () => { admissionProfileReads = profileReads; } });
   expect(await read()).toMatchObject({ status: 'ready' });
-  expect(method === 'readCatalog' ? admissionProfileReads : profileReads).toBe(1);
+  // Public preparation and its row reader prove the same requester fact.
+  // Count actual Home profile reads before the row, excluding optional history.
+  expect(profileReadsAtRow).toBe(1);
+  if (method === 'readCatalog' || method === 'readCatalogForMutation') {
+    expect(method === 'readCatalog' ? admissionProfileReads : profileReads).toBe(1);
+    // History owns an independent preparation because it can outlive first-ready
+    // publication. Recheck disclosure afterwards, irrespective of catalog count.
+    expect(profileReads).toBe(method === 'readCatalog' ? 3 : 1);
+  }
   f.retire();
-  await expect(read()).rejects.toMatchObject({ code: 'scope-retired' });
+  if (method === 'prepare' || method === 'refresh') {
+    await expect(read()).resolves.toMatchObject({ status: 'unavailable', reason: 'scope-retired' });
+  } else {
+    await expect(read()).rejects.toMatchObject({ code: 'scope-retired' });
+  }
+});
+
+it.each([false, true])('requires fresh requester authority before history cleanup within a catalog read (revoked=%s)', async revoked => {
+  const f = await createProjectSessionRuntimeFixture();
+  const get = vi.mocked(axios.get).getMockImplementation()!;
+  let writes = 0;
+  vi.mocked(axios.get).mockImplementation(async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 0,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+      status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+    if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [{
+      version: 6, contentKind: 'plain', byteLength: 100, createdAt: '2026-01-01T00:00:00.000Z' }] } };
+    if (path === '/v2/account/settings/history/6') {
+      if (revoked) f.retire();
+      return { status: 200, data: { version: 6, content: { t: 'plain', v: {
+        providerSettingsV1: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, defaultsByAgentTargetKey: {} },
+      } }, createdAt: '2026-01-01T00:00:00.000Z' } };
+    }
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    return history ?? get(url, options);
+  });
+  vi.spyOn(axios, 'post').mockImplementation(async url => {
+    expect(new URL(String(url)).pathname).toBe('/v2/account/settings/history/6/mutate');
+    writes++;
+    return { status: 200, data: { status: 'applied' } };
+  });
+  const store = createCliProviderConnectionsStoreForOperation({ operationContext: f.bootstrap.savedSecretOperationContext });
+  if (revoked) await expect(store.readCatalog()).rejects.toMatchObject({ code: 'scope-retired' });
+  else expect(await store.readCatalog()).toMatchObject({ status: 'ready', cleanup: { status: 'complete' } });
+  expect(writes).toBe(revoked ? 0 : 1);
+});
+
+it('keeps one history read checkpoint after public catalog readiness has returned', async () => {
+  const f = await createProjectSessionRuntimeFixture();
+  const get = vi.mocked(axios.get).getMockImplementation()!;
+  let profileReads = 0;
+  let historyReads = 0;
+  let releaseHistory!: () => void;
+  const heldHistory = new Promise<void>(resolve => { releaseHistory = resolve; });
+  let finishHistory!: () => void;
+  const historyFinished = new Promise<void>(resolve => { finishHistory = resolve; });
+  vi.spyOn(logger, 'infoFile').mockImplementation((message, facts) => {
+    if (message === '[PROVIDER] Catalog phase' && facts !== null && typeof facts === 'object'
+      && 'phase' in facts && facts.phase === 'history' && 'status' in facts && facts.status === 'completed') finishHistory();
+  });
+  vi.mocked(axios.get).mockImplementation(async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/profile') profileReads++;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 0,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+      status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+    if (path === '/v2/account/settings/history') {
+      historyReads++;
+      if (historyReads === 1) await heldHistory;
+      return { status: 200, data: { snapshots: [] } };
+    }
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    return history ?? get(url, options);
+  });
+  try {
+    expect(await prepareProviderConnectionsCatalogForCli({
+      expectedScopeKey: f.bootstrap.savedSecretOperationContext.readSnapshot()!.scopeKey!,
+      operationContext: f.bootstrap.savedSecretOperationContext,
+    })).toMatchObject({ status: 'ready' });
+    const beforeRemainingHistory = profileReads;
+    releaseHistory();
+    await historyFinished;
+    expect(historyReads).toBe(2);
+    expect(profileReads).toBe(beforeRemainingHistory);
+  } finally { releaseHistory(); }
 });
 
 it.each([false, true])('rechecks requester authority before Provider source activation inside a read checkpoint (revoked=%s)', async revoked => {

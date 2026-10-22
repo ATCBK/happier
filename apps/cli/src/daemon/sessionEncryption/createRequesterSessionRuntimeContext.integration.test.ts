@@ -195,7 +195,7 @@ let openedRunPluginRuntime = false;
 beforeEach(async () => { channel = await createRequesterCurrentnessSocketHarness(); });
 afterEach(async () => { await channel.close(); });
 afterAll(async () => { if (openedRunPluginRuntime) await runPluginRuntimeController.shutdown(); });
-it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'startup-settings-cancel', 'startup-settings-forbidden', 'startup-settings-unbound', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'currentness-phase', 'resolution-currentness', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending', 'follow-idle-source'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
+it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'startup-settings-cancel', 'startup-settings-forbidden', 'startup-settings-unbound', 'untracked-lifetime', 'profile-unavailable', 'action-policy', 'action-home-recovery', 'run-home-recovery', 'run-purpose-home-recovery', 'run-binding-home-recovery', 'authorization-observations', 'warm-account', 'currentness-phase', 'resolution-currentness', 'spawn-currentness', 'background-home-failure', 'startup-home-failure', 'refresh-observations', 'request-auth-observations', 'follow-wake', 'follow-rules', 'follow-source', 'follow-receiver', 'follow-pending', 'follow-idle-source'] as const)('keeps requester %s isolated from active Alice', async (surface) => {
   const actionPolicySurface = surface === 'action-policy' || surface === 'action-home-recovery' || surface === 'authorization-observations';
   const runSurface = surface === 'run-home-recovery' || surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
   const runPurposeSurface = surface === 'run-purpose-home-recovery' || surface === 'run-binding-home-recovery';
@@ -435,7 +435,7 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
         return { machineId: 'machine', serverIdentityId: 'bob-home' };
       } } } : {}) });
     const admitted = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: { token: requesterToken } },
-      ...(actionPolicySurface || runSurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'currentness-phase' || surface === 'resolution-currentness' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' || surface === 'follow-idle-source' ? { existingSessionId: requesterSessionId } : {}),
+      ...(actionPolicySurface || runSurface || surface === 'refresh-observations' || surface === 'request-auth-observations' || surface === 'currentness-phase' || surface === 'resolution-currentness' || surface === 'spawn-currentness' || surface === 'follow-wake' || surface === 'follow-source' || surface === 'follow-receiver' || surface === 'follow-pending' || surface === 'follow-idle-source' ? { existingSessionId: requesterSessionId } : {}),
       boundary: { serverId: 'bob-home', serverHttpBaseUrl: 'https://bob-home.test', happyHomeDir: directory },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: host.installation?.installationId ?? 'installation', role: 'use', encryptionMode: 'plain' },
@@ -465,6 +465,44 @@ it.each(['refresh', 'settings-refresh-failure', 'startup-settings-recovery', 'st
     }
     runtime = await runtimeConstruction;
     if (!runtime) throw new Error('Missing real requester runtime');
+    if (surface === 'spawn-currentness') {
+      const requester = runtime;
+      const spawn = () => executeSpawnSessionRequest({ options: {
+        // Stop at real request validation, before any workspace or process effect.
+        directory: '', requesterSessionBootstrap: admitted.admitted,
+      }, requesterSessionRuntimeContext: requester, credentials: requester.bootstrap.credentials, api: requester.api,
+        connectedServicesMaterializationBaseDir: directory,
+        connectedServiceRefreshCoordinator: null, connectedServiceQuotasCoordinator: null,
+        connectedServiceRuntimeRegistry: registry, pidToTrackedSession: trackedSessions,
+        pidToAwaiter: new Map(), pidToSpawnResultResolver: new Map(), pidToSpawnWebhookTimeout: new Map(),
+        spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
+        resolveCanonicalTrackedSessionId: () => { throw new Error('Unexpected runner'); },
+        onChildExited: () => { throw new Error('Unexpected runner'); },
+      });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        // Malformed Settings withdraws publication. Its next reader recovers
+        // through the real Settings owner before continuing spawn preparation.
+        await channel.pushInvalidSettings('bob');
+        settingsVersion++;
+        const before = sessionReads;
+        expect(await spawn()).toMatchObject({ type: 'error', errorCode: 'INVALID_REQUEST' });
+        // One entry observation, one catalog preparation and one fresh
+        // publication decision; Settings recovery shares entry's observation.
+        expect(sessionReads - before).toBe(3);
+        expect(requester.readAccountSettingsSnapshot().settingsVersion).toBe(settingsVersion);
+      }
+      await channel.pushInvalidSettings('bob');
+      settingsVersion++;
+      holdSettings = true;
+      const pending = spawn();
+      await vi.waitFor(() => expect(settingsGate.release).toBeDefined());
+      current = false;
+      holdSettings = false;
+      releaseSettingsRead();
+      expect(await pending).toMatchObject({ type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE' });
+      expect(requester.bootstrap.savedSecretOperationContext.readSnapshot()).toBeNull();
+      return;
+    }
     if (surface === 'resolution-currentness') {
       trackedSessions.set(process.pid, { pid: process.pid, happySessionId: requesterSessionId, startedBy: 'daemon',
         requesterSessionRuntimeContext: runtime, requesterWorkAttributionV1: runtime.bootstrap.attribution });

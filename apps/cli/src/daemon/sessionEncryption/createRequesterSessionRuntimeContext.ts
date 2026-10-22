@@ -76,7 +76,9 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   // Background coordinators also supply cancellation signals. Surface their
   // failed observation to the owning loop's backoff; only explicit preparation
   // entrypoints may retain an accepted Action while Home recovers.
-  const isCurrent = async (signal?: AbortSignal) => {
+  // Settings recovery and requester qualification form one read-only guard.
+  // Reuse its proof here; later publication and effect guards still start fresh.
+  const isCurrent = async (signal?: AbortSignal) => runWithRequesterSessionCurrentnessCheckpoint(async () => {
     if (disposed || signal?.aborted) return false;
     const readerSignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
     try {
@@ -84,7 +86,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
         && await waitForObservation(savedSecrets.isCurrent(), readerSignal)
         && await bootstrap.ensureAccountSettingsCurrent(readerSignal) && !disposed;
     } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
-  };
+  }, { readOnly: true });
   if (!await isCurrent(input.signal)) return null;
   const sessionFollowRuleCache = createAccountSessionFollowRuleCache({ accountId: bootstrap.attribution.accountId,
     credentials: bootstrap.credentials, serverHttpBaseUrl: bootstrap.serverHttpBaseUrl,

@@ -197,9 +197,9 @@ function createCapturedStore(input: Readonly<{
             : response.error === 'version-mismatch' ? { status: 'conflict' as const, currentSettingsVersion: response.currentVersion }
               : { status: 'rejected' as const };
         }),
-        normalizeHistory: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => normalizeCliAccountSettingsHistoryAfterTransfer({ credentials: input.credentials,
+        normalizeHistory: value => normalizeCliAccountSettingsHistoryAfterTransfer({ credentials: input.credentials,
           serverBaseUrl: base, signal: input.signal, destinationAuthority: value,
-          isCurrent: async () => { try { await verifyCurrent(); return true; } catch { return false; } } })),
+          isCurrent: async () => { try { await verifyCurrent(); return true; } catch { return false; } } }),
       } });
     const admitted = await readStorageContext();
     await verifyCurrent();

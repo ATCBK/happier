@@ -9,6 +9,7 @@ import { beginActiveProviderConnectionsCatalogRefresh, commitActiveProviderConne
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { sameProviderConnectionsCatalogAuthority } from '@/providers/lifecycle/currentAccountSettingsSnapshot';
 import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation, observeProviderCatalogPhase } from './catalogStore';
+import { runWithRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
 export { readActiveProviderConnectionsCatalog } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const pending = new Map<string, {
@@ -32,41 +33,45 @@ export function refreshProviderConnectionsCatalogForCli(input: CliCatalogInput):
   return readProviderConnectionsCatalogForCli(input, true);
 }
 
-async function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reobserve: boolean): Promise<ProviderConnectionsCatalogSnapshotV1> {
-  const snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
-  const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
-  if (snapshot?.scopeKey !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
-  const operationContext = input.operationContext;
-  if (operationContext && !await observeProviderCatalogPhase({ catalogReadId: randomUUID(), phase: 'admission_currentness' },
-    () => operationContext.isCurrent())) return { status: 'unavailable', reason: 'scope-retired' };
-  if (!reobserve && snapshot.providerConnectionsCatalog?.status === 'ready') return snapshot.providerConnectionsCatalog;
-  const credentials = input.operationContext?.credentials ?? input.credentials ?? await readStoredCredentials();
-  if (!credentials || resolveAccountSettingsScopeKey(credentials) !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
-  if (!input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
-  const refreshInput = { credentials, operationContext: input.operationContext, signal: input.signal };
-  const readSnapshot = () => input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
-  let resolveReadable!: (catalog: ProviderConnectionsCatalogSnapshotV1) => void;
-  const readable = new Promise<ProviderConnectionsCatalogSnapshotV1>(resolve => { resolveReadable = resolve; });
-  const observeReadable = () => {
-    const catalog = readSnapshot()?.providerConnectionsCatalog;
-    if (catalog?.status === 'ready') resolveReadable(catalog);
-  };
-  // Readiness belongs to the refresh, including an equal-row publication
-  // which intentionally produces no broad Account notification.
-  const completion = refresh(refreshInput, reobserve ? 'reobserve' : 'read', observeReadable);
-  // Source preference handoff still precedes this publication; optional
-  // history maintenance remains with the loader without holding admission.
-  const result = await Promise.race([completion, readable]);
-  if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
-  if (input.operationContext && !await input.operationContext.isCurrent()) return { status: 'unavailable', reason: 'scope-retired' };
-  const admitted = readSnapshot();
-  if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
-  if (admitted?.scopeKey !== input.expectedScopeKey
-    || !input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
-    return { status: 'unavailable', reason: 'scope-retired' };
-  }
-  if (result.status !== 'ready') return result;
-  return admitted.providerConnectionsCatalog ?? { status: 'unavailable', reason: 'unreachable' };
+function readProviderConnectionsCatalogForCli(input: CliCatalogInput, reobserve: boolean): Promise<ProviderConnectionsCatalogSnapshotV1> {
+  // Admission, row loading and local publication are one read preparation.
+  // The store exits this checkpoint before source mutations or history cleanup.
+  return runWithRequesterSessionCurrentnessCheckpoint(async () => {
+    const snapshot = input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
+    const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+    if (snapshot?.scopeKey !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
+    const operationContext = input.operationContext;
+    if (operationContext && !await observeProviderCatalogPhase({ catalogReadId: randomUUID(), phase: 'admission_currentness' },
+      () => operationContext.isCurrent())) return { status: 'unavailable', reason: 'scope-retired' };
+    if (!reobserve && snapshot.providerConnectionsCatalog?.status === 'ready') return snapshot.providerConnectionsCatalog;
+    const credentials = input.operationContext?.credentials ?? input.credentials ?? await readStoredCredentials();
+    if (!credentials || resolveAccountSettingsScopeKey(credentials) !== input.expectedScopeKey) return { status: 'unavailable', reason: 'scope-retired' };
+    if (!input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) return { status: 'unavailable', reason: 'scope-retired' };
+    const refreshInput = { credentials, operationContext: input.operationContext, signal: input.signal };
+    const readSnapshot = () => input.operationContext ? input.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
+    let resolveReadable!: (catalog: ProviderConnectionsCatalogSnapshotV1) => void;
+    const readable = new Promise<ProviderConnectionsCatalogSnapshotV1>(resolve => { resolveReadable = resolve; });
+    const observeReadable = () => {
+      const catalog = readSnapshot()?.providerConnectionsCatalog;
+      if (catalog?.status === 'ready') resolveReadable(catalog);
+    };
+    // Readiness belongs to the refresh, including an equal-row publication
+    // which intentionally produces no broad Account notification.
+    const completion = refresh(refreshInput, reobserve ? 'reobserve' : 'read', observeReadable);
+    // Source preference handoff still precedes this publication; optional
+    // history maintenance remains with the loader without holding admission.
+    const result = await Promise.race([completion, readable]);
+    if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+    if (input.operationContext && !await input.operationContext.isCurrent()) return { status: 'unavailable', reason: 'scope-retired' };
+    const admitted = readSnapshot();
+    if (input.signal?.aborted) return { status: 'unavailable', reason: 'cancelled' };
+    if (admitted?.scopeKey !== input.expectedScopeKey
+      || !input.operationContext && getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
+      return { status: 'unavailable', reason: 'scope-retired' };
+    }
+    if (result.status !== 'ready') return result;
+    return admitted.providerConnectionsCatalog ?? { status: 'unavailable', reason: 'unreachable' };
+  }, { readOnly: true });
 }
 
 /** Demand-load the sole catalog in the caller's existing Account custody. */

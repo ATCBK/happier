@@ -309,9 +309,9 @@ describe('createQualifiedConnectedAccountEstablishedRuntimeOwner', () => {
     }
     // A fresh completion verification refuses authority revoked during the callback.
     expect(accountCurrentnessChecks).toBe(2);
-    // Initial snapshot, context admission, callback entry/exit and detached-result
-    // publication; plugin context construction has one additional policy fence.
-    expect(credentialReads).toBe(kind === 'host' ? 5 : 6);
+    // Initial snapshot, context admission, callback entry and one detached-result
+    // settlement; plugin construction retains its additional policy fence.
+    expect(credentialReads).toBe(kind === 'host' ? 4 : 5);
     // OAuth resource validation uses this public read before each request. It
     // is one preparation, just like materialization: nested field reads must
     // not each repeat the same Home/Machine/Session admission.

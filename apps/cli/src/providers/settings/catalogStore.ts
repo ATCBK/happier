@@ -199,14 +199,14 @@ function createCapturedStore(input: Readonly<{
         }
         return source;
       }, initializeCatalog: mutateCatalog, replaceSource: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => replaceSource(value)),
-      normalizeHistory: value => runWithoutRequesterSessionCurrentnessCheckpoint(() => observePhase('history', () => normalizeCliAccountSettingsHistoryAfterTransfer({ credentials: input.credentials, serverBaseUrl: base,
+      normalizeHistory: value => observePhase('history', () => normalizeCliAccountSettingsHistoryAfterTransfer({ credentials: input.credentials, serverBaseUrl: base,
         signal: input.signal, isCurrent: async () => { try { await verifyCurrent(); return true; } catch { return false; } },
-        destinationAuthority: { activeTransferredRoots: value.activeTransferredRoots } }))),
+        destinationAuthority: { activeTransferredRoots: value.activeTransferredRoots } })),
     } });
     const admitted = await readStorageContext();
     await verifyCurrent();
     return admitted.mode === context.mode ? catalog : { status: 'unavailable' as const, reason: 'account-mode-mismatch' };
-  });
+  }, { readOnly: true });
   return { assertCurrent: input.assertCurrent, verifyCurrent, readRow, readStorageContext, readSourceSnapshot, readCatalog,
     readCatalogForMutation, mutateCatalog };
 }
