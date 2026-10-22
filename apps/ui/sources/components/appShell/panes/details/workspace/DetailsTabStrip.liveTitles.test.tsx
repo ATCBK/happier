@@ -6,6 +6,8 @@ import type { DiscussionOpenedSummaryV1 } from '@happier-dev/protocol';
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storage';
 import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { getDiscussionRepository, retireDiscussionRepository, clearDiscussionRepositoryRegistryForTests } from '@/sync/ops/discussions/discussionRepositoryRegistry';
@@ -16,6 +18,10 @@ import { DetailsTabStrip } from './DetailsTabStrip';
 import type { DetailsTabState } from './detailsWorkspaceTypes';
 
 installPanelCommonModuleMocks();
+vi.mock('socket.io-client', async (importOriginal) => {
+    const { createSocketIoClientBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    return createSocketIoClientBoundary(importOriginal);
+});
 vi.mock('@expo/vector-icons', async () => {
     const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
     return createExpoVectorIconsMock();
@@ -27,6 +33,11 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
         getCredentialsForServerUrl: async () => ({ token: `header.${Buffer.from(JSON.stringify({ sub: 'titles-account' })).toString('base64')}.signature`, secret: 'test-secret' }),
     } });
 });
+
+// The app entry now registers the real Sync runtime before any Session surface
+// can demand content. Reproduce that boot with only HTTP/Socket boundaries.
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+await loadSyncSingletonForTests();
 
 afterEach(() => {
     standardCleanup();

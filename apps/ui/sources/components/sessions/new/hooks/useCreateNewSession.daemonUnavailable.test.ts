@@ -13,7 +13,8 @@ import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent
 import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { PENDING_INPUT_PROTOCOL_VERSION_V4 } from '@happier-dev/protocol/clientCompatibility/primitives';
@@ -80,6 +81,23 @@ function readDraftComposerText(snapshot: import('@/sync/ops/sessionDrafts/sessio
   if (!snapshot) return undefined;
   if (!('composer' in snapshot.document)) throw new Error('Expected a composer draft');
   return snapshot.document.composer.text.value;
+}
+
+async function expectSubmittedDraftRetired(scope: import('@/sync/domains/scope/serverAccountScope').ServerAccountScope, draftId: string) {
+  const { getSessionDraftSnapshot, listNewSessionDraftProjections } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+  expect(listNewSessionDraftProjections(scope).map(draft => draft.draftId)).not.toContain(draftId);
+  const retained = getSessionDraftSnapshot(scope, { kind: 'newSession', draftId });
+  // Local supplements may retain an unmaterialized scratch document after clearing.
+  if (!retained) return;
+  expect(retained.materialized).toBe(false);
+  if (retained.document.target.kind !== 'newSession') throw new Error('Expected New Session draft');
+  expect(retained.document.target.authoring).toEqual({});
+  expect(readDraftComposerText(retained)).toBe('');
+  if (!('composer' in retained.document)) throw new Error('Expected draft composer');
+  expect(retained.document.composer.mentions.value).toEqual([]);
+  expect(retained.document.composer.attachments.value).toEqual([]);
+  expect(retained.localSupplement.launchUserAttemptId).toBeUndefined();
+  expect(retained.localSupplement.launchCurrentnessCapture).toBeUndefined();
 }
 
 async function createHarness() {
@@ -160,7 +178,7 @@ async function createHarness() {
   let authProjection: Awaited<ReturnType<typeof renderScreen>> | null = null;
   const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
   const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-  const fetchBoundary = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  const fetchBoundary = createSessionReadBatchFetchBoundary(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const memory = await authoringMemoryHttp.handle(input, init);
     if (memory) return memory;
     const url = String(input instanceof Request ? input.url : input);
@@ -203,6 +221,9 @@ async function createHarness() {
     if (url.endsWith('/v1/account/encryption/currentness')) return Response.json(todoKv.currentness);
     if (url.endsWith('/v1/account/encryption')) return Response.json({ mode: todoKv.currentness.mode, updatedAt: 1 });
     if (url.endsWith('/v2/account/settings')) return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+    if (new URL(url).pathname === '/v1/machines/read-batch' && init?.method === 'POST') {
+      return createMachineReadBatchResponseFixture(init.body, id => createPlainMachineRowFixture({ id, accountId: 'account-a' }));
+    }
     const machineId = new URL(url).pathname.match(/^\/v1\/machines\/([^/]+)(?:\/access)?$/)?.[1];
     if (machineId && !url.endsWith('/access')) return Response.json({ machine: createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }) });
     // Session creation reads current Machine custody through the real HTTP owner.
@@ -228,7 +249,7 @@ async function createHarness() {
     }
     if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) return Response.json({ ok: true });
     return Response.json({ error: 'not_found' }, { status: 404 });
-  };
+  });
   const token = `header.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`;
   vi.spyOn(sync, 'sendMessage');
   await import('@/sync/ops/actions/defaultActionExecutor');
@@ -629,7 +650,8 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     vi.restoreAllMocks();
   });
   beforeEach(() => {
-    vi.useFakeTimers();
+    // Launches use real asynchronous batch dispatch; only the asserted clock is synthetic.
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-02-05T00:00:00.000Z'));
   });
 
@@ -656,7 +678,14 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       rpcMethods: launch.observedRpcMethods, uploadedBytes: launch.uploadedBytes.length,
       submittedMessages: launch.submittedMessages.length })).toHaveBeenCalledWith({ status: 'accepted', sessionId: 'approved-note-session' }));
     expect(launch.uploadedBytes).toEqual([...new TextEncoder().encode('hello')]);
-    expect(launch.submittedMessages).toEqual([expect.objectContaining({ content: expect.objectContaining({ t: 'plain', v: expect.objectContaining({ content: expect.objectContaining({ text: expect.stringContaining('.happier/uploads/note.txt') }) }) }) })]);
+    expect(launch.submittedMessages).toEqual([expect.objectContaining({ content: expect.objectContaining({
+      t: 'plain', v: expect.objectContaining({
+        content: { type: 'text', text: 'Inspect the attached note' },
+        meta: expect.objectContaining({ happier: { kind: 'attachments.v1', payload: {
+          attachments: [expect.objectContaining({ id: 'note-file', path: '.happier/uploads/note.txt', name: 'note.txt', sizeBytes: 5 })],
+        } } }),
+      }),
+    }) })]);
     await vi.waitFor(() => expect(readDraftComposerText(launch.draftSnapshot()) ?? '').toBe(''));
     expect(launch.fileDrafts()).toEqual([]);
     // The approver already created the Session elsewhere; this origin never spawns it again.
@@ -723,8 +752,9 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     });
     const hook = await renderHook(() => useCreateNewSession(params));
     const settled = createDeferred<void>();
+    let createPromise: Promise<void> | void | null = null;
     await act(async () => {
-      hook.getCurrent().handleCreateSession({ initialMessage: 'skip', onAfterCreatedSettled: () => settled.resolve(undefined) });
+      createPromise = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', onAfterCreatedSettled: () => settled.resolve(undefined) });
       await enteredSpawn.promise;
     });
     expect(readNewSessionDraftFromRepository({ scope, draftId })).toMatchObject({
@@ -734,7 +764,9 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     // must be cleared with the accepted launch, not misclassified as successors.
     writeNewSessionDraft({ scope, draftId, patch: { text: 'Follow up after launch' }, materializationIntent: 'userEdit' });
     creation.resolve(undefined);
-    await act(async () => { await settled.promise; });
+    // Acceptance is reported before the launch owner finishes revision-safe clearing.
+    await act(async () => { await createPromise; });
+    await settled.promise;
     const snapshot = getSessionDraftSnapshot(scope, { kind: 'newSession', draftId });
     expect(readDraftComposerText(snapshot)).toBe('Follow up after launch');
     if (snapshot?.document.target.kind !== 'newSession') throw new Error('Expected successor draft');
@@ -775,7 +807,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     expect(todoKv.writes).toEqual([]);
     expect(storage.getState().todoState!.todos['task-1']).not.toHaveProperty('linkedSessions');
     expect(afterCreated).toHaveBeenCalledTimes(1);
-    expect(readNewSessionDraftFromRepository({ scope, draftId })).toBeNull();
+    await expectSubmittedDraftRetired(scope, draftId);
     await hook.unmount();
   });
 
@@ -850,7 +882,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     expect(settlements).toHaveLength(1);
     expect(sessionSpawnNewActionBoundarySpy).not.toHaveBeenCalled();
     // No successor edits exist, so acceptance retires the submitted authoring draft.
-    expect(readNewSessionDraftFromRepository({ scope, draftId })).toBeNull();
+    await expectSubmittedDraftRetired(scope, draftId);
     await hook.unmount();
   });
 
@@ -916,8 +948,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     // later retry of the same attempt must replay byte-identical input.
     vi.setSystemTime(new Date('2026-02-05T00:05:00.000Z'));
     await act(async () => { retry(); });
-    await flushHookEffects({ cycles: 8, turns: 4 });
-    expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(2));
     expect(sessionSpawnNewActionBoundarySpy.mock.calls[1]?.[0])
       .toEqual(sessionSpawnNewActionBoundarySpy.mock.calls[0]?.[0]);
     await hook.unmount();
@@ -1526,7 +1557,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         await flushHookEffects({ turns: 2 });
       });
 
-      expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1));
       const publishedAttempts = onLaunchAttemptChange.mock.calls
         .map((call) => call[0])
         .filter(Boolean);
@@ -1609,6 +1640,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
         terminal.resolve({ kind: 'found', operation: { ...operation, state: 'succeeded', revision: 2, settledAt: 3, result } });
       });
       await vi.waitFor(() => expect(settlement).toHaveBeenCalledWith({ status: 'accepted', sessionId: result.sessionId }));
+      await createPromise;
       expect(router.replace).toHaveBeenCalledWith(expect.stringContaining('/session/requester-start-session'), expect.anything());
       expect(context.modalAlertSpy).not.toHaveBeenCalled();
       expect(context.sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
@@ -1619,12 +1651,13 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     }
   });
 
-  it.each(['succeeded', 'failed', 'cancelled', 'retired'] as const)('observes an accepted manual start through canonical %s settlement without warning or replay', async terminalState => {
+  it.each(['succeeded', 'failed', 'cancelled', 'retired'] as const)('joins a daemon-qualified manual start through canonical %s settlement without warning or replay', async terminalState => {
     const context = await setupTaskHarness();
     const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
     const { writeNewSessionDraft, getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
     const draftId = 'accepted-start-draft';
     const userAttemptId = 'accepted-start-attempt';
+    const daemonServerId = 'stack_agent-qa-machine-resources__id_default';
     const prompt = 'Keep the accepted first input';
     writeNewSessionDraft({ scope: context.scope, draftId, patch: { text: prompt }, materializationIntent: 'userEdit' });
     const operation = {
@@ -1645,7 +1678,8 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     };
     context.sessionSpawnNewActionBoundarySpy.mockImplementationOnce(async () => {
       actionOperationStore.mergeSnapshots({ serverId: context.scope.serverId, snapshots: [operation] });
-      return { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' };
+      return { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted',
+        operation: { serverId: daemonServerId, machineId: 'm1', operationId: operation.operationId } };
     });
     const router = { push: vi.fn(), replace: vi.fn() };
     const settlement = vi.fn();
@@ -1660,8 +1694,11 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       await flushHookEffects({ cycles: 8, turns: 4 });
     });
     await vi.waitFor(() => expect(context.sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(operationDetailReads).toBe(1));
     expect(context.modalAlertSpy).not.toHaveBeenCalled();
     expect(settlement).not.toHaveBeenCalled();
+    expect(hook.getCurrent().isCreating).toBe(true);
+    expect(router.replace).not.toHaveBeenCalled();
     expect(attempts.mock.calls.at(-1)?.[0]).toMatchObject({ status: 'spawning' });
     expect(readDraftComposerText(getSessionDraftSnapshot(context.scope, { kind: 'newSession', draftId }))).toBe(prompt);
     if (terminalState === 'retired') {
@@ -1672,7 +1709,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       expect(readDraftComposerText(getSessionDraftSnapshot(context.scope, { kind: 'newSession', draftId }))).toBe(prompt);
       return;
     }
-    const result = { ...spawnSuccess('accepted-start-session'), executionTarget: { serverId: context.scope.serverId, machineId: 'm1' } };
+    const result = { ...spawnSuccess('accepted-start-session'), executionTarget: { serverId: daemonServerId, machineId: 'm1' } };
     const observedDetailHttp: string[] = [];
     context.additionalBoundary.http = async (url, init) => {
       observedDetailHttp.push(`${init?.method ?? 'GET'} ${url.pathname}`);
@@ -2231,19 +2268,14 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     await act(async () => {
       createPromise = hook.getCurrent().handleCreateSession({ afterCreated });
     });
-    await flushHookEffects({ runOnlyPendingTimers: true });
-
-    let retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
+    await vi.waitFor(() => expect(modalAlertSpy.mock.calls.some((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    })).toBe(true));
+    const retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
       const buttons = call[2];
       return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
     });
-    for (let attempts = 0; attempts < 5 && !retryAlertCall; attempts += 1) {
-      await flushHookEffects({ runOnlyPendingTimers: true });
-      retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
-        const buttons = call[2];
-        return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
-      });
-    }
     expect(retryAlertCall).toBeTruthy();
     expect(modalAlertSpy.mock.calls.some((call) => call[0] === 'common.error')).toBe(false);
     const buttons = (retryAlertCall?.[2] ?? []) as any[];
@@ -2330,6 +2362,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       await flushHookEffects({ cycles: 1, turns: 1 });
     });
 
+    await vi.waitFor(() => expect(afterCreated).toHaveBeenCalledTimes(1));
     expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
     expect(afterCreated).toHaveBeenCalledTimes(1);
 
@@ -2401,6 +2434,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       createPromise = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
       await flushHookEffects({ cycles: 1, turns: 1 });
     });
+    await vi.waitFor(() => expect(afterCreated).toHaveBeenCalledTimes(1));
     await hook.rerender({ targetServerId: 'server-b' });
 
     resolveAfterCreated();
@@ -2478,6 +2512,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       createPromise = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
       await flushHookEffects({ cycles: 1, turns: 1 });
     });
+    await vi.waitFor(() => expect(afterCreated).toHaveBeenCalledTimes(1));
     await hook.rerender({ selectedPath: '/private/tmp/happier-ruqa-late-opencode-hqzCRl' });
 
     resolveAfterCreated();
@@ -2586,6 +2621,7 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       createPromise = hook.getCurrent().handleCreateSession({ initialMessage: 'skip', afterCreated });
       await flushHookEffects({ cycles: 1, turns: 1 });
     });
+    await vi.waitFor(() => expect(afterCreated).toHaveBeenCalledTimes(1));
     await hook.rerender({ useProfiles: true });
 
     resolveAfterCreated();
@@ -2748,7 +2784,10 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     await act(async () => {
       createPromise = hook.getCurrent().handleCreateSession({ afterCreated });
     });
-    await flushHookEffects({ runOnlyPendingTimers: true });
+    await vi.waitFor(() => expect(modalAlertSpy.mock.calls.some((call) => {
+      const buttons = call[2];
+      return Array.isArray(buttons) && buttons.some((button) => button?.text === 'common.retry');
+    })).toBe(true));
 
     const retryAlertCall = modalAlertSpy.mock.calls.find((call) => {
       const buttons = call[2];
@@ -2762,13 +2801,14 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
       retry.onPress();
     });
     await createPromise;
+    await vi.waitFor(() => expect(afterCreated).toHaveBeenCalledTimes(2));
 
     expect(sessionSpawnNewActionBoundarySpy).toHaveBeenCalledTimes(1);
     expect(afterCreated).toHaveBeenCalledTimes(2);
-    expect(modalAlertSpy.mock.calls).toContainEqual([
+    await vi.waitFor(() => expect(modalAlertSpy.mock.calls).toContainEqual([
       'common.error',
       'Attachment validation failed',
-    ]);
+    ]));
 
     await hook.unmount();
   });
