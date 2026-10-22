@@ -1086,6 +1086,8 @@ describe('managed Machine detail', () => {
             expect(Boolean(screen.findByTestId('managed-machine.stop'))).toBe(!finite);
             expect(keep.defaultPolicy).toMatchObject({ retention: finite ? { kind: 'unused', effect: 'delete' }
                 : { kind: 'until-delete' }, wakeOnAcceptedMessage: !finite });
+            // A machine that kept its parent's rule is not "changed for" it: the parent is compared as a policy, not its resolution record.
+            expect(screen.tree.findByType(ManagedMachinePolicySection).props.description).toBe(t('managedRetention.policyDescription'));
             if (screen.tree.findByType(ManagedMachinePolicySection).props.compactSummary)
                 await act(async () => screen.tree.findByType(ManagedMachinePolicySection).props.compactSummary.onPress());
             if (finite) {
@@ -1204,9 +1206,9 @@ describe('managed Machine detail', () => {
         const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
             executeAction={createDefaultActionExecutor().execute} />);
         await flushHookEffects({ cycles: 25 });
-        // A current read has no header Retry; a resource confirmed gone has no Keep or When unused left to set (UIR5c).
+        // A current read has no header Retry; a canceled creation, like a resource confirmed gone, has no Keep or When unused left to set (UIR5c).
         expect(screen.findByTestId('managed-machine.refresh')).toBeNull();
-        expect(screen.tree.findAllByType(ManagedMachinePolicySection)).toHaveLength(allocation === 'confirmed-absent' ? 0 : 1);
+        expect(screen.tree.findAllByType(ManagedMachinePolicySection)).toHaveLength(0);
         const consoleAction = screen.findByTestId('managed-machine.progress:openProvider');
         if (machine.recovery) expect(screen.getTextContent()).toContain(machine.recovery.reference);
         if (consoleUrl) {

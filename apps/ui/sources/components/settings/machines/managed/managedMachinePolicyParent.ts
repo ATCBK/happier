@@ -133,7 +133,9 @@ export async function readManagedMachinePolicyParent(input: ManagedMachineNative
             categoryPreferences: settings.machineRetentionDefaultsV1,
             ...(currentPreset ? { presetOverride: { retention: currentPreset.retention,
                 wakeOnAcceptedMessage: currentPreset.wakeOnAcceptedMessage } } : {}) });
-        return { kind: 'ready', parent: { policy, billing: descriptor.billing, capabilities,
+        // The parent is the policy itself; its resolution record (category, sources) would never equal a machine's rule.
+        return { kind: 'ready', parent: { policy: { retention: policy.retention, wakeOnAcceptedMessage: policy.wakeOnAcceptedMessage },
+            billing: descriptor.billing, capabilities,
             providerTitle: typeof descriptor.title === 'string' ? descriptor.title : descriptor.title.fallback } };
     } finally { account.dispose(); }
 }
