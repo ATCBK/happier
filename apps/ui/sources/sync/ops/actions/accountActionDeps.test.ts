@@ -39,6 +39,17 @@ describe('Account Action carrier selection', () => {
         expect(resolveUiAccountActionFallbackMachineId(scope, { target: { kind: 'machine', machineId: 'missing' } })).toBeNull();
     });
 
+    it('selects a captured non-active Home carrier from that Home\'s own Machines', async () => {
+        const retained = await adoptHomeProfile({ source: 'manual', descriptor: { v: 1,
+            homeServerIdentityId: 'srv_retained_carrier', canonicalServerUrl: 'https://retained-carrier.test', revision: 1,
+            endpoints: [{ kind: 'https', url: 'https://retained-carrier.test' }] } });
+        const retainedMachine = createMachineFixture({ id: 'retained', activeAt: Date.now() });
+        storage.setState(state => ({ machineListByServerId: { ...state.machineListByServerId, [retained.id]: [retainedMachine] },
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [retained.id]: 'idle' } }));
+        expect(resolveUiAccountActionFallbackMachineId({ serverId: retained.id, accountId: 'carrier-owner' })).toBe('retained');
+        expect(resolveUiAccountActionFallbackMachineId(scope)).toBe('general');
+    });
+
     it('allows Registry manual retry, without leaking a carrier across Homes', () => {
         expect(resolveUiAccountActionFallbackMachineId(scope, { candidateMachineIds: ['offline'], allowUnreachableFallback: true })).toBe('offline');
         expect(resolveUiAccountActionFallbackMachineId({ ...scope, serverId: 'other-home' }, {

@@ -18,6 +18,8 @@ import { socketRpcCodec } from '@happier-dev/sync-client';
 import { MachineEncryption } from '@/sync/encryption/machineEncryption';
 import { SecretBoxEncryption } from '@/sync/encryption/encryptor';
 import { EncryptionCache } from '@/sync/encryption/encryptionCache';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineRpcReadAdmission } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcReadAdmission';
 
 type SocketEventHandler = (...args: unknown[]) => void;
 type SocketStub = ReturnType<typeof createSocketIoBoundaryStub>['socket'];
@@ -71,10 +73,11 @@ function emittedMethods(socket: SocketStub, event: string): string[] {
 async function bootApiSocket(params: Readonly<{
     socket: SocketStub;
     getMachineEncryption: (machineId: string) => unknown;
+    token?: string;
 }>) {
     rpcBoundary.socket = params.socket;
     apiSocket.initialize(
-        { endpoint: 'https://api.example.test', token: 'token-a' },
+        { endpoint: 'https://api.example.test', token: params.token ?? 'token-a' },
         {
             getSessionEncryption: () => null,
             getMachineEncryption: params.getMachineEncryption,
@@ -96,6 +99,30 @@ afterEach(() => {
 });
 
 describe('apiSocket inbound machine-scoped reverse RPC (RU2 G1)', () => {
+    it('fingerprints token-only admitted reads without exposing the bearer or merging replacement tokens', async () => {
+        const { socket } = createSocketStub();
+        socket.emitWithAck.mockResolvedValue({ ok: true, result: { ready: true } });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-plain', storageMode: 'plain' })], true);
+        const admittedKeys: string[] = [];
+        const admission = createMachineRpcReadAdmission(['token-only-test']);
+        for (const token of ['token-a', 'token-b']) {
+            await bootApiSocket({ socket, getMachineEncryption: () => null, token });
+            await expect(apiSocket.machineRPC('machine-plain', 'demo.read', {}, {
+                readAdmission: {
+                    run: input => {
+                        admittedKeys.push(input.binding.key);
+                        return admission.run(input);
+                    },
+                },
+            })).resolves.toEqual({ ready: true });
+        }
+        expect(admittedKeys).toHaveLength(2);
+        expect(admittedKeys[0]).not.toBe(admittedKeys[1]);
+        expect(admittedKeys.join('')).not.toContain('token-a');
+        expect(admittedKeys.join('')).not.toContain('token-b');
+    });
+
     it('withdraws a navigating client Action only after its accepted call has returned its receipt', async () => {
         const { socket } = createSocketStub();
         const machineEncryption = createMachineEncryption();

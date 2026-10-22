@@ -750,7 +750,7 @@ class ApiSocket {
                 binding: {
                     key: JSON.stringify([config.serverId, config.endpoint, config.runtimeOrigin ?? null, config.carrier ?? null,
                         config.homeCarrier?.endpointId ?? null, config.generation,
-                        config.credentials ? resolveAuthCredentialsScopeKey({ ...config.credentials, token: config.token }) : config.token,
+                        resolveAuthCredentialsScopeKey({ ...config.credentials, token: config.token }),
                         usePlaintextParams ? 'plain' : 'e2ee', capturedMachine?.dataEncryptionKey ?? null,
                         capturedMachine?.keyBasis?.dataEncryptionKey ?? null]),
                     scope: [controller, machineContext],

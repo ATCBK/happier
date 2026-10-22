@@ -1,5 +1,4 @@
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
 import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
 import type { ActionAccountContext, LazyActionAccountContext } from './actionAccountContext';
@@ -20,7 +19,6 @@ export function resolveUiAccountActionFallbackMachineId(account: Pick<ActionAcco
         /** Registry's user-triggered refresh retries its supplier after a failed request. */
         allowUnreachableFallback?: boolean;
     }>): string | null {
-    if (!areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)) return null;
     const machines = resolveVisibleMachinesForActiveServerFromState(storage.getState(), account);
     const candidateMachineIds = options?.candidateMachineIds;
     const candidates = candidateMachineIds === undefined ? machines
