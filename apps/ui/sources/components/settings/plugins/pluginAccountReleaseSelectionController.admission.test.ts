@@ -4,6 +4,8 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentSetActionInputV1Schema,
     PluginAvailabilityIntentSetActionOutputV1Schema, PluginAvailabilityReleaseReadActionOutputV1Schema,
+    PluginAvailabilityIntentReadActionOutputV1Schema, PluginAvailabilityIntentsListActionOutputV1Schema,
+    PluginAvailabilityMaterializationsReadActionOutputV1Schema,
     type PackageAssetArchiveDescriptorV1 } from '@happier-dev/protocol/plugins/availability';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -30,7 +32,7 @@ const { PluginAccountReleaseSelectionSection } = await import('./PluginAccountRe
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 const { createPluginAccountAvailabilityReader } = await import('@/sync/domains/plugins/availability/reader');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
-const { replacePluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
+const { readPluginAccountAvailability, replacePluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
 
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -145,6 +147,10 @@ describe('Account plugin administration admission through the production UI fron
         const lifetime = captureActiveServerAccountScopeLifetime();
         if (!lifetime) throw new Error('Expected active Account');
         const expectedRevision = prior === 'unselected' ? 'intent-3' : null;
+        let selectedIntent: ReturnType<typeof PluginAvailabilityIntentSetActionOutputV1Schema.parse>['intent'] | null = prior === 'unselected'
+            ? { pluginId: 'example.tasks', desiredVersion: null, enabled: false,
+                offlineUiHosting: 'disabled', writableCollections: [], revision: 'intent-3' }
+            : null;
         replacePluginAccountAvailabilityProjection({ scope: lifetime.scope, snapshot: {
             availabilityCursor: 2, materializations: [], snapshots: [], intentReads: [{ pluginId: 'example.tasks', response: {
                 availabilityCursor: 2, hostingCapability: { enabled: false },
@@ -154,12 +160,27 @@ describe('Account plugin administration admission through the production UI fron
             } }],
         } });
         homes.answer(serverId, releasePath, { body: release });
+        // The server persists the acknowledged CAS. No socket publication is
+        // delivered by this disconnected transport fixture; the mutation must
+        // wake the existing Availability acquisition/publication owner.
+        homes.answer(serverId, PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read'], {
+            body: PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 3, snapshots: [] }),
+        });
+        homes.answer(serverId, PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], {
+            select: () => ({ body: PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor: 3,
+                pluginIds: ['example.tasks'], failedPluginIds: [], intentReads: [{ pluginId: 'example.tasks',
+                    response: PluginAvailabilityIntentReadActionOutputV1Schema.parse({ availabilityCursor: 3,
+                        hostingCapability: { enabled: false }, intent: selectedIntent,
+                        release: selectedIntent?.desiredVersion ? release.facts : null, uiArtifacts: [], packageAssets: [] }) }] }) }),
+        });
         homes.answer(serverId, intentPath, { select: body => {
             const request = PluginAvailabilityIntentSetActionInputV1Schema.parse(body);
             if (request.expectedRevision !== expectedRevision) return { status: 409, body: { error: 'plugin_intent_revision_conflict' } };
             expect(request).toMatchObject({ pluginId: 'example.tasks', desiredVersion: '2.0.0', expectedRevision });
             const { expectedRevision: _expectedRevision, managedResourceDispositions: _dispositions, ...intent } = request;
-            return { body: PluginAvailabilityIntentSetActionOutputV1Schema.parse({ intent: { ...intent, revision: 'selected-1' } }) };
+            const response = PluginAvailabilityIntentSetActionOutputV1Schema.parse({ intent: { ...intent, revision: 'selected-1' } });
+            selectedIntent = response.intent;
+            return { body: response };
         } });
         const controller = createPluginAccountReleaseSelectionController();
         try {
@@ -167,6 +188,9 @@ describe('Account plugin administration admission through the production UI fron
             expect(result).toMatchObject({ kind: 'selected', intent: { desiredVersion: '2.0.0', revision: 'selected-1' } });
             expect(getActionSpec('plugins.account.release.select').outputSchema?.safeParse(result).success).toBe(true);
             expect(homes.requestsFor(intentPath)).toHaveLength(1);
+            await waitForHomeGovernance(() => expect(readPluginAccountAvailability(lifetime.scope)
+                .readCurrentReleaseSelection({ pluginId: 'example.tasks' }))
+                .toMatchObject({ kind: 'available', intent: { desiredVersion: '2.0.0', revision: 'selected-1' } }));
         } finally { controller.retire(); }
     });
     it.each(operations)('honors Off before any domain read or mutation (%s)', async (actionId, run) => {
