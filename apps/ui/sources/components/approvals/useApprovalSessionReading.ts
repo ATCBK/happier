@@ -70,7 +70,9 @@ export function useApprovalSessionReading(serverId: string | null, value: string
         : session ? 'ready'
         : resolution?.kind === 'resolving' ? 'resolving'
         : (resolution && resolution.kind !== 'bound') || !getServerProfileById(serverId) ? 'unavailable'
-        : needsExactRead ? (exactRead.kind === 'loading' || exactRead.kind === 'retrying' ? 'resolving' : 'unavailable')
+        // A first read in flight is still resolving. One that failed and is retrying has settled for now:
+        // the reference reads by where it lives until a later attempt names it, never "Loading" for good.
+        : needsExactRead ? (exactRead.kind === 'loading' ? 'resolving' : 'unavailable')
         : !homeObservation || (homeObservation.lastSuccessAt === null
             && (homeObservation.phase === 'idle' || homeObservation.phase === 'loading' || homeObservation.phase === 'refreshing'))
             ? 'resolving' : 'unavailable';

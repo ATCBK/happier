@@ -47,7 +47,8 @@ export type HappierApprovalPromptChromeProps = Readonly<{
   maxHeight?: number;
   /**
    * Bounded: the height the card would take unbounded (head, all facts, decision) and the least it can take
-   * (head and decision), for a host sharing its room between cards.
+   * (head and decision), for a host sharing its room between cards. A card with no decision to pin is never
+   * cut (its least is its whole height), so the host scrolls between whole cards.
    */
   onMeasure?: (heights: Readonly<{ natural: number; minimum: number }>) => void;
   /** Host bodies that already carry their own trailing space can keep their established inset. */
@@ -81,11 +82,15 @@ export function HappierApprovalPromptChrome(props: HappierApprovalPromptChromePr
   const step = props.spacing.small;
   const textColumnStart = inset + ICON_SIZE + ICON_TEXT_GAP;
   const bounded = typeof props.maxHeight === 'number';
+  // Only a card with a decision to keep in view scrolls its facts under a bound. A failed or settled card
+  // closes from its head, so cutting its facts would only slice a line in half: it keeps its whole height and
+  // the room it shares scrolls between whole cards instead.
+  const pinned = bounded && Boolean(props.footer);
   // Bounded facts that do not fit show a hairline over the pinned decision: there is more above it.
   const [factsViewport, setFactsViewport] = useState(0);
   const [factsContent, setFactsContent] = useState(0);
   // Only real facts count as hidden; a few pixels of the body's own bottom inset do not.
-  const factsClipped = bounded && factsContent - factsViewport > step;
+  const factsClipped = pinned && factsContent - factsViewport > step;
   // A bounded card never gets shorter than its head and its decision: when the bound is tighter (several
   // requests share a tray), the card keeps both whole and its host scrolls between cards instead.
   const [headHeight, setHeadHeight] = useState(0);
@@ -98,8 +103,8 @@ export function HappierApprovalPromptChrome(props: HappierApprovalPromptChromePr
   const onMeasure = props.onMeasure;
   const naturalHeight = bounded && headHeight > 0 ? headHeight + decisionHeight + factsContent : 0;
   useEffect(() => {
-    if (naturalHeight > 0) onMeasure?.({ natural: naturalHeight, minimum: boundedMinHeight });
-  }, [boundedMinHeight, naturalHeight, onMeasure]);
+    if (naturalHeight > 0) onMeasure?.({ natural: naturalHeight, minimum: pinned ? boundedMinHeight : naturalHeight });
+  }, [boundedMinHeight, naturalHeight, onMeasure, pinned]);
   const surface: HappierPortableStyle = {
     borderRadius: inline ? 0 : props.cardRadius,
     borderWidth: inline ? 0 : 1,
@@ -113,7 +118,7 @@ export function HappierApprovalPromptChrome(props: HappierApprovalPromptChromePr
   const toneSurface = !inline && props.tone ? resolveHappierWorkStatusSurfaceStyle(props.tone, props.colors.status) : null;
   return (
     <View testID={props.testID} accessibilityRole={props.accessibilityRole}
-      style={[surface, toneSurface, bounded ? { maxHeight: props.maxHeight,
+      style={[surface, toneSurface, pinned ? { maxHeight: props.maxHeight,
         ...(boundedMinHeight > 0 ? { minHeight: boundedMinHeight } : null) } : null]}>
       <View onLayout={bounded ? (event) => setHeadHeight(event.nativeEvent.layout.height) : undefined}
         style={{ flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: ICON_TEXT_GAP,
@@ -128,14 +133,14 @@ export function HappierApprovalPromptChrome(props: HappierApprovalPromptChromePr
         </View>
         {props.headerAccessory}
       </View>
-      {!hasBody ? null : bounded ? (
+      {!hasBody ? null : pinned ? (
         <ScrollView testID={props.testID ? `${props.testID}-facts` : undefined} style={{ flexShrink: 1, minHeight: 0 }}
           contentContainerStyle={bodyStyle} nestedScrollEnabled
           onLayout={(event) => setFactsViewport(event.nativeEvent.layout.height)}
           onContentSizeChange={(_width, height) => setFactsContent(height)}>
           {props.children}
         </ScrollView>
-      ) : <View style={bodyStyle}>{props.children}</View>}
+      ) : <View style={bodyStyle} onLayout={bounded ? (event) => setFactsContent(event.nativeEvent.layout.height) : undefined}>{props.children}</View>}
       {props.footer ? <View style={{ flexShrink: 0, paddingLeft: textColumnStart, paddingRight: inset, paddingBottom: inset,
         ...(factsClipped ? { borderTopWidth: 1, borderTopColor: props.colors.border, paddingTop: step } : null) }}>
         <View onLayout={bounded ? (event) => setDecisionContent(event.nativeEvent.layout.height) : undefined}>{props.footer}</View>

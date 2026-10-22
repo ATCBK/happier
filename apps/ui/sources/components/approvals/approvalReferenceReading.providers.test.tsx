@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { installApprovalCommonModuleMocks } from './approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { renderHook, flushHookEffects } from '@/dev/testkit';
+import { createDeferred, renderHook, flushHookEffects } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { TeamCredentialResourceCatalogEntryV1Schema, TeamCredentialResourceReadInputV1Schema } from '@happier-dev/protocol/teams';
 import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
@@ -14,6 +14,9 @@ installApprovalCommonModuleMocks({ text: () => vi.importActual<typeof import('@/
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { readActionApprovalSubject } = await import('./actionApprovalPresentation');
+const { readActionApprovalReview } = await import('./actionApprovalReview');
+const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
 const { resolveApprovalRequestTitle, useApprovalRequestTitle } = await import('./approvalRequestTitle');
 const { useApprovalReferenceReading, readApprovalReferenceForConfirmation } = await import('./approvalReferenceReading');
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
@@ -153,5 +156,66 @@ describe('Provider approval reference reading', () => {
             const reading = await readApprovalReferenceForConfirmation(connection.reference, account);
             expect(reading.text).toBe(hook.getCurrent().text);
         } finally { account.dispose(); }
+    });
+
+    it.each([true, false])('keeps the pending approval connection resolving until its Agent-qualified catalog answers (source matches: %s)', async (sourceMatches) => {
+        const home = await harness.addHome({ name: 'Approval Home', serverUrl: 'https://pending-provider-reference.test',
+            accountId: 'recipient', serverIdentityId: 'srv_pending_approval', teamsEnabled: true, credentialResourcesEnabled: true });
+        await harness.selectHomes([home]);
+        const directory = bindHomeDomainActionHttpRequestV1('teams.list', { v: 1, scope: 'member', archived: 'active' });
+        harness.answer(home, `${directory.method} ${directory.path.split('?')[0]}`,
+            { body: { items: [teamSummaryFixture({ id: resource.teamId, name: 'Platform' })], nextCursor: null } });
+        const response = createDeferred<void>();
+        const requested = createDeferred<void>();
+        const pendingResource = TeamCredentialResourceCatalogEntryV1Schema.parse({ ...resource,
+            sourcePresentation: { kind: 'connected_service',
+                service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
+            providerModels: [{ ...resource.providerModels[0],
+                selection: { ...resource.providerModels[0]!.selection, modelId: 'gpt-5.5' },
+                descriptor: { id: 'gpt-5.5', name: 'GPT-5.5' },
+                application: { agentTargetKey: input.agentTargetKey,
+                    implementationIdentity: { pluginId: 'happier.provider.cliproxyapi', localId: 'cliproxyapi' },
+                    endpointTemplateId: 'cliproxyapi-openai-responses', protocol: 'openai-responses' },
+                confirmationSource: { connectionId: input.connectionId,
+                    catalogSourceKey: sourceMatches ? input.catalogSourceKey : 'x'.repeat(43) } }],
+        });
+        const catalog = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: resource.teamId });
+        harness.answer(home, `${catalog.method} ${catalog.path.split('?')[0]}`, { select: value => {
+            const { application } = TeamCredentialResourceReadInputV1Schema.parse(value);
+            if (!application) return { body: { resources: [TeamCredentialResourceCatalogEntryV1Schema.parse({
+                ...pendingResource, providerModels: [],
+            })] } };
+            if (JSON.stringify(application) !== JSON.stringify(pendingResource.providerModels[0]!.application)) {
+                return { body: { resources: [TeamCredentialResourceCatalogEntryV1Schema.parse({ ...pendingResource, providerModels: [],
+                    readiness: { kind: 'broker_unavailable', reason: 'projection_unavailable' },
+                })] } };
+            }
+            requested.resolve();
+            return { respondAfter: response.promise, body: { resources: [pendingResource] } };
+        } });
+        // CLI-created c88 approval: both original operands and the observation preview
+        // retain the Agent target and opaque confirmation-source identity.
+        const actionArgs = { ...input, modelId: 'gpt-5.5', machineId: 'a512fd05-e2c6-428c-9611-1b11a536df12' };
+        const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'cli' }, requestedSurface: 'cli', summary: 'Allow experimental Provider model',
+            actionId, actionArgs, preview: { actionId, actionArgs: getActionSpec(actionId).projectObservationInput?.(actionArgs) },
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+                serverId: home, actionId, requestId: 'pending-provider-approval' } });
+        const review = readActionApprovalReview(request);
+        const connection = review.admission?.presentation.rows.find(row => row.path === 'connectionId');
+        if (!connection || connection.kind !== 'value') throw new Error('Missing connection');
+        const hook = await renderHook(() => useApprovalReferenceReading(connection.reference, connection.value, home));
+        try {
+            await requested.promise;
+            await flushHookEffects();
+            expect(hook.getCurrent()).toMatchObject({ text: 'Loading…', resolving: true });
+        } finally {
+            response.resolve();
+            await flushHookEffects({ cycles: 25 });
+        }
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({
+            text: sourceMatches ? `${resource.displayName} · Platform` : 'Unavailable',
+        }));
+        expect(hook.getCurrent().resolving).not.toBe(true);
     });
 });

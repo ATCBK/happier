@@ -150,6 +150,14 @@ describe('approval session reference resolution', () => {
             expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', name: null });
         });
 
+        it('settles as unavailable, not loading, when the exact read failed and is retrying', async () => {
+            const home = await addLoadingHome();
+            exactRead.mockResolvedValue({ kind: 'retryable_failure', sessionId: 'requester', serverId: home, cause: 'network' });
+            const hook = await renderHook(() => useApprovalSessionReading(home, 'requester', bound, { exactRead: true }));
+            await act(async () => {});
+            expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', name: null });
+        });
+
         it('stays resolving, without a claim, while the exact read is in flight', async () => {
             const home = await addLoadingHome();
             exactRead.mockReturnValue(new Promise(() => {}));

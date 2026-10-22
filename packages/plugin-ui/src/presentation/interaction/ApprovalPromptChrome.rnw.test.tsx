@@ -37,6 +37,19 @@ describe('HappierApprovalPromptChrome', () => {
     } finally { mounted.unmount(); }
   });
 
+  it('never clips the facts of a card that has no decision to pin', () => {
+    // A failed or settled card closes from its head: nothing needs pinning, so a shared room scrolls whole
+    // cards between each other instead of cutting this card's last line in half.
+    const mounted = mountThroughReactNativeWeb(<HappierApprovalPromptChrome {...base} testID="card" maxHeight={90}>
+      <View testID="facts" />
+    </HappierApprovalPromptChrome>);
+    try {
+      const card = mounted.container.querySelector('[data-testid="card"]') as HTMLElement;
+      expect(card.style.maxHeight).toBe('');
+      expect(mounted.container.querySelector('[data-testid="card-facts"]')).toBeNull();
+    } finally { mounted.unmount(); }
+  });
+
   it('lets an unbounded card grow with its facts', () => {
     const mounted = mount();
     try {

@@ -37,7 +37,9 @@ import { readTeam, readTeamCredentialResourceCatalogs } from '@/sync/store/teams
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 type ApprovalReference = ApprovalActionReference;
 
-export type ApprovalReferenceReading = Readonly<{ text: string; named: boolean; resolving?: boolean; subject?: 'managedMachine' }>;
+export type ApprovalReferenceReading = Readonly<{ text: string; named: boolean; resolving?: boolean; subject?: 'managedMachine';
+    /** A Session this device read: the reference opens it. */
+    session?: Readonly<{ id: string; serverId: string | null }> }>;
 
 /** Both cached UI rows and authorized exact reads use the same content-readable name rule. */
 function readApprovalArtifactReference(reference: ApprovalReference, artifact: DecryptedArtifact | null | undefined): ApprovalReferenceReading {
@@ -94,10 +96,12 @@ export async function readApprovalReferenceForConfirmation(reference: ApprovalRe
     return resolveApprovalReferenceReading(reference, reference.id, account.serverId, sources);
 }
 
-export function useApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null): ApprovalReferenceReading {
+export function useApprovalReferenceReading(reference: ApprovalReference | undefined, literal: string, approvalServerId: string | null,
+    /** A page opened by a link mounts no Session list, so it settles a Session reference with one exact read. */
+    options?: Readonly<{ exactRead?: boolean }>): ApprovalReferenceReading {
     const serverId = reference?.kind === 'session' ? reference.serverId ?? approvalServerId : approvalServerId;
     const sessionReading = useApprovalSessionReading(reference?.kind === 'session' ? serverId : null,
-        reference?.kind === 'session' ? reference.id : '');
+        reference?.kind === 'session' ? reference.id : '', undefined, options);
     const viewer = useAccountSettingsScope();
     const ownHome = isSameApprovalHome(viewer?.serverId, approvalServerId);
     const artifact = useArtifact((reference?.kind === 'skill' || reference?.kind === 'artifact') && ownHome ? reference.id : '');
@@ -124,7 +128,8 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const { managedMachine, managedEnrolledMachine, managedMachineLoading } = useManagedReferenceSources(reference, approvalServerId);
     return resolveApprovalReferenceReading(reference, literal, approvalServerId, { serverId, sessionReading, viewer, ownHome, artifact, machine,
         managedMachine, managedEnrolledMachine, managedMachineLoading, sessionMachine, mcp, registries, projects, agents, providerCatalog, declarations,
-        syncLink, workspace, teamResources: teamCatalog.resources, teamNameById: teamCatalog.teamNameById });
+        syncLink, workspace, teamResources: teamCatalog.resources, teamNameById: teamCatalog.teamNameById,
+        teamCatalogLoading: teamCatalog.condition?.reason === 'loading' });
 }
 
 /** The managed row and its enrolled Machine behind a managed reference, read in the reference's own Home. */
@@ -172,6 +177,7 @@ type ApprovalReferenceSources = {
     providerCatalog?: ReturnType<typeof useProviderCatalogForServer>;
     teamResources?: readonly TeamCredentialResourceCatalogEntryV1[];
     teamNameById?: Readonly<Record<string, string>>;
+    teamCatalogLoading?: boolean;
     declarations: ReturnType<typeof readAccountProviderDeclarations>;
     syncLink?: WorkspaceSyncRelationshipSummary | null;
     workspace?: WorkspaceSyncRelationshipEndpoint | null;
@@ -250,6 +256,9 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
                 providerName: sourceName ?? t('common.unavailable') }).title, named: true };
         }
         const resource = findApprovalProviderSource(reference, sources.teamResources);
+        if (!resource && !reference.displayName && (sources.teamCatalogLoading || providerCatalog?.status === 'loading')) {
+            return { text: t('common.loading'), named: true, resolving: true };
+        }
         return { text: resource
             ? [resource.displayName, sources.teamNameById?.[resource.teamId]].filter(Boolean).join(' · ')
             : reference.displayName ?? t('common.unavailable'), named: true };
@@ -257,12 +266,14 @@ function resolveApprovalReferenceReading(reference: ApprovalReference | undefine
     if (reference?.kind === 'session') {
         if (sessionReading.status === 'resolving') return { text: t('common.loading'), named: false, resolving: true };
         const title = sessionReading.name ?? describeUnnamedApprovalSession(resolveApprovalHomeSentenceName(serverId));
-        if (reference.presentation !== 'destructive_target') return { text: title, named: true };
+        const session = sessionReading.status === 'ready' ? { session: { id: reference.id, serverId } } : {};
+        if (reference.presentation !== 'destructive_target') return { text: title, named: true, ...session };
         const machineName = getMachineDisplayName(sessionMachine)
             ?? (sessionReading.machineId || t('common.unavailable'));
         return {
             text: `${title} · ${t('contextBar.machine')} ${machineName} · …${reference.id.slice(-8)}`,
             named: true,
+            ...session,
         };
     }
     if (reference?.kind === 'home') {
