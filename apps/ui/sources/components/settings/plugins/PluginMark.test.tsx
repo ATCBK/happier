@@ -12,9 +12,7 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
 // SVG is a native/platform rendering boundary; keep catalog and AgentIcon resolution real.
-vi.mock('react-native-svg', () => ({
-    SvgXml: (props: Record<string, unknown>) => React.createElement('SvgXml', props),
-}));
+vi.mock('react-native-svg', async () => await import('@/dev/testkit/mocks/reactNativeSvg'));
 const bundledBrands = vi.hoisted(() => [] as { pluginId: string; resourceId: string; releaseVersion: string; displayName: string; digest: string; bytes: Uint8Array }[]);
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],

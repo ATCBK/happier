@@ -227,21 +227,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
     }),
 }));
 
-vi.mock('@/components/sessions/attachments/useAttachmentDraftManager', () => ({
-    useAttachmentDraftManager: () => ({
-        filePickerRef: { current: null },
-        drafts: [],
-        getDraftsSnapshot: () => [],
-        hasSendableAttachments: false,
-        agentInputAttachments: [],
-        addWebFiles: vi.fn(),
-        addPickedAttachments: vi.fn(),
-        removeDraft: vi.fn(),
-        clearDrafts: vi.fn(),
-        applyDraftPatch: vi.fn(),
-    }),
-}));
-
 vi.mock('@/components/sessions/attachments/uploadAttachmentDraftsToSession', () => ({
     uploadAttachmentDraftsToSession: vi.fn(),
 }));

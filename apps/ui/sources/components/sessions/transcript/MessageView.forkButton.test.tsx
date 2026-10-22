@@ -291,14 +291,6 @@ vi.mock('@/components/sessions/transcript/thinking/ThinkingTimelineRow', () => (
   ThinkingTimelineRow: ({ children }: any) => React.createElement(React.Fragment, null, children),
 }));
 
-vi.mock('@/components/sessions/transcript/structured/happierMetaEnvelope', () => ({
-  parseHappierMetaEnvelope: () => null,
-}));
-
-vi.mock('@/sync/domains/attachments/attachmentsMessageMeta', () => ({
-  AttachmentsMessageMetaV1Schema: { safeParse: () => ({ success: false }) },
-}));
-
 vi.mock('@/components/sessions/attachments/messages/AttachmentsMessageRow', () => ({
   AttachmentsMessageRow: () => null,
 }));

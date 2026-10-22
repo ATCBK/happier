@@ -31,7 +31,6 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 vi.mock('@/components/ui/accessibility/announceAccessibilityMessage', () => ({ announceAccessibilityMessage: () => {} }));
 vi.mock('expo-image', () => ({ Image: 'Image' }));
-vi.mock('react-native-svg', () => ({ SvgXml: 'SvgXml' }));
 
 const [{ useInSessionAgentPickerControls }, { getResolvedBackendCatalogEntries }, { settingsDefaults }] = await Promise.all([
     import('./useInSessionAgentPickerControls'),

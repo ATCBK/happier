@@ -100,20 +100,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
     useAttachmentsUploadConfig: () => ({ maxFileBytes: 1 }),
 }));
 
-vi.mock('@/components/sessions/attachments/useAttachmentDraftManager', () => ({
-    useAttachmentDraftManager: () => ({
-        filePickerRef: { current: null },
-        drafts: [],
-        getDraftsSnapshot: () => [],
-        hasSendableAttachments: false,
-        agentInputAttachments: [],
-        addWebFiles: () => {},
-        addPickedAttachments: () => {},
-        applyDraftPatch: () => {},
-        clearDrafts: () => {},
-    }),
-}));
-
 vi.mock('@/components/sessions/attachments/uploadAttachmentDraftsToSession', () => ({
     uploadAttachmentDraftsToSession: vi.fn(),
 }));
