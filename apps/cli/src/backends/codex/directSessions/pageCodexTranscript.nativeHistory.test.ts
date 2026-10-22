@@ -1,13 +1,22 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { beforeAll, afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadDirectSessionTranscriptItems } from '@/api/directSessions/import/loadDirectSessionTranscriptItems';
 import { DirectSessionsProviderUnavailableError } from '@/backends/directSessions/providerOps';
 import { createCodexAppServerProcessEnv, writeFakeCodexAppServerThreadListScript } from '../appServer/testkit/fakeCodexAppServer';
 import { pageCodexTranscript } from './pageCodexTranscript';
 import { readAfterCodexTranscript } from './readAfterCodexTranscript';
+
+// Native startup locks are per OS user; keep fixture processes separate from live Agents.
+const startupHome = vi.hoisted(() => ({ path: '' }));
+vi.mock('node:os', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, userInfo: () => ({ ...actual.userInfo(), homedir: startupHome.path || actual.userInfo().homedir }) };
+});
+beforeAll(async () => { startupHome.path = await mkdtemp(join(tmpdir(), 'codex-history-startup-test-')); });
+afterAll(async () => { await rm(startupHome.path, { recursive: true, force: true }); });
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -115,6 +124,8 @@ describe('Codex native paginated direct history (0.162.1 contract)', () => {
     const page = await pageCodexTranscript({ ...f.params, direction: 'older' });
     expect(page.items).toHaveLength(2);
     expect(JSON.stringify(page.items)).toContain('inherited question');
+    await writeFile(f.nativeItemsPath, '[]');
+    await expect(pageCodexTranscript({ ...f.params, direction: 'older' })).rejects.toBeInstanceOf(DirectSessionsProviderUnavailableError);
   });
 
   it('keeps a native cursor on its source when a legacy rollout appears later', async () => {

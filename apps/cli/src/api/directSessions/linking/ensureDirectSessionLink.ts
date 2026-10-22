@@ -19,7 +19,6 @@ import { fetchSessionById, fetchSessionsPage, getOrCreateSessionByTag } from '@/
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { updateSessionMetadataWithRetry } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { normalizePathForComparison } from '@/utils/path/normalizePathForComparison';
-import { logger } from '@/ui/logger';
 import {
   hasConnectedServiceBindings,
   mergeConnectedServiceRuntimeSnapshots,
@@ -27,7 +26,10 @@ import {
   type ConnectedServiceRuntimeSnapshot,
 } from '@/daemon/connectedServices/connectedServiceRuntimeSnapshot';
 import { listSessionMarkers, type DaemonSessionMarker } from '@/daemon/sessionRegistry';
-import { directSessionMarkerMatches } from '@/api/directSessions/markers/readDirectSessionMarkerIdentity';
+import {
+  directSessionMarkerMatches,
+  readDirectSessionMarkerProviderId,
+} from '@/api/directSessions/markers/readDirectSessionMarkerIdentity';
 
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
@@ -54,6 +56,18 @@ function resolveDirectRemoteSessionId(metadata: Readonly<Record<string, unknown>
   return normalizeNullableString(directSession?.remoteSessionId);
 }
 
+function resolveMarkerDirectoryKeys(marker: DaemonSessionMarker): ReadonlySet<string> {
+  const metadata = asMetadataRecord(marker.metadata);
+  const respawn = asMetadataRecord(marker.respawn);
+  return new Set(
+    [
+      normalizePathForComparison(marker.cwd),
+      normalizePathForComparison(metadata?.path),
+      normalizePathForComparison(respawn?.directory),
+    ].filter((value): value is string => Boolean(value)),
+  );
+}
+
 function resolveMarkerConnectedServiceRuntimeSnapshot(marker: DaemonSessionMarker): ConnectedServiceRuntimeSnapshot {
   return mergeConnectedServiceRuntimeSnapshots(
     readConnectedServiceRuntimeSnapshot(marker.respawn),
@@ -72,11 +86,9 @@ function uniqueSnapshotKey(snapshot: ConnectedServiceRuntimeSnapshot): string {
 async function resolveConnectedServiceRuntimeSnapshotForDirectLink(params: Readonly<{
   providerId: DirectSessionsProviderId;
   remoteSessionId: string;
+  directoryHint?: string | null;
 }>): Promise<ConnectedServiceRuntimeSnapshot> {
-  const markers = await listSessionMarkers().catch((): DaemonSessionMarker[] => {
-    logger.infoFile('[DirectSessions] Marker discovery failed; connected-service snapshot recovery is unavailable');
-    return [];
-  });
+  const markers = await listSessionMarkers().catch(() => [] as DaemonSessionMarker[]);
   const markersWithSnapshots = markers
     .map((marker) => ({
       marker,
@@ -84,15 +96,28 @@ async function resolveConnectedServiceRuntimeSnapshotForDirectLink(params: Reado
     }))
     .filter((entry) => hasConnectedServiceBindings(entry.snapshot));
 
-  // A marker owns credentials for its native conversation. A shared working
-  // directory cannot establish that ownership for another conversation.
-  return markersWithSnapshots
+  const exactRemoteMatch = markersWithSnapshots
     .filter((entry) => directSessionMarkerMatches({
       marker: entry.marker,
       providerId: params.providerId,
       remoteSessionId: params.remoteSessionId,
     }))
-    .sort((left, right) => right.marker.updatedAt - left.marker.updatedAt)[0]?.snapshot ?? {};
+    .sort((left, right) => right.marker.updatedAt - left.marker.updatedAt)[0];
+  if (exactRemoteMatch) return exactRemoteMatch.snapshot;
+
+  const directoryKey = normalizePathForComparison(params.directoryHint);
+  if (!directoryKey) return {};
+
+  const contextualMatches = markersWithSnapshots
+    .filter((entry) => readDirectSessionMarkerProviderId(entry.marker) === params.providerId)
+    .filter((entry) => resolveMarkerDirectoryKeys(entry.marker).has(directoryKey))
+    .sort((left, right) => right.marker.updatedAt - left.marker.updatedAt);
+
+  const uniqueSnapshots = new Map<string, ConnectedServiceRuntimeSnapshot>();
+  for (const match of contextualMatches) {
+    uniqueSnapshots.set(uniqueSnapshotKey(match.snapshot), match.snapshot);
+  }
+  return uniqueSnapshots.size === 1 ? [...uniqueSnapshots.values()][0] ?? {} : {};
 }
 
 function isMeaningfulSessionTitle(value: unknown, metadata?: Readonly<Record<string, unknown>>): boolean {
@@ -234,10 +259,7 @@ async function refreshExistingDirectSessionMetadataIfNeeded(params: Readonly<{
   const rawSession = await fetchSessionById({
     token: params.credentials.token,
     sessionId: params.sessionId,
-  }).catch(() => {
-    logger.infoFile('[DirectSessions] Session read failed; existing link metadata was not refreshed');
-    return null;
-  });
+  }).catch(() => null);
   if (!rawSession) return;
 
   const initialMetadata = tryDecryptSessionMetadata({
@@ -269,9 +291,7 @@ async function refreshExistingDirectSessionMetadataIfNeeded(params: Readonly<{
         directoryHint: params.directoryHint,
         connectedServiceRuntimeSnapshot: params.connectedServiceRuntimeSnapshot,
       }) ?? currentMetadata,
-  }).catch(() => {
-    logger.infoFile('[DirectSessions] Metadata update failed; existing link metadata was not refreshed');
-  });
+  }).catch(() => undefined);
 }
 
 function resolveSourceKey(providerId: DirectSessionsProviderId, source: DirectSessionsSource): string {
@@ -684,6 +704,7 @@ export async function ensureDirectSessionLink(params: Readonly<{
   const connectedServiceRuntimeSnapshot = await resolveConnectedServiceRuntimeSnapshotForDirectLink({
     providerId: params.providerId,
     remoteSessionId,
+    directoryHint: params.directoryHint,
   });
 
   const tag = computeDirectSessionTag({

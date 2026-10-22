@@ -27,6 +27,7 @@ export async function readCodexDirectTranscript(params: Readonly<{
     throw new DirectSessionsProviderUnavailableError('Codex transcript cursor does not match the selected source');
   }
   let selectedNativeHome: string | undefined;
+  let hasPaginatedRollout = false;
   if (!nativeCursor) {
     const perHome = await Promise.all(homes.map(async home => ({ home,
       files: await collectCodexSessionRolloutFiles({ codexHome: home, remoteSessionId: params.remoteSessionId }) })));
@@ -34,10 +35,10 @@ export async function readCodexDirectTranscript(params: Readonly<{
       Math.max(...right.files.map(file => file.mtimeMs)) - Math.max(...left.files.map(file => file.mtimeMs)))[0];
     // A paginated rollout can be only a local segment with an inherited history_base.
     // Codex owns replaying that lineage; the legacy JSONL projection cannot prove completeness.
-    const paginated = best && (await Promise.all(best.files.map(file => readCodexSessionMetaFromRollout(file.filePath))))
-      .some(metadata => metadata?.history_mode === 'paginated');
+    hasPaginatedRollout = Boolean(best && (await Promise.all(best.files.map(file => readCodexSessionMetaFromRollout(file.filePath))))
+      .some(metadata => metadata?.history_mode === 'paginated'));
     selectedNativeHome = best?.home;
-    if (best && !paginated) {
+    if (best && !hasPaginatedRollout) {
       const input = { ...params, codexHome: best.home, initialRolloutFiles: best.files };
       if (params.follow) {
         const page = await readAfterCodexRolloutStreams({ ...input, cursor: params.cursor! });
@@ -54,7 +55,7 @@ export async function readCodexDirectTranscript(params: Readonly<{
         affinity: { home: params.source.kind === 'codexHome' ? params.source.home : 'user', homePath: home } });
       const reset = Boolean(params.cursor && params.cursor !== 'tail' && !nativeCursor);
       const page = await withCodexAppServerClient({ processEnv, run: client => pageCodexNativeTranscript({
-        ...params, client, home, cursor: nativeCursor ? params.cursor : undefined,
+        ...params, client, home, hasPaginatedRollout, cursor: nativeCursor ? params.cursor : undefined,
         tailOnly: params.follow && (!nativeCursor || params.cursor === 'tail'),
       }) });
       return reset ? { ...page, items: [], truncated: true, truncationReason: 'source_discontinuity' } : page;
