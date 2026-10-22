@@ -194,7 +194,7 @@ export function registerTeamRoutes(
             teamId: request.body.teamId,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }), { isolationLevel: "Serializable" /* Team archive participates in membership, directory and credential admission predicates. */ });
+        }), { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission and the Team lock precede authority/access reads; audience rechecks cover discovery races. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });
@@ -211,7 +211,7 @@ export function registerTeamRoutes(
             teamId: request.body.teamId,
             env,
             authentication: readTeamOperationAuthenticationFromRequest(request, env),
-        }), { isolationLevel: "Serializable" /* Team restoration participates in membership, directory and credential admission predicates. */ });
+        }), { isolationLevel: "ReadCommitted" /* Restore uses the same exclusive Account admission, Team lock and audience rechecks as archive. */ });
         if (!result.ok) return sendTeamError(reply, result.error);
         return reply.send(result.team);
     });

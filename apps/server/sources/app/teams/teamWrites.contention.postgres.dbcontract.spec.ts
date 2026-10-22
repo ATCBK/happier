@@ -4,6 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { resolveEffectiveMachineRoleInTx } from "@/app/machines/machineAccess";
+import { resolveStructuralSessionAccessForAccountsInTx } from "@/app/session/access/sessionAccess";
 import { HOME_GOVERNANCE_POLICY_ID } from "@/app/home/governance/governancePolicy";
 import { createQualifiedConnectedAccountGroupDigest, createQualifiedConnectedAccountServiceDigest } from "@/app/api/routes/connect/qualifiedConnectedAccounts/identity";
 import { initEncrypt } from "@/modules/encrypt";
@@ -27,6 +29,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
             HANDY_MASTER_SECRET: "fix-c74-disposable-test",
             HAPPIER_FEATURE_TEAMS__ENABLED: "1",
             HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED: "1",
+            HAPPIER_DB_CONNECTION_LIMIT: "10",
         })) {
             previousEnv.set(key, process.env[key]);
             process.env[key] = value;
@@ -66,7 +69,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         return row;
     }
 
-    async function fixture(kind: "create" | "member" | "provider_resource" | "pool_resource") {
+    async function fixture(kind: "create" | "member" | "provider_resource" | "pool_resource" | "archive" | "restore") {
         const owner = await account();
         if (kind === "create") return {
             owner, url: "/v1/teams/create", payload: { v: 1, name: "Contended Team", requestKey: randomUUID() },
@@ -80,6 +83,18 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         const team = await db.team.create({ data: { name: "Contended membership and credentials" } });
         teamIds.push(team.id);
         await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "owner" } });
+        if (kind === "archive" || kind === "restore") {
+            if (kind === "restore") await db.team.update({ where: { id: team.id }, data: { archivedAt: new Date() } });
+            return {
+                owner, url: `/v1/teams/${kind}`, payload: { v: 1, teamId: team.id },
+                verify: async (body: { id: string }) => {
+                    expect(body.id).toBe(team.id);
+                    const persisted = await db.team.findUniqueOrThrow({ where: { id: team.id } });
+                    if (kind === "archive") expect(persisted.archivedAt).not.toBeNull();
+                    else expect(persisted.archivedAt).toBeNull();
+                },
+            };
+        }
         if (kind === "member") {
             const target = await account();
             return {
@@ -125,6 +140,79 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
             },
         };
     }
+
+    it("archives an otherwise idle Team and preserves the committed timestamp on retry", async () => {
+        const input = await fixture("archive");
+        const post = () => app.inject({ method: "POST", url: input.url,
+            headers: { "x-test-user-id": input.owner.id }, payload: input.payload });
+        const response = await post();
+        expect(response.statusCode, response.body).toBe(200);
+        await input.verify(response.json());
+        const repeated = await post();
+        expect(repeated.statusCode, repeated.body).toBe(200);
+        expect(repeated.json().archivedAt).toBe(response.json().archivedAt);
+    });
+
+    it("archives and restores retained Team access atomically without reviving invitations", async () => {
+        const owner = await account();
+        const member = await account();
+        const outsider = await account();
+        const team = await db.team.create({ data: { name: "Retained Team access" } });
+        teamIds.push(team.id);
+        await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "owner" } });
+        const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: member.id, role: "member" } });
+        const group = await db.teamGroup.create({ data: { teamId: team.id, name: "Operators", nameKey: "operators" } });
+        await db.teamGroupMembership.create({ data: {
+            teamId: team.id, teamGroupId: group.id, teamMembershipId: membership.id, nativeContribution: true,
+        } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted",
+            responsibleAccountId: member.id,
+            teamGrants: { create: { teamId: team.id, accessLevel: "edit", effectiveAt: new Date() } },
+        } });
+        const machine = await db.machine.create({ data: {
+            id: randomUUID(), accountId: owner.id, metadata: "{}", kind: "persistent",
+            groupGrants: { create: { teamGroupId: group.id, accessLevel: "view", createdByAccountId: owner.id } },
+        } });
+        const invitation = await db.teamInvitation.create({ data: {
+            teamId: team.id, tokenHash: Buffer.from(randomUUID()), role: "member", historyAccess: "from_membership",
+            expiresAt: new Date(Date.now() + 86_400_000),
+        } });
+        const sessionAccess = () => inTx(tx => resolveStructuralSessionAccessForAccountsInTx(tx, {
+            sessionId: session.id, accountIds: [member.id],
+        }));
+        const machineRole = () => inTx(tx => resolveEffectiveMachineRoleInTx(tx, {
+            actorAccountId: member.id, machineId: machine.id,
+        }));
+        const post = (operation: "archive" | "restore", actorAccountId = owner.id) => app.inject({
+            method: "POST", url: `/v1/teams/${operation}`, headers: { "x-test-user-id": actorAccountId },
+            payload: { v: 1, teamId: team.id },
+        });
+        try {
+            expect((await sessionAccess()).get(member.id)?.capabilities.readTranscript).toBe(true);
+            expect(await machineRole()).toBe("use");
+            expect((await post("archive", outsider.id)).statusCode).toBe(404);
+            expect((await db.team.findUniqueOrThrow({ where: { id: team.id } })).archivedAt).toBeNull();
+            const archived = await post("archive");
+            expect(archived.statusCode, archived.body).toBe(200);
+            expect((await sessionAccess()).get(member.id)).toBeNull();
+            expect(await machineRole()).toBeNull();
+            expect((await db.session.findUniqueOrThrow({ where: { id: session.id } })).responsibleAccountId).toBeNull();
+            const revokedAt = (await db.teamInvitation.findUniqueOrThrow({ where: { id: invitation.id } })).revokedAt;
+            expect(revokedAt).not.toBeNull();
+            for (const [kind, entityId] of [["session", session.id], ["machine", machine.id]] as const) {
+                expect(await db.accountChange.count({ where: { accountId: member.id, kind, entityId } })).toBeGreaterThan(0);
+            }
+            const restored = await post("restore");
+            expect(restored.statusCode, restored.body).toBe(200);
+            expect((await sessionAccess()).get(member.id)?.capabilities.readTranscript).toBe(true);
+            expect(await machineRole()).toBe("use");
+            expect(await db.teamMembership.count({ where: { teamId: team.id } })).toBe(2);
+            expect((await db.teamInvitation.findUniqueOrThrow({ where: { id: invitation.id } })).revokedAt).toEqual(revokedAt);
+        } finally {
+            await db.session.delete({ where: { id: session.id } });
+        }
+    });
 
     it("keeps one Team when the same creation intent arrives during its dedupe read", async () => {
         const input = await fixture("create");
@@ -189,7 +277,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
     });
 
     for (const competition of ["same-account-publication", "foreign-serializable"] as const) {
-        it.each(["create", "member", "provider_resource", "pool_resource"] as const)(`%s commits with ${competition}`, async kind => {
+        it.each(["create", "member", "provider_resource", "pool_resource", "archive", "restore"] as const)(`%s commits with ${competition}`, async kind => {
             const input = await fixture(kind);
             const foreign = await account();
             await db.$executeRaw`ANALYZE "Account"`;
@@ -230,7 +318,10 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
                                 }
                                 competitions++;
                             }
-                            return query(...values);
+                            try { return await query(...values); }
+                            catch (error) {
+                                throw error;
+                            }
                         };
                     } });
                     try {

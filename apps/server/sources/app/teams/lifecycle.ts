@@ -322,7 +322,13 @@ export type ArchiveTeamInput = Readonly<{
  * caller.
  */
 export async function archiveTeamInTx(tx: Tx, input: ArchiveTeamInput): Promise<TeamLifecycleResult> {
-    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    // Exclude affected Account writers before authority reads and the Team lock.
+    // Together with audience rechecks this permits ReadCommitted without a stale
+    // Serializable snapshot conflicting at terminal Account publication.
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, {
+        teamId: input.teamId, accountIds: [input.actorAccountId], intent: "exclusive",
+        membershipChange: { kind: "teamMembership", teamId: input.teamId },
+    });
     await acquireTeamMutationLockInTx(tx, input.teamId);
     await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) return denied("teams_unavailable");
@@ -384,7 +390,10 @@ export type RestoreTeamInput = Readonly<{
  * and does not recreate removed members or rotate keys.
  */
 export async function restoreTeamInTx(tx: Tx, input: RestoreTeamInput): Promise<TeamLifecycleResult> {
-    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, {
+        teamId: input.teamId, accountIds: [input.actorAccountId], intent: "exclusive",
+        membershipChange: { kind: "teamMembership", teamId: input.teamId },
+    });
     await acquireTeamMutationLockInTx(tx, input.teamId);
     await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) return denied("teams_unavailable");

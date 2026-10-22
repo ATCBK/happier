@@ -6,6 +6,7 @@ import { inTx } from '@/storage/inTx';
 import { getDbProviderFromEnv } from '@/storage/prisma';
 
 import { setTeamPolicyInTx } from './policy';
+import { archiveTeamInTx, restoreTeamInTx } from './lifecycle';
 
 function deferred() {
     let resolve!: () => void;
@@ -13,7 +14,7 @@ function deferred() {
     return { promise, resolve };
 }
 
-describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('Team authentication policy admission', () => {
+describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('Team authority mutation admission', () => {
     const previousRetries = process.env.HAPPIER_DB_TX_MAX_RETRIES;
 
     beforeAll(async () => {
@@ -29,11 +30,12 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
         else process.env.HAPPIER_DB_TX_MAX_RETRIES = previousRetries;
     });
 
-    it('exclusively admits the affected Session owner before taking the Team resource lock', async () => {
+    it.each(['policy', 'archive', 'restore'] as const)('%s exclusively admits the affected Session owner before taking the Team resource lock', async operation => {
         const suffix = randomUUID();
         const reader = await db.account.create({ data: { id: `a-reader-${suffix}`, encryptionMode: 'plain' } });
         const actor = await db.account.create({ data: { id: `z-actor-${suffix}`, encryptionMode: 'plain' } });
-        const team = await db.team.create({ data: { name: `Policy ${suffix}` } });
+        const team = await db.team.create({ data: { name: `Admission ${suffix}`,
+            ...(operation === 'restore' ? { archivedAt: new Date() } : {}) } });
         await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: 'owner' } });
         const session = await db.session.create({ data: {
             accountId: reader.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
@@ -43,7 +45,13 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
         const release = deferred();
         let holderPid = 0;
         let finished = false;
-        let policyOutcome: Promise<PromiseSettledResult<Awaited<ReturnType<typeof setTeamPolicyInTx>>>[]> | undefined;
+        const mutate = () => inTx(async tx => {
+            const input = { actorAccountId: actor.id, teamId: team.id };
+            if (operation === 'archive') return archiveTeamInTx(tx, input);
+            if (operation === 'restore') return restoreTeamInTx(tx, input);
+            return setTeamPolicyInTx(tx, { ...input, previousAuthenticationPolicy: null, authenticationPolicy: null });
+        }, { isolationLevel: 'ReadCommitted' });
+        let mutationOutcome: Promise<PromiseSettledResult<Awaited<ReturnType<typeof mutate>>>[]> | undefined;
         const holderOutcome = Promise.allSettled([inTx(async tx => {
             const [backend] = await tx.$queryRawUnsafe<Array<{ pid: number }>>('SELECT pg_backend_pid() AS pid');
             holderPid = backend.pid;
@@ -54,10 +62,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
         })]);
         try {
             await Promise.race([admitted.promise, holderOutcome.then(() => { throw new Error('Account barrier ended before admission'); })]);
-            policyOutcome = Promise.allSettled([inTx(tx => setTeamPolicyInTx(tx, {
-                actorAccountId: actor.id, teamId: team.id,
-                previousAuthenticationPolicy: null, authenticationPolicy: null,
-            })).finally(() => { finished = true; })]);
+            mutationOutcome = Promise.allSettled([mutate().finally(() => { finished = true; })]);
             let blocked: Array<{ pid: number; query: string }> = [];
             while (!finished && blocked.length === 0) {
                 blocked = await db.$queryRawUnsafe<Array<{ pid: number; query: string }>>(
@@ -72,16 +77,22 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
             await db.$transaction(async probe => {
                 await probe.$queryRawUnsafe('SELECT "id" FROM "Team" WHERE "id" = $1 FOR UPDATE NOWAIT', team.id);
             });
-            console.info('team-policy-exclusive-entry', { holderPid, policyPid: blocked[0].pid, query: blocked[0].query, retries: 0 });
             release.resolve();
-            const [outcome] = await policyOutcome;
+            const [outcome] = await mutationOutcome;
             if (outcome.status === 'rejected') throw outcome.reason;
             expect(outcome.value).toMatchObject({ ok: true });
-            expect(await db.accountChange.count({ where: { accountId: reader.id, kind: 'session', entityId: session.id } })).toBeGreaterThan(0);
+            if (operation === 'policy') {
+                expect(await db.accountChange.count({ where: { accountId: reader.id, kind: 'session', entityId: session.id } })).toBeGreaterThan(0);
+            } else {
+                const persisted = await db.team.findUniqueOrThrow({ where: { id: team.id } });
+                if (operation === 'archive') expect(persisted.archivedAt).not.toBeNull();
+                else expect(persisted.archivedAt).toBeNull();
+                expect(await db.session.findUnique({ where: { id: session.id } })).not.toBeNull();
+            }
         } finally {
             release.resolve();
             await holderOutcome;
-            await policyOutcome;
+            await mutationOutcome;
             await db.session.deleteMany({ where: { id: session.id } });
             await db.team.deleteMany({ where: { id: team.id } });
             await db.account.deleteMany({ where: { id: { in: [actor.id, reader.id] } } });
