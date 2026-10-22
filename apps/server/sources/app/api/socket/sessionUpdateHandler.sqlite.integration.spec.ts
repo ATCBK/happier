@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,6 +27,21 @@ import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { setHomeSettings } from '@/app/home/settings/homeSettings';
 import { logger } from '@/utils/logging/log';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from "@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1";
+import {
+    SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
+    SessionTranscriptObservationAckV1Schema,
+    SessionTranscriptObservationInputSchema,
+} from "@happier-dev/protocol/sessions/messages/transcriptObservationV1";
+import { reloadConfiguration } from "../../../../../cli/src/configuration";
+import { prepareSessionEventMessageViaPort } from "../../../../../cli/src/api/session/client/transcript/sendMessages";
+import { createRuntimeSessionClientDurableMutationOutbox } from "../../../../../cli/src/api/session/client/transport/mutations/createRuntimeSessionClientDurableMutationOutbox";
+import { loadSessionClientDurableMutationOutbox } from "../../../../../cli/src/api/session/client/transport/mutations/sessionClientDurableMutationPersistence";
+import {
+    resolveTranscriptMessageAppendMutationId,
+    type SessionClientDurableMutationSocket,
+    type TranscriptMessageAppendMutationV1,
+} from "../../../../../cli/src/api/session/client/transport/mutations/sessionClientDurableMutationTypes";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -43,6 +59,166 @@ describe("session update handler on SQLite", () => {
     }, 120_000);
     beforeEach(() => harness.resetEnv());
     afterAll(async () => await harness.close());
+
+    it("recovers the original capability notice after Home commits but its ACK is lost", async () => {
+        const previousCliHome = process.env.HAPPIER_HOME_DIR;
+        process.env.HAPPIER_HOME_DIR = join(harness.baseDir, "capability-notice-cli");
+        process.env.HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY = "optional";
+        reloadConfiguration();
+        const handles: ReturnType<typeof createRuntimeSessionClientDurableMutationOutbox>[] = [];
+        let releaseLostAck!: () => void;
+        const loseAck = new Promise<void>(resolve => { releaseLostAck = resolve; });
+        let committedAtHome!: () => void;
+        const homeCommitted = new Promise<void>(resolve => { committedAtHome = resolve; });
+        try {
+            const owner = await db.account.create({
+                data: { publicKey: `notice-owner-${randomUUID()}`, encryptionMode: "plain" },
+            });
+            const machineId = `notice-machine-${randomUUID()}`;
+            await db.machine.create({ data: { id: machineId, accountId: owner.id, metadata: "{}" } });
+            const session = await db.session.create({ data: {
+                accountId: owner.id, tag: `notice-${randomUUID()}`, encryptionMode: "plain", metadata: "{}",
+            } });
+            await db.accessKey.create({ data: {
+                accountId: owner.id, machineId, sessionId: session.id, data: "encrypted",
+            } });
+            const presence = createSessionPublisherPresence();
+            const attempts: ReturnType<typeof SessionTranscriptObservationInputSchema.parse>[] = [];
+            const homeAcks: ReturnType<typeof SessionTranscriptObservationAckV1Schema.parse>[] = [];
+            const connectPublisher = async (dropAck: boolean) => {
+                const socket = createAuthenticatedFakeSocket({ id: `notice-socket-${randomUUID()}` });
+                sessionUpdateHandler(owner.id, socket as never, {
+                    connectionType: "session-scoped", socket, userId: owner.id, sessionId: session.id,
+                } as never, { presence, binding: { accountId: owner.id, machineId, sessionId: session.id } });
+                const claimAcks: unknown[] = [];
+                await getSocketHandler(socket, "session-runtime-activity-snapshot")({
+                    sessionId: session.id, mutationId: randomUUID(), snapshot: { state: "idle", activeCount: 0 },
+                }, (ack: unknown) => claimAcks.push(ack));
+                expect(claimAcks).toEqual([expect.objectContaining({
+                    status: expect.stringMatching(/^(applied|unchanged)$/u), sessionId: session.id,
+                })]);
+                // Only Socket.IO transport is substituted. The registered Home
+                // handler, publisher admission, transcript writer and SQL dedup stay real.
+                const transport = {
+                    connected: true,
+                    emit: () => undefined,
+                    async emitWithAck(event: string, payload: unknown) {
+                        expect(event).toBe(SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1);
+                        attempts.push(SessionTranscriptObservationInputSchema.parse(payload));
+                        let response: unknown;
+                        await getSocketHandler(socket, event)(payload, (ack: unknown) => { response = ack; });
+                        const ack = SessionTranscriptObservationAckV1Schema.parse(response);
+                        homeAcks.push(ack);
+                        if (dropAck) {
+                            committedAtHome();
+                            await loseAck;
+                            transport.connected = false;
+                            socket.connected = false;
+                            throw new Error("connection closed after Home committed and before ACK delivery");
+                        }
+                        return ack;
+                    },
+                } satisfies SessionClientDurableMutationSocket;
+                return transport;
+            };
+            const firstSocket = await connectPublisher(true);
+            const contract = (socket: SessionClientDurableMutationSocket, epoch: number) => ({
+                mode: "session_sync_v2_pending_input_v1" as const,
+                runtimeActivity: "v2" as const, pendingInput: "v1" as const,
+                publisherAuthority: "indeterminate" as const, sessionConnectionEpoch: epoch, socket,
+                transcriptTransport: { mode: "session_transcript_observation_v1" as const },
+            });
+            const first = createRuntimeSessionClientDurableMutationOutbox({
+                token: "transport-fixture", sessionId: session.id, flushOnReady: false,
+                getSocket: () => firstSocket, requestReconnect: () => undefined,
+            });
+            handles.push(first);
+            await first.setSessionSyncPendingInputServerContract(contract(firstSocket, 1));
+            const prepareNotice = () => prepareSessionEventMessageViaPort({
+                buildOutboundSessionMessagePayload: content => ({ t: "plain", v: content }),
+            }, {
+                type: "message", message: "An optional MCP server could not be prepared.",
+                [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: { v: 1, items: [{
+                    kind: "mcp_server", itemId: "optional-tracker", name: "Tracker",
+                    code: "mcp_unavailable", detail: "catalog_unavailable",
+                }] },
+            });
+            const prepared = prepareNotice();
+            const now = Date.now();
+            const mutation = {
+                v: 1, sessionId: session.id,
+                mutationId: resolveTranscriptMessageAppendMutationId({ sessionId: session.id, localId: prepared.localId }),
+                source: "transcript_message_append", localId: prepared.localId, sidechainId: null,
+                messageRole: prepared.messageRole, content: prepared.payload, createdAt: now, updatedAt: now,
+                provenance: { kind: "non_dependent", source: "background" },
+            } satisfies TranscriptMessageAppendMutationV1;
+
+            // The optional caller resumes from durable custody while the real
+            // Home ACK is still unavailable; it installs no delivery observer.
+            expect(await first.enqueueTranscriptMessage(mutation, { awaitDelivery: false })).toMatchObject({
+                persisted: true, delivered: false, localId: prepared.localId,
+            });
+            await homeCommitted;
+            const committed = await db.sessionMessage.findUniqueOrThrow({ where: {
+                sessionId_localId: { sessionId: session.id, localId: prepared.localId },
+            } });
+            expect(committed.content).toEqual(prepared.payload);
+            expect(committed.content).toMatchObject({ t: "plain", v: { content: { data: {
+                [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: {
+                    v: 1, items: [{ kind: "mcp_server", itemId: "optional-tracker", code: "mcp_unavailable" }],
+                },
+            } } } });
+            expect(await db.sessionMessage.count({ where: { sessionId: session.id } })).toBe(1);
+            expect(await loadSessionClientDurableMutationOutbox(session.id)).toEqual([expect.objectContaining({
+                mutationId: mutation.mutationId, payload: expect.objectContaining({ localId: prepared.localId }),
+            })]);
+
+            releaseLostAck();
+            await first.flush("flush");
+            await first.close();
+            handles.pop();
+            expect(homeAcks).toEqual([expect.objectContaining({ ok: true, didWrite: true, localId: prepared.localId })]);
+            expect(await loadSessionClientDurableMutationOutbox(session.id)).toEqual([expect.objectContaining({
+                mutationId: mutation.mutationId, attempts: 1,
+            })]);
+
+            const recoveredSocket = await connectPublisher(false);
+            const recovered = createRuntimeSessionClientDurableMutationOutbox({
+                token: "transport-fixture", sessionId: session.id, initiallyActive: false, flushOnReady: false,
+                getSocket: () => recoveredSocket, requestReconnect: () => undefined,
+            });
+            handles.push(recovered);
+            await recovered.awaitReady();
+            await recovered.setSessionSyncPendingInputServerContract(contract(recoveredSocket, 2));
+            expect(prepareNotice().localId).toBe(prepared.localId);
+            // Do not enqueue another event: the replacement handle must recover
+            // and dequeue the original persisted mutation itself.
+            await recovered.activateDelivery();
+            await recovered.flush("flush");
+
+            expect(attempts.map(attempt => attempt.localId)).toEqual([prepared.localId, prepared.localId]);
+            expect(homeAcks).toEqual([
+                expect.objectContaining({ ok: true, id: committed.id, seq: committed.seq, didWrite: true }),
+                expect.objectContaining({ ok: true, id: committed.id, seq: committed.seq, didWrite: false }),
+            ]);
+            expect(await db.sessionMessage.findMany({ where: { sessionId: session.id },
+                select: { id: true, seq: true, localId: true, content: true, rowRevision: true },
+            })).toEqual([{
+                id: committed.id, seq: committed.seq, localId: prepared.localId,
+                content: committed.content, rowRevision: committed.rowRevision,
+            }]);
+            expect(await loadSessionClientDurableMutationOutbox(session.id)).toEqual([]);
+        } finally {
+            releaseLostAck();
+            try {
+                for (const handle of handles) await handle.close();
+            } finally {
+                if (previousCliHome === undefined) delete process.env.HAPPIER_HOME_DIR;
+                else process.env.HAPPIER_HOME_DIR = previousCliHome;
+                reloadConfiguration();
+            }
+        }
+    });
 
     it('reads saved live message diagnostics on the next socket event without reconnecting', async () => {
         const owner = await db.account.create({ data: { publicKey: `pk-${randomUUID()}`, encryptionMode: 'plain', homeRole: 'owner' }, select: { id: true } });
