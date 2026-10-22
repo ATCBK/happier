@@ -940,9 +940,9 @@ export async function machinePluginActionSchemasRead(
                                 await release();
                             };
                         },
-                        resolve: async signal => {
+                        resolve: async (signal, onIssued) => {
                             try {
-                                const value = await input.resolve(signal);
+                                const value = await input.resolve(signal, onIssued);
                                 const parsed = DaemonPluginActionSchemasReadResponseSchema.safeParse(value);
                                 input.binding.assertCurrent();
                                 if (!parsed.success || !parsed.data.ok || signal.aborted) forget();
