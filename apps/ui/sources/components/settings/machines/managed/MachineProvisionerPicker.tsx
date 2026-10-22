@@ -156,16 +156,16 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
     const controllerName = scope.machine ? getMachineSentenceName(scope.machine) : '';
     const observedMachines = React.useMemo(() => scope.machine ? [scope.machine] : [], [scope.machine]);
     const presenceNowMs = useMachinePresenceNowMs(observedMachines);
-    const controllerOnline = scope.machine ? resolveMachinePickerPresence(scope.machine, presenceNowMs,
-        catalog.binding?.isCurrent() ? catalog.binding.scope : null).status === 'online' : false;
+    const controllerPresence = scope.machine ? resolveMachinePickerPresence(scope.machine, presenceNowMs,
+        catalog.binding?.isCurrent() ? catalog.binding.scope : null).status : 'unknown';
     const checkFailed = Object.values(checks).some(result => result.kind === 'failed' && result.code !== 'credential_unavailable');
     const failure = catalog.error ?? error ?? (checkFailed ? 'unavailable' : null);
     // The controller's own state, said once under the chip that changes it.
     // A catalog that answered speaks for itself; presence only explains an empty or failed one.
     const scopeState = !controller ? null
-        : (failure || cards.length === 0) && !controllerOnline ? <SurfaceStateCard testID="managed-picker.offline" kind="unavailable" size="line"
+        : (failure || cards.length === 0) && controllerPresence === 'offline' ? <SurfaceStateCard testID="managed-picker.offline" kind="unavailable" size="line"
             title={t('managedMachines.add.controllerOffline', { controller: controllerName })} action={{ label: t('common.retry'), onPress: catalog.refresh }} />
-        : failure ? <SurfaceStateCard testID="managed-picker.unavailable" kind="error" size="line" diagnosticCode={failure}
+        : failure || cards.length === 0 && controllerPresence === 'unknown' ? <SurfaceStateCard testID="managed-picker.unavailable" kind={controllerPresence === 'unknown' ? 'unavailable' : 'error'} size="line" diagnosticCode={failure ?? undefined}
             title={t('managedMachines.add.controllerUnreadable', { controller: controllerName })} action={{ label: t('common.retry'), onPress: catalog.refresh }} />
         : catalog.loading && cards.length === 0 ? <SurfaceStateCard kind="loading" size="line" title={t('managedMachines.providers.loading')} />
         : !catalog.loading && cards.length === 0 ? <SurfaceStateCard kind="empty" size="line" title={t('managedMachines.providers.empty')} />

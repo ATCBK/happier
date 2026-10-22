@@ -13,7 +13,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useTeamBinding } from '@/hooks/teams/useTeamBinding';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { useMachineListForServer, useServerScopedMachine } from '@/sync/domains/state/storage';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
@@ -123,6 +123,10 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
     </ItemList>;
 
     const controllerName = getMachineDisplayName(controller) ?? t('common.unknown');
+    const presenceLabel = (machine: NonNullable<typeof controller>) => {
+        const presence = resolveMachinePickerPresence(machine, presenceNowMs, catalog.binding?.isCurrent() ? catalog.binding.scope : null);
+        return presence.status === 'online' ? t('status.online') : presence.status === 'offline' ? t('status.offline') : t('common.unknown');
+    };
     // Managed from is edited in place among this Home's machines that can manage; the server re-checks the recipe on it.
     const controllerChoices = canManage ? (machines ?? []).filter(isManagedControllerCandidate) : [];
     const receipt = buildManagedConfigurationReceipt({ launch: visiblePreset.recipe, reviewedFacts: configuration.facts ?? undefined,
@@ -175,9 +179,9 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
         controller: { description: t('managedMachines.controller.required', { controller: controllerName }),
             row: controllerChoices.length ? {
                 title: t('machinePresets.controllerRow'),
-                ...(controller ? { subtitle: isMachineReachable(catalog.binding?.isCurrent() ? catalog.binding.scope : null, controller, presenceNowMs) ? t('status.online') : t('status.offline') } : {}),
+                ...(controller ? { subtitle: presenceLabel(controller) } : {}),
                 choices: controllerChoices.map(machine => ({ id: machine.id, title: getMachineDisplayName(machine) ?? machine.id,
-                    subtitle: isMachineReachable(catalog.binding?.isCurrent() ? catalog.binding.scope : null, machine, presenceNowMs) ? t('status.online') : t('status.offline') })),
+                    subtitle: presenceLabel(machine) })),
                 value: visiblePreset.controller.machineId, disabled: busy,
                 onChange: id => {
                     const machine = controllerChoices.find(candidate => candidate.id === id);

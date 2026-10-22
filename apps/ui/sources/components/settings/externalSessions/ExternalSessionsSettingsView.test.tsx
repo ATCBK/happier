@@ -1184,6 +1184,27 @@ describe('ExternalSessionsSettingsView passive shell', () => {
         await screen.unmount();
     });
 
+    it('keeps withdrawn follow machines unknown and disabled while freshly observed offline machines stay offline', async () => {
+        effectBoundary.machines = [createMachineFixture({ id: 'machine-1', activeAt: Date.now() }),
+            createMachineFixture({ id: 'machine-2', active: false, activeAt: 0 })];
+        effectBoundary.sessions = [createExternalSession({ id: 'unknown', title: 'Waiting follow', policy: 'attached_only', status: 'disabled' }),
+            createExternalSession({ id: 'offline', title: 'Sleeping follow', machineId: 'machine-2', policy: 'attached_only', status: 'disabled' })];
+        const { ExternalSessionsSettingsView } = await import('./ExternalSessionsSettingsView');
+        const screen = await renderSettingsView(<ExternalSessionsSettingsView />);
+        const { withdrawMachinePresenceForScope, captureMachinePresenceObservation, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+        const scope = { serverId: scopeIdOf(account.serverId), accountId: 'account-1' };
+        try {
+            await act(async () => { withdrawMachinePresenceForScope(scope); captureMachinePresenceObservation(scope)(['machine-2']); });
+            await flushHookEffects({ cycles: 2, turns: 2 });
+            expect(screen.findRow('settings-external-sessions-follow-item-unknown')?.props.subtitle).toBe('externalSessions.followStatusUnknown');
+            expect(screen.findRow('settings-external-sessions-follow-item-unknown')?.props.disabled).toBe(true);
+            expect(screen.findRow('settings-external-sessions-follow-item-offline')?.props.subtitle).toBe('externalSessions.followStatusMachineOffline');
+            await act(async () => captureMachinePresenceObservation(scope)(['machine-1']));
+            await flushHookEffects({ cycles: 2, turns: 2 });
+            expect(screen.findRow('settings-external-sessions-follow-item-unknown')?.props.disabled).toBe(false);
+        } finally { clearMachineRequestReachabilityForTest(); }
+    });
+
     it('keeps the stored follow status but fails mutation closed while capability projection is still loading', async () => {
         effectBoundary.machines = [createMachineFixture({
             id: 'machine-1',

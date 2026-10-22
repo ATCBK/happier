@@ -26,6 +26,10 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { useMachineListByServerId, useMachineListStatusByServerId } from '@/sync/domains/state/storage';
 import type { Machine } from '@/sync/domains/state/storageTypes';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import { createMachinePool, deleteMachinePool, MachinePoolActionApprovalPendingError, updateMachinePool } from '@/sync/ops/machinePools';
 import { useMachinePoolProjections, type MachinePoolProjection } from '@/sync/engine/machines/useMachinePoolProjections';
 import { MachinePoolActionError } from '@/sync/api/machines/machinePoolActions';
@@ -128,6 +132,9 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
     const router = useRouter(); const navigation = useNavigation(); const { theme } = useUnistyles();
     const isFocused = useIsFocused();
     const { machines, machineListStatus, poolProjection } = props;
+    const { binding } = useServerCredentialAccountScopeBinding(props.serverId);
+    const presenceNowMs = useMachinePresenceNowMs(machines);
+    const reachabilityRevision = useMachineReachabilityRevision();
     const isNew = !props.poolId;
     const lifetimeCurrentRef = React.useRef(true);
     React.useEffect(() => () => { lifetimeCurrentRef.current = false; }, []);
@@ -267,7 +274,8 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
             id: 'machines',
             options: availableMachines.map((machine) => {
                 const label = resolveMachinePoolMemberLabel({ machineId: machine.id }, machines);
-                const status = machine.active ? t('status.online') : t('status.offline');
+                const presence = resolveMachinePickerPresence(machine, presenceNowMs, binding?.isCurrent() ? binding.scope : null);
+                const status = presence.status === 'online' ? t('status.online') : presence.status === 'offline' ? t('status.offline') : t('common.unknown');
                 return {
                     id: machine.id,
                     testID: `settings.machinePools.editor.memberPicker.${machine.id}`,
@@ -278,7 +286,7 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
                 };
             }),
         }],
-    }), [availableMachines, machines]);
+    }), [availableMachines, machines, binding, presenceNowMs, reachabilityRevision]);
     const closeMemberPicker = React.useCallback(() => {
         if (!memberPickerModalIdRef.current) return;
         Modal.hide(memberPickerModalIdRef.current);
@@ -311,6 +319,9 @@ function MachinePoolEditorContent(props: MachinePoolEditorContentProps) {
             closeOnBackdrop: true,
         });
     }, [availableMachines.length, closeMemberPicker, formDisabled, memberPickerStep]);
+    React.useEffect(() => {
+        if (memberPickerModalIdRef.current) Modal.update(memberPickerModalIdRef.current, { rootStep: memberPickerStep });
+    }, [memberPickerStep]);
     React.useEffect(() => closeMemberPicker, [closeMemberPicker]);
     const updateMember = React.useCallback((machineId: string, patch: Partial<MachinePoolMemberInputV1>) => setDraft((current) => ({ ...current, members: current.members.map((member) => member.machineId === machineId ? { ...member, ...patch } : member) })), []);
     /**

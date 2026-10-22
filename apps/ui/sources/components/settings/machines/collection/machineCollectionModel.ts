@@ -40,6 +40,7 @@ type MachineCollectionRowPresentation = Readonly<{
     host: string | null;
     platformLabel: string;
     online: boolean;
+    status: 'online' | 'offline' | 'unknown';
     /** "Online", or "Offline · last seen …", from the shared presence owner. */
     presence: string;
     /** Why this device cannot read the machine, when it is locked. */
@@ -102,9 +103,9 @@ export function partitionMachineCollectionRailRows(rows: readonly MachineCollect
     inline: readonly MachineCollectionRow[];
     offline: readonly MachineCollectionRow[];
 }> {
-    const offline = foldOffline ? rows.filter(row => !row.online) : [];
+    const offline = foldOffline ? rows.filter(row => row.status === 'offline') : [];
     if (offline.length === 0) return { inline: rows, offline: [] };
-    return { inline: rows.filter(row => row.online), offline };
+    return { inline: rows.filter(row => row.status !== 'offline'), offline };
 }
 
 export function managedMachineConsentKey(serverId: string, managedId: string): string {
@@ -166,6 +167,7 @@ export function buildMachineCollection(input: Readonly<{
                     host: host && host !== name ? host : null,
                     platformLabel: formatOSPlatform(machine.metadata?.platform),
                     online: presence.online,
+                    status: presence.status,
                     presence: presence.label,
                     reason: describeMachineLockedReason(machine),
                     ownership: describeMachineSharedOwnership(machine),
@@ -183,7 +185,7 @@ export function buildMachineCollection(input: Readonly<{
                         const awaitingConsent = input.awaitingConsent?.has(managedMachineConsentKey(group.serverId, machine.id)) === true;
                         const creation = describeManagedCreation(machine);
                         return { kind: 'managed', managedId: machine.id,
-                        serverId: group.serverId, title: machine.launch.name, titleParts: { name: machine.launch.name, hint: null }, host: null, platformLabel: '', online: false,
+                        serverId: group.serverId, title: machine.launch.name, titleParts: { name: machine.launch.name, hint: null }, host: null, platformLabel: '', online: false, status: 'offline',
                         presence: awaitingConsent ? t('approvals.waitingForYou') : creation.line,
                         ...(!awaitingConsent && creation.word ? { presenceWord: creation.word } : {}), reason: null, ownership: null, ownerName: null,
                         ...(machine.enrolledMachineId && machine.archivedAt === undefined ? { enrolledMachineId: machine.enrolledMachineId } : {}) };

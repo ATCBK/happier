@@ -202,6 +202,7 @@ export type PluginMachineExecutionOriginPresentation = Readonly<{
     selected: boolean;
     /** A chosen Machine that cannot run this plugin's operations now (offline, unreachable, rejected). */
     unavailable?: boolean;
+    presence?: 'offline';
     /** Happier picked this Machine (nothing is pinned on this device); choosing one pins it. */
     automatic?: boolean;
 }>;
@@ -218,6 +219,8 @@ export function resolvePluginMachineExecutionOriginPresentation(
         ?? (selectedOrigin ? { serverIdentityId: selectedOrigin.serverIdentityId, machineId: getPluginMachineExecutionOriginRef(selectedOrigin).machineId } : null);
     if (selectedTarget) {
         const labels = resolveMachineAdministrationTargetLabel({ target: selectedTarget, candidates: machineCandidates })!;
+        const machine = machineCandidates.find(candidate => candidate.target.serverIdentityId === selectedTarget.serverIdentityId
+            && candidate.target.machineId === selectedTarget.machineId);
         const selectedCandidate = selectedOrigin ? selection.candidates.find((candidate) => exactOriginsEqual(
             selectedOrigin,
             getPluginExecutionOriginCandidateOrigin(candidate),
@@ -232,6 +235,7 @@ export function resolvePluginMachineExecutionOriginPresentation(
                 ? resolveCandidatePresentationDetail(selectedCandidate)
                 : t('common.unavailable'),
             selected: true,
+            ...(machine?.availability === 'offline' ? { presence: 'offline' as const } : {}),
             automatic: !selection.storedTarget && selection.state.kind === 'selected' && selection.state.selectionSource === 'auto',
             unavailable: selection.state.kind === 'unavailable'
                 || !selectedCandidate
@@ -348,9 +352,9 @@ export function PluginMachineExecutionOriginSelectorView(props: Readonly<{
             icon: <Icon name="desktop" size={14} color={theme.colors.text.secondary} />,
             ...(props.compact ? { iconOnly: true } : {}),
             muted: !current.selected,
-            // The chosen Machine is named either way; when it cannot answer, the chip says so with the
-            // shared presence dot (healthy stays quiet) and announces why.
-            ...(current.unavailable ? { presence: 'offline' as const, accessibilityHint: current.detail } : {}),
+            // Plugin availability does not establish Machine presence; an unknown Machine keeps no dot.
+            ...(current.presence ? { presence: current.presence } : {}),
+            ...(current.unavailable ? { accessibilityHint: current.detail } : {}),
             testID: props.testIDPrefix ? `${props.testIDPrefix}.chip` : undefined,
             ...(hasCandidates || hasChoice ? {
                 renderPopoverContent: ({ close, maxHeight }) => (

@@ -835,6 +835,28 @@ describe('MachinePoolEditorScreen', () => {
         expect(option).toMatchObject({ id: 'machine-offline', disabled: false });
     });
 
+    it('uses unknown for withdrawn member candidates and preserves fresh offline candidates', async () => {
+        boundaries.machines = [createMachineFixture({ id: 'unknown', activeAt: Date.now(), metadata: machineMetadata('Unknown machine') }),
+            createMachineFixture({ id: 'offline', active: false, activeAt: 0, metadata: machineMetadata('Offline machine') })];
+        await publishBoundaryState();
+        const { MachinePoolEditorScreen } = await import('./MachinePoolEditorScreen');
+        const screen = await renderScreen(<MachinePoolEditorScreen serverId={boundaries.serverId} />);
+        const { withdrawMachinePresenceForScope, captureMachinePresenceObservation, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+        try {
+            const scope = { serverId: boundaries.serverId, accountId: 'account-a' };
+            await screen.pressByTestIdAsync('settings.machinePools.editor.addMachines');
+            vi.mocked(Modal.update).mockClear();
+            await act(async () => { withdrawMachinePresenceForScope(scope); captureMachinePresenceObservation(scope)(['offline']); });
+            const updatedProps = vi.mocked(Modal.update).mock.calls.at(-1)?.[1];
+            const step = updatedProps && 'rootStep' in updatedProps ? updatedProps.rootStep as SelectionListStep : undefined;
+            expect(step).toBeDefined();
+            if (!step) throw new Error('The mounted picker must receive current presence');
+            const options = step.sections.flatMap(section => section.kind === 'static' ? section.options : []);
+            expect(options.find(option => option.id === 'unknown')?.subtitle).toBe(t('common.unknown'));
+            expect(options.find(option => option.id === 'offline')?.subtitle).toBe(t('status.offline'));
+        } finally { clearMachineRequestReachabilityForTest(); }
+    });
+
     it('explains why Add machines is unavailable once every eligible machine is already a member', async () => {
         boundaries.machines = [createMachineFixture({ id: 'machine-a', metadata: machineMetadata('Mac Studio') })];
         boundaries.pools = [poolView(1)];

@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { ItemList } from '@/components/ui/lists/ItemList';
 
-import { AccountDetailFactsSectionsView, AccountDetailUsageSectionView, AccountDetailSubscriptionSectionView, AccountDetailResetsSectionView, projectAccountDetailMachines, type AccountDetailUsageFacts } from './AccountDetailSections';
+import { AccountDetailFactsSectionsView, AccountDetailUsageSectionView, AccountDetailSubscriptionSectionView, AccountDetailResetsSectionView, AccountDetailWorksOnSectionView, projectAccountDetailMachines, type AccountDetailUsageFacts } from './AccountDetailSections';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -159,6 +159,20 @@ it('retains saved-reset facts when the detail has no live reset action', async (
 });
 
 describe('projectAccountDetailMachines', () => {
+    it('omits a presence dot for unknown machines while preserving a genuine offline dot', async () => {
+        const scope = { serverId: 'home-a', accountId: 'detail-account' };
+        const now = Date.now();
+        const machines = [createMachineFixture({ id: 'unknown', activeAt: now }), createMachineFixture({ id: 'offline', active: false, activeAt: 0 })];
+        withdrawMachinePresenceForScope(scope);
+        captureMachinePresenceObservation(scope)(['offline']);
+        try {
+            const rows = projectAccountDetailMachines(machines, now, scope);
+            expect(rows.find(row => row.id === 'unknown')).toMatchObject({ online: false, status: 'unknown' });
+            const screen = await renderScreen(<AccountDetailWorksOnSectionView machines={rows} />);
+            expect(screen.root.findAll(node => node.props.accessibilityLabel === 'Offline' && typeof node.type === 'string')).toHaveLength(1);
+            expect(screen.root.findAll(node => node.props.accessibilityLabel === 'Online' && typeof node.type === 'string')).toHaveLength(0);
+        } finally { clearMachineRequestReachabilityForTest(); }
+    });
     it('retains unavailable inventory while showing executable supply first', () => {
         const now = Date.now();
         const failed = createMachineFixture({ id: 'failed', activeAt: now });

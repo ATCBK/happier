@@ -280,7 +280,7 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
                     serverId={row.serverId}
                     machineId={row.kind === 'machine' ? row.machineId : row.enrolledMachineId ?? null}
                     online={row.online}
-                    quietWord={row.reason ?? (!row.online && row.kind === 'managed' ? row.presenceWord ?? row.presence : !row.online ? t('machineDetailPage.offline') : row.ownership)}
+                    quietWord={row.reason ?? (row.status === 'unknown' ? t('common.unknown') : !row.online && row.kind === 'managed' ? row.presenceWord ?? row.presence : !row.online ? t('machineDetailPage.offline') : row.ownership)}
                 />
             )}
             icon={(

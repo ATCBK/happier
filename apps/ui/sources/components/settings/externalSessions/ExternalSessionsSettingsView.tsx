@@ -34,6 +34,7 @@ import { requireOneShotAccountSettingsMutationApplied } from '@/sync/engine/sett
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
+import { resolveMachinePickerPresence, type MachinePickerPresence } from '@/sync/domains/machines/identity/resolveMachinePickerPresence';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { supportsExternalSessionBackgroundFollow } from '@/components/sessions/external/browse/resolveExternalSessionBrowseSourceOptions';
@@ -88,7 +89,7 @@ function resolveFollowStatusSubtitle(status: FollowRow['status']): string {
 
 function buildFollowRows(
     sessions: readonly Session[],
-    machineOnlineById: ReadonlyMap<string, boolean>,
+    machinePresenceById: ReadonlyMap<string, Readonly<{ presence: MachinePickerPresence; canChange: boolean }>>,
 ): FollowRow[] {
     const rows: FollowRow[] = [];
     for (const session of sessions) {
@@ -96,17 +97,18 @@ function buildFollowRows(
         const link = readExternalSessionLink(metadata);
         if (!link) continue;
         const enabled = readExternalSessionFollowPolicy(metadata) === 'background_follow';
-        const machineOnline = machineOnlineById.get(link.machineId);
-        const status = machineOnline === false
+        const machine = machinePresenceById.get(link.machineId);
+        const status = machine?.presence.status === 'offline'
             ? 'machine_offline'
-            : readExternalSessionFollowStatusV1(link.followStatusV1)?.status ?? 'unknown';
+            : machine?.presence.status !== 'online' ? 'unknown'
+                : readExternalSessionFollowStatusV1(link.followStatusV1)?.status ?? 'unknown';
         const title = getSessionName(session);
         rows.push({
             session,
             title,
             enabled,
             status,
-            canChange: machineOnline !== false,
+            canChange: machine?.canChange === true,
         });
     }
     return rows;
@@ -221,13 +223,16 @@ export const ExternalSessionsSettingsView = React.memo(function ExternalSessions
         keepPassivelyFollowingAfterRestart: false,
         autoLinkSourcePolicies: [],
     };
-    const machineOnlineById = React.useMemo(
-        () => new Map(machines.map((machine) => [machine.id, isMachineSelectableForFleet(accountScope, machine, nowMs)])),
+    const machinePresenceById = React.useMemo(
+        () => new Map(machines.map((machine) => [machine.id, {
+            presence: resolveMachinePickerPresence(machine, nowMs, accountScope),
+            canChange: isMachineSelectableForFleet(accountScope, machine, nowMs),
+        }])),
         [machines, accountScope, reachabilityRevision, nowMs],
     );
     const rows = React.useMemo(
-        () => buildFollowRows(sessions, machineOnlineById),
-        [machineOnlineById, sessions],
+        () => buildFollowRows(sessions, machinePresenceById),
+        [machinePresenceById, sessions],
     );
     const administrationTargetSelection = useMachineAdministrationTargetSelection(
         MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.externalSessions,

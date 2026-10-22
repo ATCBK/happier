@@ -36,6 +36,7 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
+import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
 
 import { ACCOUNT_BLOCK_RESET_COUNTDOWN_DAYS_FORMATTER } from './accountBlockFormatters';
 import { formatAgentNames } from '../ConnectedServiceMark';
@@ -497,7 +498,7 @@ export const AccountDetailUsedBySection = React.memo(function AccountDetailUsedB
 });
 
 /** One machine the account works on, with its presence. */
-export type AccountDetailMachine = Readonly<{ id: string; name: string; online: boolean }>;
+export type AccountDetailMachine = Readonly<{ id: string; name: string; online: boolean; status?: 'online' | 'offline' | 'unknown' }>;
 
 /**
  * Account detail · Works on (G10): the account is saved to the Account, so every machine can use it
@@ -522,11 +523,11 @@ export const AccountDetailWorksOnSectionView = React.memo(function AccountDetail
                     <View key={machine.id} style={[styles.machine, machine.online ? null : styles.machineOffline]}>
                         <Icon name="desktop" size={13} color={theme.colors.text.secondary} />
                         <Text style={styles.machineName} numberOfLines={1}>{machine.name}</Text>
-                        <StatusDot
+                        {machine.status !== 'unknown' ? <StatusDot
                             size={6}
                             color={machine.online ? theme.colors.state.success.foreground : theme.colors.text.tertiary}
                             accessibilityLabel={machine.online ? t('status.online') : t('status.offline')}
-                        />
+                        /> : null}
                     </View>
                 ))}
             </View>
@@ -548,6 +549,7 @@ export function projectAccountDetailMachines(
         id: machine.id,
         name: names.get(machine.id) ?? getMachineDisplayName(machine),
         online: isMachineSelectableForFleet(scope, machine, nowMs),
+        status: describeMachinePresenceLine(machine, nowMs, undefined, scope).status,
     }));
     return [...rows.filter((row) => row.online), ...rows.filter((row) => !row.online)];
 }

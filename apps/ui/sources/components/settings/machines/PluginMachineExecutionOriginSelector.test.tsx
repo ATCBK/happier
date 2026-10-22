@@ -86,6 +86,21 @@ const { PluginMachineExecutionOriginSelectorView, resolvePluginMachineExecutionO
     = await import('./PluginMachineExecutionOriginSelector');
 const { storage } = await import('@/sync/domains/state/storageStore');
 
+it('uses the Machine verdict for an unavailable origin dot, preserving unknown and genuine offline', async () => {
+    const storedTarget = { serverIdentityId: 'home', machineId: 'machine' };
+    const fixture = selection({ candidates: [], state: { kind: 'unavailable', storedOrigin: null, storedTarget, candidates: [], reasons: ['offline'] } });
+    const machine = { target: storedTarget, displayName: 'Studio', serverLabel: 'Home', availability: 'unknown' as const,
+        observation: 'stale' as const, observedAt: 1 };
+    const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={fixture.value} machineCandidates={[machine]} presentation="chip" />);
+    const filter = () => screen.root.findAll(node => node.props.filter?.id === 'plugin-execution')[0]?.props.filter;
+    expect(filter()).toBeDefined();
+    expect(filter()).not.toHaveProperty('presence');
+    await screen.update(<PluginMachineExecutionOriginSelectorView selection={fixture.value} machineCandidates={[{ ...machine, availability: 'offline' }]} presentation="chip" />);
+    expect(filter()?.presence).toBe('offline');
+    expect(resolvePluginMachineExecutionOriginPresentation(fixture.value, [machine])).not.toHaveProperty('presence');
+    expect(resolvePluginMachineExecutionOriginPresentation(fixture.value, [{ ...machine, availability: 'offline' }])).toMatchObject({ presence: 'offline' });
+});
+
 function candidate(input: Readonly<{
     machineId: string;
     materializationId: string;

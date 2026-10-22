@@ -35,7 +35,7 @@ import {
 } from '@/sync/domains/state/storage';
 import { useVoiceSessionSnapshot } from '@/voice/session/voiceSession';
 import { t } from '@/text';
-import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
+import { isMachineReachable, resolveMachineReachability } from '@/sync/domains/machines/reachability/machineReachability';
 import { normalizeFileSystemPath } from '@/sync/domains/fileSystem/normalizeFileSystemPath';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
@@ -521,6 +521,7 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
             const list = Array.isArray(rawList) ? rawList.filter(isMachineVisibleForLaunchSelection) : rawList;
             const binding = machineScopeBindings.get(resolveServerProfileScopeIdForIdentifier(serverId));
             const isOnline = (machine: NonNullable<typeof list>[number]) => isMachineReachable(binding?.isCurrent() ? binding.scope : null, machine, presenceNowMs);
+            const reachability = (machine: NonNullable<typeof list>[number]) => resolveMachineReachability(binding?.isCurrent() ? binding.scope : null, machine, presenceNowMs);
             // One refresh for every Home's machines, on the first machines section.
             const refreshAction = groupIndex === 0 ? (
               <RoundButton
@@ -603,7 +604,7 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
               const subtitle = (
                 <View>
                   <Text style={{ color: theme.colors.text.secondary }}>
-                    {online ? t('systemStatus.machine.online') : t('systemStatus.machine.offline')}
+                    {online ? t('systemStatus.machine.online') : reachability(machine) === 'unknown' ? t('common.unknown') : t('systemStatus.machine.offline')}
                     {meta?.platform ? ` • ${meta.platform}` : ''}
                     {meta?.arch ? ` • ${meta.arch}` : ''}
                     {meta?.happyCliVersion ? t('systemStatus.machine.cliVersionBullet', { version: meta.happyCliVersion }) : ''}
@@ -636,7 +637,8 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
                 </React.Fragment>
               );
             };
-            const offlineMachines = list.filter((machine) => !isOnline(machine));
+            const offlineMachines = list.filter((machine) => reachability(machine) === 'unreachable');
+            const unknownMachines = list.filter((machine) => reachability(machine) === 'unknown');
             // Machines that need attention come first; calm online ones fold into one counted row (a lone one stays a row).
             const onlineMachines = list.filter(isOnline);
             const needsAttention = (machine: (typeof list)[number]) => readMachineAttention(
@@ -659,6 +661,7 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
                     {calmMachines.map(renderMachine)}
                   </CountedDisclosureItem>
                 ) : calmMachines.map(renderMachine)}
+                {unknownMachines.map(renderMachine)}
                 {offlineMachines.length > 0 ? (
                   <CountedDisclosureItem testID="system-status-offline-machines" title={t('systemStatus.machine.offline')} count={offlineMachines.length}>
                     {offlineMachines.map(renderMachine)}

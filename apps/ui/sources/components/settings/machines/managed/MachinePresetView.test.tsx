@@ -65,7 +65,10 @@ beforeEach(async () => {
     clearDaemonMergedProjectionCacheForTests(); resetMachineProjectionReadsForTests();
     boundary.rpc.mockReset().mockResolvedValue({ ok: false, code: 'unsupported' });
 });
-afterEach(() => standardCleanup());
+afterEach(async () => {
+    standardCleanup();
+    (await import('@/sync/domains/machines/reachability/machineReachability')).clearMachineRequestReachabilityForTest();
+});
 
 const preset = { id: 'preset', homeId: 'srv_history', revision: 3, name: 'Build box',
     owner: { kind: 'account', accountId: 'owner' },
@@ -694,6 +697,38 @@ describe('reachable preset detail', () => {
                 patch: { controller: { machineId: 'builder', installationId: 'builder-installation' } } },
         ]);
         expect(harness.requestsFor('/v1/actions/machines.managed.acquire')).toEqual([]);
+    });
+
+    it('refreshes controller subtitles to unknown after that Home withdraws presence', async () => {
+        const serverId = await seed();
+        const scopeId = await seedConfiguration(serverId);
+        const screen = await renderSettingsView(<MachinePresetView serverId={serverId} presetId="preset" />);
+        const model = () => screen.findAllByType(MachinePresetDetail)[0]?.props.model;
+        await waitForHomeGovernance(() => expect(model()?.controller.row.subtitle).toBe(t('status.online')));
+        const { withdrawMachinePresenceForScope, captureMachinePresenceObservation } = await import('@/sync/domains/machines/reachability/machineReachability');
+        const scope = { serverId: scopeId, accountId: 'owner' };
+        await act(async () => withdrawMachinePresenceForScope(scope));
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(model()?.controller.row.subtitle).toBe(t('common.unknown'));
+        expect(model()?.controller.row.choices[0].subtitle).toBe(t('common.unknown'));
+        await act(async () => captureMachinePresenceObservation(scope)([preset.controller.machineId]));
+        await waitForHomeGovernance(() => expect(model()?.controller.row.subtitle).toBe(t('status.online')));
+    });
+
+    it('does not name a withdrawn controller offline while its provisioner catalog is unavailable', async () => {
+        const serverId = await seed();
+        const scopeId = await seedConfiguration(serverId);
+        const { useManagedControllerScope } = await import('./useManagedControllerScope');
+        const controllerScope = await renderHook(() => useManagedControllerScope({ serverId: scopeId, preferred: preset.controller, testIDPrefix: 'withdrawn-controller' }));
+        await waitForHomeGovernance(() => expect(controllerScope.getCurrent().controller).toEqual(preset.controller));
+        const { withdrawMachinePresenceForScope } = await import('@/sync/domains/machines/reachability/machineReachability');
+        await act(async () => withdrawMachinePresenceForScope({ serverId: scopeId, accountId: 'owner' }));
+        expect(controllerScope.getCurrent()).toMatchObject({ controller: preset.controller, machine: { id: preset.controller.machineId } });
+        harness.answer(serverId, '/v1/actions/machines.provisioners.list', { status: 503, body: { code: 'unavailable' } });
+        const screen = await renderSettingsView(<MachineProvisionerPicker serverId={scopeId} scope={controllerScope.getCurrent()} />);
+        await flushHookEffects({ cycles: 3, turns: 3 });
+        expect(screen.findByTestId('managed-picker.unavailable'), screen.getTextContent()).not.toBeNull();
+        expect(screen.findByTestId('managed-picker.offline')).toBeNull();
     });
 
     it('marks the provisioner with its package’s contributed brand mark', async () => {

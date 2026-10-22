@@ -5,7 +5,7 @@ import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/ma
 import type { ManagedMachinePresetV1 } from '@happier-dev/protocol/machines/managed/managedMachinePresetV1';
 import { t } from '@/text';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } from '@/sync/domains/machines/reachability/machineReachability';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 import type { ActiveSelectionMachineGroup } from '../hooks/useActiveSelectionMachineGroups';
 import {
@@ -49,6 +49,21 @@ function group(serverId: string, machines: Machine[], overrides: Partial<ActiveS
 afterEach(() => clearMachineRequestReachabilityForTest());
 
 describe('machine collection rail partition', () => {
+    it('keeps withdrawn unknown machines out of the offline fold and restores only observed machines', () => {
+        const nowMs = Date.now();
+        const scope = { serverId: 'a', accountId: 'collection-account' };
+        const machines = [machine('studio', { active: true, activeAt: nowMs }), machine('sleeping')];
+        withdrawMachinePresenceForScope(scope);
+        captureMachinePresenceObservation(scope)(['sleeping']);
+        const rows = buildMachineCollection({ groups: [group('a', machines)], groupedByHome: false, nowMs }).sections[0]!.rows;
+        const partition = partitionMachineCollectionRailRows(rows, true);
+        expect(partition.inline.map(row => row.machineId)).toEqual(['studio']);
+        expect(partition.inline[0]).toMatchObject({ online: false, status: 'unknown', presence: t('common.unknown') });
+        expect(partition.offline.map(row => row.machineId)).toEqual(['sleeping']);
+        captureMachinePresenceObservation(scope)(['studio']);
+        const restored = buildMachineCollection({ groups: [group('a', machines)], groupedByHome: false, nowMs }).sections[0]!.rows;
+        expect(restored.find(row => row.machineId === 'studio')).toMatchObject({ online: true, status: 'online' });
+    });
     it('keeps long-offline machines folded when the last online machine expires', () => {
         const nowMs = 1_000_000_000;
         const machines = [
@@ -93,7 +108,7 @@ describe('machine collection rail partition', () => {
             groups: [group('a', [machine('offline')])], groupedByHome: false,
         }).sections[0]!.rows;
         expect(partitionMachineCollectionRailRows(rows, false)).toEqual({ inline: rows, offline: [] });
-        const online = [{ ...rows[0]!, online: true }];
+        const online = [{ ...rows[0]!, online: true, status: 'online' as const }];
         expect(partitionMachineCollectionRailRows(online, true)).toEqual({ inline: online, offline: [] });
         expect(partitionMachineCollectionRailRows([], true)).toEqual({ inline: [], offline: [] });
     });

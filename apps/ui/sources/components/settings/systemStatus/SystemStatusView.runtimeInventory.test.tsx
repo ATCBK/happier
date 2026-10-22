@@ -342,6 +342,25 @@ describe('SystemStatusView runtime inventory', () => {
         expect(screen.getTextContent()).not.toContain('systemStatus.machine.daemonAttributionUnknown');
     });
 
+    it('withdraws mounted machine presence to unknown without folding it among genuinely offline machines', async () => {
+        const known = { ...state.createMachine('Studio'), id: 'present' };
+        const offline = { ...state.createMachine('Sleeping'), id: 'sleeping', active: false, activeAt: 0 };
+        state.machineListByServerId = { srv_1: [known, offline] };
+        const screen = await renderStatus();
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        const { withdrawMachinePresenceForScope, captureMachinePresenceObservation } = await import('@/sync/domains/machines/reachability/machineReachability');
+        await act(async () => {
+            const scope = { serverId: 'srv_1', accountId: 'acct_1' };
+            withdrawMachinePresenceForScope(scope);
+            captureMachinePresenceObservation(scope)(['sleeping']);
+        });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(screen.getTextContent()).toContain('Studio');
+        expect(screen.getTextContent()).toContain('common.unknown');
+        const offlineRows = screen.findAll(node => node.props.title === 'systemStatus.machine.offline' && node.props.detail === '1');
+        expect(offlineRows.length).toBeGreaterThan(0);
+    });
+
     it('shows the active Home once, even when its saved profile id differs from its identity', async () => {
         const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
         expect(getServerProfileById('srv_1')?.id).not.toBe('srv_1');
