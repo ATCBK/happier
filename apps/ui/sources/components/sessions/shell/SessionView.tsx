@@ -492,7 +492,7 @@ import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
 import {
     buildQuotaSnapshotScopeKey,
     consumeQuotaRecoveryCredit,
-} from '@/hooks/server/connectedServices/connectedServiceQuotaSnapshotStore';
+} from '@/sync/domains/connectedServices/connectedServiceQuotaSnapshotStore';
 
 const sessionSubmitPort = createSyncBackedSubmitPort(sync);
 const SESSION_COMPOSER_SUGGESTION_KINDS: readonly ComposerSuggestionKindId[] = [
