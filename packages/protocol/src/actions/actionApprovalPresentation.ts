@@ -166,7 +166,7 @@ export type ApprovalActionReference =
   /** An Agent's own model (no Provider connection): read by the Agent catalog's title for it. */
   | Readonly<{ kind: 'agentModel'; id: string; agentTargetKey: string }>
   /** The Connected Account (or pool) one connected service is bound to: read as "Service · account". */
-  | Readonly<{ kind: 'connectedAccount'; service: string } & ({ accountId: string } | { groupId: string })>
+  | Readonly<{ kind: 'connectedAccount'; id: string; service: string; pool?: true }>
   | Readonly<{ kind: 'managedMachine'; id: string; homeId: string }>
   | Readonly<{ kind: 'artifact' | 'skill' | 'mcpServer' | 'project' | 'agent' | 'registrySource'; id: string }>
   | Readonly<{ kind: 'machine'; id: string; workspaceRoot?: string }>
@@ -672,7 +672,7 @@ function describeApprovalConnectedServices(value: unknown): readonly ApprovalStr
     const id = groupId || accountId;
     if (!id) return [];
     return [{ label: 'Connected account', value: id, depth: 0,
-      reference: { kind: 'connectedAccount', service, ...(groupId ? { groupId } : { accountId }) } }];
+      reference: { kind: 'connectedAccount', id, service, ...(groupId ? { pool: true as const } : {}) } }];
   });
   return entries.length > 0 ? entries : undefined;
 }

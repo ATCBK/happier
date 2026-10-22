@@ -133,9 +133,9 @@ export function useApprovalReferenceReading(reference: ApprovalReference | undef
     const connectedAccountTargets = React.useMemo((): readonly ProjectedQualifiedConnectedAccountTarget[] => {
         const service = reference?.kind === 'connectedAccount' ? parseQualifiedPluginContributionKey(reference.service) : null;
         if (reference?.kind !== 'connectedAccount' || !service) return [];
-        return [{ key: CONNECTED_ACCOUNT_KEY, target: 'groupId' in reference
-            ? { kind: 'group', service, groupId: reference.groupId }
-            : { kind: 'account', account: { service, accountId: reference.accountId } } }];
+        return [{ key: CONNECTED_ACCOUNT_KEY, target: reference.pool
+            ? { kind: 'group', service, groupId: reference.id }
+            : { kind: 'account', account: { service, accountId: reference.id } } }];
     }, [reference]);
     const connectedAccount = useProjectedQualifiedConnectedAccountTargetPresentations(approvalServerId, connectedAccountTargets)
         .presentationsByKey[CONNECTED_ACCOUNT_KEY];

@@ -80,7 +80,7 @@ describe('Action arguments read by meaning', () => {
     const readable = row?.kind === 'value' ? row.entries?.filter((entry) => entry.value !== null && !entry.technical) : [];
     expect(readable).toEqual([{
       label: 'Connected account', value: 'beee2181-b6ad-463c-8c96-5922f24555cd', depth: 0,
-      reference: { kind: 'connectedAccount', service: 'happier.agent.claude/claude-subscription', accountId: 'beee2181-b6ad-463c-8c96-5922f24555cd' },
+      reference: { kind: 'connectedAccount', id: 'beee2181-b6ad-463c-8c96-5922f24555cd', service: 'happier.agent.claude/claude-subscription' },
     }]);
   });
 
