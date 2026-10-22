@@ -86,6 +86,9 @@ const APPROVED_CATALOG_VOCABULARY = [
   // Pane states and shell columns: existing public adapters over shared presentation owners.
   'FreshnessLine', 'NavigationList', 'NavigationList.Group', 'NavigationList.Row',
   'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
+  'TaskStatusGlyph',
+  'UsageSkyOfDays', 'UsageWeekTide', 'UsageDaylight', 'UsageDayInAgents', 'UsageScore', 'UsageOrbit', 'UsageCrew',
+  'UsageAgentRiver', 'UsageShipped', 'UsageConstellation', 'UsagePlanetPortrait', 'UsagePersonalRecords', 'UsageSteeringTide', 'UsageRunLength',
   // Entity drag-and-drop r1: declared sources/targets join the mounted host lifecycle.
   'DragSource', 'DropTarget', 'HostedAnchoredMenu',
   // Widgets platform r1 (WGT-11): the native metric, rows/table and one-series chart nodes.
@@ -1833,6 +1836,49 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     declarative: { kind: 'not-applicable', reason: 'V2 has no author-controlled sheet-menu node.' },
   },
   {
+    publicName: 'TaskStatusGlyph',
+    propTypeName: 'TaskStatusGlyphProps',
+    family: 'Task status glyph',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'components/TaskStatusGlyph.tsx',
+    sharedSymbol: 'TaskStatusGlyph',
+    pluginOwner: { module: 'components/TaskStatusGlyph.tsx', symbol: 'TaskStatusGlyph' },
+    coreConsumers: [],
+    positiveConsumer: { kind: 'plugin-surface', pathFromRepoRoot: 'packages/plugins/triage/src/ui/list/rows.tsx' },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no task-status glyph node; Triage renders the public adapter.' },
+  },
+  // Theme adapters over the chart owners already consumed by core Usage. No
+  // maintained plugin renders these exact public adapters yet, so they do not graduate.
+  ...[
+    { name: 'UsageSkyOfDays', module: 'UsageSkyOfDays.tsx' },
+    { name: 'UsageWeekTide', module: 'UsageRhythmEncodings.tsx' },
+    { name: 'UsageDaylight', module: 'UsageRhythmEncodings.tsx' },
+    { name: 'UsageDayInAgents', module: 'UsageDayInAgents.tsx' },
+    ...['UsageScore', 'UsageOrbit', 'UsageCrew', 'UsageAgentRiver', 'UsageShipped', 'UsageConstellation']
+      .map(name => ({ name, module: 'UsageAgentsCharts.tsx' })),
+    ...['UsagePlanetPortrait', 'UsagePersonalRecords', 'UsageSteeringTide', 'UsageRunLength']
+      .map(name => ({ name, module: 'UsageWorkCharts.tsx' })),
+  ].map((entry): GraduatedFamily => ({
+    publicName: entry.name,
+    propTypeName: `ComponentProps<typeof ${entry.name}>`,
+    family: entry.name,
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: `presentation/usage/charts/${entry.module}`,
+    sharedSymbol: entry.name,
+    pluginOwner: { module: 'components/UsageCharts.tsx', symbol: entry.name },
+    coreConsumers: ['components/settings/usage/widgets/UsageChartStyleBodies.tsx'],
+    coreAdapter: { module: 'components/UsageCharts.tsx', symbol: entry.name },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no Usage chart node; callers supply finite chart models and labels.' },
+  })),
+  {
     publicName: 'SceneArt',
     propTypeName: 'SceneArtProps',
     family: 'Scene art',
@@ -2923,6 +2969,9 @@ describe('graduated shared presentation families (§8.2)', () => {
       'CollectionToolbar',
       'FollowPolicyEditor',
       'SheetMenu',
+      'TaskStatusGlyph',
+      'UsageSkyOfDays', 'UsageWeekTide', 'UsageDaylight', 'UsageDayInAgents', 'UsageScore', 'UsageOrbit', 'UsageCrew',
+      'UsageAgentRiver', 'UsageShipped', 'UsageConstellation', 'UsagePlanetPortrait', 'UsagePersonalRecords', 'UsageSteeringTide', 'UsageRunLength',
       'SceneArt',
       'FreshnessLine',
       'NavigationList',
