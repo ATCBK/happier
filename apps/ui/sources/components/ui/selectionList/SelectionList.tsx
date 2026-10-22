@@ -78,6 +78,10 @@ const stylesheet = StyleSheet.create((theme) => ({
     container: {
         backgroundColor: theme.colors.surface.base,
         flexDirection: 'column',
+        // A host that bounds the list (a card modal on a short viewport) gets the rows scrolling inside
+        // the remaining height instead of clipped; an unbounded host never shrinks it.
+        flexShrink: 1,
+        minHeight: 0,
     },
     bareSurface: { backgroundColor: 'transparent' },
     contentWithDetail: { flexDirection: 'row', flex: 1, minHeight: 0 },
