@@ -21,6 +21,11 @@ import type { SessionDiscussionDraftMutationAttempt } from '@/sync/ops/sessionDr
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { createWorkspaceNavigationAdapter } from '@/components/appShell/workspace/workspaceNavigationAdapter';
+import { createWorkspaceState, reduceWorkspaceState } from '@/components/appShell/workspace/workspaceState';
 
 const pane = vi.hoisted(() => ({
   openDetailsTab: vi.fn(),
@@ -459,6 +464,7 @@ describe('DiscussionDetailsView selection', () => {
     const state = getStorage().getState();
     getStorage().setState({
       sessions: {},
+      sessionListRowsByServerId: {},
       settings: {
         ...state.settings,
         transcriptBulkCopyFormat: 'markdown_labeled',
@@ -566,8 +572,24 @@ describe('DiscussionDetailsView selection', () => {
     try {
     snapshot.threads['discussion-a'].summary.anchor = { kind: 'session', sessionId: 'session-a', messageId: 'committed/answer' };
     const target = { kind: 'discussion' as const, address: { serverId: 'server-a' }, discussionId: 'discussion-a' };
+    let workspace = createWorkspaceState({ id: 'discussion-tab', target: { kind: 'discussions', params: { discussionId: 'discussion-a', serverId: 'server-a' } }, pinned: false, preview: false });
+    const catalog = resolveCompactAppDestinations({ pages: [], builtins: { externalSessions: false, inbox: false, workflows: true, friends: false } });
+    const committedHrefs: string[] = [];
+    const navigation = createWorkspaceNavigationAdapter({
+      getState: () => workspace, getCatalog: () => catalog,
+      getScope: () => ({ serverId: 'server-a', accountId: 'viewer' }),
+      dispatch: (action) => { workspace = reduceWorkspaceState(workspace, action); },
+      transport: { commit: (href) => { committedHrefs.push(href); } },
+      createId: () => 'source-tab', onChange: () => undefined,
+    });
     const screen = await renderScreen(<SurfaceStateSizeProvider size={device === 'phone' ? 'phone' : 'pane'}>
+      <DestinationInstanceHost tabId="discussion-tab" ref={workspace.tabs['discussion-tab'].target}
+        pathname="/discussions/discussion-a" focused visible navigation={{
+          push: (href) => { expect(typeof href).toBe('string'); expect(navigation.openHref(String(href), { tabId: 'discussion-tab' })).toBe(true); },
+          replace: () => undefined, back: () => undefined,
+        }}>
       <DiscussionDetailsView target={target} active standaloneSurface={device === 'phone'} />
+      </DestinationInstanceHost>
     </SurfaceStateSizeProvider>);
     const readOpen = (): (() => void) | undefined => device === 'phone'
       ? screen.findAll(node => node.props.triggerTestID === 'session-discussion-actions-menu' && Array.isArray(node.props.actions))[0]?.props.actions
@@ -575,25 +597,38 @@ describe('DiscussionDetailsView selection', () => {
       : screen.findAll(node => node.props.testID === 'session-discussion-anchor' && typeof node.props.onPress === 'function')[0]?.props.onPress;
     expect(screen.getTextContent()).toContain('Source unavailable');
     expect(readOpen()).toBeUndefined();
-    await act(async () => { getStorage().setState({ sessions: { 'session-a': createSessionFixture({ id: 'session-a', serverId: 'server-a',
-      metadata: { name: 'Release review', path: '/project', host: 'host' } }) } }); });
-    await act(async () => { readOpen()!(); });
-    expect(routerPush).toHaveBeenLastCalledWith('/session/session-a/message/server%3Acommitted%2Fanswer?serverId=server-a');
+    const source = createSessionFixture({ id: 'session-a', serverId: 'server-a',
+      metadata: { name: 'Release review', path: '/project', host: 'host' } });
+    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-a': { 'session-a': buildSessionListRenderableFromSession(source) } } }); });
+    expect(getStorage().getState().sessions['session-a']).toBeUndefined();
+    if (device === 'phone') await act(async () => { readOpen()!(); });
+    else await screen.pressByTestIdAsync('session-discussion-anchor');
+    expect(committedHrefs).toHaveLength(1);
+    const opened = new URL(committedHrefs[0]!, 'https://happier.invalid');
+    expect(opened.pathname).toBe('/session/session-a/message/server%3Acommitted%2Fanswer');
+    expect(opened.searchParams.get('serverId')).toBe('server-a');
+    const activeTab = workspace.tabs[workspace.groups[workspace.focusedGroupId].activeTabId];
+    expect(activeTab.target.params).toMatchObject({ id: 'session-a', serverId: 'server-a', messageId: 'server:committed/answer' });
     const retainedOpen = readOpen()!;
-    await act(async () => { getStorage().setState({ sessions: { 'session-a': createSessionFixture({ id: 'session-a', serverId: 'server-b',
-      metadata: { name: 'Other Home secret', path: '/other', host: 'host' } }) } }); });
+    committedHrefs.length = 0;
+    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-a': { 'session-a': buildSessionListRenderableFromSession({
+      ...source, metadata: null, ownerMetadataView: null, encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable',
+    }) } } }); });
+    expect(screen.getTextContent()).toContain('Source unavailable');
+    await act(async () => { retainedOpen(); });
+    expect(committedHrefs).toEqual([]);
+    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-b': { 'session-a': buildSessionListRenderableFromSession(createSessionFixture({ id: 'session-a', serverId: 'server-b',
+      metadata: { name: 'Other Home secret', path: '/other', host: 'host' } })) } } }); });
     expect(screen.getTextContent()).toContain('Source unavailable');
     expect(screen.getTextContent()).not.toContain('Other Home secret');
-    routerPush.mockClear();
+    committedHrefs.length = 0;
     await act(async () => { retainedOpen(); });
-    expect(routerPush).not.toHaveBeenCalled();
-    await act(async () => { getStorage().setState({ sessions: { 'session-a': createSessionFixture({ id: 'session-a', serverId: 'server-a',
-      metadata: { name: 'Release review', path: '/project', host: 'host' } }) } }); });
+    expect(committedHrefs).toEqual([]);
+    await act(async () => { getStorage().setState({ sessionListRowsByServerId: { 'server-a': { 'session-a': buildSessionListRenderableFromSession(source) } } }); });
     // Retiring the captured Account cannot turn a retained header callback into a new Account's navigation.
     exactHomeBinding.current.isCurrent = () => false;
-    routerPush.mockClear();
     await act(async () => { readOpen()!(); });
-    expect(routerPush).not.toHaveBeenCalled();
+    expect(committedHrefs).toEqual([]);
     } finally { snapshot.threads['discussion-a'].messages = messages; }
   });
 

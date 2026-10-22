@@ -19,6 +19,7 @@ import { t } from '@/text';
 import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import { readableSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { selectSessionDisplayNameSource } from '@/sync/domains/state/storage';
+import { captureMachinePresenceObservation, clearMachineRequestReachabilityForTest, recordMachineRequestFailed, withdrawMachinePresenceForScope } from '@/sync/domains/machines/reachability/machineReachability';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -35,6 +36,43 @@ async function captureHome(serverId: string) {
 }
 
 describe('Discussion Invite source composition', () => {
+    it('omits retired model targets and puts scoped available Machines before retained unavailable setup choices', async () => {
+        const home = boundary.serverIds[1]!;
+        const accountLifetime = await captureHome(home);
+        boundary.http.answer(home, '/v1/teams/list', { body: { items: [], nextCursor: null } });
+        const machine = (id: string, overrides: Parameters<typeof createMachineFixture>[0] = {}) => createMachineFixture({
+            id, activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!, displayName: id }, ...overrides,
+        });
+        const inventory = [
+            machine('a-offline', { active: false, activeAt: 0 }),
+            machine('b-unknown'),
+            machine('c-failed'),
+            machine('removed', { revokedAt: 1 }),
+            machine('replaced', { replacedByMachineId: 'z-ready' }),
+            machine('ephemeral', { kind: 'ephemeral_session_runner' }),
+            machine('z-ready'),
+            machine('y-ready', { revokedAt: 0, replacedByMachineId: '  ' }),
+        ];
+        withdrawMachinePresenceForScope(accountLifetime.scope);
+        captureMachinePresenceObservation(accountLifetime.scope)(inventory.filter(row => row.id !== 'b-unknown').map(row => row.id));
+        recordMachineRequestFailed({ ...accountLifetime.scope, machineId: 'c-failed' });
+        try {
+            storage.setState({ machineListByServerId: { [home]: inventory } });
+            const hook = await renderHook(() => useExecutableParticipantSections({ accountLifetime, enabled: true,
+                sessionsContext: 'Reviewer', onChoose: vi.fn() }));
+            const options = () => hook.getCurrent().sections.find(section => section.id === 'agents-models')?.options ?? [];
+            const ids = ['model:y-ready', 'model:z-ready', 'model:a-offline', 'model:b-unknown', 'model:c-failed'];
+            expect(options().map(option => option.id)).toEqual(ids);
+            expect(options().map(option => option.readiness && 'status' in option.readiness ? option.readiness.status : null))
+                .toEqual(['ready', 'ready', 'offline', 'unknown', 'offline']);
+            expect(options().every(option => !option.disabled)).toBe(true);
+            await act(async () => { storage.setState({ machineListByServerId: { [home]: [...inventory].reverse() } }); });
+            expect(options().map(option => option.id)).toEqual(ids);
+        } finally {
+            clearMachineRequestReachabilityForTest();
+        }
+    });
+
     it('projects encrypted title readability from the exact Home title owner and tracks unlock without label heuristics', async () => {
         const [focusedHome, home] = boundary.serverIds as [string, string, string];
         const accountLifetime = await captureHome(home);

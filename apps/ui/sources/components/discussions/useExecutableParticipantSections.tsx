@@ -20,7 +20,9 @@ import type { ExecutableParticipantPickerOption } from '@/components/sessions/au
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useMachineListForServer } from '@/sync/domains/state/storage';
 import { resolveMachineSpawnReadiness } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { resolveMachineActionCandidates } from '@/utils/sessions/resolveMachineActionCandidates';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { useDiscussionInviteCandidates } from './useDiscussionInviteCandidates';
 import { SharePrincipalVisual } from '@/components/sharing/buildShareSheetSelectionStep';
@@ -30,7 +32,7 @@ import { describeMachineReadinessCause, presentSessionReadiness } from '@/compon
 
 /**
  * A not-ready choice stays listed and selectable with its one cause in place of the usual hint
- * (C7): an offline Bot or Machine is never hidden, and unknown never reads as ready.
+ * (C7): an offline Bot or current Machine stays visible, and unknown never reads as ready.
  */
 function readinessSubtitle(readiness: ExecutableParticipantSectionOption['readiness'], fallback: string): string {
   if (!readiness) return fallback;
@@ -180,7 +182,11 @@ export function useExecutableParticipantSections(
     }
     // Setup remains selectable offline. Start re-admits through the ordinary authoring owner.
     const inventory = machines ?? [];
-    const matchingMachines = inventory.filter(
+    const matchingMachines = resolveMachineActionCandidates(
+      input.accountLifetime.scope,
+      inventory.filter(isMachineVisibleForLaunchSelection),
+      { onlineOnly: false },
+    ).filter(
       (machine) =>
         matches(
           `${getMachineDisplayName(machine, inventory) ?? ''} ${t('session.collaboration.discussion.manage.modelsGroup')}`,
