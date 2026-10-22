@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { observeProjectServicePlacementActualV1, type ProjectServicePlacementGetResultV1 } from '@happier-dev/protocol/workspaces/projectServicePlacementV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { storage } from '@/sync/domains/state/storage';
 import { readCurrentProjectAccountRows } from '@/sync/store/domains/projectAccountRows';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -185,11 +186,16 @@ function useProjectServiceBindings(input: LocalServiceLiveFeedsInput, sourceStat
     }, [binding, canObserve, change, declarations, enabled, input.serverId, input.workspaceRefId, input.launcherSnapshotClient, input.inventorySnapshotClient, rows, subscriptions]);
     const state = React.useMemo(() => {
         if (!enabled || !sourceState || !declarations.length) return sourceState;
-        const values = canObserve && observation?.subscriptions === subscriptions && observation.declarations === declarations ? observation.values : null;
+        const values = canObserve && observation?.subscriptions === subscriptions ? observation.values : null;
         const rowIdsByTargetId = new Map<string, string>();
         const targets = sourceTargets.flatMap(target => {
             if (!declarations.includes(target)) return [target];
-            const actual = values?.get(target.id);
+            // A fresh SOURCE target can change native facts without changing the
+            // declaration being observed. Keep its completed binding while the
+            // same census refreshes; new declarations/topology still start unread.
+            const observedDeclaration = observation?.declarations.find(previous => previous.id === target.id);
+            const actual = observedDeclaration && sameStrictJsonValue(observedDeclaration.declaration, target.declaration)
+                && sameStrictJsonValue(observedDeclaration.workspace, target.workspace) ? values?.get(target.id) : undefined;
             if (actual?.status === 'present') {
                 // Moving changes native custody, not the declared Service the person opened.
                 // Keep presentation identity separate from the native target used by Actions.

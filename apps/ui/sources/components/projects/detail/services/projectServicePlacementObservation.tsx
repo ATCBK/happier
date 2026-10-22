@@ -234,8 +234,10 @@ function ScopedObservationProvider(props: Readonly<{
   const [startRequests, setStartRequests] = React.useState<ReadonlyMap<string, ProjectExecutionChoiceV1 | null>>(() => new Map());
   const observedPlacements = React.useRef(new Map<string, ProjectExecutionChoiceV1>());
   const observeStartPlacement = React.useCallback((name: string, choice: ProjectExecutionChoiceV1 | null) => {
+    // Moving between Running/ready groups remounts placement controls. Their
+    // initial unread state cannot erase this scope's last observed destination.
+    // Start still resolves fresh placement before dispatching any native effect.
     if (choice) observedPlacements.current.set(name, choice);
-    else observedPlacements.current.delete(name);
   }, []);
   const [approvals, setApprovals] = React.useState<ReadonlyMap<string, ActionApprovalRegistration>>(() => new Map());
   React.useEffect(() => {
