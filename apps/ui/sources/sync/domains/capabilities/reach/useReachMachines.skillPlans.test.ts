@@ -98,7 +98,7 @@ it('keeps withdrawn capability places unknown until their exact Account observes
             expect(reach.offlineMachineIds).toEqual([]);
             expect(reach.bodies.every(body => !body.online)).toBe(true);
             expect(summarizeMachines(places.machines.map(machine => ({ machine, skillAgents: ['codex'], cannotLoad: [],
-                facts: new Map([['codex', { kind: 'delivered' as const }]]), projectedAgents: ['codex'] })), id => id))
+                facts: new Map([['codex', { kind: 'delivered' as const }]]), projectedAgents: ['codex'] })), ids => ids))
                 .toEqual({ summary: 'Unknown', note: undefined });
         }
         await act(async () => captureMachinePresenceObservation({ ...scope, accountId: 'another-account' })(['online', 'offline']));
