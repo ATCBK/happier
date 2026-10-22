@@ -101,16 +101,6 @@
           "Must be pinned by exact revision/version and checksum before production bundling.",
           "Patch/source provenance, license/NOTICE, size, ABI smoke, App Store/export, and update/rollback procedure are release gates."
         ]
-      },
-      "remodex": {
-        "referenceOnly": true,
-        "url": "https://github.com/Emanuele-web04/remodex",
-        "observedCommit": "7efa7dffb51ef84d761702c8d6d278488e664429",
-        "notes": [
-          "Vendors GhosttyKit.xcframework directly in an iOS Xcode project.",
-          "Wraps the Ghostty C surface API from Swift for runtime/app/surface lifecycle, byte feed, write callback, resize, draw, selection, text extraction, and clipboard.",
-          "Use as lifecycle/API reference only; do not make Remodex a production binary supply-chain dependency."
-        ]
       }
     },
     "gates": [

@@ -741,15 +741,6 @@ test('terminal-native records native renderer supply-chain gates', async () => {
         sourceUrl: 'https://raw.githubusercontent.com/Lakr233/libghostty-spm/c069f05e0a4ef50143e943e954ed75e52e947009/LICENSE',
     });
     assert.equal(rendererPolicy.iosGhostty.referenceImplementations.libghosttySpm.referenceOnly, false);
-    assert.equal(rendererPolicy.iosGhostty.referenceImplementations.remodex.referenceOnly, true);
-    assert.match(
-        rendererPolicy.iosGhostty.referenceImplementations.remodex.observedCommit,
-        /^[a-f0-9]{40}$/,
-    );
-    assert.match(
-        rendererPolicy.iosGhostty.referenceImplementations.remodex.url,
-        /^https:\/\/github\.com\/Emanuele-web04\/remodex/,
-    );
     assert.ok(rendererPolicy.iosGhostty.gates.includes('pinned-libghostty-spm-version'));
     assert.ok(rendererPolicy.iosGhostty.gates.includes('checksum-pinned-artifact'));
 	assert.ok(rendererPolicy.iosGhostty.gates.includes('react-native-skia-wuffs-isolation'));
