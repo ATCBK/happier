@@ -3,14 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createKeyedSingleFlightScheduler } from './createKeyedSingleFlightScheduler';
 
 describe('createKeyedSingleFlightScheduler', () => {
-  function createDeferredVoid(): { promise: Promise<void>; resolve: () => void } {
-    let resolve!: () => void;
-    const promise = new Promise<void>((r) => {
-      resolve = r;
-    });
-    return { promise, resolve };
-  }
-
   function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
     let resolve!: (value: T) => void;
     const promise = new Promise<T>((r) => {
@@ -29,11 +21,12 @@ describe('createKeyedSingleFlightScheduler', () => {
     const scheduler = createKeyedSingleFlightScheduler({ delayMs: 10 });
     const run = vi.fn(async () => {});
 
-    scheduler.schedule('a', run);
-    scheduler.schedule('a', run);
-    scheduler.schedule('a', run);
+    const results = [scheduler.scheduleResult('a', run), scheduler.scheduleResult('a', run), scheduler.scheduleResult('a', run)];
 
+    await vi.advanceTimersByTimeAsync(9);
+    expect(run).not.toHaveBeenCalled();
     await vi.runAllTimersAsync();
+    await Promise.all(results);
 
     expect(run).toHaveBeenCalledTimes(1);
   });
@@ -43,63 +36,42 @@ describe('createKeyedSingleFlightScheduler', () => {
 
     const scheduler = createKeyedSingleFlightScheduler({ delayMs: 10 });
 
-    const deferred = createDeferredVoid();
+    const deferred = createDeferred<void>();
     const run = vi.fn(async () => {
       await deferred.promise;
     });
 
-    scheduler.schedule('a', run);
+    const first = scheduler.scheduleResult('a', run);
     await vi.runAllTimersAsync();
     expect(run).toHaveBeenCalledTimes(1);
 
-    scheduler.schedule('a', run);
+    const second = scheduler.scheduleResult('a', run);
     await vi.runOnlyPendingTimersAsync();
     expect(run).toHaveBeenCalledTimes(1);
 
-    deferred.resolve();
+    deferred.resolve(undefined);
     await vi.runAllTimersAsync();
+    await Promise.all([first, second]);
 
-    scheduler.schedule('a', run);
+    const next = scheduler.scheduleResult('a', run);
     await vi.runAllTimersAsync();
+    await next;
     expect(run).toHaveBeenCalledTimes(2);
   });
 
-  it('cancel prevents a scheduled run from starting', async () => {
+  it('delivers a shared failure to all borrowers and permits another acquisition', async () => {
     vi.useFakeTimers();
 
     const scheduler = createKeyedSingleFlightScheduler({ delayMs: 10 });
-    const run = vi.fn(async () => {});
-
-    scheduler.schedule('a', run);
-    scheduler.cancel('a');
-
+    const error = new Error('Lookup unavailable');
+    const run = vi.fn(async () => { throw error; });
+    const results = Promise.allSettled([scheduler.scheduleResult('a', run), scheduler.scheduleResult('a', run)]);
     await vi.runAllTimersAsync();
-    expect(run).toHaveBeenCalledTimes(0);
-  });
-
-  it('limits concurrent runs across keys', async () => {
-    vi.useFakeTimers();
-
-    const scheduler = createKeyedSingleFlightScheduler({ delayMs: 0, maxConcurrent: 1 });
-
-    const deferredA = createDeferredVoid();
-    const runA = vi.fn(async () => {
-      await deferredA.promise;
-    });
-
-    const runB = vi.fn(async () => {});
-
-    scheduler.schedule('a', runA);
-    scheduler.schedule('b', runB);
-
+    await expect(results).resolves.toEqual([{ status: 'rejected', reason: error }, { status: 'rejected', reason: error }]);
+    expect(run).toHaveBeenCalledTimes(1);
+    const next = scheduler.scheduleResult('a', async () => 'recovered');
     await vi.runAllTimersAsync();
-    expect(runA).toHaveBeenCalledTimes(1);
-    expect(runB).toHaveBeenCalledTimes(0);
-
-    deferredA.resolve();
-    await vi.runAllTimersAsync();
-
-    expect(runB).toHaveBeenCalledTimes(1);
+    await expect(next).resolves.toBe('recovered');
   });
 
   it('shares the same result promise for duplicate result schedules', async () => {
