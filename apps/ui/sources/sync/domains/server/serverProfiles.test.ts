@@ -3269,6 +3269,13 @@ describe('serverProfiles', () => {
         const reads = vi.spyOn(window.localStorage, 'getItem');
         let acquisitions: number;
         try {
+            for (let publication = 0; publication < 3; publication += 1) {
+                for (let machine = 0; machine < 138; machine += 1) {
+                    expect(captured(created.id)).toBe('srv_scope_one');
+                    expect(captured('srv_scope_one')).toBe('srv_scope_one');
+                }
+            }
+            expect(reads.mock.calls.filter(([key]) => key.endsWith(':server-state-v1'))).toHaveLength(0);
             expect(resolveWorkspaceRefById(refs, 'workspace-99', 'srv_scope_one')).toMatchObject({
                 kind: 'resolved', ref: refs[99],
             });

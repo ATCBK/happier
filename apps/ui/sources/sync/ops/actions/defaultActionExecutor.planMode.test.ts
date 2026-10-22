@@ -8,7 +8,7 @@ import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/
 import { DaemonSessionGoalGetRequestV1Schema, DaemonSessionGoalSetRequestV2Schema,
   DaemonSessionGoalClearRequestV1Schema } from '@happier-dev/protocol/sessions/work/state/sessionWorkStateRpc';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
-import { createSessionFixture, createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createSessionFixture, createSessionAccessFixture, createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionListQueryV1Schema } from '@happier-dev/protocol/sessions/listing/query';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -89,7 +89,7 @@ let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefi
 let serverId = '';
 let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 
-function installSession(id: string, partialMetadata: Partial<NonNullable<ReturnType<typeof createSessionFixture>['metadata']>>, ownerServerId = serverId) {
+function installSession(id: string, partialMetadata: Partial<NonNullable<ReturnType<typeof createSessionFixture>['metadata']>>, ownerServerId = serverId, layout: 0 | 1 = 0) {
   const metadata = { path: '/repo', host: 'tester.local', ...partialMetadata };
   const session = createSessionFixture({ id, serverId: ownerServerId, active: true, metadata });
   storage.setState({ sessions: { ...storage.getState().sessions, [id]: session } });
@@ -99,6 +99,7 @@ function installSession(id: string, partialMetadata: Partial<NonNullable<ReturnT
     responsibleAccountId: null, responsibleAccount: null, share: null, archivedAt: null,
     agentState: null, dataEncryptionKey: null, pendingCount: 0, pendingVersion: 0,
   });
+  if (layout === 1) row = createPlainSessionCurrentProjectionRecordFixture({ id, active: true, metadata });
   const answer = { select: (input: unknown) => {
     if (input === undefined || input === null) return { body: { session: row } };
     const patch = SessionMetadataTuplePatchV1Schema.parse(input);
@@ -900,6 +901,61 @@ describe('default Action executor mode and catalog contracts', () => {
       .toMatchObject({ success: false });
     expect(outgoing).toEqual([]);
   });
+  it.each([0, 1] as const)('renames and gently stops an owned Session through the real lifecycle Action (layout %s)', async layout => {
+    const sessionId = 'person-renamed-session';
+    // A daemon clock can be ahead of this device. An explicit rename must use
+    // the title binding's monotonic user-write policy, as the CLI Action does.
+    const read = installSession(sessionId, { machineId: 'machine-a', summary: { text: 'Ready', updatedAt: Date.now() + 60_000 },
+      sessionModelsV1: { v: 1, agentId: 'codex', updatedAt: 0, currentModelId: 'gpt-5.6-luna',
+        activeSelectionV1: { v: 2, selection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5.6-luna' },
+          source: 'runtime_apply', runner: { pid: 631353, processStartTimeMs: 1122862470 },
+          teamCredentialModel: { kind: 'team_credential_provider_model', resourceId: 'shared-resource', teamId: 'team', expectedResourceRevision: 0,
+            agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5.6-luna', deliveryMode: 'brokered' } },
+        availableModels: [{ id: 'gpt-5.6-luna', name: 'gpt-5.6-luna' }] },
+    }, serverId, layout);
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const { getSessionName } = await import('@/utils/sessions/sessionUtils');
+    expect(await executeSessionLifecycleAction('session.title.set', sessionId, { serverId }, 'QA43 Codex via Team share'))
+      .toEqual({ success: true });
+    expect(getSessionName(storage.getState().sessions[sessionId]!, serverId)).toBe('QA43 Codex via Team share');
+    const row = read();
+    const owner = SessionOwnerMetadataEnvelopeV1Schema.parse(row.ownerMetadata);
+    if (owner.t !== 'plain') throw new Error('Expected plain owner metadata');
+    expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(row.metadata!), ownerMetadata: owner.v }).summary)
+      .toMatchObject({ text: 'QA43 Codex via Team share' });
+    daemonAnswer = () => ({ status: 'stopped' });
+    expect(await executeSessionLifecycleAction('session.stop', sessionId, { serverId })).toEqual({ success: true });
+  });
+  it('renames a shared admin Session through the declared shared-editor intent without owner metadata', async () => {
+    const sessionId = 'admin-renamed-session';
+    const access = createSessionAccessFixture('admin');
+    const source = createPlainSessionCurrentProjectionRecordFixture({ id: sessionId,
+      metadata: { path: '/repo', host: 'tester.local', summary: { text: 'Ready', updatedAt: 1 } } });
+    const { ownerMetadata: _privateOwnerMetadata, ...sharedSource } = source;
+    let row = SessionCurrentProjectionRecordV1Schema.parse({ ...sharedSource,
+      effectiveAccess: { v: 1, level: 'admin', sources: [{ kind: 'direct', shareId: 'share' }], capabilities: access.capabilities },
+      share: { accessLevel: 'admin', canApprovePermissions: false, grantableAccessLevel: 'admin' },
+    });
+    storage.getState().applySessions([createSessionFixture({ id: sessionId, serverId, access, accessLevel: 'admin',
+      metadataLayoutVersion: 1, metadata: JSON.parse(row.metadata!), ownerMetadataView: null })]);
+    const answer = { select: (input: unknown) => {
+      if (input === undefined || input === null) return { body: { session: row } };
+      const patch = SessionMetadataTuplePatchV1Schema.parse(input);
+      if (patch.mode !== 'shared_editor' || patch.mutationIntent !== 'rename_session') {
+        return { status: 403, body: { error: 'Forbidden' } };
+      }
+      row = SessionCurrentProjectionRecordV1Schema.parse({ ...row, metadata: patch.sharedMetadata.ciphertext,
+        metadataVersion: row.metadataVersion + 1 });
+      return { body: SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+        sharedMetadata: { version: row.metadataVersion } }) };
+    } };
+    homes.answer(serverId, `/v2/sessions/${sessionId}`, answer);
+    homes.answer(serverId, `/v2/sessions/${sessionId}?accessProjectionVersion=1`, answer);
+    const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    expect(await executeSessionLifecycleAction('session.title.set', sessionId, { serverId }, 'Shared rename')).toEqual({ success: true });
+    expect(JSON.parse(row.metadata!).summary.text).toBe('Shared rename');
+    expect(row).not.toHaveProperty('ownerMetadata');
+  });
   it('preserves current daemon stop confirmation and failure detail through the real Action adapter', async () => {
     const readRow = installSession('stop-session', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
     const { executeSessionLifecycleAction } = await import('@/components/sessions/actions/sessionActionExecution');
@@ -933,6 +989,59 @@ describe('default Action executor mode and catalog contracts', () => {
         code: 'session_stop_failed',
         message: 'Session stop incomplete: destroy_failed',
       });
+  });
+  it.each(['stopped', 'incomplete'] as const)('settles the mounted UI Stop through the real Action and Machine RPC (%s)', async status => {
+    const sessionId = 'mounted-stop';
+    installSession(sessionId, { path: '/repo', machineId: 'machine-a', flavor: 'codex' });
+    const { executeSessionAction } = await import('@/components/sessions/actions/sessionActionExecution');
+    const { createSessionActionTarget } = await import('@/components/sessions/actions/sessionActionContext');
+    const { SESSION_ACTION_STOP_ID } = await import('@/components/sessions/actions/sessionActionIds');
+    const { useHappyAction } = await import('@/hooks/ui/useHappyAction');
+    const { Modal } = await import('@/modal');
+    const alert = vi.mocked(Modal.alert);
+    alert.mockClear();
+    const entered = createDeferred<void>();
+    const reply = createDeferred<unknown>();
+    daemonAnswer = async request => {
+      expect(request.method).toBe(`machine-a:${RPC_METHODS.STOP_SESSION}`);
+      entered.resolve();
+      return await reply.promise;
+    };
+    const target = createSessionActionTarget({ session: storage.getState().sessions[sessionId]!, serverId });
+    let failure: unknown;
+    const stop = async () => {
+      try {
+        await executeSessionAction({ actionId: SESSION_ACTION_STOP_ID, target });
+      } catch (error) {
+        failure = error;
+        throw error;
+      }
+    };
+    const hook = await renderHook(() => useHappyAction(stop));
+    try {
+      await act(async () => { hook.getCurrent()[1](); });
+      await entered.promise;
+      expect(hook.getCurrent()[0]).toBe(true);
+      await act(async () => {
+        reply.resolve(status === 'stopped' ? { status } : { status, reason: 'destroy_failed' });
+        await flushHookEffects();
+      });
+      await vi.waitFor(async () => {
+        await flushHookEffects();
+        expect(hook.getCurrent()[0]).toBe(false);
+      });
+      if (status === 'incomplete') {
+        expect(failure).toMatchObject({ name: 'HappyError', code: 'session_stop_failed' });
+        expect(alert).toHaveBeenCalled();
+      } else {
+        expect(failure).toBeUndefined();
+        expect(alert).not.toHaveBeenCalled();
+      }
+      expect(outgoing.map(request => request.method)).toEqual([`machine-a:${RPC_METHODS.STOP_SESSION}`]);
+    } finally {
+      reply.resolve({ status: 'stopped' });
+      await hook.unmount();
+    }
   });
   it('preserves automatic Stop authorship without creating a person hold through the real Action adapter', async () => {
     const readRow = installSession('automatic-stop', { path: '/repo', machineId: 'machine-a', flavor: 'claude' });
