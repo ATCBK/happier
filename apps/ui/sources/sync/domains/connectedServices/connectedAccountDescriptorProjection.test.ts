@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ConnectedAccountUiProjectionEntryV1 } from '@happier-dev/protocol';
 import type { DaemonContributionRegistryProjection } from '@/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
+import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 
 import {
   advanceConnectedAccountDescriptorProjectionState,
@@ -64,6 +65,24 @@ function projection(entries: Record<string, Readonly<{ id: string }> & Record<st
 }
 
 describe('connectedAccountDescriptorProjection', () => {
+  it('keeps Machine availability and diagnostics when adopting the admitted bundled declaration', () => {
+    const bundled = BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS['happier.agent.codex/openai-codex']!;
+    const supplied = descriptor({
+      ...bundled.descriptor, pluginId: bundled.service.pluginId, serviceId: bundled.service.localId,
+      provenance: 'first_party', sourceKind: 'bundled', title: 'Older declaration',
+      availability: { state: 'blocked', reason: 'runtime_unavailable' }, diagnostics: ['machine-a'],
+    });
+    const resolution = createConnectedAccountDescriptorProjectionPublication().publish([
+      { kind: 'ready', descriptors: [supplied] },
+      { kind: 'ready', descriptors: [{ ...supplied, title: 'Another build', diagnostics: ['machine-b'] }] },
+    ]);
+    expect(resolution.kind).toBe('ready');
+    expect(resolution.descriptors).toHaveLength(1);
+    expect(resolution.descriptors?.[0]).toMatchObject({
+      ...bundled.descriptor, availability: supplied.availability, diagnostics: ['machine-a', 'machine-b'],
+    });
+  });
+
   it('compares declarations directly without serializing cold agreement or diagnostics', () => {
     const entry = descriptor({ diagnostics: ['machine_refused'] });
     const source = readConnectedAccountDescriptorProjection(projection({ account: entry }));

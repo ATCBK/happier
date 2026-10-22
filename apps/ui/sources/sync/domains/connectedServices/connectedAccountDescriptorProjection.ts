@@ -3,6 +3,7 @@ import {
   type ConnectedAccountUiProjectionEntryV1,
 } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import type { DaemonContributionRegistryProjection } from '@/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
+import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { resolveFleetReadState, resolveFleetSupplyAgreement } from '@/sync/domains/machines/administration/fleetUnion';
 
 export type ConnectedAccountDescriptorProjectionErrorReason =
@@ -119,6 +120,18 @@ type PreparedDescriptorVariants = { admitted?: PreparedDescriptor; descriptive?:
 type PrepareDescriptor = (entry: ConnectedAccountUiProjectionEntryV1, descriptiveOnly: boolean) => PreparedDescriptor;
 
 function prepareDescriptor(entry: ConnectedAccountUiProjectionEntryV1, descriptiveOnly: boolean): PreparedDescriptor {
+  const bundled = entry.provenance === 'first_party' && entry.sourceKind === 'bundled' && entry.pluginId
+    ? BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS[`${entry.pluginId}/${entry.id}`]?.descriptor
+    : undefined;
+  // The admitted manifest owns bundled declarations. Machines only supply
+  // availability, diagnostics and occurrence facts, including across builds.
+  if (bundled) entry = {
+    ...bundled, serviceId: bundled.id, pluginId: entry.pluginId,
+    provenance: entry.provenance, sourceKind: entry.sourceKind,
+    capabilities: bundled.capabilities ?? [],
+    availability: entry.availability, diagnostics: entry.diagnostics,
+    ...(entry.occurrenceId === undefined ? {} : { occurrenceId: entry.occurrenceId }),
+  };
   // Runtime occurrences never participate in Account declaration agreement.
   const { occurrenceId, ...declaration } = entry;
   const descriptor = descriptiveOnly && entry.availability.state === 'available'

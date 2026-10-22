@@ -5,7 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { buildQualifiedPluginContributionKey, createRecipientContractDigestV1, PluginProjectionV2Schema, VoiceProviderContributionSchema, type PluginProjectionV2, type VoiceProviderContribution } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, createRecipientContractDigestV1, PluginProjectionV2Schema, VoiceProviderContributionSchema, type PluginContributionIdentityV1, type PluginProjectionV2, type VoiceProviderContribution } from '@happier-dev/protocol';
 import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -71,6 +71,9 @@ const contribution = Object.freeze({
   pluginId: 'acme.credential-source-fixture',
   localId: 'realtime-openai',
 });
+// Variable daemon authentication belongs to an external fixture. Bundled services
+// use their admitted manifest declaration even when an older daemon reports another one.
+const descriptorService: PluginContributionIdentityV1 = Object.freeze({ pluginId: 'acme.credential-account', localId: 'openai-codex' });
 const declaration = VoiceProviderContributionSchema.parse({
   id: contribution.localId,
   title: 'OpenAI realtime',
@@ -114,7 +117,7 @@ const declaration = VoiceProviderContributionSchema.parse({
     },
     {
       kind: 'connectedAccount',
-      service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' },
+      service: descriptorService,
       rawGrants: [{
         realm: 'web',
         phase: 'prepare',
@@ -192,8 +195,8 @@ async function installCodexDescriptor(options: Readonly<{
   descriptorReplies = options.available === false ? [] : z.array(ConnectedAccountUiProjectionEntryV1Schema).parse([{
       id: 'openai-codex',
       serviceId: 'openai-codex',
-      pluginId: 'happier.agent.codex',
-      provenance: 'first_party',
+      pluginId: descriptorService.pluginId,
+      provenance: 'external',
       sourceKind: 'bundled',
       title: 'Codex',
       authentication: {
@@ -268,9 +271,8 @@ function ProjectionReader() {
 async function waitForDescriptorReply() {
   await vi.waitFor(async () => {
     await flush();
-    expect(getConnectedAccountAuthentication({
-      pluginId: 'happier.agent.codex', localId: 'openai-codex',
-    })).toEqual(descriptorReplies.find(entry => entry.id === 'openai-codex')?.authentication ?? null);
+    expect(getConnectedAccountAuthentication(descriptorService))
+      .toEqual(descriptorReplies.find(entry => entry.id === descriptorService.localId)?.authentication ?? null);
   });
 }
 const projectionRequests = installSessionActionRpcBoundary(request => {
@@ -306,7 +308,7 @@ const projectionRequests = installSessionActionRpcBoundary(request => {
 
 const PURPOSES_PATH = '/v1/account/entity-rows/connected-accounts/purposes';
 const codexTarget = { kind: 'account' as const, account: {
-  service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'codex-work',
+  service: descriptorService, accountId: 'codex-work',
 } };
 const apiTarget = { kind: 'account' as const, account: {
   service: { pluginId: 'happier.voice.openai', localId: 'openai' }, accountId: 'api-work',
@@ -603,8 +605,8 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     expect(binding()).toBeUndefined();
     expect(revision).toBe(9);
   });
-  it('updates eligibility when the real descriptor projection arrives', async () => {
-    await installCodexDescriptor({ available: false });
+  it('updates eligibility when the projected authentication configuration changes', async () => {
+    await installCodexDescriptor({ requiresAccountConfiguration: true });
     const rerender = await renderField();
     await open();
     expect(requireNode(`dropdown-option-${optionId(codexTarget)}`).getAttribute('aria-disabled')).toBe('true');
@@ -614,6 +616,21 @@ describe('VoiceCredentialSourceField → admitted Account purpose transaction', 
     await act(async () => { pointerPress(requireNode(`dropdown-option-${optionId(codexTarget)}`)); });
     expect(await selectionReceipt()).toMatchObject({ status: 'applied' });
     await vi.waitFor(() => assertAccountSelection());
+  });
+  it('selects a bundled account without a Machine descriptor supplier', async () => {
+    const bundledService = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const bundledTarget = { ...codexTarget, account: { ...codexTarget.account, service: bundledService } };
+    const bundledDeclaration = VoiceProviderContributionSchema.parse({ ...declaration, credentials: {
+      ...credentials, sources: credentials.sources.map(source => source.kind === 'connectedAccount'
+        && typeof source.service !== 'string' && source.service.pluginId === descriptorService.pluginId
+        ? { ...source, service: bundledService } : source),
+    } });
+    installCurrentDeclaration(bundledDeclaration);
+    await publishProfile([{ ...codexAccount, ref: bundledTarget.account }]);
+    await installCodexDescriptor({ available: false });
+    await renderField(bundledDeclaration);
+    await choose(optionId(bundledTarget));
+    await vi.waitFor(() => assertAccountSelection(bundledTarget));
   });
   it('offers none, SavedSecret and only manifest-declared service accounts', async () => {
     await installCodexDescriptor({ includeOpenAi: true });

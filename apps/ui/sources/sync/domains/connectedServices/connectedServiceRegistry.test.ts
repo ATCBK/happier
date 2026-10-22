@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { QualifiedConnectedAccountGroupV4Schema, QualifiedConnectedAccountProfileV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
+import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 
 import {
   getGeneratedLegacyConnectedServiceRegistryFallback,
@@ -74,9 +76,26 @@ describe('connectedServiceRegistry', () => {
     scopeKey: 'server-a', status, descriptors, conflicts: [], errorReason: status === 'stale' ? 'transport' : null,
   });
 
-  it('keeps a saved bundled pool selectable without a Machine descriptor supplier', () => {
-    install([]);
+  it.each(['no Machine', 'two Machines', 'two Machines with different declarations'] as const)('keeps a saved bundled pool selectable with %s supplying declarations', (suppliers) => {
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const bundled = BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS[`${service.pluginId}/${service.localId}`]!;
+    const descriptor = ConnectedAccountUiProjectionEntryV1Schema.parse({
+      ...bundled.descriptor, pluginId: service.pluginId, serviceId: service.localId,
+      provenance: 'first_party', sourceKind: 'bundled', capabilities: bundled.descriptor.capabilities ?? [],
+      availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+    });
+    const { usageIdentity, ...withoutUsageIdentity } = descriptor;
+    expect(usageIdentity).toBeDefined();
+    const merged = mergeConnectedAccountDescriptorProjections(suppliers === 'no Machine' ? [] : [
+      { kind: 'ready', descriptors: [suppliers === 'two Machines with different declarations' ? {
+        ...withoutUsageIdentity, title: 'Older Machine title', capabilities: [],
+        authentication: manualAuthentication([]), usageIdentity: { providerId: 'older.usage' },
+      } : withoutUsageIdentity] },
+      { kind: 'ready', descriptors: [descriptor] },
+    ]);
+    installConnectedAccountDescriptorProjection(advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'), merged,
+    ));
     const account = QualifiedConnectedAccountProfileV4Schema.parse({
       ref: { service, accountId: 'work' }, status: 'connected', authenticationModeId: 'oauth',
       revisionSemantics: 'revisioned', credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
@@ -99,8 +118,56 @@ describe('connectedServiceRegistry', () => {
     expect(selected).toMatchObject({ eligibility: 'usable', selectable: true });
     expect(selected?.presentation.unavailableReason).toBeUndefined();
     // Passive declaration truth does not admit a sign-in/refresh operation.
-    expect(getQualifiedConnectedServiceRegistryEntry(service)).toBeNull();
+    if (suppliers === 'no Machine') expect(getQualifiedConnectedServiceRegistryEntry(service)).toBeNull();
+    else {
+      expect(merged.kind).toBe('ready');
+      expect(merged.descriptors).toHaveLength(1);
+      expect(merged.descriptors?.[0]).toMatchObject({
+        title: bundled.descriptor.title, authentication: bundled.descriptor.authentication,
+        capabilities: bundled.descriptor.capabilities ?? [], usageIdentity: bundled.descriptor.usageIdentity,
+      });
+      expect(getQualifiedConnectedServiceRegistryEntry(service)?.projectedDescriptorCandidates).toHaveLength(1);
+    }
     expect(getConnectedAccountAuthentication({ pluginId: 'acme.foreign', localId: service.localId })).toBeNull();
+  });
+
+  it.each(['external', 'external with bundled key', 'unknown bundled', 'first-party installed'] as const)('refuses genuinely divergent usage declarations for %s supplies', (variant) => {
+    const bundled = BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS['happier.agent.codex/openai-codex']!;
+    const service = { pluginId: variant === 'first-party installed' || variant === 'external with bundled key' ? bundled.service.pluginId : 'acme.accounts', localId: bundled.service.localId };
+    const descriptor = ConnectedAccountUiProjectionEntryV1Schema.parse({
+      ...bundled.descriptor, pluginId: service.pluginId, serviceId: service.localId,
+      provenance: variant.startsWith('external') ? 'external' : 'first_party',
+      sourceKind: variant === 'first-party installed' ? 'installed' : 'bundled', capabilities: bundled.descriptor.capabilities ?? [],
+      availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+    });
+    const other = { ...descriptor, usageIdentity: { providerId: 'acme.usage' } };
+    const merged = mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [descriptor] }, { kind: 'ready', descriptors: [other] },
+    ]);
+    installConnectedAccountDescriptorProjection(advanceConnectedAccountDescriptorProjectionState(
+      createConnectedAccountDescriptorProjectionLoadingState('server-a'), merged,
+    ));
+    expect(merged.kind).toBe('conflict');
+    expect(merged.descriptors).toHaveLength(2);
+    expect(getConnectedAccountAuthentication(service)).toBeNull();
+  });
+
+  it('does not fill omitted usage metadata for an external declaration', () => {
+    const bundled = BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS['happier.agent.codex/openai-codex']!;
+    const service = { pluginId: 'acme.accounts', localId: bundled.service.localId };
+    const descriptor = ConnectedAccountUiProjectionEntryV1Schema.parse({
+      ...bundled.descriptor, pluginId: service.pluginId, serviceId: service.localId,
+      title: 'Different declaration', provenance: 'external',
+      sourceKind: 'bundled', capabilities: bundled.descriptor.capabilities ?? [],
+      availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+    });
+    const { usageIdentity: omitted, ...withoutUsageIdentity } = descriptor;
+    expect(omitted).toBeDefined();
+    const merged = mergeConnectedAccountDescriptorProjections([
+      { kind: 'ready', descriptors: [withoutUsageIdentity] }, { kind: 'ready', descriptors: [descriptor] },
+    ]);
+    expect(merged.kind).toBe('conflict');
+    expect(merged.descriptors).toHaveLength(2);
   });
 
   it('preserves projected authentication and refuses conflicting suppliers rather than borrowing bundled modes', () => {

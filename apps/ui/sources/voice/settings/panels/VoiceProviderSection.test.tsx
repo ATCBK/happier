@@ -1562,7 +1562,7 @@ describe('VoiceProviderSection', () => {
         expect(JSON.stringify(checkedReadinessRow(tree)?.props)).not.toContain(account.ref.accountId);
     }, 120_000);
 
-    it('does not claim a bound Connected Account credential is missing when its descriptor is unavailable', async () => {
+    it('uses bundled authentication for a bound Connected Account when its Machine descriptor is unavailable', async () => {
         const { settingsParse } = await import('@/sync/domains/settings/settings');
         const { applyAccountVoiceCredentialSourceSelection } = await import('@/voice/credentials/accountVoiceCredential');
         const { createDefaultVoiceProviderRegistry } = await import('@/voice/registry/defaultRegistry');
@@ -1633,15 +1633,16 @@ describe('VoiceProviderSection', () => {
         const { tree } = screen;
 
         const row = findProviderChoiceRow(tree, { testID: `settings.voice.provider.${encodeURIComponent(OPENAI_PROVIDER_ID)}.byo` });
-        expect(providerChoiceDetail(row)).toContain(tLoose('voice.readiness.credential_unknown'));
+        expect(providerChoiceDetail(row)).toContain(t('settingsVoice.pages.conversations.serviceReady'));
+        expect(providerChoiceDetail(row)).not.toContain(tLoose('voice.readiness.credential_unknown'));
         expect(providerChoiceDetail(row)).not.toContain(tLoose('voice.readiness.credential_missing'));
         expect(row?.props.disabled).not.toBe(true);
 
         await act(async () => {});
         const readiness = checkedReadinessRow(tree);
-        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.credential_unknown'));
+        expect(readiness?.props.announcement).toContain(tLoose('voice.readiness.ready'));
+        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.credential_unknown'));
         expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.credential_missing'));
-        expect(readiness?.props.announcement).not.toContain(tLoose('voice.readiness.ready'));
     }, 120_000);
 
     it('keeps ordinary OpenAI configurable when an orphaned purpose binding makes current source resolution unknown', async () => {
@@ -2933,11 +2934,10 @@ describe('VoiceProviderSection', () => {
             .map((call) => (call as unknown as [{ localId: string }])[0].localId);
         expect(checkedContributions()).toEqual(['google-cloud-tts']);
 
-        const geminiHear = { ...settings, voice: withHear('happier.voice.google/gemini-stt') };
-        storageBoundary.settings = geminiHear;
+        accountFixture.replaceVoice(withHear('happier.voice.google/gemini-stt'));
+        const geminiHear = storage.getState().settings;
         await act(async () => { await screen.update(render(geminiHear.voice)); });
-        await act(async () => {});
-        expect(checkedContributions()).toContain('gemini-stt');
+        await vi.waitFor(() => expect(checkedContributions()).toContain('gemini-stt'));
         await screen.unmount();
     }, 120_000);
 
