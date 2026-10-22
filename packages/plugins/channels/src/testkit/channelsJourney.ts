@@ -10,7 +10,7 @@ import { runConversationOutwardDeliveryCycle } from '../outwardDeliverySuperviso
 import { channelsTargetedContributionServices } from './operationOnlyTargetedContributionsFixture.js';
 import { MemoryCollection } from './memoryCollection.js';
 import type { ComposerAttachmentResolveRequestV1 } from '@happier-dev/plugin-sdk';
-import { PluginMachineExecutionOriginV1Schema, type PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
+import { getPluginMachineExecutionRouting, PluginMachineExecutionOriginV1Schema, type PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
 
 /**
  * Public-SDK composition of the actual Channels activation and cycle owners.
@@ -29,11 +29,15 @@ export async function createChannelsJourneyFixture(input: Readonly<{
   resolveCurrentProviderExecutionOrigin?: () => PluginMachineExecutionOriginV1 | null;
   omitAttachmentRegistration?: boolean;
   logger?: PluginServices['logger'];
+  state?: MemoryCollection;
+  deliveries?: MemoryCollection;
 }>) {
-  const state = new MemoryCollection();
-  const deliveries = new MemoryCollection();
-  await state.put(input.connection, { expectedRevision: 'absent' });
-  await state.put(input.binding, { expectedRevision: 'absent' });
+  const state = input.state ?? new MemoryCollection();
+  const deliveries = input.deliveries ?? new MemoryCollection();
+  if (input.state === undefined) {
+    await state.put(input.connection, { expectedRevision: 'absent' });
+    await state.put(input.binding, { expectedRevision: 'absent' });
+  }
   const storage = { account: { collection: (definition: { id: string }) => {
     if (definition.id === CHANNEL_STATE_COLLECTION.id) return state;
     if (definition.id === CHANNEL_DELIVERIES_COLLECTION.id) return deliveries;
@@ -118,7 +122,17 @@ export async function createChannelsJourneyFixture(input: Readonly<{
       };
     } },
     targetedContributionContributors: [input.provider],
-    ...(input.resolveCurrentPluginMaterializationRef ? { resolveCurrentPluginMaterializationRef: input.resolveCurrentPluginMaterializationRef } : {}),
+    ...(input.resolveCurrentPluginMaterializationRef ? { resolveCurrentPluginMaterializationRef: input.resolveCurrentPluginMaterializationRef }
+      : input.resolveCurrentProviderExecutionOrigin === undefined ? {} : {
+        // The fixture host colocates core and provider by default. Tests may
+        // explicitly place another core elsewhere; saved connection data is
+        // never the host-identity source.
+        resolveCurrentPluginMaterializationRef: () => {
+          const origin = input.resolveCurrentProviderExecutionOrigin?.();
+          return origin == null ? null : { pluginId: 'happier.channels',
+            machineId: getPluginMachineExecutionRouting(origin).machineId, materializationId: 'channels-journey-core' };
+        },
+      }),
     services: { storage, sessions: input.sessions, actions: input.actions,
       logger: input.logger ?? { debug() {}, info() {}, warn() {}, error() {}, diagnostic() {} } },
   });

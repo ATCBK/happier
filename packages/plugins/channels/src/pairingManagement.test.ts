@@ -295,6 +295,7 @@ function pairingManagementContext(input: Readonly<{
     // targeted-contribution host boundaries.
     services: {
       actions: {
+        getCurrentExecutionRouting: async () => ({ serverIdentityId: 'srv_pairing_test', machineId: 'machine-1', pluginId: 'happier.channels' }),
         executeAdmittedTargetedOperationWithExecutionOrigin: endpointResolutionExecutor(
           input.endpointCandidates ?? [directDestinationEndpoint],
         ),

@@ -1120,6 +1120,7 @@ export async function resolveConversationOutwardDeliveryCustodyInAccountCollecti
   endpoint?: ConversationResolvedEndpointV1;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  assertExecutionPlacement?: (connectionId: string) => Promise<void>;
   now?: () => number;
 }>): Promise<Readonly<{
   kind: 'resolved';
@@ -1189,6 +1190,8 @@ export async function resolveConversationOutwardDeliveryCustodyInAccountCollecti
       'Delivery resolution target is not canonical outward custody.',
     );
   }
+  await input.assertExecutionPlacement?.(record.obligation.connectionId);
+  assertDeliveryResolutionCurrent(input);
   if (record.obligation.newThread !== undefined && input.resolution === 'accepted') {
     const endpoint = input.endpoint ?? record.custody.endpoint;
     if (endpoint === undefined || endpoint.kind !== 'thread' || endpoint.parentId !== record.obligation.endpoint.id

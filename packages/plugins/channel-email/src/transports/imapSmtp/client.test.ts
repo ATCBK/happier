@@ -247,7 +247,8 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
       return spec.outputSchema.parse({ ok: true, projection: 'externalShareableV1', sessionId,
         scannedThroughSeq: transcript.length, nextCursor: String(transcript.length), hasMore: false, items });
     } } as unknown as PluginServices['actions'];
-    journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions, logger });
+    journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions, logger,
+      resolveCurrentProviderExecutionOrigin: () => ({ serverIdentityId: 'srv_plugin_testkit', materializationRef: providerMaterialization }) });
     try {
       await journey.state.put(createConversationSessionProjectionFrontierRow({ bindingId: binding.id, targetSessionId: sessionId,
         transcriptCursor: '0', lastScannedSeq: 0, revision: 1, now: 1 }), { expectedRevision: 'absent' });
@@ -565,7 +566,8 @@ describe('IMAP/SMTP transport against real TLS protocol servers', () => {
         scannedThroughSeq: transcript.length, nextCursor: String(transcript.length), hasMore: false,
         items: page.limit === 0 ? [] : transcript.filter(item => item.seq > Number(page.cursor ?? 0)) });
     } } as unknown as PluginServices['actions'];
-    const journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions });
+    const journey = await createChannelsJourneyFixture({ provider: registeredPlugin, connection, binding, sessions, actions,
+      resolveCurrentProviderExecutionOrigin: () => ({ serverIdentityId: 'srv_plugin_testkit', materializationRef: materialization }) });
     const mime = (id: string, answer: string, reply = false) => Buffer.from([
       `From: sales@example.com`, `To: ${mailbox}`, `Message-ID: <${id}@example.com>`,
       ...(reply ? ['References: <first@example.com>', 'In-Reply-To: <first@example.com>'] : []),

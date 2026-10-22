@@ -1,4 +1,6 @@
-import { PluginError } from '@happier-dev/plugin-sdk';
+import { definePlugin, PluginError } from '@happier-dev/plugin-sdk';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { ConversationProvidersContributionProtocolV1 } from '@happier-dev/channels-protocol/v1';
 import { ConversationDeliveryContentV1Schema, ConversationDeliveryInputV1Schema } from '@happier-dev/channels-protocol/v1';
 import type { ConversationDeliveryInputV1, ConversationDeliveryResultV1 } from '@happier-dev/channels-protocol/v1';
 import type {
@@ -9,7 +11,7 @@ import type {
   TargetedContributionsService,
 } from '@happier-dev/plugin-sdk';
 import type { BackgroundServiceContext } from '@happier-dev/plugin-sdk/background-services';
-import { getPluginMachineExecutionRouting } from '@happier-dev/plugin-sdk/actions';
+import { getPluginMachineExecutionRouting, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -45,6 +47,7 @@ import {
   createCurrentConversationConnectionFixture,
   type ConversationConnectionFixtureAuthority,
 } from './testkit/currentConnectionFixture.js';
+import { createChannelsJourneyFixture } from './testkit/channelsJourney.js';
 
 const endpoint = {
   kind: 'direct' as const,
@@ -512,6 +515,7 @@ function backgroundContext(input: Readonly<{
   collection?: (definition: Readonly<{ id: string }>) => MemoryCollection | undefined;
   targetedContributions?: TargetedContributionsService;
   watchSession?: (listener: () => void) => { dispose(): void };
+  executionRouting?: PluginMachineExecutionRoutingV1 | null;
 }>): BackgroundServiceContext {
   const collections = new Map<string, MemoryCollection>([
     [CHANNEL_STATE_COLLECTION.id, input.state],
@@ -534,6 +538,9 @@ function backgroundContext(input: Readonly<{
         },
       },
       actions: {
+        getCurrentExecutionRouting: async () => input.executionRouting === undefined
+          ? { ...getPluginMachineExecutionRouting(providerTransportOrigin), pluginId: 'happier.channels' }
+          : input.executionRouting,
         execute: input.execute,
         executeAdmittedTargetedOperationWithExecutionOrigin: input.executeAdmittedTargetedOperationWithExecutionOrigin,
       },
@@ -655,6 +662,151 @@ function permissionWaitOutwardObligation(): ConversationOutwardDeliveryObligatio
 }
 
 describe('Channels outward-delivery supervisor', () => {
+  it('leaves a final unclaimed when the connection moves during the transcript read', async () => {
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await seedProjectionState(state);
+    const execute = vi.fn(async (action: string) => {
+      if (action === 'session.permission.remote.pending.list') return emptyPendingPermissionPage();
+      const connection = connectionRow();
+      await state.put({ ...connection, payload: { ...connection.payload, authorityEpoch: 5,
+        transportOrigin: { serverIdentityId: providerTransportOrigin.serverIdentityId, machineId: 'replacement-machine' },
+      } }, { expectedRevision: 1 });
+      return { ok: true, projection: 'externalShareableV1', sessionId: 'session-1', scannedThroughSeq: 1, nextCursor: '1', hasMore: false,
+        items: [{ kind: 'assistantText', sessionId: 'session-1', seq: 1, itemId: 'moving-final', turnId: 'moving-turn',
+          final: 'completed', text: 'Final after transfer', consumedInputs: [] }] };
+    });
+    const deliver = vi.fn(async () => ({ result: { kind: 'delivered', providerMessageIds: ['wrong-runtime'] }, executionOrigin: providerTransportOrigin }));
+    await runConversationOutwardDeliveryCycle({ context: backgroundContext({ state, deliveries, execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: deliver }), now: () => 100 });
+    expect(deliveries.rows.size).toBe(0);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(state.rows.get(createConversationSessionProjectionFrontierRowId('binding-1'))?.value.payload).toMatchObject({ lastScannedSeq: 0 });
+  });
+  it('refuses foreign manual resolution and terminal retention without mutating custody', async () => {
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await state.put(connectionRow(), { expectedRevision: 'absent' });
+    const store = createConversationOutwardDeliveryCollectionStore({ stateCollection: state as never,
+      deliveriesCollection: deliveries as never, signal: new AbortController().signal, now: () => 1 });
+    const created = await store.ensure(outwardObligation());
+    if (created.kind !== 'created') throw new Error('Expected custody');
+    const unknown = await store.compareAndSwap({ custodyId: created.record.custodyId, expectedRevision: created.record.revision,
+      custody: { state: 'outcomeUnknown', attemptCount: 1, providerMessageIds: [] } });
+    if (unknown.kind !== 'updated') throw new Error('Expected ambiguous custody');
+    const foreign = backgroundContext({ state, deliveries, execute: vi.fn(), executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn(),
+      executionRouting: { ...getPluginMachineExecutionRouting(providerTransportOrigin), pluginId: 'happier.channels', machineId: 'foreign-machine' } });
+    const request = { custodyId: unknown.record.custodyId, expectedRevision: unknown.record.revision, resolution: 'discarded' };
+    const before = structuredClone([...deliveries.rows]);
+    await expect(resolveConversationDeliveryForInvocation(request, foreign)).rejects.toMatchObject({ code: 'channels_delivery_resolve_unavailable' });
+    expect([...deliveries.rows]).toEqual(before);
+    const placed = backgroundContext({ state, deliveries, execute: vi.fn(), executeAdmittedTargetedOperationWithExecutionOrigin: vi.fn() });
+    await expect(resolveConversationDeliveryForInvocation(request, placed)).resolves.toMatchObject({ kind: 'resolved' });
+    const settled = structuredClone([...deliveries.rows]);
+    const expiry = Date.now() + 30 * 24 * 60 * 60 * 1_000;
+    await runConversationOutwardDeliveryCycle({ context: foreign, now: () => expiry });
+    expect([...deliveries.rows]).toEqual(settled);
+    await runConversationOutwardDeliveryCycle({ context: placed, now: () => expiry });
+    expect(await deliveries.get(created.record.custodyId)).toBeNull();
+  });
+  it('routes an external plugin final through the public host stamp and real Channels journey exactly once', async () => {
+    const pluginId = 'acme.installed.conversation';
+    const origin = { serverIdentityId: 'srv_plugin_testkit', materializationRef: {
+      pluginId, machineId: 'external-machine', materializationId: 'installed-external-provider',
+    } } as const;
+    const operations = ConversationProvidersContributionProtocolV1.operations;
+    const send = vi.fn(async () => ({ status: 200, finalUrl: 'https://external.example/send', headers: {}, body: new Uint8Array() }));
+    const plugin = definePlugin({ id: pluginId, version: '1.0.0', actions: {
+      setup: { title: 'Setup', surfaces: ['plugin'], dangerLevel: 'safe', run() { throw new Error('Existing connection needs no setup'); } },
+      test: { title: 'Test', surfaces: ['plugin'], dangerLevel: 'safe', run() { throw new Error('Existing connection needs no retest'); } },
+      send: { title: 'Send', surfaces: ['plugin'], dangerLevel: 'writesRemote',
+        inputSchema: operations.messageDeliver.declaration.input.schema.jsonSchema,
+        resultSchema: operations.messageDeliver.declaration.resultSchema.jsonSchema,
+        async run(_input, context) {
+          await context.services.http.request({ method: 'POST', url: 'https://external.example/send', redirect: 'error' });
+          return { kind: 'delivered', providerMessageIds: ['external-receipt'] };
+        } },
+    }, contributesTo: { 'happier.channels': { providers: { external: ConversationProvidersContributionProtocolV1.contribute({ operations: {
+      setup: operations.setup.bind('setup'), connectionTest: operations.connectionTest.bind('test'), messageDeliver: operations.messageDeliver.bind('send'),
+    } }) } } } });
+    const provider = await createPluginTestkit({ manifest: plugin.manifest, module: plugin,
+      resolveCurrentPluginMaterializationRef: () => origin.materializationRef,
+      services: { http: { request: send, async openWebSocket() { throw new Error('No socket'); } } } });
+    const connection = createCurrentConversationConnectionFixture({ connectionId: 'connection-1', authority: {
+      ...deliveryConnectionAuthority({ providerConnectionKey: 'external-connection', providerConfig: { account: 'external' },
+        routingIdentityKey: 'a'.repeat(43), integrationPrincipal: { id: 'external-principal' }, authorityEpoch: 4 }),
+      providerPluginId: pluginId, providerContributionSelection: { contributionId: 'external' }, transportOrigin: origin,
+    } });
+    const actions = { execute: async (action: string) => action === 'session.permission.remote.pending.list'
+      ? emptyPendingPermissionPage() : { ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
+        scannedThroughSeq: 1, nextCursor: '1', hasMore: false, items: [{ kind: 'assistantText', sessionId: 'session-1', seq: 1,
+          itemId: 'external-final', turnId: 'external-turn', final: 'completed', text: 'Final answer', consumedInputs: [] }] },
+    } as unknown as PluginServices['actions'];
+    const sessions = { get: async () => ({ watch: () => ({ dispose() {} }) }) } as unknown as PluginServices['sessions'];
+    const common = { provider, connection, binding: bindingRow(), actions, sessions, resolveCurrentProviderExecutionOrigin: () => origin };
+    const placed = await createChannelsJourneyFixture(common);
+    const foreign = await createChannelsJourneyFixture({ ...common, state: placed.state, deliveries: placed.deliveries,
+      resolveCurrentPluginMaterializationRef: () => ({ pluginId: 'happier.channels', machineId: 'foreign-machine', materializationId: 'foreign-core' }) });
+    try {
+      await placed.state.put(createConversationSessionProjectionFrontierRow({ bindingId: 'binding-1', targetSessionId: 'session-1',
+        transcriptCursor: null, lastScannedSeq: 0, revision: 1, now: 0 }), { expectedRevision: 'absent' });
+      const before = structuredClone([...placed.state.rows]);
+      await foreign.outward();
+      expect([...placed.state.rows]).toEqual(before);
+      expect(placed.deliveries.rows.size).toBe(0);
+      expect(send).not.toHaveBeenCalled();
+      await placed.outward();
+      await foreign.outward();
+      await placed.outward();
+      expect(send).toHaveBeenCalledOnce();
+      expect([...placed.deliveries.rows.values()]).toMatchObject([{ value: { payload: { state: 'delivered', attemptCount: 1 } } }]);
+    } finally { await foreign.dispose(); await placed.dispose(); await provider.dispose(); }
+  });
+  it.each(['machine', 'home', 'unavailable', 'unsupported'] as const)('leaves foreign %s custody and projection untouched until the placed runtime runs', async (foreign) => {
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    await seedProjectionState(state);
+    const store = createConversationOutwardDeliveryCollectionStore({ stateCollection: state as never,
+      deliveriesCollection: deliveries as never, signal: new AbortController().signal, now: () => 1 });
+    const ready = await store.ensure(outwardObligation());
+    const attempting = await store.ensure({ ...outwardObligation(), source: {
+      kind: 'sessionProjection', sessionId: 'session-1', semanticItemId: 'stale-attempt',
+    }, deliveryKey: 'stale-attempt' });
+    if (ready.kind !== 'created' || attempting.kind !== 'created') throw new Error('Expected retained custody');
+    const started = await store.compareAndSwap({ custodyId: attempting.record.custodyId, expectedRevision: attempting.record.revision,
+      custody: { ...attempting.record.custody, state: 'attempting', attemptCount: 1, attemptId: 'original-attempt', startedAt: 1 } });
+    expect(started.kind).toBe('updated');
+    const execute = vi.fn(async (action: string) => action === 'session.permission.remote.pending.list'
+      ? emptyPendingPermissionPage() : { ok: true, projection: 'externalShareableV1', sessionId: 'session-1',
+        scannedThroughSeq: 1, nextCursor: '1', hasMore: false, items: [{ kind: 'assistantText', sessionId: 'session-1',
+          seq: 1, itemId: 'projected-final', turnId: 'turn-final', final: 'completed', text: 'Fresh final', consumedInputs: [] }] });
+    const deliver = vi.fn(async (operation: typeof providerDeliveryAction) => ({
+      result: { kind: 'delivered', providerMessageIds: [operation === providerDeliveryReconcileAction ? 'reconciled' : 'sent'] },
+      executionOrigin: providerTransportOrigin,
+    }));
+    const routing = { ...getPluginMachineExecutionRouting(providerTransportOrigin), pluginId: 'happier.channels' };
+    const foreignContext = backgroundContext({ state, deliveries, execute, executeAdmittedTargetedOperationWithExecutionOrigin: deliver,
+      executionRouting: foreign === 'unavailable' ? null : { ...routing,
+        ...(foreign === 'machine' ? { machineId: 'another-machine' } : { serverIdentityId: 'srv_another_home' }) } });
+    if (foreign === 'unsupported') Reflect.deleteProperty(foreignContext.services.actions, 'getCurrentExecutionRouting');
+    const originalCustody = structuredClone([...deliveries.rows]);
+    const originalState = structuredClone([...state.rows]);
+    await runConversationOutwardDeliveryCycle({ context: foreignContext, now: () => 40_000 });
+    expect([...deliveries.rows]).toEqual(originalCustody);
+    expect([...state.rows]).toEqual(originalState);
+    expect(execute).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(foreignContext.services.logger.warn).not.toHaveBeenCalled();
+    expect(foreignContext.services.logger.info).not.toHaveBeenCalled();
+    const placed = backgroundContext({ state, deliveries, execute, executeAdmittedTargetedOperationWithExecutionOrigin: deliver });
+    await runConversationOutwardDeliveryCycle({ context: placed, now: () => 40_001 });
+    await runConversationOutwardDeliveryCycle({ context: placed, now: () => 40_002 });
+    expect(deliver.mock.calls.filter(([operation]) => operation === providerDeliveryAction)).toHaveLength(2);
+    expect(deliver.mock.calls.filter(([operation]) => operation === providerDeliveryReconcileAction)).toHaveLength(1);
+    expect([...deliveries.rows.values()]).toHaveLength(3);
+    expect([...deliveries.rows.values()].every(row => isChannelStateJsonRecord(row.value.payload)
+      && row.value.payload.state === 'delivered')).toBe(true);
+  });
   it('stops queued child delivery and holds new projection while its router is disabled', async () => {
     const state = new MemoryCollection();
     const deliveries = new MemoryCollection();
@@ -1254,6 +1406,73 @@ describe('Channels outward-delivery supervisor', () => {
     expect([...deliveries.rows.values()].filter((row) => row.deleted !== true).map((row) => (
       (row.value.payload as Readonly<Record<string, unknown>>).state
     ))).toEqual(expect.arrayContaining(['partial', 'outcomeUnknown']));
+  });
+
+  it('retires deleted-connection terminal custody at thirty days without mutating non-terminal custody on an unplaced runtime', async () => {
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1_000;
+    const terminalAt = 100;
+    const state = new MemoryCollection();
+    const deliveries = new MemoryCollection();
+    const connection = await state.put(connectionRow(), { expectedRevision: 'absent' });
+    const store = createConversationOutwardDeliveryCollectionStore({
+      stateCollection: state as never,
+      deliveriesCollection: deliveries as never,
+      signal: new AbortController().signal,
+      now: () => terminalAt,
+    });
+    const created = await store.ensure(outwardObligation());
+    if (created.kind !== 'created') throw new Error('Expected terminal custody fixture.');
+    const terminal = await store.compareAndSwap({
+      custodyId: created.record.custodyId,
+      expectedRevision: created.record.revision,
+      custody: { state: 'delivered', attemptCount: 1, providerMessageIds: ['provider-1'] },
+    });
+    if (terminal.kind !== 'updated') throw new Error('Expected terminal custody settlement.');
+    const unsettled = [];
+    for (const custody of [
+      { state: 'ready', attemptCount: 0, providerMessageIds: [] },
+      { state: 'attempting', attemptId: 'stale-attempt', startedAt: terminalAt, attemptCount: 1, providerMessageIds: [] },
+      { state: 'outcomeUnknown', attemptCount: 1, providerMessageIds: [] },
+    ] as const) {
+      const admitted = await store.ensure(retireableControlOutwardObligation(`deleted-connection-${custody.state}`));
+      if (admitted.kind !== 'created') throw new Error('Expected non-terminal custody fixture.');
+      const updated = await store.compareAndSwap({
+        custodyId: admitted.record.custodyId,
+        expectedRevision: admitted.record.revision,
+        custody,
+      });
+      if (updated.kind !== 'updated') throw new Error('Expected non-terminal custody state.');
+      expect(updated.record.custody).toEqual(custody);
+      unsettled.push(structuredClone(await deliveries.get(updated.record.custodyId)));
+    }
+    await state.delete(connection.rowId, { expectedRevision: connection.revision });
+    expect(await state.get(connection.rowId)).toBeNull();
+    const execute = vi.fn();
+    const providerOperation = vi.fn();
+    const context = backgroundContext({
+      state,
+      deliveries,
+      execute,
+      executeAdmittedTargetedOperationWithExecutionOrigin: providerOperation,
+      executionRouting: { ...getPluginMachineExecutionRouting(providerTransportOrigin), pluginId: 'happier.channels', machineId: 'foreign-machine' },
+    });
+    const before = structuredClone([...deliveries.rows]);
+    await runConversationOutwardDeliveryCycle({ context, now: () => terminalAt + THIRTY_DAYS_MS - 1 });
+    expect([...deliveries.rows]).toEqual(before);
+    await runConversationOutwardDeliveryCycle({ context, now: () => terminalAt + THIRTY_DAYS_MS });
+    for (const row of unsettled) {
+      if (row === null) throw new Error('Expected retained non-terminal row.');
+      expect(await deliveries.get(row.rowId)).toEqual(row);
+    }
+    expect(execute).not.toHaveBeenCalled();
+    expect(providerOperation).not.toHaveBeenCalled();
+    expect(await deliveries.get(terminal.record.custodyId)).toBeNull();
+    // Session projection remains replayable, so the existing retirement owner
+    // preserves its content-free dedupe tombstone rather than forgetting it.
+    expect(deliveries.rows.get(terminal.record.custodyId)).toMatchObject({
+      deleted: true,
+      revision: terminal.record.revision + 1,
+    });
   });
 
   it('keeps a content-free control-response tombstone until its ingress source row is gone', async () => {
@@ -2637,6 +2856,14 @@ describe('Channels outward-delivery supervisor', () => {
       throw new Error('Finalizing rows must not issue a provider delivery.');
     });
     const context = backgroundContext({ state, deliveries, execute, executeAdmittedTargetedOperationWithExecutionOrigin });
+
+    const foreignContext = backgroundContext({ state, deliveries, execute, executeAdmittedTargetedOperationWithExecutionOrigin,
+      executionRouting: { ...getPluginMachineExecutionRouting(providerTransportOrigin), pluginId: 'happier.channels', machineId: 'foreign-machine' } });
+    const beforeState = structuredClone([...state.rows]);
+    const beforeCustody = structuredClone([...deliveries.rows]);
+    await runConversationOutwardDeliveryCycle({ context: foreignContext, now: () => 10 });
+    expect([...state.rows]).toEqual(beforeState);
+    expect([...deliveries.rows]).toEqual(beforeCustody);
 
     await runConversationOutwardDeliveryCycle({ context, now: () => 10 });
     expect(deliveries.rows.get(custody.record.custodyId)?.value).toMatchObject({

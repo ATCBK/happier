@@ -27,6 +27,7 @@ import {
   CHANNEL_STATE_RECORD_KIND,
 } from './collections.js';
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
+import { asChannelStateRow, readConversationConnectionUpdateRow } from './accountLocalBindingPolicy.js';
 import {
   hasUnsettledDestructiveOldTransportStop,
   getSelfStampedPluginCallerExecutionOrigin,
@@ -123,6 +124,32 @@ export function hasCurrentConversationTransportCaller(input: Readonly<{
     getPluginMachineExecutionRouting(origin),
     getConversationConnectionExecutionRouting(input.transportOrigin, input.providerPluginId),
   );
+}
+
+/** Core background work uses its own host stamp, never the provider's target stamp. */
+export async function hasCurrentConversationExecutionPlacement(
+  context: Pick<PluginInvocationContext, 'services' | 'signal'>,
+  transportOrigin: ConversationConnectionTransportOriginV1,
+): Promise<boolean> {
+  if (context.signal.aborted) return false;
+  const routing = await context.services.actions?.getCurrentExecutionRouting?.({ signal: context.signal });
+  return routing != null && !context.signal.aborted && arePluginMachineExecutionRoutingsEqual(
+    routing,
+    getConversationConnectionExecutionRouting(transportOrigin, routing.pluginId),
+  );
+}
+
+/** Reread placement before claiming or mutating Account-wide background work. */
+export async function isConversationConnectionPlacedForInvocation(
+  context: Pick<PluginInvocationContext, 'services' | 'signal'>,
+  connectionId: string,
+): Promise<boolean> {
+  const stored = await requireChannelsAccountStorage(context).collection(CHANNEL_STATE_COLLECTION)
+    .get(connectionId, { signal: context.signal });
+  const row = asChannelStateRow(stored);
+  if (row === undefined) return false;
+  const connection = readConversationConnectionUpdateRow({ row, connectionId });
+  return await hasCurrentConversationExecutionPlacement(context, connection.transportOrigin);
 }
 
 /**

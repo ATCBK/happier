@@ -11,6 +11,7 @@ import {
 } from './collections.js';
 import { requireChannelsAccountStorage } from './requiredAccountStorage.js';
 import { createSupervisorWake } from './supervisorWake.js';
+import { isConversationConnectionPlacedForInvocation } from './reconciliation.js';
 import {
   classifySupervisorFailure,
   isInactiveSupervisorCollectionFailure,
@@ -518,6 +519,7 @@ export async function runConversationOutwardDeliveryCycle(
   const redriveRetainedDelivery = async (
     record: ConversationOutwardDeliveryRecord,
   ): Promise<void> => {
+    if (!await isConversationConnectionPlacedForInvocation(context, record.obligation.connectionId)) return;
     if (hasPendingConversationThreadBinding(record.custody)) {
       if (!await finishStartedConversationBinding({ record, store: deliveryStore, context })) {
         noteDeadline(now() + RECONCILIATION_INTERVAL_MS);
@@ -634,6 +636,7 @@ export async function runConversationOutwardDeliveryCycle(
       }
       continue;
     }
+    if (!await isConversationConnectionPlacedForInvocation(context, source.source.connectionId)) continue;
     try {
       await input.observeSession?.(source.source.sessionId);
     } catch (error) {
@@ -728,7 +731,8 @@ export async function runConversationOutwardDeliveryCycle(
     // A truncated source list cannot prove absence. Only an untouched custody
     // row can be suppressed after a complete exact-source negative read;
     // attempted or ambiguous effects retain their ordinary custody truth.
-    if (mediation.truncated || !isUnattemptedPermissionWait(record)) continue;
+    if (mediation.truncated || !isUnattemptedPermissionWait(record)
+      || !await isConversationConnectionPlacedForInvocation(context, record.obligation.connectionId)) continue;
     try {
       const result = await redriveConversationOutwardDelivery({
         store: deliveryStore,
@@ -766,6 +770,9 @@ export async function runConversationOutwardDeliveryCycle(
     if (context.signal.aborted) break;
     let observedDeliveryOutcome = false;
     try {
+      const bindingRow = await stateCollection.get(bindingId, { signal: context.signal });
+      const connectionId = bindingRow === null ? undefined : bindingConnectionIdFromRow(bindingRow.value, bindingId);
+      if (connectionId === undefined || !await isConversationConnectionPlacedForInvocation(context, connectionId)) continue;
       const projected = await projectConversationSessionTranscriptPage({
         actions: context.services.actions,
         store: projectionStore,
@@ -777,6 +784,11 @@ export async function runConversationOutwardDeliveryCycle(
           outcome: { code: 'channels_projection_repliesOnlyInputNotConsumed', retryable: false, informational: true },
         }),
         deliver: async ({ binding, item, source }) => {
+          // Transcript reads can outlive a placement change. Recheck before
+          // this callback can materialize or claim the final's custody.
+          if (!await isConversationConnectionPlacedForInvocation(context, binding.connectionId)) {
+            return { kind: 'notAttempted', reason: 'connectionUnavailable' };
+          }
           const relations = await readConversationSessionInputReplyRelations({
             stateCollection, bindingId: binding.bindingId, connectionId: binding.connectionId,
             sessionId: source.sessionId, signal: context.signal,
@@ -876,12 +888,22 @@ export async function runConversationOutwardDeliveryCycle(
         return cycleResult();
       }
       if (scanned.records.length > 0) {
+        const retirementRecords: ConversationOutwardDeliveryRecord[] = [];
+        for (const record of scanned.records) {
+          const connection = await stateCollection.get(record.obligation.connectionId, { signal: context.signal });
+          // The scanner has already proved terminal eligibility and the
+          // thirty-day cutoff. Deleted connections leave that retention duty
+          // here; live connections still require their current placement.
+          if (connection === null || await isConversationConnectionPlacedForInvocation(context, record.obligation.connectionId)) {
+            retirementRecords.push(record);
+          }
+        }
         const unreachableControlSourceIds = await readUnreachableControlSourceIds({
           context,
-          records: scanned.records,
+          records: retirementRecords,
         });
         const retired = await deliveryStore.retireSelected({
-          records: scanned.records.map((record) => ({
+          records: retirementRecords.map((record) => ({
             custodyId: record.custodyId,
             expectedRevision: record.revision,
             physicallyForget: canPhysicallyForgetOutwardCustody({

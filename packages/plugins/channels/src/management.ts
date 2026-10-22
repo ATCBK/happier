@@ -135,6 +135,8 @@ import {
 } from './connectionLifecycle.js';
 import {
   hasCurrentConversationTransportCaller,
+  hasCurrentConversationExecutionPlacement,
+  isConversationConnectionPlacedForInvocation,
   readConversationBindingInputModesNoLongerDeliverable,
 } from './reconciliation.js';
 import {
@@ -4148,6 +4150,7 @@ async function finalizeConversationConnectionDelete(input: Readonly<{
   if (connectionRow === undefined) return;
   const current = readConversationConnectionUpdateRow({ row: connectionRow, connectionId: input.connectionId });
   if (!finalizingDeleteIsAuthorized(current)) return;
+  if (!await hasCurrentConversationExecutionPlacement(input.context, current.transportOrigin)) return;
 
   const reservationIdentity = readFinalizingReservationIdentity(current);
   const connectionIdentityKey = await readExistingConnectionIdentityKey(input.context);
@@ -4312,6 +4315,7 @@ async function finalizeConversationBindingDelete(input: Readonly<{
     connectionId: current.binding.connectionId,
   });
   if (connection.lifecycle.deletionState !== 'none') return;
+  if (!await hasCurrentConversationExecutionPlacement(input.context, connection.transportOrigin)) return;
 
   const custody = await settleConversationOutwardDeliveriesForBindingDeletion({
     stateCollection: collection,
@@ -5293,6 +5297,11 @@ export async function resolveConversationDeliveryForInvocation(
     deliveriesCollection: requireChannelsAccountStorage(context).collection(CHANNEL_DELIVERIES_COLLECTION),
     ...resolution,
     signal: context.signal,
+    async assertExecutionPlacement(connectionId) {
+      if (!await isConversationConnectionPlacedForInvocation(context, connectionId)) {
+        throw pluginError('channels_delivery_resolve_unavailable', 'Delivery resolution requires the connection placement to be available.', true);
+      }
+    },
   });
 }
 

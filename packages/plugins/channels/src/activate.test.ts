@@ -1117,7 +1117,11 @@ describe('Channels core activation', () => {
     const core = await createPluginTestkit({
       manifest: PLUGIN_MANIFEST,
       module: { activate },
-      services: { storage },
+      services: { storage,
+        // This fixture supplies the host's own Machine identity, not provider I/O.
+        actions: { getCurrentExecutionRouting: async () => ({ serverIdentityId: 'srv_plugin_testkit',
+          machineId: 'plugin-testkit-machine', pluginId: 'happier.channels' }) } as PluginServices['actions'],
+      },
     });
     const signal = new AbortController().signal;
     const custody = createConversationOutwardDeliveryCollectionStore({

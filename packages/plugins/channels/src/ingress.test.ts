@@ -1226,7 +1226,9 @@ function createIngressHarness(options: IngressHarnessOptions = {}) {
   const services = {
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
     storage: { account: { collection: () => collection } },
-    actions: { execute, executeAdmittedTargetedOperationWithExecutionOrigin },
+    actions: { execute, executeAdmittedTargetedOperationWithExecutionOrigin,
+      getCurrentExecutionRouting: async () => ({ ...getPluginMachineExecutionRouting(options.getPollExecutionOrigin?.()
+        ?? options.pollExecutionOrigin ?? telegramExecutionOrigin), pluginId: 'happier.channels' }) },
     targetedContributions: targetedTelegramPollContribution(options.readAdmittedProviderContributions),
     sessions: {
       get: async (sessionId: string) => (options.availableSessionIds ?? ['session-1']).includes(sessionId)
@@ -7678,6 +7680,23 @@ pairingRequestId: 'pairing-request-1',
 });
 
 describe('Conversation checkpointed-poll ingress', () => {
+  it.each(['machine', 'home', 'unavailable'] as const)('keeps a foreign %s poll inert before provider or checkpoint effects', async (foreign) => {
+    const harness = createIngressHarness();
+    const routing = { ...getPluginMachineExecutionRouting(telegramExecutionOrigin), pluginId: 'happier.channels' };
+    const before = structuredClone([...harness.rows]);
+    const context: PluginInvocationContext = { ...harness.context, services: { ...harness.context.services,
+      actions: { ...harness.context.services.actions, getCurrentExecutionRouting: async () => foreign === 'unavailable' ? null
+        : { ...routing, ...(foreign === 'machine' ? { machineId: 'foreign-machine' } : { serverIdentityId: 'srv_foreign' }) } },
+    } };
+    await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, context))
+      .resolves.toEqual({ kind: 'ineligible' });
+    expect([...harness.rows]).toEqual(before);
+    expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).not.toHaveBeenCalled();
+    expect(harness.send).not.toHaveBeenCalled();
+    await expect(runConversationCheckpointedPollForInvocation({ connectionId: 'connection-1', waitMs: 0 }, harness.context))
+      .resolves.toMatchObject({ kind: 'committed' });
+    expect(harness.executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenCalledOnce();
+  });
   it('follows updated source custody for a replacement baseline, normal poll and frozen Event retry without an authority change', async () => {
     const sourceOrigin: PluginMachineExecutionOriginV1 = {
       serverIdentityId: telegramExecutionOrigin.serverIdentityId,
@@ -8378,10 +8397,15 @@ describe('Conversation checkpointed-poll ingress', () => {
     // The replacement poll overlaps the old daemon's exclusive getUpdates
     // slot. The exclusive-consumer conflict follows the shared backoff
     // instead of latching the connection into a blocked manual-retry state.
+    const replacementContext: PluginInvocationContext = { ...harness.context, services: { ...harness.context.services,
+      actions: { ...harness.context.services.actions, getCurrentExecutionRouting: async () => ({
+        serverIdentityId: telegramExecutionOrigin.serverIdentityId, machineId: 'machine-replacement', pluginId: 'happier.channels',
+      }) },
+    } };
     await expect(runConversationCheckpointedPollForInvocation({
       connectionId: 'connection-1',
       waitMs: 0,
-    }, harness.context)).resolves.toEqual({ kind: 'retry' });
+    }, replacementContext)).resolves.toEqual({ kind: 'retry' });
     const retried = rows.get('connection-1');
     if (retried === undefined) throw new Error('Expected the retrying replacement Channel connection.');
     const retriedPollFailure = record(record(retried.value).payload).pollFailure;

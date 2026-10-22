@@ -96,7 +96,7 @@ import {
 } from './connectionLifecycle.js';
 import { readPersistedConversationConnectionPollFailure } from './connectionPollFailurePersistence.js';
 import { classifySupervisorFailure } from './supervisorFailure.js';
-import { hasCurrentConversationTransportCaller } from './reconciliation.js';
+import { hasCurrentConversationTransportCaller, hasCurrentConversationExecutionPlacement } from './reconciliation.js';
 import {
   CONVERSATION_NON_ADMISSION_REASONS,
   decideConversationCommandPolicy,
@@ -7707,6 +7707,7 @@ async function readEligibleCheckpointedPollConnection(input: Readonly<{
     );
   }
   if (!isEligibleCheckpointedPollConnection(connection)) return undefined;
+  if (!await hasCurrentConversationExecutionPlacement(input.context, connection.value.payload.transportOrigin)) return undefined;
   const revalidation = input.revalidateOccurrenceConflict;
   if (revalidation !== undefined && (
     connection.value.payload.configurationRevision !== revalidation.configurationRevision

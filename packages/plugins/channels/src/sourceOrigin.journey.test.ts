@@ -229,7 +229,9 @@ async function journey(kind: 'source' | 'bundled' | 'materialization', omitCreat
       await driver.activate(api);
       return dispose;
     } },
-      targetedContributionContributors: [provider], services: { storage } });
+      targetedContributionContributors: [provider], services: { storage },
+      resolveCurrentPluginMaterializationRef: () => ({ pluginId: PLUGIN_MANIFEST.id,
+        machineId: 'journey-machine', materializationId: 'journey-core' }) });
   } catch (error) {
     await provider.dispose();
     throw error;
