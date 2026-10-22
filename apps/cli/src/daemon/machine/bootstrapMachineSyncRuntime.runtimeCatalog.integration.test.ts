@@ -84,6 +84,7 @@ import { SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol';
 import { readOrCreateInstallationIdentitySync } from '@/daemon/identity/store';
 import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import { SessionFollowObserveInactiveResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { createSessionFollowOccurrenceDispatcher } from '@/agent/runtime/session/follow/sessionFollowOccurrenceDispatcher';
 
 type ConnectedApiMachineForBootstrap = NonNullable<Awaited<ReturnType<BootstrapMachineSyncRuntimeParams['createConnectedApiMachine']>>>;
 
@@ -445,6 +446,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                 metadata: JSON.stringify(metadata), metadataLayoutVersion: 0, active: false, pendingCount: 0 });
             const source = createSessionRecordFixture({ id: sourceSessionId, encryptionMode: 'plain',
                 metadata: JSON.stringify({ machineId, path: homeDir, flavor: 'claude' }),
+                ownerAccountId: accountId,
                 metadataLayoutVersion: 0, latestTurnId: 'failed-source-turn', latestTurnStatus: 'failed' });
             const observation = { sourceSessionId, destinationSessionId, relation: 'manager', attachedAt: 1,
                 policy: { preset: 'important' }, delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1,
@@ -459,6 +461,9 @@ describe('bootstrapMachineSyncRuntime', () => {
             const app = fastify();
             app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
                 signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+            app.get('/v2/account/session-follow-rules', async () => ({ rules: [] }));
+            app.get('/v2/account/session-follow-preferences', async () => ({ assigned: false, direct: false, team: false, group: false }));
+            app.get(`/v2/sessions/${destinationSessionId}/follows/sessions`, async () => ({ sources: [] }));
             app.get('/v2/sessions', async () => { listReads += 1; return { sessions: [destination], nextCursor: null, hasNext: false }; });
             app.get(`/v2/sessions/${destinationSessionId}`, async () => ({ session: destination }));
             app.get(`/v2/sessions/${sourceSessionId}`, async () => {
@@ -504,6 +509,19 @@ describe('bootstrapMachineSyncRuntime', () => {
                     // Machine socket and process spawn are external boundaries; scan, admission,
                     // source hydration and inactive resume remain the real bootstrap composition.
                     const machineClient = transport as unknown as ConnectedApiMachineForBootstrap;
+                    const spawn = async (options: Parameters<BootstrapMachineSyncRuntimeParams['spawnSessionForInternalResume']>[0]): Promise<SpawnSessionResult> => {
+                        expect(options.existingSessionId).toBe(destinationSessionId);
+                        expect(options.executionAuthorization).toBeUndefined();
+                        launches.push(destinationSessionId);
+                        running = true;
+                        return { type: 'success', sessionId: destinationSessionId };
+                    };
+                    const dispatcher = createSessionFollowOccurrenceDispatcher({ accountId, credentials, serverId: target.homeId,
+                        serverHttpBaseUrl: new URL(resolveServerHttpBaseUrl()).origin, machineId, installationId,
+                        signal: new AbortController().signal, isCurrent: async () => !requesterUnavailable,
+                        subscribeInvalidation: () => () => {}, spawnSession: spawn, isSessionAlreadyRunning: async () => running,
+                        resolveSourceKeyContext: async () => ({ serverIdentityId: target.homeId, authority: 'account_automation', surface: 'api' }),
+                        isPersonalCurrent: () => false, dispatchPersonal: async () => {} });
                     const runtime = await bootstrapMachineSyncRuntime({
                         cliVersion: '0.0.0-test', machineId,
                         machine: { id: machineId, encryptionMode: 'plain', metadata: null, metadataVersion: 0,
@@ -513,16 +531,13 @@ describe('bootstrapMachineSyncRuntime', () => {
                         createConnectedApiMachine: () => machineClient,
                         attachTransferRuntimeStatePublisher: async () => {}, startAutomationWorkerForMachine: () => null,
                         startMemoryWorkerForMachine: async () => null, startVoiceInferenceWorkerForMachine: async () => null,
-                        spawnSessionForInternalResume: async options => {
-                            expect(options.existingSessionId).toBe(destinationSessionId);
-                            expect(options.executionAuthorization).toBeUndefined();
-                            launches.push(destinationSessionId);
-                            running = true;
-                            return { type: 'success', sessionId: destinationSessionId };
-                        },
+                        spawnSessionForInternalResume: spawn,
                         spawnSession: async () => { throw new Error('Automatic Follow must not use person Resume'); },
                         stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => running,
                         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: target.homeId, machineId }),
+                        dispatchSessionFollowOccurrence: async request => 'observations' in request
+                            ? await dispatcher.dispatchReceiverRange(request)
+                            : { coveredEvents: [], receiverSessionIds: [] },
                         readRequesterSessionCredentialBindings: async () => ({ status: 'ready', bindings: requesterUnavailable ? [{
                             sessionId: destinationSessionId, attribution: { serverId: 'requester-home', accountId: 'requester-account', machineId, installationId },
                         }] : [] }),
@@ -579,7 +594,7 @@ describe('bootstrapMachineSyncRuntime', () => {
                         destination = { ...destination, metadata: JSON.stringify(metadata) };
                         await changedSession({ sessionId: destinationSessionId, cursor: 4 });
                         await connectOptions.onConnect();
-                    } finally { await retireMachineSyncRuntimeAttempt(runtime); }
+                    } finally { dispatcher.dispose(); await retireMachineSyncRuntimeAttempt(runtime); }
                 }
                 expect(observationReads).toContainEqual({ v: 1, machineId, installationId });
                 expect(launches).toEqual([destinationSessionId, destinationSessionId]);

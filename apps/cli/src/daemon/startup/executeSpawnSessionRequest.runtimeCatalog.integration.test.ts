@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios, { AxiosHeaders, type AxiosResponse } from 'axios';
 import { z } from 'zod/mini';
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -23,6 +24,20 @@ import { consumeProviderBindingLaunchHandoffFromEnvironments } from '@/plugins/r
 import type { ProviderSpawnAuthorizationAttempt } from '@/providers/spawn/authorize';
 import type { TrackedSession } from '../types';
 import { createConnectedAccountPurposeBindingOwner } from '../connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
+import { AcpCatalogRecordV1Schema, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { createCustomAcpAdmissionRuntimeFixture } from './customAcpAdmission.testkit';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { writeExecutableShim } from '@/testkit/fs/executableShim';
+import { bindHomeDomainActionHttpRequestV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { NO_TEAM_CAPABILITIES_V1 } from '@happier-dev/protocol/teams';
+import { TeamsPageV1Schema, resolveTeamAdmissionProjectionV1 } from '@happier-dev/protocol/teams/projections';
+import { TeamCredentialResourceEntitledPageV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 
 const HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY =
   'HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_V1_JSON';
@@ -47,7 +62,6 @@ const hoisted = vi.hoisted(() => {
   const acquireAuthoritativePluginRuntimeRegistryLease = vi.fn();
   const resolveMergedContributionRegistry = vi.fn();
   const createRuntimeProviderSpawnAuthorizationAttempt = vi.fn();
-  const getActiveAccountSettingsSnapshot = vi.fn<() => unknown>(() => null);
   const fetchForkChildSessionOrThrow = vi.fn();
   const updateSessionMetadataWithRetry = vi.fn();
   const ensureSessionDirectory = vi.fn<() => Promise<MockEnsureSessionDirectoryResult>>(async () => ({
@@ -70,7 +84,6 @@ const hoisted = vi.hoisted(() => {
     acquireAuthoritativePluginRuntimeRegistryLease,
     resolveMergedContributionRegistry,
     createRuntimeProviderSpawnAuthorizationAttempt,
-    getActiveAccountSettingsSnapshot,
     fetchForkChildSessionOrThrow,
     updateSessionMetadataWithRetry,
     ensureSessionDirectory,
@@ -123,17 +136,15 @@ vi.mock('@/configuration', () => ({
   },
 }));
 
+// OS credential-store boundary: the configured runtime must see the same
+// keyless Account identity that the daemon admitted, without reading local keys.
+vi.mock('@/persistence', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/persistence')>(),
+  readStoredCredentials: vi.fn(async () => createParams().credentials),
+}));
+
 vi.mock('@/settings/accountSettings/refreshAccountSettingsForMinimumVersion', () => ({
   refreshAccountSettingsForMinimumVersion: hoisted.refreshAccountSettingsForMinimumVersion,
-}));
-
-vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@/settings/accountSettings/activeAccountSettingsSnapshot')>(),
-  getActiveAccountSettingsSnapshot: hoisted.getActiveAccountSettingsSnapshot,
-}));
-
-vi.mock('@/terminal/runtime/envVarSanitization', () => ({
-  validateEnvVarRecordStrict: vi.fn(() => ({ ok: true, env: {} })),
 }));
 
 vi.mock('@/ui/logger', () => ({
@@ -141,6 +152,7 @@ vi.mock('@/ui/logger', () => ({
     debug: vi.fn(),
     debugLargeJson: vi.fn(),
     info: vi.fn(),
+    infoFile: vi.fn(),
     warn: vi.fn(),
   },
 }));
@@ -256,6 +268,9 @@ function createParams() {
       directory: '/tmp/project',
       sessionId: 'session-1',
       resume: 'vendor-session-1',
+      // These generic fixtures select native auth; default-purpose admission
+      // has dedicated Account/Team inputs in the cases below.
+      connectedServices: { v: 2 as const, bindingsByServiceId: {} },
       runtimeDescriptorV1: {
         v: 1 as const,
         agentId: 'codex',
@@ -264,10 +279,7 @@ function createParams() {
     },
     credentials: {
       token: 'token-1',
-      encryption: {
-        type: 'legacy',
-        secret: new Uint8Array([1, 2, 3]),
-      },
+      encryption: null,
     },
     api: {} as never,
     connectedServicesMaterializationBaseDir: '/tmp/connected-services',
@@ -286,8 +298,52 @@ function createParams() {
   } as const;
 }
 
+let profileRows: unknown[] = [];
+let fixtureAcpCatalog: AcpCatalogSnapshotV1 | undefined;
+let admittedAgentFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+
+async function setAccountSnapshot(input: Readonly<{
+  settings: Readonly<Record<string, unknown>>;
+  settingsVersion?: number;
+  acpCatalog?: AcpCatalogSnapshotV1;
+  providerConnectionsCatalog?: ActiveAccountSettingsSnapshot['providerConnectionsCatalog'];
+}>) {
+  const { profiles, ...settings } = input.settings;
+  // The Account HTTP boundary stores destination rows. Settings is no longer
+  // the authoritative producer of launch-profile definitions.
+  profileRows = (Array.isArray(profiles) ? profiles : []).map((profile: unknown) => ({
+    id: profile && typeof profile === 'object' ? Reflect.get(profile, 'id') : '',
+    revision: 1,
+    content: { t: 'plain', v: { v: 1,
+      id: profile && typeof profile === 'object' ? Reflect.get(profile, 'id') : '',
+      definition: { kind: 'inline', profile }, enabled: true,
+      promptStack: [], skillSeeds: [], secretBindings: {},
+    } },
+  }));
+  fixtureAcpCatalog = input.acpCatalog;
+  const { setActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+  const { resolveAccountSettingsScopeKey } = await import('@/settings/accountSettings/accountSettingsScopeKey');
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse(settings), rawSettings: settings,
+    settingsVersion: input.settingsVersion ?? 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+    scopeKey: resolveAccountSettingsScopeKey(createParams().credentials), acpCatalog: input.acpCatalog,
+    providerConnectionsCatalog: input.providerConnectionsCatalog });
+}
+
+function homeResponse<T>(data: T): AxiosResponse<T> {
+  return { data, status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() } };
+}
+
+function configuredAcpCatalog(): AcpCatalogSnapshotV1 {
+  return { status: 'ready', revision: 4, record: AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [{
+    id: 'review-bot', name: 'review-bot', title: 'Review Bot',
+    launch: { kind: 'command', command: 'review-bot', args: [] }, env: {},
+    capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
+  }] }) };
+}
+
 function createRegistryWithBackendOwners(ownersByBackendId: Record<string, string>) {
   return {
+    ...createResolvedContributionRegistry({}),
     agentDefinitionsById: new Map(
       Object.entries(ownersByBackendId).map(([agentId, pluginId]) => {
         const localAgentId = agentId === 'ohMyPi' ? 'ohmypi' : agentId;
@@ -654,6 +710,11 @@ async function configureProviderBoundExistingSessionSpawn(input: Readonly<{
 }
 
 describe('executeSpawnSessionRequest', () => {
+  afterEach(async () => {
+    await admittedAgentFixture?.dispose();
+    admittedAgentFixture = undefined;
+    vi.restoreAllMocks();
+  });
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.resetModules();
@@ -688,8 +749,28 @@ describe('executeSpawnSessionRequest', () => {
     hoisted.acquireAuthoritativePluginRuntimeRegistryLease.mockReset();
     hoisted.resolveMergedContributionRegistry.mockReset();
     hoisted.createRuntimeProviderSpawnAuthorizationAttempt.mockReset();
-    hoisted.getActiveAccountSettingsSnapshot.mockReset();
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue(null);
+    profileRows = [];
+    fixtureAcpCatalog = undefined;
+    const { resetActiveAccountSettingsSnapshotForTests, getActiveAccountSettingsSnapshot } = await import('@/settings/accountSettings/activeAccountSettingsSnapshot');
+    resetActiveAccountSettingsSnapshotForTests();
+    // HTTP alone is controlled; scoped catalog loading, schema parsing,
+    // currentness checks and snapshot publication remain real.
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return homeResponse(createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
+      if (path === '/v1/account/encryption') return homeResponse({ mode: 'plain', updatedAt: 1 });
+      if (path === '/v1/artifacts') return homeResponse([]);
+      if (path === '/v1/account/entity-rows/profiles') return homeResponse({ status: 'listed', rows: profileRows,
+        nextCursor: null, complete: true, referenceGuardRevision: 1, transferControl: { status: 'absent' }, diagnostics: [] });
+      if (path === '/v1/account/entity-rows/profiles/reference-guard') return homeResponse({ status: 'ready', revision: 1 });
+      if (path === '/v1/account/entity-rows/profiles/transfer') return homeResponse({ status: 'absent' });
+      if (path === '/v2/account/settings') return homeResponse({ content: { t: 'plain', v: getActiveAccountSettingsSnapshot()?.rawSettings ?? {} },
+        version: getActiveAccountSettingsSnapshot()?.settingsVersion ?? 1 });
+      if (path === '/v1/account/authoring-memory/lastUsedProfile') return homeResponse({ status: 'present', revision: 1, content: { t: 'plain', v: null } });
+      if (path === '/v1/account/entity-rows/acp' && fixtureAcpCatalog?.status === 'ready') return homeResponse({
+        status: 'present', revision: fixtureAcpCatalog.revision, content: { t: 'plain', v: fixtureAcpCatalog.record } });
+      throw new Error(`Unexpected Account GET in spawn fixture: ${path}`);
+    });
     hoisted.fetchForkChildSessionOrThrow.mockReset();
     hoisted.fetchForkChildSessionOrThrow.mockResolvedValue({
       id: 'child-acp',
@@ -995,7 +1076,7 @@ describe('executeSpawnSessionRequest', () => {
       },
       catalogAgentId: 'codex',
     });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({
+    await setAccountSnapshot({
       settings: {
         profiles: [{
           v: 2,
@@ -1084,7 +1165,7 @@ describe('executeSpawnSessionRequest', () => {
       catalogAgentId: 'codex',
     });
     hoisted.ensureSessionDirectory.mockResolvedValueOnce({ ok: true, directoryCreated: false });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({
+    await setAccountSnapshot({
       settings: {
         profiles: [{
           v: 2, id: 'focused', name: 'Focused',
@@ -1115,8 +1196,6 @@ describe('executeSpawnSessionRequest', () => {
       source: 'active',
       release,
     });
-    const { validateEnvVarRecordStrict } = await import('@/terminal/runtime/envVarSanitization');
-    vi.mocked(validateEnvVarRecordStrict).mockReturnValueOnce({ ok: true, env: { THIRD_PARTY_AUTH: 'attacker-value' } });
     const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
     const { resolveSpawnChildEnvironment } = await import('../spawn/resolveSpawnChildEnvironment');
     const { routeSpawnModeAndWaitForWebhook } = await import('../spawn/routeSpawnModeAndWaitForWebhook');
@@ -1161,7 +1240,7 @@ describe('executeSpawnSessionRequest', () => {
       sessionAttachPayload: null,
       catalogAgentId: 'codex',
     });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({ settings: { profiles } });
+    await setAccountSnapshot({ settings: { profiles } });
     const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
     const { routeSpawnModeAndWaitForWebhook } = await import('../spawn/routeSpawnModeAndWaitForWebhook');
 
@@ -1196,7 +1275,7 @@ describe('executeSpawnSessionRequest', () => {
       catalogAgentId: 'codex',
     });
     hoisted.ensureSessionDirectory.mockResolvedValueOnce({ ok: true, directoryCreated: false });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({
+    await setAccountSnapshot({
       settings: {
         profiles: [{
           v: 2, id: 'focused', name: 'Focused',
@@ -1227,8 +1306,6 @@ describe('executeSpawnSessionRequest', () => {
       source: 'active',
       release,
     });
-    const { validateEnvVarRecordStrict } = await import('@/terminal/runtime/envVarSanitization');
-    vi.mocked(validateEnvVarRecordStrict).mockReturnValueOnce({ ok: true, env: { TEAM_FLAG: '1' } });
     const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
     const { resolveSpawnChildEnvironment } = await import('../spawn/resolveSpawnChildEnvironment');
     const { routeSpawnModeAndWaitForWebhook } = await import('../spawn/routeSpawnModeAndWaitForWebhook');
@@ -1258,23 +1335,21 @@ describe('executeSpawnSessionRequest', () => {
       sessionAttachPayload: null, catalogAgentId: 'claude',
     });
     hoisted.ensureSessionDirectory.mockResolvedValueOnce({ ok: true, directoryCreated: false });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({ settings: {
-      providerSettingsV1: {
+    await setAccountSnapshot({ settings: {}, providerConnectionsCatalog: {
+      status: 'ready', revision: 1, catalog: splitProviderSettingsV1({
         ...DEFAULT_PROVIDER_SETTINGS_V1,
         migration: {
           v: 1,
           completedSources: [{ sourceProfileId: 'deepseek', kind: 'connection', connectionId: 'pc_deepseek' }],
           pendingCustomProfileIds: [], migratedAt: 2,
         },
-      },
+      }).catalog,
     } });
     const release = vi.fn(async () => undefined);
     hoisted.acquireAuthoritativePluginRuntimeRegistryLease.mockResolvedValueOnce({
       registry: { contributes: { agentDefinitionsById: new Map([['claude', { definition: { id: 'claude', kindVersion: 1 } }]]) }, agentRuntimesByAgentId: new Map() },
       source: 'active', release,
     });
-    const { validateEnvVarRecordStrict } = await import('@/terminal/runtime/envVarSanitization');
-    vi.mocked(validateEnvVarRecordStrict).mockReturnValueOnce({ ok: true, env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' } });
     const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
     const { resolveSpawnChildEnvironment } = await import('../spawn/resolveSpawnChildEnvironment');
     const result = await executeSpawnSessionRequest({
@@ -1287,9 +1362,11 @@ describe('executeSpawnSessionRequest', () => {
         environmentVariables: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' },
       },
     });
-    expect(result).toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_ENVIRONMENT_VARIABLES });
+    expect(result).toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+      errorMessage: expect.stringContaining("Launch profile 'deepseek' was migrated") });
     expect(resolveSpawnChildEnvironment).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
+    expect(hoisted.acquireAuthoritativePluginRuntimeRegistryLease).not.toHaveBeenCalled();
   });
 
   it('authorizes provider bindings before connected services, suppresses conflicting auth, and revalidates before commit', async () => {
@@ -1304,7 +1381,7 @@ describe('executeSpawnSessionRequest', () => {
       catalogAgentId: 'codex',
     });
     hoisted.ensureSessionDirectory.mockResolvedValueOnce({ ok: true, directoryCreated: false });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({
+    await setAccountSnapshot({
       settings: {
         profiles: [{
           v: 2, id: 'focused', name: 'Focused', extraEnvironmentVariables: [{ name: 'TEAM_FLAG', value: '1' }],
@@ -1441,8 +1518,6 @@ describe('executeSpawnSessionRequest', () => {
     });
 
     const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
-    const { validateEnvVarRecordStrict } = await import('@/terminal/runtime/envVarSanitization');
-    vi.mocked(validateEnvVarRecordStrict).mockReturnValueOnce({ ok: true, env: { TEAM_FLAG: '1' } });
     const { resolveSpawnChildEnvironment } = await import('../spawn/resolveSpawnChildEnvironment');
     const { resolveConnectedServiceAuthForSpawn } = await import('../connectedServices/resolveConnectedServiceAuthForSpawn');
     const { shouldResolveConnectedServiceAuthForSpawn } = await import('../connectedServices/shouldResolveConnectedServiceAuthForSpawn');
@@ -1450,13 +1525,13 @@ describe('executeSpawnSessionRequest', () => {
     vi.mocked(shouldResolveConnectedServiceAuthForSpawn).mockReturnValueOnce(true);
     vi.mocked(resolveConnectedServiceAuthForSpawn).mockImplementationOnce(async (input) => {
       events.push('connected-services');
-      expect(input.connectedServicesBindingsRaw).toEqual({
+      expect(input.connectedServicesBindingsRaw).toEqual(ConnectedServiceBindingsV2IngressSchema.parse({
         v: 1,
         bindingsByServiceId: {
           github: { source: 'connected', selection: 'profile', profileId: 'github-work' },
           anthropic: { source: 'connected', selection: 'profile', profileId: 'anthropic-work' },
         },
-      });
+      }));
       expect(input.resolveQualifiedPurposeBindingSnapshot?.(
         ConnectedServiceBindingsV2IngressSchema.parse(input.connectedServicesBindingsRaw),
       )?.bindings).toEqual([{
@@ -1636,6 +1711,7 @@ describe('executeSpawnSessionRequest', () => {
     });
     const acceptedLease = {
       registry: {
+        ...createAdmittedRuntimeRegistry({ codex: 'happier.agent.codex' }),
         contributes: {
           agentDefinitionsById: new Map([['codex', {
             id: 'codex',
@@ -1682,16 +1758,18 @@ describe('executeSpawnSessionRequest', () => {
           }]]),
         },
         agentRuntimesByAgentId: new Map([['codex', {
+          ...createAdmittedRuntimeRegistry({ codex: 'happier.agent.codex' }).agentRuntimesByAgentId.get('codex'),
           pluginId: 'happier.agent.codex',
           pluginVersion: '1.0.0',
           agentId: 'codex',
-          occurrenceId: expect.any(String),
+          occurrenceId: 'codex-managed-occurrence',
           sourceCustody: {
             kind: 'managed',
             immutableGenerationId: 'agent-immutable-q',
             installSource: 'localPath',
           },
           hasPrimaryRuntime: true,
+          retirementSignal: new AbortController().signal,
         }]]),
         runtimeCapabilitiesByPluginId: new Map([[
           'happier.agent.codex',
@@ -1849,8 +1927,8 @@ describe('executeSpawnSessionRequest', () => {
           pluginId: 'happier.agent.codex',
           agentId: 'codex',
           backendId: 'codex',
-          generation: 'agent-generation-q',
-          immutableGenerationId: 'agent-immutable-q',
+          occurrenceId: 'codex-managed-occurrence',
+          sourceCustody: { kind: 'managed', immutableGenerationId: 'agent-immutable-q', installSource: 'localPath' },
         },
         bootstrapFilePath: expect.any(String),
         authorityFilePath: expect.any(String),
@@ -2060,6 +2138,7 @@ describe('executeSpawnSessionRequest', () => {
       type: 'error',
       errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
       errorMessage: 'Failed to spawn session: downstream failure echoed [REDACTED]',
+      errorDetail: { kind: 'launch_error', code: 'SPAWN_FAILED', message: 'downstream failure echoed [REDACTED]' },
     });
     expect(setup.attachCleanup).toHaveBeenCalledTimes(1);
     expect(setup.providerCleanupOnFailure).toHaveBeenCalledTimes(1);
@@ -2116,6 +2195,7 @@ describe('executeSpawnSessionRequest', () => {
       errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
       errorMessage:
         'startup_retirement_incomplete:exit_cleanup_incomplete',
+      errorDetail: { kind: 'launch_error', code: 'STARTUP_RETIREMENT_INCOMPLETE', message: 'startup_retirement_incomplete:exit_cleanup_incomplete' },
     });
     expect(setup.providerCleanupOnFailure).toHaveBeenCalledTimes(1);
     expect(setup.providerCleanupOnExit).not.toHaveBeenCalled();
@@ -2132,7 +2212,7 @@ describe('executeSpawnSessionRequest', () => {
       sessionAttachPayload: { v: 2, encryptionMode: 'plain' },
       catalogAgentId: 'codex',
     });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({
+    await setAccountSnapshot({
       settings: { profiles: [{
         v: 2, id: 'focused', name: 'Focused', extraEnvironmentVariables: [{ name: 'TEAM_FLAG', value: '1' }],
         defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {},
@@ -2146,8 +2226,6 @@ describe('executeSpawnSessionRequest', () => {
     });
     const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
     const { resolveSpawnChildEnvironment } = await import('../spawn/resolveSpawnChildEnvironment');
-    const { validateEnvVarRecordStrict } = await import('@/terminal/runtime/envVarSanitization');
-    vi.mocked(validateEnvVarRecordStrict).mockReturnValueOnce({ ok: true, env: { TEAM_FLAG: '1' } });
 
     const result = await executeSpawnSessionRequest({
       ...createParams(),
@@ -2257,7 +2335,7 @@ describe('executeSpawnSessionRequest', () => {
       sessionAttachPayload: null, catalogAgentId: 'codex',
     });
     hoisted.ensureSessionDirectory.mockResolvedValueOnce({ ok: true, directoryCreated: false });
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({ settings: { profiles: [{
+    await setAccountSnapshot({ settings: { profiles: [{
       v: 2, id: 'focused', name: 'Focused', extraEnvironmentVariables: [{ name: 'TEAM_FLAG', value: '1' }],
       defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {}, createdAt: 1, updatedAt: 1,
     }] } });
@@ -2266,8 +2344,6 @@ describe('executeSpawnSessionRequest', () => {
       registry: { contributes: { agentDefinitionsById: new Map([['codex', { definition: { id: 'codex', kindVersion: 1 } }]]) }, agentRuntimesByAgentId: new Map() },
       source: 'active', release,
     });
-    const { validateEnvVarRecordStrict } = await import('@/terminal/runtime/envVarSanitization');
-    vi.mocked(validateEnvVarRecordStrict).mockReturnValueOnce({ ok: true, env: { TEAM_FLAG: '1' } });
     const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
     const result = await executeSpawnSessionRequest({
       ...createParams(), resolveProvidersFeatureEnabled: async () => true,
@@ -2443,13 +2519,10 @@ describe('executeSpawnSessionRequest', () => {
     }));
 
     let discoveryPending = true;
-    let spawnedWhileDiscoveryPending = false;
     let releaseDiscovery: () => void = () => {};
     const discovery = new Promise<void>((resolve) => { releaseDiscovery = resolve; });
     // An unresolved discovery operation is still optional. The established
     // spawn must return before discovery settles.
-    const release = setTimeout(() => releaseDiscovery(), 500);
-    const spawnStartedAt = performance.now();
     try {
       const result = await executeSpawnSessionRequest({ ...params,
         controlPluginDevelopment: async () => {
@@ -2458,14 +2531,9 @@ describe('executeSpawnSessionRequest', () => {
           throw new Error('Optional discovery unavailable');
         },
       });
-      spawnedWhileDiscoveryPending = discoveryPending;
-      console.info('[r9-latency] spawn with optional discovery pending', {
-        durationMs: Math.round(performance.now() - spawnStartedAt), discoveryPending,
-      });
       expect(result).toMatchObject({ type: 'success', sessionId: 'session-1' });
-      expect(spawnedWhileDiscoveryPending).toBe(true);
+      expect(discoveryPending).toBe(true);
     } finally {
-      clearTimeout(release);
       releaseDiscovery();
       await discovery;
     }
@@ -2614,6 +2682,7 @@ describe('executeSpawnSessionRequest', () => {
       ...createParams(),
       options: {
         directory: '/tmp/project',
+        connectedServices: { v: 2, bindingsByServiceId: {} },
         ...(requestBackendTarget ? { backendTarget: requestBackendTarget } : {}),
       },
       processEnv: {},
@@ -3002,6 +3071,7 @@ describe('executeSpawnSessionRequest', () => {
     const agentRuntimesByAgentId = new Map();
     const activateContributionsOnDemand = vi.fn(async () => {
       agentRuntimesByAgentId.set('pi', {
+        ...createAdmittedRuntimeRegistry({ pi: 'happier.agent.pi' }).agentRuntimesByAgentId.get('pi'),
         pluginId: 'happier.agent.pi',
         pluginVersion: '1.0.0',
         agentId: 'pi',
@@ -3012,11 +3082,13 @@ describe('executeSpawnSessionRequest', () => {
           installSource: 'localPath' as const,
         },
         hasPrimaryRuntime: true,
+        retirementSignal: new AbortController().signal,
       });
       return [];
     });
     hoisted.acquireAuthoritativePluginRuntimeRegistryLease.mockResolvedValueOnce({
       registry: {
+        ...createAdmittedRuntimeRegistry({ pi: 'happier.agent.pi' }),
         contributes: {
           ...createRegistryWithBackendOwners({ pi: 'happier.agent.pi' }),
           agentDefinitionsById: new Map([['pi', {
@@ -3363,6 +3435,37 @@ describe('executeSpawnSessionRequest', () => {
     };
 
     async function arrangeCommittedLaunch() {
+      const projection = await vi.importActual<typeof import('@/plugins/projection/registry/createResolvedContributionRegistry')>('@/plugins/projection/registry/createResolvedContributionRegistry');
+      hoisted.resolveMergedContributionRegistry.mockImplementation(projection.resolveMergedContributionRegistry);
+      admittedAgentFixture = await createAdmittedPluginRuntimeFixture({ runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+      hoisted.acquireAuthoritativePluginRuntimeRegistryLease.mockResolvedValueOnce({
+        registry: admittedAgentFixture.registry, source: 'active', release: vi.fn(async () => undefined),
+      });
+      const codexPath = await writeExecutableShim({ dir: admittedAgentFixture.happyHomeDir,
+        fileName: process.platform === 'win32' ? 'codex.cmd' : 'codex',
+        contents: process.platform === 'win32' ? '@echo off\r\necho codex-cli 0.160.0\r\n' : '#!/bin/sh\necho codex-cli 0.160.0\n',
+      });
+      const teamsRead = bindHomeDomainActionHttpRequestV1('teams.list', { v: 1, scope: 'member', archived: 'active' });
+      const resourcesRead = bindHomeDomainActionHttpRequestV1('teams.credentials.entitled.list', { teamId: 'team-1' });
+      // These recipient-safe Home projections drive the real Team selection
+      // normalization before the Session creation transaction below.
+      vi.spyOn(axios, 'request').mockImplementation(async request => {
+        const path = new URL(String(request.url)).pathname;
+        if (path === teamsRead.path) return homeResponse(TeamsPageV1Schema.parse({ items: [{
+          id: 'team-1', name: 'Work', description: null, logo: null, archivedAt: null, recovery: null,
+          policy: { v: 1, sessionCreationPolicy: 'private_default', externalSharingPolicy: 'allowed',
+            defaultSessionHistoryAccess: 'from_membership', admissionMode: 'invite_only', authenticationPolicy: null },
+          viewerRole: 'member', capabilities: NO_TEAM_CAPABILITIES_V1, admission: resolveTeamAdmissionProjectionV1(), counts: null,
+        }], nextCursor: null }));
+        if (path === resourcesRead.path) return homeResponse(TeamCredentialResourceEntitledPageV1Schema.parse({ resources: [{
+          id: 'resource-1', teamId: 'team-1', displayName: 'Team account', resourceRevision: 3,
+          readiness: { kind: 'available' }, recoveryAction: null, mayBroker: false, mayReceiveDirect: true,
+          directMaterialState: 'never_delivered', sessionUsePolicy: 'personal_allowed', providerModels: [],
+          connectedServiceSelections: Object.values(directTeamOptions.connectedServices.bindingsByServiceId),
+          sourcePresentation: { kind: 'connected_service', service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' } },
+        }], nextCursor: null }));
+        throw new Error(`Unexpected Team Home request in spawn fixture: ${path}`);
+      });
       hoisted.requireCatalogEntry.mockReturnValue({});
       hoisted.resolveSpawnBackendIdentity.mockResolvedValueOnce({
         ok: true,
@@ -3397,11 +3500,11 @@ describe('executeSpawnSessionRequest', () => {
       committedSessionNetwork.setSessionArchivedStateById.mockResolvedValue({ archivedAt: 1 });
       const { shouldResolveConnectedServiceAuthForSpawn } = await import('../connectedServices/shouldResolveConnectedServiceAuthForSpawn');
       vi.mocked(shouldResolveConnectedServiceAuthForSpawn).mockReturnValue(true);
-      return { getOrCreateSession };
+      return { getOrCreateSession, processEnv: { HAPPIER_CODEX_PATH: codexPath, PATH: '' } };
     }
 
     it('commits the Session with its Team binding before launch material is opened, and launches as an attach to it', async () => {
-      const { getOrCreateSession } = await arrangeCommittedLaunch();
+      const { getOrCreateSession, processEnv } = await arrangeCommittedLaunch();
       const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
       const { createSessionAttachFile } = await import('../sessionAttachFile');
       const { routeSpawnModeAndWaitForWebhook } = await import('../spawn/routeSpawnModeAndWaitForWebhook');
@@ -3438,9 +3541,12 @@ describe('executeSpawnSessionRequest', () => {
         ...createParams(),
         api: { getOrCreateSession } as never,
         options: directTeamOptions,
+        processEnv,
       });
 
-      expect(result).toMatchObject({ type: 'success', sessionId: 'session-committed' });
+      expect(result).toEqual({ type: 'success', sessionId: 'session-committed', sessionCreationOutcome: {
+        disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] },
+      } });
       expect(getOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({
         teamCredentialBindings: [teamSlotBinding],
         primaryTeamId: 'team-1',
@@ -3468,7 +3574,7 @@ describe('executeSpawnSessionRequest', () => {
     });
 
     it('archives the committed Session when launch material is refused before the runner starts', async () => {
-      const { getOrCreateSession } = await arrangeCommittedLaunch();
+      const { getOrCreateSession, processEnv } = await arrangeCommittedLaunch();
       const { executeSpawnSessionRequest } = await import('./executeSpawnSessionRequest');
       const { routeSpawnModeAndWaitForWebhook } = await import('../spawn/routeSpawnModeAndWaitForWebhook');
       const { resolveConnectedServiceAuthForSpawn } = await import('../connectedServices/resolveConnectedServiceAuthForSpawn');
@@ -3478,6 +3584,7 @@ describe('executeSpawnSessionRequest', () => {
         ...createParams(),
         api: { getOrCreateSession } as never,
         options: directTeamOptions,
+        processEnv,
       });
 
       expect(result).toMatchObject({ type: 'error' });
@@ -3697,9 +3804,9 @@ describe('executeSpawnSessionRequest', () => {
       sessionId: 'sess-claude-repair',
       agentId: 'claude',
       connectedServices: {
-        v: 1,
+        v: 2,
         bindingsByServiceId: {
-          'claude-subscription': {
+          'happier.agent.claude/claude-subscription': {
             source: 'connected',
             selection: 'profile',
             profileId: 'claude-work',
@@ -3907,7 +4014,7 @@ describe('executeSpawnSessionRequest', () => {
       failurePhase: 'materialization',
       source: 'spawn_resume',
       agentId: 'claude',
-      serviceId: 'claude-subscription',
+      serviceId: 'happier.agent.claude/claude-subscription',
       retryable: false,
       diagnostics: {
         reason: 'missing_required_scope',
@@ -3964,6 +4071,7 @@ describe('executeSpawnSessionRequest', () => {
       ...createParams(),
       options: {
         directory: '/tmp/project',
+        connectedServices: { v: 2, bindingsByServiceId: {} },
         backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
       },
     });
@@ -4164,38 +4272,34 @@ describe('executeSpawnSessionRequest', () => {
   });
 
   it('carries configured ACP resume through the composed daemon spawn boundary from the active Account snapshot', async () => {
+    const projection = await vi.importActual<typeof import('@/plugins/projection/registry/createResolvedContributionRegistry')>('@/plugins/projection/registry/createResolvedContributionRegistry');
+    hoisted.resolveMergedContributionRegistry.mockImplementation(projection.resolveMergedContributionRegistry);
+    admittedAgentFixture = await createCustomAcpAdmissionRuntimeFixture();
+    const agent = [...admittedAgentFixture.registry.contributes.agentDefinitionsById.values()]
+      .find(entry => entry.identity?.pluginId === CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId);
+    if (!agent) throw new Error('Expected the admitted Custom ACP contribution');
+    hoisted.requireCatalogEntry.mockReturnValue({});
     const configuredTarget = {
-      kind: 'backend',
-      sourceKind: 'configured',
-      backendId: 'review-bot',
-      configuredBackendId: 'review-bot',
+      kind: 'agent',
+      identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1,
+      definitionId: 'review-bot',
     } as const;
-    hoisted.getActiveAccountSettingsSnapshot.mockReturnValue({
-      settingsVersion: 1,
-      settings: {
-        acpCatalogSettingsV1: {
-          v: 2,
-          backends: [{
-            id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
-             env: {}, transportProfile: 'generic',
-            capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
-          }],
-        },
-      },
-    });
+    const { projectResolvedAgentBackendTarget } = await import('@/session/creation/resolveSessionCreationAgentTarget');
+    await setAccountSnapshot({ settings: {}, acpCatalog: configuredAcpCatalog() });
     hoisted.resolveSpawnBackendIdentity.mockResolvedValueOnce({
       ok: true,
       normalizedExistingSessionId: 'parent-session',
       effectiveResume: 'provider-session-1',
-      effectiveBackendTargetV2: configuredTarget,
+      effectiveAgentTarget: configuredTarget,
+      effectiveBackendTargetV2: projectResolvedAgentBackendTarget(configuredTarget, agent.id),
       sessionAttachPayload: { v: 2, encryptionMode: 'plain' },
-      catalogAgentId: null,
+      catalogAgentId: agent.id,
       ownerMetadata: null,
       existingSessionWorkspacePath: null,
     });
     hoisted.ensureSessionDirectory.mockResolvedValueOnce({ ok: true, directoryCreated: false });
     hoisted.acquireAuthoritativePluginRuntimeRegistryLease.mockResolvedValueOnce({
-      registry: createAdmittedRuntimeRegistry({ 'review-bot': 'active.plugin.review-bot' }),
+      registry: admittedAgentFixture.registry,
       source: 'active',
       release: vi.fn(async () => undefined),
     });
@@ -4224,7 +4328,7 @@ describe('executeSpawnSessionRequest', () => {
       ...baseParams,
       options: {
         ...baseParams.options,
-        backendTarget: configuredTarget,
+        agentTarget: configuredTarget,
         resume: 'provider-session-1',
         runtimeDescriptorV1: undefined,
       },
@@ -4233,7 +4337,7 @@ describe('executeSpawnSessionRequest', () => {
     expect(result).toEqual({ type: 'success', sessionId: 'configured-resumed-session' });
     expect(resolveSpawnChildEnvironment).toHaveBeenCalledWith(expect.objectContaining({
       options: expect.objectContaining({
-        backendTarget: configuredTarget,
+        agentTarget: configuredTarget,
         resume: 'provider-session-1',
       }),
     }));
@@ -4241,18 +4345,22 @@ describe('executeSpawnSessionRequest', () => {
   });
 
   it('admits configured ACP resume only from the caller-provided Account snapshot', async () => {
+    const projection = await vi.importActual<typeof import('@/plugins/projection/registry/createResolvedContributionRegistry')>('@/plugins/projection/registry/createResolvedContributionRegistry');
+    hoisted.resolveMergedContributionRegistry.mockImplementation(projection.resolveMergedContributionRegistry);
+    admittedAgentFixture = await createCustomAcpAdmissionRuntimeFixture();
+    const agent = [...admittedAgentFixture.registry.contributes.agentDefinitionsById.values()]
+      .find(entry => entry.identity?.pluginId === CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId);
+    if (!agent) throw new Error('Expected the admitted Custom ACP contribution');
+    const { projectResolvedAgentBackendTarget } = await import('@/session/creation/resolveSessionCreationAgentTarget');
+    hoisted.requireCatalogEntry.mockReturnValue({});
     hoisted.resolveSpawnBackendIdentity.mockResolvedValueOnce({
       ok: true,
       normalizedExistingSessionId: 'parent-session',
       effectiveResume: 'provider-session-1',
-      effectiveBackendTargetV2: {
-        kind: 'backend',
-        sourceKind: 'configured',
-        backendId: 'review-bot',
-        configuredBackendId: 'review-bot',
-      },
+      effectiveAgentTarget: { kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'review-bot' },
+      effectiveBackendTargetV2: projectResolvedAgentBackendTarget({ kind: 'agent', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'review-bot' }, agent.id),
       sessionAttachPayload: null,
-      catalogAgentId: null,
+      catalogAgentId: agent.id,
       ownerMetadata: null,
       existingSessionWorkspacePath: null,
     });
@@ -4260,18 +4368,10 @@ describe('executeSpawnSessionRequest', () => {
     const { prepareExecuteSpawnSessionRequest } = await import('./prepareExecuteSpawnSessionRequest');
     const prepared = await prepareExecuteSpawnSessionRequest({
       request: {
-        options: { ...createParams().options, resume: 'provider-session-1' },
+        options: { ...createParams().options, resume: 'provider-session-1', runtimeDescriptorV1: undefined },
         credentials: createParams().credentials,
-        accountSettings: {
-          acpCatalogSettingsV1: {
-            v: 2,
-            backends: [{
-              id: 'review-bot', name: 'review-bot', title: 'Review Bot', launch: { kind: 'command' as const, command: 'review-bot', args: [] },
-               env: {}, transportProfile: 'generic',
-              capabilities: { supportsLoadSession: true }, createdAt: 1, updatedAt: 1,
-            }],
-          },
-        },
+        accountSettings: {},
+        acpCatalogSnapshot: configuredAcpCatalog(),
       },
       validateEnvVarRecordStrict: () => ({ ok: true, env: {} }),
     });

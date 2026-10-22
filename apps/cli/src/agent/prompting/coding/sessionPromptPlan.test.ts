@@ -646,6 +646,54 @@ describe('session prompt-plan producer', () => {
     expect(resolve.readStartupInstructions?.()?.revision).toBe(3);
     expect(detailReads).toBe(4);
   });
+  it('retains a prepared instruction snapshot during an edit and reads current text at the next preparation and resume', async () => {
+    let markdown = 'QA_PERSONA_ALPHA';
+    let bodyVersion = 1;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      const document = { ...plainPromptDocument('turn-instructions', markdown), bodyVersion };
+      if (path === '/v1/artifacts') return { status: 200, data: [document] };
+      if (path === '/v1/artifacts/turn-instructions') return { status: 200, data: document };
+      throw new Error(`Unexpected instruction-turn HTTP path: ${path}`);
+    });
+    const params = {
+      opts: { credentials: { token: 'turn-instructions-token', encryption: null } },
+      session: Object.assign(createApiSessionClientFixture(), {
+        sessionId: 'instruction-turn-session',
+        getMetadataSnapshot: () => createTestMetadata({ work: { memoryEnabled: false, promptStack: [{
+          id: 'session.instructions', ref: { kind: 'doc' as const, artifactId: 'turn-instructions' },
+          enabled: true, required: true, placement: 'system_append' as const,
+        }] } }),
+      }),
+      agentId: 'codex', machineId: 'test-machine', directory: '/tmp/project',
+      memoryRecallGuidanceEnabled: false, readNativeSessionId: () => 'resumed-native-thread', daemonBridge,
+    };
+    const resolve = createSessionPromptPlanResolver(params);
+    expect(await resolve({ baseOverride: 'Base' })).toContain('QA_PERSONA_ALPHA');
+    // An idle edit is observed by the immediately following preparation.
+    markdown = 'QA_PERSONA_BRAVO'; bodyVersion += 1;
+    expect(await resolve({ baseOverride: 'Base' })).toContain('QA_PERSONA_BRAVO');
+    const running = resolve.readStartupInstructions?.();
+    expect(running?.revision).toBe(2);
+    // Dispatch retains this prepared value; editing its source cannot mutate it.
+    markdown = 'QA_PERSONA_CHARLIE'; bodyVersion += 1;
+    expect(resolve.assertPreparedPlanCurrent).not.toThrow();
+    expect(resolve.readStartupInstructions?.()).toEqual(running);
+    expect(running?.instructions).toContain('QA_PERSONA_BRAVO');
+    expect(running?.instructions).not.toContain('QA_PERSONA_CHARLIE');
+    const next = await resolve({ baseOverride: 'Base' });
+    expect(next).toContain('QA_PERSONA_CHARLIE');
+    expect(next).not.toContain('QA_PERSONA_BRAVO');
+    expect(resolve.readStartupInstructions?.()?.revision).toBe(3);
+    expect(running?.instructions).toContain('QA_PERSONA_BRAVO');
+    // A reloaded Session creates a new producer while resuming its native thread.
+    markdown = 'QA_PERSONA_DELTA'; bodyVersion += 1;
+    const resumed = createSessionPromptPlanResolver(params);
+    const reloaded = await resumed({ baseOverride: 'Base' });
+    expect(reloaded).toContain('QA_PERSONA_DELTA');
+    expect(reloaded).not.toContain('QA_PERSONA_CHARLIE');
+  });
   it('retains the full-plan identity and advances its revision only when composed instructions change', async () => {
     let notes = 'Initial worker boundary';
     const resolve = createSessionPromptPlanResolver({
