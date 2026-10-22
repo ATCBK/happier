@@ -529,13 +529,18 @@ export function useSessionAgentInputComposerPersistence({
         });
     }, [owner, scope, scopeIsCurrent]);
 
+    const initialScrollY = inputState?.scrollY;
+    const selectionStart = inputState?.selection?.start;
+    const selectionEnd = inputState?.selection?.end;
     const inputPersistence = React.useMemo(() => ({
-        ...(typeof inputState?.scrollY === 'number' ? { initialScrollY: inputState.scrollY } : {}),
-        ...(inputState?.selection ? { initialSelection: inputState.selection } : {}),
+        ...(typeof initialScrollY === 'number' ? { initialScrollY } : {}),
+        ...(selectionStart !== undefined && selectionEnd !== undefined
+            ? { initialSelection: { start: selectionStart, end: selectionEnd } }
+            : {}),
         restoreToken: buildRestoreToken(owner, scope, restoreEpoch, restoreBasisAdopted),
         onScrollYChange,
         onSelectionChangePersist,
-    }), [inputState, onScrollYChange, onSelectionChangePersist, owner, restoreBasisAdopted, restoreEpoch, scope]);
+    }), [initialScrollY, selectionStart, selectionEnd, onScrollYChange, onSelectionChangePersist, owner, restoreBasisAdopted, restoreEpoch, scope]);
 
     const structuredInputPersistence = React.useMemo<SessionComposerStructuredInputPersistence>(() => ({
         get mentions() {

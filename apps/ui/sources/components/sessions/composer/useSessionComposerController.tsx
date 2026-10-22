@@ -818,6 +818,7 @@ export function useSessionComposerController({
         fontScale: uiFontScale,
     });
     const isInputExpanded = inputComposerPersistence.expanded;
+    const setInputExpanded = inputComposerPersistence.setExpanded;
     const maxAgentInputTextHeight = isInputExpanded
         ? expandedAgentInputTextHeight
         : collapsedAgentInputTextHeight;
@@ -827,9 +828,9 @@ export function useSessionComposerController({
             ? { collapsedMaxHeight: collapsedAgentInputTextHeight }
             : {}),
         onToggle: () => {
-            inputComposerPersistence.setExpanded((current) => !current);
+            setInputExpanded((current) => !current);
         },
-    }), [collapsedAgentInputTextHeight, inputComposerPersistence, isInputExpanded]);
+    }), [collapsedAgentInputTextHeight, setInputExpanded, isInputExpanded]);
     const [isComposerSending, setIsComposerSending] = React.useState(false);
     const sessionComposerAdmissionReservationsRef = React.useRef(new Set<string>());
     const runWithSessionComposerAdmissionReservation = React.useCallback(<T,>(

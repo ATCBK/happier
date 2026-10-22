@@ -216,6 +216,11 @@ async function importSessionDraftValuesPersistence() {
     return await import('@/sync/domains/state/sessionDraftValuesPersistence');
 }
 
+// Account cases reset module state below; compile the real cold Sync graph during
+// collection so its first transform is not billed to one case's setup timeout.
+await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+await loadSyncSingletonForTests();
+
 describe('useSessionAgentInputComposerPersistence', () => {
     beforeEach(async () => {
         mmkvStore.clear();
@@ -575,6 +580,42 @@ describe('useSessionAgentInputComposerPersistence', () => {
             mockWindowLifecycle.restore();
             mockDocument.restore();
         }
+    });
+
+    it('retains persistence wrappers after live typing when their restore values are unchanged', async () => {
+        const { useSessionAgentInputComposerPersistence } = await import('./useSessionAgentInputComposerPersistence');
+        const { createComposerTextStore } = await import('@/components/sessions/agentInput/composerTextStore');
+        const localUiStateStore = await importLocalUiStateStore();
+        const textStore = createComposerTextStore('Ask $review');
+        const accountLifetime = getActiveAccountLifetime();
+        localUiStateStore.patchAgentInputLocalUiState(activeScopeState.value, { kind: 'session', sessionId: 'session-a' }, {
+            scrollY: 88, selection: { start: 4, end: 9 }, textLength: textStore.getPrompt().length, fontScale: 1,
+        });
+        const hook = await renderHook(({ fontScale }: { fontScale: number }) => useSessionAgentInputComposerPersistence({
+            sessionId: 'session-a', accountLifetime, textStore, fontScale,
+        }), { initialProps: { fontScale: 1 } });
+        const initial = hook.getCurrent();
+        await act(async () => { textStore.setPrompt('Ask $review '); });
+        await hook.rerender({ fontScale: 1 });
+        expect(hook.getCurrent().inputPersistence).toEqual(initial.inputPersistence);
+        expect(hook.getCurrent().inputPersistence).toBe(initial.inputPersistence);
+        expect(hook.getCurrent()).toBe(initial);
+        await hook.rerender({ fontScale: 1 });
+        expect(hook.getCurrent()).toBe(initial);
+
+        const mention = { kind: 'skill' as const, tokenText: '$review', start: 4, end: 11, name: 'review' };
+        await act(async () => { hook.getCurrent().structuredInputPersistence.onMentionsChange([mention]); });
+        expect(hook.getCurrent().structuredInputPersistence.mentions).toEqual([mention]);
+        await hook.rerender({ fontScale: 2 });
+        expect(hook.getCurrent().inputPersistence).not.toBe(initial.inputPersistence);
+        expect(hook.getCurrent().inputPersistence.initialScrollY).toBeUndefined();
+        expect(hook.getCurrent().inputPersistence.initialSelection).toEqual({ start: 4, end: 9 });
+        await act(async () => { textStore.setPrompt('Ask'); });
+        await hook.rerender({ fontScale: 2 });
+        expect(hook.getCurrent().inputPersistence.initialSelection).toEqual({ start: 3, end: 3 });
+        expect(hook.getCurrent().structuredInputPersistence.mentions).toEqual([]);
+        await act(async () => { hook.getCurrent().setExpanded(true); });
+        expect(hook.getCurrent().expanded).toBe(true);
     });
 
     it('keeps restoreToken stable across self-originated selection and scroll persists', async () => {
