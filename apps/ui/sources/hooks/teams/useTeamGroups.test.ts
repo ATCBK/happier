@@ -7,13 +7,8 @@ import { useSessionAudienceContext } from './useSessionAudienceContext';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_TEAM_GROUP_CAPABILITIES_V1, type TeamGroupV1 } from '@happier-dev/protocol/teams';
 
-const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: serverFetchMock,
-}));
 
 vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     runtimeFetchWithServerReachability: runtimeFetchMock,
@@ -69,7 +64,6 @@ function page(items: TeamGroupV1[], nextCursor: string | null): Response {
 }
 
 beforeEach(() => {
-    serverFetchMock.mockReset();
     runtimeFetchMock.mockReset();
     getCredentialsForServerUrlMock.mockReset();
     getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });

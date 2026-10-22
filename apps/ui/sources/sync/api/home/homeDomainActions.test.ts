@@ -11,13 +11,8 @@ import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actio
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { readFriendMutationProfile } from '@/sync/ops/friends';
 
-const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: serverFetchMock,
-}));
 
 vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     runtimeFetchWithServerReachability: runtimeFetchMock,
@@ -76,7 +71,6 @@ async function scopeForNewHome(serverUrl: string) {
 }
 
 beforeEach(() => {
-    serverFetchMock.mockReset();
     runtimeFetchMock.mockReset();
     getCredentialsForServerUrlMock.mockReset();
     getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });

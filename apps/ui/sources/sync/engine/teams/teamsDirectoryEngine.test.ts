@@ -7,13 +7,8 @@ import {
     type TeamsListInputV1,
 } from '@happier-dev/protocol/teams';
 
-const serverFetchMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: serverFetchMock,
-}));
 
 vi.mock('@/sync/runtime/connectivity/serverReachabilityRuntimeFetch', () => ({
     runtimeFetchWithServerReachability: runtimeFetchMock,
@@ -93,7 +88,6 @@ async function addHome(name: string, serverUrl: string): Promise<string> {
 }
 
 beforeEach(() => {
-    serverFetchMock.mockReset();
     runtimeFetchMock.mockReset();
     getCredentialsForServerUrlMock.mockReset();
     getCredentialsForServerUrlMock.mockResolvedValue({ token: tokenForSub('account') });
