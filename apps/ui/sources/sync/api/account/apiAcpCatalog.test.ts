@@ -113,7 +113,7 @@ describe('ACP captured Account row snapshots', () => {
         const cachedData = hook.getCurrent().snapshot?.data;
         active = false;
         await hook.rerender({ enabled: false });
-        await act(async () => publishHomeAccountChange({ serverId: scope.serverId }));
+        await act(async () => publishHomeAccountChange(scope.serverId));
         expect(catalogReads).toBe(1);
         renders = 0;
         await act(async () => applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 4,
