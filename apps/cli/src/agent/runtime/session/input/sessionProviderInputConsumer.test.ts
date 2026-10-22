@@ -1009,6 +1009,7 @@ describe('createSessionProviderInputConsumer', () => {
       };
     });
     const session = {
+      sessionId: 'receiver',
       onUserMessage: (handler: (message: UserMessage) => boolean | void) => {
         userMessageHandler = handler;
       },

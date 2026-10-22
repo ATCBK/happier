@@ -1103,8 +1103,7 @@ export type SessionFollowObservationResultV1 = Readonly<{
     wakeAdmission?: FollowWakeAdmissionDecision;
 }>;
 
-type FollowWakeAdmissionDecision = Readonly<{ status: 'allowed' }>
-    | Readonly<{ status: 'held'; code: 'autonomous_check_in' | 'session_input_target_unavailable' | 'session_input_cancelled' }>;
+type FollowWakeAdmissionDecision = NonNullable<Extract<SessionFollowObservePendingResponseV1, { ok: true }>['wakeAdmission']>;
 
 const unavailableWake = { status: 'held', code: 'session_input_target_unavailable' } as const;
 
@@ -1185,21 +1184,27 @@ async function readFollowWakeAdmissionInTx(tx: Tx, input: Readonly<{
         commonRoot = resolved.root;
     }
     const choice = input.wakeAdmission.autonomousCheckIn;
-    if (!choice) return unavailableWake;
-    if (!commonRoot) return needsReceiverRoot ? { status: 'allowed' } : unavailableWake;
+    if (!commonRoot) return needsReceiverRoot && choice
+        ? { status: 'allowed', originatingDiscussion: null } : unavailableWake;
     const original = await tx.sessionMessage.findUnique({ where: { sessionId_localId: {
         sessionId: commonRoot.sessionId, localId: commonRoot.localId } },
         select: { inputAdmissionReceipt: true, autonomousExchangeState: true, session: { select: { accountId: true } } } });
     if (!original || original.session.accountId !== input.destinationAccountId
         || !isAutonomousExchangeRootReceiptForAccount(original.inputAdmissionReceipt, input.destinationAccountId, commonRoot.sessionId)) return unavailableWake;
+    // Only the exact validated exchange root decides which Discussion's
+    // preference the owner client reads, including later inherited Follow wakes.
+    const receipt = createStoredReadSchema(SessionInputAdmissionReceiptV1Schema).parse(original.inputAdmissionReceipt);
+    const originatingDiscussion = receipt.issuer === 'authenticatedMachine' && receipt.discussionAddressing
+        ? { serverId: receipt.admittedTarget!.homeId, discussionId: receipt.discussionAddressing.discussionId } : null;
+    if (!choice) return { ...unavailableWake, originatingDiscussion };
     const state = createStoredReadSchema(AutonomousExchangeStateV1Schema).safeParse(original.autonomousExchangeState);
     if (!state.success && original.autonomousExchangeState !== null) return unavailableWake;
-    if (state.success && state.data.stopped) return { status: 'held', code: 'session_input_cancelled' };
+    if (state.success && state.data.stopped) return { status: 'held', code: 'session_input_cancelled', originatingDiscussion };
     const current = state.success ? { ...state.data, afterTurns: choice.afterTurns }
         : createAutonomousExchangeStateV1(choice.afterTurns);
     return readAutonomousExchangeAdmissionV1(current) === 'check_in'
-        ? { status: 'held', code: 'autonomous_check_in' }
-        : { status: 'allowed' };
+        ? { status: 'held', code: 'autonomous_check_in', originatingDiscussion }
+        : { status: 'allowed', originatingDiscussion };
 }
 
 /**

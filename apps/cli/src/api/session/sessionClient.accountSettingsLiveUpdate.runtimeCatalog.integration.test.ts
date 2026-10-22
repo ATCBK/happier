@@ -7,6 +7,8 @@ import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSna
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
+import { readAutonomousExchangeAdmissionV1 } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
+import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SessionFollowObservePendingRequestV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import type { ApiSessionClientOptions } from './sessionClient';
 import { buildPromptLibraryPhysicalKeyV1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
@@ -194,6 +196,67 @@ describe('ApiSessionClient live account settings convergence', () => {
         expect(readDiscussionAutonomousCheckIn).not.toHaveBeenCalled();
         override = null;
         expect(await reader.readCurrentAutonomousCheckIn(origin)).toBeNull();
+    });
+
+    it('admits a Discussion-origin Follow wake with Never pause over Account five and holds unreadable origin policy', async () => {
+        const credentials = { token: 'fake-token', encryption: null } as const;
+        readStoredCredentialsMock.mockResolvedValue(credentials);
+        let override: { afterTurns: number | null } | null = { afterTurns: null };
+        const features = () => ({ status: 'ready' as const, features: FeaturesResponseSchema.parse({
+            features: { sessions: { enabled: true, autonomousExchange: { enabled: true }, conversations: { enabled: true } },
+                sharing: { enabled: true, session: { enabled: true } } }, capabilities: {},
+        }) });
+        const requestDiscussion = vi.spyOn(axios, 'request').mockImplementation(async () => override === null
+            ? { status: 503, data: {} }
+            : { status: 200, data: { discussionId: 'originating-discussion',
+                settings: { coordination: { autonomousCheckIn: override } } } });
+        const { createDiscussionAutonomousCheckInReader } = await import('@/discussions/discussionActionDeps');
+        const { configuration } = await import('@/configuration');
+        const readDiscussionAutonomousCheckIn = createDiscussionAutonomousCheckInReader({ credentials,
+            serverId: configuration.activeServerId, serverHttpBaseUrl: 'http://discussion-wake.test',
+            resolveServerFeaturesSnapshot: features });
+        const { client, sessionSocket } = createClient({ readDiscussionAutonomousCheckIn, getServerFeaturesSnapshot: features });
+        setActiveAccountSettingsSnapshot({ source: 'network', rawSettings: {}, settings: accountSettingsParse({}),
+            settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+        const origin = { serverId: client.getServerBinding().serverId, discussionId: 'originating-discussion' };
+        let reportedOrigin: typeof origin | undefined = origin;
+        // Home is the network boundary; keep the actual check-in reducer and
+        // strict request parser under the real Session client's wake entry point.
+        sessionSocket.emitWithAck.mockImplementation(async (event: string, payload: unknown) => {
+            if (event !== SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1) throw new Error(`Unexpected event ${event}`);
+            const request = SessionFollowObservePendingRequestV1Schema.parse(payload);
+            const decision = request.wakeAdmission?.autonomousCheckIn
+                ? readAutonomousExchangeAdmissionV1({ v: 1, observedStarts: 5, pauseAtStarts: null,
+                    stopped: false, afterTurns: request.wakeAdmission.autonomousCheckIn.afterTurns }) : 'check_in';
+            return { ok: true, v: 1, sessionId: request.sessionId, publisherGeneration: '1',
+                currentSourceSessionIds: ['source'], observations: [], wakeAdmission: {
+                    status: decision === 'allow' ? 'allowed' : 'held',
+                    ...(decision === 'allow' ? {} : { code: 'autonomous_check_in' }),
+                    ...(reportedOrigin ? { originatingDiscussion: reportedOrigin } : {}),
+                } };
+        });
+        const frontier = { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null };
+        const options = { wakeAdmission: { eventLocalId: 'session-follow-wake:origin', observations: [{
+            sourceSessionId: 'source', relation: 'follower' as const, policy: { preset: 'everything' as const },
+            expected: frontier, consumed: { ...frontier, transcriptSeq: 1 },
+        }] } };
+        expect(await client.observePendingSessionFollow(options)).toMatchObject({ wakeAdmission: { status: 'allowed' } });
+        expect(requestDiscussion).toHaveBeenCalledWith(expect.objectContaining({
+            url: 'http://discussion-wake.test/v1/discussions/originating-discussion/settings',
+        }));
+        override = { afterTurns: 5 };
+        expect(await client.observePendingSessionFollow(options)).toMatchObject({
+            wakeAdmission: { status: 'held', code: 'autonomous_check_in' },
+        });
+        override = null;
+        expect(await client.observePendingSessionFollow(options)).toMatchObject({
+            wakeAdmission: { status: 'held', code: 'session_input_target_unavailable' },
+        });
+        reportedOrigin = undefined;
+        override = { afterTurns: null };
+        expect(await client.observePendingSessionFollow(options)).toMatchObject({
+            wakeAdmission: { status: 'held', code: 'session_input_target_unavailable' },
+        });
     });
 
     it('fails malformed direct settings hints closed while unrelated runtime updates still apply', async () => {

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { encodeBase64, MACHINE_PLAIN_DATA_KEY_MARKER, TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol';
-import { deriveSessionFollowWakeEventLocalIdV1, SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { deriveSessionFollowWakeEventLocalIdV1, SESSION_FOLLOW_WAKE_EVENT_MESSAGE, SessionFollowObservePendingResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 import { db } from '@/storage/db';
@@ -252,7 +252,8 @@ describe('SessionFollowEdge service', () => {
             .toMatchObject({ ok: true, delivered: { transcriptSeq: 2 } });
     });
 
-    it.each([false, true])('admits a Follow wake only while its Account-local root has check-in capacity (cross-Account: %s)', async crossAccount => {
+    it.each([{ crossAccount: false, discussion: false }, { crossAccount: true, discussion: false },
+        { crossAccount: false, discussion: true }])('admits a Follow wake only while its Account-local root has check-in capacity (%j)', async ({ crossAccount, discussion }) => {
         const owner = await createAccount();
         const sourceOwner = crossAccount ? await createAccount() : owner;
         const source = await createSession(sourceOwner.id);
@@ -265,14 +266,29 @@ describe('SessionFollowEdge service', () => {
         await db.sessionMessage.create({ data: {
             sessionId: source.id, localId: originalLocalId, seq: 1, messageRole: 'user',
             content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'investigate' } } },
-            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount',
-                actorAccountId: sourceOwner.id, sessionRelationship: 'owner' },
+            inputAdmissionReceipt: discussion ? { v: 1, issuer: 'authenticatedMachine',
+                admittedTarget: { homeId: 'origin-home', accountId: owner.id, sessionId: source.id,
+                    machineId: 'machine', installationId: 'installation' },
+                discussionAddressing: { discussionId: 'origin-discussion', messageId: 'question', throughSeq: 1,
+                    participantSessionId: source.id } }
+                : { v: 1, issuer: 'authenticatedAccount', actorAccountId: sourceOwner.id, sessionRelationship: 'owner' },
+            ...(discussion ? { autonomousExchangeRootSessionId: source.id, autonomousExchangeRootLocalId: originalLocalId } : {}),
             acceptedTurnId: sourceTurnId, acceptedTurnKind: 'newTurn',
             turnStartWitnessId: sourceTurnId,
         } });
         await db.sessionTurn.create({ data: { sessionId: source.id, turnId: sourceTurnId,
             status: 'completed', startedAt: 1n, updatedAt: 1n } });
-        await db.session.update({ where: { id: source.id }, data: { seq: 1,
+        if (discussion) {
+            // The current source input has no Discussion; only its inherited,
+            // exact root receipt identifies the originating Discussion.
+            await db.sessionMessage.create({ data: { sessionId: source.id, localId: 'later-follow-input', seq: 2,
+                messageRole: 'user', content: { t: 'plain', v: {} }, acceptedTurnId: sourceTurnId,
+                inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', admittedTarget: {
+                    homeId: 'origin-home', accountId: owner.id, sessionId: source.id,
+                    machineId: 'machine', installationId: 'installation' } },
+                autonomousExchangeRootSessionId: source.id, autonomousExchangeRootLocalId: originalLocalId } });
+        }
+        await db.session.update({ where: { id: source.id }, data: { seq: discussion ? 2 : 1,
             latestTurnId: sourceTurnId, latestTurnStatus: 'completed' } });
         const rootSessionId = crossAccount ? destination.id : source.id;
         if (crossAccount) {
@@ -297,6 +313,11 @@ describe('SessionFollowEdge service', () => {
             wakeAdmission };
         expect(await inTx(tx => observeSessionFollowForDestinationInTx(tx, input)))
             .toMatchObject({ wakeAdmission: { status: 'allowed' } });
+        const origin = discussion ? { serverId: 'origin-home', discussionId: 'origin-discussion' } : null;
+        const result = await inTx(tx => observeSessionFollowForDestinationInTx(tx, input));
+        expect(SessionFollowObservePendingResponseV1Schema.parse({ ok: true, v: 1, sessionId: destination.id,
+            publisherGeneration: destination.publisherGeneration.toString(), ...result }))
+            .toMatchObject({ wakeAdmission: { originatingDiscussion: origin } });
         // Observation is read-only; admission may overlay the current Account
         // choice without moving the original input's control revision.
         expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: {
@@ -309,6 +330,9 @@ describe('SessionFollowEdge service', () => {
         expect(await inTx(tx => observeSessionFollowForDestinationInTx(tx, input)))
             .toMatchObject({ wakeAdmission: { status: 'held', code: 'autonomous_check_in' } });
         expect(await inTx(tx => observeSessionFollowForDestinationInTx(tx, {
+            ...input, wakeAdmission: { ...wakeAdmission, autonomousCheckIn: { afterTurns: null } },
+        }))).toMatchObject({ wakeAdmission: { status: 'allowed', originatingDiscussion: origin } });
+        expect(await inTx(tx => observeSessionFollowForDestinationInTx(tx, {
             ...input, wakeAdmission: { ...wakeAdmission, autonomousCheckIn: undefined },
         }))).toMatchObject({ wakeAdmission: { status: 'held', code: 'session_input_target_unavailable' } });
         await db.sessionMessage.update({ where: { sessionId_localId: {
@@ -318,6 +342,9 @@ describe('SessionFollowEdge service', () => {
         } });
         expect(await inTx(tx => observeSessionFollowForDestinationInTx(tx, input)))
             .toMatchObject({ wakeAdmission: { status: 'held', code: 'session_input_cancelled' } });
+        expect(await inTx(tx => observeSessionFollowForDestinationInTx(tx, {
+            ...input, wakeAdmission: { ...wakeAdmission, autonomousCheckIn: { afterTurns: null } },
+        }))).toMatchObject({ wakeAdmission: { status: 'held', code: 'session_input_cancelled' } });
         expect(await readEdge(destination.id, source.id)).toMatchObject({ deliveredTranscriptSeq: 0 });
         if (crossAccount) expect((await db.sessionMessage.findUniqueOrThrow({ where: { sessionId_localId: {
             sessionId: source.id, localId: originalLocalId } } })).autonomousExchangeState).toBeNull();

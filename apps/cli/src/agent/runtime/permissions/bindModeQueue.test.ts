@@ -180,12 +180,38 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     expect(first?.message.text).toContain('first-question');
     expect(first?.message.text).not.toContain('second-question');
     expect(first?.message.text).not.toContain('later-peer-answer');
+    if (version === 1) expect(first?.message.inputContextBlock).not.toContain('reply_action=');
+    else {
+      expect(first?.message.inputContextBlock).toContain('reply_action="session.message.reply"');
+      expect(first?.message.inputContextBlock).toContain('request_local_id="input-0"');
+      expect(first?.message.inputContextBlock).toContain('reply_mode="wait"');
+    }
     const second = await queue.waitForMessagesAndGetAsString();
     expect(second).toMatchObject({ isolate: true, message: { localId: 'input-1', discussionAddressing: { messageId: 'question-1', throughSeq: 3 } } });
     expect(second?.message.text).toContain('second-question');
     expect(second?.message.text).not.toContain('later-peer-answer');
     expect((await queue.waitForMessagesAndGetAsString())?.message.text).toContain('later-peer-answer');
   });
+  it.each(['wait', 'return'] as const)('frames an admitted Session %s with its exact reply custody', async mode => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
+      batcher: combinePermissionModeQueuedPrompts,
+    });
+    const harness = createSessionHarness();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {} });
+    const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+      sourceSession: { sourceSessionId: 'asker', sourceTurnId: 'asker-turn', via: 'action' }, replyIntent: { mode } });
+    const inputAdmissionReceipt = { v: 1 as const, issuer: 'authenticatedMachine' as const };
+    const authority = settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
+    harness.emit({ role: 'user', localId: 'exact-request', content: { type: 'text', text: 'Question' }, inputAdmissionReceipt,
+      meta: withSessionInputAuthority({}, authority) });
+    const queued = await queue.waitForMessagesAndGetAsString();
+    expect(queued?.message.inputContextBlock).toContain('reply_action="session.message.reply"');
+    expect(queued?.message.inputContextBlock).toContain('reply_session_id="receiver"');
+    expect(queued?.message.inputContextBlock).toContain('request_local_id="exact-request"');
+    expect(queued?.message.inputContextBlock).toContain(`reply_mode="${mode}"`);
+  });
+
   it.each([
     { kind: 'agent_team_member' as const, teamId: 'team-a', memberId: 'member-a' },
     { kind: 'agent_team_broadcast' as const, teamId: 'team-a' },
@@ -286,6 +312,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
 
     return {
       session: {
+        sessionId: 'receiver',
         onUserMessage: (handler: (message: UserMessage) => boolean | void) => {
           userMessageHandler = handler;
         },
@@ -400,6 +427,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     expect(harness.queueCalls).toHaveLength(1);
 
     harness.releaseRejectedBeforeProviderPromptIdentity({
+      sessionId: 'other-receiver',
       onUserMessage: () => undefined,
       updateMetadata: () => undefined,
     }, {
@@ -428,6 +456,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     const queueCalls: Array<{ message: PermissionModeQueuedPrompt }> = [];
     let userMessageHandler: ((message: UserMessage) => boolean | void) | null = null;
     const session = {
+      sessionId: 'receiver',
       onUserMessage: (handler: (message: UserMessage) => boolean | void) => {
         userMessageHandler = handler;
       },
@@ -755,6 +784,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         },
         updateMetadata: () => void 0,
         getCommittedUserMessageSeq: (localId: string) => (localId === 'local-seq-1' ? 42 : null),
+        sessionId: 'receiver',
       },
       queue: {
         getContextOnlyMessages: () => [],
@@ -798,6 +828,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         },
         updateMetadata: () => void 0,
         getCommittedUserMessageSeq: (localId: string) => (localId === 'local-dup-1' ? 7 : null),
+        sessionId: 'receiver',
       },
       queue: {
         getContextOnlyMessages: () => [],
@@ -1174,6 +1205,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         metadata = updater(metadata);
       },
       readDurableProviderInputAcceptanceV1: async () => 'not_accepted' as const,
+      sessionId: 'receiver',
     };
     const emitUserMessage = (message: UserMessage) => {
       if (!userMessageHandler) throw new Error('missing onUserMessage handler');

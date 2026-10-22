@@ -35,6 +35,7 @@ function createSessionHarness() {
   let handler: ((message: any) => void) | null = null;
   let metadataSnapshot: any = null;
   const session = {
+    sessionId: 'receiver',
     onUserMessage: (fn: (message: any) => void) => {
       handler = fn;
     },

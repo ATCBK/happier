@@ -239,7 +239,7 @@ async function fixture(status: 'completed' | 'failed' | 'cancelled' | 'running' 
         publisherGeneration: acknowledgementState.publisherGeneration, currentSourceSessionIds: [workerId],
         observations: observations.filter(entry => !isSessionFollowFrontierEqualV1(entry.delivered, entry.observed))
           .map(entry => ({ ...entry })),
-        ...(request.wakeAdmission ? { wakeAdmission: { status: 'allowed' } } : {}) };
+        ...(request.wakeAdmission ? { wakeAdmission: { status: 'allowed', originatingDiscussion: null } } : {}) };
     }
     if (event === SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1) {
       const request = SessionFollowAcknowledgeRequestV1Schema.parse(payload);

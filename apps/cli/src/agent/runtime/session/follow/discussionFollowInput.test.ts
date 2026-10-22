@@ -126,6 +126,9 @@ it.each([
         text: expect.stringContaining('discussion_sender_account_id="owner"') } } });
       expect(stored).toMatchObject({ t: 'plain', v: { content: {
         text: expect.stringContaining('discussion_sender_display_name="Alex Person"') } } });
+      if (event.kind !== 'needs_you') expect(stored).toMatchObject({ t: 'plain', v: { content: {
+        text: expect.not.stringContaining('reply_action='),
+      } } });
     }
   });
 
@@ -202,6 +205,18 @@ it('admits a human-addressed original into existing Machine Pending without inve
   } } } });
   expect(request).not.toHaveProperty('reply.sourceSession');
   expect(request).not.toHaveProperty('content.v.meta.happierInputRequestV1.sourceSession');
+  expect(request?.content).toMatchObject({ t: 'plain', v: { content: {
+    text: expect.stringContaining('reply_action="session.message.reply"'),
+  } } });
+  expect(request?.content).toMatchObject({ t: 'plain', v: { content: {
+    text: expect.stringContaining(`request_local_id="${localId}"`),
+  } } });
+  expect(request?.content).toMatchObject({ t: 'plain', v: { content: {
+    text: expect.stringContaining(`reply_session_id="${sessionId}"`),
+  } } });
+  expect(request?.content).toMatchObject({ t: 'plain', v: { content: {
+    text: expect.stringContaining('reply_fallback="turn_final"'),
+  } } });
 });
 
 it.each([
@@ -423,9 +438,10 @@ it.each(['comment', 'proposal', 'inherited', 'untitled', 'restricted-count', 'cr
   expect(text).not.toContain('PRIVATE_REPLACEMENT');
   expect(text).not.toContain('PRIVATE_PREFIX');
   expect(text).not.toContain('PRIVATE_SUFFIX');
-  const background = text.split('\n').find(line => line.startsWith('{"author":'));
+  const background = text.split('\n').find(line => line.startsWith('{"kind":"host_reference_metadata"'));
   if (!background) throw new Error('Expected the shared Discussion background block');
   const item = JSON.parse(background.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'));
+  expect(item).not.toHaveProperty('author');
   expect(JSON.parse(item.text).doc).toEqual({ docRef: admittedRef, title, revision: kind === 'proposal' ? proposalRevision : revision,
     openCommentCount: variant === 'restricted-count' ? null : 1,
     threadRef: { kind: 'discussion', discussion: { serverId: binding.serverId, discussionId: addressing.discussionId },

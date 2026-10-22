@@ -304,6 +304,11 @@ export function registerPermissionModeMessageQueueBinding(opts: {
     const inputContextBlock = renderSessionInputContextBlockV1({
       provenance: resolveSessionInputPromptProvenanceV1(message.meta),
       ...(returnedAnswer ? { returnedAnswer } : {}),
+      // Discussion return text already carries intake's exact addressed/watch
+      // classification; its retained return custody alone is not an obligation.
+      ...(authority?.replyIntent && localId && (!discussionAddressing || authority.replyIntent.mode === 'wait') ? { replyObligation: {
+        mode: authority.replyIntent.mode, sessionId: session.sessionId, requestLocalId: localId,
+      } } : {}),
     });
     const queuedPromptIdentityFields = {
       ...(localIds.length === 0 ? {} : { localIds }),
@@ -954,6 +959,7 @@ function resolveModelOverrideFromUserMessage(
 }
 
 type PermissionModeQueueSessionBinding = {
+  sessionId: string;
   onUserMessage: (handler: SessionProviderInputConsumer) => void;
   updateMetadata: (updater: (current: Metadata) => Metadata) => Promise<void> | void;
   getMetadataSnapshot?: () => unknown;

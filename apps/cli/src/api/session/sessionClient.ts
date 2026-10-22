@@ -204,7 +204,7 @@ import { SessionActionConfirmationsV1Schema, SessionActionConfirmationResponseTa
 import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import { SessionMessageAcceptedDeliveryFactsV1Schema, type SessionMessageAcceptedDeliveryContentV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageDeliveryResolutionV1';
 import { SessionRuntimeActivitySnapshotSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
-import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SessionFollowObservePendingRequestV1Schema, SessionFollowObservePendingResponseV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowAcknowledgeResponseV1Schema, type SessionFollowObservePendingRequestV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SessionFollowObservePendingRequestV1Schema, SessionFollowObservePendingResponseV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowAcknowledgeResponseV1Schema, type SessionFollowObservePendingRequestV1, type SessionFollowObservePendingResponseV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1, ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1, AccountVoiceFollowObservePendingRequestV1Schema, AccountVoiceFollowObservePendingResponseV1Schema, AccountVoiceFollowAcknowledgeRequestV1Schema, AccountVoiceFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/accountVoiceFollowTransportV1';
 import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPublisherPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, type DiscussionAgentPublisherPublicationInputV1 } from '@happier-dev/protocol/discussions/api';
 import type { SessionFollowAcknowledgeRequestV1, AccountVoiceFollowAcknowledgeRequestV1 } from '@happier-dev/protocol';
@@ -2422,7 +2422,8 @@ export class ApiSessionClient extends EventEmitter {
             || !this.supportsSessionFollowWakeAdmission()
             || this.accountSettingsSyncBarrier !== null
             || !this.hasOwnerMetadataAuthority()
-            || snapshot.scopeKey !== resolveAccountSettingsScopeKey(credentials)) return null;
+            || snapshot.scopeKey !== resolveAccountSettingsScopeKey(credentials)
+            || originatingDiscussion && !this.readDiscussionAutonomousCheckIn) return null;
         try {
             const override = originatingDiscussion && this.readDiscussionAutonomousCheckIn
                 ? await this.readDiscussionAutonomousCheckIn(originatingDiscussion) : undefined;
@@ -4550,7 +4551,7 @@ export class ApiSessionClient extends EventEmitter {
         signal?: AbortSignal;
         inputLocalIds?: SessionFollowObservePendingRequestV1['inputLocalIds'];
         wakeAdmission?: Omit<NonNullable<SessionFollowObservePendingRequestV1['wakeAdmission']>, 'autonomousCheckIn'>;
-    }>) {
+    }>): Promise<SessionFollowObservePendingResponseV1> {
         const supportsWakeAdmission = this.supportsSessionFollowWakeAdmission();
         // Older strict Homes may not understand the new field. Their ordinary
         // Follow observation remains usable, but a wake must hold before effect.
@@ -4570,16 +4571,39 @@ export class ApiSessionClient extends EventEmitter {
                 ...(autonomousCheckIn ? { autonomousCheckIn } : {}),
             } } : {}),
         });
-        const raw = await emitSocketWithAck<unknown>({
-            socket: this.socket as any,
-            event: SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1,
-            timeoutMs: null,
-            signal: options?.signal
-                ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
-                : this.socketAckAbortController.signal,
-            payload: request,
-        });
-        return SessionFollowObservePendingResponseV1Schema.parse(raw);
+        const signal = options?.signal
+            ? AbortSignal.any([options.signal, this.socketAckAbortController.signal])
+            : this.socketAckAbortController.signal;
+        const observe = async (payload: SessionFollowObservePendingRequestV1) => {
+            const raw = await emitSocketWithAck({
+                socket: this.socket,
+                event: SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1,
+                timeoutMs: null,
+                signal,
+                payload,
+            });
+            return SessionFollowObservePendingResponseV1Schema.parse(raw);
+        };
+        let response = await observe(request);
+        if (!request.wakeAdmission || !response.ok) return response;
+        const holdUnavailable = () => ({ ...response, wakeAdmission: {
+            status: 'held' as const, code: 'session_input_target_unavailable' as const,
+        } });
+        // The Home resolves the exact common root from retained input custody.
+        // Missing proof must never select the Account default for an unknown origin.
+        const origin = response.wakeAdmission?.originatingDiscussion;
+        if (origin === undefined) return holdUnavailable();
+        if (origin === null || response.wakeAdmission?.status === 'held'
+            && response.wakeAdmission.code === 'session_input_cancelled') return response;
+        const discussionChoice = await this.readCurrentAutonomousCheckIn(origin);
+        if (!discussionChoice) return holdUnavailable();
+        response = await observe({ ...request, wakeAdmission: {
+            ...request.wakeAdmission, autonomousCheckIn: discussionChoice,
+        } });
+        if (!response.ok) return response;
+        const currentOrigin = response.wakeAdmission?.originatingDiscussion;
+        return currentOrigin?.serverId === origin.serverId && currentOrigin.discussionId === origin.discussionId
+            ? response : holdUnavailable();
     }
 
     /**

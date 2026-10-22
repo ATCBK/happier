@@ -6,7 +6,7 @@ import { SessionInputRequestV1Schema, assertSessionInputAdmissionReceiptForAutho
   buildTrustedHostSessionInputAdmissionV1, readSessionInputAuthority, readSessionInputCausalPermissionAuthorityV1,
   readSessionMessageProvenance } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { deriveDiscussionFollowInputLocalIdV1, type SessionFollowDiscussionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
-import { resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { hasDirectDiscussionAnswerObligation, resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { renderSessionInputContextPromptV1, type DiscussionPromptAuthorV1 } from '@happier-dev/protocol/sessions/messages/sessionInputPromptContextV1';
 import { readDiscussionMessagePartsV1 } from '@happier-dev/protocol/discussions/content';
 import { DiscussionParticipantsListResponseV1Schema } from '@happier-dev/protocol/discussions/participants';
@@ -130,9 +130,12 @@ export function createDiscussionFollowInputIntake(input: Readonly<{
       const renderQuestionText = () => renderSessionInputContextPromptV1({
         discussionRequest: { discussionId: addressing.discussionId, messageId: addressing.messageId,
           throughSeq: addressing.throughSeq, sender, ...(doc ? { readActions: ['doc.read'] } : {}) },
+        ...(hasDirectDiscussionAnswerObligation({ addressing, original: question, reply }) ? {
+          replyObligation: { mode: reply.mode, sessionId: input.session.sessionId, requestLocalId: localId },
+        } : {}),
         transformedUserText: readDiscussionMessagePartsV1(content).map(part => part.t === 'text' ? part.text
           : part.participant.kind === 'account' ? `@account:${part.participant.accountId}` : `@session:${part.participant.sessionId}`).join(''),
-        ...(doc ? { discussionContext: [{ author: sender, text: JSON.stringify({ doc }) }] } : {}),
+        ...(doc ? { discussionContext: [{ kind: 'host_reference_metadata', text: JSON.stringify({ doc }) }] } : {}),
       });
       let actionRequestAttributionV1 = materializeActionRequestAttributionV1({
         requestRef: localId, requester: { serverId: serverIdentityId, accountId: question.authorAccountId },

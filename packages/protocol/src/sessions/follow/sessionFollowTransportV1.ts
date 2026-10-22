@@ -4,7 +4,7 @@ import { z } from 'zod/mini';
 
 import { encodeBase64 } from '../../crypto/base64.js';
 import { SessionIdSchema } from '../idsV1.js';
-import { DiscussionAddressingV1Schema, type DiscussionAddressingV1 } from '../../discussions/references.js';
+import { DiscussionAddressingV1Schema, DiscussionAddressV1Schema, type DiscussionAddressingV1 } from '../../discussions/references.js';
 import { DiscussionMessageRefV1Schema } from '../../discussions/messageRefs.js';
 import { SessionInputMachineTargetV1Schema } from '../messages/sessionInputAdmission.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
@@ -300,11 +300,14 @@ export const SessionFollowObservePendingResponseV1Schema = lazyZodSchema(() => z
     publisherGeneration: PublisherGenerationV1Schema,
     currentSourceSessionIds: z.array(SessionIdZodSchema),
     observations: z.array(SessionFollowPendingObservationV1Schema),
+    // Explicit null proves a non-Discussion root. Omission means origin
+    // authority is unavailable and current clients hold before provider effect.
     wakeAdmission: z.optional(z.discriminatedUnion('status', [
-      z.strictObject({ status: z.literal('allowed') }),
+      z.strictObject({ status: z.literal('allowed'),
+        originatingDiscussion: z.optional(z.nullable(DiscussionAddressV1Schema)) }),
       z.strictObject({ status: z.literal('held'), code: z.enum([
         'autonomous_check_in', 'session_input_target_unavailable', 'session_input_cancelled',
-      ]) }),
+      ]), originatingDiscussion: z.optional(z.nullable(DiscussionAddressV1Schema)) }),
     ])),
   }),
   z.strictObject({

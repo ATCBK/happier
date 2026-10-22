@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bindApiSessionSocketSequenceMock,
   createApiSessionSocketStub,
+  createSessionRuntimeActivityHomeStub,
+  createSessionTranscriptHomeStub,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import { createMockSession } from '@/testkit/backends/sessionFixtures';
 import {
@@ -77,13 +79,28 @@ describe('ApiClient ordinary Session Follow wake wiring', () => {
   });
 
   it('backs advertised wake support with exact Session invalidation and reconnect consumers when V2 changes are disabled', async () => {
+    const machineId = 'ordinary-machine';
+    const activityHome = createSessionRuntimeActivityHomeStub({ machineId });
+    const transcriptHome = createSessionTranscriptHomeStub();
+    const emitWithAck = (event: string, payload: unknown) => activityHome.answer(event, payload)
+      ?? transcriptHome.answer(event, payload) ?? { ok: true };
+    vi.mocked(axios.get).mockImplementation(async url => String(url).includes('/v1/access-keys/')
+      ? { status: 200, data: { accessKey: 'ordinary-machine-access' } }
+      : { status: 404, data: {} });
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json(FeaturesResponseSchema.parse({
+      features: {},
+      capabilities: { session: { runtimeActivity: { protocolVersion: 2 },
+        pendingInput: { protocolVersion: 3 }, publisherAuthority: { protocolVersion: 1 } } },
+    }))));
     const userSocket = createApiSessionSocketStub({ id: 'ordinary-user-socket' });
     const firstSessionSocket = createApiSessionSocketStub({
       id: 'ordinary-session-socket-1',
       disconnectReason: 'transport close',
+      emitWithAck,
     });
     const reconnectedSessionSocket = createApiSessionSocketStub({
       id: 'ordinary-session-socket-2',
+      emitWithAck,
     });
     bindApiSessionSocketSequenceMock(mockIo, [
       userSocket,
@@ -100,9 +117,12 @@ describe('ApiClient ordinary Session Follow wake wiring', () => {
       id: 'destination-session',
       encryptionMode: 'plain',
       metadataLayoutVersion: 1,
-      metadata: { v: 1 },
+      metadata: { v: 1, machineId },
       agentState: null,
-    }));
+    }), {
+      // This connection-only fixture has not activated a host runtime yet.
+      durableMutationDeliveryInitiallyActive: false,
+    });
 
     await vi.waitFor(() => {
       expect(readSessionFollowWakeInvalidationGeneration()).toBe(beforeConstruction + 1);

@@ -12,6 +12,8 @@ import type { SessionCapabilityMetadataV1 } from '@happier-dev/protocol/reach/se
 import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2 } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
 import { DISCUSSION_AGENT_POST_EVENT_V1, type DiscussionAgentPublisherPublicationV1, type DiscussionAgentPublisherResponseV1 } from '@happier-dev/protocol/discussions/api';
+import type { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SessionFollowObservePendingRequestV1,
+  SessionFollowObservePendingResponseV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import {
   SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1,
   SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1,
@@ -181,7 +183,10 @@ export interface ServerToClientEvents {
 /**
  * Socket events from client to server
  */
-export interface ClientToServerEvents {
+export interface ClientToServerEvents extends Record<typeof SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, (
+    data: SessionFollowObservePendingRequestV1,
+    cb: (answer: SessionFollowObservePendingResponseV1) => void,
+  ) => void> {
   [DISCUSSION_AGENT_POST_EVENT_V1]: (
     data: DiscussionAgentPublisherPublicationV1,
     cb: (answer: DiscussionAgentPublisherResponseV1) => void,
