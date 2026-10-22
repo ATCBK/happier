@@ -66,7 +66,7 @@ describe('ApiSessionClient exact request settlement recovery', () => {
   const clients: ApiSessionClient[] = [];
   const connectGates: ReturnType<typeof createDeferred>[] = [];
 
-  it('overlaps AgentState currentness and Session reads without committing before both are admitted', async () => {
+  it.each(['AgentState', 'metadata'] as const)('overlaps %s currentness and Session reads without committing before both are admitted', async operation => {
     const session = createOwnerSession({ id: 'withdrawal-read-overlap' });
     const row = createOwnerRow(session);
     serveSession(row);
@@ -85,19 +85,24 @@ describe('ApiSessionClient exact request settlement recovery', () => {
     });
     const connect = createDeferred();
     const client = createClient(session, [createSocket()], { initialRegisteredSessionStateFieldMutations: [] }, connect);
-    const mutation = client.updateAgentState(state => ({ ...state, controlledByUser: true }));
+    const readValue = () => operation === 'AgentState'
+      ? client.getAgentStateSnapshot()?.controlledByUser
+      : client.getMetadataSnapshot()?.path === '/updated';
+    const mutation = operation === 'AgentState'
+      ? client.updateAgentState(state => ({ ...state, controlledByUser: true }))
+      : client.updateMetadata(metadata => ({ ...metadata, path: '/updated' }));
     try {
       await currentnessStarted.promise;
       // HTTP is held, not internal tuple/currentness logic. An independent
       // Session read must progress while Account-mode admission is pending.
       await vi.waitFor(() => expect(sessionReads).toBe(1));
       expect(axios.patch).not.toHaveBeenCalled();
-      expect(client.getAgentStateSnapshot()?.controlledByUser).not.toBe(true);
+      expect(readValue()).not.toBe(true);
     } finally {
       releaseCurrentness.resolve();
       await mutation;
     }
-    expect(client.getAgentStateSnapshot()?.controlledByUser).toBe(true);
+    expect(readValue()).toBe(true);
   });
 
   function createSocket(options: Parameters<typeof createApiSessionSocketStub>[0] = {}) {

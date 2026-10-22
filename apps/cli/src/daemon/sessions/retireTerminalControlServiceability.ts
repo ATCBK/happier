@@ -1,5 +1,5 @@
 import type { StoredCredentials } from '@/persistence';
-import { updateSessionMetadataWithRetry, verifySessionMetadataMutationCurrentness,
+import { assertSessionMetadataMutationCurrentness, updateSessionMetadataWithRetry, verifySessionMetadataMutationCurrentness,
     type SessionMetadataMutationCurrentness } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
 import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
@@ -60,12 +60,13 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
     const matchesExpectedRunner = (metadata: Readonly<{ hostPid?: number; hostProcessStartTimeMs?: number }>) =>
         !params.expectedRunner || (metadata.hostPid === params.expectedRunner.pid
             && (params.expectedRunner.startTimeMs === undefined || metadata.hostProcessStartTimeMs === params.expectedRunner.startTimeMs));
-    await verifySessionMetadataMutationCurrentness(params.currentness);
+    assertSessionMetadataMutationCurrentness(params.currentness);
     const currentnessHeaders = params.resolveAuthorizationHeaders?.({ method: 'GET', path: '/v1/account/encryption/currentness' });
     if (params.resolveAuthorizationHeaders && !currentnessHeaders) throw new Error('Terminal retirement Account authorization unavailable');
-    // These independent Home reads share the same admitted Account. The tuple
-    // writer still checks requester currentness immediately before its CAS.
-    const [rawSession, accountEncryptionCurrentness] = await Promise.all([
+    // Fetch independent facts under the captured Account together. Opening the
+    // tuple awaits admission; the writer rechecks currentness before its CAS.
+    const [, rawSession, accountEncryptionCurrentness] = await Promise.all([
+        verifySessionMetadataMutationCurrentness(params.currentness),
         fetchSessionByIdCompat({
             token: params.credentials.token,
             sessionId: params.sessionId,

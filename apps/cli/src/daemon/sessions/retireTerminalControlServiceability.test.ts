@@ -122,6 +122,49 @@ describe('retireExactTerminalControlServiceability', () => {
         })).rejects.toMatchObject({ code: 'session_publisher_authority_lost' });
     });
 
+    it('overlaps requester admission and independent retirement reads without committing before admission', async () => {
+        let releaseAuthority!: () => void;
+        let authorityStarted!: () => void;
+        const heldAuthority = new Promise<void>(resolve => { releaseAuthority = resolve; });
+        const authorityReadStarted = new Promise<void>(resolve => { authorityStarted = resolve; });
+        const reads = new Set<string>();
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/requester-currentness') {
+                authorityStarted();
+                await heldAuthority;
+                return { status: 200, data: { current: true } };
+            }
+            reads.add(path);
+            return { status: 200, data: path.includes('/v2/sessions/')
+                ? { session: createSessionRecordFixture({ id: 'session-authority-overlap', encryptionMode: 'plain',
+                    metadataLayoutVersion: 0, metadataVersion: 1,
+                    metadata: JSON.stringify({ path: '/repo', terminal: { mode: 'tmux', controlServiceabilityV1: {
+                        v: 1, attachmentId: 'attachment-overlap', state: 'servable', observedAt: 1,
+                    } } }) }) }
+                : { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+        });
+        const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: { success: true,
+            metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 0 } } });
+        const retirement = retireExactTerminalControlServiceability({ credentials: { token: 'fixture', encryption: null },
+            sessionId: 'session-authority-overlap', attachmentId: 'attachment-overlap', terminalMode: 'tmux',
+            // Model the remote authority read at HTTP, not the internal verifier.
+            currentness: { verifyCurrent: async () => (await axios.get('http://authority.test/requester-currentness')).data.current === true },
+        });
+        try {
+            await authorityReadStarted;
+            await vi.waitFor(() => {
+                expect(reads).toContain('/v2/sessions/session-authority-overlap');
+                expect(reads).toContain('/v1/account/encryption/currentness');
+            });
+            expect(patch).not.toHaveBeenCalled();
+        } finally {
+            releaseAuthority();
+            await retirement;
+        }
+        await expect(retirement).resolves.toBe('retired');
+    });
+
     it('overlaps independent Home reads while awaiting the retirement commit', async () => {
         vi.useFakeTimers();
         try {

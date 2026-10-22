@@ -56,7 +56,6 @@ import {
     type SessionMetadataEnvelopeTupleSnapshot,
     type SessionMetadataLegacyOwnerSnapshot,
     type SessionMetadataSharedEditorSnapshot,
-    type SessionMetadataTupleWriterSnapshot,
 } from '@/session/metadata/updateSessionMetadataWithRetry';
 import type {
     SessionMetadataLegacyOwnerMutationRequestV1,
@@ -3459,12 +3458,10 @@ export class ApiSessionClient extends EventEmitter {
                 },
             );
         }
-        const accountEncryptionCurrentness = await this.traceMetadataTuplePhase(operation, 'account_currentness', () =>
-            this.runSessionRequest(() => this.getAccountEncryptionCurrentness()));
         const updated = await this.runSessionRequest(async () => {
             const cryptoContext = this.getMetadataTupleCryptoContext();
-            const initialSnapshot = await this.traceMetadataTuplePhase(operation, 'snapshot_read', () =>
-                this.acquireMetadataTupleWriterSnapshot(credentials, accountEncryptionCurrentness));
+            const { initialSnapshot, accountEncryptionCurrentness } =
+                await this.acquireMetadataTupleWriterSnapshot(credentials, operation);
             return await this.traceMetadataTuplePhase(operation, 'tuple_commit', () => updateSessionMetadataEnvelopeTupleWithRetry({
                 token: this.token,
                 sessionId: this.sessionId,
@@ -3581,24 +3578,32 @@ export class ApiSessionClient extends EventEmitter {
 
     private async acquireMetadataTupleWriterSnapshot(
         credentials: StoredCredentials,
-        accountEncryptionCurrentness: AccountEncryptionCurrentnessResponse,
-    ): Promise<SessionMetadataTupleWriterSnapshot> {
-        const rawSession = await this.runSessionRequest(async () => fetchSessionByIdCompat({
-            token: this.token,
-            sessionId: this.sessionId,
-            reason: 'waitForMetadataUpdate',
-        }));
+        operation: 'metadata' | 'publisher_metadata' | 'agent_state',
+    ) {
+        // Acquire independent HTTP facts together. Opening or mutating the
+        // tuple still requires both the Account mode and the raw Session.
+        const [accountEncryptionCurrentness, rawSession] = await Promise.all([
+            this.traceMetadataTuplePhase(operation, 'account_currentness', () =>
+                this.runSessionRequest(() => this.getAccountEncryptionCurrentness())),
+            this.traceMetadataTuplePhase(operation, 'snapshot_read', () =>
+                this.runSessionRequest(() => fetchSessionByIdCompat({
+                    token: this.token,
+                    sessionId: this.sessionId,
+                    reason: 'waitForMetadataUpdate',
+                }))),
+        ]);
         if (!rawSession) {
             throw Object.assign(new Error('Session not found'), {
                 code: 'session_not_found' as const,
                 retryable: false as const,
             });
         }
-        return readSessionMetadataTupleWriterSnapshot({
+        const initialSnapshot = readSessionMetadataTupleWriterSnapshot({
             credentials,
             rawSession,
             accountEncryptionCurrentness,
         });
+        return { initialSnapshot, accountEncryptionCurrentness };
     }
 
     private applyMetadataEnvelopeTupleSnapshot(
@@ -4141,12 +4146,10 @@ export class ApiSessionClient extends EventEmitter {
                     },
                 );
             }
-            const accountEncryptionCurrentness = await this.traceMetadataTuplePhase('agent_state', 'account_currentness', () =>
-                this.runSessionRequest(() => this.getAccountEncryptionCurrentness()));
             const updated = await this.runSessionRequest(async () => {
                 const cryptoContext = this.getMetadataTupleCryptoContext();
-                const initialSnapshot = await this.traceMetadataTuplePhase('agent_state', 'snapshot_read', () =>
-                    this.acquireMetadataTupleWriterSnapshot(credentials, accountEncryptionCurrentness));
+                const { initialSnapshot, accountEncryptionCurrentness } =
+                    await this.acquireMetadataTupleWriterSnapshot(credentials, 'agent_state');
                 return await this.traceMetadataTuplePhase('agent_state', 'tuple_commit', () => updateSessionMetadataEnvelopeTupleWithRetry({
                     token: this.token,
                     sessionId: this.sessionId,
