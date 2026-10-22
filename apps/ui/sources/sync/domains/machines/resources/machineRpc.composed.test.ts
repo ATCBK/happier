@@ -7,7 +7,7 @@ import { createDeferred, renderScreen } from '@/dev/testkit';
 import { readRpcRequestDisposition, socketRpcCodec } from '@happier-dev/sync-client';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { MachineVitalsGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { MachineGuardViewV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
@@ -162,6 +162,42 @@ function destination(serverId: string, visible: boolean, focused = visible, over
         children: React.createElement(ResourceProbe, { serverId, overview, expectedAccountId }),
     });
 }
+
+it('keeps pending Vitals admission through unchanged mounted destination renders and dispatches its original read', async () => {
+    await withMachineHome(async home => {
+        const rowStarted = createDeferred<void>();
+        const releaseRow = createDeferred<void>();
+        const snapshot = vitals();
+        homes.answer(home.serverId, '/v1/machines/shared-machine', { select: () => {
+            rowStarted.resolve();
+            return { body: { machine: createPlainMachineRowFixture({ id: 'shared-machine', accountId: 'owner' }) },
+                respondAfter: releaseRow.promise };
+        } });
+        home.setAnswer(async call => {
+            if (call.method === RPC_METHODS.MACHINES_VITALS_GET) await call.reply(snapshot);
+            if (call.method === RPC_METHODS.MACHINES_VITALS_HISTORY_GET) await call.reply({
+                range: '1h', bucketMs: 60_000, points: [], today: { rxBytes: 0, txBytes: 0 },
+            });
+        });
+        const screen = await renderScreen(destination(home.serverId, true));
+        try {
+            await rowStarted.promise;
+            for (let render = 0; render < 20; render += 1) await screen.update(destination(home.serverId, true));
+            expect(home.calls).toEqual([]);
+            expect(home.cancellations).toEqual([]);
+            await act(async () => {
+                releaseRow.resolve();
+                await waitForHomeGovernance(() => expect(machineResourceStore.getState({ serverId: home.serverId,
+                    expectedAccountId: 'owner', machineId: 'shared-machine', view: 'overview' })).toMatchObject({ status: 'ready', snapshot }));
+            });
+            expect(home.calls.filter(call => call.method === RPC_METHODS.MACHINES_VITALS_GET)).toHaveLength(1);
+            expect(home.cancellations).toEqual([]);
+        } finally {
+            releaseRow.resolve();
+            await screen.unmount();
+        }
+    });
+});
 
 function OtherResourcesProbe({ serverId }: { serverId: string }) {
     const key = { serverId, machineId: 'shared-machine' };

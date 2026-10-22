@@ -274,6 +274,56 @@ describe('machine resource visibility and demand', () => {
         await hook.unmount();
     });
 
+    it('keeps one credential binding and a pending Overview read through detail renders and unrelated Home publications', async () => {
+        const { useMachineVitalsOverview } = await import('./useMachineVitalsOverview');
+        const { useMachineDaemonReadIdentities } = await import('../useMachineDaemonReadTarget');
+        const { machineResourceStore } = await import('./machineResourceStore');
+        const pending = createDeferred<unknown>();
+        const aborted: string[] = [];
+        boundary.rpc.mockImplementation(input => {
+            input.signal?.addEventListener('abort', () => aborted.push(input.method), { once: true });
+            return pending.promise;
+        });
+        // Observe the real demand owner without replacing its lifecycle or clients.
+        const originalDemand = machineResourceStore.demand.bind(machineResourceStore);
+        let releases = 0;
+        const demand = vi.spyOn(machineResourceStore, 'demand').mockImplementation(input => {
+            const release = originalDemand(input);
+            return () => { releases += 1; release(); };
+        });
+        const bindings = new Set<NonNullable<ReturnType<typeof useMachineDaemonReadIdentities>[number]['accountBinding']>>();
+        const hook = await renderHook(() => {
+            // Fresh input containers match ordinary Machine detail renders.
+            const identity = useMachineDaemonReadIdentities([{ serverId: homeA, machineId: 'machine-a' }])[0]!;
+            if (identity.accountBinding) bindings.add(identity.accountBinding);
+            return useMachineVitalsOverview({ serverId: homeA, machineId: 'machine-a', range: '1h' });
+        });
+        try {
+            await flushHookEffects({ cycles: 3, turns: 3 });
+            for (let render = 0; render < 20; render += 1) await hook.rerender();
+            const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+            await act(async () => {
+                await upsertServerProfile({ serverUrl: 'https://resource-home-a.test', name: 'Renamed Home A' });
+                await upsertServerProfile({ serverUrl: 'https://resource-home-b.test', name: 'Renamed Home B' });
+            });
+            await flushHookEffects();
+            expect(bindings.size).toBe(1);
+            expect(demand).toHaveBeenCalledTimes(1);
+            expect(releases).toBe(0);
+            expect(aborted).toEqual([]);
+            expect(boundary.rpc.mock.calls.filter(([input]) => input.method === 'machines.vitals.get')).toHaveLength(1);
+            expect(boundary.rpc.mock.calls.filter(([input]) => input.method === 'machines.vitals.history.get')).toHaveLength(1);
+            await hook.unmount();
+            // Credential retirement and effect cleanup may both call the idempotent release.
+            expect(releases).toBeGreaterThan(0);
+            expect(aborted.sort()).toEqual(['machines.vitals.get', 'machines.vitals.history.get']);
+        } finally {
+            await hook.unmount();
+            demand.mockRestore();
+            pending.resolve({ state: 'reporting', sample: null, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } });
+        }
+    });
+
     it.each([
         { reason: 'helper_missing', expected: { kind: 'not_reported', reason: 'unsupported' } },
         { reason: 'reader_failed', expected: { kind: 'reporting', summary: null, freshness: 'stale', attention: { level: 'calm', reasons: [] } } },
