@@ -7,8 +7,12 @@ export type AccountAdmissionIntent = "content" | "serializing" | "exclusive";
 const admissionStrength = { content: 0, serializing: 1, exclusive: 2 } as const;
 
 const admissionSymbol = Symbol("account-admission");
+const attributionSymbol = Symbol("account-admission-attribution");
 type AccountAdmission = { readonly strength: number; held: boolean };
-type AdmissionContext = { [admissionSymbol]?: ReadonlyMap<string, AccountAdmission> };
+type AdmissionContext = {
+    [admissionSymbol]?: ReadonlyMap<string, AccountAdmission>;
+    [attributionSymbol]?: boolean;
+};
 
 function assertManagedAdmissionAudience(tx: Tx, ids: readonly string[], strength: number) {
     const context = getTransactionContext(tx, { optional: true });
@@ -126,6 +130,23 @@ export async function acquireAccountSessionOwnerMetadataFencesInTx(
         : ids.length === 1
             ? `SELECT "id" FROM "Account" WHERE "id" = $1 FOR ${mode}`
             : `SELECT "id" FROM "Account" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR ${mode}`;
+    if (dialect === "postgres") {
+        const context = getTransactionContext(tx, { optional: true });
+        const owner = context as (typeof context & AdmissionContext);
+        if (owner && !owner.readOnly && !owner[attributionSymbol]) {
+            const requestId = owner.requestId ?? "unattributed";
+            const transactionClass = /^[a-zA-Z0-9._-]+$/.test(owner.transactionClass)
+                ? owner.transactionClass : "unspecified";
+            // PostgreSQL application_name has 63 usable bytes. Keep the full
+            // validated request identity and as much of the existing class as fits.
+            const applicationName = `${transactionClass.slice(0, 63 - requestId.length - 1)}:${requestId}`;
+            // A utility SET leaves the first Serializable snapshot to the
+            // Account lock. SELECT set_config (including inside DO) does not.
+            // Both components are restricted ASCII, never SQL/input content.
+            await tx.$executeRawUnsafe(`SET LOCAL application_name = '${applicationName}'`);
+            owner[attributionSymbol] = true;
+        }
+    }
     const rows = await tx.$queryRawUnsafe<Array<{ id: string }>>(
         query,
         ...(dialect === "mysql" || ids.length === 1 ? ids : [ids]),
