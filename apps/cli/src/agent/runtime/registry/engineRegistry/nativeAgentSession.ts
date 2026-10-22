@@ -2993,6 +2993,7 @@ export function createNativeAgentSessionOperations(
                     ? deriveNativeUsageAccountingIdentity({ ...witness, inferenceId: event.accounting.inferenceId })
                     : null;
                 const counterSemantics = {
+                    runtimeEventOrder: { runtimeIncarnationId, sequence: event.sequence },
                     ...(event.accounting?.inputIncludesCache === undefined ? {} : { inputIncludesCache: event.accounting.inputIncludesCache }),
                     ...(event.accounting?.outputIncludesReasoning === undefined ? {} : { outputIncludesReasoning: event.accounting.outputIncludesReasoning }),
                     ...(event.accounting?.historyComplete === undefined ? {} : { historyComplete: event.accounting.historyComplete }),

@@ -63,6 +63,45 @@ describe("usageWriteService", () => {
         ]);
     });
 
+    it('retains the earliest matching runtime order on a delayed duplicate without upgrading stored attribution', async () => {
+        const account = await db.account.create({ data: { publicKey: 'runtime-order' } });
+        const session = await db.session.create({ data: { accountId: account.id, tag: 'runtime-order', encryptionMode: 'plain', metadata: '{}' } });
+        const request = (sequence: number, observedAt = 100, runtimeIncarnationId = 'runtime-A', total = 3) => UsageEventIngestRequestSchema.parse({
+            sessionId: session.id, turnId: 'turn', externalKey: 'response-1', observedAt, agentId: 'codex',
+            source: 'codex-app-server-response-usage', scope: 'turn_delta', isCumulative: false,
+            tokens: { input: total, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total },
+            cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' }, metadata: { usageAccounting: {
+                path: 'runtime', status: 'partial', asOfMs: observedAt, futureDiagnostic: { retain: true },
+                runtimeEventOrder: { runtimeIncarnationId, sequence },
+            } },
+        });
+        expect(await recordUsageEvent(account.id, request(4, 101))).toMatchObject({ ok: true });
+        const earlier = request(2);
+        expect(await recordUsageEvent(account.id, { ...earlier, attribution: { v: 1, turnId: 'turn', source: {
+            kind: 'native', accountScope: 'personal', connectedAccount: null,
+        } } })).toMatchObject({ ok: true });
+        let stored = await db.usageEvent.findFirstOrThrow({ where: { accountId: account.id, externalKey: 'response-1' } });
+        expect(stored.observedAt.getTime()).toBe(100);
+        expect(stored.metadata).toMatchObject({ usageAccounting: { runtimeEventOrder: { runtimeIncarnationId: 'runtime-A', sequence: 2 } } });
+
+        const concurrent = (sequence: number) => ({ ...request(sequence), externalKey: 'concurrent-response' });
+        expect(await recordUsageEvent(account.id, concurrent(8))).toMatchObject({ ok: true });
+        for (const result of await Promise.all([6, 5, 7].map(sequence => recordUsageEvent(account.id, concurrent(sequence))))) {
+            expect(result).toMatchObject({ ok: true });
+        }
+        const concurrentRow = await db.usageEvent.findFirstOrThrow({ where: { accountId: account.id, externalKey: 'concurrent-response' } });
+        expect(concurrentRow.metadata).toMatchObject({ usageAccounting: { runtimeEventOrder: { runtimeIncarnationId: 'runtime-A', sequence: 5 }, futureDiagnostic: { retain: true } } });
+        expect(stored.metadata).not.toHaveProperty('usageAttribution');
+        expect(stored.metadata).toMatchObject({ usageAccounting: { futureDiagnostic: { retain: true } } });
+        await recordUsageEvent(account.id, request(5, 102));
+        await recordUsageEvent(account.id, request(1, 99, 'runtime-B'));
+        await recordUsageEvent(account.id, request(1, 99, 'runtime-A', 999));
+        stored = await db.usageEvent.findFirstOrThrow({ where: { accountId: account.id, externalKey: 'response-1' } });
+        expect(stored.totalTokens).toBe(3);
+        expect(stored.observedAt.getTime()).toBe(100);
+        expect(stored.metadata).toMatchObject({ usageAccounting: { runtimeEventOrder: { runtimeIncarnationId: 'runtime-A', sequence: 2 } } });
+    });
+
     it('retains request-bound switched account identity through ingest and query, ignoring metadata guesses', async () => {
         const account = await db.account.create({ data: { publicKey: 'request-attribution' } });
         const session = await db.session.create({ data: { accountId: account.id, tag: 'attribution', encryptionMode: 'e2ee', metadata: 'ciphertext' } });

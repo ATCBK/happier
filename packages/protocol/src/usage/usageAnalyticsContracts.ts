@@ -355,6 +355,11 @@ export const UsageAccountingMetadataSchema = lazyZodSchema(() => z.strictObject(
   nativeSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   inferenceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   counterEpoch: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  /** Existing host runtime ordering, only comparable within that incarnation. */
+  runtimeEventOrder: z.optional(z.strictObject({
+    runtimeIncarnationId: z.string().check(z.trim(), z.minLength(1)),
+    sequence: z.number().check(z.int(), z.minimum(0)),
+  })),
   inputIncludesCache: z.optional(z.boolean()),
   outputIncludesReasoning: z.optional(z.boolean()),
 }));

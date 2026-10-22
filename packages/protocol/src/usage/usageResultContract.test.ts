@@ -2,8 +2,11 @@ import { expect, it } from 'vitest';
 import { readUsageAccountingMetadata, UsageAccountingMetadataSchema, UsageAnalyticsCostFactSchema } from './usageAnalyticsContracts.js';
 
 it('reads stored accounting evidence by dropping extras but rejects invalid known fields', () => {
-  expect(readUsageAccountingMetadata({ usageAccounting: { inferenceId: 'inference', status: 'pending', extra: 'drop' } })).toEqual({ inferenceId: 'inference', status: 'pending' });
+  expect(readUsageAccountingMetadata({ usageAccounting: { inferenceId: 'inference', status: 'pending', extra: 'drop',
+    runtimeEventOrder: { runtimeIncarnationId: 'runtime', sequence: 2, future: 'drop' },
+  } })).toEqual({ inferenceId: 'inference', status: 'pending', runtimeEventOrder: { runtimeIncarnationId: 'runtime', sequence: 2 } });
   expect(readUsageAccountingMetadata({ usageAccounting: { status: 'fabricated' } })).toBeNull();
+  expect(readUsageAccountingMetadata({ usageAccounting: { runtimeEventOrder: { runtimeIncarnationId: 'runtime', sequence: -1 } } })).toBeNull();
   expect(UsageAccountingMetadataSchema.safeParse({ status: 'available', extra: 'drop' }).success).toBe(false);
 });
 

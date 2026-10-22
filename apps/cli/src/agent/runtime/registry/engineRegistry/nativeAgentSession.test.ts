@@ -73,6 +73,7 @@ import type { ProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { SessionRollbackRangeV1 } from '@happier-dev/protocol/sessions/metadata/sessionRollbackRangesV1';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime';
+import { readUsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { ProviderRuntimeBindingBasisV1Schema } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
@@ -15067,6 +15068,7 @@ describe('native Agent session usage bridge — full canonical UsageObservation 
         expect(call.metadata).toEqual({ usageAccounting: {
             path: 'runtime', status: 'unknown', asOfMs: 1_000,
             nativeSessionId: 'native-session-1', inferenceId: 'native-inference-1',
+            runtimeEventOrder: { runtimeIncarnationId: expect.any(String), sequence: 5 },
         } });
         expect(call.turnId).toBe('turn-42');
         expect(call.observedAt).toBe(1_000);
@@ -15127,12 +15129,18 @@ describe('native Agent session usage bridge — full canonical UsageObservation 
                     sourceRootKey: expect.any(String), nativeSessionKey: expect.any(String) },
                 usageAccounting: { path: 'runtime', status: 'available', inferenceId: expect.any(String) },
             });
-            expect(published[1].metadata).toBeUndefined();
+            expect(published[1].metadata).toEqual({ usageAccounting: {
+                path: 'runtime', status: 'unknown', asOfMs: 11,
+                runtimeEventOrder: { runtimeIncarnationId: expect.any(String), sequence: 3 },
+            } });
             expect(published[2].metadata).toMatchObject({
                 accountingSubject: published[0].metadata?.accountingSubject,
                 usageAccounting: { path: 'runtime', status: 'partial', historyComplete: false, inferenceId: expect.any(String) },
             });
             expect(published[2].observation.tokens).toEqual(usage.tokens);
+            const orders = published.map(call => readUsageAccountingMetadata(call.metadata)?.runtimeEventOrder);
+            expect(orders.map(order => order?.sequence)).toEqual([2, 3, 4]);
+            expect(new Set(orders.map(order => order?.runtimeIncarnationId)).size).toBe(1);
             const serialized = JSON.stringify(published[0].metadata);
             expect(serialized).not.toContain('/private/native');
             expect(serialized).not.toContain('native-session');
@@ -15151,6 +15159,7 @@ describe('native Agent session usage bridge — full canonical UsageObservation 
         expect(published).toHaveLength(1);
         expect(published[0].observation).toMatchObject({ scope: 'session_cumulative', cost: { reportedUsd: 0.5 }, tokens: { input: 5, total: 10 } });
         expect(published[0].metadata).toEqual({ usageAccounting: { path: 'runtime', status: 'partial', asOfMs: 10,
+            runtimeEventOrder: { runtimeIncarnationId: expect.any(String), sequence: 1 },
             nativeSessionId: 'unlinked-native', historyComplete: false, inputIncludesCache: false, outputIncludesReasoning: false } });
     });
 

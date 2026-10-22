@@ -2,11 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { UsageEventIngestRequest, UsageNativeAccountingSubject, UsageNativeHistoryDeleteRequest, UsageObservationCost, UsageObservationTokens } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsageEventIngestRequestSchema, UsageNativeAccountingSubjectSchema, readUsageAccountingMetadata } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
-import type { Prisma } from "@prisma/client";
+import type { Prisma, UsageEvent } from "@prisma/client";
 import { buildUsageEphemeral, eventRouter } from "@/app/events/eventRouter";
 import { publishTeamCredentialUsageChangedInTx } from "./teamCredentialUsageInvalidation";
 import { usageReportWritesCounter } from "@/app/monitoring/metrics/index";
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { db } from "@/storage/db";
 import { requireDbProviderFromEnv } from "@/storage/prisma";
 import { AsyncLock } from "@/utils/runtime/lock";
@@ -526,6 +526,36 @@ function accountingMetadataForWrite(request: UsageEventIngestRequest): Record<st
     };
 }
 
+async function retainEarliestRuntimeOrderInTx(tx: Tx, existing: UsageEvent, request: UsageEventIngestRequest, attribution: SessionUsageAttribution): Promise<void> {
+    const previousAccounting = readUsageAccountingMetadata(existing.metadata);
+    const accounting = readUsageAccountingMetadata(request.metadata);
+    const previous = previousAccounting?.path === 'runtime' ? previousAccounting.runtimeEventOrder : undefined;
+    const order = accounting?.path === 'runtime' ? accounting.runtimeEventOrder : undefined;
+    if (!previous || !order || previous.runtimeIncarnationId !== order.runtimeIncarnationId
+        || order.sequence >= previous.sequence || request.observedAt > existing.observedAt.getTime()) return;
+    if ((['nativeSessionId', 'inferenceId', 'counterEpoch', 'inputIncludesCache', 'outputIncludesReasoning'] as const)
+        .some(key => !isDeepStrictEqual(previousAccounting?.[key], accounting?.[key]))) return;
+    const next = toUsageEventCreateInput(existing.accountId, request, attribution);
+    if (Object.entries(next).some(([key, value]) => key !== 'observedAt' && key !== 'metadata'
+        && !isDeepStrictEqual(Reflect.get(existing, key), value))) return;
+    const metadata = existing.metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return;
+    const rawAccounting = metadata.usageAccounting;
+    if (!rawAccounting || typeof rawAccounting !== 'object' || Array.isArray(rawAccounting)) return;
+    // Replay keeps the original fact, including its attribution. Only the
+    // earliest witnessed position and its real source instant can move back.
+    const changed = await tx.usageEvent.updateMany({ where: {
+        id: existing.id, observedAt: existing.observedAt, metadata: { equals: metadata },
+    }, data: {
+        observedAt: new Date(request.observedAt),
+        metadata: { ...metadata, usageAccounting: { ...rawAccounting, runtimeEventOrder: order } },
+    } });
+    // ReadCommitted writers can race on the same duplicate. Reuse the owning
+    // transaction's replay policy rather than replace a newer minimum order.
+    if (changed.count === 0) throw new TransactionReplayRequiredError('usage-runtime-order-changed');
+    emitUsageEventAfterTransaction(tx, existing.accountId, request);
+}
+
 async function ensureNativeSubjectOwnedInTx(tx: Tx, accountId: string, subject: UsageNativeAccountingSubject): Promise<boolean> {
     return Boolean(await tx.machine.findFirst({ where: { id: subject.machineId, accountId }, select: { id: true } }));
 }
@@ -722,7 +752,7 @@ export async function recordUsageEvent(
                         await tx.usageEvent.update({ where: { id: existing.id }, data: next });
                         emitUsageEventAfterTransaction(tx, accountId, request);
                     }
-                }
+                } else await retainEarliestRuntimeOrderInTx(tx, existing, request, attribution);
                 return { ok: true, event: { id: existing.id, createdAt: existing.createdAt } };
             }
 
@@ -733,8 +763,8 @@ export async function recordUsageEvent(
                 },
                 update: request.subject ? next : {},
                 create: next,
-                select: { id: true, createdAt: true },
             });
+            if (!request.subject) await retainEarliestRuntimeOrderInTx(tx, created, request, attribution);
             await accessUsageEventExecutionRunIdInTx(tx, {
                 kind: "writeOnce",
                 eventId: created.id,
@@ -751,7 +781,7 @@ export async function recordUsageEvent(
             }
             emitUsageEventAfterTransaction(tx, accountId, request);
             await publishAttributedUsageChangedInTx(tx, attribution);
-            return { ok: true, event: created };
+            return { ok: true, event: { id: created.id, createdAt: created.createdAt } };
         }
 
         const created = await tx.usageEvent.create({

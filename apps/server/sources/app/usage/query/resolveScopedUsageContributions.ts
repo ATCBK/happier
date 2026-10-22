@@ -84,6 +84,31 @@ function compareChronologically(left: ScopedUsageEventRow, right: ScopedUsageEve
     return left.id.localeCompare(right.id);
 }
 
+function orderRuntimeObservations(rows: readonly ScopedUsageEventRow[]): ScopedUsageEventRow[] {
+    const ordered = [...rows].sort(compareChronologically);
+    for (let start = 0; start < ordered.length;) {
+        let end = start + 1;
+        while (end < ordered.length && ordered[end]!.observedAt.getTime() === ordered[start]!.observedAt.getTime()) end++;
+        const streams = new Map<string, { slots: number[]; rows: Array<{ row: ScopedUsageEventRow; sequence: number }> }>();
+        for (let index = start; index < end; index++) {
+            const row = ordered[index]!;
+            const accounting = row.accountingEvidence?.accounting;
+            const order = accounting?.path === 'runtime' ? accounting.runtimeEventOrder : undefined;
+            if (!order) continue;
+            const stream = streams.get(order.runtimeIncarnationId) ?? { slots: [], rows: [] };
+            stream.slots.push(index);
+            stream.rows.push({ row, sequence: order.sequence });
+            streams.set(order.runtimeIncarnationId, stream);
+        }
+        for (const stream of streams.values()) {
+            stream.rows.sort((left, right) => left.sequence - right.sequence || compareChronologically(left.row, right.row));
+            stream.slots.forEach((slot, index) => { ordered[slot] = stream.rows[index]!.row; });
+        }
+        start = end;
+    }
+    return ordered;
+}
+
 function asContribution(
     row: ScopedUsageEventRow,
     tokens: UsageObservationTokens = row.tokens,
@@ -98,11 +123,14 @@ function asContribution(
     };
 }
 
-function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsageContributions {
+function resolveGroup(rows: readonly ScopedUsageEventRow[], ranks: Map<string, number>): ResolvedScopedUsageContributions {
+    const compareRows = (left: ScopedUsageEventRow, right: ScopedUsageEventRow): number =>
+        ranks.get(left.id)! - ranks.get(right.id)! || left.id.localeCompare(right.id);
+    const chronological = [...rows].sort(compareRows);
     const reasons = new Set<UsageAccountingCoverageReason>();
     const inferences = new Map<string, ScopedUsageEventRow>();
     const uncorrelated: ScopedUsageEventRow[] = [];
-    for (const row of [...rows].sort(compareChronologically)) {
+    for (const row of chronological) {
         const identity = row.accountingEvidence?.accounting?.inferenceId;
         if (row.scope !== "turn_delta" || row.isCumulative || !identity) {
             uncorrelated.push(row);
@@ -116,13 +144,18 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         // Prefer the live observation when both paths witnessed the same request.
         const previousPath = previous?.accountingEvidence?.accounting?.path;
         const path = row.accountingEvidence?.accounting?.path;
-        if (!previous || previousPath !== "runtime" || path === "runtime") inferences.set(identity, row);
+        const previousOrder = previous?.accountingEvidence?.accounting?.runtimeEventOrder;
+        const order = row.accountingEvidence?.accounting?.runtimeEventOrder;
+        const sameRuntime = previousPath === 'runtime' && path === 'runtime' && previousOrder && order
+            && previousOrder.runtimeIncarnationId === order.runtimeIncarnationId;
+        if (!previous || previousPath !== "runtime" || (path === "runtime"
+            && (!sameRuntime || order.sequence < previousOrder.sequence))) inferences.set(identity, row);
     }
-    const ordered = [...uncorrelated, ...inferences.values()].sort(compareChronologically);
+    const ordered = [...uncorrelated, ...inferences.values()].sort(compareRows);
     const latestFinal = ordered.filter((row) => row.scope === "session_final").at(-1);
     const deltas = ordered.filter((row) => row.scope === "turn_delta" && !row.isCumulative);
     const snapshots = ordered.filter((row) => (row.isCumulative || row.scope !== "turn_delta")
-        && (!latestFinal || compareChronologically(row, latestFinal) <= 0));
+        && (!latestFinal || compareRows(row, latestFinal) <= 0));
     const contributions: ScopedUsageContribution[] = [];
     let previous: ScopedUsageEventRow | undefined;
     let deltaIndex = 0;
@@ -131,7 +164,7 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         const intervalStartIndex = contributions.length;
         let intervalTokens = createEmptyUsageTokens();
         let intervalCost = createEmptyUsageCost(snapshot.cost.currency);
-        while (deltaIndex < deltas.length && compareChronologically(deltas[deltaIndex]!, snapshot) <= 0) {
+        while (deltaIndex < deltas.length && compareRows(deltas[deltaIndex]!, snapshot) <= 0) {
             const delta = deltas[deltaIndex++]!;
             contributions.push(asContribution(delta));
             intervalTokens = addUsageTokens(intervalTokens, delta.tokens);
@@ -156,6 +189,7 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
         const coveredIds: string[] = [];
         const hasResidual = usageHasAnyValue(tokens, { ...cost, reportedUsd: 0, invoiceUsd: 0 });
         const totalId = hasResidual ? `${snapshot.id}:reported` : snapshot.id;
+        ranks.set(totalId, ranks.get(snapshot.id)!);
         if (hasReportedTotal) {
             // The counter's reported charge covers this epoch, not just its residual tokens.
             // Earlier reported deltas already telescope in their own basis. Retain unlike
@@ -196,7 +230,7 @@ function resolveGroup(rows: readonly ScopedUsageEventRow[]): ResolvedScopedUsage
     for (; deltaIndex < deltas.length; deltaIndex++) contributions.push(asContribution(deltas[deltaIndex]!));
     const uncorrelatedSources = new Set(deltas.filter((row) => !row.accountingEvidence?.accounting?.inferenceId).map((row) => row.source));
     if (uncorrelatedSources.size > 1) reasons.add("ambiguous_overlap");
-    const resolved = contributions.sort(compareChronologically).map((row) => ({ ...row, coverageReasons: [...new Set([...reasons, ...row.coverageReasons ?? []])] }));
+    const resolved = contributions.sort(compareRows).map((row) => ({ ...row, coverageReasons: [...new Set([...reasons, ...row.coverageReasons ?? []])] }));
     return { totalContributions: resolved, bucketAttributions: resolved, coverageReasons: [...new Set(resolved.flatMap((row) => row.coverageReasons ?? []))] };
 }
 
@@ -216,6 +250,12 @@ export function resolveScopedUsageContributions(
         || !row.sessionId
         || !sessionsWithNativeUsage.has(row.sessionId)
     ));
+    // Reorder only the existing slots of one witnessed runtime at an equal
+    // source instant. Pairwise same-runtime/else-created comparisons can cycle
+    // across mixed streams; these fixed ranks govern reconciliation and output.
+    const ranks = new Map(orderRuntimeObservations(eligibleRows).map((row, index) => [row.id, index]));
+    const compareRows = (left: ScopedUsageEventRow, right: ScopedUsageEventRow): number =>
+        ranks.get(left.id)! - ranks.get(right.id)! || left.id.localeCompare(right.id);
     const groups = new Map<string, ScopedUsageEventRow[]>();
     for (const row of eligibleRows) {
         const key = usageAccountingSubjectKey(row);
@@ -228,7 +268,7 @@ export function resolveScopedUsageContributions(
     const bucketAttributions: ScopedUsageContribution[] = [];
     const coverageReasons = new Set<UsageAccountingCoverageReason>();
     for (const group of groups.values()) {
-        const resolved = resolveGroup(group);
+        const resolved = resolveGroup(group, ranks);
         const selected = resolved.totalContributions.filter((row) => (
             (range?.startMs === undefined || row.observedAt.getTime() >= range.startMs)
             && (range?.endMs === undefined || row.observedAt.getTime() < range.endMs)
@@ -239,8 +279,8 @@ export function resolveScopedUsageContributions(
     }
 
     return {
-        totalContributions: totalContributions.sort(compareChronologically),
-        bucketAttributions: bucketAttributions.sort(compareChronologically),
+        totalContributions: totalContributions.sort(compareRows),
+        bucketAttributions: bucketAttributions.sort(compareRows),
         coverageReasons: [...coverageReasons],
     };
 }

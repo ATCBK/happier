@@ -154,6 +154,10 @@ export function buildLegacyUsageReportFromUsageObservation(params: Readonly<{
 }>): UsageReportV1 | null {
     const observation = normalizeLegacyInput(params.observation);
     if (!observation) return null;
+    // Exact Codex responses supplement the existing cumulative stream. Scalar
+    // servers replace the session key and cannot reconcile the two; retain
+    // their unchanged cumulative report instead of letting a delta replace it.
+    if (observation.source === 'codex-app-server-response-usage') return null;
     const tokens = getCompatibleLegacyTokens(observation);
     if (!tokens) return null;
     const cost = createLegacyNumberMap();

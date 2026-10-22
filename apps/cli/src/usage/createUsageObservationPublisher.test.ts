@@ -6,6 +6,25 @@ import { createUsageObservationPublisher } from './createUsageObservationPublish
 import { logger } from '@/ui/logger';
 
 describe('createUsageObservationPublisher', () => {
+    it('keeps exact Codex response supplements out of scalar fallback regardless of arrival order', async () => {
+        const reports: Array<{ tokens: { total: number } }> = [];
+        const publisher = createUsageObservationPublisher({
+            token: 'synthetic-token', apiServerUrl: 'https://api.example.test',
+            fetchServerFeaturesSnapshot: async () => ({ status: 'unsupported', reason: 'endpoint_missing' }),
+            emitLegacyUsageReport: report => { reports.push(report); },
+        });
+        const observation = { provider: 'codex', source: 'codex-app-server-response-usage', scope: 'turn_delta' as const,
+            key: null, modelId: null, tokens: { total: 3, input: 2, output: 1, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
+            cost: null, contextUsedTokens: null, contextWindowTokens: null };
+        const exact = { sessionId: 'session-1', externalKey: 'response-1', observation };
+        expect(await publisher.publish(exact)).toEqual({ status: 'skipped' });
+        expect(await publisher.publish({ sessionId: 'session-1', observation: { ...observation,
+            source: 'codex-app-server-token-usage', scope: 'session_cumulative', tokens: { ...observation.tokens, total: 1006, input: 1004, output: 2 },
+        } })).toEqual({ status: 'sent', transport: 'legacy' });
+        expect(await publisher.publish(exact)).toEqual({ status: 'skipped' });
+        expect(reports.map(report => report.tokens.total)).toEqual([1006]);
+    });
+
     it('keeps canceled native HTTP capture pending instead of acknowledging it', async () => {
         const controller = new AbortController();
         const publisher = createUsageObservationPublisher({

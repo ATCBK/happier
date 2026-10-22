@@ -17,6 +17,39 @@ function row(id: string, time: number, scope: string, total: number): ScopedUsag
 }
 
 describe("resolveScopedUsageContributions", () => {
+    it("reconciles response deltas against the same-millisecond cumulative snapshot regardless of ingestion order", () => {
+        const order = (sequence: number) => ({ usageAccounting: { path: 'runtime', runtimeEventOrder: { runtimeIncarnationId: 'runtime', sequence } } });
+        const snapshot = { ...row("snapshot", 100, "session_cumulative", 1006), createdAt: new Date(101), metadata: order(3) };
+        const first = { ...row("first", 100, "turn_delta", 3), createdAt: new Date(102),
+            metadata: order(1) };
+        const second = { ...row("second", 100, "turn_delta", 3), createdAt: new Date(103),
+            metadata: order(2) };
+        const result = resolveScopedUsageContributions([snapshot, first, second]);
+        expect(result.totalContributions.reduce((sum, event) => sum + event.tokens.total, 0)).toBe(1006);
+        expect(result.totalContributions.filter(event => event.scope === 'turn_delta').map(event => event.tokens.total)).toEqual([3, 3]);
+    });
+
+    it('retains multiple same-clock counter prefixes while leaving other streams and legacy slots stable', () => {
+        const ordered = (id: string, scope: string, total: number, sequence: number, created: number): ScopedUsageEventRow => ({
+            ...row(id, 100, scope, total), createdAt: new Date(created),
+            metadata: { usageAccounting: { path: 'runtime', runtimeEventOrder: { runtimeIncarnationId: 'runtime-A', sequence } } },
+        });
+        const rows = [row('baseline', 1, 'session_cumulative', 1000),
+            ordered('second-snapshot', 'session_cumulative', 1006, 4, 1),
+            { ...row('other', 100, 'turn_delta', 0), createdAt: new Date(2), metadata: { usageAccounting: {
+                path: 'runtime', runtimeEventOrder: { runtimeIncarnationId: 'runtime-B', sequence: 1 },
+            } } },
+            ordered('second-response', 'turn_delta', 3, 3, 3),
+            { ...row('legacy', 100, 'turn_delta', 0), createdAt: new Date(4) },
+            ordered('first-snapshot', 'session_cumulative', 1003, 2, 5),
+            ordered('first-response', 'turn_delta', 3, 1, 6)];
+        const selected = resolveScopedUsageContributions(rows, { startMs: 100, endMs: 101 });
+        expect(selected.totalContributions.reduce((sum, event) => sum + event.tokens.total, 0)).toBe(6);
+        expect(selected.totalContributions.filter(event => event.scope === 'turn_delta').map(event => event.id))
+            .toEqual(['first-response', 'other', 'legacy', 'second-response']);
+        expect(resolveScopedUsageContributions([...rows].reverse(), { startMs: 100, endMs: 101 })).toEqual(selected);
+    });
+
     it("assigns a shared range boundary only to the following half-open period", () => {
         const events = [row("before", 999, "turn_delta", 5), row("boundary", 1000, "turn_delta", 10), row("end", 2000, "turn_delta", 20)];
         const previous = resolveScopedUsageContributions(events, { startMs: 0, endMs: 1000 });
