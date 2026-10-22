@@ -60,6 +60,37 @@ async function corpus() {
 }
 
 describe('Claude candidate conversation search', () => {
+    it('publishes a hit page without prefiltering later or already visited native bodies', async () => {
+        const params = await corpus();
+        const directory = join(params.source.configDir, 'projects', 'project');
+        await rm(join(directory, 'session.jsonl'));
+        const paths: string[] = [];
+        for (let index = 0; index < 5; index += 1) {
+            const path = join(directory, `page-${index}.jsonl`);
+            await writeFile(path, JSON.stringify({ type: 'user', uuid: `hit-${index}`, parentUuid: null,
+                message: { role: 'user', content: 'paged native needle' } }) + '\n');
+            paths.push(await realpath(path));
+            await utimes(path, new Date(2025, 0, 5 - index), new Date(2025, 0, 5 - index));
+        }
+        const request = { ...params, searchTerm: 'paged native needle', limit: 2 };
+        const first = await listClaudeExternalSessionCandidates(request);
+        expect(first.candidates.map(row => row.remoteSessionId)).toEqual(['page-0', 'page-1']);
+        expect(first.contentCoverage).toBe('partial');
+        // The process boundary must only read this result page's native work.
+        // Eagerly scanning the root charges every future page before a hit can publish.
+        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])).toEqual(paths.slice(0, 2));
+        params.ripgrep.run.mockClear();
+        const second = await listClaudeExternalSessionCandidates({ ...request, cursor: first.nextCursor! });
+        expect(second.candidates.map(row => row.remoteSessionId)).toEqual(['page-2', 'page-3']);
+        expect(second.contentCoverage).toBe('partial');
+        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])).toEqual(paths.slice(2, 4));
+        params.ripgrep.run.mockClear();
+        const last = await listClaudeExternalSessionCandidates({ ...request, cursor: second.nextCursor! });
+        expect(last.candidates.map(row => row.remoteSessionId)).toEqual(['page-4']);
+        expect(last.contentCoverage).toBe('complete');
+        expect(last.nextCursor).toBeNull();
+        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])).toEqual(paths.slice(4));
+    });
     it('finds readable assistant text after a NUL record in a directory-prefiltered native transcript', async () => {
         const params = await corpus();
         const path = join(params.source.configDir, 'projects', 'project', 'session.jsonl');
@@ -504,6 +535,9 @@ describe('Claude candidate conversation search', () => {
         expect(hits.map(hit => hit.remoteSessionId)).toEqual(['session', 'older']);
         expect(hits[0]?.match).toMatchObject({ snippet: 'First file deadline needle earliest', messageIndex: 100 });
         expect(hits[0]?.title).toBe('Latest native title');
+        const resumedPath = await realpath(join(params.source.configDir, 'projects', 'project', 'session.jsonl'));
+        expect(params.ripgrep.run.mock.calls.flatMap(([call]) => [...call.paths])
+            .filter(path => path === resumedPath)).toHaveLength(1);
         await writeFile(join(params.source.configDir, 'projects', 'project', 'session.jsonl'), text.replace('Obsolete', 'Replaced'));
         // Keep ordering unchanged: the captured prefix anchor must reject a
         // rewrite, including an edited EOF continuation.
@@ -682,7 +716,7 @@ describe('Claude candidate conversation search', () => {
         expect(page.candidates[0]?.match).toEqual({ snippet: 'Body-only café\nwith "quotes"', sourceItemId: expect.stringMatching(/^claude:/), messageIndex: 1 });
         expect(page.contentCoverage).toBe('complete');
         await listClaudeExternalSessionCandidates({ ...params, searchTerm: 'Body-only' });
-        expect(params.ripgrep.run.mock.calls.at(-1)?.[0].paths).toEqual([await realpath(join(params.source.configDir, 'projects', 'project'))]);
+        expect(params.ripgrep.run.mock.calls.at(-1)?.[0].paths).toEqual([await realpath(join(params.source.configDir, 'projects', 'project', 'session.jsonl'))]);
     });
     it('excludes tool metadata and abandoned branches', async () => {
         const params = await corpus();

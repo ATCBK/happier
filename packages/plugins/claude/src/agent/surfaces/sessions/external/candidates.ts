@@ -628,11 +628,8 @@ export async function listClaudeExternalSessionCandidates(
       : undefined
     : undefined;
   const page: ClaudeExternalSessionCandidate[] = [];
-  const prefilteredPaths = search.searchTarget === 'content' && traversed.contentSearchRoot && traversed.entries.length
-    ? await prefilterExternalSessionContentPaths({ query: searchTerm, paths: [traversed.contentSearchRoot.path],
-        glob: '*.jsonl', maxDepth: traversed.contentSearchRoot.maxDepth,
-        ripgrep: params.ripgrep!, signal: params.signal })
-    : null;
+  let prefilteredPaths: ReadonlySet<string> | null = null;
+  let prefilteredThroughIndex = 0;
   let previousScanPosition = scanPosition;
   let previousSourceGeneration = traversed.sourceGeneration;
   let fileStartedAtMs: number | undefined;
@@ -707,8 +704,20 @@ export async function listClaudeExternalSessionCandidates(
     }
     previousScanPosition = session.scanPosition;
     previousSourceGeneration = session.sourceGeneration;
-    if (search.searchTarget === 'content' && prefilteredPaths !== null && !prefilteredPaths.has(session.filePath)
-      && !(traversalIndex === 0 && contentCursor?.contentProgress)) continue;
+    if (search.searchTarget === 'content' && !(traversalIndex === 0 && contentCursor?.contentProgress)) {
+      if (traversalIndex >= prefilteredThroughIndex) {
+        // Prefetch using the caller's existing result-page size, only from the
+        // unvisited frontier. Scanning the root rereads every completed file
+        // and delays the first hit behind all later history on every page.
+        prefilteredThroughIndex = traversalIndex + limit;
+        prefilteredPaths = await prefilterExternalSessionContentPaths({
+          query: searchTerm,
+          paths: traversed.entries.slice(traversalIndex, prefilteredThroughIndex).map(entry => entry.filePath),
+          ripgrep: params.ripgrep!, signal: params.signal,
+        });
+      }
+      if (prefilteredPaths !== null && !prefilteredPaths.has(session.filePath)) continue;
+    }
     let candidate: ClaudeExternalSessionCandidate;
     let needsSelectedRowTitle = false;
     if (search.searchTarget === 'content') {
@@ -721,7 +730,7 @@ export async function listClaudeExternalSessionCandidates(
         });
         if (!authorizedSession) throw new ClaudeCandidateSourceChangedError('external_sessions_path_authority');
         const projection = await searchClaudeExternalTranscript({
-          prefiltered: traversed.contentSearchRoot !== undefined,
+          prefiltered: true,
           filePath: authorizedSession.filePath,
           fileRelPath: `${session.projectId}/${session.remoteSessionId}.jsonl`,
           query: searchTerm,

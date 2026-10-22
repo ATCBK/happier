@@ -143,8 +143,6 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     sourceGeneration: string;
     nextScanPoint: ClaudeJsonlSessionScanPoint | null;
     scanned: number;
-    /** Physically admitted root for one page-wide native JSONL prefilter. */
-    contentSearchRoot?: Readonly<{ path: string; maxDepth: 1 | 2 }>;
 }>> {
     throwIfAborted(params.signal);
     const configDir = resolveClaudeConfigDir({ source: params.source, env: params.env });
@@ -334,9 +332,6 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
         const last = page.at(-1);
         return {
             entries: page,
-            contentSearchRoot: preferredProjectId
-                ? { path: join(projectsDir, preferredProjectId), maxDepth: 1 }
-                : { path: projectsDir, maxDepth: 2 },
             hasMore: skippedRemaining.length > page.length,
             sourceGeneration: '',
             nextScanPoint: skippedRemaining.length > page.length && last
