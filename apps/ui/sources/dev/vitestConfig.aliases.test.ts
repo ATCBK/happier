@@ -3,6 +3,19 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 describe('vitest config aliases', () => {
+    it('replaces the whole nested SVG native module path while keeping its XML parser real', async () => {
+        const { default: config } = await import('../../vitest.config');
+        const aliases = Array.isArray(config.resolve?.alias) ? config.resolve.alias : [];
+        const nativeModule = resolve(__dirname, '../../node_modules/react-native-svg/lib/module/xmlTags.js');
+        for (const path of [nativeModule, `/@fs${nativeModule}`, 'C:\\workspace\\apps\\ui\\node_modules\\react-native-svg\\lib\\module\\xmlTags.js']) {
+            const alias = aliases.find(entry => entry.find instanceof RegExp && entry.find.test(path));
+            if (!alias || !(alias.find instanceof RegExp)) throw new Error('Missing native SVG boundary');
+            expect(path.replace(alias.find, alias.replacement)).toBe(resolve(__dirname, 'testkit/mocks/reactNativeSvg.ts'));
+        }
+        const parser = resolve(__dirname, '../../node_modules/react-native-svg/lib/module/xml.js');
+        expect(aliases.some(entry => entry.find instanceof RegExp && entry.find.test(parser))).toBe(false);
+    });
+
     it('stubs expo-modules-core subpaths to avoid loading Expo TS sources in node tests', async () => {
         const module = await import('../../vitest.config');
         const config = module.default as {
