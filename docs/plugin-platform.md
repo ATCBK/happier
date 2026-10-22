@@ -773,6 +773,17 @@ existing daemon Artifact source can ask other suppliers of the selected digest,
 and all returned files still pass the same lease verifier. A supplier never
 becomes execution authority.
 
+Account-mounted Views and Settings pages retain their Account caller custody
+when invoking through an admitted Run-on Machine. Both daemon Action ingresses
+validate that caller against the current Account declaration; host Action
+delivery preserves the declaration version and digest. The authenticated
+requester's Account selection remains separate from the Machine custodian's.
+The existing supplier projection carries each surface's Resource capability,
+and Administration's selected supplier supplies both that capability and the
+Resource transport occurrence. An Account renderer or an unselected sibling
+cannot grant Machine Resource access. These are 0.3 development-source mechanics;
+loaded-runtime validation still requires the updated UI and daemon.
+
 The surface's existing machine-requirement owner decides which capabilities
 need Run-on. An unavailable explicit local target retains its Machine name in
 those states. Optional setup and contribution-point reads may be unavailable
@@ -4188,6 +4199,15 @@ metadata without parsing all bundled declarations. Clean-checkout Agent preparat
 files before the ignored packaged plugin manifests exist; published CLI runtimes
 include them as runtime assets. The locator and JSON files form one publication
 closure and must be regenerated together before loading the changed locator shape.
+
+Source-runtime daemon builds use that same CLI publisher to derive their locator
+and JSON closure into private build output from the captured plugin sources.
+They neither require fresh checkout projections nor rewrite them. Invalid optional
+plugin declarations are omitted from that closure and carried through the existing
+publication-failure inventory to unavailable catalog rows; required host plugins
+and generator failures still stop the build. Committed projections retain their
+strict freshness check in CI and package/release builds. This describes 0.3
+development source.
 
 Bundled prompt-library adapter descriptors are projected as data. The Claude
 predecessor message-metadata bridge binds the Protocol-owned writer to defaults
