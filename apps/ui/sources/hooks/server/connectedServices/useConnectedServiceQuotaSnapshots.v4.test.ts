@@ -114,6 +114,34 @@ describe('useConnectedServiceQuotaSnapshots V4 transport', () => {
         expectNoLegacyQuotaRequest();
     });
 
+    it('shares visible summary and Session quota demand, retains facts on reopen, and revalidates once', async () => {
+        const { useUsageSummary } = await import('@/components/hub/usage/useUsageSummary');
+        const summary = await renderHook(() => useUsageSummary({ load: 'visible' }), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.read).toHaveBeenCalledTimes(1);
+        expect(boundary.read).toHaveBeenCalledTimes(1);
+        expect(summary.getCurrent().entries[0]?.fetchedAt).toBe(snapshot.fetchedAt);
+        await summary.unmount();
+        let finish!: (response: Response) => void;
+        boundary.read.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+        const reopened = await renderHook(() => useUsageSummary({ load: 'visible' }), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(reopened.getCurrent().entries[0]?.fetchedAt).toBe(snapshot.fetchedAt);
+        expect(boundary.read).toHaveBeenCalledTimes(2);
+        const joined = await renderHook(() => useConnectedServiceQuotaSnapshots(profileInput), { wrapper: Wrapper });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(joined.getCurrent().loadingByKey['anthropic/work']).toBe(true);
+        expect(boundary.read).toHaveBeenCalledTimes(2);
+        await act(async () => { finish(Response.json(quotaTestResponse(fresh))); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(reopened.getCurrent().entries[0]?.fetchedAt).toBe(fresh.fetchedAt);
+        await reopened.unmount(); await joined.unmount();
+        await act(async () => { publishHomeAccountChange(getActiveServerSnapshot().serverId,
+            [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1], { changeKinds: ['account'] }); });
+        await flushHookEffects({ cycles: 8, turns: 8 });
+        expect(boundary.read).toHaveBeenCalledTimes(2);
+    });
+
     it('refreshes retained quota on persisted usage changes without healthy GET polling', async () => {
         vi.useFakeTimers();
         try {

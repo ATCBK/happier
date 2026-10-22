@@ -10,6 +10,7 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { ChangesResponseSchema, CurrentCursorResponseSchema } from '@happier-dev/protocol/changes';
 import {
     ConnectedAccountControlCommandRequestSchema,
     CONNECTED_ACCOUNT_CONTROL_COMMAND_RPC_METHOD,
@@ -100,6 +101,11 @@ export async function createQualifiedQuotaTestHarness(options: Readonly<{
             if (url.pathname === '/v1/features') return features();
             const customResponse = await options.request?.(input, init);
             if (customResponse) return customResponse;
+            // A restored Home can finish reconnect catch-up after the quota read.
+            // Serve its real empty frontier so a missing fixture route does not
+            // trigger a fallback snapshot refresh and unrelated quota invalidation.
+            if (url.pathname === '/v2/cursor') return Response.json(CurrentCursorResponseSchema.parse({ cursor: 0, changesFloor: 0 }));
+            if (url.pathname === '/v2/changes') return Response.json(ChangesResponseSchema.parse({ changes: [], nextCursor: 0 }));
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: options.accountMode ?? 'plain', updatedAt: 0 });
             // Real reconnect catch-up must see the same live census as initial fixture admission.
             if (url.pathname === '/v1/machines') return Response.json([

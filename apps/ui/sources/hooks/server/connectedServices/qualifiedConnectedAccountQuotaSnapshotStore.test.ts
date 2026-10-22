@@ -81,6 +81,65 @@ async function flushAsyncTurns(turns = 8): Promise<void> {
 }
 
 describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
+    it('keeps settled retain and release quiet, preserving the view and equal snapshot through reload', async () => {
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
+        const context = buildContext('server-a', 1);
+        const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
+        const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: Date.now(), staleAfterMs: 60_000,
+            planLabel: null, accountLabel: null, meters: [] };
+        getQuotaMock.mockResolvedValue({ ref, sourceResolution });
+        snapshotFixture.mockImplementation(() => ({ ...snapshot, meters: [] }));
+        const release = store.retainQualifiedQuotaSnapshotPolling(key, context);
+        await flushAsyncTurns();
+        const before = store.getQualifiedQuotaSnapshotEntry(key);
+        const listener = vi.fn();
+        const unsubscribe = store.subscribeQualifiedQuotaSnapshotEntry(key, listener);
+        const releaseAgain = store.retainQualifiedQuotaSnapshotPolling(key, context);
+        releaseAgain();
+        releaseAgain();
+        release();
+        expect(store.getQualifiedQuotaSnapshotEntry(key)).toBe(before);
+        expect(listener).not.toHaveBeenCalled();
+        await store.reloadQualifiedQuotaSnapshotAfterRecovery(context);
+        expect(store.getQualifiedQuotaSnapshotEntry(key).snapshot).toBe(before.snapshot);
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(store.getQualifiedQuotaSnapshotEntry(key).loading).toBe(false);
+        unsubscribe();
+    });
+
+    it('publishes the stale deadline once without acquiring another snapshot', async () => {
+        vi.useFakeTimers();
+        const store = await import('@/sync/domains/connectedServices/qualifiedConnectedAccountQuotaSnapshotStore');
+        const context = buildContext('server-a', 1);
+        const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
+        const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: Date.now(), staleAfterMs: 100,
+            planLabel: null, accountLabel: null, meters: [] };
+        getQuotaMock.mockResolvedValue({ ref, sourceResolution });
+        snapshotFixture.mockReturnValue(snapshot);
+        const release = store.retainQualifiedQuotaSnapshotPolling(key, context);
+        await vi.advanceTimersByTimeAsync(0);
+        await flushAsyncTurns();
+        const before = store.getQualifiedQuotaSnapshotEntry(key);
+        expect(before).toMatchObject({ snapshot, loading: false, read: true });
+        const listener = vi.fn();
+        const unsubscribe = store.subscribeQualifiedQuotaSnapshotEntry(key, listener);
+        await vi.advanceTimersByTimeAsync(snapshot.fetchedAt + snapshot.staleAfterMs - Date.now());
+        expect(store.getQualifiedQuotaSnapshotEntry(key)).toBe(before);
+        expect(listener).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        const stale = store.getQualifiedQuotaSnapshotEntry(key);
+        expect(stale).not.toBe(before);
+        expect(stale.snapshot).toBe(before.snapshot);
+        expect(listener).toHaveBeenCalledTimes(1);
+        expect(getQuotaMock).toHaveBeenCalledTimes(1);
+        release();
+        release();
+        expect(store.getQualifiedQuotaSnapshotEntry(key)).toBe(stale);
+        expect(listener).toHaveBeenCalledTimes(1);
+        unsubscribe();
+        vi.useRealTimers();
+    });
+
     it.each([
         { intent: 'retry', policy: 'poll' },
         { intent: 'retry', policy: 'cached' },

@@ -204,6 +204,8 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
      * legacy transport.
      */
     usageRecordIdsByKey: Readonly<Record<string, ProviderAccountUsageRecordId | null>>;
+    /** Current read activity, separate from an explicit provider-refresh operation. */
+    loadingByKey: Readonly<Record<string, boolean>>;
     isRefreshing: boolean;
     hasConnectedProfiles: boolean;
     refreshableKeys: readonly string[];
@@ -466,6 +468,7 @@ export function useConnectedServiceQuotaSummaries(options?: Readonly<{
         inUseAccountKeys,
         usageRecordIdsByKey,
         isRefreshing,
+        loadingByKey,
         hasConnectedProfiles: connectedProfiles.length > 0,
         refreshableKeys,
         refreshingByKey,
