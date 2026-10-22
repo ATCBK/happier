@@ -695,8 +695,13 @@ following workspace links into source-owned private dependencies. The same
 readiness record binds that proof to the pinned package manager and produced
 `.modules.yaml`; missing or changed metadata or a Yarn integrity file invalidates
 it. Unchanged proven installations stay warm, and adoption cannot certify an
-unproven worker tree. This does not add a continuous inventory of manually copied
-packages or change primary checkout validation's read-only policy.
+unproven worker tree: worker adoption only rechecks readiness under shared read
+custody. Actual worker installations also run the existing server-generated
+client producer before publishing readiness, because root replacement removes
+Prisma output that source reload does not regenerate. Producer failure withholds
+admission. On workers, schema synchronization is check-only and generation does
+not access the database. This does not add a continuous inventory of manually
+copied packages or change primary checkout validation's read-only policy.
 
 Finite source runtime, web and workspace-package construction reuses that same
 dependency lock through capture, consumption and cleanup. Dependency custody
