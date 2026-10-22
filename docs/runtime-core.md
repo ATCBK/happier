@@ -1670,6 +1670,17 @@ contracts, not claims of released availability or loaded-provider validation.
 
 The [input consumer](../apps/cli/src/agent/runtime/session/input/sessionProviderInputConsumer.ts) owns provider-input dispatch custody and admission quiescence. Ordinary dispatch and model-transition admission transfer use the same async custody scope. A runtime replacement initiated within an active dispatch retains that custody and drains other dispatches plus pending materialization; it does not wait for itself. External replacements drain all dispatches. Settled dispatch scopes cannot lend custody to later asynchronous continuations. This is a 0.3 development-source contract; native reply verification is separate evidence.
 
+In 0.3 development source, OpenCode V1 input acceptance consumes its unique committed
+native user message independently of the long V1 message HTTP response. Live
+message/status events wake an authoritative inventory read; the native Session,
+nonblank user identity, submitted prompt and creation time must bind to the current
+host turn. Missing, foreign or ambiguous native identity leaves delivery unproven.
+A later HTTP response failure cannot erase proven native acceptance or establish
+native finality. Busy, compaction, tools and permissions retain their existing
+native lifecycle; an assistant `finish:stop` alone does not settle the turn while
+the native operation remains active. The plugin supplies this evidence through
+the existing Session SDK input receipt; the host retains custody and turn ownership.
+
 In 0.3 development, a missing launchable Agent CLI carries `agent_cli_missing` from both the command/terminal launch owner and the native plugin system-tool binding. Startup sanitization preserves that code; the primary Session issue classifier projects `dependency_failure` with static installation/path remediation. It does not expose raw startup error text or infer acceptance from a failed prerequisite.
 
 The same closed startup-diagnostic owner preserves
