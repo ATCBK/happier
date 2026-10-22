@@ -17,11 +17,19 @@ vi.mock('react-native', async () => {
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true, renderCustomModals: true }).module);
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
-const fs = await vi.hoisted(async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock('file:///markdown-preview'));
+const fs = await vi.hoisted(async () => {
+    const { createRequire } = await import('node:module');
+    const { dirname, join } = await import('node:path');
+    const require = createRequire(join(process.cwd(), 'package.json'));
+    return {
+        ...(await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock('file:///markdown-preview'),
+        nativeModulePath: join(dirname(require.resolve('expo-file-system/package.json')), 'src/ExpoFileSystem.ts'),
+    };
+});
 vi.mock('expo-file-system', () => fs.module);
 // Expo's native source wrapper can be imported by an already loaded module; its native classes
 // still use the same filesystem boundary rather than reaching the unavailable device module.
-vi.mock('../../../node_modules/expo-file-system/src/ExpoFileSystem.ts', () => ({ default: {
+vi.mock(fs.nativeModulePath, () => ({ default: {
     FileSystemDirectory: class extends fs.module.Directory { validatePath() {} },
     FileSystemFile: class extends fs.module.File { validatePath() {} },
     cacheDirectory: 'file:///markdown-preview',
