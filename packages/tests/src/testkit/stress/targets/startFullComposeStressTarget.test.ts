@@ -92,6 +92,8 @@ describe('startFullComposeStressTarget', () => {
       {
         config,
         testDir,
+        repoRoot: '/repo/comparison-side',
+        captureSqlStatements: true,
       },
       {
         repoRootDir: () => '/repo/root',
@@ -173,6 +175,10 @@ describe('startFullComposeStressTarget', () => {
     const generatedDockerfilePath = join(testDir, 'topology', 'Dockerfile.server-stress.generated');
 
     const composeYaml = readFileSync(composePath, 'utf8');
+    expect(composeYaml).toContain('context: /repo/comparison-side');
+    expect(composeYaml).toContain('shared_preload_libraries=pg_stat_statements');
+    expect(runtime.execCapture).toHaveBeenCalledWith('postgres', expect.arrayContaining(['CREATE EXTENSION IF NOT EXISTS pg_stat_statements']));
+    expect(runtime.buildServerImage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ contextDir: '/repo/comparison-side' }));
     expect(composeYaml).toContain('gateway:');
     expect(composeYaml).toContain('HAPPIER_FEATURE_MACHINES_TUNNEL_SERVER_ROUTED__ENABLED: "1"');
     expect(composeYaml).not.toContain(

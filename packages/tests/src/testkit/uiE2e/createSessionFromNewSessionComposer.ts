@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 
 import { gotoDomContentLoadedWithPathFallback, gotoDomContentLoadedWithRetries } from './pageNavigation';
+import { selectNewSessionAgent } from './selectNewSessionAgent';
 
 export type CreateSessionFromNewSessionComposerReadiness = 'route' | 'first-turn-reload-safe';
 
@@ -14,6 +15,7 @@ type CreateSessionFromNewSessionComposerParams = Readonly<{
   uiBaseUrl: string;
   machineId: string;
   prompt: string;
+  agentId?: string;
   readiness?: CreateSessionFromNewSessionComposerReadiness;
 }>;
 
@@ -231,6 +233,7 @@ export async function createSessionFromNewSessionComposer(
   const newSessionComposer = visibleNewSessionComposer(page);
   await expect(newSessionComposer).toHaveCount(1, { timeout: 60_000 });
   await selectCurrentPathCheckoutIfPresent(page);
+  if (params.agentId) await selectNewSessionAgent({ page, agentId: params.agentId });
 
   await newSessionComposer.fill(prompt);
   await expect(page.getByTestId('new-session-composer-send')).toHaveCount(1, { timeout: 60_000 });

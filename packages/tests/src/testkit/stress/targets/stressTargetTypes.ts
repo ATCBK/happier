@@ -78,4 +78,8 @@ export type StartedStressTarget = Readonly<{
 export type StartStressTargetParams = Readonly<{
   config: StressConfig;
   testDir: string;
+  /** Comparison runs keep the current driver while building this exact source side. */
+  repoRoot?: string;
+  /** Physical SQL counters for isolated performance journeys; never logs query text. */
+  captureSqlStatements?: boolean;
 }>;

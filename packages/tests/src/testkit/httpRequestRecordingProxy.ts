@@ -15,6 +15,11 @@ export type RecordedHttpProxyRequest = Readonly<{
   statusCode: number | null;
   upgraded: boolean;
   error: string | null;
+  /** Encoded upstream HTTP body bytes, excluding HTTP headers and framing. */
+  responseBodyWireBytes: number;
+  responseContentEncoding: string | null;
+  /** Raw upstream upgrade traffic, including the initial upgrade handshake. */
+  upgradedResponseWireBytes: number;
   body: Readonly<{
     text: string;
     byteLength: number;
@@ -49,6 +54,9 @@ type MutableRecordedHttpProxyRequest = {
   statusCode: number | null;
   upgraded: boolean;
   error: string | null;
+  responseBodyWireBytes: number;
+  responseContentEncoding: string | null;
+  upgradedResponseWireBytes: number;
   body: {
     text: string;
     byteLength: number;
@@ -149,6 +157,9 @@ export async function startHttpRequestRecordingProxy(params: Readonly<{
       statusCode: null,
       upgraded,
       error: null,
+      responseBodyWireBytes: 0,
+      responseContentEncoding: null,
+      upgradedResponseWireBytes: 0,
       body: null,
       responseBody: null,
     };
@@ -343,6 +354,12 @@ export async function startHttpRequestRecordingProxy(params: Readonly<{
       const statusCode = upstreamRes.statusCode ?? 502;
       entry.statusCode = statusCode;
       upstreamRes.pause();
+      const encoding = upstreamRes.headers['content-encoding'];
+      entry.responseContentEncoding = Array.isArray(encoding) ? encoding.join(', ') : encoding ?? null;
+      // Observe without retaining or changing negotiated compression.
+      upstreamRes.on('data', (chunk: Buffer | string) => {
+        entry.responseBodyWireBytes += Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk);
+      });
       void (async () => {
         try {
           await params.beforeForwardResponse?.(snapshot(entry));
@@ -397,6 +414,7 @@ export async function startHttpRequestRecordingProxy(params: Readonly<{
       host: target.hostname,
       port: Number(target.port),
     }));
+    targetSocket.on('data', (chunk: Buffer) => { entry.upgradedResponseWireBytes += chunk.byteLength; });
     targetSocket.once('connect', () => {
       targetSocket.write(`${req.method ?? 'GET'} ${req.url ?? '/'} HTTP/${req.httpVersion}\r\n`);
       targetSocket.write(headerLinesFromRawHeaders(req.rawHeaders));

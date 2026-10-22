@@ -28,6 +28,7 @@ export function renderStressComposeYaml(params: {
   config: StressComposeConfig;
   secrets: StressComposeSecrets;
   peerMediation: StressComposePeerMediation;
+  captureSqlStatements?: boolean;
 }): string {
   const {
     repoRootDir,
@@ -99,7 +100,7 @@ ${stressLabels}
   return `services:
   postgres:
     image: postgres:16-alpine
-${stressLabels}
+${params.captureSqlStatements ? '    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all", "-c", "pg_stat_statements.track_utility=on"]\n' : ''}${stressLabels}
     environment:
       POSTGRES_DB: ${secrets.postgresDb}
       POSTGRES_USER: ${secrets.postgresUser}

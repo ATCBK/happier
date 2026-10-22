@@ -28,6 +28,9 @@ function recordedSessionPatch(body: unknown): RecordedHttpProxyRequest {
       complete: true,
     },
     responseBody: null,
+    responseBodyWireBytes: 0,
+    responseContentEncoding: null,
+    upgradedResponseWireBytes: 0,
   };
 }
 

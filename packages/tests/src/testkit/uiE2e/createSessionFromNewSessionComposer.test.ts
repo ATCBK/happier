@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@playwright/test', () => ({
-  expect: (locator: { count: () => Promise<number> }) => ({
+  expect: (locator: { count: () => Promise<number>; isEnabled?: () => Promise<boolean> }) => ({
+    async toBeEnabled() {
+      if (locator.isEnabled && !await locator.isEnabled()) throw new Error('expected enabled locator');
+    },
     async toHaveCount(expectedCount: number) {
       const actualCount = await locator.count();
       if (actualCount !== expectedCount) {
@@ -38,6 +41,20 @@ function createCountableLocator(params: Readonly<{
   };
 }
 
+// Model the visible textarea at the browser boundary while retaining each
+// fixture's existing visibility and fill behavior.
+function withVisibleComposerBoundary(page: {
+  getByTestId: (testId: string) => unknown;
+  locator: (selector: string) => unknown;
+}) {
+  return {
+    ...page,
+    locator: (selector: string) => selector === 'textarea[data-testid="new-session-composer-input"]:visible'
+      ? { first: () => page.getByTestId('new-session-composer-input') }
+      : page.locator(selector),
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -71,7 +88,7 @@ describe('openNewSessionMachineSelection', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await openNewSessionMachineSelection({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       popoverWaitMs: 1_000,
       routeFallbackWaitMs: 1_000,
@@ -123,7 +140,7 @@ describe('openNewSessionMachineSelection', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await expect(openNewSessionMachineSelection({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       popoverWaitMs: 1_000,
       routeFallbackWaitMs: 1_000,
@@ -153,7 +170,7 @@ describe('openNewSessionMachineSelection', () => {
     };
 
     await expect(openNewSessionMachineSelection({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       popoverWaitMs: 1,
       routeFallbackWaitMs: 1_000,
@@ -192,7 +209,7 @@ describe('openNewSessionPathSelection', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await openNewSessionPathSelection({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       popoverWaitMs: 1_000,
       routeFallbackWaitMs: 1_000,
@@ -315,7 +332,7 @@ describe('createSessionFromNewSessionComposer', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     const createdSession = await createSessionFromNewSessionComposer({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       machineId: 'machine-1',
       prompt: 'hello after guidance',
@@ -329,7 +346,7 @@ describe('createSessionFromNewSessionComposer', () => {
     expect(committedPromptVisible).toBe(true);
 
     await reloadCreatedSessionFromNewSessionComposer({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       session: createdSession,
     });
 
@@ -342,22 +359,44 @@ describe('createSessionFromNewSessionComposer', () => {
     );
   });
 
-  it('returns route-ready without waiting for transcript commit when the fallback picker auto-selects the machine', async () => {
+  it('selects the requested Agent before Send and returns route-ready when the fallback picker auto-selects the machine', async () => {
     let nowMs = 0;
     let currentUrl = 'http://127.0.0.1:3000/new';
     let machineChipText = 'Select machine';
     let sessionComposerVisible = false;
+    let selectedAgent = 'Codex';
 
     const machineChipClickSpy = vi.fn(async () => {});
     const sendClickSpy = vi.fn(async () => {
+      expect(selectedAgent).toBe('Claude');
       currentUrl = 'http://127.0.0.1:3000/session/session-123';
       sessionComposerVisible = true;
     });
     const inputFillSpy = vi.fn(async () => {});
     const inputPressSpy = vi.fn(async () => {});
 
+    const agentLocator = (testId: string) => {
+      const locator: {
+        count: () => Promise<number>;
+        textContent: () => Promise<string>;
+        isEnabled: () => Promise<boolean>;
+        click: () => Promise<void>;
+        first: () => unknown;
+      } = {
+        count: async () => testId === 'agent-input-agent-chip' || testId === 'dropdown-option-claude' ? 1 : 0,
+        textContent: async () => selectedAgent,
+        isEnabled: async () => true,
+        click: async () => { if (testId === 'dropdown-option-claude') selectedAgent = 'Claude'; },
+        first: () => locator,
+      };
+      return locator;
+    };
+
     const page = {
       getByTestId: vi.fn((testId: string) => {
+        if (['agent-input-agent-chip', 'new-session-agent-dropdown-trigger', 'agent-input-chip-picker.apply', 'agent-input-chip-picker.close'].includes(testId)) {
+          return agentLocator(testId);
+        }
         if (testId === 'new-session-composer-input') {
           return {
             count: async (): Promise<number> => 1,
@@ -398,6 +437,8 @@ describe('createSessionFromNewSessionComposer', () => {
         throw new Error(`unexpected test id: ${testId}`);
       }),
       locator: vi.fn((selector: string) => {
+        if (selector === '[role="dialog"][data-state="open"]') return { last: () => ({ getByTestId: () => agentLocator('absent') }) };
+        if (selector === '[data-testid="dropdown-option-claude"]:visible') return agentLocator('dropdown-option-claude');
         if (selector === '[data-testid^="new-session-machine:"]') {
           return {
             first: () => ({
@@ -434,10 +475,11 @@ describe('createSessionFromNewSessionComposer', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await expect(createSessionFromNewSessionComposer({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       machineId: 'machine-1',
       prompt: 'hello world',
+      agentId: 'claude',
     })).resolves.toEqual({
       sessionId: 'session-123',
       sessionHref: 'http://127.0.0.1:3000/session/session-123',
@@ -535,7 +577,7 @@ describe('createSessionFromNewSessionComposer', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await expect(createSessionFromNewSessionComposer({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       machineId: 'machine-dup',
       prompt: 'duplicate machine prompt',
@@ -636,7 +678,7 @@ describe('createSessionFromNewSessionComposer', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await expect(createSessionFromNewSessionComposer({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       machineId: 'machine-delayed-enabled',
       prompt: 'wait for enabled machine',
@@ -730,7 +772,7 @@ describe('createSessionFromNewSessionComposer', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await expect(createSessionFromNewSessionComposer({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       machineId: 'machine-session-input-only',
       prompt: 'session input only prompt',
@@ -816,7 +858,7 @@ describe('createSessionFromNewSessionComposer', () => {
     vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
 
     await expect(createSessionFromNewSessionComposer({
-      page: page as never,
+      page: withVisibleComposerBoundary(page) as never,
       uiBaseUrl: 'http://127.0.0.1:3000',
       machineId: 'machine-error',
       prompt: 'propagate playwright error',

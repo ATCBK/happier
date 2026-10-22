@@ -374,7 +374,7 @@ export async function startFullComposeStressTarget(
       + `received apiReplicas=${params.config.compose.apiReplicas}.`,
     );
   }
-  const resolvedRepoRootDir = deps.repoRootDir();
+  const resolvedRepoRootDir = params.repoRoot ? resolve(params.repoRoot) : deps.repoRootDir();
   const repoRootFingerprint = deps.createRepoRootFingerprint(resolvedRepoRootDir);
   const imageFreshnessFingerprint = deps.computeComposeServerImageFingerprint(resolvedRepoRootDir);
   const selectedImageFingerprint = pinnedFrozenImageFingerprint ?? imageFreshnessFingerprint;
@@ -454,6 +454,7 @@ export async function startFullComposeStressTarget(
     },
     secrets,
     peerMediation,
+    captureSqlStatements: params.captureSqlStatements,
   });
   const privateRuntimeMaterial = createPrivateComposeRuntimeMaterial({
     composeProjectName,
@@ -578,6 +579,10 @@ export async function startFullComposeStressTarget(
           workerReplicas: params.config.compose.workerReplicas,
         });
         topologyIsRunning = true;
+
+        if (params.captureSqlStatements) {
+          await runtime.execCapture('postgres', ['psql', '-U', secrets.postgresUser, '-d', secrets.postgresDb, '-v', 'ON_ERROR_STOP=1', '-c', 'CREATE EXTENSION IF NOT EXISTS pg_stat_statements']);
+        }
 
         await deps.waitForComposeTopology({
           runtime,

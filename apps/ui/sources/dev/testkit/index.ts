@@ -57,6 +57,8 @@ export * from './harness/toolViewTestHelpers';
 export * from './hooks/createDeferred';
 export * from './hooks/flushHookEffects';
 export * from './hooks/renderHook';
+export * from './performance/counts';
+export * from './performance/timerCensus';
 export * from './mocks/agentInput';
 export * from './mocks/accountEncryptionMode';
 export * from './mocks/icons';

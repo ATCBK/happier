@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { connect, type Socket } from 'node:net';
+import { gzipSync } from 'node:zlib';
 
 import { describe, expect, it } from 'vitest';
 
@@ -41,6 +42,51 @@ async function waitForNoSockets(sockets: ReadonlySet<Socket>, label: string): Pr
 }
 
 describe('startHttpRequestRecordingProxy', () => {
+  it('counts actual encoded HTTP bodies and upgraded bytes without retaining payloads', async () => {
+    const body = gzipSync('synthetic transport body: 😀 '.repeat(128));
+    const upgradedPayload = Buffer.from('synthetic upgraded response');
+    const targetSockets = new Set<Socket>();
+    const target = createServer((_req, res) => {
+      res.writeHead(200, { 'content-encoding': 'gzip', 'content-length': body.length });
+      res.end(body);
+    });
+    target.on('connection', socket => {
+      targetSockets.add(socket);
+      socket.once('close', () => targetSockets.delete(socket));
+    });
+    target.on('upgrade', (_req, socket) => {
+      socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n');
+      socket.on('data', () => socket.write(upgradedPayload));
+    });
+    await listen(target);
+    const address = target.address();
+    if (!address || typeof address !== 'object') throw new Error('target server did not bind');
+    const proxy = await startHttpRequestRecordingProxy({ targetBaseUrl: `http://127.0.0.1:${address.port}` });
+    let upgraded: Socket | undefined;
+    try {
+      const response = await fetch(`${proxy.baseUrl}/body`);
+      expect(await response.text()).toBe('synthetic transport body: 😀 '.repeat(128));
+      expect(proxy.entries()[0]).toMatchObject({
+        responseBodyWireBytes: body.length, responseContentEncoding: 'gzip', responseBody: null,
+      });
+      const url = new URL(proxy.baseUrl);
+      upgraded = connect(Number(url.port), url.hostname);
+      await once(upgraded, 'connect');
+      upgraded.write(`GET /stream HTTP/1.1\r\nHost: ${url.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+      await once(upgraded, 'data');
+      const before = proxy.entries()[1]!.upgradedResponseWireBytes;
+      const received = once(upgraded, 'data');
+      upgraded.write('next');
+      await received;
+      expect(proxy.entries()[1]!.upgradedResponseWireBytes - before).toBe(upgradedPayload.length);
+    } finally {
+      upgraded?.destroy();
+      await proxy.stop();
+      for (const socket of targetSockets) socket.destroy();
+      await closeServer(target);
+    }
+  });
+
   it('can expose an HTTP target through HTTPS trusted by only the supplied fixture CA', async () => {
     const target = createServer((req, res) => {
       req.resume();
