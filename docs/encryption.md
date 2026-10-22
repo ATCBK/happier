@@ -2047,6 +2047,14 @@ need no fabricated encryption material. Inner title/message schemas remain under
 logic. Resource grants and recipient envelopes consume the same policy owner as
 Artifacts, with Discussion-specific persistence.
 
+The development CLI Discussion adapter admits its local Account material against
+live Account currentness using Protocol's existing fingerprint converter:
+currentness uses `aemk1_…`, while resource recipient bindings use
+`content-public-key-sha256:…`. These encode the same SHA-256 digest. Creation
+passes the admitted resource fingerprint to both the resource-DEK helper and
+the server's owner-recipient guard; missing material or a different digest still
+fails closed for both legacy and data-key credentials.
+
 Development Discussion append uses the existing per-attempt audience preparation
 and ReadCommitted transaction boundary, shared by HTTP and trusted Session
 publishers. Ordered Account admission precedes the captured Session and source
