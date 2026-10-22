@@ -21,6 +21,8 @@ export type SessionAwarenessScopeOptions = Readonly<{ accountLifetime: ServerAcc
 type AwarenessBinding<TSession extends Session | null, TAwareness extends SessionAwarenessProjectionV1 | null> = Readonly<{
     session: TSession;
     awareness: TAwareness;
+    /** A scoped cold source is still being acquired, not yet known unavailable. */
+    contentPending: boolean;
     turnStartedAtMs: number | null;
     pendingRequests: readonly SessionPendingRequest[];
     /** Existing pending-navigation landing consumes this exact id/source after opening requestHref. */
@@ -49,12 +51,17 @@ export function useSessionAwareness(sessionId: string, serverId: string | null, 
     const currentScope = React.useSyncExternalStore(subscribeScope, readCurrentScope, readCurrentScope);
     const resetVersion = React.useSyncExternalStore(subscribeSessionSurfaceVisibilityReset,
         getSessionSurfaceVisibilityResetVersion, getSessionSurfaceVisibilityResetVersion);
+    const acquisition = React.useMemo(() => ({ sessionId, serverId, accountLifetime, currentScope, resetVersion }),
+        [sessionId, serverId, accountLifetime, currentScope, resetVersion]);
+    const [settledAcquisition, setSettledAcquisition] = React.useState<typeof acquisition | null>(null);
+    const onContentSettled = React.useCallback(() => setSettledAcquisition(acquisition), [acquisition]);
     // Explicit scoped leaves demand a fresh snapshot even when their Session was never opened.
     // The existing list-content owner shares exact reads and live metadata updates, never messages.
     // Incumbent unscoped Summary/transcript callers retain their host-owned acquisition lifecycle.
     useSessionContentDemand(scopeRequired && serverId ? [{ serverId, sessionId }] : [], {
         active: currentScope && scopeRequired,
         hydrate: 'viewport', resetVersion, tag: 'session-awareness',
+        onSettled: scopeRequired ? onContentSettled : undefined,
     });
     const liveSession = useSession(currentScope ? sessionId : '', currentScope ? serverId : null);
     // Summary retains its already-authorized shell while a live row is absent.
@@ -82,5 +89,6 @@ export function useSessionAwareness(sessionId: string, serverId: string | null, 
         ? listPendingSessionRequests(session, []) : NO_PENDING_REQUESTS, [session]);
     const oldestPendingRequest = React.useMemo(() => selectOldestPendingRequest(pendingRequests), [pendingRequests]);
     const requestHref = oldestPendingRequest && serverId ? buildPermissionToolCallRoute({ sessionId, serverId, location: null }) : null;
-    return { session, awareness, turnStartedAtMs, pendingRequests, oldestPendingRequest, requestHref };
+    return { session, awareness, contentPending: scopeRequired && currentScope && settledAcquisition !== acquisition,
+        turnStartedAtMs, pendingRequests, oldestPendingRequest, requestHref };
 }

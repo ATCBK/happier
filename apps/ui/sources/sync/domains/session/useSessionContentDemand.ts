@@ -39,9 +39,11 @@ export function useSessionContentDemand(
         active?: boolean;
         /** A server-scope reset releases every retained row; re-entry then hydrates again. */
         resetVersion?: number;
+        /** Reports completion of this entry's acquisition, including a settled refusal. */
+        onSettled?: () => void;
     }>,
 ): void {
-    const { tag, hydrate, active = true, resetVersion = 0 } = options;
+    const { tag, hydrate, active = true, resetVersion = 0, onSettled } = options;
     const previous = React.useRef<Readonly<{ keys: ReadonlySet<string>; resetVersion: number }>>({ keys: new Set(), resetVersion });
     // Callers rebuild their arrays freely; the demand follows the Sessions, not the array identity.
     const identity = addresses.map(sessionAddressKey).join('\u0000');
@@ -53,9 +55,12 @@ export function useSessionContentDemand(
         const entered = demanded.filter(address => !earlier.has(sessionAddressKey(address)));
         const release = retainVisibleSessionListSurfaces(demanded);
         const toHydrate = hydrate === 'unsettled' ? entered.filter(isSessionContentUnsettled) : entered;
-        if (toHydrate.length > 0) fireAndForget(sync.hydrateSessionListRows(toHydrate), { tag });
-        return release;
+        let current = true;
+        const settled = () => { if (current) onSettled?.(); };
+        if (toHydrate.length > 0) fireAndForget(sync.hydrateSessionListRows(toHydrate).finally(settled), { tag });
+        else settled();
+        return () => { current = false; release(); };
         // The addresses are fully described by their identity key.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [identity, active, resetVersion, hydrate, tag]);
+    }, [identity, active, resetVersion, hydrate, tag, onSettled]);
 }
