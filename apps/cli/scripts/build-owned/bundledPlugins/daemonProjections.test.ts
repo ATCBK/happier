@@ -1,36 +1,44 @@
-import { cpSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { transform } from 'esbuild';
 import { expect, it } from 'vitest';
 import { ingestPluginManifestV2 } from '@happier-dev/protocol/plugins/manifest';
 import { projectPackedSessionRunnerModulePath } from '../../../src/plugins/authoring/bundleDaemonRuntime';
 import { PLUGIN_MANIFEST } from '../../../../../packages/plugins/custom-acp/src/manifest';
-import { readCliSourceEntries } from '../../../../../packages/cli-common/sourceRuntimeEntries.mjs';
+import { readCliSourceEntries, readWorkspacePackages } from '../../../../../packages/cli-common/sourceRuntimeEntries.mjs';
+import { captureBuildInputFiles } from '../../../../../scripts/workspaces/buildInputConvergence.mjs';
+import { readWorkspaceBuildInputs } from '../../../../../apps/stack/scripts/utils/fs/workspaceBuildInputs.mjs';
 import { createPackageLayoutSandbox, writeBundledPluginSourceInputs, writeCliBundledHostPackage } from '../../__tests__/testkit/packageLayoutSandbox';
 import { resolveGeneratorHostProjectionOutPaths } from './projectionPaths.mjs';
 import { renderCliBundledPluginManifestAssets, renderCliBundledPluginManifestEntriesTs } from './registry';
 
-it('checks every daemon-consumed runner locator against real registration without inspecting UI or catalog facts', async () => {
+it('derives isolated source daemon projections while keeping committed-output checks strict', async () => {
   const { repoRoot, happyCliDir, cleanup } = createPackageLayoutSandbox('happier-daemon-projections-');
   try {
     // Give the real generator its own publication root. Taking the checkout's
     // live publication lock would couple this fixture to unrelated builds.
     const sourceRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
     const scriptsDir = join(happyCliDir, 'scripts');
-    mkdirSync(scriptsDir, { recursive: true });
-    cpSync(fileURLToPath(new URL('../', import.meta.url)), join(scriptsDir, 'build-owned'), {
-      recursive: true, filter: path => !path.endsWith('.test.ts'),
-    });
-    cpSync(join(sourceRoot, 'apps/cli/scripts/pluginHostSharedRuntimePackages.mjs'), join(scriptsDir, 'pluginHostSharedRuntimePackages.mjs'));
+    const sourceCli = join(sourceRoot, 'apps/cli');
+    await captureBuildInputFiles({ sourceDir: sourceCli, captureDir: happyCliDir,
+      readPaths: () => readWorkspaceBuildInputs(sourceCli).filter(path => path.startsWith('scripts/')) });
     // Host projections are writable fixture outputs, so this tree must be a
     // private copy rather than a link to the shared checkout.
     cpSync(join(sourceRoot, 'apps/cli/src'), join(happyCliDir, 'src'), {
       recursive: true, filter: path => !/\.(?:test|spec|testkit)\.[^.]+$/u.test(path),
     });
-    for (const path of ['scripts', 'node_modules', ...['agents', 'protocol', 'cli-common', 'plugin-sdk', 'release-runtime'].map(name => `packages/${name}`)]) {
-      mkdirSync(dirname(join(repoRoot, path)), { recursive: true });
-      symlinkSync(join(sourceRoot, path), join(repoRoot, path), process.platform === 'win32' ? 'junction' : 'dir');
+    symlinkSync(join(sourceRoot, 'node_modules'), join(repoRoot, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    await captureBuildInputFiles({ sourceDir: sourceRoot, captureDir: repoRoot,
+      readPaths: () => readWorkspaceBuildInputs(sourceRoot).filter(path => path.startsWith('scripts/')) });
+    for (const { root: source } of (await readWorkspacePackages(sourceRoot)).values()) {
+      const path = relative(sourceRoot, source).replaceAll('\\', '/');
+      if (!path.startsWith('packages/') || path.startsWith('packages/plugins/')) continue;
+      const target = join(repoRoot, path);
+      await captureBuildInputFiles({ sourceDir: source, captureDir: target,
+        readPaths: () => readWorkspaceBuildInputs(source, { includeShippedFiles: true }).filter(path => !path.startsWith('../')) });
+      symlinkSync(join(source, 'node_modules'), join(target, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
     }
     for (const path of ['tsconfig.json', 'tsconfig.runtime.json']) {
       cpSync(join(sourceRoot, 'apps/cli', path), join(happyCliDir, path));
@@ -43,10 +51,13 @@ it('checks every daemon-consumed runner locator against real registration withou
     const packageRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'fixture' });
     writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
       name: '@happier-dev/plugins-fixture', version: '0.0.0', type: 'module',
+      files: ['assets'],
       exports: { '.': { 'happier-source': './src/index.ts' } },
     }));
     const { brand: _brand, resources: _resources, ...manifest } = PLUGIN_MANIFEST;
     writeFileSync(join(packageRoot, 'src/manifest.ts'), `export const PLUGIN_MANIFEST = ${JSON.stringify(manifest)};`);
+    mkdirSync(join(packageRoot, 'assets'), { recursive: true });
+    cpSync(join(sourceRoot, 'packages/plugins/custom-acp/assets/brand.png'), join(packageRoot, 'assets/brand.png'));
     const factorySource = join(packageRoot, 'src/agent/runtime/factory.ts');
     mkdirSync(dirname(factorySource), { recursive: true });
     writeFileSync(factorySource, 'export function createFixture() { throw new Error("fixture factory is not invoked at admission"); }');
@@ -91,8 +102,8 @@ it('checks every daemon-consumed runner locator against real registration withou
     expect(entries['packages/plugins/fixture/dist/index']).toBe(join(packageRoot, 'src/index.ts'));
     expect(entries['packages/plugins/fixture/dist/agent/runtime/factory']).toBe(factorySource);
     expect(entries[`packages/plugins/fixture/${factory.normalizedModulePath.replace(/\.js$/u, '')}`]).toBe(factorySource);
-    // c86: the authored registration is current but its emitted declaration
-    // still selects the old engine leaf. Admission must refuse before emission.
+    // The authored registration is current but its committed declaration still
+    // selects the old engine leaf. The strict publication check must refuse it.
     const engineSource = join(packageRoot, 'src/agent/runtime/engine.ts');
     writeFileSync(engineSource, "export { createFixture } from './factory.js';");
     const staleManifest = { ...projectedManifest, runtime: {
@@ -113,8 +124,90 @@ it('checks every daemon-consumed runner locator against real registration withou
     expect(stale.entries['packages/plugins/fixture/dist/agent/runtime/factory']).toBeUndefined();
     await expect(check()).rejects.toThrow(/generated output differs.*fixture\.json/u);
     expect(readFileSync(assetPath, 'utf8')).toContain('agent/runtime/engine');
+
+    // Source reload derives its own declaration from the captured authoring
+    // inputs. Stale checkout assets and an invalid optional sibling must not
+    // prevent the healthy plugin from loading in the emitted runtime.
+    const brokenRoots = ['broken', 'missing', 'syntax'].map(pluginId => {
+      const root = writeBundledPluginSourceInputs({ repoRoot, pluginId });
+      writeFileSync(join(root, 'package.json'), JSON.stringify({
+        name: `@happier-dev/plugins-${pluginId}`, version: '0.0.0', type: 'module',
+        exports: { '.': { 'happier-source': './src/index.ts' } },
+      }));
+      if (pluginId === 'missing') rmSync(join(root, 'src/manifest.ts'));
+      else writeFileSync(join(root, 'src/manifest.ts'), pluginId === 'syntax'
+        ? 'export const PLUGIN_MANIFEST = ;'
+        : 'export const PLUGIN_MANIFEST = { schemaVersion: 2, id: "happier.broken" };');
+      writeFileSync(join(root, 'src/index.ts'), 'export const activate = () => {};');
+      return root;
+    });
+    const staleBytes = readFileSync(assetPath, 'utf8');
+    const locatorBytes = readFileSync(locator, 'utf8');
+    const cliPackage = JSON.parse(readFileSync(join(happyCliDir, 'package.json'), 'utf8'));
+    const sourceCliPackage = JSON.parse(readFileSync(join(sourceRoot, 'apps/cli/package.json'), 'utf8'));
+    writeFileSync(join(happyCliDir, 'package.json'), JSON.stringify({ ...cliPackage,
+      imports: sourceCliPackage.imports,
+      dependencies: Object.fromEntries(Object.entries(sourceCliPackage.dependencies)
+        .filter(([name]) => !name.startsWith('@happier-dev/plugins-'))),
+    }));
+    writeFileSync(join(happyCliDir, 'src/index.ts'), [
+      "export { loadCurrentBundledPluginLocatorResult } from './plugins/projection/registry/builtIn/locators';",
+      "export { projectBundledPluginCatalogEntries } from './plugins/projection/catalog/installed';",
+    ].join('\n'));
+    symlinkSync(join(sourceRoot, 'apps/cli/node_modules'), join(happyCliDir, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    for (const name of ['ui', 'stack']) {
+      const target = join(repoRoot, 'apps', name);
+      mkdirSync(target, { recursive: true });
+      cpSync(join(sourceRoot, 'apps', name, 'package.json'), join(target, 'package.json'));
+      cpSync(join(sourceRoot, 'apps', name, 'scripts'), join(target, 'scripts'), {
+        recursive: true, filter: path => !/\.(?:test|spec)\.[^.]+$/u.test(path),
+      });
+    }
+    // The real builder is an untyped repository-tool boundary, not a mocked
+    // projection producer or an owner-injected replacement for real wiring.
+    const { buildSourceRuntimeBundle } = await import(/* @vite-ignore */ pathToFileURL(join(sourceRoot, 'apps/stack/scripts/build/build_source_runtime.mjs')).href);
+    const generatorPath = join(scriptsDir, 'build-owned/generateBundledPluginEntries.ts');
+    const generatorSource = readFileSync(generatorPath, 'utf8');
+    // Reproduce the old caller's strict check through the same real publisher,
+    // input capture and builder. Only the fixture's CLI mode is selected here.
+    writeFileSync(generatorPath, generatorSource.replace('await main();', "await main(['--mode', 'check', '--daemon-projections']);"));
+    await expect(buildSourceRuntimeBundle({ repoDir: repoRoot, outputDir: join(repoRoot, 'strict-runtime'), component: 'daemon' }))
+      .rejects.toThrow(/Missing required plugin manifest|Bundled plugin package validation failed|generated output differs/u);
+    writeFileSync(generatorPath, generatorSource);
+    rmSync(locator);
+    const runtime = await buildSourceRuntimeBundle({ repoDir: repoRoot, outputDir: join(repoRoot, 'runtime'), component: 'daemon' });
+    const loaded = spawnSync(process.execPath, ['--input-type=module', '--eval', `
+      import assert from 'node:assert/strict';
+      const {loadCurrentBundledPluginLocatorResult,projectBundledPluginCatalogEntries} = await import(${JSON.stringify(pathToFileURL(runtime.entrypoint).href)});
+      const result = loadCurrentBundledPluginLocatorResult();
+      assert.deepEqual(result.loadedPlugins.map(plugin => plugin.pluginId), [${JSON.stringify(manifest.id)}]);
+      assert.deepEqual(result.pluginFailures.map(failure => failure.pluginId), ['happier.broken','happier.missing','happier.syntax']);
+      const catalog = projectBundledPluginCatalogEntries(result);
+      for (const failure of result.pluginFailures) {
+        assert.equal(failure.diagnostic.code, 'plugin_manifest_invalid');
+        assert.ok(failure.diagnostic.message.length > 0);
+        const row = catalog.find(entry => entry.pluginId === failure.pluginId);
+        assert.equal(row.enabled, false);
+        assert.equal(row.compatibility.status, 'load_error');
+        assert.deepEqual(row.diagnostics, [failure.diagnostic]);
+      }
+      const healthy = result.loadedPlugins[0];
+      assert.equal(typeof (await import(healthy.pluginRootPath + '/dist/index.js')).activate, 'function');
+      assert.equal(healthy.manifest.runtime.agentFactories[0].locator.module, './agent/runtime/factory');
+    `], { encoding: 'utf8', env: { ...process.env, ...runtime.env, NODE_OPTIONS: '' } });
+    expect(loaded.status, loaded.stderr).toBe(0);
+    expect(readFileSync(assetPath, 'utf8')).toBe(staleBytes);
+    expect(existsSync(locator)).toBe(false);
+
+    for (const root of brokenRoots) rmSync(root, { recursive: true, force: true });
     writeFileSync(assetPath, asset.out);
-    writeFileSync(locator, `${locatorOutput}\nexport const drift = true;\n`);
+    writeFileSync(locator, `${locatorBytes}\nexport const drift = true;\n`);
     await expect(check()).rejects.toThrow(/generated output differs/u);
+    await expect(main(['--root', repoRoot, '--daemon-projections', '--daemon-output-root', repoRoot]))
+      .rejects.toThrow(/separate from its source checkout/u);
+    const requiredRoot = writeBundledPluginSourceInputs({ repoRoot, pluginId: 'codex' });
+    writeFileSync(join(requiredRoot, 'package.json'), JSON.stringify({ name: '@happier-dev/plugins-codex', version: '0.0.0' }));
+    await expect(main(['--root', repoRoot, '--daemon-projections', '--daemon-output-root', join(repoRoot, 'required-output')]))
+      .rejects.toThrow(/required by host code/u);
   } finally { cleanup(); }
-}, 120_000);
+}, 240_000);

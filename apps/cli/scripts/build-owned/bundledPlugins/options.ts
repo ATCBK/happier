@@ -28,8 +28,10 @@ export type GeneratorOptions = Readonly<{
   compilerInputsOnly: boolean;
   /** Publish source Agent definition facts without compiling/staging executable runtimes. */
   agentDefinitionsOnly: boolean;
-  /** Check only the declarations consumed by readCliSourceEntries, from authored registration. */
+  /** Derive or check only declarations consumed by readCliSourceEntries. */
   daemonProjectionsOnly?: boolean;
+  /** Private source-runtime output; never publishes into the checkout. */
+  daemonOutputRoot?: string;
   inheritedFailuresStdin: boolean;
   /** Npm publication explicitly prepares installed runtime/package bytes. */
   packageArtifacts?: boolean;
@@ -56,7 +58,7 @@ export function resolvePluginAuthorRuntimeLoadScope({
 
 export function printGeneratorUsage(): void {
   console.log([
-    'Usage: node --conditions=happier-source --experimental-strip-types apps/cli/scripts/build-owned/generateBundledPluginEntries.ts [--root DIR] [--mode write|check] [--scope projections] [--daemon-projections] [--workspace plugins-<id>] [--target-owned-only] [--aggregate] [--compiler-inputs] [--agent-definitions] [--package-artifacts]',
+    'Usage: node --conditions=happier-source --experimental-strip-types apps/cli/scripts/build-owned/generateBundledPluginEntries.ts [--root DIR] [--mode write|check] [--scope projections] [--daemon-projections] [--daemon-output-root DIR] [--workspace plugins-<id>] [--target-owned-only] [--aggregate] [--compiler-inputs] [--agent-definitions] [--package-artifacts]',
     '',
     'Generates/patches bundled plugin entry maps from packages/plugins/*.',
     '',
@@ -80,6 +82,8 @@ export function printGeneratorUsage(): void {
     '--daemon-projections checks only the daemon source entry locator table and manifest',
     'assets, including runner factories derived from authored registration. It requires',
     '--mode check and cannot be combined with other preparation selectors.',
+    '--daemon-output-root DIR derives those same projections into a private output root',
+    'with --daemon-projections --mode write; checkout outputs stay read-only.',
   ].join('\n'));
 }
 
@@ -91,6 +95,7 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
   let compilerInputsOnly = false;
   let agentDefinitionsOnly = false;
   let daemonProjectionsOnly = false;
+  let daemonOutputRoot: string | undefined;
   let targetOwnedOnly = false;
   let packageArtifacts = false;
   let inheritedFailuresStdin = false;
@@ -156,6 +161,13 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
       daemonProjectionsOnly = true;
       continue;
     }
+    if (arg === '--daemon-output-root') {
+      const next = argv[index + 1];
+      if (!next || next.startsWith('--')) throw new Error('Missing value for --daemon-output-root');
+      daemonOutputRoot = next;
+      index += 1;
+      continue;
+    }
     if (arg === '--target-owned-only') {
       targetOwnedOnly = true;
       continue;
@@ -171,7 +183,10 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
     throw new Error(`Unknown arg: ${arg}`);
   }
 
-  if (daemonProjectionsOnly && (mode !== 'check' || aggregateOnly || compilerInputsOnly
+  if (daemonOutputRoot && (!daemonProjectionsOnly || mode !== 'write' || requestedScope)) {
+    throw new Error('--daemon-output-root requires --daemon-projections --mode write without --scope');
+  }
+  if (daemonProjectionsOnly && ((mode !== 'check' && !daemonOutputRoot) || aggregateOnly || compilerInputsOnly
     || agentDefinitionsOnly || workspaceNames.length > 0 || packageArtifacts || inheritedFailuresStdin)) {
     throw new Error('--daemon-projections requires an unscoped --mode check without other preparation selectors');
   }
@@ -199,7 +214,7 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
   if (mode === 'write' && requestedScope === 'projections') {
     throw new Error('--scope projections is a check-only scope; write mode always publishes the complete output set');
   }
-  const scope: GeneratorScope = mode === 'check' && !packageArtifacts ? 'projections' : 'all';
+  const scope: GeneratorScope = daemonProjectionsOnly || (mode === 'check' && !packageArtifacts) ? 'projections' : 'all';
   return {
     rootDir,
     mode,
@@ -209,6 +224,7 @@ export function parseGeneratorCliArgs(argv: readonly string[]): GeneratorOptions
     compilerInputsOnly,
     agentDefinitionsOnly,
     ...(daemonProjectionsOnly ? { daemonProjectionsOnly: true } : {}),
+    ...(daemonOutputRoot ? { daemonOutputRoot } : {}),
     inheritedFailuresStdin,
     targetOwnedOnly,
     ...(packageArtifacts ? { packageArtifacts: true } : {}),

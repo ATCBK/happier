@@ -1738,18 +1738,24 @@ function normalizePluginManifest(
 async function loadPluginManifest(
   repoRoot: string,
   pluginPackageId: string,
-  dependencies: Readonly<{ protocol: BundledPluginManifestParser }>,
+  dependencies: Readonly<{ protocol: BundledPluginManifestParser }>
+    | Promise<Readonly<{ protocol: BundledPluginManifestParser }>>,
 ): Promise<PluginManifestJson> {
   const manifestPath = resolve(repoRoot, 'packages/plugins', pluginPackageId, 'src/manifest.ts');
   if (!existsSync(manifestPath)) {
     throw new Error(`Missing required plugin manifest for shippable plugin package ${pluginPackageId}: ${manifestPath}`);
   }
 
-  const mod = await importTypescriptModule(manifestPath) as { PLUGIN_MANIFEST?: unknown };
+  // Authored inspection has its own process and does not consume the parent's
+  // workspace modules. Load those independent graphs together, then validate.
+  const [mod, resolvedDependencies] = await Promise.all([
+    importTypescriptModule(manifestPath) as Promise<{ PLUGIN_MANIFEST?: unknown }>,
+    dependencies,
+  ]);
   if (!('PLUGIN_MANIFEST' in mod)) {
     throw new Error(`Expected PLUGIN_MANIFEST export in ${manifestPath}`);
   }
-  return normalizePluginManifest(mod.PLUGIN_MANIFEST, manifestPath, dependencies.protocol);
+  return normalizePluginManifest(mod.PLUGIN_MANIFEST, manifestPath, resolvedDependencies.protocol);
 }
 
 /**
@@ -2636,7 +2642,7 @@ async function readBundledPluginPackages(
   bundledPluginPackageNames: readonly string[],
   mode: Mode,
   scope: GeneratorScope,
-  dependencies: GeneratorWorkspaceDependencies,
+  dependencies: GeneratorWorkspaceDependencies | Promise<GeneratorWorkspaceDependencies>,
   excludedArtifactPackageNames: ReadonlySet<string> = new Set(),
   packageArtifacts = false,
 ): Promise<Readonly<{
@@ -2822,7 +2828,7 @@ async function collectBundledPluginSourcePackages(
     repoRoot: string;
     bundledPluginPackageNames: readonly string[];
     mode: Mode;
-    dependencies: GeneratorWorkspaceDependencies;
+    dependencies: GeneratorWorkspaceDependencies | Promise<GeneratorWorkspaceDependencies>;
     synchronizeSerializedManifest: boolean;
     daemonProjectionsOnly?: boolean;
   }>,
@@ -2857,28 +2863,29 @@ async function collectBundledPluginSourcePackages(
         pluginPackageId,
         params.dependencies,
       );
+      const dependencies = await params.dependencies;
       if (params.synchronizeSerializedManifest) {
         await synchronizeSerializedPluginManifest({
           packageRoot,
           manifest: sourceManifest,
           mode: params.mode,
-          dependencies: params.dependencies,
+          dependencies,
         });
       }
       const manifest = params.synchronizeSerializedManifest
         ? readCommittedBundledPluginManifest(
           packageRoot,
           packageName,
-          params.dependencies.protocol,
+          dependencies.protocol,
         )
-        : await normalizeBundledSourceManifest({ packageRoot, manifest: sourceManifest, dependencies: params.dependencies });
+        : await normalizeBundledSourceManifest({ packageRoot, manifest: sourceManifest, dependencies });
       assertNoBundledAgentManifestUiBehavior(manifest, packageName);
       const sourceProjectionFacts: BundledPluginSourceProjectionFacts = params.daemonProjectionsOnly ? {} : await readSourceProjectionFacts({
         repoRoot: params.repoRoot,
         pluginPackageId,
         packageName,
         manifest,
-        dependencies: params.dependencies,
+        dependencies,
       });
 
       return Object.freeze({ sourcePluginPackage: Object.freeze({
@@ -3017,7 +3024,7 @@ async function collectBundledPluginPackages(
     mode: Mode;
     targetOwnedOnly?: boolean;
     scope: GeneratorScope;
-    dependencies: GeneratorWorkspaceDependencies;
+    dependencies: GeneratorWorkspaceDependencies | Promise<GeneratorWorkspaceDependencies>;
     excludedArtifactPackageNames?: ReadonlySet<string>;
     packageArtifacts?: boolean;
   }>,
@@ -3043,7 +3050,7 @@ async function collectBundledPluginPackages(
     mode: params.mode,
     targetOwnedOnly: params.targetOwnedOnly,
     scope: params.scope,
-    dependencies: params.dependencies,
+    dependencies: await params.dependencies,
   });
   return Object.freeze({
     // Tracked declarations describe source membership, not this publication's
@@ -4306,38 +4313,38 @@ async function generateDaemonProjections(
   options: GeneratorOptions,
   dependencies: GeneratorWorkspaceDependencies,
 ): Promise<readonly BundledPluginPackageFailure[]> {
-    const { sourcePluginPackages: pluginPackages, failures } = await collectBundledPluginSourcePackages({
-      repoRoot: options.rootDir,
-      bundledPluginPackageNames: readBundledPluginPackageNames(options.rootDir),
-      mode: options.mode,
-      dependencies,
-      synchronizeSerializedManifest: false,
-      daemonProjectionsOnly: true,
-    });
-    assertNoBundledPluginPublicationFailures(failures, options.mode);
-    // These are precisely readCliSourceEntries' generated inputs. Normalization
-    // above still evaluates real Agent registration to derive runner locators;
-    // UI/Voice/locale and Agent catalog projections belong to the full gate.
-    const outputRoot = options.daemonOutputRoot ? resolve(options.daemonOutputRoot) : options.rootDir;
-    const { cliManifestOutPath } = resolveGeneratorHostProjectionOutPaths(outputRoot);
-    const emit = options.daemonOutputRoot ? writeFileAtomic : assertGeneratedOutputMatches;
-    emit(cliManifestOutPath, renderCliBundledPluginManifestEntriesTs({ pluginPackages }));
-    for (const asset of renderCliBundledPluginManifestAssets({ pluginPackages })) {
-      emit(resolve(outputRoot, 'apps/cli', asset.relativePath), asset.out);
-    }
-    if (options.daemonOutputRoot) writeBundledPluginPublicationFailures(outputRoot, failures);
-    return failures;
+  const { sourcePluginPackages: pluginPackages, failures } = await collectBundledPluginSourcePackages({
+    repoRoot: options.rootDir,
+    bundledPluginPackageNames: readBundledPluginPackageNames(options.rootDir, { requireManifestSource: !options.daemonOutputRoot }),
+    mode: options.mode,
+    dependencies,
+    synchronizeSerializedManifest: false,
+    daemonProjectionsOnly: true,
+  });
+  if (!options.daemonOutputRoot) assertNoBundledPluginPublicationFailures(failures, options.mode);
+  // These are precisely readCliSourceEntries' generated inputs. Normalization
+  // above still evaluates real Agent registration to derive runner locators;
+  // UI/Voice/locale and Agent catalog projections belong to the full gate.
+  const outputRoot = options.daemonOutputRoot ? resolve(options.daemonOutputRoot) : options.rootDir;
+  const { cliManifestOutPath } = resolveGeneratorHostProjectionOutPaths(outputRoot);
+  const emit = options.daemonOutputRoot ? writeFileAtomic : assertGeneratedOutputMatches;
+  emit(cliManifestOutPath, renderCliBundledPluginManifestEntriesTs({ pluginPackages }));
+  for (const asset of renderCliBundledPluginManifestAssets({ pluginPackages })) {
+    emit(resolve(outputRoot, 'apps/cli', asset.relativePath), asset.out);
+  }
+  if (options.daemonOutputRoot) writeBundledPluginPublicationFailures(outputRoot, failures);
+  return failures;
 }
 
 async function generateBundledPluginEntries(
   options: GeneratorOptions,
-  dependencies: GeneratorWorkspaceDependencies,
+  dependencies: GeneratorWorkspaceDependencies | Promise<GeneratorWorkspaceDependencies>,
   publicationLease: WorkspaceBundleLockContext,
   inheritedFailures: readonly BundledPluginPackageFailure[] = [],
 ): Promise<readonly BundledPluginPackageFailure[]> {
-  if (options.daemonProjectionsOnly) return await generateDaemonProjections(options, dependencies);
+  if (options.daemonProjectionsOnly) return await generateDaemonProjections(options, await dependencies);
   if (options.aggregateOnly) {
-    return await publishBundledPluginSemanticProjection(options, dependencies, publicationLease, [], inheritedFailures);
+    return await publishBundledPluginSemanticProjection(options, await dependencies, publicationLease, [], inheritedFailures);
   }
 
   if (options.workspaceNames.length > 0) {
@@ -4360,6 +4367,7 @@ async function generateBundledPluginEntries(
       packageArtifacts: options.packageArtifacts,
     });
     const selectedPluginPackages = selectedResult.pluginPackages;
+    dependencies = await dependencies;
     const failures = mergeBundledPluginFailures(inheritedFailures, selectedResult.failures);
     assertNoBundledPluginPublicationFailures(failures, options.mode);
     if (selectedPluginPackages.length > 0 || failures.length > 0) {
@@ -4369,7 +4377,9 @@ async function generateBundledPluginEntries(
       );
       const sourceResult = !options.packageArtifacts ? await collectBundledPluginSourcePackages({
         repoRoot: options.rootDir,
-        bundledPluginPackageNames,
+        // Selected declarations already passed the same source admission above.
+        // Reuse those facts instead of starting a second inspection graph.
+        bundledPluginPackageNames: bundledPluginPackageNames.filter((name) => !selectedPackageNames.includes(name)),
         mode: options.mode,
         dependencies,
         synchronizeSerializedManifest: false,
@@ -4380,7 +4390,11 @@ async function generateBundledPluginEntries(
           publicationLease,
           !options.targetOwnedOnly ? [{ outPath: cliOutPath, out: cliOut }] : [],
           failures,
-          sourceResult ? { pluginPackages: sourceResult.sourcePluginPackages, failures: sourceResult.failures } : undefined,
+          sourceResult ? {
+            pluginPackages: [...selectedPluginPackages, ...sourceResult.sourcePluginPackages]
+              .sort((a, b) => a.packageName.localeCompare(b.packageName)),
+            failures: sourceResult.failures,
+          } : undefined,
         );
     }
     return failures;
@@ -4399,6 +4413,7 @@ async function generateBundledPluginEntries(
     new Set(inheritedFailures.map((failure) => failure.packageName)),
     options.packageArtifacts,
   );
+  dependencies = await dependencies;
   let failures = mergeBundledPluginFailures(inheritedFailures, discoveredPluginPackages.failures);
   // Full publication replaces shared Agent facts and UI cores together. A failed
   // package cannot supply that complete projection; leave the existing outputs
@@ -4655,7 +4670,8 @@ async function withGeneratorPublicationLock<T>(
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {
   const parsed = parseGeneratorCliArgs(argv);
   const { options } = normalizeCanonicalGeneratorPublication(argv, parsed,
-    readBundledPluginPackageNames(parsed.rootDir).map((name) => name.replace('@happier-dev/', '')));
+    readBundledPluginPackageNames(parsed.rootDir, { requireManifestSource: !parsed.daemonOutputRoot })
+      .map((name) => name.replace('@happier-dev/', '')));
   const timing = createBundledPluginTimingReporter();
   if (options.daemonOutputRoot) {
     if (resolve(options.daemonOutputRoot) === resolve(options.rootDir)) {
@@ -4678,17 +4694,24 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
       await publishGeneratedCompilerInputs(options, lease);
       return;
     }
-    const dependencies = await loadGeneratorWorkspaceDependencies();
-    await loadPluginAuthorRuntimeForScope(resolvePluginAuthorRuntimeLoadScope(options));
     const failures = readInheritedBundledPluginFailures(options.inheritedFailuresStdin, options.rootDir);
-    await publishGeneratorEntries(options, dependencies, lease, failures);
+    // Start isolated inspection while the host graph loads. Its admission
+    // promise still gates normalization and every publication path below.
+    const dependencies = Promise.all([
+      loadGeneratorWorkspaceDependencies(),
+      loadPluginAuthorRuntimeForScope(resolvePluginAuthorRuntimeLoadScope(options)),
+    ]).then(([dependencies]) => dependencies);
+    await Promise.all([
+      dependencies,
+      publishGeneratorEntries(options, dependencies, lease, failures),
+    ]);
   });
   timing.phase('generation-and-publication');
 }
 
 async function publishGeneratorEntries(
   options: GeneratorOptions,
-  dependencies: Awaited<ReturnType<typeof loadGeneratorWorkspaceDependencies>>,
+  dependencies: GeneratorWorkspaceDependencies | Promise<GeneratorWorkspaceDependencies>,
   lease: WorkspaceBundleLockContext,
   pluginFailures: readonly BundledPluginPackageFailure[],
 ): Promise<void> {

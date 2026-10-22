@@ -33,7 +33,12 @@ export function pluginPackageNameToPackageId(packageName: string): string {
   return packageName.slice(PLUGIN_PACKAGE_PREFIX.length);
 }
 
-export function readBundledPluginPackageNames(repoRoot: string): readonly string[] {
+/** Source capture retains missing declarations for the publisher's per-plugin
+ * diagnostic boundary; publication validates source membership by default. */
+export function readBundledPluginPackageNames(
+  repoRoot: string,
+  { requireManifestSource = true }: Readonly<{ requireManifestSource?: boolean }> = {},
+): readonly string[] {
   const pluginsRoot = resolve(repoRoot, 'packages', 'plugins');
   if (!existsSync(pluginsRoot)) return [];
 
@@ -48,7 +53,7 @@ export function readBundledPluginPackageNames(repoRoot: string): readonly string
     if (isReservationOnlyPluginPackage(pkgJson)) continue;
 
     const manifestPath = resolve(pluginsRoot, pluginPackageId, 'src/manifest.ts');
-    if (!existsSync(manifestPath)) {
+    if (requireManifestSource && !existsSync(manifestPath)) {
       throw new Error(
         `Missing required plugin manifest for shippable plugin package ${pluginPackageId}: ${manifestPath}`,
       );

@@ -9,6 +9,13 @@ import {
 } from './options.ts';
 
 describe('bundled Plugin publisher options', () => {
+  it('derives daemon projections only into an explicitly selected private output root', () => {
+    expect(parseGeneratorCliArgs(['--daemon-projections', '--daemon-output-root', '/tmp/source-runtime']))
+      .toMatchObject({ mode: 'write', scope: 'projections', daemonProjectionsOnly: true, daemonOutputRoot: '/tmp/source-runtime' });
+    for (const args of [[], ['--mode', 'check'], ['--workspace', 'plugins-fixture']]) {
+      expect(() => parseGeneratorCliArgs([...args, '--daemon-output-root', '/tmp/source-runtime'])).toThrow();
+    }
+  });
   it('restricts daemon projection admission to an unscoped source check', () => {
     expect(parseGeneratorCliArgs(['--mode', 'check', '--daemon-projections']))
       .toMatchObject({ mode: 'check', scope: 'projections', daemonProjectionsOnly: true });
