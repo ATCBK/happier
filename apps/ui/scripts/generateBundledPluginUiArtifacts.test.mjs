@@ -120,7 +120,7 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     const collection = { id: 'notes', schemaVersion: 1,
       schema: { type: 'object', properties: { id: { type: 'string', maxLength: 256 } }, required: ['id'], additionalProperties: false },
-      rowIdField: 'id', serverReadable: [], indexes: [], uiQueries: [], relations: [], readableSchemaVersions: [1] };
+      rowIdField: 'id', serverReadable: ['id'], indexes: [], uiQueries: [], relations: [], readableSchemaVersions: [1] };
     manifest.contributes.accountCollections = [collection];
     manifest.contributes.actions = [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui'],
       placementBindings: [], dangerLevel: 'safe', execution: { target: 'daemon' } }];
@@ -128,6 +128,9 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
       protocols: [{ id: 'acme.fixture/providers', version: 1, operations: { read: { required: true,
         input: { kind: 'contributorDefined' }, resultSchema: { type: 'object' },
         action: { surfaces: ['plugin', 'ui'], dangerLevel: 'safe' } } } }] }];
+    const { PluginPortableReleaseManifestV1Schema, computePluginAccountBundledCustodyV1 } = await import('@happier-dev/protocol/plugins/availability');
+    // Keep fixture drift distinguishable from a missing compiled declaration.
+    PluginPortableReleaseManifestV1Schema.parse(manifest);
     await writeFile(manifestPath, JSON.stringify(manifest));
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
 
@@ -152,7 +155,6 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     assert.equal(declaration.normalizedManifest.id, manifest.id);
     assert.deepEqual(declaration.normalizedManifest.contributes.actions, manifest.contributes.actions);
     assert.deepEqual(declaration.artifactGraphs, JSON.parse(await readFile(join(fixture.artifactRoot, 'ui-artifacts.json'), 'utf8')).entries);
-    const { computePluginAccountBundledCustodyV1 } = await import('@happier-dev/protocol/plugins/availability');
     assert.deepEqual(declaration.accountCustody, computePluginAccountBundledCustodyV1({
       packageName: declaration.packageName, manifest: declaration.normalizedManifest, artifacts: declaration.artifactGraphs,
     }));
@@ -293,12 +295,12 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
     const outputPath = resolveBundledPluginUiArtifactsOutputPath(fixture.repoRoot);
     const fixtureDir = dirname(outputPath);
     const contractDir = join(packageRoot, 'sources', 'sync', 'domains', 'plugins', 'availability');
-    for (const filename of [
-      'bundledPluginUiArtifactInventory.ts',
-      'generatedBundledPluginUiArtifacts.d.ts',
-    ]) {
-      await writeFile(join(fixtureDir, filename), await readFile(join(contractDir, filename)));
-    }
+    await writeFile(join(fixtureDir, 'generatedBundledPluginUiArtifacts.d.ts'),
+      await readFile(join(contractDir, 'generatedBundledPluginUiArtifacts.d.ts')));
+    // Resolve the real inventory contract at its owner, including relative imports.
+    // Copying that source file alone severs its ../ui/projection dependency.
+    await writeFile(join(fixtureDir, 'bundledPluginUiArtifactInventory.ts'),
+      `export type * from ${JSON.stringify(join(contractDir, 'bundledPluginUiArtifactInventory'))};\n`);
     const ambientPath = join(fixtureDir, 'asset-boundaries.d.ts');
     // Compile against the actual Protocol declarations; only the native asset
     // module is synthetic in this disposable output tree.
@@ -319,11 +321,15 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
       '',
     ].join('\n'));
     const compiler = resolve(packageRoot, '..', '..', 'scripts', 'workspaces', 'runTypeScriptCli.mjs');
-    const compilerArguments = [
-      compiler, '--ignoreConfig', '--allowJs', '--checkJs', '--noEmit', '--strict', '--skipLibCheck',
-      '--moduleResolution', 'bundler', '--module', 'esnext', '--target', 'es2022',
-      outputPath, consumerPath, ambientPath,
-    ];
+    const configPath = join(fixtureDir, 'tsconfig.contract.json');
+    const writeContractConfig = files => writeFile(configPath, JSON.stringify({
+      compilerOptions: { allowJs: true, checkJs: true, noEmit: true, strict: true, skipLibCheck: true,
+        moduleResolution: 'bundler', module: 'esnext', target: 'es2022',
+        paths: { '@/*': [join(packageRoot, 'sources/*')] } },
+      files, include: [],
+    }));
+    await writeContractConfig([outputPath, consumerPath, ambientPath]);
+    const compilerArguments = [compiler, '--project', configPath];
     await execFileAsync(process.execPath, compilerArguments);
     const validOutput = await readFile(outputPath, 'utf8');
     await writeFile(outputPath, validOutput.replace('    releaseVersion: "0.0.0",\n', ''));
@@ -335,11 +341,8 @@ test('the emitted JavaScript and committed declaration satisfy the inventory con
       },
     );
     await rm(outputPath);
-    await execFileAsync(process.execPath, [
-      compiler, '--ignoreConfig', '--noEmit', '--strict', '--skipLibCheck',
-      '--moduleResolution', 'bundler', '--module', 'esnext', '--target', 'es2022',
-      consumerPath, ambientPath,
-    ]);
+    await writeContractConfig([consumerPath, ambientPath]);
+    await execFileAsync(process.execPath, compilerArguments);
   } finally {
     await rm(fixture.repoRoot, { recursive: true, force: true });
   }
