@@ -12,13 +12,69 @@ import { PierreDiffViewer } from './PierreDiffViewer.web';
 import { useDiffHunkSlots } from '../hunks/useDiffHunkSlots';
 import { useDiffHunkNavigation } from '../hunks/useDiffHunkNavigation';
 import { renderDiffHunkRow } from '../hunks/DiffHunkRow';
+import { DiffReviewCommentsViewer } from '../reviewComments/DiffReviewCommentsViewer';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+// Vitest's generic extension resolution needs the actual web projection used by Metro.
+vi.mock('@/components/ui/code/diff/DiffViewer', async () => import('../DiffViewer.web'));
 
 const initialSettings = storage.getState().settings;
 afterEach(() => { storage.setState({ settings: initialSettings }); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it.each(['comment', 'range'] as const)('opens the existing Review composer from a late added-file %s gesture in split Pierre', async (gesture) => {
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    vi.stubGlobal('Worker', BrowserWorker);
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+    vi.stubGlobal('IntersectionObserver', class { observe() {} unobserve() {} disconnect() {} });
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(performance.now()), 0));
+    vi.stubGlobal('cancelAnimationFrame', (id: ReturnType<typeof setTimeout>) => clearTimeout(id));
+    const replaceSync = Object.getOwnPropertyDescriptor(CSSStyleSheet.prototype, 'replaceSync');
+    Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', { configurable: true, value() {} });
+    storage.setState({ settings: { ...initialSettings, filesDiffRendererMode: 'pierre', filesDiffPresentationStyle: 'split',
+        // Real 2k source coordinates, without relying on absent JSDOM scroll layout. The live
+        // replay owns offscreen virtualization; the renderer, gestures and comment state stay real.
+        filesDiffInlineVirtualizationLineThreshold: 50_000, filesDiffReviewCommentsInlineVirtualizationLineThreshold: 50_000,
+        filesDiffInlineVirtualizationByteThreshold: 1_000_000,
+    } });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    // Plain-text language keeps syntax-worker transport outside this gesture contract.
+    const patch = ['diff --git a/review-2000.txt b/review-2000.txt', 'new file mode 100644', '--- /dev/null', '+++ b/review-2000.txt',
+        '@@ -0,0 +1,2000 @@', ...Array.from({ length: 2000 }, (_, index) => `+export const needle_${index + 1} = ${index + 1};`), ''].join('\n');
+    const dispatch = (target: EventTarget, type: string) => {
+        const event = new MouseEvent(type, { bubbles: true, composed: true, button: 0, buttons: type === 'pointerup' ? 0 : 1 });
+        Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: 'mouse' }, isPrimary: { value: true } });
+        target.dispatchEvent(event);
+    };
+    try {
+        await act(async () => root.render(<DiffReviewCommentsViewer filePath="review-2000.txt" unifiedDiff={patch}
+            reviewCommentsEnabled reviewCommentDrafts={[]} />));
+        await vi.waitFor(() => expect(container.querySelector('diffs-container')?.shadowRoot?.querySelector('[data-column-number="1991"]')).toBeTruthy());
+        const host = container.querySelector('diffs-container')!;
+        const shadow = host.shadowRoot!;
+        const first = shadow.querySelector('[data-column-number="1991"]')!;
+        const last = shadow.querySelector('[data-column-number="1993"]')!;
+        if (gesture === 'range') {
+            await act(async () => { dispatch(first, 'pointerdown'); dispatch(last, 'pointermove'); dispatch(last, 'pointerup'); });
+        } else {
+            await act(async () => dispatch(first, 'pointermove'));
+            const button = host.querySelector<HTMLButtonElement>('[data-testid="review-comment-line-affordance"]');
+            expect(button).not.toBeNull();
+            await act(async () => button!.click());
+        }
+        await vi.waitFor(() => expect(container.querySelector('[placeholder="files.reviewComments.placeholder"]')).not.toBeNull());
+        expect(container.querySelector('diffs-container')).toBe(host);
+        expect(host.querySelector(`[slot="annotation-additions-${gesture === 'range' ? 1993 : 1991}"] [placeholder]`)).not.toBeNull();
+    } finally {
+        await act(async () => root.unmount());
+        container.remove();
+        if (replaceSync) Object.defineProperty(CSSStyleSheet.prototype, 'replaceSync', replaceSync);
+        else Reflect.deleteProperty(CSSStyleSheet.prototype, 'replaceSync');
+    }
+});
 
 it.each([{ width: 1440, height: 180 }, { width: 390, height: 241 }])(
     'reveals the mounted header-start Change row with tall notes on Next and Previous in a $width by $height viewport',

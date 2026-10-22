@@ -115,49 +115,24 @@ describe('useCodeLinesReviewComments', () => {
         expect(inputStyle.boxShadow).toBeUndefined();
     });
 
-    it('opens one composer after the end line for a range comment', async () => {
+    it.each(['file', 'diff'] as const)('opens one composer after the end line and saves the complete %s range comment', async (source) => {
         const onUpsertDraft = vi.fn();
-        const lines = [
-            {
-                id: 'f:1',
-                sourceIndex: 0, hunkIndex: null,
-                kind: 'file',
-                oldLine: null,
-                newLine: 1,
-                renderPrefixText: '',
-                renderCodeText: 'const a = 1;',
-                renderIsHeaderLine: false,
-                selectable: true,
-            },
-            {
-                id: 'f:2',
-                sourceIndex: 1, hunkIndex: null,
-                kind: 'file',
-                oldLine: null,
-                newLine: 2,
-                renderPrefixText: '',
-                renderCodeText: 'const b = 2;',
-                renderIsHeaderLine: false,
-                selectable: true,
-            },
-            {
-                id: 'f:3',
-                sourceIndex: 2, hunkIndex: null,
-                kind: 'file',
-                oldLine: null,
-                newLine: 3,
-                renderPrefixText: '',
-                renderCodeText: 'const c = 3;',
-                renderIsHeaderLine: false,
-                selectable: true,
-            },
-        ] as any;
+        const lines = source === 'file'
+            ? buildCodeLinesFromFile({ text: 'const a = 1;\nconst b = 2;\nconst c = 3;' })
+            : buildCodeLinesFromUnifiedDiff({ unifiedDiff: ['--- /dev/null', '+++ b/src/a.ts', '@@ -0,0 +1,2000 @@',
+                ...Array.from({ length: 2000 }, (_, index) => `+export const qaJourney${index + 1} = "needle-${index + 1}";`), ''].join('\n') });
+        const startLine = source === 'file' ? 1 : 1991;
+        const endLine = source === 'file' ? 2 : 1993;
+        const range = lines.filter(line => !line.renderIsHeaderLine && line.newLine !== null && line.newLine >= startLine && line.newLine <= endLine);
+        const first = range[0]!;
+        const last = range[range.length - 1]!;
+        const next = lines.find(line => line.newLine === endLine + 1)!;
 
         function Harness() {
             const controls = useCodeLinesReviewComments({
                 enabled: true,
                 filePath: 'src/a.ts',
-                source: 'file',
+                source,
                 lines,
                 drafts: [],
                 onUpsertDraft,
@@ -165,10 +140,11 @@ describe('useCodeLinesReviewComments', () => {
 
             return (
                 <React.Fragment>
-                    <Pressable testID="add-range-trigger" onPress={() => controls!.onPressAddCommentRange([lines[0], lines[1]])} />
-                    <View testID="after-line-1">{controls!.renderAfterLine(lines[0])}</View>
-                    <View testID="after-line-2">{controls!.renderAfterLine(lines[1])}</View>
-                    <View testID="after-line-3">{controls!.renderAfterLine(lines[2])}</View>
+                    <Pressable testID="add-range-trigger" onPress={() => controls!.onPressAddCommentRange(range)} />
+                    <Text testID="active-comment-lines">{lines.filter(line => controls!.isCommentActive(line)).map(line => line.newLine).join(',')}</Text>
+                    <View testID="after-line-1">{controls!.renderAfterLine(first)}</View>
+                    <View testID="after-line-2">{controls!.renderAfterLine(last)}</View>
+                    <View testID="after-line-3">{controls!.renderAfterLine(next)}</View>
                 </React.Fragment>
             );
         }
@@ -178,6 +154,7 @@ describe('useCodeLinesReviewComments', () => {
         await act(async () => {
             await screen.pressByTestIdAsync('add-range-trigger');
         });
+        expect(screen.findByTestId('active-comment-lines')!.props.children).toBe(source === 'file' ? '1,2' : '1991,1992,1993');
 
         const afterLineOne = screen.findByTestId('after-line-1');
         const afterLineTwo = screen.findByTestId('after-line-2');
@@ -205,16 +182,17 @@ describe('useCodeLinesReviewComments', () => {
         expect(onUpsertDraft).toHaveBeenCalledTimes(1);
         expect(onUpsertDraft.mock.calls[0]?.[0]).toMatchObject({
             filePath: 'src/a.ts',
-            source: 'file',
+            source,
             body: 'Review this range',
             anchor: {
                 kind: 'range',
                 filePath: 'src/a.ts',
-                startLine: 1,
-                endLine: 2,
+                startLine,
+                endLine,
+                ...(source === 'diff' ? { side: 'after' } : {}),
             },
             snapshot: {
-                selectedLines: ['const a = 1;', 'const b = 2;'],
+                selectedLines: range.map(line => line.renderCodeText),
             },
         });
     });

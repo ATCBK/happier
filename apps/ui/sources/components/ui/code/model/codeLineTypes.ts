@@ -21,5 +21,7 @@ export type CodeLine = Readonly<{
     noEol?: true;
     renderIntraLineDiffSegments?: readonly IntraLineDiffSegment[] | null;
     renderIsHeaderLine: boolean;
+    /** A hunk header drawn as the quiet "N unchanged lines" band (both renderers' separator), not the raw `@@` line. */
+    renderIsSeparatorLine?: true;
     selectable: boolean;
 }>;

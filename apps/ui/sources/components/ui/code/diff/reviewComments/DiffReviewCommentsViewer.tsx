@@ -148,6 +148,7 @@ function DiffReviewCommentsViewerInner(props: DiffReviewCommentsViewerProps) {
                 filePath={props.filePath}
                 unifiedDiff={props.unifiedDiff}
                 precomputedLines={lines}
+                interactionMode={props.reviewCommentsEnabled ? 'comment' : 'read'}
                 onPressLine={controls?.onPressAddComment}
                 onPressLineRange={controls?.onPressAddCommentRange}
                 pressLineWhenNotSelectable={Boolean(controls?.onPressAddComment)}

@@ -12,6 +12,7 @@ import type { DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, OnDiffLineC
 import { FileDiff, Virtualizer, VirtualizerContext, WorkerPoolContext, useVirtualizer } from '@pierre/diffs/react';
 import { usePierreScrollRootVirtualizer } from './PierreScrollRootVirtualizerProvider.web';
 import { readPierreDomLine } from './pierreDomLine';
+import { localizePierreSeparatorText } from './pierreSeparatorText.web';
 
 import { useSetting } from '@/sync/store/settingsReadHooks';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
@@ -96,6 +97,8 @@ pre, code, [data-diffs-header], [data-diff], [data-file], [data-error-wrapper], 
 // The patched library retains its original number/dataset for interactions. Desktop exposes both
 // source coordinates; the compact phone gutter keeps the library's useful single coordinate.
 const PIERRE_UNIFIED_GUTTER_UNSAFE_CSS = `
+/* The separator band reads in the code face, like the Happier renderer's and the lab's (WT8). */
+[data-separator] { font-family: var(--diffs-font-family, var(--diffs-font-fallback)); }
 [data-separator-content] { display: flex; align-items: center; gap: 1ch; }
 [data-hunk-context] { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: .8; }
 @media (min-width: 521px) {
@@ -1171,6 +1174,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
             tokenTouchGesture.current.cancelled = false;
         }
         paintRef.current = paint;
+        localizePierreSeparatorText(paint.node.shadowRoot ?? paint.node);
         paintReviewedLines(paint);
         revealScrollTarget(paint);
         refreshFind(paint);
@@ -1307,7 +1311,7 @@ export const PierreDiffViewer = React.memo<DiffViewerProps>((props) => {
                 style={wrapperStyle}
             >
                 {useHappierRenderer ? props.mode === 'unified'
-                    ? <HappierUnifiedDiffViewer {...props} />
+                    ? <HappierUnifiedDiffViewer {...props} lineInfoSeparators />
                     : <HappierTextDiffViewer {...props} />
                     : fallbackNode}
             </div>

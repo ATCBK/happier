@@ -36,7 +36,7 @@ function applyReviewSeparators(lines: readonly CodeLine[], unifiedDiff: string):
         const text = hidden > 0
             ? [t('hunkReview.unchangedLines', { count: hidden }), hunk.sectionHeading].filter(Boolean).join('  ')
             : '';
-        return text === line.renderCodeText ? line : { ...line, renderCodeText: text };
+        return { ...line, renderCodeText: text, renderIsSeparatorLine: true };
     });
 }
 
@@ -54,8 +54,8 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
 
     // With change rows drawn, a hunk's raw `@@` band becomes the quiet separator the rows sit under:
     // "N unchanged lines · section heading" (lab ade-shell RV2), blank when no lines are hidden.
-    const reviewSeparators = props.hunks !== undefined
-        && Boolean(props.hunks.actions?.keep || props.hunks.actions?.discard || props.hunks.stateOf);
+    const reviewSeparators = props.lineInfoSeparators === true || (props.hunks !== undefined
+        && Boolean(props.hunks.actions?.keep || props.hunks.actions?.discard || props.hunks.stateOf));
     const lines = React.useMemo(() => {
         const built = props.precomputedLines ?? buildCodeLinesFromUnifiedDiff({
             unifiedDiff: props.unifiedDiff,
@@ -162,7 +162,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
         : props.renderAfterLine, [canFold, props.renderAfterLine, renderAfterLine]);
 
     const view = (
-        <View style={props.virtualized ? styles.virtualizedBody : undefined}>
+        <View style={[props.virtualized ? styles.virtualizedBody : null, !wrapLines ? styles.fillScroll : null]}>
             <CodeLinesView
                 lines={folded.lines}
                 selectedLineIds={props.selectedLineIds}
@@ -213,5 +213,9 @@ const styles = StyleSheet.create({
     virtualizedBody: {
         flex: 1,
         minHeight: 0,
+    },
+    // Unwrapped rows span the visible width even when every line is shorter, as Pierre's do.
+    fillScroll: {
+        flexGrow: 1,
     },
 });

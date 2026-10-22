@@ -206,15 +206,20 @@ export function CodeLineRow(props: {
           ? theme.colors.diff.added.background
           : line.kind === 'remove'
             ? theme.colors.diff.removed.background
-            : line.renderIsHeaderLine
-              ? theme.colors.diff.hunk.background
-              : 'transparent';
+            : line.renderIsSeparatorLine
+              // The "N unchanged lines" band is quiet context, not a coloured `@@` header (lab WT8, Pierre's band).
+              ? theme.colors.diff.context.background
+              : line.renderIsHeaderLine
+                ? theme.colors.diff.hunk.background
+                : 'transparent';
 
     const textColor = line.kind === 'add'
         ? theme.colors.diff.added.foreground
         : line.kind === 'remove'
           ? theme.colors.diff.removed.foreground
-          : line.renderIsHeaderLine
+          : line.renderIsSeparatorLine
+            ? theme.colors.text.tertiary
+            : line.renderIsHeaderLine
             ? theme.colors.diff.hunk.foreground
             // A file's own text is the document, not a diff's unchanged context: it reads in the editor's
             // default ink, so View and Edit draw the same code in the same colours (files lab ED1).

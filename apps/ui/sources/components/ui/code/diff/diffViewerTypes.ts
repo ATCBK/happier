@@ -112,6 +112,11 @@ export type UnifiedDiffViewerProps = DiffViewerBaseProps & Readonly<{
     mode: 'unified';
     unifiedDiff: string;
     precomputedLines?: readonly CodeLine[];
+    /**
+     * Host-private: draw each hunk header as Pierre's quiet "N unchanged lines · heading" band rather than
+     * the raw `@@` header, so the Happier renderer standing in while Pierre initializes reads like Pierre.
+     */
+    lineInfoSeparators?: boolean;
 }>;
 
 export type TextDiffViewerProps = DiffViewerBaseProps & Readonly<{
