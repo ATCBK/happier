@@ -73,11 +73,7 @@ const AppRailAccountTrigger = React.memo(function AppRailAccountTrigger(props: R
     const { theme } = useUnistyles();
     const materialColor = useHappierMaterialColorResolver();
     const { state } = props;
-    const profile = useProfile();
-    const identity = React.useMemo(
-        () => resolveAccountIdentity(profile, state.accountService),
-        [profile, state.accountService],
-    );
+    const identity = useProfile(profile => resolveAccountIdentity(profile, state.accountService));
     const anchorRef = React.useRef<View>(null);
     const [hovered, setHovered] = React.useState(false);
     const title = identity.kind === 'signedIn' ? identity.name : identity.title;

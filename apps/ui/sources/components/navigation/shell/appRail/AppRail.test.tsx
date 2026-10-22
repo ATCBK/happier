@@ -16,6 +16,7 @@ import { t } from '@/text';
 import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
 import { AppRailSurface } from './AppRail';
+import { AppRailAccount } from './AppRailAccount';
 import { buildAppRailEntries, buildAppRailPlacementItems } from './appRailModel';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -52,6 +53,23 @@ const layout = (height: number): LayoutChangeEvent => ({
 } as LayoutChangeEvent);
 
 describe('AppRail measured room', () => {
+    it('keeps the mounted Account trigger quiet for unrelated Profile changes and observes its name', async () => {
+        const store = getStorage();
+        store.setState(state => ({ profile: { ...state.profile, id: 'rail-account', name: 'Ada' } }));
+        let commits = 0;
+        const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+            <React.Profiler id="rail-account" onRender={() => { commits++; }}><AppRailAccount /></React.Profiler>
+        </InjectedAuthProvider>);
+        const before = commits;
+        for (let tick = 1; tick <= 5; tick++) {
+            await act(async () => store.setState(state => ({ profile: { ...state.profile, timestamp: tick } })));
+        }
+        expect(commits - before).toBe(0);
+        await act(async () => store.setState(state => ({ profile: { ...state.profile, name: 'Grace' } })));
+        expect(screen.findHostByTestId('app-rail-account')?.props.accessibilityLabel).toContain('Grace');
+        await screen.unmount();
+    });
+
     it('explains unavailable built-in destinations through the shared accessible button', async () => {
         const screen = await renderScreen(<InjectedAuthProvider credentials={null}><InboxSummaryProvider><AppRailSurface entries={entries()} activeId={null} onOpen={() => {}}
             renderFooter={item => <View testID={item.id} />} /></InboxSummaryProvider></InjectedAuthProvider>);
