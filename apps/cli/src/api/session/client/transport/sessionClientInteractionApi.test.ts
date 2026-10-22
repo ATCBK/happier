@@ -1088,7 +1088,8 @@ describe('createSessionClientInteractionApi diagnostics', () => {
         throw new Error(`Unexpected transport URL: ${url}`);
       });
       socketAckMock.mockImplementation(async () => {
-        return { v: 1, result: state === 'revoked' || state === 'muted' ? { status: 'rejected', code: 'session_input_cancelled' }
+        return { v: 1, result: state === 'revoked' ? { status: 'rejected', code: 'session_input_cancelled' }
+          : state === 'muted' ? { status: 'rejected', code: 'session_input_muted' }
           : state === 'held' ? { status: 'held', localId, code: 'autonomous_check_in' }
           : state === 'settlement-unknown' ? { status: 'outcomeUnknown', localId, code: 'settlement_unavailable' }
           : { status: 'alreadyAccepted', localId } };
@@ -1110,20 +1111,25 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       const observeProviderInputSettlement = vi.fn(async () => false);
       const confirmUserMessageLocallyConsumed = vi.fn();
       const rejectSteerBeforeProvider = vi.fn();
+      const published: unknown[] = [];
+      const onPromptFailure = vi.fn();
       const session = createMutableApiSessionClientFixture({ sessionId: 's1',
         metadata: createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }), overrides: {
           onUserMessage: handler => { receiveUserMessage = handler; },
           observeProviderInputSettlement,
           confirmUserMessageLocallyConsumed,
           enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: false }),
-          enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: false }),
+          enqueueAgentMessageCommitted: async (_provider, body) => {
+            published.push(body);
+            return { persisted: true, delivered: false };
+          },
           ...(state === 'missing-service' ? {} : {
             reconcileSessionInputForProviderDispatch: input => api.reconcileSessionInputForProviderDispatch(input),
           }),
         } });
       const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
       const queuedAddressing = state === 'changed-cutoff' ? { ...discussionAddressing, throughSeq: 4 } : discussionAddressing;
-      const nativeSend = vi.fn(async () => {});
+      const nativeSend = vi.fn(async (_text: string) => {});
       const nativeSteer = vi.fn(async () => {});
       // The native provider is the only runtime boundary replaced; host preparation and receiver settlement stay real.
       const runtime = { beginTurnLifecycle() {}, sendTurnPrompt: nativeSend, steerInFlightTurn: nativeSteer,
@@ -1163,20 +1169,30 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       } else {
         queue.push({ text: 'Answer the original question', localId, discussionAddressing: queuedAddressing }, { permissionMode: 'default' });
       }
+      if (state === 'revoked') queue.pushIsolate({ text: 'UNRELATED_ORDINARY_INPUT', localId: 'ordinary-after-removal' }, { permissionMode: 'default' });
       await runPermissionModePromptLoop({ providerName: 'Test', agentMessageType: 'codex', explicitPermissionMode: undefined,
         session, messageQueue: queue, permissionHandler: { setPermissionMode() {}, reset() {} }, runtime,
         createOverrideSynchronizer: () => ({ syncFromMetadata() {}, flushPendingAfterStart: async () => {} }),
         messageBuffer: new MessageBuffer(), shouldExit: () => shouldExit, getAbortSignal: () => new AbortController().signal,
-        keepAlive() {}, setThinking() {}, sendReady() { shouldExit = true; }, currentPermissionModeUpdatedAt: 0,
+        keepAlive() {}, setThinking() {}, sendReady() {
+          shouldExit = state !== 'revoked' || nativeSend.mock.calls.some(([text]) => text.includes('UNRELATED_ORDINARY_INPUT'));
+        }, currentPermissionModeUpdatedAt: 0,
         setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {}, formatPromptErrorMessage: String,
+        onPromptFailure,
         registerProviderAcceptedEffect() {}, checkpointLifecycle: { onBeforePromptDispatch: async () => { checkpointFinished = true; } },
       });
       expect(checkpointFinished).toBe(true);
       expect(readBeforePreparationFinished).toBe(false);
       expect(nativeSteer).not.toHaveBeenCalled();
       const admitted = state === 'valid' || state === 'permission-broadened';
-      expect(nativeSend).toHaveBeenCalledTimes(admitted ? 1 : 0);
-      if (!admitted) {
+      expect(nativeSend).toHaveBeenCalledTimes(admitted || state === 'revoked' ? 1 : 0);
+      if (state === 'revoked') {
+        expect(nativeSend).toHaveBeenCalledWith(expect.stringContaining('UNRELATED_ORDINARY_INPUT'), expect.anything());
+        expect(nativeSend.mock.calls.some(([text]) => text.includes('Answer the original question'))).toBe(false);
+        expect(published).not.toContainEqual(expect.objectContaining({ type: 'turn_failed' }));
+        expect(onPromptFailure).not.toHaveBeenCalled();
+        expect(observeProviderInputSettlement).not.toHaveBeenCalled();
+      } else if (!admitted) {
         const retryable = state === 'held' || state === 'unavailable' || state === 'missing-service' || state === 'settlement-unknown';
         expect(observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
           kind: 'rejected_before_effect', localId, retryable,
@@ -1255,6 +1271,8 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     });
     let receive: ((message: UserMessage) => boolean | void) | undefined;
     const observeProviderInputSettlement = vi.fn(async () => false);
+    let shouldExit = false;
+    const published: unknown[] = [];
     const contract = { mode: 'session_sync_v2_pending_input_v1' as const,
       runtimeActivity: 'v2' as const, pendingInput: 'v1' as const, publisherAuthority: 'v1' as const,
       sessionConnectionEpoch: 1, socket };
@@ -1271,8 +1289,15 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       metadata: createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }), overrides: {
         onUserMessage: handler => { receive = handler; }, observeProviderInputSettlement,
         enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: false }),
-        enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: false }),
-        ...(state === 'missing-service' ? {} : { reconcileSessionInputForProviderDispatch: input => api.reconcileSessionInputForProviderDispatch(input) }),
+        enqueueAgentMessageCommitted: async (_provider, body) => {
+          published.push(body);
+          return { persisted: true, delivered: false };
+        },
+        ...(state === 'missing-service' ? {} : { reconcileSessionInputForProviderDispatch: async input => {
+          const status = await api.reconcileSessionInputForProviderDispatch(input);
+          if (status === 'withdrawn' && queue.size() === 0) shouldExit = true;
+          return status;
+        } }),
       } });
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'same-mode',
       { batcher: combinePermissionModeQueuedPrompts });
@@ -1293,8 +1318,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       await vi.waitFor(() => expect(discarded).toBe(true));
       await new Promise<void>(resolve => setImmediate(resolve));
       expect(nativeSteer).not.toHaveBeenCalled();
-      expect(rejectSteer).toHaveBeenCalledWith(expect.objectContaining({ localIds: [localId],
-        preparationFailure: { code: 'session_input_rejected', retryable: false } }));
+      expect(rejectSteer).not.toHaveBeenCalled();
       expect(queue.size()).toBe(0);
       return;
     }
@@ -1312,7 +1336,6 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       subscribeRuntimeEvents: () => () => {}, respondToPermission: async () => {}, cancelTurn: async () => {},
       readSessionIdentity: () => ({ sessionId: 'native' }), updateSessionRuntimeConfig: async () => {},
       resetOrDisposeRuntime: async () => {}, shouldResumeAfterPermissionModeChange: () => true } as unknown as PermissionModePromptLoopTurnOperations;
-    let shouldExit = false;
     await runPermissionModePromptLoop({ providerName: 'External Agent', agentMessageType: 'plugin:external-agent/agent', explicitPermissionMode: undefined,
       session, messageQueue: queue, permissionHandler: { setPermissionMode() {}, reset() {} }, runtime,
       createOverrideSynchronizer: () => ({ syncFromMetadata() {}, flushPendingAfterStart: async () => {} }),
@@ -1329,9 +1352,13 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     if (state === 'discarded-with-peer') expect(nativeSend).toHaveBeenCalledWith(expect.stringContaining('Preserve this peer'),
       expect.objectContaining({ localId: 'valid-peer', localIds: ['valid-peer'] }));
     expect(finalAdmissionRead).toBe(state !== 'missing-service');
-    if (state !== 'valid') expect(observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
+    if (state === 'missing-service' || state === 'wrong-binding') expect(observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'rejected_before_effect', localId, retryable: state === 'missing-service' || state === 'wrong-binding',
     }));
+    else {
+      expect(observeProviderInputSettlement).not.toHaveBeenCalled();
+      expect(published).not.toContainEqual(expect.objectContaining({ type: 'turn_failed' }));
+    }
   });
 
   it('settles Workflow V2 provenance, reply and authority through the existing Session permission owner', async () => {

@@ -175,12 +175,12 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
     catch { logger.debug('[Usage composition] Session detail retention unavailable'); }
   };
   return {
-    async assertAdmission(): Promise<void> {
+    async assertAdmission(): Promise<boolean> {
       // Context-only input has its own host admission boundary. Every durable
       // protected input must re-enter Pending after arbitrary-duration prompt
       // preparation: materialization into the local queue is custody, not a
       // grant to dispatch an input that has since been discarded.
-      if (input.prompt.hostContextOnly || (!input.prompt.discussionAddressing && !input.prompt.causalPermissionAuthority)) return;
+      if (input.prompt.hostContextOnly || (!input.prompt.discussionAddressing && !input.prompt.causalPermissionAuthority)) return true;
       const reconcile = services?.reconcileSessionInputForProviderDispatch;
       const localIds = normalizePermissionModeQueuedPromptLocalIds(input.prompt);
       if (!reconcile || localIds.length === 0) throw new SessionInputDispatchAdmissionError('outcomeUnknown');
@@ -193,8 +193,10 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
           if (isAbortLikeError(error)) throw error;
           throw new SessionInputDispatchAdmissionError('outcomeUnknown');
         }
+        if (status === 'withdrawn') return false;
         if (status !== 'admitted') throw new SessionInputDispatchAdmissionError(status);
       }
+      return true;
     },
     readComposition,
     retainComposition,

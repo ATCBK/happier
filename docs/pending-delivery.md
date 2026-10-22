@@ -682,7 +682,13 @@ their exact tuple, the committed question, current participation, access and
 delivery mute; newly supplied request metadata is not replacement authority.
 A released or revoked original cannot dispatch. Participant removal or
 Discussion archive withdraws outstanding returns in that same original custody;
-reinvitation cannot revive a withdrawn ask. This does not override ordinary
+reinvitation cannot revive a withdrawn ask. The client preserves Pending's
+`session_input_cancelled` result as a definite withdrawal at the shared final
+dispatch boundary. Normal input and in-flight steer then end quietly before a
+provider effect: they create no failed turn, second rejection settlement or
+synthetic ready/finished notification. The next unrelated input remains eligible.
+Other admission refusals, holds and unknown outcomes retain their existing
+failure/recovery handling. This does not override ordinary
 blocked-predecessor FIFO or the unknown-effect recovery above. The canonical
 checks are `validateInputSettlementDomainFactsInTx` with the
 [Session reply owner's](../apps/server/sources/app/session/messages/sessionMessageReply.ts)

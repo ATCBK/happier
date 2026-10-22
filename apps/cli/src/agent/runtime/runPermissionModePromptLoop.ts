@@ -1196,9 +1196,9 @@ export async function runPermissionModePromptLoop(opts: {
     let suppressFlushTurnFailure = false;
     let beganTurn = false;
     let handledPreTurnFailure = false;
-    // A context-only wake whose Follow admission was withdrawn at the dispatch
-    // boundary: nothing reached the provider, so no turn, no ACK and no ready.
-    let contextOnlyWakeWithdrawn = false;
+    // The input was withdrawn before dispatch: nothing reached the provider,
+    // so no turn, no ACK and no ready/finished notification is manufactured.
+    let inputWithdrawnBeforeTurn = false;
     let currentCheckpointMessageId: string | null = null;
     let assistantTextSnapshotScope: AssistantTextSnapshotTurnScope | null = null;
     let readReadyTurnContext: (() => ReadyNotificationTurnContext | undefined) | undefined;
@@ -1636,7 +1636,7 @@ export async function runPermissionModePromptLoop(opts: {
             && !dispatchAbortSignal.aborted) {
             inputConsumer.deferContextOnlyInput({ ...message, isolate: true });
           }
-          contextOnlyWakeWithdrawn = true;
+          inputWithdrawnBeforeTurn = true;
           return;
         }
         if (hostContextOnly) {
@@ -1677,7 +1677,7 @@ export async function runPermissionModePromptLoop(opts: {
             },
           });
           if (result !== 'committed') {
-            contextOnlyWakeWithdrawn = true;
+            inputWithdrawnBeforeTurn = true;
             return;
           }
         }
@@ -1739,7 +1739,10 @@ export async function runPermissionModePromptLoop(opts: {
         if (resolveSessionPlan) opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
         recordPreparationPhase('host_context');
         if (!hostContextOnly) await preparedHostContext?.commitWorkerUpdateEvents?.();
-        await preparedDispatch.assertAdmission();
+        if (!await preparedDispatch.assertAdmission()) {
+          inputWithdrawnBeforeTurn = true;
+          return;
+        }
         assistantTextSnapshotScope = beginAssistantTextSnapshotTurnScope(opts.session);
         const readyTurnContext = opts.onBeforeTurnBegin?.(message.message, assistantTextSnapshotScope);
         if (typeof readyTurnContext === 'function') readReadyTurnContext = readyTurnContext;
@@ -1981,7 +1984,7 @@ export async function runPermissionModePromptLoop(opts: {
           await opts.sendReady(readReadyTurnContext?.());
         }
         completeAssistantTextSnapshotTurnScope(opts.session, assistantTextSnapshotScope);
-      } else if (handledPreTurnFailure || contextOnlyWakeWithdrawn) {
+      } else if (handledPreTurnFailure || inputWithdrawnBeforeTurn) {
         if (currentCheckpointMessageId) {
           await enqueueCheckpointHook(() => opts.checkpointLifecycle?.onTurnAbortedBeforeStart?.({
             messageId: currentCheckpointMessageId!,

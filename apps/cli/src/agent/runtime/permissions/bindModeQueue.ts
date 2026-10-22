@@ -770,7 +770,7 @@ export function registerPermissionModeMessageQueueBinding(opts: {
             });
             await preparedSessionFollowContext?.commitWorkerUpdateEvents?.();
             if (stopForUnavailableSteer()) return;
-            await preparedDispatch.assertAdmission();
+            if (!await preparedDispatch.assertAdmission()) return;
             if (stopForUnavailableSteer()) return;
             const confirmProviderPromptAccepted = (): void => {
               const settle = settleReplaySeedOnProviderAcceptance;

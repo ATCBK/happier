@@ -54,7 +54,7 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { PENDING_INPUT_PROTOCOL_VERSION_V3, PENDING_INPUT_PROTOCOL_VERSION_V5 } from '@happier-dev/protocol/clientCompatibility/primitives';
 import { settleSessionInputRequestV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionBroadcastContainerSchema } from '@happier-dev/protocol/updates';
-import type { SessionInputRequest, SessionInputAuthority, SessionInputSettlementValidationV1 } from '@happier-dev/protocol';
+import type { SessionInputRequest, SessionInputAuthority, SessionInputSettlementValidationV1, SessionInputAdmissionRejectionCodeV1 } from '@happier-dev/protocol';
 import { buildImmutableSessionInputEqualityEnvelopeV1 } from '@/session/services/sessionInputEqualityEnvelope';
 import { deriveSessionInputActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
@@ -68,7 +68,7 @@ export type SessionInputProviderDispatchReconciliation = Readonly<{
     signal: AbortSignal;
 }>;
 
-export type SessionInputProviderDispatchAdmission = 'admitted' | 'rejected' | 'held' | 'outcomeUnknown';
+export type SessionInputProviderDispatchAdmission = 'admitted' | 'withdrawn' | 'rejected' | 'held' | 'outcomeUnknown';
 
 /**
  * The exact admission/custody facts this owner hands to one target-bound runtime
@@ -192,7 +192,7 @@ function readMaterializedPendingUserMessage(params: Readonly<{
 type ReconciledPendingInput =
     | Readonly<{ status: 'legacy'; message: PendingQueueMaterializedMessage }>
     | Readonly<{ status: 'admitted'; message: PendingQueueMaterializedMessage }>
-    | Readonly<{ status: 'rejected' }>
+    | Readonly<{ status: 'rejected'; code?: SessionInputAdmissionRejectionCodeV1 }>
     | Readonly<{ status: 'held' }>
     | Readonly<{ status: 'outcomeUnknown' }>;
 
@@ -295,7 +295,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
             const result = await settlePendingQueueV2Admission({ signal: params.signal, socket: params.socket,
                 sessionId: params.sessionId, localId, decision: { kind: 'reject', code: 'session_input_untrusted_assertion' } });
             return result.status === 'held' ? { status: 'held' }
-                : result.status === 'rejected' ? { status: 'rejected' } : { status: 'outcomeUnknown' };
+                : result.status === 'rejected' ? { status: 'rejected', code: result.code } : { status: 'outcomeUnknown' };
         }
         if (requestEqualityEvidenceV1) {
             const result = await settlePendingQueueV2Admission({
@@ -303,7 +303,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
                 socket: params.socket, sessionId: params.sessionId, localId,
                 decision: { kind: 'admit', finalContent: params.message.content, requestEqualityEvidenceV1 },
             });
-            if (result.status === 'rejected') return { status: 'rejected' };
+            if (result.status === 'rejected') return { status: 'rejected', code: result.code };
             if (result.status === 'outcomeUnknown' || result.localId !== localId) return { status: 'outcomeUnknown' };
         }
         return { status: 'legacy', message: params.message };
@@ -318,7 +318,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
         });
         return result.status === 'outcomeUnknown'
             ? { status: 'outcomeUnknown' }
-            : { status: 'rejected' };
+            : { status: 'rejected', ...(result.status === 'rejected' ? { code: result.code } : {}) };
     }
 
     let inputAdmissionReceipt: ReturnType<typeof assertSessionInputAdmissionReceiptForRequest>;
@@ -342,7 +342,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
         });
         return result.status === 'outcomeUnknown'
             ? { status: 'outcomeUnknown' }
-            : { status: 'rejected' };
+            : { status: 'rejected', ...(result.status === 'rejected' ? { code: result.code } : {}) };
     }
 
     const senderSessionId = readSessionInputSenderSessionIdV1(request);
@@ -361,7 +361,8 @@ async function reconcileProtectedPendingInput(params: Readonly<{
                 signal: params.signal, socket: params.socket, sessionId: params.sessionId, localId,
                 decision: { kind: 'reject', code: 'session_input_muted', ...(validation ? { validation } : {}) },
             });
-            return result.status === 'outcomeUnknown' ? { status: 'outcomeUnknown' } : { status: 'rejected' };
+            return result.status === 'outcomeUnknown' ? { status: 'outcomeUnknown' }
+                : { status: 'rejected', ...(result.status === 'rejected' ? { code: result.code } : {}) };
         }
     }
 
@@ -396,7 +397,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
         });
         return result.status === 'outcomeUnknown'
             ? { status: 'outcomeUnknown' }
-            : { status: 'rejected' };
+            : { status: 'rejected', ...(result.status === 'rejected' ? { code: result.code } : {}) };
     }
     // Protected attribution retains the originating Discussion across later
     // addressed inputs; the current addressed Discussion is otherwise the root.
@@ -450,7 +451,7 @@ async function reconcileProtectedPendingInput(params: Readonly<{
             ...(validation ? { validation } : {}),
         },
     });
-    if (result.status === 'rejected') return { status: 'rejected' };
+    if (result.status === 'rejected') return { status: 'rejected', code: result.code };
     if (result.status === 'held') return { status: 'held' };
     if (result.status === 'outcomeUnknown') return { status: 'outcomeUnknown' };
     if (result.localId !== localId) return { status: 'outcomeUnknown' };
@@ -1361,6 +1362,9 @@ export function createSessionClientInteractionApi(
             }));
             if (deps.getClosed() || input.signal.aborted || deps.getSocket() !== socket
                 || !socket.connected || deps.getSessionConnectionEpoch() !== epoch) return 'outcomeUnknown';
+            // Pending has already retired this exact original. A definite
+            // withdrawal is neither a provider failure nor a new settlement.
+            if (result.status === 'rejected' && result.code === 'session_input_cancelled') return 'withdrawn';
             return result.status === 'legacy' ? 'rejected' : result.status;
         },
 
