@@ -219,6 +219,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
         params.organizationPlacement,
         params.access,
         params.primaryTeamId,
+        params.teamCredentialBindings,
         params.initialTriggers,
         params.selectedProfileId,
         params.sessionConfigOptionOverrides,

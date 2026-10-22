@@ -1439,6 +1439,10 @@ describe('multi-Home Session creation composition', () => {
         const { bindHomeDomainActionHttpRequestV1 } = await import('@happier-dev/protocol/actions/homeDomainActionFamily');
         const { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedAccountCatalogRowReadResponseV1Schema }
             = await import('@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1');
+        const { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema, splitProviderSettingsV1 }
+            = await import('@happier-dev/protocol/providers/connections/connectionRowsV1');
+        const { DEFAULT_PROVIDER_SETTINGS_V1 } = await import('@happier-dev/protocol/providers/settings/v1');
+        const { setProviderExperimentalConfirmationV1 } = await import('@happier-dev/protocol/providers/settings/operationsV1');
         const { TeamsPageV1Schema, TeamCredentialResourceEntitledPageV1Schema, TEAM_DIRECTORY_PAGE_LIMIT_DEFAULT_V1,
             NO_TEAM_CAPABILITIES_V1, resolveTeamAdmissionProjectionV1 } = await import('@happier-dev/protocol/teams');
         const { RunnerArtifactAvailabilityProjectionV1Schema } = await import('@happier-dev/protocol/ephemeralRunner/runnerArtifact');
@@ -1484,6 +1488,16 @@ describe('multi-Home Session creation composition', () => {
                 agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'gpt-5', modelName: 'GPT-5',
             });
         }
+        const workerRow = socketBoundary.providerProjection?.status === 'success'
+            ? socketBoundary.providerProjection.groups[0]?.rows[0] : undefined;
+        // Consent is owned by the recipient's Account catalog, not the
+        // worker's confirmed bit. Keep that genuine HTTP boundary current.
+        const providerCatalog = splitProviderSettingsV1(workerRow?.confirmationSource
+            ? setProviderExperimentalConfirmationV1(DEFAULT_PROVIDER_SETTINGS_V1, {
+                ...workerRow.confirmationSource, agentTargetKey: workerRow.ref.agentTargetKey,
+                modelId: workerRow.ref.modelId,
+                compatibilityFingerprint: workerRow.compatibility.compatibilityFingerprint, confirmedAt: 1,
+            }) : DEFAULT_PROVIDER_SETTINGS_V1).catalog;
         const publication = RunnerArtifactAvailabilityProjectionV1Schema.parse({ status: 'available', artifacts: [{
             identity: { product: 'happier-runner', version: '0.3.0', target: 'linux-x64', sha256: 'a'.repeat(64) }, channel: 'stable',
             url: 'https://runner-publication.test/happier-runner-v0.3.0-linux-x64.zip',
@@ -1506,6 +1520,10 @@ describe('multi-Home Session creation composition', () => {
                     declarationTransport: 'http-header-and-socket-auth-v1' } } });
             if (`${parsed.pathname}${parsed.search}` === teamPath) return Response.json(teams);
             if (`${parsed.pathname}${parsed.search}` === resourcesPath) return Response.json(entitled);
+            if (parsed.pathname === PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 && (!init?.method || init.method === 'GET')) {
+                return Response.json(ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+                    content: { t: 'plain', v: providerCatalog } }));
+            }
             if (parsed.pathname === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) {
                 return Response.json(ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
                     content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } } }));
