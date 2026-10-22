@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 import { createWebDomScrollObservation } from '@/components/sessions/transcript/viewport/driver/webDomObservation';
+import { TranscriptListShell } from './TranscriptListShell';
+import { resolveMainTranscriptListShellFrame } from './transcriptListShellCapabilities';
 
 let capturedLegendListProps: any = null;
 let assignedLegendRef: any = null;
@@ -46,8 +48,6 @@ describe('TranscriptListShell', () => {
     });
 
     it('renders the Legend renderer with frame facts, slots, and overlays', async () => {
-        const { TranscriptListShell } = await import('./TranscriptListShell');
-        const { resolveMainTranscriptListShellFrame } = await import('./transcriptListShellCapabilities');
         const listRef = { current: null as any };
         const keyExtractor = vi.fn((item: { id: string }) => item.id);
         const renderItem = vi.fn(({ item }: { item: { id: string } }) => React.createElement('Row', { id: item.id }));
@@ -89,8 +89,6 @@ describe('TranscriptListShell', () => {
     });
 
     it('owns the layout commit observer wrapper while preserving the host callback', async () => {
-        const { TranscriptListShell } = await import('./TranscriptListShell');
-        const { resolveMainTranscriptListShellFrame } = await import('./transcriptListShellCapabilities');
         const onCommitLayoutEffect = vi.fn();
 
         await renderScreen(

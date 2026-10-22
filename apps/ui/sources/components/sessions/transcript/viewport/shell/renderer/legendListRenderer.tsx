@@ -29,6 +29,7 @@ import type { WebScrollMovementFact } from '@/components/sessions/transcript/scr
 
 import type {
     TranscriptRendererAtEndState,
+    TranscriptRendererEntryAnchorHold,
     TranscriptRendererNativePhysicalViewportCapture,
     TranscriptRendererNativePhysicalViewportObservationRequest,
     TranscriptRendererNativePhysicalViewportObservationResult,
@@ -84,6 +85,14 @@ const LEGEND_TRANSCRIPT_ESTIMATED_ITEM_SIZE_PX = 240;
 // View that is an ancestor of the Legend scroller.
 const LEGEND_IDENTITY_HOST_STYLE = { flex: 1, minHeight: 0 } as const;
 
+type RetainedViewport = Readonly<
+    | { isPinned: true; anchor: null }
+    | { isPinned: false; anchor: TranscriptRendererEntryAnchorHold }
+>;
+// Navigation retains only row identity/placement, never message content. The resource's existing
+// lifetime (for Discussions, the scoped repository) owns reclamation; no immortal dataset cache.
+const retainedViewports = new WeakMap<object, Map<string, RetainedViewport>>();
+
 type LegendNativePhysicalMeasureNode = Readonly<{
     measure: (
         onSuccess: (
@@ -102,6 +111,13 @@ function LegendListTranscriptRendererInner<TItem>(
     ref: React.ForwardedRef<TranscriptListShellRef<TItem>>,
 ): React.ReactElement {
     const legendListRef = React.useRef<LegendListRef | null>(null);
+    const retainedEntry = React.useMemo(() => props.viewportRetention
+        ? retainedViewports.get(props.viewportRetention)?.get(props.dataKey) ?? null
+        : null, [props.dataKey, props.viewportRetention]);
+    const initialPlacementAtEnd = retainedEntry?.isPinned === false
+        ? false : props.frame.rendererOptions.initialPlacement.atEnd;
+    const captureRetainedViewportRef = React.useRef<() => void>(() => undefined);
+    const restoredEntryRef = React.useRef<RetainedViewport | null>(null);
     const contentDemand = React.useMemo(createTranscriptRendererContentDemand, [props.dataKey]);
     const identityHostRef = React.useRef<React.ElementRef<typeof View> | null>(null);
     const visualBottomSlotHostRef = React.useRef<React.ElementRef<typeof View> | null>(null);
@@ -163,7 +179,7 @@ function LegendListTranscriptRendererInner<TItem>(
     // auto-latch there drags the entry-anchor restore back to the tail. Cleared by real scroll
     // movement or an explicit renderer command.
     const suppressAutoEndLatchRef = React.useRef(
-        !props.frame.rendererOptions.initialPlacement.atEnd,
+        !initialPlacementAtEnd,
     );
     const isWebFrame = props.frame.platform === 'web';
     const findClearancePx = useTranscriptFindClearance();
@@ -501,7 +517,7 @@ function LegendListTranscriptRendererInner<TItem>(
         data,
         dataKey: props.dataKey,
         dataLength,
-        initialPlacementAtEnd: props.frame.rendererOptions.initialPlacement.atEnd,
+        initialPlacementAtEnd,
         invalidateUserInertiaContinuation,
         isUserScrollInputLive,
         isWebFrame,
@@ -950,6 +966,7 @@ function LegendListTranscriptRendererInner<TItem>(
         }
         emitRendererAtEndState({ offsetMoved, pendingCause: cause, webMovementFact });
         tryAcknowledgeInitialPresentationSettlement();
+        captureRetainedViewportRef.current();
         if (webMovementFact) {
             props.onScroll?.(event, webMovementFact);
         } else {
@@ -1151,6 +1168,64 @@ function LegendListTranscriptRendererInner<TItem>(
             endIndex: Math.max(startIndex, endIndex),
         };
     }, [dataLength, projectChronologicalIndex]);
+
+    const retainedEntryIndex = retainedEntry?.anchor
+        ? data.findIndex((item, index) => props.keyExtractor(item, resolveSourceIndex(index)) === retainedEntry.anchor?.itemId)
+        : -1;
+    React.useLayoutEffect(() => {
+        if (!retainedEntry?.anchor || retainedEntryIndex < 0 || restoredEntryRef.current === retainedEntry) return;
+        restoredEntryRef.current = retainedEntry;
+        // Use the SAME keyed entry-placement transaction as the Session entry driver. Legend's
+        // initial index materializes the row; its existing hold owns late measurement correction.
+        holdIndexTarget(retainedEntryIndex, retainedEntry.anchor.itemOffsetPx, 0, {
+            ...retainedEntry.anchor,
+            reason: 'entry-restore',
+        });
+        requestHeldIntentSettle();
+    }, [holdIndexTarget, requestHeldIntentSettle, retainedEntry, retainedEntryIndex]);
+
+    const captureRetainedViewport = React.useCallback(() => {
+        const lifetime = props.viewportRetention;
+        if (!lifetime || hasActiveEntryPlacement()
+            || (retainedEntry?.anchor && restoredEntryRef.current !== retainedEntry)) return;
+        const save = (snapshot: RetainedViewport) => {
+            let entries = retainedViewports.get(lifetime);
+            if (!entries) {
+                entries = new Map();
+                retainedViewports.set(lifetime, entries);
+            }
+            entries.set(props.dataKey, snapshot);
+        };
+        if (heldScrollIntentRef.current?.kind === 'end') {
+            save({ isPinned: true, anchor: null });
+            return;
+        }
+        if (!isWebFrame) {
+            const savePhysical = (capture: TranscriptRendererNativePhysicalViewportCapture | null) => {
+                if (capture) save({ isPinned: false, anchor: {
+                    kind: 'item', itemId: capture.itemKey, messageId: null, itemOffsetPx: capture.itemOffsetPx,
+                } });
+            };
+            const observed = observeNativePhysicalViewport({ focusOffsetPx: 0, onComplete: savePhysical });
+            if (observed.status === 'captured') savePhysical(observed.capture);
+            return;
+        }
+        const state = legendListRef.current?.getState();
+        const metrics = readWebScrollMetrics();
+        if (!state || !metrics || !Number.isFinite(state.start)) return;
+        const index = state.start;
+        const item = data[index];
+        const element = state.elementAtIndex?.(index) as unknown as HTMLElement | null;
+        if (item === undefined || typeof element?.getBoundingClientRect !== 'function') return;
+        const itemOffsetPx = element.getBoundingClientRect().top - metrics.element.getBoundingClientRect().top;
+        if (!Number.isFinite(itemOffsetPx)) return;
+        save({ isPinned: false, anchor: {
+            kind: 'item', itemId: props.keyExtractor(item, resolveSourceIndex(index)), messageId: null,
+            itemOffsetPx,
+        } });
+    }, [data, hasActiveEntryPlacement, heldScrollIntentRef, isWebFrame, observeNativePhysicalViewport, props.dataKey, props.keyExtractor, props.viewportRetention, readWebScrollMetrics, resolveSourceIndex, retainedEntry]);
+    useCommittedTranscriptRef(captureRetainedViewportRef, captureRetainedViewport);
+    React.useLayoutEffect(() => () => captureRetainedViewportRef.current(), [props.dataKey, props.viewportRetention]);
 
     React.useImperativeHandle(ref, (): TranscriptListShellRef<TItem> => ({
         armVisibleAnchorHold,
@@ -1490,7 +1565,10 @@ function LegendListTranscriptRendererInner<TItem>(
         // Continuous tail maintenance belongs to Legend, but initial placement must respect the
         // app-owned discrete entry intent. A released/anchored entry starts away from the tail so
         // entry restore can consume its saved anchor before any at-end observation clears it.
-        initialScrollAtEnd: props.frame.rendererOptions.initialPlacement.atEnd,
+        initialScrollAtEnd: initialPlacementAtEnd,
+        initialScrollIndex: retainedEntryIndex >= 0 && retainedEntry?.anchor
+            ? { index: retainedEntryIndex, viewOffset: retainedEntry.anchor.itemOffsetPx }
+            : undefined,
         keyExtractor: (item, index) => props.keyExtractor(
             item,
             toSourceIndex(index, dataLength, projectChronologicalIndex),

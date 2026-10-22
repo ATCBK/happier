@@ -10,6 +10,7 @@ import { createWebDomScrollObservation } from '@/components/sessions/transcript/
 import { resetTranscriptViewportDiagnosticsForTests } from '@/components/sessions/transcript/viewport/driver/transcriptViewportWriteDiagnostics';
 import { resolveMainTranscriptListShellFrame } from '../transcriptListShellCapabilities';
 import { legendListRenderer } from './legendListRenderer';
+import { resolveReadOnlyTranscriptListShellFrame } from '../transcriptListShellCapabilities';
 import type {
     TranscriptListShellRef,
     TranscriptRendererEntryPlacementEvent,
@@ -34,6 +35,7 @@ type ResizeObserverRecord = Readonly<{
 
 const resizeObservers = new Set<ResizeObserverRecord>();
 let useMeasuredLegendGeometry = false;
+let usePhysicalRowGeometry = false;
 type PhysicalScrollWrite = Readonly<{
     stack: string;
     top: number;
@@ -76,7 +78,23 @@ function measuredRect(element: Element): DOMRectReadOnly {
     }
     const row = htmlElement.querySelector<HTMLElement>('[data-height]');
     if (row) {
-        return rect(800, Number(row.dataset.height ?? 72));
+        const size = rect(800, Number(row.dataset.height ?? 72));
+        if (usePhysicalRowGeometry) {
+            // jsdom has no layout. Read the installed renderer's actual absolute CSS placement,
+            // not the app's target/state, so physical entry-anchor measurements remain real inputs.
+            let top = 0;
+            let node: HTMLElement | null = htmlElement;
+            while (node) {
+                if (node.style.overflowY === 'auto' || node.style.overflow === 'auto') {
+                    top -= node.scrollTop;
+                    break;
+                }
+                top += Number.parseFloat(node.style.top || '0') || 0;
+                node = node.parentElement;
+            }
+            return { ...size, top, bottom: top + size.height, y: top };
+        }
+        return size;
     }
     return rect(800, Number.parseFloat(htmlElement.style.height || '0') || 80);
 }
@@ -211,6 +229,7 @@ describe('Legend installed web-package cleanup', () => {
         vi.useFakeTimers();
         physicalWrites = 0;
         useMeasuredLegendGeometry = false;
+        usePhysicalRowGeometry = false;
         physicalScrollWrites.length = 0;
         directScrollTopWrites.length = 0;
         scrollMethodActive = false;
@@ -343,6 +362,75 @@ describe('Legend installed web-package cleanup', () => {
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
         vi.useRealTimers();
+    });
+
+    it('restores a detached bounded transcript by row across remount, new messages and a resized viewport', async () => {
+        useMeasuredLegendGeometry = true;
+        usePhysicalRowGeometry = true;
+        viewportHeight = 464;
+        const lifetime = {};
+        const Renderer = legendListRenderer.Component;
+        let data = Array.from({ length: 20 }, (_, index) => ({ id: `discussion-reader-${index}`, height: 72 }));
+        const listRef = React.createRef<TranscriptListShellRef<Row>>();
+        const render = (retention = lifetime, dataKey = 'discussion:home-a:account-a:reader') => <div id="installed-pinned-host">
+            <Renderer ref={listRef} data={data} dataKey={dataKey}
+                viewportRetention={retention}
+                frame={resolveReadOnlyTranscriptListShellFrame({ accessKind: 'public', bottomNoticeVisible: false, platformOS: 'web' })}
+                keyExtractor={(item: Row) => item.id} renderItem={renderRow}
+                webDomObservation={createWebDomScrollObservation()} />
+        </div>;
+        await act(async () => root.render(render()));
+        await flushLegendWork();
+        const scroller = findInstalledScrollElement();
+        // Real renderer input releases the tail. Model the browser's following physical scroll.
+        await act(async () => {
+            scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -500 }));
+            scroller.scrollTo({ top: 480 });
+        });
+        await flushLegendWork();
+        expect(scroller.scrollTop).toBe(480);
+        const anchorTestId = 'real-legend-row-discussion-reader-6';
+        const anchorOffset = (viewport: HTMLElement) => {
+            const row = viewport.querySelector(`[data-testid="${anchorTestId}"]`)?.parentElement ?? null;
+            expect(row, 'the reader\'s anchored message must remain materialized').not.toBeNull();
+            return row!.getBoundingClientRect().top - viewport.getBoundingClientRect().top;
+        };
+        const readingOffset = anchorOffset(scroller);
+        expect(readingOffset).toBe(-48);
+        await act(async () => root.render(null));
+        data = [...data, { id: 'discussion-reader-new', height: 72 }];
+        viewportHeight = 488;
+        await act(async () => root.render(render()));
+        await flushLegendWork();
+        const returned = findInstalledScrollElement();
+        // Offscreen estimates can change the absolute offset. The SAME content and intra-row
+        // placement are the continuity contract, not a distance from an expanded live tail.
+        expect(anchorOffset(returned)).toBe(readingOffset);
+        expect(distanceFromLiveTail(returned)).toBeGreaterThan(0);
+
+        // A later reply and composer-height change do not re-acquire detached tail intent.
+        data = [...data, { id: 'discussion-reader-later', height: 72 }];
+        viewportHeight = 440;
+        await act(async () => root.render(render()));
+        await flushLegendWork();
+        expect(anchorOffset(returned)).toBe(readingOffset);
+
+        // Another Home/Account or a retired repository lifetime never inherits the entry.
+        for (const dataKey of ['discussion:home-b:account-a:reader', 'discussion:home-a:account-b:reader']) {
+            await act(async () => root.render(null));
+            await act(async () => root.render(render(lifetime, dataKey)));
+            await flushLegendWork();
+            expect(distanceFromLiveTail(findInstalledScrollElement())).toBeLessThanOrEqual(1);
+        }
+        const newLifetime = {};
+        await act(async () => root.render(null));
+        await act(async () => root.render(render(newLifetime)));
+        await flushLegendWork();
+        expect(distanceFromLiveTail(findInstalledScrollElement())).toBeLessThanOrEqual(1);
+        data = [...data, { id: 'discussion-reader-pinned-append', height: 72 }];
+        await act(async () => root.render(render(newLifetime)));
+        await flushLegendWork();
+        expect(distanceFromLiveTail(findInstalledScrollElement())).toBeLessThanOrEqual(1);
     });
 
     it('revokes a pending tail command through the real wheel takeover before its commit', async () => {

@@ -250,6 +250,12 @@ export type TranscriptListRendererProps<TItem> = Readonly<{
      * previous session's scroll/held state (live audit finding AUD-003, 2026-07-12).
      */
     dataKey: string;
+    /**
+     * Opt-in remount continuity for bounded transcripts. The existing resource owner supplies
+     * its lifetime identity; entries are weakly retained and separated by the qualified dataKey.
+     * Main Session transcripts keep their existing durable entry lifecycle instead.
+     */
+    viewportRetention?: object;
     extraData?: unknown;
     keyExtractor: NonNullable<FlatListProps<TItem>['keyExtractor']>;
     getItemType?: (item: TItem, index: number, extraData?: unknown) => string | number | undefined;

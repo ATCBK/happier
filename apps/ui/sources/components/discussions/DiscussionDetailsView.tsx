@@ -1242,6 +1242,7 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                 <TranscriptListShell<DiscussionTimelineItem<DiscussionDisplayMessage>>
                     key={dataKey}
                     dataKey={dataKey}
+                    viewportRetention={repository}
                     data={items}
                     extraData={rowsVersion}
                     frame={frame}
