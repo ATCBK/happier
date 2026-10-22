@@ -14,6 +14,73 @@ import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { spawnTestProcess } from '../../testkit/core/spawn_test_process.mjs';
 import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
 
+test('wait diagnostics report live lock holders from the acquisition snapshot', async (t) => {
+  for (const kind of ['reader', 'writer']) await t.test(kind, async (t) => {
+    const fixture = await createTempFixture(t, { prefix: 'json-owner-live-holders-' });
+    const lockPath = fixture.path('owner.lock');
+    const secondReader = kind === 'reader'
+      ? spawnTestProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+      : null;
+    if (secondReader) {
+      t.after(async () => {
+        if (secondReader.exitCode !== null || secondReader.signalCode !== null) return;
+        const exited = once(secondReader, 'exit');
+        secondReader.kill();
+        await exited;
+      });
+      await once(secondReader, 'spawn');
+    }
+    const nowMs = Date.now();
+    const liveOwner = { pid: process.pid, createdAtMs: nowMs - 9000, updatedAtMs: nowMs - 1000 };
+    const deadOwner = { pid: 99999999, createdAtMs: nowMs - 30000, updatedAtMs: nowMs - 30000 };
+    const liveReaders = [liveOwner, {
+      pid: secondReader?.pid, createdAtMs: nowMs - 7000, updatedAtMs: nowMs - 500,
+    }];
+    await writeFile(lockPath, JSON.stringify(kind === 'reader'
+      ? { ...deadOwner, priority: 'reader', readers: [deadOwner, ...liveReaders] }
+      : { ...liveOwner, priority: 'writer' }));
+    t.mock.method(Date, 'now', () => nowMs);
+    const read = fs.readFileSync;
+    let reads = 0;
+    t.mock.method(fs, 'readFileSync', (path, ...args) => {
+      if (path === lockPath) reads += 1;
+      return read(path, ...args);
+    });
+    syncBuiltinESMExports();
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+    let notices = '';
+    t.mock.method(process.stderr, 'write', chunk => { notices += String(chunk); return true; });
+    const notice = createWorkspaceBuildWaitNotifier({
+      label: 'dependency refresh', kind: 'lock', env: { HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' },
+    });
+    const cancellation = new AbortController();
+    let observed;
+    let notifierReread;
+    await assert.rejects(withJsonOwnerFileLock(() => assert.fail('live holder must block acquisition'), {
+      lockPath, sharedReaders: true, priority: 'writer', signal: cancellation.signal,
+      onWait(event) {
+        observed = event;
+        unlinkSync(lockPath);
+        t.mock.method(Date, 'now', () => nowMs + 60000);
+        const readsBeforeNotice = reads;
+        notice(event);
+        notifierReread = reads !== readsBeforeNotice;
+        cancellation.abort();
+      },
+    }), { name: 'AbortError' });
+    assert.equal(notifierReread, false, 'the notifier must not reread the lock');
+    assert.ok(Array.isArray(observed.holders), 'the wait event must identify live holders');
+    assert.deepEqual(observed.holders.map(({ pid, kind, heldMs, heartbeatAgeMs }) => ({ pid, kind, heldMs, heartbeatAgeMs })), [
+      { pid: process.pid, kind, heldMs: 9000, heartbeatAgeMs: 1000 },
+      ...(secondReader ? [{ pid: secondReader.pid, kind, heldMs: 7000, heartbeatAgeMs: 500 }] : []),
+    ]);
+    assert.equal(observed.owner.pid, process.pid);
+    assert.match(notices, new RegExp(`${kind} pid=${process.pid}.*heldMs=9000.*heartbeatAgeMs=1000`));
+    if (secondReader) assert.match(notices, new RegExp(`reader pid=${secondReader.pid}.*heldMs=7000.*heartbeatAgeMs=500`));
+    assert.doesNotMatch(notices, /99999999/);
+  });
+});
+
 test('owner creation and heartbeat never expose an incomplete owner record', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-publication-' });
   const lockPath = fixture.path('owner.lock');

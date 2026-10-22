@@ -58,12 +58,17 @@ function publishOwnerRecord(path, raw, { create = false, expectedRaw } = {}) {
   }
 }
 
-export function describeJsonOwnerLockOwner(owner, nowMs = Date.now()) {
-  if (!owner) return 'owner=unknown';
+function readJsonOwnerLockOwnerAges(owner, nowMs) {
   const createdAtMs = Number(owner.createdAtMs ?? owner.updatedAtMs ?? nowMs);
   const updatedAtMs = Number(owner.updatedAtMs ?? owner.createdAtMs ?? nowMs);
   const heldMs = Math.max(0, nowMs - createdAtMs);
   const heartbeatAgeMs = Math.max(0, nowMs - updatedAtMs);
+  return { heldMs, heartbeatAgeMs };
+}
+
+export function describeJsonOwnerLockOwner(owner, nowMs = Date.now()) {
+  if (!owner) return 'owner=unknown';
+  const { heldMs, heartbeatAgeMs } = readJsonOwnerLockOwnerAges(owner, nowMs);
   return `pid=${String(owner.pid ?? 'unknown')} heldMs=${heldMs} heartbeatAgeMs=${heartbeatAgeMs}`;
 }
 
@@ -71,21 +76,35 @@ export function describeJsonOwnerLock(lockPath, nowMs) {
   return describeJsonOwnerLockOwner(readJsonOwnerLockSnapshot(lockPath).owner, nowMs);
 }
 
-export function shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, nowMs, fallbackMtimeMs = 0, options = {}) {
-  if (!snapshot.exists) return true;
+function inspectJsonOwnerLockSnapshot(snapshot, staleAfterMs, nowMs, fallbackMtimeMs = 0, options = {}) {
+  const state = { snapshot, observedAtMs: nowMs, liveOwners: [], kind: 'writer', reclaimable: true };
+  if (!snapshot.exists) return state;
   const owner = snapshot.owner;
   if (owner?.priority === 'reader' && Array.isArray(owner.readers)) {
-    return !owner.readers.some(reader => Number(reader.pid) > 1 && isPidAlive(Number(reader.pid)));
+    state.kind = 'reader';
+    state.liveOwners = owner.readers.filter(reader => Number(reader.pid) > 1 && isPidAlive(Number(reader.pid)));
+    state.reclaimable = state.liveOwners.length === 0;
+    return state;
   }
   const ownerPid = Number(owner?.pid);
   if (Number.isFinite(ownerPid) && ownerPid > 1) {
-    if (!isPidAlive(ownerPid)) return true;
-    if (options.allowLiveOwnerStaleReclaim !== true) return false;
+    if (!isPidAlive(ownerPid)) return state;
+    state.liveOwners = [owner];
+    if (options.allowLiveOwnerStaleReclaim !== true) {
+      state.reclaimable = false;
+      return state;
+    }
     const updatedAtMs = Number(owner?.updatedAtMs ?? owner?.createdAtMs ?? fallbackMtimeMs);
-    return updatedAtMs > 0 && nowMs - updatedAtMs > staleAfterMs;
+    state.reclaimable = updatedAtMs > 0 && nowMs - updatedAtMs > staleAfterMs;
+    return state;
   }
   const updatedAtMs = Number(owner?.updatedAtMs ?? owner?.createdAtMs ?? fallbackMtimeMs);
-  return updatedAtMs > 0 && nowMs - updatedAtMs > staleAfterMs;
+  state.reclaimable = updatedAtMs > 0 && nowMs - updatedAtMs > staleAfterMs;
+  return state;
+}
+
+export function shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, nowMs, fallbackMtimeMs = 0, options = {}) {
+  return inspectJsonOwnerLockSnapshot(snapshot, staleAfterMs, nowMs, fallbackMtimeMs, options).reclaimable;
 }
 
 function shouldReclaimJsonOwnerLock(lockPath, staleAfterMs, nowMs, options = {}) {
@@ -178,6 +197,7 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
   let sharedAcquired = false;
   const waitersDir = `${lockPath}.waiters`;
   let observedWaiterNames = new Set();
+  let waitLockState;
   const observer = createFileChangeObserver([dirname(lockPath), waitersDir], {
     isRelevant(directory, filename) {
       if (filename == null) return true;
@@ -258,16 +278,21 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
     const raw = JSON.stringify({ ...readers[0], priority: 'reader', updatedAtMs: Date.now(), readers });
     publishOwnerRecord(lockPath, raw, { create });
   };
+  const readLockState = () => {
+    const snapshot = readJsonOwnerLockSnapshot(lockPath);
+    let mtimeMs = 0;
+    try { mtimeMs = statSync(lockPath).mtimeMs; } catch {}
+    return inspectJsonOwnerLockSnapshot(snapshot, staleAfterMs, Date.now(), mtimeMs, options);
+  };
   const trySharedAcquire = () => {
     let waiters = readWaiters();
     if (!waiterPath && options.priority === 'writer') registerWaiter(waiters, true);
-    let snapshot = readJsonOwnerLockSnapshot(lockPath);
-    let mtimeMs = 0;
-    try { mtimeMs = statSync(lockPath).mtimeMs; } catch {}
-    if (snapshot.exists && shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, Date.now(), mtimeMs, options)) {
-      reclaimJsonOwnerLockSnapshot(lockPath, snapshot.raw);
-      snapshot = readJsonOwnerLockSnapshot(lockPath);
+    waitLockState = readLockState();
+    if (waitLockState.snapshot.exists && waitLockState.reclaimable) {
+      reclaimJsonOwnerLockSnapshot(lockPath, waitLockState.snapshot.raw);
+      waitLockState = readLockState();
     }
+    const snapshot = waitLockState.snapshot;
     const reader = options.priority === 'reader';
     const eligible = reader ? !waiters.some(waiter => waiter.writer)
       : waiterPath ? waiters[0]?.path === waiterPath : waiters.length === 0;
@@ -348,12 +373,9 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
         }, false);
         eligible = readWaiters()[0]?.path === waiterPath;
       }
-      const snapshot = readJsonOwnerLockSnapshot(lockPath);
-      let fallbackMtimeMs = 0;
-      try {
-        fallbackMtimeMs = statSync(lockPath).mtimeMs;
-      } catch {}
-      if (!sharedReaders && eligible && shouldReclaimJsonOwnerLockSnapshot(snapshot, staleAfterMs, Date.now(), fallbackMtimeMs, options)) {
+      const lockState = sharedReaders ? waitLockState : readLockState();
+      const { snapshot, observedAtMs } = lockState;
+      if (!sharedReaders && eligible && lockState.reclaimable) {
         reclaimJsonOwnerLockSnapshot(lockPath, snapshot.raw);
         continue;
       }
@@ -370,7 +392,13 @@ async function withJsonOwnerFileLockInternal(fn, options, fair) {
         try {
           options.onWait({
             lockPath,
-            owner: snapshot.owner,
+            owner: lockState.liveOwners[0] ?? null,
+            holders: lockState.liveOwners.map(owner => ({
+              ...owner,
+              kind: lockState.kind,
+              ...readJsonOwnerLockOwnerAges(owner, observedAtMs),
+            })),
+            observedAtMs,
             queueHead: head?.owner,
             staleAfterMs,
             timeoutMs,

@@ -20,8 +20,12 @@ export function createWorkspaceBuildWaitNotifier({ env = process.env, label, kin
     let message;
     if (kind === 'lock') {
       const owner = event.owner ?? event.queueHead;
+      const observedAtMs = event.observedAtMs ?? Date.now();
+      const ownerDescription = event.holders?.length > 0
+        ? event.holders.map(holder => `${holder.kind} ${describeJsonOwnerLockOwner(holder, observedAtMs)}`).join('; ')
+        : describeJsonOwnerLockOwner(owner, observedAtMs);
       const custody = !event.owner && event.queueHead ? 'queued ' : '';
-      message = `[local] waiting for ${label} lock (${Math.ceil(waitedMs / 1000)}s): ${event.lockPath} (${custody}${describeJsonOwnerLockOwner(owner, Date.now())})`;
+      message = `[local] waiting for ${label} lock (${Math.ceil(waitedMs / 1000)}s): ${event.lockPath} (${custody}${ownerDescription})`;
     } else if (kind === 'imports') {
       const attempt = Number(event.attempt ?? 0);
       const attempts = Number(event.attempts ?? 0);
