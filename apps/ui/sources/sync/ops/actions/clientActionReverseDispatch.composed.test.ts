@@ -74,6 +74,7 @@ const { listNewSessionDraftProjections } = await import('@/sync/ops/sessionDraft
 const { readNewSessionDraftProjectionFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
 const { createUiClientActionReverseHandler } = await import('./clientActionReverseDispatch');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
 const releases: (() => void)[] = [];
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
@@ -93,6 +94,8 @@ beforeEach(async () => {
   const { primeServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
   primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
   storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1 }) } });
+  // Restoring the Account withdraws its Machines' presence as module state; each test seeds its own Machines as live.
+  clearMachineRequestReachabilityForTest();
 });
 afterEach(async () => {
   for (const release of releases.splice(0)) release();

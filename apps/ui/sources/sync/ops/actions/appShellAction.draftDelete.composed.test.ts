@@ -6,6 +6,7 @@ import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1 } from '@happier-dev/protocol/auth
 import { ArtifactActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
 import { SessionDraftMutateRequestV2Schema, SessionDraftMutateResponseV2Schema, SessionDraftReadResponseV2Schema,
@@ -133,6 +134,8 @@ async function setup(mode: 'plain' | 'e2ee', connected = true, synchronized = tr
     const reverse = createClientActionReverseDispatcher(() => ({ hasConnectedClientRpcHandler: () => connected,
         callConnectedClientRpc: async (method, payload, options) => {
             selectedMethods.push(method);
+            // The Home server selects the receiver; with no connected client it answers typed absence.
+            if (!connected) return { ok: false, errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
             if (viewedSessionId) {
                 // Socket membership/ACKs are the boundary; selection and the app's
                 // actual Action receiver stay real, including the other client.
