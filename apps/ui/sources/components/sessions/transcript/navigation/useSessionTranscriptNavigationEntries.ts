@@ -224,7 +224,7 @@ export function useSessionTranscriptNavigationEntries(sessionId: string): Sessio
         isLoaded,
         messageIdsOldestFirst,
         messagesById,
-    } = useTranscriptRootMessages(sessionId);
+    } = useTranscriptRootMessages(sessionId, { liveText: true });
     const activeServerAccountScope = useActiveServerAccountScope();
     const state = useSessionTranscriptNavigationEntriesFromMessages({
         activeServerAccountScope,

@@ -1708,10 +1708,10 @@ export function useSessionTranscriptIds(sessionId: string, enabled: boolean = tr
   );
 }
 
-export function useForkedTranscriptSnapshot(sessionId: string): ForkedTranscriptSnapshot | null {
+export function useForkedTranscriptSnapshot(sessionId: string, options?: Readonly<{ textUpdates?: boolean }>): ForkedTranscriptSnapshot | null {
   const normalizedSessionId = normalizeSessionId(sessionId);
   return getStorage()(
-    useShallow((state) => getForkedTranscriptSnapshotCached(state, normalizedSessionId))
+    useShallow((state) => getForkedTranscriptSnapshotCached(state, normalizedSessionId, options))
   );
 }
 
@@ -1737,26 +1737,29 @@ export function useSessionTailContiguousBoundary(sessionId: string): SessionMess
   return getStorage()((state) => state.sessionTailContiguousBoundary[sessionId] ?? null);
 }
 
-export function useSessionMessagesById(sessionId: string, enabled: boolean = true): Record<string, Message> {
+export function useSessionMessagesById(sessionId: string, enabled: boolean = true, options?: Readonly<{ textUpdates?: boolean }>): Record<string, Message> {
   const normalizedSessionId = normalizeSessionId(sessionId);
-  const snapshot = getStorage()(
-    useShallow((state) => {
-      if (!enabled) {
-        return {
-          committedIds: emptyArray as any as string[],
-          committedMessagesById: emptyRecord as Record<string, Message>,
-          messagesVersion: 0,
-        };
-      }
-      const session = state.sessionMessages[normalizedSessionId];
-      return {
-        committedIds: session?.messageIdsOldestFirst ?? (emptyArray as any as string[]),
-        committedMessagesById: session?.messagesById ?? (emptyRecord as Record<string, Message>),
-        messagesVersion: session?.messagesVersion ?? 0,
-      };
-    })
-  );
-  return React.useMemo(() => snapshot.committedMessagesById, [snapshot.committedMessagesById, snapshot.messagesVersion]);
+  const textUpdates = options?.textUpdates !== false;
+  const selector = React.useMemo(() => {
+    let previousVersion: number | undefined;
+    let previousTranscript: StorageState['sessionMessages'][string] | undefined;
+    let current = { messagesById: emptyRecord as Record<string, Message> };
+    return (state: StorageState) => {
+      const transcript = enabled ? state.sessionMessages[normalizedSessionId] : undefined;
+      const version = textUpdates ? transcript?.messagesVersion ?? 0
+        : transcript?.transcriptStructureVersion ?? transcript?.messagesVersion ?? 0;
+      if (previousVersion === version
+        && previousTranscript?.messageIdsOldestFirst === transcript?.messageIdsOldestFirst
+        && (textUpdates ? previousTranscript?.messagesById === transcript?.messagesById
+          : previousTranscript?.reducerState === transcript?.reducerState)) return current;
+      previousVersion = version;
+      previousTranscript = transcript;
+      // Keep the revision wrapper: legacy same-map writes still notify live readers.
+      current = { messagesById: transcript?.messagesById ?? emptyRecord as Record<string, Message> };
+      return current;
+    };
+  }, [enabled, normalizedSessionId, textUpdates]);
+  return getStorage()(selector).messagesById;
 }
 
 export function useSessionMessagesVersion(sessionId: string, enabled: boolean = true): number {
@@ -1797,14 +1800,16 @@ export function useSessionSidechainMessages(sessionId: string, sidechainId: stri
   }, [normalizedSidechainId, reducerState, version]);
 }
 
-export function useSessionMessagesReducerState(sessionId: string) {
+export function useSessionMessagesReducerState(sessionId: string, options?: Readonly<{ textUpdates?: boolean }>) {
   const normalizedSessionId = normalizeSessionId(sessionId);
   const snapshot = getStorage()(
     useShallow((state) => {
       const session = state.sessionMessages[normalizedSessionId];
       return {
         reducerState: session?.reducerState ?? null,
-        reducerVersion: (session as any)?.reducerVersion ?? 0,
+        reducerVersion: options?.textUpdates === false
+          ? session?.transcriptStructureVersion ?? session?.messagesVersion ?? 0
+          : session?.reducerVersion ?? 0,
       };
     })
   );

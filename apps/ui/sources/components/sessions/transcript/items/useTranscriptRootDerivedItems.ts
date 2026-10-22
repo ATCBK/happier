@@ -104,7 +104,9 @@ export function useTranscriptRootDerivedItems(params: Readonly<{
         sessionId,
         derivedItemsCacheMaxSessions,
     );
-    const needsTurns = groupingMode === 'turns' || messageIdsOldestFirst.some((id) => readWorkflowTurnProvenance(messagesById[id]) !== null);
+    const needsTurns = React.useMemo(() => groupingMode === 'turns'
+        || messageIdsOldestFirst.some((id) => readWorkflowTurnProvenance(messagesById[id]) !== null),
+    [groupingMode, messageIdsOldestFirst, messagesById]);
     const turnsCache = React.useMemo(() => {
         if (!needsTurns) return null;
         return measureTranscriptDerivation('ui.sessions.transcript.derived.turns', () => ({

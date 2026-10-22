@@ -85,6 +85,8 @@ export type SessionMessages = {
     latestReadyEventSeq?: number | null;
     latestReadyEventAt?: number | null;
     messagesVersion: number;
+    /** List structure excludes assistant text/tick updates, which live in row subscriptions. */
+    transcriptStructureVersion?: number;
     subagentSourceVersion?: number;
     lastAppliedAgentStateVersion?: number | null;
     isLoaded: boolean;
@@ -224,6 +226,8 @@ function coerceSessionMessages(input: unknown): SessionMessages {
         latestReadyEventSeq,
         latestReadyEventAt,
         messagesVersion,
+        transcriptStructureVersion: typeof raw.transcriptStructureVersion === 'number'
+            ? raw.transcriptStructureVersion : messagesVersion,
         subagentSourceVersion,
         lastAppliedAgentStateVersion,
         isLoaded,
@@ -233,6 +237,19 @@ function coerceSessionMessages(input: unknown): SessionMessages {
     return Object.entries(normalized).every(([key, value]) => raw[key] === value)
         ? input as SessionMessages
         : normalized;
+}
+
+function transcriptStructureChanged(previous: Message | undefined, next: Message): boolean {
+    if (previous === next) return false;
+    if (previous?.kind !== 'agent-text' || next.kind !== 'agent-text') return true;
+    const project = (message: Extract<Message, { kind: 'agent-text' }>) => {
+        const { text: _text, sourceUpdatedAt: _sourceUpdatedAt, meta, ...structure } = message;
+        const segment = meta?.happierStreamSegmentV1;
+        if (!segment || typeof segment !== 'object' || Array.isArray(segment)) return { ...structure, meta };
+        const { updatedAtMs: _tick, ...segmentStructure } = segment;
+        return { ...structure, meta: { ...meta, happierStreamSegmentV1: segmentStructure } };
+    };
+    return !areSessionValuesDeepEqual(project(previous), project(next));
 }
 
 function inferLatestUserPermissionModeFromChangedMessages(
@@ -320,6 +337,8 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
 
     const messageRevisionsById = existing.messageRevisionsById ?? {};
     const previousMessages = new Map(processedMessages.map((message) => [message.id, existing.messagesById[message.id]]));
+    const didStructureChange = processedMessages.some(message => transcriptStructureChanged(previousMessages.get(message.id), message))
+        || reducerResult.reducerStateChanged === true;
     const orderedTranscript = applyReducedMessages(existing, processedMessages);
     const messagesById = orderedTranscript.messagesById;
     const nextIds = orderedTranscript.messageIdsOldestFirst;
@@ -402,6 +421,7 @@ export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
             latestThinkingMessageId,
             latestThinkingMessageActivityAtMs,
             messagesVersion: existing.messagesVersion + (processedMessages.length > 0 ? 1 : 0),
+            transcriptStructureVersion: (existing.transcriptStructureVersion ?? existing.messagesVersion) + (didStructureChange ? 1 : 0),
             subagentSourceVersion: (existing.subagentSourceVersion ?? existing.messagesVersion) + (didSubagentSourceChange ? 1 : 0),
             lastAppliedAgentStateVersion: existing.lastAppliedAgentStateVersion,
         },
@@ -424,6 +444,7 @@ function createEmptySessionMessages(): SessionMessages {
         latestReadyEventSeq: null,
         latestReadyEventAt: null,
         messagesVersion: 0,
+        transcriptStructureVersion: 0,
         subagentSourceVersion: 0,
         lastAppliedAgentStateVersion: null,
         isLoaded: false,
@@ -593,6 +614,8 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
 
                 const messageRevisionsById = existingSession.messageRevisionsById ?? {};
                 const previousMessages = new Map(processedMessages.map((message) => [message.id, existingSession.messagesById[message.id]]));
+                const didStructureChange = processedMessages.some(message => transcriptStructureChanged(previousMessages.get(message.id), message))
+                    || reducerResult.reducerStateChanged === true;
                 const orderedTranscript = syncPerformanceTelemetry.measure(
                     'sync.store.messages.index',
                     { processed: processedMessages.length },
@@ -930,6 +953,9 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                             messagesVersion: options?.replaceExisting === true
                                 ? (state.sessionMessages[sessionId]?.messagesVersion ?? 0) + 1
                                 : existingSession.messagesVersion + (processedMessages.length > 0 ? 1 : 0),
+                            transcriptStructureVersion: options?.replaceExisting === true
+                                ? (state.sessionMessages[sessionId]?.transcriptStructureVersion ?? state.sessionMessages[sessionId]?.messagesVersion ?? 0) + 1
+                                : (existingSession.transcriptStructureVersion ?? existingSession.messagesVersion) + (didStructureChange ? 1 : 0),
                             subagentSourceVersion: options?.replaceExisting === true
                                 ? (state.sessionMessages[sessionId]?.subagentSourceVersion ?? state.sessionMessages[sessionId]?.messagesVersion ?? 0) + 1
                                 : (existingSession.subagentSourceVersion ?? existingSession.messagesVersion) + (didSubagentSourceChange ? 1 : 0),

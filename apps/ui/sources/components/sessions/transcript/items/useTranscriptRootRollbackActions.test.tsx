@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
 import { readRuntimeCapabilitiesForSession } from '@happier-dev/agents';
 
 import { renderHook } from '@/dev/testkit';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { Message } from "@happier-dev/session-core/messages";
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { storage } from '@/sync/domains/state/storageStore';
+import { useSessionMessagesById, useSessionTranscriptIds } from '@/sync/store/hooks';
 
 import { useTranscriptRootRollbackActions } from './useTranscriptRootRollbackActions';
 
@@ -131,48 +134,51 @@ describe('useTranscriptRootRollbackActions', () => {
         await hook.unmount();
     });
 
-    it('recomputes rollback actions when the transcript store mutates stable message containers', async () => {
-        const messageIdsOldestFirst = ['user'];
-        const stableMessagesById: Record<string, Message> = { ...messagesById };
-        const session = createSession([1, 4]);
-        const hook = await renderHook(
-            ({ revision }: { revision: number }) => {
-                void revision;
-                return useTranscriptRootRollbackActions({
-                    messageIdsOldestFirst,
-                    messagesById: stableMessagesById,
-                    session,
-                    sessionMetadataSignature: 'metadata-v1',
-                    stableSessionMetadata: metadata,
-                });
-            },
-            { initialProps: { revision: 1 } },
-        );
-
-        expect(hook.getCurrent().rollbackActionsByMessageId).toHaveProperty('user');
-
-        messageIdsOldestFirst.push('second-user');
-        stableMessagesById['second-user'] = {
-            kind: 'user-text',
-            id: 'second-user',
-            seq: 4,
-            localId: 'local-second-user',
-            createdAt: 4,
-            text: 'second prompt',
-        };
-        await hook.rerender({ revision: 2 });
-
-        expect(hook.getCurrent().rollbackActionsByMessageId).toMatchObject({
-            user: {
-                target: { type: 'before_user_message', userMessageSeq: 1 },
-                restoredDraftText: 'first prompt',
-            },
-            'second-user': {
-                target: { type: 'before_user_message', userMessageSeq: 4 },
-                restoredDraftText: 'second prompt',
-            },
+    it('recomputes rollback actions when the transcript store publishes another prompt', async () => {
+        const previous = storage.getState();
+        const session = createSessionFixture({ ...createSession([1, 4]), id: 'rollback-publication' });
+        storage.getState().applySessions([session]);
+        storage.getState().applyMessages(session.id, [{
+            id: 'user', seq: 1, localId: null, createdAt: 1,
+            role: 'user', isSidechain: false, content: { type: 'text', text: 'first prompt' },
+        }]);
+        const initialTranscript = storage.getState().sessionMessages[session.id]!;
+        const firstMessageId = initialTranscript.messageIdsOldestFirst[0]!;
+        const hook = await renderHook(() => {
+            const { ids } = useSessionTranscriptIds(session.id);
+            const committedMessages = useSessionMessagesById(session.id, true, { textUpdates: false });
+            return useTranscriptRootRollbackActions({
+                messageIdsOldestFirst: ids,
+                messagesById: committedMessages,
+                session,
+                sessionMetadataSignature: 'metadata-v1',
+                stableSessionMetadata: metadata,
+            });
         });
-
-        await hook.unmount();
+        try {
+            expect(hook.getCurrent().rollbackActionsByMessageId).toHaveProperty(firstMessageId);
+            await act(async () => {
+                storage.getState().applyMessages(session.id, [{
+                    id: 'second-user', seq: 4, localId: null, createdAt: 4,
+                    role: 'user', isSidechain: false, content: { type: 'text', text: 'second prompt' },
+                }]);
+            });
+            const nextTranscript = storage.getState().sessionMessages[session.id]!;
+            expect(nextTranscript.messagesById).not.toBe(initialTranscript.messagesById);
+            expect(nextTranscript.messageIdsOldestFirst).not.toBe(initialTranscript.messageIdsOldestFirst);
+            expect(hook.getCurrent().rollbackActionsByMessageId).toMatchObject({
+                [firstMessageId]: {
+                    target: { type: 'before_user_message', userMessageSeq: 1 },
+                    restoredDraftText: 'first prompt',
+                },
+                [nextTranscript.messageIdsOldestFirst[1]!]: {
+                    target: { type: 'before_user_message', userMessageSeq: 4 },
+                    restoredDraftText: 'second prompt',
+                },
+            });
+        } finally {
+            await hook.unmount();
+            storage.setState(previous);
+        }
     });
 });

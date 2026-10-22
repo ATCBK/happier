@@ -13,6 +13,7 @@ import {
 import { TranscriptNavigationTurnFactsStrip } from './TranscriptNavigationTurnFactsStrip';
 import { resolveTranscriptNavigationRailSoftFadeStyle } from './useTranscriptNavigationRailSoftPresence';
 import type { TranscriptNavigationRailEntry } from './TranscriptNavigationRail';
+import { useTranscriptNavigationEntryText } from './useTranscriptNavigationEntryText';
 
 type WebPreviewViewProps = React.ComponentPropsWithRef<typeof View> & {
     onPointerEnter?: (event: unknown) => void;
@@ -48,11 +49,12 @@ export type TranscriptNavigationRailPreviewProps = Readonly<{
  */
 export function TranscriptNavigationRailPreview(props: TranscriptNavigationRailPreviewProps) {
     const styles = stylesheet;
-    const title = resolveTranscriptNavigationEntryPrimaryText(props.entry);
-    const body = resolveTranscriptNavigationEntrySecondaryText(props.entry);
+    const entry = useTranscriptNavigationEntryText(props.entry) ?? props.entry;
+    const title = resolveTranscriptNavigationEntryPrimaryText(entry);
+    const body = resolveTranscriptNavigationEntrySecondaryText(entry);
     return (
         <WebPreviewView
-            accessibilityLabel={props.entry.label}
+            accessibilityLabel={entry.label}
             onLayout={props.onLayout}
             onPointerEnter={props.onPointerEnter}
             onPointerLeave={props.onPointerLeave}

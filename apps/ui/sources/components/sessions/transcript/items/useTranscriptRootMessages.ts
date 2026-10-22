@@ -9,14 +9,14 @@ import { buildForkAwareMessageDescriptors } from '@/components/sessions/transcri
 import { sync } from '@/sync/sync';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
-export function useTranscriptRootMessages(sessionId: string) {
+export function useTranscriptRootMessages(sessionId: string, options?: Readonly<{ liveText?: boolean }>) {
     const source = useSessionTranscriptSource();
     const scope = useActiveServerAccountScope(source.kind === 'app' ? source.serverId ?? undefined : null);
     // Fork ancestry is an app-owned cross-session projection, never a snapshot fallback.
-    const fork = source.kind === 'app' ? useForkedTranscriptSnapshot(sessionId) : null;
+    const fork = source.kind === 'app' ? useForkedTranscriptSnapshot(sessionId, { textUpdates: options?.liveText === true }) : null;
     const childMessageIdsOldestFirst = source.useMessageIdsOldestFirst();
     const { isLoaded } = source.history.useState();
-    const childMessagesById = source.useMessagesById();
+    const childMessagesById = source.useMessagesById({ textUpdates: options?.liveText === true });
     const forkedTranscriptEnabled = fork != null;
 
     const forkContextNeedsPrefetch = React.useMemo(() => {

@@ -44,6 +44,7 @@ export type TranscriptNavigationToolFacts = Readonly<{
     completedAtMs: number | null;
 }>;
 export type TranscriptNavigationFallbackLabelKind = 'pinned-assistant' | 'pinned-tool' | 'pinned-message';
+export type TranscriptNavigationPreviewSource = Readonly<{ messageId: string | null; preview: string | null }>;
 
 export type TranscriptNavigationEntry = Readonly<{
     id: string;
@@ -57,6 +58,9 @@ export type TranscriptNavigationEntry = Readonly<{
     fallbackLabelKind?: TranscriptNavigationFallbackLabelKind | null;
     promptPreview: string | null;
     responsePreview: string | null;
+    /** Loaded text is read by the preview leaf; remote history retains its supplied preview. */
+    responsePreviewSources?: readonly TranscriptNavigationPreviewSource[];
+    labelMessageId?: string;
     createdAtMs: number | null;
     pinned: boolean;
     pinnedAtMs: number | null;

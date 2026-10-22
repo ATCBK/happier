@@ -35,10 +35,12 @@ export type ForkedTranscriptSnapshot = Readonly<{
 type MinimalState = Pick<StorageState, 'sessions' | 'sessionMessages'>
   & Partial<Pick<StorageState, 'sessionMessagesHistoryStartLoaded' | 'sessionLocalStateScope'>>;
 
-type CacheEntry = Readonly<{
+type CacheEntry = Partial<Record<'live' | 'structure', Readonly<{
   key: string;
   snapshot: ForkedTranscriptSnapshot;
-}>;
+  // Lifetime checks must not retain an evicted reducer's full raw/sidechain graph.
+  reducers: readonly (WeakSet<object> | null)[];
+}>>>;
 
 const cacheByChildSessionId = new LruMap<string, CacheEntry>({
   maxEntries: loadSyncTuning().transcriptForkedSnapshotCacheMaxSessions,
@@ -105,7 +107,7 @@ function filterIdsByCutoffSeqInclusive(params: Readonly<{
   return out;
 }
 
-export function getForkedTranscriptSnapshotCached(state: MinimalState, childSessionId: string): ForkedTranscriptSnapshot | null {
+export function getForkedTranscriptSnapshotCached(state: MinimalState, childSessionId: string, options?: Readonly<{ textUpdates?: boolean }>): ForkedTranscriptSnapshot | null {
   const segmentsRaw = buildSegmentsRootToChild(state, childSessionId);
   if (!segmentsRaw) return null;
 
@@ -116,17 +118,26 @@ export function getForkedTranscriptSnapshotCached(state: MinimalState, childSess
   const visualCopies = sharedVisuals.success ? sharedVisuals.data.copies : ownerVisuals.success ? ownerVisuals.data.copies : [];
 
   const keyParts: string[] = [];
+  const reducers: Array<MinimalState['sessionMessages'][string]['reducerState'] | undefined> = [];
   for (const seg of segmentsRaw) {
     const sessionMessages = state.sessionMessages[seg.sessionId];
-    const version = sessionMessages?.messagesVersion ?? 0;
+    reducers.push(sessionMessages?.reducerState);
+    // Ancestor text still invalidates the context snapshot. Only the child's
+    // live prose is supplied independently by its rendered row subscriptions.
+    const version = options?.textUpdates === false && !seg.isReadOnlyContext
+      ? sessionMessages?.transcriptStructureVersion ?? sessionMessages?.messagesVersion ?? 0
+      : sessionMessages?.messagesVersion ?? 0;
     const idsLen = sessionMessages?.messageIdsOldestFirst?.length ?? 0;
     const historyStartLoaded = state.sessionMessagesHistoryStartLoaded?.[seg.sessionId] === true;
     keyParts.push(`${state.sessions[seg.sessionId]?.serverId ?? state.sessionLocalStateScope?.serverId ?? ''}:${seg.sessionId}:${seg.cutoffSeqInclusive ?? 'full'}:${version}:${idsLen}:${historyStartLoaded}:${sessionMessages?.isLoaded === true}`);
   }
   const key = `${keyParts.join('|')}|${JSON.stringify(visualCopies)}`;
 
-  const existing = cacheByChildSessionId.get(childSessionId);
-  if (existing && existing.key === key) {
+  const mode = options?.textUpdates === false ? 'structure' : 'live';
+  const existing = cacheByChildSessionId.get(childSessionId)?.[mode];
+  if (existing && existing.key === key && reducers.length === existing.reducers.length
+    && reducers.every((reducer, index) => reducer
+      ? existing.reducers[index]?.has(reducer) === true : existing.reducers[index] === null)) {
     return existing.snapshot;
   }
 
@@ -281,6 +292,8 @@ export function getForkedTranscriptSnapshotCached(state: MinimalState, childSess
     visualCopies,
   };
 
-  cacheByChildSessionId.set(childSessionId, { key, snapshot });
+  cacheByChildSessionId.set(childSessionId, { ...cacheByChildSessionId.get(childSessionId), [mode]: {
+    key, snapshot, reducers: reducers.map(reducer => reducer ? new WeakSet([reducer]) : null),
+  } });
   return snapshot;
 }

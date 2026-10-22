@@ -1,48 +1,45 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { Encryption } from '@/sync/encryption/encryption';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { encodeBase64 } from '@/encryption/base64';
+import { deriveAccountSigningPublicKey } from '@/auth/flows/challenge';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import type { SessionMessagesEncryption } from '@/sync/engine/sessions/sessionMessagesPagePipeline';
 import type { SessionMessagesWindowState } from '@/sync/runtime/sessionMessagesWindowState';
 import { AppSessionTranscriptSourceProvider } from './appSessionTranscriptSource';
 import { useSessionTranscriptSource } from './SessionTranscriptSourceContext';
 
-const request = vi.hoisted(() => vi.fn());
-// HTTP and scoped credential persistence are the real external boundaries.
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({ importOriginal, tokenStorage: {
-        getCredentialsForServerUrl: async () => ({ token: 'hdr.eyJzdWIiOiJhY2NvdW50LWEifQ.sig' }),
-    } });
-});
-vi.mock('@/sync/api/session/apiSocket', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/api/session/apiSocket')>();
-    return { ...original, apiSocket: { ...original.apiSocket, request } };
-});
-
-beforeEach(async () => {
-    request.mockReset();
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input instanceof Request ? input.url : input);
-        if (url.endsWith('/v1/auth/ping') || url.endsWith('/health')) return Response.json({ ok: true });
-        return request(input, init);
-    });
-    await loadSyncSingletonForTests();
-});
-afterEach(() => { vi.unstubAllGlobals(); standardCleanup(); });
+afterEach(standardCleanup);
+let home: Awaited<ReturnType<typeof serveSessionActionHome>> | undefined;
+afterEach(async () => { await home?.dispose(); home = undefined; });
 
 describe('source-owned Find history paging', () => {
     it('continues both frontiers of a route-created encrypted window through the real decrypt and reducer pipeline', async () => {
-        const { sync } = await import('@/sync/syncEngine');
-        const previous = storage.getState();
         const id = 'find-encrypted-window';
-        const encryption = await Encryption.create(new Uint8Array(32).fill(7));
+        const secret = new Uint8Array(32).fill(7);
+        const encryption = await Encryption.create(secret);
         await encryption.initializeSessions(new Map([[id, new Uint8Array(32).fill(8)]]));
         const reader = encryption.getSessionEncryption(id)!;
+        const request = vi.fn<(url: URL) => Promise<Response>>();
+        home = await serveSessionActionHome({
+            homes: [{ key: 'owner', serverUrl: 'https://find-history.test', accountId: 'account-a', accountMode: 'e2ee',
+                credentials: { token: createAccountTokenForTests('account-a'), secret: encodeBase64(secret, 'base64url') },
+                encryptionCurrentness: () => ({ mode: 'e2ee', version: 1, updatedAt: 1,
+                    signingKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(deriveAccountSigningPublicKey(secret)),
+                    contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(encryption.contentDataKey),
+                    recipientEnvelopeReadiness: { status: 'available' },
+                }),
+            }],
+            route: ({ path, url }) => path === `/v1/sessions/${id}/messages` ? request(url) : undefined,
+        });
+        const { sync } = await import('@/sync/syncEngine');
+        const previous = storage.getState();
         // Seed the singleton's actual encryption and known-Session lifecycle.
         const owner = sync as unknown as {
             encryption: { getSessionEncryption(id: string): SessionMessagesEncryption | null };
@@ -68,7 +65,7 @@ describe('source-owned Find history paging', () => {
             return { source, history: source.history.useState(), messages: source.useMessagesById() };
         }, { wrapper: (props) => <AppSessionTranscriptSourceProvider sessionId={id}>{props.children}</AppSessionTranscriptSourceProvider> });
         try {
-            await act(async () => { await hook.getCurrent().source.history.loadTargetWindow?.({ kind: 'route-message-id', routeMessageId: 'server:m100', seqHint: 100 }); });
+            await act(async () => { expect(await hook.getCurrent().source.history.loadTargetWindow?.({ kind: 'route-message-id', routeMessageId: 'server:m100', seqHint: 100 })).toMatchObject({ status: 'loaded' }); });
             const windowId = sync.getSessionTargetWindowState(id).windowId;
             // A failed ciphertext must remain retryable without certifying or advancing its frontier.
             request.mockResolvedValueOnce(Response.json({ messages: [{ ...await encryptedRow(99, 'unreadable'), content: { t: 'encrypted', c: 'unreadable-ciphertext' } }], hasMore: false, nextBeforeSeq: null }));

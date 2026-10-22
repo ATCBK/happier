@@ -166,19 +166,24 @@ export function useTranscriptSessionCommon(): TranscriptSessionCommon {
     const accountActorViewerScope = authorship.viewerScope;
     const sessionForkSupportSource = source.useForkSupportSource();
     const workspacePath = source.useWorkspacePath();
-    const sourceMessagesById = source.useMessagesById();
+    const sourceMessagesById = source.useMessagesById({ textUpdates: false });
+    const relevantMessages = React.useMemo(() => {
+        const tools: Record<string, Message> = {};
+        const deliveries: Record<string, Message> = {};
+        for (const [id, message] of Object.entries(sourceMessagesById)) {
+            if (message.kind === 'tool-call') tools[id] = message;
+            if (message.localId && message.followDeliveryProjection) deliveries[id] = message;
+        }
+        return { tools, deliveries };
+    }, [sourceMessagesById]);
     // Only tool rows use this route lookup; streamed text has its own row-local reader.
-    const messagesById = useShallow((messages: Readonly<Record<string, Message>>) => Object.fromEntries(
-        Object.entries(messages).filter(([, message]) => message.kind === 'tool-call'),
-    ))(sourceMessagesById);
+    const messagesById = useShallow((messages: Readonly<Record<string, Message>>) => messages)(relevantMessages.tools);
     // Delivery evidence changes far less often than transcript rows. Keep the
     // shared row props stable when unrelated messages stream in.
-    const followDeliveryMessagesById = useShallow((messages: Readonly<Record<string, Message>>) => Object.fromEntries(
-        Object.entries(messages).filter(([, message]) => Boolean(message.localId && message.followDeliveryProjection)),
-    ))(sourceMessagesById);
+    const followDeliveryMessagesById = useShallow((messages: Readonly<Record<string, Message>>) => messages)(relevantMessages.deliveries);
     const followDeliveryByLocalId = React.useMemo(
         () => indexFollowDeliveryByLocalId(followDeliveryMessagesById), [followDeliveryMessagesById]);
-    const reducerState = source.useReducerState();
+    const reducerState = source.useReducerState({ textUpdates: false });
     // The server the fork launchers spawn the child on, resolved through the one
     // owner they already use, so the decision below is scoped to that exact
     // server rather than to whatever the sidebar happens to have selected.

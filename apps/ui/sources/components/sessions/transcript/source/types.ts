@@ -41,10 +41,11 @@ export type SessionTranscriptSource = Readonly<{
     serverId: string | null;
     useInteraction(): TranscriptInteraction;
     useMessageIdsOldestFirst(): readonly string[];
-    useMessagesById(): Readonly<Record<string, Message>>;
+    /** Structure consumers leave streaming text to the rendered row subscriptions. */
+    useMessagesById(options?: Readonly<{ textUpdates?: boolean }>): Readonly<Record<string, Message>>;
     useMessage(messageId: string): Message | null;
     useMessagesByIds(ids: readonly string[]): readonly (Message | null)[];
-    useReducerState(): ReducerState | null;
+    useReducerState(options?: Readonly<{ textUpdates?: boolean }>): ReducerState | null;
     useAwareness(): SessionAwarenessProjectionV1 | null;
     /** Runtime observation time for offline labels; static datasets have no runtime. */
     useRuntimeLastObservedAt(): number | null;

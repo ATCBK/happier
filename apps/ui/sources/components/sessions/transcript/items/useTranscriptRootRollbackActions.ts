@@ -32,7 +32,7 @@ function areSameMessages(
     previous: readonly TurnChangeToolMessage[],
     next: readonly TurnChangeToolMessage[],
 ): boolean {
-    return previous.length === next.length && previous.every((message, index) => message === next[index]);
+    return previous === next || (previous.length === next.length && previous.every((message, index) => message === next[index]));
 }
 
 export function useTranscriptRootRollbackActions(params: Readonly<{
@@ -71,17 +71,16 @@ export function useTranscriptRootRollbackActions(params: Readonly<{
         () => readSessionRollbackRangesV1((stableSessionMetadata as Record<string, unknown> | null | undefined) ?? null),
         [sessionMetadataSignature, stableSessionMetadata],
     );
-    // The transcript store mutates these containers in place and uses a separate revision to
-    // trigger this root render. Recompute the content signature instead of memoizing by identity.
-    const rollbackActionsInputSignature = buildRollbackActionsInputSignature({
+    const rollbackActionsInputSignature = React.useMemo(() => buildRollbackActionsInputSignature({
         messageIdsOldestFirst,
         messagesById,
-    });
+    }), [messageIdsOldestFirst, messagesById]);
     const turnChangeSetsCacheRef = React.useRef<Readonly<{
         sourceMessages: readonly TurnChangeToolMessage[];
         turnChangeSets: ReturnType<typeof deriveTurnChangeSetsFromMessages>;
     }>>({ sourceMessages: [], turnChangeSets: [] });
-    const turnChangeToolMessages = listTurnChangeToolMessages({ messageIdsOldestFirst, messagesById });
+    const turnChangeToolMessages = React.useMemo(() => listTurnChangeToolMessages({ messageIdsOldestFirst, messagesById }),
+        [messageIdsOldestFirst, messagesById]);
     if (!areSameMessages(turnChangeSetsCacheRef.current.sourceMessages, turnChangeToolMessages)) {
         turnChangeSetsCacheRef.current = {
             sourceMessages: turnChangeToolMessages,

@@ -9,6 +9,7 @@ import {
 } from './resolveTranscriptNavigationRailMotion';
 import { isTranscriptNavigationEntryWaiting } from './transcriptNavigationFilters';
 import type { TranscriptNavigationEntry } from './transcriptNavigationTypes';
+import { useTranscriptNavigationEntryText } from './useTranscriptNavigationEntryText';
 
 /** The trail speaks the pane's marker language: amber waits for you, red ended in failure. */
 export type TranscriptNavigationRailMarkerTone = 'waiting' | 'failed' | null;
@@ -33,6 +34,7 @@ export type TranscriptNavigationRailMarkerProps = Readonly<{
     anchorId: string;
     index: number;
     label: string;
+    entry?: TranscriptNavigationEntry;
     markerHeightPx: number;
     motion: TranscriptNavigationRailMarkerMotion;
     onFocusFromPointer: (index: number, event: unknown) => void;
@@ -46,6 +48,7 @@ export type TranscriptNavigationRailMarkerProps = Readonly<{
 
 function TranscriptNavigationRailMarkerComponent(props: TranscriptNavigationRailMarkerProps) {
     const styles = stylesheet;
+    const entry = useTranscriptNavigationEntryText(props.entry);
     const { index, onFocusFromPointer, onPress } = props;
     const handlePointerEnter = React.useCallback((event: unknown) => {
         onFocusFromPointer(index, event);
@@ -56,7 +59,7 @@ function TranscriptNavigationRailMarkerComponent(props: TranscriptNavigationRail
 
     return (
         <WebMarkerView
-            accessibilityLabel={props.label}
+            accessibilityLabel={entry?.label ?? props.label}
             accessibilityRole="button"
             accessibilityState={{
                 selected: props.active,
@@ -110,6 +113,7 @@ export const TranscriptNavigationRailMarker = React.memo(
         left.anchorId === right.anchorId &&
         left.index === right.index &&
         left.label === right.label &&
+        left.entry === right.entry &&
         left.markerHeightPx === right.markerHeightPx &&
         transcriptNavigationRailMarkerMotionEquals(left.motion, right.motion) &&
         left.onFocusFromPointer === right.onFocusFromPointer &&

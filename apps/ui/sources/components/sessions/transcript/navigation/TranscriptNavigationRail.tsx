@@ -584,6 +584,7 @@ export function TranscriptNavigationRail(props: TranscriptNavigationRailProps) {
                                 anchorId={entry.id}
                                 index={index}
                                 label={entry.label}
+                                entry={entry.role === 'assistant' ? entry : undefined}
                                 markerHeightPx={layout.markerHeightPx}
                                 motion={resolveTranscriptNavigationRailMarkerMotion({
                                     activeIndex: activeIndex >= 0 ? activeIndex : null,

@@ -35,6 +35,10 @@ function textForMessage(message: Message): string | null {
     return null;
 }
 
+export function readTranscriptNavigationMessagePreview(message: Message): string | null {
+    return normalizeTranscriptNavigationTextPreview(textForMessage(message));
+}
+
 function permissionOutcome(message: Message & { kind: 'tool-call' }): TranscriptNavigationToolFacts['permission'] {
     const permission = message.tool.permission;
     if (!permission) return null;
@@ -72,7 +76,7 @@ function buildLoadedMessageRow(sessionId: string, message: Message): TranscriptN
         seq: normalizeFiniteInteger(message.seq),
         transcriptBlockIndex: normalizeFiniteInteger(message.transcriptBlockIndex),
         role: roleForMessage(message),
-        text: normalizeTranscriptNavigationTextPreview(textForMessage(message)),
+        text: readTranscriptNavigationMessagePreview(message),
         createdAtMs: normalizeFiniteInteger(message.createdAt),
         loaded: true,
         tool: toolFactsForMessage(message),

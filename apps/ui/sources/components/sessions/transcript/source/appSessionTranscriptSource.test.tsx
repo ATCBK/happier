@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { Text } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
@@ -6,7 +7,7 @@ import { resolveMessageRouteIdForDisplay, type Message } from '@happier-dev/sess
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 import {
     createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createToolCallMessageFixture,
-    renderHook, renderScreen, standardCleanup,
+    renderHook, renderScreen, standardCleanup, flushHookEffects,
 } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
 import { getActiveServerSnapshot, setActiveServer } from '@/sync/domains/server/serverRuntime';
@@ -27,6 +28,8 @@ import { SessionCompanionContent } from '@/components/sessions/companion/Session
 import { SessionCompanionScreen } from '@/components/sessions/companion/SessionCompanionScreen';
 import { useSessionCompanionController } from '@/components/sessions/companion/state/useSessionCompanionController';
 import { SESSION_SUMMARY_COMPANION_ITEM } from '@/components/sessions/companion/state/sessionCompanionPreference';
+import { TranscriptNavigationRailPreview } from '../navigation/TranscriptNavigationRailPreview';
+import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 
 const { routerPush, routerSetParams } = vi.hoisted(() => ({ routerPush: vi.fn(), routerSetParams: vi.fn() }));
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
@@ -53,6 +56,99 @@ beforeEach(async () => {
 });
 
 describe('app transcript source', () => {
+    it.each([
+        { forked: false, thinking: false }, { forked: true, thinking: false },
+        { forked: false, thinking: true }, { forked: true, thinking: true },
+    ])('publishes stream text to message and navigation leaves without rebuilding history (fork=$forked, thinking=$thinking)', async ({ forked, thinking }) => {
+        const previous = storage.getState();
+        const parent = createSessionFixture({ id: 'root-stream-parent' });
+        const session = createSessionFixture({ id: 'root-stream-locality', active: true, thinking, agentState: {}, ...(forked ? {
+            metadata: { ...createSessionFixture().metadata!, forkV1: { v: 1, parentSessionId: parent.id,
+                parentCutoffSeqInclusive: 0, createdAtMs: 1, strategy: 'replay' } },
+        } : {}) });
+        const stream = (text: string, tick: number, segmentState: 'streaming' | 'interrupted' | 'complete' = 'streaming'): NormalizedMessage => ({
+            id: 'stream-row', seq: 102, localId: 'stream-row', createdAt: 102,
+            sourceCreatedAt: 102, sourceUpdatedAt: tick,
+            role: 'agent', isSidechain: false,
+            content: [thinking ? { type: 'thinking', thinking: text, uuid: 'stream-row', parentUUID: null }
+                : { type: 'text', text, uuid: 'stream-row', parentUUID: null }],
+            meta: { happierStreamSegmentV1: { v: 1, segmentKind: thinking ? 'thinking' : 'assistant', segmentLocalId: 'stream-row',
+                segmentState, startedAtMs: 2, updatedAtMs: tick } },
+        });
+        let rootRenders = 0;
+        const derivations = () => syncPerformanceTelemetry.snapshot().events
+            .filter(event => event.name.startsWith('ui.sessions.transcript.derived.'))
+            .reduce((sum, event) => sum + event.count, 0);
+        const telemetryEnabled = syncPerformanceTelemetry.isEnabled();
+        let rowRenders = 0;
+        let streamingId = '';
+        let historyReads = 0;
+        const initialNow = Date.now();
+        let now = initialNow;
+        const clock = thinking ? vi.spyOn(Date, 'now').mockImplementation(() => now) : null;
+        function MessageLeaf({ id }: { id: string }) {
+            rowRenders += 1;
+            const message = useTranscriptMessage(id);
+            return <><Text testID="stream-text">{message?.kind === 'agent-text' ? message.text : ''}</Text>
+                <Text testID="stream-updated">{message?.sourceUpdatedAt}</Text></>;
+        }
+        function Root() {
+            rootRenders += 1;
+            const root = useChatListRootState({ session, sessionSurfaceKey: session.id });
+            const items = root.internalProps.items;
+            const entry = root.internalProps.transcriptNavigationEntries.at(-1);
+            return <>
+                <Text testID="root-order">{items.map(item => item.id).join(',')}</Text>
+                <MessageLeaf id={streamingId} />
+                {entry ? <TranscriptNavigationRailPreview entry={entry} shown topPx={0} /> : null}
+            </>;
+        }
+        try {
+            syncPerformanceTelemetry.configure({ enabled: true });
+            storage.getState().applySessions([parent, session]);
+            storage.getState().applyMessages(session.id, [...Array.from({ length: 100 }, (_, index): NormalizedMessage => ({
+                id: `historical-${index}`, seq: index + 1, localId: null, createdAt: index + 1,
+                role: 'user', isSidechain: false, content: { type: 'text', text: `Earlier question ${index}` },
+            })), { id: 'prompt', seq: 101, localId: null, createdAt: 101,
+                role: 'user', isSidechain: false, content: { type: 'text', text: 'Check the project' } }, stream('', 2)]);
+            storage.getState().applyMessagesLoaded(session.id);
+            const transcript = storage.getState().sessionMessages[session.id]!;
+            streamingId = transcript.messageIdsOldestFirst.at(-1)!;
+            // Read-only instrumentation: retain every real row/reference and count
+            // work against historical fields, not merely selected-result equality.
+            for (const id of transcript.messageIdsOldestFirst.slice(0, 100)) {
+                const message = transcript.messagesById[id]!;
+                const { kind, meta } = message;
+                Object.defineProperties(message, {
+                    kind: { enumerable: true, configurable: true, get: () => { historyReads += 1; return kind; } },
+                    meta: { enumerable: true, configurable: true, get: () => { historyReads += 1; return meta; } },
+                });
+            }
+            const screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId={session.id}><Root /></AppSessionTranscriptSourceProvider>);
+            await flushHookEffects({ cycles: 5, turns: 2 });
+            const before = { rootRenders, derivations: derivations(), rowRenders, historyReads };
+            expect(before.derivations).toBeGreaterThan(0);
+            const order = screen.findByTestId('root-order')!.props.children;
+            for (let tick = 3; tick <= 7; tick += 1) {
+                now = initialNow + tick * 10;
+                await act(async () => { storage.getState().applyMessages(session.id, [stream(`Progress ${tick}`, tick)]); });
+                expect(screen.findByTestId('stream-text')!.props.children).toBe(`Progress ${tick}`);
+                expect(screen.findByTestId('stream-updated')!.props.children).toBe(tick);
+                if (thinking) expect(screen.findByTestId('transcript-navigation-rail.preview.body')).toBeNull();
+                else expect(screen.findByTestId('transcript-navigation-rail.preview.body')!.props.children).toBe(`Progress ${tick}`);
+                expect(screen.findByTestId('root-order')!.props.children).toBe(order);
+            }
+            expect({ rootRenders: rootRenders - before.rootRenders, derivations: derivations() - before.derivations,
+                rowRenders: rowRenders - before.rowRenders, historyReads: historyReads - before.historyReads })
+                .toEqual({ rootRenders: thinking ? 5 : 0, derivations: 0, rowRenders: 5, historyReads: 0 });
+            await act(async () => { storage.getState().applyMessages(session.id, [stream('Finished', 8, 'complete')]); });
+            expect(rootRenders).toBeGreaterThan(before.rootRenders);
+            expect(screen.findByTestId('stream-text')!.props.children).toBe('Finished');
+            if (thinking) expect(screen.findByTestId('transcript-navigation-rail.preview.body')).toBeNull();
+            else expect(screen.findByTestId('transcript-navigation-rail.preview.body')!.props.children).toBe('Finished');
+            await screen.unmount();
+        } finally { clock?.mockRestore(); syncPerformanceTelemetry.configure({ enabled: telemetryEnabled }); storage.setState(previous); }
+    });
     it.each([false, true])('withdraws legacy live fields and messages when another Home is staged (retained=%s)', async (retained) => {
         const previous = storage.getState();
         const serverId = getActiveServerSnapshot().serverId;

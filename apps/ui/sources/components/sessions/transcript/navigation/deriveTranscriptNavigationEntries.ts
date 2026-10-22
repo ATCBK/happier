@@ -14,6 +14,7 @@ import type {
     TranscriptNavigationRole,
     TranscriptNavigationTurnApproval,
     TranscriptNavigationTurnFacts,
+    TranscriptNavigationPreviewSource,
 } from './transcriptNavigationTypes';
 
 export type NavigationEntryWithOrder = Readonly<{
@@ -28,6 +29,7 @@ export type UserTurnDraft = Readonly<{
     routeMessageId: string | null;
     promptPreview: string;
     responsePreview: string | null;
+    responsePreviewSources?: readonly TranscriptNavigationPreviewSource[];
     createdAtMs: number | null;
     loaded: boolean;
     /** Ordering surrogate only (role-ranked when the row has no block index). Never entry identity. */
@@ -264,6 +266,8 @@ function deriveLoadedUserTurns(
     let activeAgentPreview: string | null = null;
     let activeToolPreview: string | null = null;
     let activeFacts: TurnFactsAccumulator | null = null;
+    let activeResponseSources: TranscriptNavigationPreviewSource[] = [];
+    let activeToolSources: TranscriptNavigationPreviewSource[] = [];
 
     const commitActiveUser = () => {
         if (!activeUser) return;
@@ -274,6 +278,8 @@ function deriveLoadedUserTurns(
             activeAgentPreview = null;
             activeToolPreview = null;
             activeFacts = null;
+            activeResponseSources = [];
+            activeToolSources = [];
             return;
         }
 
@@ -285,6 +291,7 @@ function deriveLoadedUserTurns(
             // Agent text is the subtitle whenever the turn produced any; a tool-only turn falls
             // back to what the agent did. Thinking rows never reach here: their builders emit no text.
             responsePreview: activeAgentPreview ?? activeToolPreview,
+            responsePreviewSources: [...activeToolSources, ...activeResponseSources],
             createdAtMs: normalizeFiniteInteger(activeUser.createdAtMs),
             loaded: activeUser.loaded !== false,
             blockOrder: normalizeBlockIndex(activeUser.transcriptBlockIndex, 'user'),
@@ -295,6 +302,8 @@ function deriveLoadedUserTurns(
         activeAgentPreview = null;
         activeToolPreview = null;
         activeFacts = null;
+        activeResponseSources = [];
+        activeToolSources = [];
     };
 
     for (const message of loadedMessages) {
@@ -316,6 +325,11 @@ function deriveLoadedUserTurns(
         const activeUserSeq = normalizeFiniteInteger(activeUser.seq);
         if (replySeq !== null && activeUserSeq !== null && replySeq < activeUserSeq) continue;
         if (activeFacts) accumulateTurnRow(activeFacts, message);
+        // Preserve assistant-over-tool precedence, including a loaded assistant
+        // whose first snapshot is empty and becomes visible in a later tick.
+        const source = { messageId: message.loaded === false ? null : message.messageId, preview: message.text };
+        if (message.role === 'assistant') activeResponseSources.push(source);
+        else activeToolSources.push(source);
         const preview = message.text;
         if (!preview) continue;
         if (message.role === 'assistant') {
@@ -393,6 +407,7 @@ export function buildUserEntry(turn: UserTurnDraft, mode: 'all' | 'pinned', pin:
             label: normalizeTextPreview(pin?.label) ?? turn.promptPreview,
             promptPreview: turn.promptPreview,
             responsePreview: turn.responsePreview,
+            responsePreviewSources: turn.responsePreviewSources,
             createdAtMs: turn.createdAtMs,
             pinned,
             pinnedAtMs,
@@ -449,6 +464,11 @@ function buildPinnedEntry(params: Readonly<{
             fallbackLabelKind,
             promptPreview,
             responsePreview,
+            responsePreviewSources: isUser ? params.nearestUserTurn?.responsePreviewSources
+                : params.loadedMessage ? [{ messageId: params.loadedMessage.loaded === false ? null : params.loadedMessage.messageId,
+                    preview: loadedPreview }] : undefined,
+            ...(!normalizeTextPreview(params.pin.label) && params.loadedMessage?.loaded !== false && params.loadedMessage
+                ? { labelMessageId: params.loadedMessage.messageId } : {}),
             createdAtMs: normalizeFiniteInteger(params.loadedMessage?.createdAtMs) ?? params.nearestUserTurn?.createdAtMs ?? null,
             pinned: true,
             pinnedAtMs: normalizeFiniteInteger(params.pin.pinnedAtMs),
@@ -523,6 +543,12 @@ function transcriptNavigationEntriesMatch(
         && a.fallbackLabelKind === b.fallbackLabelKind
         && a.promptPreview === b.promptPreview
         && a.responsePreview === b.responsePreview
+        && a.labelMessageId === b.labelMessageId
+        && (a.responsePreviewSources === b.responsePreviewSources
+            || (a.responsePreviewSources?.length === b.responsePreviewSources?.length
+                && (a.responsePreviewSources ?? []).every((source, index) =>
+                    source.messageId === b.responsePreviewSources?.[index]?.messageId
+                    && source.preview === b.responsePreviewSources?.[index]?.preview)))
         && a.createdAtMs === b.createdAtMs
         && a.pinned === b.pinned
         && a.pinnedAtMs === b.pinnedAtMs

@@ -18,7 +18,7 @@ import {
     getStorage, storage, useForkedTranscriptSnapshot, useMessagesByRefs,
     readSessionMessagesSnapshot,
     useSessionForkSupportSource, useSessionInteractionSource,
-    useSessionMessages, useSessionMessagesById, useSessionMessagesReducerState, useSessionMessagesVersion,
+    useSessionMessages, useSessionMessagesById, useSessionMessagesReducerState,
     useSessionTranscriptIds, useSessionWorkspacePath, useSocketStatus,
     type MessageStoreRef,
 } from '@/sync/domains/state/storage';
@@ -79,11 +79,23 @@ export function useSessionIntentionalRestartSourceEvents(): readonly TranscriptI
     const selector = React.useMemo(() => {
         let current: readonly TranscriptIntentionalRestartEvent[] = [];
         let messagesRef: readonly Message[] | null = null;
+        let structureVersion: number | undefined;
+        let previousTranscript: StorageState['sessionMessages'][string] | undefined;
+        let previousScoped: boolean | undefined;
+        let previousFork: ReturnType<typeof getForkedTranscriptSnapshotCached> | undefined;
         return (state: StorageState) => {
             const scoped = !source.serverId || readScopedSession(state, source.sessionId, source.serverId, activeServerId) !== null;
             const transcript = state.sessionMessages[source.sessionId];
+            const fork = scoped ? getForkedTranscriptSnapshotCached(state, source.sessionId, { textUpdates: false }) : null;
+            const version = transcript?.transcriptStructureVersion ?? transcript?.messagesVersion ?? 0;
+            if (previousScoped === scoped && previousFork === fork && previousTranscript?.reducerState === transcript?.reducerState
+                && previousTranscript?.messageIdsOldestFirst === transcript?.messageIdsOldestFirst
+                && previousTranscript?.isLoaded === transcript?.isLoaded && structureVersion === version) return current;
+            previousScoped = scoped;
+            previousFork = fork;
+            previousTranscript = transcript;
+            structureVersion = version;
             const ids = transcript?.messageIdsOldestFirst ?? EMPTY_IDS;
-            const fork = scoped ? getForkedTranscriptSnapshotCached(state, source.sessionId) : null;
             const messages = scoped && (!fork || ids.length > 0)
                 ? readSessionMessagesSnapshot(source.sessionId, ids, transcript?.messagesById ?? EMPTY_MESSAGES_BY_ID, transcript?.messagesVersion ?? 0, transcript?.isLoaded ?? false)
                 : EMPTY_MESSAGES;
@@ -184,16 +196,16 @@ function createAppSessionTranscriptReads(sessionId: string, serverId: string | n
         useMessageIdsOldestFirst: () => {
             const scoped = useMessageScope();
             const { ids } = useSessionTranscriptIds(sessionId, scoped);
-            const fork = useForkedTranscriptSnapshot(sessionId);
+            const fork = useForkedTranscriptSnapshot(sessionId, { textUpdates: false });
             const { messages } = useSessionMessages(sessionId, { enabled: scoped && !fork && ids.length === 0 });
             return React.useMemo(() => !scoped ? EMPTY_IDS : !fork && ids.length === 0 && messages.length > 0
                 ? messages.map((message) => message.id) : ids, [fork, ids, messages, scoped]);
         },
-        useMessagesById: () => {
+        useMessagesById: (options?: Readonly<{ textUpdates?: boolean }>) => {
             const scoped = useMessageScope();
             const { ids } = useSessionTranscriptIds(sessionId, scoped);
-            const byId = useSessionMessagesById(sessionId, scoped);
-            const fork = useForkedTranscriptSnapshot(sessionId);
+            const byId = useSessionMessagesById(sessionId, scoped, options);
+            const fork = useForkedTranscriptSnapshot(sessionId, { textUpdates: false });
             const { messages } = useSessionMessages(sessionId, { enabled: scoped && !fork && ids.length === 0 });
             return React.useMemo(() => scoped && !fork && ids.length === 0 && messages.length > 0
                 ? Object.fromEntries(messages.map((message) => [message.id, message])) : byId, [byId, fork, ids, messages, scoped]);
@@ -203,9 +215,9 @@ function createAppSessionTranscriptReads(sessionId: string, serverId: string | n
             return useSelectedMessages(ids)[0] ?? null;
         },
         useMessagesByIds: useSelectedMessages,
-        useReducerState: () => {
+        useReducerState: (options?: Readonly<{ textUpdates?: boolean }>) => {
             const scoped = useMessageScope();
-            const state = useSessionMessagesReducerState(sessionId);
+            const state = useSessionMessagesReducerState(sessionId, options);
             return scoped ? state : null;
         },
         useMetadata: () => useSessionField((session) => session ? readSessionOwnerMetadataView(session) : null),
@@ -308,9 +320,8 @@ function TranscriptOriginAppSourceRoot(props: Readonly<{ source: SessionTranscri
             history: {
                 useState: () => {
                     const { isLoaded } = useSessionTranscriptIds(sessionId);
-                    useSessionMessagesVersion(sessionId);
                     const window = useSourceTargetWindow(sessionId);
-                    const available = sync.getSessionOlderMessagesAvailability(sessionId);
+                    const available = getStorage()(() => sync.getSessionOlderMessagesAvailability(sessionId));
                     return React.useMemo(() => projectHistoryFrontiers({ isLoaded, hasOlder: available ?? true, isLoadingOlder: false }, window), [available, isLoaded, window]);
                 },
                 loadOlder: null, loadTargetWindow: null,
@@ -351,12 +362,11 @@ function AppSessionTranscriptSourceRoot(props: AppSourceProviderProps) {
             history: {
                 useState: () => {
                     const { isLoaded } = useSessionTranscriptIds(sessionId);
-                    useSessionMessagesVersion(sessionId);
                     const window = useSourceTargetWindow(sessionId, loadOlderOverride == null);
                     const loading = React.useSyncExternalStore(subscribe, () => olderLoadCount > 0, () => olderLoadCount > 0);
                     const loadingNewer = React.useSyncExternalStore(subscribe, () => newerLoadCount > 0, () => newerLoadCount > 0);
                     const more = React.useSyncExternalStore(subscribe, () => overrideHasOlder, () => overrideHasOlder);
-                    const available = loadOlderOverride ? null : sync.getSessionOlderMessagesAvailability(sessionId);
+                    const available = getStorage()(() => loadOlderOverride ? null : sync.getSessionOlderMessagesAvailability(sessionId));
                     return React.useMemo(() => projectHistoryFrontiers({ isLoaded, hasOlder: available ?? more, isLoadingOlder: loading, isLoadingNewer: loadingNewer }, window), [available, isLoaded, loading, loadingNewer, more, window]);
                 },
                 loadOlder: props.readOnly === true ? null : async (options) => {

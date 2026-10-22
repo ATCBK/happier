@@ -35,18 +35,25 @@ export function useCurrentWorkerUpdate(update: WorkerUpdateV1, messageId: string
     const selector = React.useMemo(() => {
         const address = normalizeSessionAddress(source.serverId, source.sessionId);
         let transcript: StorageState['sessionMessages'][string] | undefined;
+        let structureVersion: number | undefined;
         let home: unknown;
         let sessionPresent = false;
         let latest: string | null = null;
         return (state: StorageState) => {
             const nextTranscript = state.sessionMessages[source.sessionId];
+            const nextStructureVersion = nextTranscript?.transcriptStructureVersion ?? nextTranscript?.messagesVersion ?? 0;
             const nextHome = state.sessions[source.sessionId]?.serverId;
             const nextSessionPresent = state.sessions[source.sessionId] !== undefined;
             // Unrelated streaming and metadata writes do not rescan this transcript or rerender
             // historical cards. The retained row still has to prove its Home on every change.
             if (messageId === null) return false;
-            if (transcript !== nextTranscript || home !== nextHome || sessionPresent !== nextSessionPresent) {
+            if (structureVersion !== nextStructureVersion
+                || transcript?.reducerState !== nextTranscript?.reducerState
+                || transcript?.messageIdsOldestFirst !== nextTranscript?.messageIdsOldestFirst
+                || transcript?.isLoaded !== nextTranscript?.isLoaded
+                || home !== nextHome || sessionPresent !== nextSessionPresent) {
                 transcript = nextTranscript;
+                structureVersion = nextStructureVersion;
                 home = nextHome;
                 sessionPresent = nextSessionPresent;
                 latest = latestWorkerUpdateMessageId(readStoredSessionMessagesForAddress(state, address, { activeServerId }), update);
