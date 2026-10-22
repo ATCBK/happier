@@ -7,7 +7,7 @@ import {
   type HappierPublicProfileLabels,
   type HappierPublicProfileUsageHost,
 } from '@happier-dev/plugin-ui/presentation';
-import type { PublicProfileViewV1 } from '@happier-dev/protocol/account/publicProfilePublication';
+import type { PublicProfileLocalPreviewViewV1 } from '@happier-dev/protocol/account/publicProfilePublication';
 
 import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -16,7 +16,7 @@ import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
-export type PublicProfileEditorView = Omit<PublicProfileViewV1, 'appearance'>;
+export type PublicProfileEditorView = Omit<PublicProfileLocalPreviewViewV1, 'appearance'>;
 export type PublicProfileEditorProps = Readonly<{
   status: 'draft' | 'published' | 'paused';
   mode: 'edit' | 'preview';

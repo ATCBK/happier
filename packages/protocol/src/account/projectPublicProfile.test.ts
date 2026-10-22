@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfileSnapshotV1Schema, PublicProfileSnapshotV1StoredSchema,
   PublicProfilePolicyV1StoredSchema, type PublicProfileSnapshotV1 } from './publicProfile.js';
-import { projectPublicProfile, projectPublicProfileSnapshot } from './projectPublicProfile.js';
+import { projectPublicProfile, projectPublicProfilePreview, projectPublicProfileSnapshot } from './projectPublicProfile.js';
 import { PublicProfileLayoutV1Schema, PublicProfileLayoutV1StoredSchema, WidgetPublicSnapshotDocumentV1Schema } from '../widgets/widgetPublicSnapshotV1.js';
-import { PublicProfileContextV1Schema } from './publicProfilePublication.js';
+import { PublicProfileContextV1Schema, PublicProfileViewV1Schema } from './publicProfilePublication.js';
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 import { PluginJsonSchemaV2Schema } from '../plugins/contributions/jsonSchema.js';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '../plugins/actions/jsonSchemaValidation.js';
@@ -40,6 +40,15 @@ describe('public-profile disclosure projection', () => {
       .toMatchObject({ indexable: true });
     expect(projectPublicProfile({ ...input, policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1,
       fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: false } } })?.layout.items).toEqual([]);
+    for (const service of [input.context.service, null]) {
+      const localInput = { ...input, context: { ...input.context, service, urls: null },
+        policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: false } } };
+      const local = projectPublicProfilePreview(localInput);
+      expect(local).toMatchObject({ handle: 'person', service, urls: null, layout: { items: [] } });
+      expect(JSON.stringify(local)).not.toContain('87654321');
+      expect(PublicProfileViewV1Schema.safeParse(local).success).toBe(false);
+      expect(projectPublicProfile(localInput)).toBeNull();
+    }
   });
   it('admits built-in Usage placements without private query inputs and removes calendar-dependent copies when hidden', () => {
     const widget = { kind: 'widget', id: 'sky', title: 'Sky of days', size: 'full', frameStyle: 'plain',

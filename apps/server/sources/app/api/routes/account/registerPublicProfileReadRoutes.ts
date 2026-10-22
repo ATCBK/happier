@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { z } from 'zod/mini';
 import { PublicProfileReadResultV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
-import { readPublicProfile, readPublicProfileDelivery, type PublicProfileDelivery } from '@/app/account/profile/publicProfileRead';
+import { readPublicProfile, readPublicProfileDelivery, readPublicProfileRepresentation, readPublicProfileDeliveryRepresentation, type PublicProfileDelivery } from '@/app/account/profile/publicProfileRead';
 import type { PublicProfileServerDependencies } from '@/app/account/profile/publicProfileStorage';
 import { publicProfileServerDependencies } from '@/app/account/profile/publicProfileDependencies';
 import { renderPublicProfileHtml } from '@/app/account/profile/render/publicProfileHtml';
@@ -12,6 +12,7 @@ import { renderPublicProfileCardPng, renderPublicProfileOg } from '@/app/account
 import { PUBLIC_PROFILE_ASSET_LABELS } from '@/app/account/profile/render/publicProfileLabels';
 import { PUBLIC_PROFILE_PALETTES } from '@/app/account/profile/render/publicProfileEnvironment';
 import { publicProfileFontFaceForFilename, readPublicProfileFont } from '@/app/account/profile/render/publicProfileFonts';
+import { renderPublicProfileHero } from '@/app/account/profile/render/publicProfileHero';
 
 /** Validators describe the currently admitted representation, never a stored snapshot timestamp. */
 export function publicProfileRepresentationEtag(bytes: string | Uint8Array): string {
@@ -48,13 +49,13 @@ export function registerPublicProfileReadRoutes(app: Fastify, deps: PublicProfil
             try {
                 const env = await readRequestHomeEnv(request);
                 // A metric badge has no picture layer, just like its Shields JSON counterpart.
-                const delivery: PublicProfileDelivery = kind === 'badge'
-                    ? { result: await readPublicProfile(request.params.handle, env, deps) }
-                    : await readPublicProfileDelivery(request.params.handle, env, deps);
-                const body = await renderPublicProfileSvg(delivery.result, { ...assetOptions, kind, theme: request.query.theme ?? 'auto',
+                const materialize = (delivery: PublicProfileDelivery) => renderPublicProfileSvg(delivery.result, { ...assetOptions, kind, theme: request.query.theme ?? 'auto',
                     metric: request.params.kind, ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) });
+                const { result, representation: body } = kind === 'badge'
+                    ? await readPublicProfileRepresentation(request.params.handle, env, deps, result => materialize({ result }))
+                    : await readPublicProfileDeliveryRepresentation(request.params.handle, env, deps, materialize);
                 reply.header('Cache-Control', 'public, no-cache, must-revalidate').type('image/svg+xml');
-                if (delivery.result.kind === 'unavailable') return reply.send(body);
+                if (result.kind === 'unavailable') return reply.send(body);
                 const etag = publicProfileRepresentationEtag(body);
                 reply.header('ETag', etag);
                 if (matchesPublicProfileEtag(request.headers['if-none-match'], etag)) return reply.code(304).send();
@@ -82,12 +83,13 @@ export function registerPublicProfileReadRoutes(app: Fastify, deps: PublicProfil
         querystring: z.object({ v: z.optional(z.string()), theme: z.optional(z.enum(['auto', 'light', 'dark'])) }) } }, async (request, reply) => {
         reply.header('X-Content-Type-Options', 'nosniff').header('X-Robots-Tag', 'noindex').header('Referrer-Policy', 'no-referrer');
         try {
-            const delivery = await readPublicProfileDelivery(request.params.handle, await readRequestHomeEnv(request), deps);
-            const options = { ...assetOptions, ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) };
-            const body = kind === 'og' ? await renderPublicProfileOg(delivery.result, options)
-                : await renderPublicProfileCardPng(delivery.result, { ...options, theme: request.query.theme ?? 'auto' });
+            const { result, representation: body } = await readPublicProfileDeliveryRepresentation(request.params.handle, await readRequestHomeEnv(request), deps, async delivery => {
+                const options = { ...assetOptions, ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) };
+                return kind === 'og' ? renderPublicProfileOg(delivery.result, options)
+                    : renderPublicProfileCardPng(delivery.result, { ...options, theme: request.query.theme ?? 'auto' });
+            });
             reply.header('Cache-Control', 'public, no-cache, must-revalidate').type('image/png');
-            if (delivery.result.kind === 'unavailable') return reply.send(body);
+            if (result.kind === 'unavailable') return reply.send(body);
             const etag = publicProfileRepresentationEtag(body);
             reply.header('ETag', etag);
             if (matchesPublicProfileEtag(request.headers['if-none-match'], etag)) return reply.code(304).send();
@@ -113,9 +115,12 @@ export function registerPublicProfileReadRoutes(app: Fastify, deps: PublicProfil
         reply.header('X-Content-Type-Options', 'nosniff').header('Referrer-Policy', 'no-referrer')
             .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'");
         try {
-            const result = await readPublicProfile(request.params.handle, await readRequestHomeEnv(request), deps);
+            const { result, representation: body } = await readPublicProfileDeliveryRepresentation(request.params.handle, await readRequestHomeEnv(request), deps, async delivery => {
+                const hero = delivery.result.kind === 'published' ? await renderPublicProfileHero(delivery.result.view,
+                    { palette: PUBLIC_PROFILE_PALETTES, ...(delivery.picture ? { picture: delivery.picture.bytes } : {}) }) : undefined;
+                return renderPublicProfileHtml(delivery.result, hero);
+            });
             reply.header('X-Robots-Tag', result.kind === 'published' && result.view.indexable ? 'index, follow' : 'noindex, nofollow');
-            const body = renderPublicProfileHtml(result);
             reply.header('Cache-Control', 'public, no-cache, must-revalidate').type('text/html; charset=utf-8');
             if (result.kind === 'unavailable') return reply.code(404).send(body);
             const etag = publicProfileRepresentationEtag(body);

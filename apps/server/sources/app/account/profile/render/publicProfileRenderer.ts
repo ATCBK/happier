@@ -3,25 +3,29 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StyleSheet } from 'react-native-web';
 import { HappierUiEnvironmentProvider, HappierUiTypographyProvider } from '@happier-dev/plugin-ui/environment';
 import { HappierPublicProfile } from '@happier-dev/plugin-ui/presentation';
-import type { UsagePlanetSpec } from '@happier-dev/plugin-ui/presentation';
+import type { HappierPublicProfileHeroGeometry, UsagePlanetSpec } from '@happier-dev/plugin-ui/presentation';
 import { createPlanetScene } from '@happier-dev/brand/planet';
 import { readBundledAgentPresentation, getNeutralAgentIdentityColor } from '@happier-dev/agents/presentation';
 import type { PublicProfileReadResultV1 } from '@happier-dev/protocol/account/publicProfilePublication';
 import { createPublicProfileTheme, PUBLIC_PROFILE_TYPOGRAPHY, PUBLIC_PROFILE_PALETTES } from './publicProfileEnvironment';
 import { publicProfilePageLabels, PUBLIC_PROFILE_LOCALE, PUBLIC_PROFILE_STATE_LABELS } from './publicProfileLabels';
 import { publicProfileUsageLabels } from './publicProfileUsageLabels';
+import type { PublicProfileHeroData } from './publicProfileHero';
 
 export type PublicProfileBodyInput = Readonly<{
     result: PublicProfileReadResultV1;
     scheme: 'light' | 'dark';
-    hero?: Readonly<{ mimeType: string; base64: string; width: number; height: number; label: string }>;
+    hero?: PublicProfileHeroData;
+    singleColumn?: boolean;
 }>;
 
 /** The same portable page as owner preview, rendered before any client effects or measurement. */
 export function renderPublicProfileBody(input: PublicProfileBodyInput): { markup: string; css: string } {
     const hero = input.hero;
     const palette = PUBLIC_PROFILE_PALETTES[input.scheme];
-    const view = input.result.kind === 'published' ? createElement(HappierPublicProfile, { view: input.result.view, labels: publicProfilePageLabels(input.result.view),
+    const view = input.result.kind === 'published' ? createElement(HappierPublicProfile, { view: input.result.view,
+        labels: { ...publicProfilePageLabels(input.result.view), ...(hero?.credit ? { heroCredit: hero.credit } : {}) },
+        singleColumn: input.singleColumn ?? false,
         usage: {
             paint: { accent: createPublicProfileTheme(input.scheme).colors.accent, paper: palette.background, dark: input.scheme === 'dark' },
             agent: (id: string) => {
@@ -32,11 +36,13 @@ export function renderPublicProfileBody(input: PublicProfileBodyInput): { markup
             labels: publicProfileUsageLabels(input.result.view),
             renderPlanet: (spec: UsagePlanetSpec) => renderUsagePlanet(spec, input.scheme),
         },
-        ...(hero ? { renderHero: () => createElement('img', {
-            src: `data:${hero.mimeType};base64,${hero.base64}`, alt: hero.label,
-            width: hero.width, height: hero.height,
-            style: { display: 'block', width: '100%', height: 'auto' },
-        }) } : {}),
+        ...(hero ? { renderHero: (geometry: HappierPublicProfileHeroGeometry) => {
+            const images = hero.editions[input.scheme][geometry.singleColumn ? 'phone' : 'wide'];
+            const source = (image: typeof images.one) => `data:${image.mimeType};base64,${image.base64}`;
+            return createElement('img', { src: source(images.one), srcSet: `${source(images.one)} 1x, ${source(images.two)} 2x`,
+                alt: '', width: images.one.width, height: images.one.height,
+                style: { display: 'block', width: '100%', height: geometry.bandHeightPx, objectFit: 'cover' } });
+        } } : {}),
     }) : createElement(HappierPublicProfile, { result: input.result,
         labels: PUBLIC_PROFILE_STATE_LABELS });
     const markup = renderToStaticMarkup(createElement(HappierUiEnvironmentProvider, {
@@ -46,7 +52,7 @@ export function renderPublicProfileBody(input: PublicProfileBodyInput): { markup
             platform: { platform: 'web', colorScheme: input.scheme },
             insets: { safeArea: { top: 0, right: 0, bottom: 0, left: 0 } } },
         children: createElement(HappierUiTypographyProvider, { typography: PUBLIC_PROFILE_TYPOGRAPHY, children: view }),
-    }), { identifierPrefix: `public-profile-${input.scheme}-` });
+    }), { identifierPrefix: `public-profile-${input.scheme}-${input.singleColumn ? 'phone' : 'wide'}-` });
     return { markup, css: StyleSheet.getSheet().textContent };
 }
 

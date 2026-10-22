@@ -4,7 +4,8 @@ import { bindHomeDomainActionHttpRequestV1, bindPublicProfilePreparedHttpRequest
 import { bindPublicProfileActionPorts } from './executor/publicProfileActions.js';
 import { normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1, PublicProfileSnapshotV1Schema } from '../account/publicProfile.js';
-import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfileOwnerReadV1Schema, type PublicProfilePreparedAppearanceV1 } from '../account/publicProfilePublication.js';
+import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfileOwnerReadV1Schema, PublicProfileViewV1Schema, type PublicProfilePreparedAppearanceV1 } from '../account/publicProfilePublication.js';
+import { PublicProfilePreviewResultV1Schema } from '../account/publicProfileIntents.js';
 import { ApprovalRequestV2Schema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { decideApprovalRequestTransition } from '../approvals/approvalRequestTransition.js';
 import { getActionSpec } from './actionSpecs.js';
@@ -103,8 +104,9 @@ describe('public-profile Actions through the shared executor', () => {
     { missing: 'report', reason: 'report_contact_unconfigured' },
     { missing: 'ingress', reason: 'public_ingress_unconfigured' },
     { missing: 'usage', reason: 'usage_unavailable' },
-  ] as const)('reports $reason from the strict owner context without uploading preview data', async ({ missing, reason }) => {
+  ] as const)('keeps local preview independent of Publish prerequisites ($missing)', async ({ missing, reason }) => {
     const requests: unknown[] = [];
+    const queried: unknown[] = [];
     const canonicalContext = owner().context;
     // Actual server context: a claimed handle and configured service still
     // have null URLs when the canonical report contact is unconfigured.
@@ -115,12 +117,38 @@ describe('public-profile Actions through the shared executor', () => {
       requests.push(args.actionId); return read;
     };
     const executor = createActionExecutor({ homeDomainAction, isActionApprovalRequired: approvalRequired,
-      publicProfileActions: bindPublicProfileActionPorts({ homeDomainAction, assertCurrent: () => {} }),
+      publicProfileActions: bindPublicProfileActionPorts({ homeDomainAction, assertCurrent: () => {},
+        buildSnapshot: buildPublicProfileSnapshot,
+        ...(missing === 'usage' ? {} : { usage: { query: async ({ queries }) => {
+          queried.push(...queries);
+          return resolveUsagePageAggregation({ queries, accounting: queries.map(query => ({ query,
+            status: 'available', asOfMs: 1_000, value: UsageAnalyticsQueryResponseSchema.parse({ v: 1,
+              totals: { eventCount: 0, tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD' } }, contributions: [],
+              coverage: { status: 'complete', reasons: [], missingDimensions: [], ranked: [],
+                range: { startMs: 0, endMs: 1_000, complete: true }, sources: [] },
+            }),
+          })) });
+        } } }),
+      }),
     } as ActionExecutorDeps);
-    await expect(executor.execute('account.public_profile.preview', { policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadataSelection: {},
-      query: normalizeUsageQuery({ period: { relative: '90days' } }), layout, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 }, context))
-      .resolves.toMatchObject({ ok: true, result: { kind: 'unavailable', reason } });
+    const intent = { policy: DEFAULT_PUBLIC_PROFILE_POLICY_V1, metadataSelection: {},
+      query: normalizeUsageQuery({ period: { startMs: 0, endMs: 1_000 } }), layout, appearance: DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1 };
+    const result = await executor.execute('account.public_profile.preview', intent, context);
+    expect(result).toMatchObject({ ok: true, result: { kind: missing === 'usage' ? 'unavailable' : 'ready' } });
+    if (!result.ok) throw new Error('Expected a local preview result');
+    const preview = PublicProfilePreviewResultV1Schema.parse(result.result);
+    if (preview.kind === 'ready') {
+      expect(preview.view.service).toEqual(read.context.service);
+      expect(preview.view.urls).toBeNull();
+      expect(PublicProfileViewV1Schema.safeParse(preview.view).success).toBe(false);
+    } else expect(preview.reason).toBe(reason);
     expect(requests).toEqual(['account.public_profile.get']);
+    expect(queried).toHaveLength(missing === 'usage' ? 0 : 1);
+    await expect(executor.execute('account.public_profile.publish', { ...intent, intent: 'publish' }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'public_profile_preparation_unavailable', details: { reason } });
+    expect(requests).toEqual(['account.public_profile.get', 'account.public_profile.get']);
+    expect(queried).toHaveLength(missing === 'usage' ? 0 : 1);
   });
 
   it('retains the exact image Apply through blocking approval without uploading its bytes in the Approval Artifact', async () => {

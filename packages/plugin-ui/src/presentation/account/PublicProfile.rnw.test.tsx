@@ -257,7 +257,7 @@ describe('HappierPublicProfile', () => {
     } finally { mounted.unmount(); }
   });
 
-  it('renders a real local picture preview through the same placed tree and its host-owned hero slot', () => {
+  it.each([true, false])('renders a local picture preview without inventing a Report link (public destination: %s)', configured => {
     const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j1ioAAAAASUVORK5CYII=';
     const appearance = PublicProfilePreparedAppearanceV1Schema.parse({ theme: 'light', atmosphere: {
       source: 'picture', picture: { layout: 'horizon', descriptor: {
@@ -266,7 +266,8 @@ describe('HappierPublicProfile', () => {
         look: { effect: 'mosaic', params: {}, strength: 0.37, dissolve: { style: 'rows', from: 0.58, to: 1 } },
       }, content: { mimeType: 'image/png', base64: png } },
     } });
-    const view = projectPublicProfilePreview({ context,
+    const previewContext = configured ? context : { ...context, service: null, urls: null };
+    const view = projectPublicProfilePreview({ context: previewContext,
       policy: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1, fields: { ...DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields, tokens: false } },
       metadata: {}, snapshot, appearance,
       layout: { v: 1, items: [metric('tokens', 'Tokens', 'tokens', 'medium'), metric('peak', 'At once', 'peakParallel', 'wide')] },
@@ -286,6 +287,8 @@ describe('HappierPublicProfile', () => {
       expect(mounted.container.querySelector('[data-testid="public-profile-block-peak"]')?.textContent).toContain('6');
       expect(mounted.container.querySelector('[data-testid="public-profile-block-tokens"]')).toBeNull();
       expect(mounted.container.textContent).not.toContain('87654321');
+      expect(mounted.container.querySelector('[data-testid="public-profile-report"]')?.getAttribute('href') ?? null)
+        .toBe(configured ? context.urls.report : null);
     } finally { mounted.unmount(); }
   });
   it.each([true, false])('distinguishes selected missing calendar from hidden calendar (selected: %s)', selected => {

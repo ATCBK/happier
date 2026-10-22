@@ -9,7 +9,8 @@ import {
 } from '../../declarative/inertDeclarativeView.js';
 import { HappierText } from '../text/Text.js';
 import { HappierInfoState, HappierInfoTile } from '../state/InfoState.js';
-import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
+import { HAPPIER_PAGE_METRICS, HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
+export { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '../layout/pageMetrics.js';
 import { HAPPIER_WIDGET_FRAME_METRICS, HappierWidgetFrame } from '../layout/WidgetFrame.js';
 import { PublicProfileUsageBody, type HappierPublicProfileUsageHost } from './PublicProfileUsage.js';
 import { projectPublicUsageChartModels, projectPublicUsageRecords, type PublicUsageChartModels } from '../usage/charts/publicUsageChartModels.js';
@@ -49,26 +50,10 @@ export type HappierPublicProfileLabels = Readonly<{
   heroCredit?: string;
 }>;
 
-/**
- * The atmosphere band's geometry (lab `pphero`), owned here so the app's live painter and the server's
- * raster paint the same rectangle the page reserves.
- */
-export const HAPPIER_PUBLIC_PROFILE_HERO_METRICS = Object.freeze({
-  bandHeightPx: Object.freeze({ wide: 420, phone: 300 }),
-  avatarPx: Object.freeze({ wide: 84, phone: 64 }),
-  /**
-   * A cold render has no measured width: the server paints the band at these widths (and 2× for
-   * density) and the page shows the one that matches, covering the reserved band height.
-   */
-  rasterWidthPx: Object.freeze({ wide: 1440, phone: 390 }),
-  /** Where a Horizon picture's horizon sits in the band, above the identity (lab `pphero`). */
-  horizonAt: 0.6,
-});
-
 export type HappierPublicProfileHeroGeometry = Readonly<{ bandHeightPx: number; singleColumn: boolean }>;
 
 type PublishedPublicProfileProps = Readonly<{
-  view: Omit<PublicProfileViewV1, 'appearance'>;
+  view: Omit<PublicProfileViewV1, 'appearance' | 'service' | 'urls'> & Readonly<{ urls: PublicProfileViewV1['urls'] | null }>;
   labels: HappierPublicProfileLabels;
   /**
    * The applied atmosphere band (picture or planet), painted by the host's own adapter at the given
@@ -242,11 +227,11 @@ function PublishedPublicProfile(props: PublishedPublicProfileProps) {
             {labels.footerNote}
           </HappierText>
           <View style={styles.footerLinks}>
-            <PublicLink
+            {view.urls ? <PublicLink
               href={view.urls.report}
               label={labels.report}
               testID={`${testID}-report`}
-            />
+            /> : null}
             <HappierText variant="meta" tone="secondary">
               {labels.madeWith}
             </HappierText>

@@ -125,6 +125,13 @@ async function renderAtmosphere(view: Extract<PublicProfileReadResultV1, { kind:
     const pane = { width, height };
     const geometry = homePlanetGeometry(atmosphere.planet.placement, pane, { limb });
     const scene = createPlanetScene(homePlanetSceneOptions(geometry, pane, { theme, style: atmosphere.planet.style, digits: atmosphere.planet.digits }));
+    return renderPublicProfilePlanetSceneSvg(scene, pane);
+}
+
+/** Physical Brand scene paint shared by fixed assets and the cold hero. */
+export async function renderPublicProfilePlanetSceneSvg(scene: ReturnType<typeof createPlanetScene>,
+    pane: Readonly<{ width: number; height: number }>, pixelRatio: 1 | 2 = 1): Promise<string> {
+    const { width, height } = pane;
     const dots = [...scene.body, ...scene.haze].map(dot => `<circle cx="${dot.x}" cy="${dot.y}" r="${dot.r}" fill="rgb(${dot.rgb.join(',')})" fill-opacity="${dot.opacity}"/>`).join('');
     if (scene.cells.length === 0) return dots;
     // Brand owns the resting digits. Register the exact shipped face before the
@@ -133,7 +140,8 @@ async function renderAtmosphere(view: Extract<PublicProfileReadResultV1, { kind:
     const font = await readPublicProfileFont('regular');
     await sharp({ text: { text: '0', font: 'Inter 12', fontfile: font.path, rgba: true } }).png().toBuffer();
     const cells = scene.cells.map(cell => `<text x="${cell.x}" y="${cell.y}" text-anchor="middle" font-family="Inter" font-size="${cell.fs}" fill="rgb(${cell.rgb.join(',')})" fill-opacity="${cell.a}">${xml(cell.ch)}</text>`).join('');
-    const raster = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${cells}</svg>`)).png().toBuffer();
+    const raster = await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">${cells}</svg>`),
+        { density: 72 * pixelRatio }).png().toBuffer();
     return dots + image(raster, 0, 0, width, height);
 }
 

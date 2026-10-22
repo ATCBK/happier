@@ -1,6 +1,17 @@
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import type { HappierCollectionLayoutMode } from '../collection/collectionLayout.js';
 
+/** Shared profile band geometry (lab `pphero`) for measured hosts and cold raster adapters. */
+export const HAPPIER_PUBLIC_PROFILE_HERO_METRICS = Object.freeze({
+  bandHeightPx: Object.freeze({ wide: 420, phone: 300 }),
+  avatarPx: Object.freeze({ wide: 84, phone: 64 }),
+  /** Paint at 1× and 2×; the selected edition covers the reserved band. */
+  rasterWidthPx: Object.freeze({ wide: 1440, phone: 390 }),
+  /** Existing owner-preview recomposition threshold. */
+  singleColumnBelowWidthPx: 640,
+  horizonAt: 0.6,
+});
+
 /** The gap between a row's title and its title-line meta (one owner with the gap the renderers draw). */
 export const HAPPIER_ROW_TITLE_META_GAP_PX = 12;
 

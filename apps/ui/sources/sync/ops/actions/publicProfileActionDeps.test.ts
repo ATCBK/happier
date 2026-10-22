@@ -75,13 +75,16 @@ describe('public-profile UI captured Account binding', () => {
     expect(home.requests.some(request => request.path === '/v2/usage/query')).toBe(false);
     expect(home.requests.some(request => request.path === '/v1/account/settings' && request.method !== 'GET')).toBe(false);
   });
-  it.each(['planet', 'picture'] as const)('previews real admitted Usage and the exact %s through the default executor without uploading', async source => {
+  it.each([
+    { source: 'planet', missing: null }, { source: 'picture', missing: null },
+    { source: 'planet', missing: 'report' }, { source: 'picture', missing: 'ingress' },
+  ] as const)('previews real admitted Usage and the exact $source without uploading (missing: $missing)', async ({ source, missing }) => {
     const startMs = Date.parse('2026-10-20T00:00:00Z');
     const endMs = startMs + 86_400_000;
     const policy = PublicProfilePolicyV1Schema.parse({ indexable: false, fields: Object.fromEntries(
       Object.keys(DEFAULT_PUBLIC_PROFILE_POLICY_V1.fields).map(field => [field, ['tokens', 'activeDays', 'calendar', 'agentMix', 'sourceSplit', 'agentTime'].includes(field)])) });
     const owner = PublicProfileOwnerReadV1Schema.parse({ kind: 'absent', context: { handle: 'ada', identity: {},
-      service: { displayName: 'Home', publicBaseUrl: 'https://profile-home.test' }, urls: {
+      service: missing === 'ingress' ? null : { displayName: 'Home', publicBaseUrl: 'https://profile-home.test' }, urls: missing ? null : {
         page: 'https://profile-home.test/@ada', json: 'https://profile-home.test/@ada/json',
         badgeBase: 'https://profile-home.test/@ada/badge', card: 'https://profile-home.test/@ada/card.svg',
         og: 'https://profile-home.test/@ada/og.png', report: 'mailto:operator@profile-home.test',
@@ -138,7 +141,9 @@ describe('public-profile UI captured Account binding', () => {
     if (!result.ok) throw new Error('Expected local preview');
     const preview = PublicProfilePreviewResultV1Schema.parse(result.result);
     if (preview.kind !== 'ready') throw new Error('Expected local preview');
-    expect(PublicProfileViewV1Schema.safeParse(preview.view).success).toBe(source !== 'picture');
+    expect(preview.view.service).toEqual(owner.context.service);
+    expect(preview.view.urls).toEqual(owner.context.urls);
+    expect(PublicProfileViewV1Schema.safeParse(preview.view).success).toBe(source !== 'picture' && !missing);
     expect(JSON.stringify(home.requests)).not.toContain(png);
     expect(home.requests.filter(request => request.path.startsWith('/v1/account/public-profile') && request.method !== 'GET')).toEqual([]);
   });

@@ -1,9 +1,10 @@
 import sharp from 'sharp';
+import { transform } from 'esbuild';
 import * as privacyKit from 'privacy-kit';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_PUBLIC_PROFILE_POLICY_V1 } from '@happier-dev/protocol/account/publicProfile';
 import { DEFAULT_PUBLIC_PROFILE_APPEARANCE_V1, PublicProfilePublishBodyV1Schema } from '@happier-dev/protocol/account/publicProfilePublication';
-import { PublicProfilePreparedAtmosphereV1Schema } from '@happier-dev/protocol/account/publicProfileAtmosphere';
+import { PublicProfilePreparedAtmosphereV1Schema, type PublicProfilePictureDescriptorV1 } from '@happier-dev/protocol/account/publicProfileAtmosphere';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
@@ -19,14 +20,33 @@ import { refreshPublicProfile } from './publicProfileRefresh';
 import { pausePublicProfile } from './publicProfilePause';
 import { unpublishPublicProfile } from './publicProfileUnpublish';
 import { readAdmittedPublicProfileDelivery, readPublicProfileDelivery } from './publicProfileRead';
+import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
+import { registerAccountPublicProfileRoutes } from '@/app/api/routes/account/registerAccountPublicProfileRoutes';
+import { registerPublicProfileReadRoutes } from '@/app/api/routes/account/registerPublicProfileReadRoutes';
+import { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+
+// Real font IO is the asynchronous system boundary after publication admission.
+const fontIo = vi.hoisted(() => ({ afterRead: undefined as (() => Promise<void>) | undefined }));
+vi.mock('node:fs/promises', async original => {
+    const actual = await original<typeof import('node:fs/promises')>();
+    return { ...actual, readFile: async (...args: Parameters<typeof actual.readFile>) => {
+        const bytes = await actual.readFile(...args);
+        if (String(args[0]).endsWith('Inter-Regular.ttf') && fontIo.afterRead) {
+            const afterRead = fontIo.afterRead;
+            fontIo.afterRead = undefined;
+            await afterRead();
+        }
+        return bytes;
+    } };
+});
 
 const env = { HAPPIER_PUBLIC_SERVER_URL: 'https://profiles.example.test/prefix',
     HAPPIER_PUBLIC_PROFILE_REPORT_URL: 'mailto:operator@example.test', HAPPIER_ACCOUNT_SERVICE_DISPLAY_NAME: 'Test Home' };
 
-async function pictureFixture(red: number) {
+async function pictureFixture(red: number, credit: PublicProfilePictureDescriptorV1['credit'] = null) {
     const pixels = await sharp({ create: { width: 96, height: 48, channels: 3, background: { r: red, g: 83, b: 137 } } }).png().toBuffer();
     const atmosphere = PublicProfilePreparedAtmosphereV1Schema.parse({ source: 'picture', picture: {
-        layout: 'horizon', descriptor: { kind: 'photo', title: 'Reviewed copy', credit: null, horizon: {}, focus: {},
+        layout: 'horizon', descriptor: { kind: 'photo', title: 'Reviewed copy', credit, horizon: {}, focus: {},
             hour: 12, grades: { light: 1, dusk: 1, night: 1 }, dark: 'night', adaptiveHaze: false,
             look: { effect: 'original', params: {}, strength: 1, dissolve: { style: 'gradient', from: 0.58, to: 1 } } },
         content: { mimeType: 'image/png', base64: privacyKit.encodeBase64(pixels) },
@@ -48,8 +68,8 @@ async function publishedAccount() {
     return owner;
 }
 
-async function applyPicture(accountId: string, red: number) {
-    const fixture = await pictureFixture(red);
+async function applyPicture(accountId: string, red: number, credit: PublicProfilePictureDescriptorV1['credit'] = null) {
+    const fixture = await pictureFixture(red, credit);
     const result = await updatePublicProfile(accountId, { appearance: fixture.appearance });
     expect(result.kind).toBe('updated');
     if (result.kind !== 'updated' || result.record?.appearance?.atmosphere.source !== 'picture') throw new Error('Expected applied picture');

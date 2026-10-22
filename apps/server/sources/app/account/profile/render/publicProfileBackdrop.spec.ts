@@ -28,6 +28,21 @@ async function fixture(width: number, height: number) {
 }
 
 describe('renderPublicProfileBackdrop', () => {
+    it('preserves CSS-sized effect cells at the selected device-pixel ratio', async () => {
+        const sharp = await loadSharp();
+        const source = await fixture(64, 48);
+        const selected = { ...picture, look: { ...picture.look, effect: 'halftone' as const } };
+        const input = { bytes: source.bytes, picture: selected, layout: 'wallpaper' as const, width: 64, height: 48,
+            dpr: 2, theme: 'light' as const, page: [255, 255, 255] as const, horizonAt: 0.6 };
+        const props = pictureBackdropProps({ ...input, look: { effect: selected.look.effect, params: selected.look.params,
+            strength: selected.look.strength, fade: selected.look.dissolve.style, from: selected.look.dissolve.from, to: selected.look.dissolve.to } });
+        const job = { ...props, source: { rgba: new Uint8ClampedArray(source.rgba), w: 64, h: 48 } };
+        const expected = renderBackdrop({ ...job, dpr: 2 });
+        expect(Buffer.from(expected.rgba)).not.toEqual(Buffer.from(renderBackdrop({ ...job, dpr: 1 }).rgba));
+        const actual = await renderPublicProfileBackdrop(input);
+        expect((await sharp(actual.bytes).raw().toBuffer()).equals(Buffer.from(expected.rgba))).toBe(true);
+    });
+
     it('encodes the actual Brand core output with source-space grades, crop, adjustment and fixed target inputs', async () => {
         const sharp = await loadSharp();
         const source = await fixture(48, 32);

@@ -12,6 +12,8 @@ export interface PublicProfileBackdropInput {
     layout: 'horizon' | 'wallpaper';
     width: number;
     height: number;
+    /** Device pixels per CSS pixel, as supplied to Brand by BackdropCanvas. */
+    dpr?: number;
     theme: AtmosphereTheme;
     page: AtmosphereRgb;
     horizonAt: number;
@@ -44,17 +46,21 @@ export async function renderPublicProfileBackdrop(input: PublicProfileBackdropIn
     const source = { uri: `data:image/png;base64,${privacyKit.encodeBase64(png)}`, w: decoded.info.width, h: decoded.info.height };
     const props = pictureBackdropProps({ picture: input.picture, look: releaseLook(input.picture),
         layout: input.layout, theme: input.theme, page: input.page, horizonAt: input.horizonAt });
-    const render = async (width: number, height: number) => {
+    const render = async (width: number, height: number, dpr = input.dpr) => {
         const crop = cropOf(source, width, height, props.focus, props.horizon);
         const sampled = await sampleCrop(source, crop, width, height);
-        return renderBackdrop({ ...props, source: sampled, grade: backdropBandGrade(props.grade, crop, props.horizon) });
+        return renderBackdrop({ ...props, source: sampled, dpr,
+            grade: backdropBandGrade(props.grade, crop, props.horizon) });
     };
     const backdrop = await render(input.width, input.height);
     let pixels: Buffer = Buffer.from(backdrop.rgba);
     if (input.layout === 'wallpaper' && input.wallpaperHaze) {
         const { composition, at } = input.wallpaperHaze;
-        const quarter = { width: Math.max(2, Math.round(input.width / 4)), height: Math.max(2, Math.round(input.height / 4)) };
-        const small = composition.layers.length > 0 ? await render(quarter.width, quarter.height) : null;
+        const dpr = input.dpr ?? 1;
+        // WallpaperHaze renders a quarter CSS-size canvas at dpr=1, then scales
+        // that image by four CSS pixels. Keep its effect lattice and blur intact.
+        const quarter = { width: Math.max(2, Math.round(input.width / dpr / 4)), height: Math.max(2, Math.round(input.height / dpr / 4)) };
+        const small = composition.layers.length > 0 ? await render(quarter.width, quarter.height, 1) : null;
         const layers: { input: Buffer; raw: { width: number; height: number; channels: 4 } }[] = [];
         for (const layer of composition.layers) {
             const blurred = await sharp(Buffer.from(small!.rgba), { raw: { ...quarter, channels: 4 } })
@@ -62,7 +68,7 @@ export async function renderPublicProfileBackdrop(input: PublicProfileBackdropIn
             // Match the UI's quarter-size layer scaled by four, then clipped to
             // the viewport (including viewports not divisible by four).
             const enlarged = await sharp(blurred, { raw: { ...quarter, channels: 4 } })
-                .resize(quarter.width * 4, quarter.height * 4, { fit: 'fill' }).raw().toBuffer({ resolveWithObject: true });
+                .resize(Math.round(quarter.width * 4 * dpr), Math.round(quarter.height * 4 * dpr), { fit: 'fill' }).raw().toBuffer({ resolveWithObject: true });
             const clipped = Buffer.alloc(input.width * input.height * 4);
             for (let row = 0; row < Math.min(input.height, enlarged.info.height); row++) {
                 enlarged.data.copy(clipped, row * input.width * 4, row * enlarged.info.width * 4,

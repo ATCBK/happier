@@ -53,9 +53,11 @@ export const PublicProfileViewV1Schema = lazyZodSchema(() => z.strictObject({ v:
   appearance: PublicProfileAppearanceV1Schema, urls: PublicProfileUrlsV1Schema,
 }));
 export type PublicProfileViewV1 = z.infer<typeof PublicProfileViewV1Schema>;
-/** Local key-holding preview only: anonymous responses still accept references, never prepared pixels. */
+/** Local preview can precede public destination setup; anonymous views still require URLs and applied references. */
 export const PublicProfileLocalPreviewViewV1Schema = lazyZodSchema(() => z.strictObject({
-  ...z.omit(PublicProfileViewV1Schema, { appearance: true }).shape,
+  ...z.omit(PublicProfileViewV1Schema, { appearance: true, service: true, urls: true }).shape,
+  service: PublicProfileContextV1Schema.shape.service,
+  urls: PublicProfileContextV1Schema.shape.urls,
   appearance: PublicProfilePreparedAppearanceV1Schema,
 }));
 export type PublicProfileLocalPreviewViewV1 = z.infer<typeof PublicProfileLocalPreviewViewV1Schema>;

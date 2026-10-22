@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { Image, View, useWindowDimensions } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
+import { HAPPIER_PUBLIC_PROFILE_HERO_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 import type {
   HappierPublicProfileHeroGeometry,
   HappierPublicProfileLabels,
@@ -145,7 +146,7 @@ export function PublicProfileEditorScreen(): React.ReactElement {
   const context = read?.context ?? null;
   const encryption = useAccountEncryptionMode();
   const { width } = useWindowDimensions();
-  const singleColumn = width < 640;
+  const singleColumn = width < HAPPIER_PUBLIC_PROFILE_HERO_METRICS.singleColumnBelowWidthPx;
   const [draft, setDraft] = React.useState<PublicProfileDraft | null>(null);
   const [mode, setMode] = React.useState<'edit' | 'preview'>('edit');
   const [snapshotView, setSnapshotView] =

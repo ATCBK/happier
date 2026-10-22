@@ -163,8 +163,8 @@ function compileNode(node: PluginDeclarativeNodeV2, view: Readonly<{ snapshot: P
 type PublicProfileProjectionInput = Readonly<{ context: PublicProfileContextV1; policy: PublicProfilePolicyV1;
   metadata: PublicProfileMetadataV1; snapshot: PublicProfileSnapshotV1; layout: PublicProfileLayoutV1 }>;
 /** One compiler for current identity, consent, facts and inert placements in local and published views. */
-function projectPublicProfileCore(input: PublicProfileProjectionInput): Omit<PublicProfileViewV1, 'appearance'> | null {
-  if (!input.context.handle || !input.context.service || !input.context.urls) return null;
+function projectPublicProfileCore(input: PublicProfileProjectionInput): Omit<PublicProfileLocalPreviewViewV1, 'appearance'> | null {
+  if (!input.context.handle) return null;
   const policy = PublicProfilePolicyV1Schema.parse(input.policy);
   const safe = { snapshot: projectPublicProfileSnapshot(input.snapshot, policy), metadata: projectPublicProfileMetadata(input.metadata, policy),
     identity: projectPublicProfileIdentity(input.context.identity, policy), handle: input.context.handle };
@@ -184,6 +184,7 @@ function projectPublicProfileCore(input: PublicProfileProjectionInput): Omit<Pub
 }
 /** Anonymous responses retain the strict applied/publication-reference-only representation. */
 export function projectPublicProfile(input: PublicProfileProjectionInput & Readonly<{ appearance: PublicProfileAppearanceV1 }>): PublicProfileViewV1 | null {
+  if (!input.context.service || !input.context.urls) return null;
   const view = projectPublicProfileCore(input);
   return view ? PublicProfileViewV1Schema.parse({ ...view, appearance: input.appearance }) : null;
 }
