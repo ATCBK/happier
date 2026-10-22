@@ -5,7 +5,6 @@ import {
     readKnownPendingQueueState,
 } from './pendingQueueState';
 
-// @happier-platform:begin feat=pending-wake-recovery 版本回退 hint 必须纠偏采纳而非丢弃（丢失唤醒死锁根因修复）
 describe('pendingQueueState regression adoption', () => {
     it('adopts regressive server pending state as a bookkeeping correction instead of dropping it', () => {
         const current = { known: true as const, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 10 };
@@ -36,7 +35,6 @@ describe('pendingQueueState regression adoption', () => {
         expect(applied.state).toEqual(current);
     });
 });
-// @happier-platform:end feat=pending-wake-recovery
 
 describe('pendingQueueState', () => {
     it('rejects fractional pending counters instead of truncating them', () => {

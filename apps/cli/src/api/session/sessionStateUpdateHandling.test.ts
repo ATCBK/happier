@@ -108,7 +108,6 @@ describe('handleSessionStateUpdate', () => {
     });
   });
 
-  // @happier-platform:begin feat=pending-wake-recovery 回退版本 hint 产生唤醒（不再被去重吞掉）
   it('wakes and adopts regressive pending-changed hints as bookkeeping corrections', () => {
     const onMetadataUpdated = vi.fn();
 
@@ -143,7 +142,6 @@ describe('handleSessionStateUpdate', () => {
     });
     expect(onMetadataUpdated).toHaveBeenCalledTimes(1);
   });
-  // @happier-platform:end feat=pending-wake-recovery
 
   it('accepts only newer complete target Runtime Activity projections', () => {
     const current = {

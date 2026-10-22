@@ -51,7 +51,6 @@ export function applyKnownPendingQueueState(
     next: KnownPendingQueueState,
 ): { state: PendingQueueState; changed: boolean } {
     const normalizedNext = normalizeKnownPendingQueueState(next);
-    // @happier-platform:begin feat=pending-wake-recovery 版本回退=本地记账漂移证据，采纳服务端权威状态纠偏（原：低于本地版本即丢弃——丢失唤醒死锁根因）
     // The server owns the monotonic pendingVersion. A regressive authoritative state is proof of
     // local bookkeeping drift; adopting it (and reporting the change) lets the next hint or ack
     // correct the belief. Dropping it strands every later update as "stale" and permanently
@@ -61,7 +60,6 @@ export function applyKnownPendingQueueState(
         || normalizeKnownPendingQueueState(current).pendingBlockedCount !== normalizedNext.pendingBlockedCount
         || current.pendingVersion !== normalizedNext.pendingVersion;
     return { state: normalizedNext, changed };
-    // @happier-platform:end feat=pending-wake-recovery
 }
 
 export function derivePendingQueueStateAfterMaterializeResult(params: Readonly<{

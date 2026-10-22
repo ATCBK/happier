@@ -1,4 +1,3 @@
-// @happier-platform:file feat=pending-wake-recovery
 import { describe, expect, it, vi } from 'vitest';
 
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
