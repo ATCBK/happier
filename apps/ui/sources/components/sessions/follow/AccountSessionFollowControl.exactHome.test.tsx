@@ -26,6 +26,8 @@ vi.mock('./AccountSessionFollowEditor', () => ({
 
 import { getStorage } from '@/sync/domains/state/storage';
 import { AccountSessionFollowControl } from './AccountSessionFollowControl';
+import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { SessionAgentCatalogIdentityIcon } from '@/components/sessions/presentation/SessionAgentCatalogIdentityIcon';
 
 const SESSION_ID = 's_shared';
 const HOME_A = 'home-a';
@@ -54,6 +56,17 @@ afterEach(async () => {
 });
 
 describe('AccountSessionFollowControl background-sync warning', () => {
+    it('shows the compact contributed Agent identity in the Follow header', async () => {
+        getStorage().setState({ sessionListRowsByServerId: { [HOME_B]: {
+            [SESSION_ID]: createSessionListRenderableSessionFixture({ id: SESSION_ID,
+                metadata: { path: '/repo', host: 'home', flavor: 'acme.agent' } }),
+        } } });
+        await renderScreen(<AccountSessionFollowControl address={{ serverId: HOME_B, sessionId: SESSION_ID }} />);
+        const editorProps = editorSpy.mock.calls.at(-1)?.[0] as { sessionMark: React.ReactElement };
+        const mark = await renderScreen(editorProps.sessionMark);
+        expect(mark.tree.root.findAllByType(SessionAgentCatalogIdentityIcon).map(node => node.props.agentId)).toEqual(['acme.agent']);
+    });
+
     it('reads the linked-external fact from the Home it was opened for', async () => {
         getStorage().setState({
             // Home A's hydrated entity for the same Session id is a linked external session.

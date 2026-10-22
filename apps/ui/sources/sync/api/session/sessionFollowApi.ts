@@ -24,7 +24,8 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
-import { createServerRequestForResolvedServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { createServerRequestForResolvedServerScope, runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import { resolveServerAccountRequestContext } from '@/sync/runtime/orchestration/serverScopedRpc/resolveServerAccountRequestContext';
 
 export type SessionFollowApiResult<T> =
@@ -91,6 +92,7 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
     serverId: string,
     signal?: AbortSignal,
     expectedAccountId?: string,
+    sourceSessionId?: string,
 ): Promise<SessionFollowApiResult<SessionFollowActionOutputV1[TActionId]>> {
     return await withCurrentFollowRequest({
         serverId,
@@ -130,8 +132,13 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
                     rules = { status: 'unavailable', reason: classifyAccountStorageReadFailure(error, requestSignal) };
                 }
                 const { previewSessionFollowRule } = await import('./sessionFollowRulePreview');
+                const sourceSession = sourceSessionId ? (await runWithServerRequestAuthorityForServerAccountScope({
+                    scope: { serverId: context.targetServerId, accountId: context.targetAccountId }, activeRequest: send,
+                }, authority => readSessionSnapshotForAuthority({ authority, sessionId: sourceSessionId,
+                    signal: requestSignal, isCurrent }))).session : undefined;
                 const payload = await previewSessionFollowRule({ serverId: context.targetServerId,
                     accountId: context.targetAccountId, request: FollowPreviewActionInputV1Schema.parse(input), rules,
+                    ...(sourceSession ? { sourceSession } : {}),
                     signal: requestSignal,
                     assertCurrent: () => { if (!isCurrent()) throw new Error('scope-retired'); },
                 });
@@ -219,8 +226,9 @@ export async function readAccountSessionDeliveryMutedScopes(
     }
 }
 
-export const sessionFollowAction: NonNullable<ActionExecutorDeps['sessionFollowAction']> = async (args) => {
-    const result = await executeSessionFollowAction(args.actionId, args.input, args.serverId ?? '', args.signal);
+export const sessionFollowAction = async (args: Parameters<NonNullable<ActionExecutorDeps['sessionFollowAction']>>[0]
+    & Readonly<{ sourceSessionId?: string }>) => {
+    const result = await executeSessionFollowAction(args.actionId, args.input, args.serverId ?? '', args.signal, undefined, args.sourceSessionId);
     return result.kind === 'ok' ? result.value : {
         ok: false,
         errorCode: result.error === 'unavailable' ? 'network_error' : result.error,

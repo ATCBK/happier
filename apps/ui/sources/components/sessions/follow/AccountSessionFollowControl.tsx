@@ -87,7 +87,7 @@ export function AccountSessionFollowControl(props: Readonly<{
         onRetry={() => { void controller.retry(); }}
         onOpenNotificationSettings={() => { props.onOpenNotificationSettings?.(); }}
         sessionTitle={session ? getSessionName(session, serverId) : undefined}
-        sessionMark={<FollowSessionMark metadata={metadata} serverId={serverId} />}
+        sessionMark={<FollowSessionMark session={session} serverId={serverId} />}
         onClose={props.onClose}
         alsoFollowing={alsoFollowing}
         onOpenPeople={() => {

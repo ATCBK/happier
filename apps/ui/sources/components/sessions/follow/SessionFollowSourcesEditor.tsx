@@ -593,7 +593,7 @@ export function SessionFollowSourcesEditor(props: Readonly<{
             case 'session': {
                 const { session, title } = sessionTitle(ref.sessionId);
                 return { key, ref, session, sourceTitle: title, icon: 'stack',
-                    mark: <FollowSessionMark metadata={session?.metadata} serverId={serverId} /> };
+                    mark: <FollowSessionMark session={session ?? null} serverId={serverId} /> };
             }
             case 'discussion': {
                 const index = discussionAddresses.findIndex((address) => address.discussionId === ref.discussionId);

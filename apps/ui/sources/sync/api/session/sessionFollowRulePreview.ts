@@ -26,6 +26,7 @@ export async function previewSessionFollowRule(input: Readonly<{
     rules: SessionFollowRulesSnapshot;
     signal: AbortSignal;
     assertCurrent(): void;
+    sourceSession?: Parameters<typeof buildSessionListRowFilterFacts>[0];
 }>) {
     const receiver = FollowReceiverRefV1Schema.parse(input.request.receiver);
     const rules = input.rules;
@@ -37,11 +38,11 @@ export async function previewSessionFollowRule(input: Readonly<{
     const candidates: FollowRulePreviewCandidateV1[] = [];
     let coverage: 'complete' | 'partial' | 'unavailable' = readable ? 'complete' : 'unavailable';
     const filter = input.request.filter;
-    if (readable && ((canSessionListFilterIncludeRunsV1(filter) && filter.underSessionId === undefined)
+    if (readable && !input.sourceSession && ((canSessionListFilterIncludeRunsV1(filter) && filter.underSessionId === undefined)
         || filter.homeServerIds.some(serverId => !areServerProfileIdentifiersEquivalent(serverId, input.serverId)))) coverage = 'partial';
     if (readable) {
         const admitted = new Map<string, () => boolean>();
-        if (filter.show !== 'runs') {
+        if (filter.show !== 'runs' && !input.sourceSession) {
             for (const home of projectSessionListFilterHomeQueriesV1(filter, { storage: 'active', includeInactive: true,
                 mountedHomeServerIds: [input.serverId], limit: SESSION_LIST_PAGE_MAX_LIMIT, includeAttention: false })) {
                 let cursor: string | undefined;
@@ -93,13 +94,14 @@ export async function previewSessionFollowRule(input: Readonly<{
                 }),
             });
         };
+        if (input.sourceSession) add(input.sourceSession);
         for (const [sessionId, isCurrent] of admitted) {
             if (!isCurrent()) { coverage = 'partial'; continue; }
             const row = findSessionListLookupSession(state, { serverId: input.serverId, sessionId })?.session;
             if (!row) { coverage = 'partial'; continue; }
             add(row);
         }
-        if (canSessionListFilterIncludeRunsV1(filter) && filter.underSessionId !== undefined) {
+        if (!input.sourceSession && canSessionListFilterIncludeRunsV1(filter) && filter.underSessionId !== undefined) {
             try {
                 const runs = await listAllWorkflowRuns({ filter: { underSessionId: filter.underSessionId }, signal: input.signal });
                 input.assertCurrent();
@@ -109,7 +111,7 @@ export async function previewSessionFollowRule(input: Readonly<{
                 input.assertCurrent();
                 coverage = 'partial';
             }
-        } else if (canSessionListFilterIncludeRunsV1(filter)) {
+        } else if (!input.sourceSession && canSessionListFilterIncludeRunsV1(filter)) {
             for (const [key, row] of Object.entries(state.workflowRunsById)) {
                 if (key !== workflowRunStoreKey(row.id, scope) || !row.summary) continue;
                 candidates.push({ source: { kind: 'workflow_run', runId: row.id }, facts: buildWorkflowRunFilterFacts(row.summary, input.serverId, input.accountId) });
@@ -117,9 +119,9 @@ export async function previewSessionFollowRule(input: Readonly<{
         }
     }
     input.assertCurrent();
-    return evaluateFollowRulePreviewV1({ filter: filter.show === 'sessions'
+    return evaluateFollowRulePreviewV1({ filter: filter.show === 'sessions' && !input.sourceSession
         ? projectSessionListFilterAfterHomeQueryV1(filter, input.serverId) : filter, candidates,
-        coverage, otherRules: rules.status !== 'ready' ? [] : rules.rules
+        coverage, otherRules: input.sourceSession || rules.status !== 'ready' ? [] : rules.rules
             .filter(rule => rule.receiver.kind === 'session' && !equalFollowRuleReceiverV1(rule.receiver, receiver))
             .map(rule => ({ ruleId: rule.ruleId, enabled: rule.definition.enabled, filter: rule.definition.filter })),
     });

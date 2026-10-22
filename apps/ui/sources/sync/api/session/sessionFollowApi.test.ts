@@ -58,6 +58,45 @@ async function setup(secret?: string) {
 }
 
 describe('Follow exact Home Action transport', () => {
+    it('evaluates one source through fresh exact-Home reads without a Session corpus query', async () => {
+        const homes = createHomeGovernanceHarness();
+        await homes.reset();
+        installHomeGovernanceBoundaries(homes);
+        const serverUrl = 'https://follow-source.test';
+        const credentials = { token: createAccountTokenForTests('source-account', { currentAccount: true }) };
+        const serverId = await homes.addHome({ name: 'Source', serverUrl, accountId: 'source-account', currentAccount: true, credentials });
+        await restoreServerAccountForTest({ serverUrl, accountId: 'source-account', credentials,
+            request: homes.request, configureSocket: configureConnectedServerSocketBoundary });
+        const { sync } = await import('@/sync/sync');
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const { apiSocket } = await import('@/sync/api/session/apiSocket');
+        const { executeSessionFollowAction } = await import('./sessionFollowApi');
+        const source = createSessionFixture({ id: 'source', serverId, metadata: { path: '/repo', host: 'test' } });
+        homes.answer(serverId, '/v2/sessions', { body: { sessions: [], nextCursor: null, hasNext: false } });
+        homes.answer(serverId, '/v2/account/session-follow-rules', { body: { rules: [] } });
+        homes.answer(serverId, '/v2/sessions/source', { body: createPlainSessionByIdResponseFixture(source) });
+        try {
+            await sync.awaitBootstrapForegroundAcquisition();
+            await vi.waitFor(() => expect(storage.getState().isDataReady).toBe(true));
+            const beforeQueries = homes.requests.filter(request => request.path === '/v2/sessions/query').length;
+            const filter = normalizeSessionListFilterV1({ homeServerIds: [serverId], show: 'sessions',
+                scope: 'all_accessible', startedBy: ['you', 'agents', 'triggers'] });
+            const read = (value: typeof filter) => executeSessionFollowAction('follow.preview', {
+                receiver: { kind: 'session', sessionId: 'receiver' }, filter: value,
+            }, serverId, undefined, undefined, 'source');
+            expect(await read(filter)).toMatchObject({ kind: 'ok', value: { coverage: 'complete',
+                matches: [{ source: { kind: 'session', sessionId: 'source' } }] } });
+            expect(await read({ ...filter, homeServerIds: ['other-home'] })).toMatchObject({ kind: 'ok',
+                value: { coverage: 'complete', matches: [] } });
+            expect(await read({ ...filter, underSessionId: 'unknown-manager' })).toMatchObject({ kind: 'ok',
+                value: { coverage: 'partial', matches: [], unavailable: [{ source: { sessionId: 'source' } }] } });
+            expect(homes.requests.filter(request => request.path === '/v2/sessions/query')).toHaveLength(beforeQueries);
+        } finally {
+            apiSocket.disconnect();
+            installDisconnectedServerSocketBoundary();
+        }
+    });
+
     it.each([false, true])('checks preview authority after the held Session query (Home changed: %s)', async changeBeforeDisclosure => {
         const homes = createHomeGovernanceHarness();
         await homes.reset();
