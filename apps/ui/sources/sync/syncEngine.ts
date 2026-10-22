@@ -3318,6 +3318,10 @@ class Sync {
         }
     }
 
+    private markSessionDraftsReady(): void {
+        storage.setState(state => state.isSessionDraftsReady ? state : { isSessionDraftsReady: true });
+    }
+
     private async refreshSessionDraftRepositoryForSync(params: Readonly<{
         forceSnapshotHydration?: boolean;
     }> = {}): Promise<void> {
@@ -3332,7 +3336,7 @@ class Sync {
         }
         if (scope && generation === this.serverScopeGeneration
             && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)) {
-            storage.setState(state => state.isSessionDraftsReady ? state : { isSessionDraftsReady: true });
+            this.markSessionDraftsReady();
         }
     }
 
@@ -7940,7 +7944,7 @@ class Sync {
               await this.refreshEmbedSessionSnapshot();
               if (this.embedSessionScope === embedScope && embedScope.isCurrent()) {
                   storage.getState().applyReady();
-                  storage.setState({ isSessionDraftsReady: true });
+                  this.markSessionDraftsReady();
               }
               return;
           }
