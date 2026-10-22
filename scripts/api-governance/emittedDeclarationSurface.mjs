@@ -73,7 +73,8 @@ export function projectPreparedDeclarationSurface({
   });
   return Object.freeze({
     entrypoints,
-    program,
+    // Return only the projected data. Keeping the compiler program here pins
+    // its AST/checker graph while the caller builds the author-source census.
     rows,
     declarationReport: projectPublicDeclarationReport({
       program,
