@@ -343,6 +343,8 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const settingsCatalog = useResolvedSettingsPageCatalog();
     const sessions = useAllSessions();
     const sessionListRowsByServerId = useSessionListRowsByServerId();
+    const dirtyTargetMachineLists = storage(state => state.machineListByServerId);
+    const dirtyTargetMachineListStatus = storage(state => state.machineListStatusByServerId);
     const workspaceRefs = useWorkspaceRefs();
     const canonicalScopeServerId = scope.serverId
         ? resolveServerProfileScopeIdForIdentifier(scope.serverId)
@@ -805,7 +807,10 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
     const replaceMatcher = React.useMemo<WorkspaceReplaceMatcher | null>(() => source === 'fileContent' && replaceOpen
         && query.length > 0 && !terminalJump ? { query, replacement, matchCase, regex } : null, [matchCase, query, regex, replaceOpen, replacement, source, terminalJump]);
     // Files with an unsaved editor draft are never written by replace; they are listed and skipped.
-    const unsavedPaths = React.useMemo(() => unsavedWorkspaceFilePaths({ accountId: scope.accountId, details: paneDetails }), [paneDetails, scope.accountId]);
+    const unsavedPaths = React.useMemo(() => unsavedWorkspaceFilePaths({ accountId: scope.accountId, workspaceScope,
+        paneScopes: paneContext?.state.scopes, workspaceRefs, sessionState: storage.getState() }),
+    [paneContext?.state.scopes, scope.accountId, workspaceScope, workspaceRefs, sessions, sessionListRowsByServerId, machines,
+        dirtyTargetMachineLists, dirtyTargetMachineListStatus]);
     const replaceModel = useWorkspaceReplace({
         scope: replaceMatcher && selectedCredentialIsCurrent ? workspaceScope : null,
         available: workspaceScopeReachable,

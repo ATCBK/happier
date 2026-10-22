@@ -1,21 +1,67 @@
 import * as React from 'react';
 import { readWorkspaceFileEditorDraft } from '@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft';
-import { getOwnDetailsWorkspaceRecordEntry, type PaneDetailsStateView } from './detailsWorkspaceTypes';
+import { getOwnDetailsWorkspaceRecordEntry, type DetailsTabState, type PaneDetailsStateView } from './detailsWorkspaceTypes';
+import type { AppPaneState } from '@/components/appShell/panes/model/appPaneReducer';
+import { parseProjectPaneScopeId } from '@/components/projects/detail/projectPaneScope';
+import { parseSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
+import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
+import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
+import { normalizeWorkspaceScopeBase, type WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
+import { resolveWorkspaceTargetForSessionFromState, type WorkspaceTargetForSessionState } from '@/sync/domains/session/resolveWorkspaceTargetForSessionFromState';
+import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
+import { resolvePathRelativeToRoot } from '@/utils/path/resolvePathRelativeToRoot';
+
+function dirtyFilePaths(accountId: string, tabs: readonly DetailsTabState[], tabState: Readonly<Record<string, unknown>>): string[] {
+    return tabs.flatMap(tab => {
+        if (tab.kind !== 'file' || !readWorkspaceFileEditorDraft(getOwnDetailsWorkspaceRecordEntry(tabState, tab.key), accountId)?.isEditingFile
+            || !tab.resource || typeof tab.resource !== 'object') return [];
+        const path = (tab.resource as Readonly<{ path?: unknown }>).path;
+        return typeof path === 'string' && path ? [path] : [];
+    });
+}
 
 /** Persisted drafts exist only while dirty, including editors whose tab body is not mounted. */
-export function unsavedWorkspaceFilePaths(scope: Readonly<{
-    accountId: string | null;
+export function unsavedWorkspaceFilePaths(scope: Readonly<{ accountId: string | null }> & (Readonly<{
+    /** A caller already inside this exact pane needs no Machine availability to protect its drafts. */
     details: (Pick<PaneDetailsStateView, 'tabs' | 'tabState'> & Partial<Pick<PaneDetailsStateView, 'groups'>>) | null | undefined;
-}>): readonly string[] {
-    if (!scope.details) return [];
+    rootPath?: string | null;
+}> | Readonly<{
+    workspaceScope: WorkspaceScopeBase | null;
+    paneScopes: AppPaneState['scopes'] | null | undefined;
+    workspaceRefs: readonly WorkspaceRefV1[];
+    sessionState: WorkspaceTargetForSessionState;
+}>)): readonly string[] {
+    if (!scope.accountId) return [];
+    if ('details' in scope) {
+        if (!scope.details) return [];
+        const tabs = [...scope.details.tabs, ...(scope.details.groups?.flatMap(group => group.tabs) ?? [])];
+        const paths = dirtyFilePaths(scope.accountId, tabs, scope.details.tabState);
+        return [...new Set(paths.flatMap(path => {
+            if (!scope.rootPath) return [path];
+            const absolute = resolveMachineAbsolutePath({ rootPath: scope.rootPath, requestPath: path, pathKind: 'workspace_entry' });
+            const relative = resolvePathRelativeToRoot({ path: absolute, root: scope.rootPath, preservePathSpelling: true });
+            return relative && relative !== '.' ? [relative] : [];
+        }))];
+    }
+    const target = scope.workspaceScope ? normalizeWorkspaceScopeBase(scope.workspaceScope) : null;
+    if (!target || !scope.paneScopes) return [];
     const paths = new Set<string>();
-    const tabs = [...scope.details.tabs, ...(scope.details.groups?.flatMap((group) => group.tabs) ?? [])];
-    for (const tab of tabs) {
-        if (tab.kind !== 'file') continue;
-        const draft = readWorkspaceFileEditorDraft(getOwnDetailsWorkspaceRecordEntry(scope.details.tabState, tab.key), scope.accountId);
-        if (!draft?.isEditingFile || !tab.resource || typeof tab.resource !== 'object') continue;
-        const path = (tab.resource as Readonly<{ path?: unknown }>).path;
-        if (typeof path === 'string' && path) paths.add(path);
+    for (const [scopeId, pane] of Object.entries(scope.paneScopes)) {
+        const dirtyPaths = dirtyFilePaths(scope.accountId, Object.values(pane.details.tabsByKey), pane.details.tabState);
+        if (!dirtyPaths.length) continue;
+        // Destination instances share file identity, not tab state. Resolve each
+        // actual pane through the existing Project/Session target owners.
+        const project = parseProjectPaneScopeId(scopeId);
+        const ref = project ? resolveWorkspaceRefById(scope.workspaceRefs, project.workspaceRefId, project.serverId) : null;
+        const session = project ? null : parseSessionPaneScopeId(scopeId);
+        const source = ref?.kind === 'resolved' ? normalizeWorkspaceScopeBase(ref.ref)
+            : session?.address ? resolveWorkspaceTargetForSessionFromState(scope.sessionState, session.address) : null;
+        if (!source || source.serverId !== target.serverId || source.machineId !== target.machineId) continue;
+        for (const path of dirtyPaths) {
+            const absolute = resolveMachineAbsolutePath({ rootPath: source.rootPath, requestPath: path, pathKind: 'workspace_entry' });
+            const relative = resolvePathRelativeToRoot({ path: absolute, root: target.rootPath, preservePathSpelling: true });
+            if (relative && relative !== '.') paths.add(relative);
+        }
     }
     return [...paths];
 }

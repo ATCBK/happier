@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseUnifiedDiffHunks } from '@happier-dev/protocol/diff/hunks';
 import { WorkspaceFilesReplaceActionInputSchema } from '@happier-dev/protocol/actions/actionSpecs';
@@ -24,6 +25,14 @@ installDisconnectedServerSocketBoundary();
 // Load the real Action graph during collection, outside an individual operation's test deadline.
 await import('@/sync/ops/actions/defaultActionExecutor');
 const { useServerCredentialAccountScopeBinding } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+const { AppPaneProvider, useAppPaneContext } = await import('@/components/appShell/panes/AppPaneProvider');
+const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+const { unsavedWorkspaceFilePaths, useDetailsTabUnsavedKeys } = await import('@/components/appShell/panes/details/workspace/detailsTabChrome');
+const { buildProjectPaneScopeId } = await import('@/components/projects/detail/projectPaneScope');
+const { useWorkspaceFileEditorState } = await import('@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState');
+const { readWorkspaceFileEditorDraft } = await import('@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft');
+const { storage } = await import('@/sync/domains/state/storage');
 const {
   buildReplaceApplyFiles,
   buildReplacePreviewUnifiedDiff,
@@ -242,6 +251,61 @@ describe('useWorkspaceReplace', () => {
     let scope = { serverId: 'home', machineId: 'mac', rootPath: '/repo' };
     const previewOk = { ok: true, files: [modal, doc], skipped: { notText: 1 }, hasMore: false, coverage: 'complete' };
     let account = lifetime();
+
+    it('excludes a real editor immediately when it becomes dirty again after preview, before its text debounce', async () => {
+        const workspaceRefs = [{ id: 'replace-dirty-workspace', serverId: scope.serverId,
+            machineId: scope.machineId, rootPath: scope.rootPath, label: 'Replace draft', createdAtMs: 1 }];
+        rpc.call.mockResolvedValueOnce(previewOk).mockResolvedValueOnce({ ok: true,
+            results: [{ path: modal.path, status: 'replaced', hash: hash('d'), matchCount: 3, edits: [] }] });
+        const tab = createWorkspaceFileDetailsTab(`${scope.rootPath}/${doc.path}`);
+        const hook = await renderHook(() => {
+            const context = useAppPaneContext();
+            const pane = useAppPaneScope(buildProjectPaneScopeId('replace-dirty-workspace', scope.serverId, 'retained-editor'));
+            const { chromeFor, unsavedKeys } = useDetailsTabUnsavedKeys(pane.pinDetailsTab);
+            const chrome = chromeFor(tab.key);
+            const { binding } = useServerCredentialAccountScopeBinding(scope.serverId);
+            const persistDraft = React.useCallback((draft: Parameters<typeof useWorkspaceFileEditorState>[0]['persistedDraft']) => {
+                pane.patchDetailsTabState(tab.key, draft ?? { accountId: null, isEditingFile: false,
+                    editorOriginalHash: undefined, editorText: undefined });
+            }, [pane.patchDetailsTabState]);
+            const editor = useWorkspaceFileEditorState({ scope, accountId: 'acct', filePath: doc.path, displayMode: 'file',
+                fileText: 'Use useSettingsRouteKey here', fileHash: hash('b'), fileWriteSupported: true,
+                setFileWriteSupported: () => {}, fileEditorFeatureEnabled: true, filesEditorWebMonacoEnabled: true,
+                filesEditorNativeCodeMirrorEnabled: true, filesEditorAutoSave: false, filesEditorChangeDebounceMs: 60_000,
+                mountedRef: { current: true }, refreshAll: async () => {}, persistDraft,
+                persistedDraft: readWorkspaceFileEditorDraft(pane.scopeState?.details.tabState[tab.key], 'acct') });
+            React.useEffect(() => chrome.setUnsaved(editor.editorDirty), [chrome, editor.editorDirty]);
+            const unsavedPaths = unsavedWorkspaceFilePaths({ accountId: 'acct', workspaceScope: scope,
+                paneScopes: context.state.scopes, workspaceRefs, sessionState: storage.getState() });
+            const replace = useWorkspaceReplace({ scope, accountLifetime: binding ?? null, matcher, unsavedPaths });
+            return { editor, replace, pane, unsaved: unsavedKeys.has(tab.key) };
+        }, { wrapper: ({ children }: React.PropsWithChildren) => React.createElement(AppPaneProvider, null, children) });
+        await React.act(async () => { hook.getCurrent().pane.openDetailsTab(tab, { intent: 'pinned' }); });
+        await waitForHomeGovernance(() => expect(hook.getCurrent().replace.canApply).toBe(true));
+        await React.act(async () => {
+            hook.getCurrent().editor.startEditingFile();
+            // Consume the editor's two existing immediate publications, then
+            // return to clean before a fresh dirty transition is debounced.
+            hook.getCurrent().editor.onEditorChange('temporary edit');
+            hook.getCurrent().editor.onEditorChange('Use useSettingsRouteKey here');
+        });
+        expect(hook.getCurrent().editor.editorDirty).toBe(false);
+        await React.act(async () => {
+            hook.getCurrent().editor.onEditorChange('Use useSettingsRouteKey here\nunsaved');
+        });
+        expect(hook.getCurrent().unsaved).toBe(true);
+        expect(readWorkspaceFileEditorDraft(hook.getCurrent().pane.scopeState?.details.tabState[tab.key], 'acct'))
+            .toMatchObject({ isEditingFile: true, editorText: 'Use useSettingsRouteKey here\nunsaved' });
+        expect(hook.getCurrent().replace.unsavedFiles.map(file => file.path)).toEqual([doc.path]);
+        await React.act(async () => { await hook.getCurrent().replace.apply(); });
+        expect(rpc.call.mock.calls[1]![0]).toMatchObject({ payload: { operation: { kind: 'replace',
+            files: [{ path: modal.path, expectedHash: modal.hash }] } } });
+        expect(hook.getCurrent().replace.results).toEqual([
+            expect.objectContaining({ path: modal.path, status: 'replaced' }),
+            expect.objectContaining({ path: doc.path, status: 'skipped', reason: 'unsaved' }),
+        ]);
+        expect(hook.getCurrent().editor.getEditorText()).toContain('unsaved');
+    });
 
     it.each(['query', 'folder', 'machine', 'disarm', 'close'] as const)('withdraws an abandoned preview approval on %s, without executing its stale read', async (change) => {
         await homes.requireUiApproval(scope.serverId, 'workspace.files.replace.preview');

@@ -80,7 +80,7 @@ export function useWorkspaceFileEditorCommands(input: Readonly<{
             editor.onEditorChange(value);
             dirty.current = editor.isEditingFile && value !== editor.editorOriginalText;
         },
-        requestDecision: () => promptUnsavedChangesAlert(Modal.alert, {
+        requestDecision: () => promptUnsavedChangesAlert((title, message, buttons) => Modal.alert(title, message, buttons), {
             title: t('common.discardChanges'), message: t('common.unsavedChangesWarning'), discardText: t('common.discardChanges'),
             saveText: t('common.save'), keepEditingText: t('common.keepEditing'),
         }),

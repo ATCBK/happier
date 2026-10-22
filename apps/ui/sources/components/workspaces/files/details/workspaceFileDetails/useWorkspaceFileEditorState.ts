@@ -234,15 +234,19 @@ export function useWorkspaceFileEditorState(input: Input): WorkspaceFileEditorSt
     }, [initialLine, isCurrentOwner]);
     const onEditorChange = React.useCallback((value: string) => {
         if (!isCurrentOwner()) return;
+        const wasDirty = editing.current && text.current !== baseRef.current.text;
         backToEditing(); retireUndo(); text.current = value;
         if (latest.current.fileText === value && latest.current.fileHash !== null && latest.current.fileHash !== baseRef.current.hash) {
             updateBase({ text: value, hash: latest.current.fileHash, encoding: latest.current.encoding });
         }
         const dirty = editing.current && value !== baseRef.current.text;
+        // Cross-tab writes consume the persisted draft as the dirty fact. Keep
+        // that transition synchronous even when subsequent text is debounced.
+        if (dirty !== wasDirty) persist();
         setEditorDirty(previous => previous === dirty ? previous : dirty); publishDebounce.debounced(value);
         if (dirty && latest.current.filesEditorAutoSave && !latest.current.unreachable && !refusalRef.current && !conflictNow()) autoSave.debounced();
         else autoSave.cancel();
-    }, [autoSave, backToEditing, conflictNow, isCurrentOwner, publishDebounce, retireUndo, updateBase]);
+    }, [autoSave, backToEditing, conflictNow, isCurrentOwner, persist, publishDebounce, retireUndo, updateBase]);
     const getEditorText = React.useCallback(() => isCurrentOwner() ? text.current : '', [isCurrentOwner]);
 
     // Mounted result custody is shared by Save and its guarded inverse. The

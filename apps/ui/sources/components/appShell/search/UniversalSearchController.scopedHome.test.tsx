@@ -23,6 +23,7 @@ import type { SessionOrganizationProjection } from '@/sync/domains/session/organ
 import type { UniversalSearchControllerProps } from './UniversalSearchController';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { t } from '@/text';
+import type { WorkspaceFileEditorState } from '@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState';
 
 const HOME_A = 'srv_fsp_controller_a';
 const HOME_B = 'srv_fsp_controller_b';
@@ -69,6 +70,12 @@ const { AppShellPluginUiProjectionValueProvider, useAppShellPluginUiProjection }
 const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
 const { readCurrentAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+const { createWorkspaceFileDetailsTab } = await import('@/components/appShell/panes/details/fileDetailsTab');
+const { useDetailsTabUnsavedKeys } = await import('@/components/appShell/panes/details/workspace/detailsTabChrome');
+const { buildProjectPaneScopeId } = await import('@/components/projects/detail/projectPaneScope');
+const { useWorkspaceFileEditorState } = await import('@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileEditorState');
+const { readWorkspaceFileEditorDraft } = await import('@/components/workspaces/files/details/workspaceFileDetails/workspaceFileEditorDraft');
 const { ChatFindSeedHost } = await import('@/components/appShell/panes/fileFindSeedHost');
 const { createTranscriptFindModel } = await import('@/components/sessions/transcript/find/useTranscriptFind');
 const { WorkspaceProvider } = await import('@/components/appShell/workspace/WorkspaceProvider');
@@ -256,6 +263,28 @@ function DismissibleSearch(props: Readonly<{ element: React.ReactElement<Univers
         setOpen(false);
         props.element.props.onRequestClose();
     } }) : null;
+}
+function DirtyReplaceEditor(props: Readonly<{ observe(editor: WorkspaceFileEditorState, unsaved: boolean): void }>) {
+    const pane = useAppPaneScope(buildProjectPaneScopeId('ws-replace', HOME_B, 'dirty-editor-instance'));
+    const tab = React.useMemo(() => createWorkspaceFileDetailsTab('/repo/src/dirty.ts'), []);
+    React.useEffect(() => { pane.openDetailsTab(tab, { intent: 'pinned' }); }, [pane.openDetailsTab, tab]);
+    const { chromeFor, unsavedKeys } = useDetailsTabUnsavedKeys(pane.pinDetailsTab);
+    const chrome = chromeFor(tab.key);
+    const persistDraft = React.useCallback((draft: Parameters<typeof useWorkspaceFileEditorState>[0]['persistedDraft']) => {
+        pane.patchDetailsTabState(tab.key, draft ?? { accountId: null, isEditingFile: false,
+            editorOriginalHash: undefined, editorText: undefined });
+    }, [pane.patchDetailsTabState, tab.key]);
+    const editor = useWorkspaceFileEditorState({
+        scope: { serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo' }, accountId: 'account-1',
+        filePath: 'src/dirty.ts', displayMode: 'file', fileText: 'routeKey()', fileHash: 'a'.repeat(64),
+        fileWriteSupported: true, setFileWriteSupported: () => {}, fileEditorFeatureEnabled: true,
+        filesEditorWebMonacoEnabled: true, filesEditorNativeCodeMirrorEnabled: true,
+        filesEditorAutoSave: false, filesEditorChangeDebounceMs: 0, mountedRef: { current: true }, refreshAll: async () => {},
+        persistedDraft: readWorkspaceFileEditorDraft(pane.scopeState?.details.tabState[tab.key], 'account-1'), persistDraft,
+    });
+    React.useEffect(() => chrome.setUnsaved(editor.editorDirty), [chrome, editor.editorDirty]);
+    props.observe(editor, unsavedKeys.has(tab.key));
+    return null;
 }
 async function renderScreen(element: React.ReactElement<UniversalSearchControllerProps>, destination?: React.ReactNode,
     wrap?: (content: React.ReactNode) => React.ReactNode | Promise<React.ReactNode>) {
@@ -1118,6 +1147,39 @@ describe('UniversalSearchController exact Home scope', () => {
         expect(isMachineReachable(target, storage.getState().machines['machine-b']!)).toBe(true);
         await flushHookEffects({ cycles: 4, turns: 2 });
         expect(previews()).toEqual([firstPreview]);
+    });
+
+    it.each(['before', 'after'] as const)('excludes an actual dirty editor %s its Replace preview, including retained destination instances', async when => {
+        fixture.singleHome = true;
+        fixture.workspaceRefs = [{ id: 'ws-replace', serverId: HOME_B, machineId: 'machine-b', rootPath: '/repo', label: 'Replace project', createdAtMs: 1 }];
+        fixture.memoryMachine = { serverId: HOME_B, machine: { id: 'machine-b', active: true } };
+        fixture.daemonRpc.mockResolvedValue({ ok: true, files: ['src/dirty.ts', 'src/clean.ts'].map(path => ({ path,
+            hash: 'a'.repeat(64), matchCount: 1, matches: [{ line: 1, column16: 1, length16: 8,
+                text: 'routeKey()', replacedText: 'nextKey()', before: [], after: [] }] })),
+            skipped: { notText: 0 }, hasMore: false, coverage: 'complete' });
+        const { UniversalSearchController } = await import('./UniversalSearchController');
+        let editor: WorkspaceFileEditorState | undefined;
+        let unsaved = false;
+        const screen = await renderScreen(<UniversalSearchController commands={[]} initialQuery="routeKey" initialSource="fileContent"
+            initialReplace={when === 'after'}
+            initialScope={{ accountId: 'account-1', serverId: HOME_B, sessionId: null, machineId: 'machine-b', rootPath: '/repo' }}
+            presentation="modal" onRequestClose={vi.fn()} />,
+        <DirtyReplaceEditor observe={(current, dirty) => { editor = current; unsaved = dirty; }} />);
+        await act(async () => { storage.setState({ machines: {
+            'machine-b': createMachineFixture({ id: 'machine-b', active: true, activeAt: Date.now() }),
+        } }); });
+        if (when === 'after') await vi.waitFor(() => expect(screen.findByTestId('replace-apply')?.props.disabled).toBe(false));
+        await act(async () => { editor!.startEditingFile(); editor!.onEditorChange('routeKey()\nunsaved draft'); });
+        await vi.waitFor(() => expect(unsaved).toBe(true));
+        if (when === 'before') await screen.pressByTestIdAsync('universal-search:replace-toggle');
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain(t('universalSearch.replace.unsavedSection')));
+        const sections = selectionListProps()?.rootStep.sections ?? [];
+        expect(sections.find(section => section.id === 'replace:unsaved')).toMatchObject({ options: [
+            expect.objectContaining({ id: 'replace:unsaved:src/dirty.ts', label: 'src/dirty.ts' }),
+        ] });
+        expect(sections.find(section => section.id === 'replace:review')).toMatchObject({ options: expect.arrayContaining([
+            expect.objectContaining({ label: 'src/clean.ts' }),
+        ]) });
     });
 
     it('keeps the reviewed matcher while an invalid regex loads, then shows its error', async () => {
