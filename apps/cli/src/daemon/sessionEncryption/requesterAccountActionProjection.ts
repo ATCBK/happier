@@ -291,8 +291,19 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   try {
     const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
       parsed.data.binding.actionId, parsed.data.binding.requestId, stage, operation);
-    const profile = await trace('requester.profile', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () =>
-      fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) })));
+    // Root admission above already binds these passive HTTP reads to this
+    // credential. Join both before opening Settings; profile refusal retains
+    // precedence, and the floor must still match the live encryption identity.
+    const [profileRead, settingsFloorRead] = await Promise.allSettled([
+      trace('requester.profile', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () =>
+        fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) }))),
+      trace('requester.settings_currentness', () => fetchAccountEncryptionCurrentness({
+        token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
+        ...(input.signal ? { signal: input.signal } : {}),
+      })),
+    ]);
+    if (profileRead.status === 'rejected') throw profileRead.reason;
+    const profile = profileRead.value;
     if (profile.id !== parsed.data.binding.accountId) return refused('profile_identity');
     if (input.signal?.aborted) return refused('cancelled');
     phase = 'requester_encryption_currentness';
@@ -313,10 +324,8 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     phase = 'requester_settings';
     // Finite admission needs a current Settings floor even when its live
     // encryption identity has remained unchanged since another holder joined.
-    const settingsWitness = await trace('requester.settings_currentness', () => fetchAccountEncryptionCurrentness({
-      token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
-      ...(input.signal ? { signal: input.signal } : {}),
-    }));
+    if (settingsFloorRead.status === 'rejected') throw settingsFloorRead.reason;
+    const settingsWitness = settingsFloorRead.value;
     if (!sameRequesterAccountEncryptionCurrentness(settingsWitness, currentness)
       || !observation.isCurrent(currentness)) return refused('settings_identity');
     const accountSettingsContext = await trace('requester.settings', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => bootstrapAccountSettingsContext({

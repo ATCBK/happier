@@ -100,25 +100,9 @@ describe('admitted requester Action projection', () => {
     } finally {
       releaseProfile();
       const admitted = await pending;
-      await admitted?.dispose();
+      try { expect(admitted?.accountSettingsContext.settingsVersion).toBe(2); }
+      finally { await admitted?.dispose(); }
     }
-    const samples: number[] = [];
-    reads.mockImplementation(async (url: string) => {
-      if (url.endsWith('/v1/account/profile') || url.endsWith('/v1/account/encryption/currentness')) {
-        await new Promise(resolve => setTimeout(resolve, 20));
-        return { status: 200, data: url.endsWith('/profile') ? { id: 'bob' } : { mode: 'plain', version: 1,
-          settingsVersion: 2, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
-      }
-      return { status: 200, data: { content: { t: 'plain', v: {} }, version: 2 } };
-    });
-    for (let sample = 0; sample < 3; sample++) {
-      const started = performance.now();
-      const admitted = await requesterAccountOwner.admitRequesterAccountActionContext(input);
-      samples.push(Math.round(performance.now() - started));
-      expect(admitted?.accountSettingsContext.settingsVersion).toBe(2);
-      await admitted?.dispose();
-    }
-    process.stdout.write(`FX182 requester admission samples ${JSON.stringify(samples)}\n`);
     settingsReads = 0;
     reads.mockImplementation(async (url: string) => {
       if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'another-account' } };
@@ -848,7 +832,6 @@ describe('admitted requester Action projection', () => {
         method: 'POST', path: '/v1/account/project-rows/list' });
       const headerMeasurement = { elapsedMs: Math.round(performance.now() - headerStarted),
         verify: posts.mock.calls.filter(([url]) => String(url).endsWith('/verify')).length };
-      console.info('Signed requester header latency (20ms Home boundary)', headerMeasurement);
       expect(headers?.[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]).toBe(root.token);
       // Home validates the signed effect at its destination; local signing
       // consumes this operation's admitted custody and pushed invalidation.
