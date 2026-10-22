@@ -10,3 +10,13 @@ export function selectChannelsConversationSessionState(state: SessionStateV1) {
 }
 
 export type ChannelsConversationSessionState = ReturnType<typeof selectChannelsConversationSessionState>;
+
+/**
+ * A router thread row's projection: the conversation facts plus the Session title that names a thread
+ * started before providers sent a subject. Module-stable, like the conversation selector.
+ */
+export function selectChannelsRouterThreadSessionState(state: SessionStateV1) {
+  return { ...selectChannelsConversationSessionState(state), title: state.title };
+}
+
+export type ChannelsRouterThreadSessionState = ReturnType<typeof selectChannelsRouterThreadSessionState>;

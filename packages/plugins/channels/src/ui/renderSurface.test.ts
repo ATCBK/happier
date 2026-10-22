@@ -720,6 +720,15 @@ async function pressByTestId(testID: string): Promise<void> {
   await act(async () => { element?.click(); });
 }
 
+/** A delivery decision is folded under its custody row until the owner opens it. */
+async function openDeliveryDecision(custodyId: string): Promise<void> {
+  const header = `channels-delivery-resolution-${custodyId}.header`;
+  await vi.waitFor(() => {
+    expect(document.querySelector(`[data-testid="${header}"]`), `Expected delivery row ${custodyId}`).not.toBeNull();
+  });
+  await pressByTestId(header);
+}
+
 async function pressButtonWithAccessibleLabelFragment(fragment: string): Promise<void> {
   const element = Array.from(document.querySelectorAll<HTMLElement>('[role="button"]')).find((candidate) => (
     candidate.getAttribute('aria-label')?.includes(fragment)
@@ -6111,7 +6120,7 @@ describe('Channels thread router conversation', () => {
       revision: 1,
       connectionId: 'connection-1',
       endpoint: { audience: 'shared', label: 'Devis chantier Lausanne' },
-      target: { kind: 'session', summary: 'session-thread-1' },
+      target: { kind: 'session', summary: 'session-thread-1', sessionId: 'session-thread-1' },
       inputMode: 'allAllowedMessages',
       deliveryMode: 'repliesOnly',
       approval: { kind: 'off' },
@@ -6124,7 +6133,7 @@ describe('Channels thread router conversation', () => {
       revision: 1,
       connectionId: 'connection-1',
       endpoint: { audience: 'shared' },
-      target: { kind: 'session', summary: 'session-thread-2' },
+      target: { kind: 'session', summary: 'session-thread-2', sessionId: 'session-thread-2' },
       inputMode: 'allAllowedMessages',
       deliveryMode: 'repliesOnly',
       approval: { kind: 'off' },
@@ -6275,6 +6284,104 @@ describe('Channels thread router conversation', () => {
       });
       expect(routerReads).toBe(2);
       expect(document.body.textContent).not.toContain('Couldn\u2019t read the routes');
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('lists router threads latest first with the full subject, the reply time and the unread or Work state (CH-UI2 r2)', async () => {
+    const replyAt = (hour: number) => new Date(2026, 9, 22, hour, 5).getTime();
+    const fullSubject = 'Fwd: qa-live13-forwarded-attachment-check from Anna';
+    const threadRow = (bindingId: string, label: string | undefined, sessionId: string) => ({
+      bindingId,
+      parentBindingId: 'router-1',
+      revision: 1,
+      connectionId: 'connection-1',
+      endpoint: { audience: 'shared', ...(label === undefined ? {} : { label }) },
+      // The summary is the bounded display projection; the exact Session id is its own field.
+      target: { kind: 'session', summary: `${sessionId.slice(0, 27)}…`, sessionId },
+      inputMode: 'allAllowedMessages',
+      deliveryMode: 'repliesOnly',
+      approval: { kind: 'off' },
+      enabled: true,
+      deletionState: 'none',
+    });
+    const longId = (name: string) => `${name}-0000-4000-8000-000000000000`;
+    const resource = jsonResource({
+      bindings: [
+        { bindingId: 'router-1', revision: 1, connectionId: 'connection-1', endpoint: { audience: 'direct', label: 'wilson@batiplus.ch' },
+          target: { kind: 'threadRouter', summary: 'threadRouter' }, inputMode: 'allAllowedMessages', deliveryMode: 'none',
+          approval: { kind: 'notApplicable' }, enabled: true, deletionState: 'none' },
+        threadRow('thread-old', 'Fwd: qa-live13-forwarded-at\u2026', longId('session-old')),
+        threadRow('thread-new', 'Devis chantier Lausanne', longId('session-new')),
+        threadRow('thread-working', 'Rendez-vous showroom Morges', longId('session-working')),
+      ],
+    }, 'c');
+    const base = { lifecycle: 'active' as const, runtime: 'idle' as const, operational: 'none' as const, pendingPermissions: [] };
+    const idle = { bucket: 'idle' as const, tone: 'neutral' as const, word: 'Idle' };
+    const sessions: Readonly<Record<string, SessionStateV1>> = {
+      [longId('session-old')]: { ...base, sessionId: longId('session-old'), workStatus: idle, hasUnreadMessages: false,
+        latestActivity: { kind: 'ready', text: 'Pièce jointe reçue', createdAt: replyAt(8) } },
+      [longId('session-new')]: { ...base, sessionId: longId('session-new'), workStatus: idle, hasUnreadMessages: true,
+        latestActivity: { kind: 'ready', text: 'Le devis est prêt', createdAt: replyAt(11) } },
+      [longId('session-working')]: { ...base, sessionId: longId('session-working'), runtime: 'working', operational: 'working',
+        workStatus: { bucket: 'working', tone: 'neutral', word: 'Working' }, hasUnreadMessages: false,
+        latestActivity: { kind: 'ready', text: 'Je regarde le planning', createdAt: replyAt(10) } },
+    };
+    const readReply = ConversationBindingReadResultV1Schema.parse({ kind: 'ready', revision: 1, binding: routerBinding });
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action !== CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) throw new Error(`Unexpected mounted Action: ${String(action)}`);
+      const bindingId = (input as Readonly<{ bindingId: string }>).bindingId;
+      if (bindingId === 'router-1') return readReply;
+      const label = bindingId === 'thread-old' ? fullSubject : bindingId === 'thread-new' ? 'Devis chantier Lausanne' : 'Rendez-vous showroom Morges';
+      return ConversationBindingReadResultV1Schema.parse({
+        kind: 'ready',
+        revision: 1,
+        binding: {
+          ...routerBinding,
+          id: bindingId,
+          endpoint: { kind: 'thread' as const, audience: 'shared' as const, id: `${bindingId}@batiplus.ch`, label },
+          target: { kind: 'session' as const, sessionId: longId(`session-${bindingId.slice('thread-'.length)}`), policy: routerBinding.target.routes[0]!.policy },
+          allowedPrincipalIds: ['anna@batiplus.ch'],
+        },
+      });
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-router-activity', mountNonce: 'fixture-router-activity' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(),
+      subPath: 'router-1',
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: bindingResourceReader(() => resource),
+        readSession: ({ sessionId }) => sessions[sessionId] ?? null,
+      },
+    });
+    const rowNames = async () => [
+      ...await fixture.queryAllByRole('button'),
+      ...await fixture.queryAllByRole('option'),
+    ].map((target) => target.name ?? '');
+    const rowNamed = async (subject: string) => (await rowNames()).find((name) => name.startsWith(subject)) ?? '';
+    try {
+      const locale = createChannelsPageSurfaceContext().locale;
+      await vi.waitFor(async () => {
+        // The full subject from the thread's own read, never the bounded summary.
+        expect(document.body.textContent).toContain(fullSubject);
+        expect(await rowNamed('Devis chantier Lausanne')).toContain(formatConversationTime(replyAt(11), locale));
+        expect(await rowNamed(fullSubject)).toContain(formatConversationTime(replyAt(8), locale));
+      });
+      expect(await rowNamed('Devis chantier Lausanne')).toContain('Unread');
+      expect(await rowNamed(fullSubject)).not.toContain('Unread');
+      expect(await rowNamed('Rendez-vous showroom Morges')).toContain('Working');
+      // Latest reply first: the order the person reads a mailbox in.
+      const text = document.body.textContent ?? '';
+      const at = (subject: string) => text.indexOf(subject);
+      expect(at('Devis chantier Lausanne')).toBeGreaterThan(-1);
+      expect(at('Devis chantier Lausanne')).toBeLessThan(at('Rendez-vous showroom Morges'));
+      expect(at('Rendez-vous showroom Morges')).toBeLessThan(at(fullSubject));
     } finally {
       await fixture.dispose();
     }
@@ -8342,6 +8449,7 @@ describe('Channels offline Account-local binding policy', () => {
       await vi.waitFor(() => {
         expect(document.querySelector('[data-testid="channels-delivery-resolution-controls"]')).not.toBeNull();
       });
+      await openDeliveryDecision(OFFLINE_AMBIGUOUS_CUSTODY_ID);
       await pressByTestId(`channels-delivery-resolution-discard-${OFFLINE_AMBIGUOUS_CUSTODY_ID}`);
 
       await vi.waitFor(() => {
@@ -8371,6 +8479,7 @@ describe('Channels offline Account-local binding policy', () => {
 
     try {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
+      await openDeliveryDecision(OFFLINE_AMBIGUOUS_CUSTODY_ID);
       await vi.waitFor(() => {
         expect(document.querySelector(
           `[data-testid="channels-delivery-resolution-retry-${OFFLINE_AMBIGUOUS_CUSTODY_ID}"]`,
@@ -9721,6 +9830,7 @@ describe('Channels collapsed row identity', () => {
     try {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
       const threadField = `channels-delivery-resolution-thread-${OFFLINE_AMBIGUOUS_CUSTODY_ID}`;
+      await openDeliveryDecision(OFFLINE_AMBIGUOUS_CUSTODY_ID);
       await vi.waitFor(() => {
         expect(document.querySelector(`[data-testid="${threadField}"]`)).not.toBeNull();
       });
@@ -9774,6 +9884,17 @@ describe('Channels collapsed row identity', () => {
 
     try {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
+      // Undecided deliveries of one kind are one group: its count leads, its cause is said once,
+      // and each delivery is one folded row instead of a repeated block.
+      await vi.waitFor(() => {
+        const group = document.querySelector('[data-testid="channels-delivery-resolution-group-outcomeUnknown"]');
+        expect(group?.textContent).toContain('2 deliveries with an unknown outcome');
+      });
+      const controls = document.querySelector('[data-testid="channels-delivery-resolution-controls"]')?.textContent ?? '';
+      expect(controls.split('Happier lost the answer while sending').length - 1).toBe(1);
+      expect(document.querySelectorAll('[data-testid^="channels-delivery-resolution-accept-"]').length).toBe(0);
+      await openDeliveryDecision('c'.repeat(43));
+      await openDeliveryDecision(secondCustodyId);
       await vi.waitFor(() => {
         expect(document.querySelectorAll('[data-testid^="channels-delivery-resolution-accept-"]').length).toBe(2);
       });
@@ -10222,6 +10343,59 @@ describe('Channels page (the one owner of linked conversations)', () => {
       });
     } finally {
       await paused.fixture.dispose();
+    }
+  });
+
+  it('names and opens the conversation target by its exact Session id, never the bounded summary (CH-UI2 r2b)', async () => {
+    const sessionId = 'session-chantier-morges-0000-4000-8000-000000000000';
+    const bindings = jsonResource({
+      bindings: [{
+        bindingId: 'binding-1', revision: 1, connectionId: 'connection-1',
+        endpoint: { audience: 'direct', label: 'Example conversation' },
+        // The summary is the bounded display projection: a truncated prefix of the id.
+        target: { kind: 'session', summary: `${sessionId.slice(0, 27)}\u2026`, sessionId },
+        inputMode: 'directMentionsOnly', deliveryMode: 'repliesOnly', approval: { kind: 'off' }, enabled: true, deletionState: 'none',
+      }],
+    }, 'd');
+    const readSessionIds: string[] = [];
+    const opened: unknown[] = [];
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-target-session', mountNonce: 'fixture-target-session' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(),
+      subPath: 'binding-1',
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction: async ({ action, input }) => {
+          if (action === 'session.open') {
+            opened.push(input);
+            return { kind: 'opened' };
+          }
+          throw new Error(`Unexpected mounted Action: ${String(action)}`);
+        },
+        readResource: bindingResourceReader(() => bindings),
+        readSession: ({ sessionId: requested }) => {
+          readSessionIds.push(requested);
+          return requested === sessionId
+            ? { sessionId, title: 'Chantier Morges', lifecycle: 'active', runtime: 'idle', operational: 'none', pendingPermissions: [],
+              workStatus: { bucket: 'idle', tone: 'neutral', word: 'Idle' } }
+            : null;
+        },
+      },
+    });
+    try {
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('Chantier Morges')).resolves.toBeDefined();
+      });
+      expect(readSessionIds).toContain(sessionId);
+      await fixture.press(await fixture.getByRole('button', { name: 'Open session' }));
+      await vi.waitFor(() => {
+        expect(opened).toEqual([{ sessionId }]);
+      });
+    } finally {
+      await fixture.dispose();
     }
   });
 

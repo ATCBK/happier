@@ -28,6 +28,7 @@ import {
   Heading,
   Icon,
   IconButton,
+  CountedDisclosureItem,
   Item,
   ItemGroup,
   Link,
@@ -59,9 +60,11 @@ import {
   usePluginTranslation,
   usePluginUiFocusTarget,
   useSessionState,
+  useSessionStates,
   useSurfaceContext,
   useWidgetPresentation,
   type PluginUiResourceSnapshot,
+  type SessionStateReadV1,
 } from '@happier-dev/plugin-ui';
 import {
   usePluginUiDataClient,
@@ -204,8 +207,10 @@ import {
   useConversationSessionStates,
   readChannelsPageLocation,
   resolveChannelsConversationReadState,
+  type ChannelsConversationActivity,
   type ChannelsConversationIndexRow,
 } from './conversationRows.js';
+import { selectChannelsRouterThreadSessionState, type ChannelsRouterThreadSessionState } from './conversationSessionState.js';
 import {
   bindingPermissionIntentLabel,
   bindingPermissionIntentOptions,
@@ -2030,7 +2035,9 @@ function ConversationTargetSection(props: Readonly<{
 }>): React.ReactElement {
   const { binding, t } = props;
   const isSession = binding.target.kind === 'session';
-  const session = useSessionState(isSession ? binding.target.summary : null);
+  // The summary is a bounded display projection; the Session is read and opened by its exact id.
+  const sessionId = isSession ? binding.target.sessionId : undefined;
+  const session = useSessionState(sessionId ?? null);
   const [openFailed, setOpenFailed] = React.useState(false);
   const [opening, setOpening] = React.useState(false);
   const title = isSession
@@ -2064,7 +2071,7 @@ function ConversationTargetSection(props: Readonly<{
                 onPress={props.onLinkAnother}
               />
             ) : null}
-            {isSession && openSession !== undefined ? (
+            {sessionId !== undefined && openSession !== undefined ? (
               <Button
                 testID="channels-page-open-session"
                 variant="secondary"
@@ -2074,7 +2081,7 @@ function ConversationTargetSection(props: Readonly<{
                 onPress={() => {
                   setOpening(true);
                   setOpenFailed(false);
-                  void openSession(binding.target.summary).then((opened) => {
+                  void openSession(sessionId).then((opened) => {
                     setOpening(false);
                     setOpenFailed(!opened);
                   });
@@ -2173,15 +2180,44 @@ function RouterThreadsSection(props: Readonly<{
   const [listClipped, setListClipped] = React.useState(false);
   const onOpenThread = props.onOpenThread;
   const groups = detail.kind === 'ready' ? detail.target.principalGroups : undefined;
+  // Each thread is its own Session: one read follows them all, for the reply time, unread and Work facts
+  // its row speaks. The router itself borrows none of it.
+  const threadSessionIds = React.useMemo(() => props.threadChildren.flatMap((child) => (
+    child.binding.target.kind === 'session' && child.binding.target.sessionId !== undefined ? [child.binding.target.sessionId] : []
+  )), [props.threadChildren]);
+  const threadSessions = useSessionStates(threadSessionIds, { select: selectChannelsRouterThreadSessionState }).sessions;
   const renderThread = React.useCallback((child: BindingPresentation) => (
-    <RouterThreadRow binding={child.binding} groups={groups} onOpenThread={onOpenThread} t={t} />
-  ), [groups, onOpenThread, t]);
+    <RouterThreadRow
+      binding={child.binding}
+      groups={groups}
+      session={child.binding.target.sessionId === undefined ? undefined : threadSessions.get(child.binding.target.sessionId)}
+      onOpenThread={onOpenThread}
+      t={t}
+    />
+  ), [groups, onOpenThread, t, threadSessions]);
   const threadCount = props.threadChildren.length;
-  // Threads the provider named (by subject) lead; older unnamed ones follow.
-  const threads = React.useMemo(() => [
-    ...props.threadChildren.filter((child) => hasEndpointLabel(child.binding)),
-    ...props.threadChildren.filter((child) => !hasEndpointLabel(child.binding)),
-  ], [props.threadChildren]);
+  // A mailbox reads latest first: threads with a reply lead by its time; the rest keep the provider's
+  // named threads ahead of older unnamed ones.
+  const threads = React.useMemo(() => {
+    const latestAt = (child: BindingPresentation): number | undefined => {
+      const sessionId = child.binding.target.sessionId;
+      const preview = sessionId === undefined ? undefined : channelsConversationActivity(threadSessions.get(sessionId))?.preview;
+      return preview?.kind === 'ready' ? preview.createdAt : undefined;
+    };
+    const dated = props.threadChildren
+      .flatMap((child) => {
+        const at = latestAt(child);
+        return at === undefined ? [] : [{ child, at }];
+      })
+      .sort((left, right) => right.at - left.at)
+      .map(({ child }) => child);
+    const undated = props.threadChildren.filter((child) => latestAt(child) === undefined);
+    return [
+      ...dated,
+      ...undated.filter((child) => hasEndpointLabel(child.binding)),
+      ...undated.filter((child) => !hasEndpointLabel(child.binding)),
+    ];
+  }, [props.threadChildren, threadSessions]);
   return (
     <Stack gap="large">
       <ItemGroup
@@ -2306,21 +2342,24 @@ function RouterThreadsSection(props: Readonly<{
 
 /**
  * One thread a router started. A person tells threads apart by subject, so the
- * row leads with the provider's thread label (an email subject) and falls back
- * to the Session's own title for threads labelled before providers sent one.
- * The second line says who wrote in and by which sender group; the trailing
- * column is the Session's work state, the one fact that changes.
- * Only mounted rows read their Session and sender, so a long thread list stays cheap.
+ * row leads with the provider's full thread label (an email subject) from the
+ * thread's own read, and falls back to the Session's title for threads labelled
+ * before providers sent one. The second line says who wrote in and by which
+ * sender group; the trailing column says the one fact that changes: paused,
+ * Work that needs the reader, else the latest reply's own time, in the accent
+ * tone while it is unread. Reading the list never marks a thread read.
+ * Only mounted rows read their sender, so a long thread list stays cheap.
  */
 function RouterThreadRow(props: Readonly<{
   binding: ChannelsBinding;
   /** The router's sender groups, once its detail is read; a sender's group names the route it came in by. */
   groups: readonly ThreadRouterPrincipalGroup[] | undefined;
+  session: SessionStateReadV1<ChannelsRouterThreadSessionState> | undefined;
   onOpenThread: (bindingId: string) => void;
   t: Translate;
 }>): React.ReactElement {
   const { binding, groups, onOpenThread, t } = props;
-  const session = useSessionState(binding.target.kind === 'session' ? binding.target.summary : null).state;
+  const { locale } = useSurfaceContext();
   const detail = useBindingDetail(binding.bindingId, binding.revision);
   const senders = detail.kind === 'ready' ? detail.binding.allowedPrincipalIds : [];
   const senderGroups = groups === undefined
@@ -2334,18 +2373,25 @@ function RouterThreadRow(props: Readonly<{
         : t('plugins.channels.page.threadSenders', '{sender} and {count} more', { sender: senders[0]!, count: senders.length - 1 }),
     senderGroups.length === 0 ? undefined : senderGroups.join(', '),
   ].filter((part): part is string => part !== undefined).join(' · ');
-  const title = hasEndpointLabel(binding)
-    ? bindingEndpointLabel(binding, t)
-    : session?.title ?? bindingEndpointLabel(binding, t);
-  // Healthy is quiet: the trailing column speaks only for a state that changes
-  // what the reader does (needs you, working, failed, paused). An idle thread's
-  // "Last seen …" would wrap beside the subject on a phone and say nothing new.
-  const status = !binding.enabled
-    ? { word: t('plugins.channels.column.paused', 'Paused'), tone: 'neutral' as const }
-    : session === null
-      || (session.workStatus.tone === 'neutral' && session.workStatus.bucket !== 'working')
-      ? undefined
-      : { word: session.workStatus.word, tone: session.workStatus.tone };
+  // The index carries a bounded label; the thread's own read has the subject whole, and the row
+  // truncates it at its real width.
+  const fullLabel = detail.kind === 'ready'
+    ? (detail.binding.endpoint.label ?? detail.binding.endpoint.parentLabel)?.trim()
+    : undefined;
+  const sessionTitle = props.session?.status === 'ready' ? props.session.state?.title : undefined;
+  const title = fullLabel !== undefined && fullLabel !== ''
+    ? fullLabel
+    : hasEndpointLabel(binding)
+      ? bindingEndpointLabel(binding, t)
+      : sessionTitle ?? bindingEndpointLabel(binding, t);
+  const activity = channelsConversationActivity(props.session);
+  const trailing = conversationRowTrailing({
+    paused: !binding.enabled,
+    deleting: binding.deletionState !== 'none',
+    activity,
+    locale,
+    t,
+  });
   return (
     <List.Item
       testID={`channels-router-thread-${binding.bindingId}`}
@@ -2354,8 +2400,14 @@ function RouterThreadRow(props: Readonly<{
       // Reserved while the sender is read, so the row keeps its height.
       subtitle={byline === '' ? '\u00a0' : byline}
       subtitleNumberOfLines={1}
-      {...(status === undefined ? {} : { detail: status.word })}
-      {...(status === undefined || status.tone === 'neutral' ? {} : { detailTone: status.tone })}
+      {...(trailing.detail === undefined ? {} : { detail: trailing.detail })}
+      {...(trailing.detailTone === undefined ? {} : { detailTone: trailing.detailTone })}
+      accessibilityLabel={[
+        title,
+        ...(byline === '' ? [] : [byline]),
+        ...(activity?.unread === true ? [t('plugins.channels.page.activityUnread', 'Unread')] : []),
+        ...(trailing.detail === undefined ? [] : [trailing.detail]),
+      ].join(', ')}
       onPress={() => onOpenThread(binding.bindingId)}
     />
   );
@@ -3393,19 +3445,13 @@ function conversationIndexRowLine(
       : preview?.kind === 'hidden'
         ? t('plugins.channels.page.activityHidden', 'Preview hidden')
         : bindingTargetKindLabel(row.binding.target.kind, t);
-  const time = preview?.kind === 'ready' ? formatConversationTime(preview.createdAt, locale) : undefined;
-  const status: Readonly<{ detail?: string; detailTone?: 'attention' | 'danger' | 'accent' }> = row.status?.kind === 'paused'
-    ? { detail: t('plugins.channels.column.paused', 'Paused') }
-    : row.status?.kind === 'deleting'
-      ? { detail: t('plugins.channels.surface.deleteFinalizing', 'Deletion cleanup in progress') }
-      : activity?.work !== undefined
-        ? {
-          detail: activity.work.word,
-          ...(activity.work.tone === 'neutral' ? {} : { detailTone: activity.work.tone }),
-        }
-        : time !== undefined
-          ? { detail: time, ...(activity?.unread === true ? { detailTone: 'accent' as const } : {}) }
-          : {};
+  const status = conversationRowTrailing({
+    paused: row.status?.kind === 'paused',
+    deleting: row.status?.kind === 'deleting',
+    activity,
+    locale,
+    t,
+  });
   const accessibilityLabel = [
     row.title,
     subtitle,
@@ -3413,6 +3459,32 @@ function conversationIndexRowLine(
     ...(status.detail === undefined ? [] : [status.detail]),
   ].join(', ');
   return { subtitle, ...status, accessibilityLabel };
+}
+
+/**
+ * The one fact a conversation row's trailing column speaks, for the page index and a router's thread
+ * rows alike: a paused or deleting binding, else Work that needs the reader, else the latest reply's
+ * own time, in the accent tone while it is unread.
+ */
+function conversationRowTrailing(input: Readonly<{
+  paused: boolean;
+  deleting: boolean;
+  activity: ChannelsConversationActivity | undefined;
+  locale: string;
+  t: Translate;
+}>): Readonly<{ detail?: string; detailTone?: 'attention' | 'danger' | 'accent' }> {
+  const { activity, t } = input;
+  if (input.deleting) return { detail: t('plugins.channels.surface.deleteFinalizing', 'Deletion cleanup in progress') };
+  if (input.paused) return { detail: t('plugins.channels.column.paused', 'Paused') };
+  if (activity?.work !== undefined) {
+    return { detail: activity.work.word, ...(activity.work.tone === 'neutral' ? {} : { detailTone: activity.work.tone }) };
+  }
+  const preview = activity?.preview;
+  if (preview?.kind !== 'ready') return {};
+  return {
+    detail: formatConversationTime(preview.createdAt, input.locale),
+    ...(activity?.unread === true ? { detailTone: 'accent' as const } : {}),
+  };
 }
 
 function bindingPresentationKey(presentation: BindingPresentation): string {
@@ -6342,11 +6414,18 @@ function BindingCreateJourney(props: Readonly<{
     return <Banner tone="warning" title={title} description={description} />;
   })();
 
-  const connectionOptions = availableConnections.map((connection) => ({
-    value: connection.connectionId,
-    label: connection.integrationPrincipalLabel
-      ?? props.t('plugins.channels.surface.providerFallback', 'Conversation connection'),
-  }));
+  // Two bots can share a name across providers ("Happier QA Bot" on Discord and Telegram): each
+  // option says which provider it talks through.
+  const resolveConnectionProviderName = usePluginBrandDisplayNameResolver();
+  const connectionOptions = availableConnections.map((connection) => {
+    const providerName = resolveConnectionProviderName(connection.providerPluginId);
+    return {
+      value: connection.connectionId,
+      label: connection.integrationPrincipalLabel
+        ?? props.t('plugins.channels.surface.providerFallback', 'Conversation connection'),
+      ...(providerName === undefined ? {} : { description: providerName }),
+    };
+  });
 
   return (
     <Stack gap="medium" testID="channels-binding-create">
@@ -11905,6 +11984,39 @@ function IngressAttentionControls(props: Readonly<{
   );
 }
 
+type DeliveryDecisionState = ConversationOutwardDeliveryResolutionRow['state'];
+
+/**
+ * A connection's undecided deliveries, one group per decision they need, in the order the reader
+ * should take them: unknown outcomes, partial sends, then archived destinations. Rows keep the
+ * owner's read order inside a group.
+ */
+function deliveryDecisionGroups(
+  rows: readonly ConversationOutwardDeliveryResolutionRow[],
+): readonly Readonly<{ state: DeliveryDecisionState; rows: readonly ConversationOutwardDeliveryResolutionRow[] }>[] {
+  const order: readonly DeliveryDecisionState[] = ['outcomeUnknown', 'partial', 'archiveRecoverable'];
+  return order.flatMap((state) => {
+    const matching = rows.filter((row) => row.state === state);
+    return matching.length === 0 ? [] : [{ state, rows: matching }];
+  });
+}
+
+function deliveryDecisionGroupTitle(state: DeliveryDecisionState, count: number, t: Translate): string {
+  if (state === 'archiveRecoverable') {
+    return count === 1
+      ? t('plugins.channels.surface.deliveryResolutionGroupArchivedOne', '1 delivery to an archived destination')
+      : t('plugins.channels.surface.deliveryResolutionGroupArchived', '{count} deliveries to archived destinations', { count });
+  }
+  if (state === 'partial') {
+    return count === 1
+      ? t('plugins.channels.surface.deliveryResolutionGroupPartialOne', '1 delivery partly sent')
+      : t('plugins.channels.surface.deliveryResolutionGroupPartial', '{count} deliveries partly sent', { count });
+  }
+  return count === 1
+    ? t('plugins.channels.surface.deliveryResolutionGroupUnknownOne', '1 delivery with an unknown outcome')
+    : t('plugins.channels.surface.deliveryResolutionGroupUnknown', '{count} deliveries with an unknown outcome', { count });
+}
+
 /**
  * This present-user surface intentionally offers only the two terminal
  * decisions the custody owner supports. It never reopens or resends the
@@ -12052,145 +12164,139 @@ function ConnectionDeliveryResolutionControls(props: Readonly<{
         />
       ) : null}
 
-      {rows.map((row) => {
-        const busy = action.execution.status === 'pending' && activeCustodyId === row.custodyId;
-        // An archive-recoverable delivery is not ambiguous: the provider proved
-        // it had no effect and reported that the owner may unarchive and retry.
-        // It therefore offers the recovery decision instead of the two terminal
-        // settlements, which exist only for a possible external effect.
-        if (row.state === 'archiveRecoverable') {
-          return (
-            <Stack
-              key={row.custodyId}
-              testID={`channels-delivery-resolution-${row.custodyId}`}
-              gap="small"
-            >
-              <Status
-                tone="warning"
-                label={props.t(
-                  'plugins.channels.surface.deliveryResolutionArchived',
-                  'Not sent: the destination is archived',
-                )}
-              />
-              <Button
-                testID={`channels-delivery-resolution-retry-${row.custodyId}`}
-                title={busy
-                  ? props.t('plugins.channels.surface.deliveryResolutionRetrying', 'Retrying…')
-                  : props.t(
-                    'plugins.channels.surface.deliveryResolutionRetryAfterUnarchive',
-                    'Unarchived it — send again',
-                  )}
-                accessibilityLabel={`${props.t(
-                  'plugins.channels.surface.deliveryResolutionRetryAfterUnarchive',
-                  'Unarchived it — send again',
-                )} (${deliveryRowName(row.custodyId)})`}                busy={busy}
-                disabled={actionUnavailable}
-                onPress={() => resolve(row, 'retryAfterUnarchive')}
-              />
-            </Stack>
-          );
-        }
-        const label = row.state === 'partial'
-          ? props.t('plugins.channels.surface.deliveryResolutionPartial', 'Partly sent')
-          : props.t('plugins.channels.surface.deliveryResolutionOutcomeUnknown', 'Outcome unknown');
-        return (
-          <Stack
-            key={row.custodyId}
-            testID={`channels-delivery-resolution-${row.custodyId}`}
-            gap="small"
-          >
-            <Status tone="danger" label={label} />
-            {/* The owner decides from the custody it read just now: what already arrived, what failed, and which revision the decision applies to. */}
-            <Text
-              tone="secondary"
-              value={row.state === 'partial'
-                ? props.t(
-                  'plugins.channels.surface.deliveryResolutionPartialExplanation',
-                  'Some parts reached the conversation before one failed. Accept keeps what arrived; discard records that the rest won’t be sent. Nothing is sent again either way.',
-                )
-                : props.t(
-                  'plugins.channels.surface.deliveryResolutionUnknownExplanation',
-                  'Happier lost the answer while sending, so this may have arrived. Accept it if it did, discard it if it didn’t. Nothing is sent again either way.',
-                )}
-            />
-            <Metadata
-              testID={`channels-delivery-resolution-facts-${row.custodyId}`}
-              entries={[
-                {
-                  label: props.t('plugins.channels.surface.deliveryResolutionAccepted', 'Already accepted'),
-                  value: row.acceptedPartCount === 0
-                    ? props.t('plugins.channels.surface.deliveryResolutionAcceptedNone', 'None confirmed')
-                    : row.acceptedPartCount === 1
-                      ? props.t('plugins.channels.surface.deliveryResolutionAcceptedOne', '1 part')
-                      : props.t('plugins.channels.surface.deliveryResolutionAcceptedCount', '{count} parts', { count: row.acceptedPartCount }),
-                },
-                ...(row.failedChunk === undefined ? [] : [{
-                  label: props.t('plugins.channels.surface.deliveryResolutionFailedPart', 'Failed part'),
-                  value: props.t('plugins.channels.surface.deliveryResolutionPartNumber', 'Part {number}', { number: row.failedChunk + 1 }),
-                  tone: 'danger' as const,
-                }]),
-                {
-                  label: props.t('plugins.channels.surface.deliveryResolutionRevision', 'Delivery'),
-                  value: props.t('plugins.channels.surface.deliveryResolutionRevisionValue', '{id} · revision {revision}', {
+      {deliveryDecisionGroups(rows).map((group) => (
+        <ItemGroup
+          key={group.state}
+          testID={`channels-delivery-resolution-group-${group.state}`}
+          title={deliveryDecisionGroupTitle(group.state, group.rows.length, props.t)}
+          // The cause and what each choice does are said once for the group, not on every delivery.
+          description={group.state === 'archiveRecoverable'
+            ? props.t(
+              'plugins.channels.surface.deliveryResolutionArchivedExplanation',
+              'The provider confirmed these were not sent because the destination is archived. Unarchive it, then send again.',
+            )
+            : group.state === 'partial'
+              ? props.t(
+                'plugins.channels.surface.deliveryResolutionPartialExplanation',
+                'Some parts reached the conversation before one failed. Accept keeps what arrived; discard records that the rest won’t be sent. Nothing is sent again either way.',
+              )
+              : props.t(
+                'plugins.channels.surface.deliveryResolutionUnknownExplanation',
+                'Happier lost the answer while sending, so this may have arrived. Accept it if it did, discard it if it didn’t. Nothing is sent again either way.',
+              )}
+        >
+          {group.rows.map((row, index) => {
+            const busy = action.execution.status === 'pending' && activeCustodyId === row.custodyId;
+            // The canonical recommendation names the decision and the exact revision it applies to;
+            // a delivery without one has no decision to offer.
+            const recommendation = row.recommendedRecovery ?? undefined;
+            const accepted = row.acceptedPartCount === 0
+              ? props.t('plugins.channels.surface.deliveryResolutionAcceptedNone', 'None confirmed')
+              : row.acceptedPartCount === 1
+                ? props.t('plugins.channels.surface.deliveryResolutionAcceptedOne', '1 part')
+                : props.t('plugins.channels.surface.deliveryResolutionAcceptedCount', '{count} parts', { count: row.acceptedPartCount });
+            const facts = row.state === 'archiveRecoverable' ? undefined : [
+              `${props.t('plugins.channels.surface.deliveryResolutionAccepted', 'Already accepted')}: ${accepted}`,
+              ...(row.failedChunk === undefined ? [] : [
+                `${props.t('plugins.channels.surface.deliveryResolutionFailedPart', 'Failed part')}: ${props.t(
+                  'plugins.channels.surface.deliveryResolutionPartNumber', 'Part {number}', { number: row.failedChunk + 1 },
+                )}`,
+              ]),
+            ].join(' · ');
+            return (
+              <CountedDisclosureItem
+                key={row.custodyId}
+                testID={`channels-delivery-resolution-${row.custodyId}`}
+                // The privacy-safe projection carries no content or endpoint label: a delivery is
+                // named by its short custody identity and the revision a decision applies to.
+                title={`${props.t('plugins.channels.surface.deliveryResolutionRevision', 'Delivery')} ${props.t(
+                  'plugins.channels.surface.deliveryResolutionRevisionValue', '{id} · revision {revision}', {
                     id: shortRowIdentity(row.custodyId),
                     revision: row.revision,
-                  }),
-                },
-              ]}
-            />
-            {row.createdThreadEndpointRequired === undefined ? null : (
-              <Form.TextField
-                testID={`channels-delivery-resolution-thread-${row.custodyId}`}
-                label={props.t('plugins.channels.surface.deliveryResolutionThreadId', 'Started thread ID')}
-                placeholder={props.t('plugins.channels.surface.deliveryResolutionThreadIdPlaceholder', 'For email, the sent message’s Message-ID')}
-                value={createdThreadIds[row.custodyId] ?? ''}
-                autoCapitalize="none"
-                autoCorrect={false}
-                disabled={actionUnavailable}
-                onChange={(value) => setCreatedThreadIds((current) => ({ ...current, [row.custodyId]: value }))}
-              />
-            )}
-            {row.createdThreadEndpointRequired === undefined ? null : (
-              <Text
-                tone="secondary"
-                value={props.t(
-                  'plugins.channels.surface.deliveryResolutionThreadIdDescription',
-                  'This started a new conversation. If it arrived, enter the ID of the thread it created so replies reach the session. Without it, only Discard is possible.',
+                  },
+                )}`}
+                {...(facts === undefined ? {} : { subtitle: facts })}
+                showDivider={index > 0}
+              >
+                {recommendation === undefined ? null : row.state === 'archiveRecoverable' ? (
+                  // Not ambiguous: the provider proved no effect, so the recovery is to send again
+                  // once the owner unarchived the destination.
+                  <Row gap="small" wrap>
+                    <Button
+                      testID={`channels-delivery-resolution-retry-${row.custodyId}`}
+                      title={busy
+                        ? props.t('plugins.channels.surface.deliveryResolutionRetrying', 'Retrying…')
+                        : props.t('plugins.channels.surface.deliveryResolutionRetryAfterUnarchive', 'Unarchived it — send again')}
+                      accessibilityLabel={`${props.t(
+                        'plugins.channels.surface.deliveryResolutionRetryAfterUnarchive',
+                        'Unarchived it — send again',
+                      )} (${deliveryRowName(row.custodyId)})`}
+                      busy={busy}
+                      disabled={actionUnavailable}
+                      onPress={() => resolve(row, 'retryAfterUnarchive')}
+                    />
+                  </Row>
+                ) : (
+                  <Stack gap="small">
+                    {row.createdThreadEndpointRequired === undefined ? null : (
+                      <Text
+                        tone="secondary"
+                        value={props.t(
+                          'plugins.channels.surface.deliveryResolutionThreadIdDescription',
+                          'This started a new conversation. If it arrived, enter the ID of the thread it created so replies reach the session. Without it, only Discard is possible.',
+                        )}
+                      />
+                    )}
+                    {row.createdThreadEndpointRequired === undefined ? null : (
+                      <Form.TextField
+                        testID={`channels-delivery-resolution-thread-${row.custodyId}`}
+                        label={props.t('plugins.channels.surface.deliveryResolutionThreadId', 'Started thread ID')}
+                        placeholder={props.t('plugins.channels.surface.deliveryResolutionThreadIdPlaceholder', 'For email, the sent message’s Message-ID')}
+                        value={createdThreadIds[row.custodyId] ?? ''}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        disabled={actionUnavailable}
+                        onChange={(value) => setCreatedThreadIds((current) => ({ ...current, [row.custodyId]: value }))}
+                      />
+                    )}
+                    <Row gap="small" wrap>
+                      <Button
+                        testID={`channels-delivery-resolution-accept-${row.custodyId}`}
+                        title={busy
+                          ? props.t('plugins.channels.surface.deliveryResolutionAccepting', 'Accepting…')
+                          : props.t('plugins.channels.surface.deliveryResolutionAccept', 'Accept as sent')}
+                        accessibilityLabel={`${props.t(
+                          'plugins.channels.surface.deliveryResolutionAccept',
+                          'Accept as sent',
+                        )} (${deliveryRowName(row.custodyId)})`}
+                        busy={busy}
+                        disabled={actionUnavailable
+                          || (row.createdThreadEndpointRequired !== undefined
+                            && (createdThreadIds[row.custodyId]?.trim() ?? '') === '')}
+                        onPress={() => resolve(row, 'accepted')}
+                      />
+                      <Button
+                        testID={`channels-delivery-resolution-discard-${row.custodyId}`}
+                        title={busy
+                          ? props.t('plugins.channels.surface.deliveryResolutionDiscarding', 'Discarding…')
+                          : props.t('plugins.channels.surface.deliveryResolutionDiscard', 'Discard delivery')}
+                        variant="secondary"
+                        accessibilityLabel={`${props.t(
+                          'plugins.channels.surface.deliveryResolutionDiscard',
+                          'Discard delivery',
+                        )} (${deliveryRowName(row.custodyId)})`}
+                        busy={busy}
+                        disabled={actionUnavailable}
+                        onPress={() => resolve(row, 'discarded')}
+                      />
+                    </Row>
+                  </Stack>
                 )}
-              />
-            )}
-            <Button
-              testID={`channels-delivery-resolution-accept-${row.custodyId}`}
-              title={busy && activeCustodyId === row.custodyId
-                ? props.t('plugins.channels.surface.deliveryResolutionAccepting', 'Accepting…')
-                : props.t('plugins.channels.surface.deliveryResolutionAccept', 'Accept as sent')}
-              accessibilityLabel={`${props.t(
-                'plugins.channels.surface.deliveryResolutionAccept',
-                'Accept as sent',
-              )} (${deliveryRowName(row.custodyId)})`}
-              busy={busy}
-              disabled={actionUnavailable
-                || (row.createdThreadEndpointRequired !== undefined
-                  && (createdThreadIds[row.custodyId]?.trim() ?? '') === '')}
-              onPress={() => resolve(row, 'accepted')}
-            />
-            <Button
-              testID={`channels-delivery-resolution-discard-${row.custodyId}`}
-              title={busy && activeCustodyId === row.custodyId
-                ? props.t('plugins.channels.surface.deliveryResolutionDiscarding', 'Discarding…')
-                : props.t('plugins.channels.surface.deliveryResolutionDiscard', 'Discard delivery')}
-              variant="secondary"
-              accessibilityLabel={`${props.t(
-                'plugins.channels.surface.deliveryResolutionDiscard',
-                'Discard delivery',
-              )} (${deliveryRowName(row.custodyId)})`}
-              busy={busy}
-              disabled={actionUnavailable}
-              onPress={() => resolve(row, 'discarded')}
-            />
-          </Stack>
-        );
-      })}
+              </CountedDisclosureItem>
+            );
+          })}
+        </ItemGroup>
+      ))}
 
       {!initialLoading && rows.length === 0 && !canLoadMore && deliveryRows.resource.error === undefined ? (
         <Status
