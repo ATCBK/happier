@@ -92,20 +92,24 @@ vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
 }));
 
 describe('ApiMachineClient transports', () => {
-  beforeEach(() => {
+  let transportHome: string;
+  beforeEach(async () => {
+    transportHome = await mkdtemp(join(tmpdir(), 'api-machine-transports-'));
+    configurationMock.happyHomeDir = transportHome;
     configurationMock.apiServerUrl = 'http://localhost:3005';
     configurationMock.socketIoTransports = ['polling', 'websocket'];
     mockAxiosPost.mockResolvedValue({ status: 200, data: { success: true, applied: true } });
     bindApiSessionSocketMock(mockIo, createApiSessionSocketStub());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     configurationMock.apiServerUrl = 'http://localhost:3005';
     configurationMock.activeServerDir = '';
     configurationMock.socketIoTransports = ['polling', 'websocket'];
     vi.mocked(logger.warn).mockReset();
     mockAxiosPost.mockReset();
     vi.unstubAllEnvs();
+    await rm(transportHome, { recursive: true, force: true });
   });
 
   it('publishes only safe retained Machine content and refuses new private peer flow fields before encryption', async () => {
@@ -294,6 +298,42 @@ describe('ApiMachineClient transports', () => {
       },
     );
     await client.shutdown();
+  });
+
+  it.each(['capture', 'finalize'] as const)('keeps terminal %s pending until its durable reply rather than imposing a phase timeout', async operation => {
+    vi.useFakeTimers();
+    const { MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1, MACHINE_SESSION_TERMINAL_FINALIZE_EVENT_V1 } = await import('@happier-dev/protocol');
+    const event = operation === 'capture' ? MACHINE_SESSION_TERMINAL_CAPTURE_EVENT_V1 : MACHINE_SESSION_TERMINAL_FINALIZE_EVENT_V1;
+    let reply!: (value: unknown) => void;
+    const durableReply = new Promise<unknown>(resolve => { reply = resolve; });
+    const machineSocket = createApiSessionSocketStub({ connected: true, emitWithAck: async name =>
+      name === event ? durableReply : { success: true, applied: true } });
+    bindApiSessionSocketMock(mockIo, machineSocket);
+    const client = new ApiMachineClient('fake-token', {
+      id: 'test-machine', encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy',
+      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
+    });
+    client.connect();
+    const result = operation === 'capture' ? client.captureMachineSessionTerminal('s1')
+      : client.finalizeMachineSessionTerminal({ sessionId: 's1', authority: { kind: 'generation', publisherGeneration: '7' } });
+    const observation = { status: 'pending' };
+    void result.then(() => { observation.status = 'resolved'; }, () => { observation.status = 'rejected'; });
+    const response = operation === 'capture'
+      ? { v: 1, status: 'captured', sessionId: 's1', authority: { kind: 'generation', publisherGeneration: '7' } }
+      : { v: 1, status: 'closed', sessionId: 's1' };
+    try {
+      // The Home can still be committing behind an Account writer. This is
+      // not an independent finite read; Stop's durable outcome is still pending.
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(observation.status).toBe('pending');
+      reply(response);
+      await expect(result).resolves.toEqual(response);
+    } finally {
+      reply(response);
+      await result.catch(() => undefined);
+      await client.shutdown();
+      vi.useRealTimers();
+    }
   });
 
   it('can force websocket-only via config flag', async () => {
