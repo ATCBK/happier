@@ -92,28 +92,9 @@ export {
     sessionScmStashShow,
 } from './sessionScm';
 
-// Permission operation types
-interface SessionPermissionRequest {
-    id: string;
-    approved: boolean;
-    reason?: string;
-    mode?: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan';
-    allowedTools?: string[];
-    decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
-    execPolicyAmendment?: {
-        command: string[];
-    };
-    /**
-     * Optional permission updates to apply inside the agent runtime (provider-specific).
-     * This is used to accept provider-suggested permission changes (e.g. Claude Agent SDK `permission_suggestions`).
-     */
-    updatedPermissions?: unknown;
-    /**
-     * AskUserQuestion: structured answers keyed by question text.
-     * When present, the agent can complete the tool call without requiring a follow-up user message.
-     */
-    answers?: Record<string, string>;
-}
+// Permission operation types live with the shared permission-decision owner so
+// foreground ops and the headless notification executor send one wire shape.
+import { applySessionThinkingDecisionRecovery, type SessionPermissionRequest } from './sessionPermissionDecision';
 
 // Mode change operation types
 interface SessionModeChangeRequest {
@@ -575,22 +556,9 @@ export async function sessionAbort(sessionId: string): Promise<void> {
         }
     }
 
-    // Best-effort local UX recovery: aborts should immediately return the session to non-thinking state
-    // even if lifecycle events arrive out of order or providers publish intermittent thinking=false.
-    const session = storage.getState().sessions[sessionId];
-    storage.getState().clearSessionOptimisticThinking(sessionId);
-    storage.getState().clearSessionThinkingGrace(sessionId);
-    if (!session || session.thinking !== true) {
-        return;
-    }
-
-    storage.getState().applySessions([
-        {
-            ...session,
-            thinking: false,
-            updatedAt: nowServerMs(),
-        },
-    ]);
+    // Best-effort local UX recovery: aborts should immediately return the session
+    // to non-thinking state even if lifecycle events arrive out of order.
+    applySessionThinkingDecisionRecovery(sessionId);
 }
 
 /**
@@ -697,20 +665,7 @@ export async function sessionDeny(
 
     // Best-effort local UX recovery: deny/abort decisions should immediately return
     // the session to non-thinking state even if lifecycle events arrive out of order.
-    const session = storage.getState().sessions[sessionId];
-    storage.getState().clearSessionOptimisticThinking(sessionId);
-    storage.getState().clearSessionThinkingGrace(sessionId);
-    if (!session || session.thinking !== true) {
-        return;
-    }
-
-    storage.getState().applySessions([
-        {
-            ...session,
-            thinking: false,
-            updatedAt: nowServerMs(),
-        },
-    ]);
+    applySessionThinkingDecisionRecovery(sessionId);
 }
 
 /**
