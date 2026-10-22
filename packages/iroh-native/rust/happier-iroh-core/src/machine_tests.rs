@@ -1121,6 +1121,70 @@ async fn machine_http_tunnel_requests_a_fresh_handshake_for_each_new_local_conne
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn machine_http_tunnel_keeps_http_source_reads_alive_beyond_control_window() {
+    let server = endpoint(IrohCapProfile::MachineBulk).await;
+    let client = endpoint(IrohCapProfile::MachineBulk).await;
+    let application = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("bind HTTP source");
+    let application_port = application.local_addr().expect("HTTP source addr").port();
+    let response = b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let source_read = tokio::spawn(async move {
+        let (mut socket, _) = application.accept().await.expect("accept HTTP source");
+        let head = read_http_head_bytewise(&mut socket).await;
+        assert!(head.starts_with(b"GET /endpoint HTTP/1.1\r\n"));
+        // Private Home source reads happen in HTTP application work after
+        // native admission. Keep that response pending beyond the wire budget.
+        let started = std::time::Instant::now();
+        tokio::time::sleep(crate::machine::MACHINE_CONTROL_TIMEOUT + Duration::from_millis(1)).await;
+        assert!(started.elapsed() >= crate::machine::MACHINE_CONTROL_TIMEOUT);
+        socket
+            .write_all(response)
+            .await
+            .expect("write HTTP source response");
+    });
+    let handshakes = Arc::new(Mutex::new(Vec::new()));
+    let admission_target = recording_admission_server(
+        client.id().to_string(),
+        application_port,
+        Arc::clone(&handshakes),
+    )
+    .await;
+    let acceptor = MachineAcceptor::start(&server, MachineAcceptorConfig { admission_target })
+        .expect("machine acceptor");
+    let tunnel = MachineHttpTunnel::start(
+        &client,
+        MachineTunnelConfig {
+            endpoint_id: server.id().to_string(),
+            bind_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+            direct_addresses: vec![direct_addr(&server).await],
+            relay_urls: vec![],
+            handshake_json: r#"{"v":1,"kind":"provider_broker"}"#.to_owned(),
+            cap_profile: IrohCapProfile::MachineBulk,
+        },
+    )
+    .await
+    .expect("machine HTTP tunnel");
+    let request = format!(
+        "GET /endpoint HTTP/1.1\r\nHost: 127.0.0.1\r\n{}: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        IROH_MACHINE_HTTP_LOCAL_CAPABILITY_HEADER,
+        tunnel.local_capability(),
+    );
+    let received = exchange_echo(
+        tunnel.local_addr().expect("HTTP loopback addr"),
+        request.as_bytes(),
+    )
+    .await;
+    source_read.await.expect("HTTP source task");
+    assert_eq!(received, response);
+    assert_eq!(handshakes.lock().expect("handshakes").len(), 1);
+    tunnel.stop_and_wait().await;
+    acceptor.stop_and_wait().await;
+    client.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn machine_http_tunnel_provider_failure_closes_only_that_connection() {
     let server = endpoint(IrohCapProfile::MachineBulk).await;
     let client = endpoint(IrohCapProfile::MachineBulk).await;
