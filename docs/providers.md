@@ -257,6 +257,13 @@ from its SDK registry for both Account and Team projections; budget-only models 
 not acquire guessed level choices. These descriptors describe source controls, not
 Account entitlement or verified execution compatibility.
 
+The development picker applies the canonical required-model-capability decision to
+Account, Gateway and Team rows. Models explicitly lacking a capability the selected
+Agent requires are excluded; unknown support retains experimental treatment.
+CLIProxyAPI's generated catalog marks its pinned SDK image builtins as lacking tool
+round trips. The pinned SDK supplies these through image constructors rather than
+a modality field in `models.json`.
+
 `providers.models.source_visibility.set` is an Account Action with no machine input.
 In 0.3 development, the UI and CLI use their captured Account catalog read/CAS writer;
 frontends without that writer refuse the operation before transport. A source
