@@ -33,15 +33,15 @@ export function ReviewCommentInlineComposer(props: {
             />
             <View style={styles.actions}>
                 {props.onDelete ? (
-                    <Pressable onPress={props.onDelete} style={[styles.dangerButton, { backgroundColor: paintColor(theme.colors.surface.pressed) }]}>
+                    <Pressable accessibilityRole="button" accessibilityLabel={t('common.delete')} accessibilityState={{ disabled: false }} onPress={props.onDelete} style={[styles.dangerButton, { backgroundColor: paintColor(theme.colors.surface.pressed) }]}>
                         <Text style={styles.dangerText}>{t('common.delete')}</Text>
                     </Pressable>
                 ) : null}
                 <View style={{ flex: 1 }} />
-                <Pressable onPress={props.onCancel} style={[styles.secondaryButton, { backgroundColor: paintColor(theme.colors.surface.pressed ?? theme.colors.surface.base) }]}>
+                <Pressable accessibilityRole="button" accessibilityLabel={t('common.cancel')} accessibilityState={{ disabled: false }} onPress={props.onCancel} style={[styles.secondaryButton, { backgroundColor: paintColor(theme.colors.surface.pressed ?? theme.colors.surface.base) }]}>
                     <Text style={styles.secondaryText}>{t('common.cancel')}</Text>
                 </Pressable>
-                <Pressable onPress={props.onSave} style={[styles.primaryButton, { backgroundColor: paintColor(theme.colors.button?.primary?.background ?? theme.colors.text.primary, undefined, 'solidControl') }]}>
+                <Pressable accessibilityRole="button" accessibilityLabel={t('common.save')} accessibilityState={{ disabled: false }} onPress={props.onSave} style={[styles.primaryButton, { backgroundColor: paintColor(theme.colors.button?.primary?.background ?? theme.colors.text.primary, undefined, 'solidControl') }]}>
                     <Text style={[styles.primaryText, { color: paintColor(theme.colors.button?.primary?.tint ?? theme.colors.surface.base, theme.colors.text.primary, 'solidControl') }]}>{t('common.save')}</Text>
                 </Pressable>
             </View>

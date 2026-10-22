@@ -119,6 +119,28 @@ describe('CodeLinesView', () => {
         expect(rows).toHaveLength(1);
     });
 
+    // A comment composer under a line of unwrapped code spans the visible code column and stays there while
+    // the code scrolls sideways, so its Save / Cancel never sit past the pane edge on a wide file.
+    it('pins what renders after a line to the visible width of a sideways-scrolling code column', async () => {
+        const { CodeLinesView } = await import('./CodeLinesView');
+        const { DiffHunkRowViewportContext } = await import('@/components/ui/code/diff/hunks/DiffHunkRow');
+        const { flattenTestStyle } = await import('@/dev/testkit');
+        const line = {
+            id: '1', sourceIndex: 0, hunkIndex: null, kind: 'context', oldLine: 1, newLine: 1,
+            renderPrefixText: '', renderCodeText: 'const x = 1;', renderIsHeaderLine: false, selectable: false,
+        } as const;
+        const tree = (await renderScreen(
+            <DiffHunkRowViewportContext.Provider value={{ width: 584, offsetX: 120 }}>
+                <CodeLinesView lines={[line]} virtualized={false} wrapLines={false}
+                    renderAfterLine={() => React.createElement('After', { testID: 'after' })} />
+            </DiffHunkRowViewportContext.Provider>,
+        )).tree;
+        const after = tree.root.findByProps({ testID: 'after' });
+        const pin = flattenTestStyle(after.parent!.props.style);
+        expect(pin.width).toBe(584);
+        expect(pin.transform).toEqual([{ translateX: 120 }]);
+    });
+
     it('passes extraData to FlatList when renderAfterLine is provided', async () => {
         const { CodeLinesView } = await import('./CodeLinesView');
 

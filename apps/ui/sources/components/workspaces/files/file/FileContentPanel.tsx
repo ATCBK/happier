@@ -16,7 +16,7 @@ import type { ReviewUnit } from '@happier-dev/protocol/scm/comparisonOccurrences
 import type { MarkdownSourceRange, MarkdownSourceRangeAction } from '@/components/markdown/MarkdownView';
 import { WorkspaceMarkdownView } from '@/components/markdown/WorkspaceMarkdownView';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
-import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
+import { DiffHorizontalScroll } from '@/components/ui/code/diff/happier/DiffHorizontalScroll';
 import { buildCodeLinesFromFile } from '@/components/ui/code/model/buildCodeLinesFromFile';
 import { buildCodeLinesFromUnifiedDiff } from '@/components/ui/code/model/buildCodeLinesFromUnifiedDiff';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
@@ -700,14 +700,8 @@ function FileContentPanelInner({
         </ScrollView>
     );
     const renderFileCode = () => {
-        const content = effectiveWrapLines ? fileCodeView : (
-            <HorizontalOverflowScrollView
-                showsHorizontalScrollIndicator={true}
-                contentContainerStyle={{ flexGrow: 1 }}
-            >
-                {fileCodeView}
-            </HorizontalOverflowScrollView>
-        );
+        // The diff's sideways scroller: it tells what renders under a line (a comment composer) the visible width.
+        const content = effectiveWrapLines ? fileCodeView : <DiffHorizontalScroll>{fileCodeView}</DiffHorizontalScroll>;
         return virtualized ? content : renderCodeScroll(content);
     };
 

@@ -22,6 +22,15 @@ import { resolveCodeTokenPress } from '../interactions/codeTokenPress';
 import { resolveAgentWashColor, resolveCodeSelectionColor } from '../editor/editorTheme';
 import { EditorAgentCaret } from '@/components/ui/motion/EditorAgentCaret';
 import { useCodeTextSelectionPaint } from './useCodeTextSelectionPaint';
+import { DiffLeadingContent } from '@/components/ui/code/diff/happier/DiffLeadingContent';
+
+/**
+ * What renders under a line (an inline comment composer, a saved comment) spans the visible code column and
+ * holds still while unwrapped code scrolls sideways, as change rows do, so its actions stay at the pane edge.
+ */
+function renderPinnedAfterLine(node: React.ReactNode, inset: number): React.ReactNode {
+    return node === null || node === undefined || node === false ? null : <DiffLeadingContent inset={inset}>{node}</DiffLeadingContent>;
+}
 
 export type CodeLinesExternalScrollView = Readonly<{
     scrollRef: React.RefObject<{ scrollTo: (options: { y: number; animated: boolean }) => void } | null>;
@@ -456,7 +465,7 @@ export function CodeLinesViewCore(
                 syntaxHighlighting={effectiveSyntaxHighlighting}
                 advancedTokens={effectiveSyntaxHighlighting.mode === 'advanced' ? (props.getAdvancedTokens?.(index) ?? undefined) : undefined}
             />}
-            {props.renderAfterLine ? props.renderAfterLine(item) : null}
+            {props.renderAfterLine ? renderPinnedAfterLine(props.renderAfterLine(item), paddingHorizontal * 2) : null}
         </View>
     ), [
         lineNumberDigits,
@@ -483,6 +492,7 @@ export function CodeLinesViewCore(
         props.onPressAddComment,
         props.pressLineWhenNotSelectable,
         props.renderAfterLine,
+        paddingHorizontal,
         props.renderLeadingLane,
         props.showInactiveCommentAffordance,
         rangeGesturesEnabled,
