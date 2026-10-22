@@ -379,14 +379,13 @@ async function forEachLivePluginCollectionQuotaCensusRowInTx(input: Readonly<{
                 },
             },
         });
-        // Immutable policy is shared by every row referencing its contract.
-        // Reuse the census's existing result map instead of transferring and
-        // decoding the same normalized schema/indexes once per live row.
-        const missingContractIds = [...new Set(rows.map(row => row.contractId))]
-            .filter(id => !input.contracts.has(id));
-        if (missingContractIds.length > 0) {
+        // Admission keeps this Account's live rows stable for the census.
+        // Read their distinct immutable policies once, so discovering another
+        // contract on a later page adds no policy round trip while fenced.
+        // The relation filter also avoids an Account-sized parameter list.
+        if (afterId === null && rows.length > 0) {
             const contracts = await input.tx.pluginCollectionContract.findMany({
-                where: { id: { in: missingContractIds } },
+                where: { rows: { some: { accountId: input.accountId, deletedAt: null } } },
                 select: { id: true, pluginId: true, collectionId: true, schemaVersion: true,
                     contractDigest: true, normalizedSchema: true, indexes: true, relations: true, privacyProjection: true },
             });

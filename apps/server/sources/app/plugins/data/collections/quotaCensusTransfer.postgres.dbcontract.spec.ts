@@ -12,6 +12,7 @@ import { measurePluginCollectionStoredRowEncodedBytes, readPluginCollectionAccou
 /** Observe returned database policy materializations without replacing any database operation. */
 function observePolicyTransfer(real: Tx) {
     const policies = new Map<string, number>();
+    const policyReads: unknown[] = [];
     function observe(value: unknown) {
         if (!Array.isArray(value)) return;
         for (const row of value) {
@@ -33,6 +34,7 @@ function observePolicyTransfer(real: Tx) {
                     const fn: unknown = Reflect.get(model, operation);
                     if (typeof fn !== "function") return fn;
                     return async (...args: unknown[]) => {
+                        if (name === "pluginCollectionContract" && operation === "findMany") policyReads.push(args);
                         const result: unknown = await Reflect.apply(fn, model, args);
                         observe(result);
                         return result;
@@ -41,7 +43,7 @@ function observePolicyTransfer(real: Tx) {
             });
         },
     });
-    return { tx, policies };
+    return { tx, policies, policyReads };
 }
 
 describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("Collection quota census policy transfer", () => {
@@ -60,7 +62,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
         const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const other = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         await inTx(tx => materializePluginCollectionContractsTx({ tx, pluginId,
-            contributions: ["tasks", "notes"].map(id => PluginAccountCollectionContributionV1Schema.parse({ id, schemaVersion: 1,
+            contributions: ["tasks", "notes", "retired", "foreign"].map(id => PluginAccountCollectionContributionV1Schema.parse({ id, schemaVersion: 1,
                 rowIdField: "text",
                 schema: { type: "object", properties: { text: { type: "string", maxLength: 256 } },
                     required: ["text"], additionalProperties: false },
@@ -68,18 +70,33 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
             })),
         }));
         const contracts = await db.pluginCollectionContract.findMany({ where: { pluginId }, orderBy: { collectionId: "asc" } });
+        const liveContracts = contracts.filter(row => row.collectionId === "tasks" || row.collectionId === "notes");
+        const retiredContract = contracts.find(row => row.collectionId === "retired")!;
+        const foreignContract = contracts.find(row => row.collectionId === "foreign")!;
         const envelope = { t: "plain", v: { text: "retained" } };
         const liveRows = 1005;
         try {
-            const makeRow = (index: number, accountId = account.id, deletedAt: Date | null = null) => {
-                const contract = contracts[index % contracts.length];
+            await inTx(async real => {
+                for (const read of [readPluginCollectionAccountUsageInTx, readPluginCollectionAccountActivationUsageInTx]) {
+                    const measured = observePolicyTransfer(real);
+                    const usage = await read({ tx: measured.tx, accountId: account.id,
+                        deployment: readPluginsFeatureEnv(process.env).collectionLimits });
+                    expect(usage.rows).toBe(0);
+                    expect(usage.encodedBytes).toBe(0);
+                    expect(usage.contracts.size).toBe(0);
+                    expect(measured.policyReads).toHaveLength(0);
+                }
+            });
+            const makeRow = (index: number, accountId = account.id, deletedAt: Date | null = null,
+                contract = liveContracts[index % liveContracts.length]) => {
                 return { accountId, pluginId, collectionId: contract.collectionId, rowId: `row-${index}`,
                     schemaVersion: 1, revision: 1, contractId: contract.id, contractDigest: contract.contractDigest,
                     contentEnvelope: envelope, deletedAt };
             };
             await db.pluginCollectionRow.createMany({ data: [
                 ...Array.from({ length: liveRows }, (_, index) => makeRow(index)),
-                makeRow(liveRows, account.id, new Date()), makeRow(liveRows + 1, other.id),
+                makeRow(liveRows, account.id, new Date(), retiredContract),
+                makeRow(liveRows + 1, other.id, null, foreignContract),
             ] });
             const expectedBytes = Array.from({ length: liveRows }, (_, index) =>
                 measurePluginCollectionStoredRowEncodedBytes({ rowId: `row-${index}`, contentEnvelope: envelope, projections: [] }))
@@ -93,8 +110,11 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("C
                     expect(usage.rows).toBe(liveRows);
                     expect(usage.encodedBytes).toBe(expectedBytes);
                     expect([...usage.collections.values()].map(row => row.rows).sort()).toEqual([502, 503]);
-                    expect([...usage.contracts.keys()].sort()).toEqual(contracts.map(row => row.id).sort());
-                    expect([...measured.policies.entries()].sort()).toEqual(contracts.map(row => [row.id, 1]).sort());
+                    expect([...usage.contracts.keys()].sort()).toEqual(liveContracts.map(row => row.id).sort());
+                    expect([...measured.policies.entries()].sort()).toEqual(liveContracts.map(row => [row.id, 1]).sort());
+                    // Policy I/O must not interrupt the live-row walk as new
+                    // contract identities appear on later pages.
+                    expect(measured.policyReads).toHaveLength(1);
                 }
             }, { isolationLevel: "ReadCommitted" });
         } finally {
