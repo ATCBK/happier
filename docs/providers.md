@@ -344,6 +344,23 @@ source/model through its compatibility adapter; unavailable applied state or an
 incompatible choice returns a typed refusal requiring a choice, without changing
 models or billing sources.
 
+Workflow admission freezes the origin Session's Connected selection when a leaf
+resolves to that same Agent, whether through a Role, a literal engine or an
+input-bound engine. Session and detached Run leaves consume that frozen choice;
+the Session creator no longer substitutes Account defaults for a literal engine's
+omission. Explicit bindings and explicit native/reset selections win. A leaf
+using another Agent, or a Workflow without an origin Session, retains its own
+explicit choice or that Agent's Account defaults.
+
+An Agent Session's `session.spawn_new` likewise freezes an omitted Connected
+choice from its authenticated Session baseline when the resolved child Agent is
+the same. Root starts and different-Agent Session starts retain Account-default
+resolution. Session status exposes `connectedServices` from the authorized
+owner selection as a validated, content-free binding object; an unavailable or
+malformed owner selection is omitted, never reported as native. Pool choices
+carry the pool id without its active member. This read supplies a reusable
+selection, not credentials, a grant or proof of current authentication readiness.
+
 The refusal's `details.childChoice` names the child Agent, the parent model
 reference when known, and explicit-default/model options. Choosing
 `childSelection: 'agentDefault'` through `execution.run.start` resolves the

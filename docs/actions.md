@@ -4430,6 +4430,15 @@ it in `modelSelection.ref.modelId`, with the selected Agent target key,
 Account profile ids belong in `connectedServices`, not the Provider connection
 field. Execution Runs accept that native model string directly as `modelId`.
 
+For an Agent Session's `session.spawn_new`, omitted `connectedServices` inherits
+the parent selection when the resolved child Agent is the same. An explicit
+binding object overrides it; `{v:2,bindingsByServiceId:{}}` selects native
+authentication. Root and different-Agent Session starts use Account defaults
+when omitted. `session.status.get` on `self` exposes the authorized Session's
+content-free `connectedServices` selection for explicit reuse; a missing field
+means unavailable selection evidence, not native authentication. Pool reads and
+inheritance preserve the pool id without pinning its current member.
+
 A Session `configuration` is an optional full snapshot. Its `mode`, `model` and
 `permissionIntent` each carry `{ value, updatedAtMs }`; unset values are `null`.
 Its `options` map carries `{ value, updatedAtMs }` for each option id. Model values
@@ -4470,6 +4479,10 @@ or a step's `execution.engine`; use `effort`, rather than a
 `reasoning_effort` entry in `sessionConfigOptionOverrides`. Run
 `workflow.validate` before starting an authored definition. These
 contracts share discovery and admission owners with UI, CLI and external plugins.
+With an origin Session, Workflow leaves resolving to that same Agent inherit
+its Connected selection when omitted, including literal and input-bound engines.
+The accepted leaf freezes that selection for both Session and detached Run
+execution; explicit bindings or native/reset choices retain precedence.
 Workflow definition schema sections expose the canonical authored ingress,
 including recursive block shapes and prompt shorthand. The Action transport
 remains shallow so the iterative Workflow validator can report deep repair
