@@ -1418,14 +1418,15 @@ describe('multi-Home Session creation composition', () => {
         } finally { await hook.unmount(); }
     });
 
-    async function runTemporaryTeamModelJourney(journey: 'acquisition' | 'switch-agent' | 'remembered-control' | 'launch') {
+    async function runTemporaryTeamModelJourney(journey: 'acquisition' | 'switch-agent' | 'remembered-control' | 'launch' | 'reopen') {
         const sourceCase = journey !== 'acquisition';
-        if (journey === 'launch') socketBoundary.nativeSignInStatus = 'signedOut';
+        const launchCase = journey === 'launch' || journey === 'reopen';
+        if (launchCase) socketBoundary.nativeSignInStatus = 'signedOut';
         // The first genuine Home baseline owns this preference. Re-publishing
         // changed bytes at the same Settings revision would correctly be ignored.
         accountHttpSettings = { useEnhancedSessionWizard: true };
         ({ homeA, homeAScopeId, homeAToken } = await arrangeFocusedHomeA(
-            journey === 'launch' ? 'team-launch-signed-out' : 'temporary-account-capture', { applyConnectionManager: true }));
+            launchCase ? 'team-launch-signed-out' : 'temporary-account-capture', { applyConnectionManager: true }));
         // Account replacement during first-use acquisition is independent of
         // cross-Home selection. Keep this journey on its initiating Home; the
         // borrowed-Home material preparation contract is covered separately.
@@ -1447,20 +1448,26 @@ describe('multi-Home Session creation composition', () => {
             NO_TEAM_CAPABILITIES_V1, resolveTeamAdmissionProjectionV1 } = await import('@happier-dev/protocol/teams');
         const { RunnerArtifactAvailabilityProjectionV1Schema } = await import('@happier-dev/protocol/ephemeralRunner/runnerArtifact');
         const { EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1, EPHEMERAL_RUNNER_ACTIVATIONS_PATH_V1 } = await import('@happier-dev/protocol/ephemeralRunner/routes');
-        const { writeNewSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { writeNewSessionDraft, writeSessionDraftLocalSupplement } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         const scope = { serverId: homeBScopeId, accountId: 'account-a' };
         const draftId = crypto.randomUUID();
         routeBoundary.params = { spawnServerId: homeBScopeId, draftServerId: homeBScopeId, draftAccountId: scope.accountId,
             backendTargetKey: 'agent:happier.agent.codex/codex' };
         writeNewSessionDraft({ scope, draftId, materializationIntent: 'userEdit', patch: {
-            ...(journey === 'launch' ? { selectedPath: '/workspace/project' } : {}),
+            ...(launchCase ? { selectedPath: '/workspace/project' } : {}),
             text: 'Prepare on the original target Account', authoring: { agentTarget: { kind: 'agent',
                 identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }, profileId: null,
+                ...(journey === 'reopen' ? { modelSelection: { v: 1, updatedAt: 1, ref: {
+                    agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5',
+                } } } : {}),
                 executionTarget: sourceCase
                     ? { kind: 'machine', target: { serverId: homeBScopeId, machineId: 'machine-b' } }
                     : { kind: 'temporary_computer', serverId: homeBScopeId,
                         artifactTarget: 'linux-x64', workspace: { kind: 'choose_on_endpoint' } } },
         } });
+        if (journey === 'reopen') writeSessionDraftLocalSupplement({ scope, address: { kind: 'newSession', draftId },
+            patch: { newSessionLocalState: { teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' },
+                teamId: 'runner-team', resourceId: 'runner-resource', expectedResourceRevision: 7, deliveryMode: 'brokered' }] } } });
         const features = buildServerFeaturesResponse();
         for (const id of ['sessions.ephemeralRunner', 'teams', 'teams.credentialResources'] as const) {
             expect(tryWriteServerEnabledBitInPlace(features, id, true)).toBe(true);
@@ -1578,7 +1585,7 @@ describe('multi-Home Session creation composition', () => {
                 if (model.variant !== 'wizard') throw new Error('Expected the production Agent selector');
                 expect(model.wizardProps.agent.agentPickerSelectedOptionId).toBe(entitled.resources[0]!.providerModels[0]!.selection.agentTargetKey);
             });
-            await act(async () => {
+            if (journey !== 'reopen') await act(async () => {
                 const model = hook.getCurrent();
                 if (model.variant !== 'wizard') throw new Error('Expected the production model selector');
                 await model.wizardProps.agent.onSelectTeamCredentialModel(entitled.resources[0]!.providerModels[0]!.selection);
@@ -1590,7 +1597,7 @@ describe('multi-Home Session creation composition', () => {
                 const selected = hook.getCurrent();
                 if (selected.variant !== 'wizard') throw new Error('Expected the production Agent selector');
                 expect(selected.wizardProps.agent.selectedTeamCredentialModel).toEqual(entitled.resources[0]!.providerModels[0]!.selection);
-                if (journey === 'launch') {
+                if (launchCase) {
                     const { machineAgentInventoryStore } = await import('@/agents/machineAgents/machineAgentInventoryStore');
                     const { serverAccountScopedResourceKey } = await import('@/sync/domains/scope/serverAccountScope');
                     await vi.waitFor(() => {
@@ -1720,6 +1727,10 @@ describe('multi-Home Session creation composition', () => {
 
     it('submits a worker-confirmed Team model from New Session without native Agent sign-in', async () => {
         await runTemporaryTeamModelJourney('launch');
+    });
+
+    it('keeps a reopened Team source in the New Session submit instead of its native backing model', async () => {
+        await runTemporaryTeamModelJourney('reopen');
     });
 
     it('reopens a Temporary computer draft without selecting or dispatching to an available Machine', async () => {
