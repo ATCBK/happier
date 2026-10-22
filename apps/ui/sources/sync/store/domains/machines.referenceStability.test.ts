@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
+import { useStore } from 'zustand';
+import { act } from 'react';
+import { renderHook } from '@/dev/testkit';
+import { createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
@@ -34,6 +38,37 @@ function machine(id: string, overrides: Partial<Machine> = {}): Machine {
 }
 
 describe('machine inventory reference stability through the real store', () => {
+    it('does not rerender project-grouped lists for unrelated machine metadata but does publish a rename', async () => {
+        const store = createTestStore();
+        const serverId = getActiveServerSnapshot().serverId;
+        const options = { sourceServerId: serverId };
+        const metadata = { path: '/qa/repo', host: 'one', machineId: 'one', homeDir: '/qa' };
+        store.setState({
+            sessions: { s1: createSessionFixture({ id: 's1', metadata }) },
+            sessionListRowsByServerId: { [serverId]: { s1: createSessionListRenderableSessionFixture({ id: 's1', metadata }) } },
+            ordinarySessionListMembershipByServerId: { [serverId]: ['s1'] },
+            settings: { ...settingsDefaults, sessionListActiveGroupingV1: 'project', sessionListInactiveGroupingV1: 'project' },
+        });
+        const initial = machine('one');
+        store.getState().applyMachines([initial], true, options);
+        let renders = 0;
+        const hook = await renderHook(() => { renders += 1; return useStore(store, state => state.sessionListIndexByServerId); });
+        try {
+            const before = renders;
+            const previous = hook.getCurrent();
+            await act(async () => store.getState().applyMachines([
+                machine('one', { metadataVersion: 2, metadata: { ...initial.metadata!, happyCliVersion: '0.3.1' } }),
+            ], false, options));
+            expect(store.getState().machines.one.metadataVersion).toBe(2);
+            expect(renders - before).toBe(0);
+            expect(hook.getCurrent()).toBe(previous);
+            await act(async () => store.getState().applyMachines([
+                machine('one', { metadataVersion: 3, metadata: { ...initial.metadata!, displayName: 'New reading desk' } }),
+            ], false, options));
+            expect(renders).toBeGreaterThan(before);
+            expect(hook.getCurrent()).not.toBe(previous);
+        } finally { await hook.unmount(); }
+    });
     it('publishes freshness recovery for the active Home without replacing semantic rows or notifying on subsequent heartbeats', () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(100_000);

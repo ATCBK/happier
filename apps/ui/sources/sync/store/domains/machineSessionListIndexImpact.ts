@@ -10,15 +10,16 @@ export type MachineSessionListIndexImpact = Readonly<{
     needsProjectManagerUpdate: boolean;
 }>;
 
-function areMachineDisplayRenderablesEqual(
+function areMachineProjectLabelsEqual(
     previous: MachineDisplayRenderable | null | undefined,
     next: MachineDisplayRenderable | null | undefined,
 ): boolean {
     if (previous === next) return true;
     if (!previous || !next) return previous === next;
 
+    // Inventory/version changes (for example Agent detection and CLI updates)
+    // do not change project placement or its label. Compare the consumed facts.
     return previous.id === next.id
-        && previous.metadataVersion === next.metadataVersion
         && (previous.metadata?.displayName ?? null) === (next.metadata?.displayName ?? null)
         && (previous.metadata?.host ?? null) === (next.metadata?.host ?? null)
         && (previous.metadata?.homeDir ?? null) === (next.metadata?.homeDir ?? null);
@@ -60,7 +61,7 @@ export function resolveMachineSessionListIndexImpact(params: Readonly<{
         const previousMachine = params.previousMachineDisplays[machineId];
         const nextMachine = params.nextMachineDisplays[machineId];
         return !areMachineReplacementFieldsEqual(previousMachine, nextMachine)
-            || !areMachineDisplayRenderablesEqual(previousMachine, nextMachine);
+            || !areMachineProjectLabelsEqual(previousMachine, nextMachine);
     });
     if (!hasGroupingRelevantMachineChange) {
         return {
@@ -101,7 +102,7 @@ export function resolveMachineSessionListIndexImpact(params: Readonly<{
                     needsProjectManagerUpdate: true,
                 };
             }
-            if (!areMachineDisplayRenderablesEqual(previousMachine, nextMachine)) {
+            if (!areMachineProjectLabelsEqual(previousMachine, nextMachine)) {
                 return {
                     needsSessionListIndexRebuild: true,
                     needsProjectManagerUpdate: false,
