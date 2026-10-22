@@ -8,6 +8,7 @@ import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant'
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { bindRequesterSessionCredentialScope, sameStoredCredentials, type StoredCredentials } from '@/persistence';
+import * as persistence from '@/persistence';
 import { projectRequesterAccountActionAuthorization } from './requesterSessionCredentials';
 import { createExternalActionMachineRpcExecution, dispatchOriginalAccountAction, projectExternalActionRequesterHttpAuthorization, isReviewedSecondOpinionModelSpawnChild, createReviewedSecondOpinionSessionCreationAuthorization } from '@/api/externalActionExecutionAuthorization';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
@@ -65,6 +66,25 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
+  it('does not inspect installed credentials from the parallel Settings floor before requester identity admission', async () => {
+    // Credential storage and Home HTTP are system boundaries. Keep the real
+    // currentness helper so its legacy-recovery branch remains observable.
+    const storedCredentials = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(null);
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'another-account' } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 400, data: {
+        error: 'migration-required', recipientEnvelopeReadiness: { status: 'unavailable', reason: 'encryption_setup_required' },
+      } };
+      throw new Error('Rejected identity must not open Settings');
+    });
+    await expect(requesterAccountOwner.admitRequesterAccountActionContext({
+      authorization: { ...authorization, binding: { ...authorization.binding, accountEncryptionMode: 'plain' } },
+      credentials: { token: 'bob', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => true,
+    })).resolves.toBeNull();
+    expect(storedCredentials).not.toHaveBeenCalled();
+  });
+
   it('overlaps admitted profile and Settings-floor reads without opening Settings before identity admission', async () => {
     let releaseProfile!: () => void;
     const profileHeld = new Promise<void>(resolve => { releaseProfile = resolve; });

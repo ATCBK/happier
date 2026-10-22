@@ -299,6 +299,7 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
         fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) }))),
       trace('requester.settings_currentness', () => fetchAccountEncryptionCurrentness({
         token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
+        allowCredentialRecovery: false,
         ...(input.signal ? { signal: input.signal } : {}),
       })),
     ]);
