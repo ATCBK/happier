@@ -1657,14 +1657,16 @@ The daemon pushes `daemonState.localServices` through the existing Machine-state
 transport. `LocalServiceMachineSummaryV1` is a small strict presentation union:
 `ready` carries a nonnegative `runningCount`; `unknown`, `error`, and `disabled`
 carry no count. Missing or malformed projections remain unknown to readers.
-Rail chrome can consume this Machine fact without opening a detailed service feed.
+This is a retained presentation observation, not an independently refreshed live count.
 
 The local-service inventory runtime owns the projection and its stable reference.
 It counts current listening user services with the shared listener grouping rule,
 combining loopback/wildcard bindings and excluding proven Happier internal services.
 Preview registration alone does not establish a listener. The Machine publisher
-subscribes once to that runtime, demanding its existing scan loop rather than a
-second scanner or timer. Identical summaries produce no change notification;
+subscribes passively to that runtime; publishing a Machine row does not demand
+inventory polling. Parked inventory readers demand the existing scan loop, and
+ordinary inventory/Guard reads refresh through its single-flight owner. Identical
+summaries produce no change notification;
 reconnect and Machine-client replacement republish the current projection. Deferred
 transport/CAS handlers read the current runtime summary when they execute.
 
