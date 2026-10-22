@@ -620,6 +620,26 @@ describe("inTx", () => {
     });
 
     it.each([
+        { kind: "acquisition-unavailable", message: "Unable to start a transaction in the given time. private query contents" },
+        { kind: "expired-timeout", message: "Transaction already closed: A query cannot be executed on an expired transaction. private query contents" },
+        { kind: "transaction-not-found", message: "Transaction not found. private query contents" },
+    ])("distinguishes content-free P2028 subtype $kind at exhaustion", async ({ kind, message }) => {
+        applyEnvValues({ HAPPIER_DB_PROVIDER: "postgres", HAPPIER_DB_TX_MAX_RETRIES: "0" });
+        const failure = new prismaRuntime.PrismaClientKnownRequestError("private wrapper contents", {
+            code: "P2028", clientVersion: "6.19.2", meta: { error: message },
+        });
+        if (kind === "acquisition-unavailable") transaction.mockRejectedValue(failure);
+        await expect(inTx(async () => { throw failure; }, { transactionClass: "teams.restore" }))
+            .rejects.toMatchObject({ cause: failure });
+        const diagnostic = logMock.mock.calls.find(([context]) => context.module === "storage-tx" && context.prismaCode === "P2028");
+        expect(diagnostic?.[0]).toMatchObject({
+            transactionClass: "teams.restore", prismaTransactionErrorKind: kind, attempts: 1,
+            outcome: kind === "acquisition-unavailable" ? "acquisition-unavailable" : "conflict-exhausted",
+        });
+        expect(JSON.stringify(logMock.mock.calls)).not.toContain("private");
+    });
+
+    it.each([
         { provider: "postgres", code: "42601" },
         { provider: "mysql", code: "40001" },
         { provider: "sqlite", code: "40P01" },

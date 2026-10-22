@@ -110,8 +110,17 @@ describe('API token encryption credentials', () => {
     ]) {
       expect(tokens.AccountApiTokensServerErrorV1Schema.parse({ error })).toEqual({ error });
     }
+    for (const error of [
+      'database_transaction_conflict_exhausted',
+      'database_connection_unavailable',
+    ]) {
+      expect(tokens.AccountApiTokensServerErrorV1Schema.parse({ error, statusCode: 503 }))
+        .toEqual({ error, statusCode: 503 });
+      expect(tokens.AccountApiTokensServerErrorV1Schema.safeParse({ error }).success).toBe(false);
+    }
     expect(tokens.AccountApiTokensServerErrorV1Schema.safeParse({ error: 'account_disabled' }).success).toBe(false);
     expect(tokens.AccountApiTokensServerErrorV1Schema.safeParse({ error: 'invalid_request', detail: 'secret' }).success).toBe(false);
+    expect(tokens.AccountApiTokensServerErrorV1Schema.safeParse({ error: 'invalid_request', statusCode: 503 }).success).toBe(false);
   });
 });
 

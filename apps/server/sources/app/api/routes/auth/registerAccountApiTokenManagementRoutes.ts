@@ -188,6 +188,7 @@ export function registerAccountApiTokenManagementRoutes(app: Fastify): void {
                     200: AccountApiTokensRevokeActionOutputV1Schema,
                     400: AccountApiTokensServerErrorV1Schema,
                     403: PresentUserRequiredResponseSchema,
+                    503: AccountApiTokensServerErrorV1Schema,
                 },
             },
         },

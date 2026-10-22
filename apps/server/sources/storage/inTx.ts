@@ -6,7 +6,7 @@ import { getDbProviderFromEnv, getPooledTransactionAdmission, isPrismaErrorCode,
 import { isLockAdmissionDeadlineExceededError, LockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
 import { isRetryableSqliteWriteError } from "@/storage/sqliteRetryClassifier";
 import { log } from "@/utils/logging/log";
-import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
+import { readWebLatencyRequestId, timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 import { flushAccountChangesInTx } from '@/app/changes/markAccountChanged';
 
 export type Tx = TransactionClient;
@@ -62,7 +62,8 @@ export type TransactionReplayReason = "session-account-audience-changed"
     | "follow-rule-progress-conflict"
     | "follow-relation-progress-conflict"
     | "pending-activation-target-changed"
-    | "transaction-account-audience-changed";
+    | "transaction-account-audience-changed"
+    | "usage-runtime-order-changed";
 
 /** Abort the current transaction when its fenced audience no longer matches its reads. */
 export class TransactionReplayRequiredError extends Error {
@@ -124,6 +125,8 @@ interface TransactionContext extends TransactionContextView {
 
 export interface TransactionContextView {
     readonly readOnly: boolean;
+    readonly transactionClass: string;
+    readonly requestId: string | undefined;
 }
 
 /** Native Prisma transaction proxies may share their property backing target. */
@@ -398,7 +401,11 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
         }
         // Keep all per-attempt state on this closure-owned object, rather than
         // assigning through Prisma's proxy onto a potentially shared client.
-        const context: TransactionContext = { callbacks: [], readOnly: options?.readOnly === true };
+        const context: TransactionContext = {
+            callbacks: [], readOnly: options?.readOnly === true,
+            transactionClass: options?.transactionClass ?? "unspecified",
+            requestId: readWebLatencyRequestId(),
+        };
         tx = new Proxy(tx, {
             get(target, property) {
                 return property === symbol ? context : Reflect.get(target, property, target);
@@ -521,26 +528,31 @@ export async function inTx<T>(fn: (tx: Tx) => Promise<T>, options?: InTxOptions)
                     throw new TransactionDeadlineExceededError(ambiguousAttemptFailure?.error ?? e, options?.transactionClass);
                 }
                 if (ambiguousAttemptFailure) throw ambiguousAttemptFailure.error;
-                if (acquisitionTimeout) {
-                    throw new TransactionAcquisitionUnavailableError(e);
-                }
-                if (confirmedRollback) {
+                if (confirmedRollback || acquisitionTimeout) {
                     const meta = typeof e === "object" && e !== null && "meta" in e ? e.meta : undefined;
                     const failedStatementRelation = typeof meta === "object" && meta !== null
                         && "modelName" in meta && typeof meta.modelName === "string" ? meta.modelName : undefined;
                     const prismaCode = typeof e === "object" && e !== null && "code" in e
                         && typeof e.code === "string" && /^P\d{4}$/.test(e.code) ? e.code : undefined;
+                    // Reuse the recovery owner's classifications, never raw
+                    // Prisma messages (which may contain SQL and parameters).
+                    const prismaTransactionErrorKind = prismaCode !== "P2028" ? undefined
+                        : acquisitionTimeout ? "acquisition-unavailable"
+                        : isExpiredTransactionError(e) ? "expired-timeout"
+                        : isMissingPrismaTransactionError(e) ? "transaction-not-found" : "unclassified";
                     log({
-                        module: "storage-tx", level: "warn", event: "transaction-rollback",
+                        module: "storage-tx", level: "warn", event: acquisitionTimeout ? "transaction-acquisition" : "transaction-rollback",
                         transactionClass: options?.transactionClass ?? "unspecified",
-                        provider, sqlState, prismaCode, failedStatementRelation, outcome: "conflict-exhausted",
+                        provider, sqlState, prismaCode, prismaTransactionErrorKind, failedStatementRelation,
+                        outcome: acquisitionTimeout ? "acquisition-unavailable" : "conflict-exhausted",
                         driverErrorCode: sqlState,
                         driverErrorMessage: sqlState ? readContentFreeDriverErrorMessage(e) : undefined,
                         isolationLevel: provider === "sqlite" ? undefined : options?.isolationLevel ?? "ReadCommitted",
                         readOnly: options?.readOnly === true,
                         attempts: counter + 1,
                         ...(e instanceof TransactionReplayRequiredError ? { replayReason: e.reason } : {}),
-                    }, "Database transaction rollback recovery exhausted");
+                    }, acquisitionTimeout ? "Database transaction acquisition is unavailable" : "Database transaction rollback recovery exhausted");
+                    if (acquisitionTimeout) throw new TransactionAcquisitionUnavailableError(e);
                     throw new TransactionConflictExhaustedError(e);
                 }
                 throw e;

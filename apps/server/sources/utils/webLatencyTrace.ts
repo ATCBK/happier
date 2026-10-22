@@ -15,6 +15,11 @@ export function withWebLatencyTrace<T>(requestId: unknown, operation: () => T, s
         ? context.run({ requestId, ...(sessionId ? { sessionId } : {}), sequence: { next: 0 } }, operation) : operation();
 }
 
+/** The existing trace owner admits only content-free request identities. */
+export function readWebLatencyRequestId(): string | undefined {
+    return context.getStore()?.requestId;
+}
+
 /** Only validated trace identities enter SQL; never copy input, Session ids or query values. */
 export function annotateWebLatencyQuery(sql: string): string {
     const current = context.getStore();

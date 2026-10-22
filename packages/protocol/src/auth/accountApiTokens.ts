@@ -239,8 +239,20 @@ export const AccountApiTokensServerErrorV1Schema = lazyZodSchema(() => z.strictO
     'credential_scope_denied', 'credential_origin_denied', 'model_not_granted',
     'credential_authentication_evidence_limit',
     'credential_authentication_evidence_unavailable',
+    'database_transaction_conflict_exhausted', 'database_connection_unavailable',
   ]),
-}));
+  statusCode: z.optional(z.literal(503)),
+}).check(z.superRefine((value, context) => {
+  const databaseFailure = value.error === 'database_transaction_conflict_exhausted'
+    || value.error === 'database_connection_unavailable';
+  if (databaseFailure !== (value.statusCode === 503)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['statusCode'],
+      message: 'Database availability failures require the exact HTTP 503 status projection.',
+    });
+  }
+})));
 export type AccountApiTokensServerErrorV1 = z.infer<typeof AccountApiTokensServerErrorV1Schema>;
 
 export const AccountApiTokenCredentialV1Schema = lazyZodSchema(() => z.strictObject({
