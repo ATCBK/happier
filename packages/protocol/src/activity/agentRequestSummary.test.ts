@@ -205,6 +205,13 @@ describe('extractFirstUserActionQuestion', () => {
 });
 
 describe('summarizeToolInputForNotification', () => {
+  it('uses the caller locale for a full-form question summary', () => {
+    expect(summarizeToolInputForNotification('AskUserQuestion', {
+      questions: Array.from({ length: 5 }, (_, index) => ({ question: `Question ${index}?` })),
+    }, { answerAll: count => `Répondre aux ${count} questions dans Happier` }))
+      .toBe('Répondre aux 5 questions dans Happier');
+  });
+
   it.each([
     { questionCount: 5, choiceCount: 2 },
     { questionCount: 1, choiceCount: 9 },

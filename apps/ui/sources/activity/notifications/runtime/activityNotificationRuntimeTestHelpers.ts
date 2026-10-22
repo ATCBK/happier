@@ -15,7 +15,7 @@ type InstallActivityNotificationRuntimeCommonModuleMocksOptions = Readonly<{
 
 export function createActivityNotificationTextModuleMock() {
     return createTextModuleMock({
-        translate: (key: string) => {
+        translate: (key: string, params?: Record<string, unknown>) => {
             switch (key) {
                 case 'notifications.activity.defaultSessionTitle':
                     return 'Session';
@@ -26,6 +26,7 @@ export function createActivityNotificationTextModuleMock() {
                 case 'notifications.activity.requestLabels.selectOne': return 'Select one';
                 case 'notifications.activity.requestLabels.selectMultiple': return 'Select multiple';
                 case 'notifications.activity.requestLabels.customAnswer': return 'Custom answer allowed';
+                case 'notifications.activity.requestLabels.answerAll': return `Answer all ${params?.count} in Happier`;
                 case 'notifications.activity.permissionFallbackBody':
                     return 'Approval required.';
                 case 'notifications.activity.userActionFallbackBody':

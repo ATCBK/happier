@@ -5428,6 +5428,7 @@ encryptedUnavailable: "Detalls xifrats no disponibles",
                 customAnswer: "Es permet una resposta personalitzada",
                 localMessages: "Missatges locals",
                 remoteMessages: "Missatges remots",
+                answerAll: ({ count }: { count: number }) => `Respon les ${count} preguntes a Happier`,
             },
         },
         channels: {

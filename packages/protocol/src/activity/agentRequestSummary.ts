@@ -320,12 +320,14 @@ export type RequestNotificationLabels = Readonly<{
   customAnswer: string;
   localMessages: string;
   remoteMessages: string;
+  answerAll: (count: number) => string;
 }>;
 
 const defaultLabels: RequestNotificationLabels = {
   command: 'Command', file: 'File', selectOne: 'Select one',
   selectMultiple: 'Select multiple', customAnswer: 'Custom answer allowed',
   localMessages: 'Local messages', remoteMessages: 'Remote messages',
+  answerAll: count => `Answer all ${count} in Happier`,
 };
 
 export function requiresFullFormForRemoteUserAction(questions: readonly AgentRequestQuestionSummary[]): boolean {
@@ -342,7 +344,7 @@ export function summarizeToolInputForNotification(toolName: string, toolInput: u
   });
   if (summary.questions.length) {
     if (requiresFullFormForRemoteUserAction(summary.questions)) {
-      return `Answer all ${summary.questionCount} in Happier`;
+      return display.answerAll(summary.questionCount);
     }
     return summary.questions.map((question) => [
       question.header && question.header !== question.question ? question.header : null,

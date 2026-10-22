@@ -5651,6 +5651,7 @@ export const zhHans: TranslationStructure = {
           customAnswer: "允许自定义回答",
           localMessages: "本地消息",
           remoteMessages: "远程消息",
+          answerAll: ({ count }: { count: number }) => `在 Happier 中回答全部 ${count} 个问题`,
       },
     },
     channels: {

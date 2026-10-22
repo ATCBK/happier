@@ -5770,6 +5770,7 @@ encryptedUnavailable: "Zaszyfrowane dane niedostępne",
             customAnswer: "Można wpisać własną odpowiedź",
             localMessages: "Wiadomości lokalne",
             remoteMessages: "Wiadomości zdalne",
+            answerAll: ({ count }: { count: number }) => `Odpowiedz na wszystkie pytania (${count}) w Happier`,
         },
       },
       channels: {

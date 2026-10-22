@@ -5661,6 +5661,7 @@ export const ru: TranslationStructure = {
             customAnswer: "Можно ввести свой ответ",
             localMessages: "Локальные сообщения",
             remoteMessages: "Удалённые сообщения",
+            answerAll: ({ count }: { count: number }) => `Ответьте на все вопросы (${count}) в Happier`,
         },
       },
       channels: {

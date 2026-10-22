@@ -5498,6 +5498,7 @@ encryptedUnavailable: "Verschlüsselte Details nicht verfügbar",
                 customAnswer: "Eigene Antwort erlaubt",
                 localMessages: "Lokale Nachrichten",
                 remoteMessages: "Remote-Nachrichten",
+                answerAll: ({ count }: { count: number }) => `Beantworte alle ${count} Fragen in Happier`,
             },
         },
         channels: {

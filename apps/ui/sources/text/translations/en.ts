@@ -6517,6 +6517,7 @@ const enNotifications = {
       customAnswer: 'Custom answer allowed',
       localMessages: 'Local messages',
       remoteMessages: 'Remote messages',
+      answerAll: ({ count }: { count: number }) => `Answer all ${count} in Happier`,
     },
   },
   channels: {

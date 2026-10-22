@@ -5763,6 +5763,7 @@ encryptedUnavailable: "Détails chiffrés indisponibles",
                 customAnswer: "Réponse personnalisée autorisée",
                 localMessages: "Messages locaux",
                 remoteMessages: "Messages distants",
+                answerAll: ({ count }: { count: number }) => `Réponds aux ${count} questions dans Happier`,
             },
       },
       channels: {

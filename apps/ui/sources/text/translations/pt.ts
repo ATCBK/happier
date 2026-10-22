@@ -6032,6 +6032,7 @@ encryptedUnavailable: "Detalhes encriptados indisponíveis",
             customAnswer: "Resposta personalizada permitida",
             localMessages: "Mensagens locais",
             remoteMessages: "Mensagens remotas",
+            answerAll: ({ count }: { count: number }) => `Responda às ${count} perguntas no Happier`,
         },
       },
       channels: {

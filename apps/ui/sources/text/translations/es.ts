@@ -5927,6 +5927,7 @@ encryptedUnavailable: "Detalles cifrados no disponibles",
             customAnswer: "Se permite una respuesta personalizada",
             localMessages: "Mensajes locales",
             remoteMessages: "Mensajes remotos",
+            answerAll: ({ count }: { count: number }) => `Responde las ${count} preguntas en Happier`,
         },
       },
       channels: {

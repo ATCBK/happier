@@ -10,7 +10,12 @@ import {
 } from './runtime/activityNotificationRuntimeTestHelpers';
 
 installActivityNotificationRuntimeCommonModuleMocks({
-    text: async () => createActivityNotificationTextModuleMock(),
+    text: async () => {
+        const boundary = createActivityNotificationTextModuleMock();
+        return { ...boundary, t: (key: string, params?: Record<string, unknown>) =>
+            key === 'notifications.activity.requestLabels.answerAll'
+                ? `Réponds aux ${params?.count} questions dans Happier` : boundary.t(key, params) };
+    },
 });
 
 describe('buildActivityLocalNotificationContent', () => {
@@ -29,7 +34,7 @@ describe('buildActivityLocalNotificationContent', () => {
             session: null,
             serverUrl: 'https://home-b.example.test',
         });
-        expect(notification.body).toBe('Answer all 5 in Happier');
+        expect(notification.body).toBe('Réponds aux 5 questions dans Happier');
         expect(notification.data).toMatchObject({ serverId: 'server-b', sessionId: 'session-five', requestId: 'request-five' });
         expect(notification.expo.categoryIdentifier).toBe(PUSH_NOTIFICATION_CATEGORY_IDS.userActionRequestV1);
         const tap = parseNotificationTap({

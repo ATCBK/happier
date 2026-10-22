@@ -6248,6 +6248,7 @@ localTailscale: {
           customAnswer: "自由回答が可能",
           localMessages: "ローカルメッセージ",
           remoteMessages: "リモートメッセージ",
+          answerAll: ({ count }: { count: number }) => `Happierで${count}件すべてに回答`,
       },
     },
     channels: {

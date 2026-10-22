@@ -4926,6 +4926,7 @@ const zhHantOverrides: DeepPartial<TranslationStructure> = {
                 customAnswer: "允許自訂回答",
                 localMessages: "本機訊息",
                 remoteMessages: "遠端訊息",
+                answerAll: ({ count }: { count: number }) => `在 Happier 中回答全部 ${count} 個問題`,
             },
         },
         channels: {

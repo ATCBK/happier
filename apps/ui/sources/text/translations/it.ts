@@ -6118,6 +6118,7 @@ encryptedUnavailable: "Dettagli crittografati non disponibili",
             customAnswer: "Risposta personalizzata consentita",
             localMessages: "Messaggi locali",
             remoteMessages: "Messaggi remoti",
+            answerAll: ({ count }: { count: number }) => `Rispondi a tutte le ${count} domande in Happier`,
         },
       },
       channels: {

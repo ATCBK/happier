@@ -41,6 +41,7 @@ function summarizeAgentRequestBody(requestKind: AgentRequestKind, toolName: stri
         customAnswer: t('notifications.activity.requestLabels.customAnswer'),
         localMessages: t('notifications.activity.requestLabels.localMessages'),
         remoteMessages: t('notifications.activity.requestLabels.remoteMessages'),
+        answerAll: count => t('notifications.activity.requestLabels.answerAll', { count }),
     }) : null;
     return details || t(requestKind === 'permission'
         ? 'notifications.activity.permissionFallbackBody'
