@@ -446,6 +446,8 @@ function connectedServiceQuotaSnapshotMatchesProfileRef(
     );
 }
 
+const EMPTY_AGENT_INPUT_STATUS_BADGES: readonly AgentInputStatusBadge[] = Object.freeze([]);
+
 const translateUsageLimitRecoveryPresentationKey: SessionUsageLimitRecoveryTranslate = (key, ...params) => {
     if (key === 'session.usageLimitRecovery.banner.resetCreditSummary') {
         const [resetCreditSummaryParams] = params as [
@@ -2346,11 +2348,10 @@ export function useSessionComposerController({
         sessionProviderUsageGaugeMode,
         sessionProviderUsageGaugeWindowMode,
     ]);
-    const sessionStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
-        ...usageLimitRecoveryBadges,
-        ...staleSessionRunnerBadges,
-        ...sessionWorkStateBadges,
-    ], [sessionWorkStateBadges, staleSessionRunnerBadges, usageLimitRecoveryBadges]);
+    const sessionStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
+        const badges = [...usageLimitRecoveryBadges, ...staleSessionRunnerBadges, ...sessionWorkStateBadges];
+        return badges.length > 0 ? badges : EMPTY_AGENT_INPUT_STATUS_BADGES;
+    }, [sessionWorkStateBadges, staleSessionRunnerBadges, usageLimitRecoveryBadges]);
     React.useEffect(() => {
         if (shouldRetainSessionActivityStatusBadge({
             activeStatusBadgeKey,
@@ -5783,8 +5784,8 @@ export function useSessionComposerController({
             managedWakeController, sessionAccountScope, managedWakeAuthorization, managedPendingMachine,
             router, handleManagedWakeRecovery, t]);
         const hasConnectedServicesAuthChip = Boolean(sessionConnectedServicesAuthSwitch.connectedServicesAuthChip);
-        const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => [
-            ...sessionStatusBadges,
+        const agentInputStatusBadges = React.useMemo<ReadonlyArray<AgentInputStatusBadge>>(() => {
+            const badges: AgentInputStatusBadge[] = [
             ...(sessionCapabilitiesApplyBadge ? [sessionCapabilitiesApplyBadge] : []),
             ...sessionConnectedServicesAuthSwitch.statusBadges,
             ...(draftSyncStatusBadge ? [draftSyncStatusBadge] : []),
@@ -5874,7 +5875,9 @@ export function useSessionComposerController({
                     onPress: cancelPendingMessageEdit,
                 } satisfies AgentInputStatusBadge]
                 : []),
-        ], [
+            ];
+            return badges.length > 0 ? [...sessionStatusBadges, ...badges] : sessionStatusBadges;
+        }, [
             agentTransitionOutcomeBanner.collapsed,
             agentTransitionOutcomeBanner.toggle,
             armedContinuationNotice,

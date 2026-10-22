@@ -344,6 +344,8 @@ describe('SessionView composer typing', () => {
       }));
       expect(readProducerProps().composerFileScope).toMatchObject({ machineId: secondMachineId });
       expect(readModelDetail().props.discovery(settingsDefaults).selectedMachineId).toBe(secondMachineId);
+      expect(readProducerProps().statusBadges).toEqual(initial.statusBadges);
+      expect(readProducerProps().statusBadges).toBe(initial.statusBadges);
 
       await renderer.act(async () => {
         publishSessionOwnerMetadata(({ modelSelectionIntentV1: _previousModel, ...metadata }) => ({ ...metadata, flavor: 'claude' }));
