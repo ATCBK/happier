@@ -428,6 +428,44 @@ describe('SessionComputerScreenPane retained source', () => {
             await screen.update(<Harness shell="pane" />);
             await flushHookEffects();
             expect(store.getPortalSnapshot() === settledSlot).toBe(true);
+            phase = 'settling the footer fit threshold across the real pane/viewer handoff';
+            await act(async () => { viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' }); });
+            const layoutHost = async (height: number) => {
+                await act(async () => {
+                    invokeTestInstanceHandler(screen.findByTestId('session-viewer-host')!, 'onLayout', {
+                        nativeEvent: { layout: { x: 0, y: 0, width: 1200, height } },
+                    });
+                });
+            };
+            await layoutHost(900);
+            for (const [testID, width] of [
+                ['session-viewer-source-capsule', 300],
+                ['session-viewer-buttons-capsule', 90],
+                ['session-viewer-machine', 51],
+            ] as const) {
+                await act(async () => {
+                    invokeTestInstanceHandler(screen.root.find(node => node.props.testID === testID
+                        && typeof node.props.onLayout === 'function'), 'onLayout', {
+                        nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } },
+                    });
+                });
+            }
+            expect(viewerController!.presence.get('computer')).not.toBeNull();
+            const { resolveFloatingFrameChromeHeight } = await import('@happier-dev/plugin-ui/presentation');
+            const { SESSION_VIEWER_EDGE } = await import('@/components/sessions/viewer/sessionViewerGeometry');
+            const aspect = viewerController!.facts.computer!.aspectRatio!;
+            expect(aspect).toBeGreaterThan(0);
+            const thresholdHeight = 453 / aspect + (
+                resolveFloatingFrameChromeHeight({ footer: false }) + resolveFloatingFrameChromeHeight({ footer: true })
+            ) / 2 + SESSION_VIEWER_EDGE * 2;
+            await layoutHost(thresholdHeight);
+            expect(viewerController!.state.mode).toBe('docked');
+            expect(viewerController!.floatFits).toBe(false);
+            await layoutHost(900);
+            expect(viewerController!.state.mode).toBe('floating');
+            expect(screen.root.findByType(ComputerScreenViewer)).toBe(body);
+            expect(picture()).toEqual(lastPicture);
+            await act(async () => { viewerController!.port.apply({ kind: 'viewer.close' }); });
             phase = 'projecting the actual phone breakpoint through the Computer Details route';
             await act(async () => {
                 viewerController!.port.apply({ kind: 'viewer.open', source: 'computer' });

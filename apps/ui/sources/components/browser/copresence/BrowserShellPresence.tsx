@@ -97,7 +97,9 @@ export function BrowserShellPresence(props: Readonly<{
     testID: string;
 }>): React.ReactElement | null {
     const { controlService, view } = props;
-    const inViewer = useSessionViewerBodyPresentation() === 'viewer';
+    const presentation = useSessionViewerBodyPresentation();
+    const inViewer = presentation === 'viewer';
+    const viewerSource = presentation !== null;
     // A daemon-owned view's controller is the daemon's (its `controllerChanged` events, ingested into
     // the view state); an in-app view's is the in-app automation owner. One projection, two owners,
     // never a third copy here.
@@ -161,14 +163,16 @@ export function BrowserShellPresence(props: Readonly<{
 
     // The Session viewer draws who acts below the picture and moves by the picture while it is only
     // watched; this leaf stays the one owner of the takeover it hands over.
-    const viewerPresence = React.useMemo<SessionViewerPresence | null>(() => (inViewer ? {
+    // Fit checks in the dock predict the same floating footer. Its source fact must
+    // survive that handoff even though the pane draws its own capsule.
+    const viewerPresence = React.useMemo<SessionViewerPresence | null>(() => (viewerSource ? {
         presence,
         agent,
         onTakeControl: canControl ? takeControl : undefined,
         onHandBack: canControl ? handBack : undefined,
         onCheckAgain: props.onCheckAgain ? checkAgain : undefined,
         checking,
-    } : null), [agent, canControl, handBack, inViewer, presence, takeControl, props.onCheckAgain, checkAgain, checking]);
+    } : null), [agent, canControl, handBack, viewerSource, presence, takeControl, props.onCheckAgain, checkAgain, checking]);
     usePublishSessionViewerPresence('browser', viewerPresence);
     usePublishSessionViewerSourceFacts('browser', inViewer ? {
         machineName: null,

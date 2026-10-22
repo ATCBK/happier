@@ -80,22 +80,33 @@ describe('BrowserShellPresence daemon takeover', () => {
                 navigationGeneration: currentView.navigationGeneration, actionKind: 'snapshot' }) }));
         expect(screen.getTextContent()).toContain('browserPresence.lastActionMayHaveLanded');
     });
-    it('publishes the same observation recovery to the Session viewer without a pane capsule', async () => {
+    it('publishes the same observation recovery across viewer and pane presentations without claiming standalone surfaces', async () => {
         rpc.mockReset();
         let store: SessionViewerPresenceStore | undefined;
         function ReadPresence() { store = useOptionalSessionViewerController()?.presence; return null; }
         const original = view('human', 5);
         const currentView = { ...original, automationController: { ...original.automationController!, uncertain: true } };
-        const screen = await renderScreen(<SessionViewerControllerProvider sessionId="session_1" serverId="server_1"
-            phone={false} canPresentSource={() => true} openDocked={() => {}}>
-            <ReadPresence />
-            <SessionViewerBodyPresentation presentation="viewer"><Surface currentView={currentView} enabled={false} /></SessionViewerBodyPresentation>
-        </SessionViewerControllerProvider>);
+        function Tree({ presentation }: Readonly<{ presentation: 'pane' | 'viewer' | null }>) {
+            const surface = <Surface currentView={currentView} enabled={false} />;
+            return <SessionViewerControllerProvider sessionId="session_1" serverId="server_1"
+                phone={false} canPresentSource={() => true} openDocked={() => {}}>
+                <ReadPresence />
+                {presentation === null ? surface : <SessionViewerBodyPresentation presentation={presentation}>{surface}</SessionViewerBodyPresentation>}
+            </SessionViewerControllerProvider>;
+        }
+        const screen = await renderScreen(<Tree presentation="viewer" />);
         expect(screen.findHostByTestId('p-human')).toBeNull();
         expect(store?.get('browser')?.presence).toMatchObject({ kind: 'human', interruptedCompletion: 'unknown' });
         expect(store?.get('browser')?.onCheckAgain).toBeTypeOf('function');
+        // The dock must predict the floating footer before Float is admitted. Drawing the
+        // capsule in the pane must not erase the source fact that determines that fit.
+        await screen.update(<Tree presentation="pane" />);
+        expect(screen.findHostByTestId('p-human')).not.toBeNull();
+        expect(store?.get('browser')?.presence).toMatchObject({ kind: 'human', interruptedCompletion: 'unknown' });
         await act(async () => store?.get('browser')?.onCheckAgain?.());
         expect(rpc).not.toHaveBeenCalled();
+        await screen.update(<Tree presentation={null} />);
+        expect(store?.get('browser')).toBeNull();
     });
     it('does not take control or hand back when the existing Action policy refuses UI admission', async () => {
         rpc.mockReset();

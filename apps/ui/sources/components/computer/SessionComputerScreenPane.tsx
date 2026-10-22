@@ -157,10 +157,11 @@ function SessionComputerScreenBody(
   });
   // The one capsule projection the pane draws too: no Take control while the machine denies input,
   // and nobody to name while the screen cannot be seen at all (its picture is the permission card).
+  // Keep this fact while docked: Float must fit the footer it will actually present.
   const needsPermission = computerCaptureNeedsPermission(model);
   const presence = React.useMemo<SessionViewerPresence | null>(
     () =>
-      viewer && model.shared && !needsPermission
+      model.shared && !needsPermission
         ? resolveComputerPresenceCapsule({
             presence: model.presence,
             agent: model.agent,
@@ -189,7 +190,6 @@ function SessionComputerScreenBody(
       model.shared,
       model.targetTitle,
       needsPermission,
-      viewer,
     ],
   );
   usePublishSessionViewerPresence('computer', presence);
