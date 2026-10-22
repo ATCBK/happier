@@ -22,7 +22,8 @@ import {
   type ServerAccountScope,
 } from '@/sync/domains/scope/serverAccountScope';
 import { useAppShellPluginUiDeclarationSources } from '@/components/appShell/plugins/AppShellPluginUiProjection';
-import { EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY, type PluginSkillSourceIdentity } from './pluginSkillSourceIdentity';
+import { readCurrentAppShellPluginUiProjection } from '@/components/appShell/plugins/committedPluginUiProjection';
+import { createPluginSkillSourceIdentityPublication, EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY, type PluginSkillSourceIdentity } from './pluginSkillSourceIdentity';
 
 export type SkillsLibraryStatus = 'loading' | 'ready' | 'unavailable';
 export type SkillsLibrary = Readonly<{
@@ -53,11 +54,16 @@ const lastKnown = new Map<string, Snapshot>();
 // Cold observers join one active read and validate its revisions against later
 // inventory publication. No response or extra cache survives settlement here.
 const readsInFlight = new Map<string, Readonly<{ pending: Promise<ActionExecuteResult>; sourceKey: string | null;
-  pluginRevision: PluginSkillSourceIdentity }>>();
-function readSkills(key: string, scope: NonNullable<SkillsLibrary['scope']>, sourceKey: string | null = null,
-  pluginRevision: PluginSkillSourceIdentity = EMPTY_PLUGIN_SKILL_SOURCE_IDENTITY) {
+  sourceRevisions: readonly string[] | null;
+  pluginRevision: PluginSkillSourceIdentity | null; pluginSourcesCurrent: () => boolean }>>();
+function readSkills(scope: NonNullable<SkillsLibrary['scope']>, sourceRevisions: readonly string[] | null = null,
+  pluginRevision: PluginSkillSourceIdentity | null = null) {
+  const key = `${scope.serverId}:${scope.accountId}`;
   const existing = readsInFlight.get(key);
-  if (existing && existing.pluginRevision === pluginRevision) return existing;
+  if (existing) return existing;
+  const pluginIdentity = createPluginSkillSourceIdentityPublication();
+  const pluginSources = () => pluginIdentity.publish(readCurrentAppShellPluginUiProjection({ scope, declarationsOnly: true }));
+  const initialPluginSources = pluginSources();
   // The front door captures the exact Account lifetime, independent of either mounted observer.
   const execute = createFrontDoorActionExecute();
   const pending = Promise.resolve()
@@ -77,7 +83,8 @@ function readSkills(key: string, scope: NonNullable<SkillsLibrary['scope']>, sou
     .finally(() => {
       if (readsInFlight.get(key)?.pending === pending) readsInFlight.delete(key);
     });
-  const read = { pending, sourceKey, pluginRevision };
+  const read = { pending, sourceKey: sourceRevisions === null ? null : contentKey(sourceRevisions), sourceRevisions,
+    pluginRevision, pluginSourcesCurrent: () => pluginSources() === initialPluginSources };
   readsInFlight.set(key, read);
   return read;
 }
@@ -97,7 +104,7 @@ export async function readSkillsLibraryItems(
 ): Promise<readonly SkillListItemV1[] | null> {
   const scopeKey = `${scope.serverId}:${scope.accountId}`;
   try {
-    const result = await readSkills(`picker|${scopeKey}`, scope).pending;
+    const result = await readSkills(scope).pending;
     if (result.ok) {
       const parsed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(
         result.result,
@@ -252,8 +259,7 @@ export function useSkillsLibrary(
     );
     void (async () => {
       try {
-        const initialRead = !lastKnown.has(scopeKey) && attempt === 0;
-        const read = readSkills(initialRead ? observationKey : readKey, scope, sourceKey, pluginRevision);
+        const read = readSkills(scope, sourceRevisions, pluginRevision);
         const result = await read.pending;
         if (controller.signal.aborted) return;
         if (!result.ok) {
@@ -273,8 +279,15 @@ export function useSkillsLibrary(
           .map(item => `${item.skillId}@${item.revision}`));
         // A changed membership/revision during the cold read needs a fresh
         // observation. Never relabel an older response as the newer mutation.
-        if (initialRead && (read.pluginRevision !== pluginRevision
-          || read.sourceKey !== sourceKey && !(inventoryComplete && resultKey === sourceKey))) {
+        const knownRevisions = new Set(parsed.items.filter(item => !isReadOnlySkillProvenanceV1(item.provenance))
+          .map(item => `${item.skillId}@${item.revision}`));
+        // A picker has no observed inventory/declaration revision. Its complete
+        // response may satisfy a mounted observer, but never a newer publication.
+        const published = new Set(sourceRevisions);
+        const sourceChanged = read.sourceKey !== sourceKey && (inventoryComplete ? resultKey !== sourceKey
+          : sourceRevisions.some(revision => !knownRevisions.has(revision))
+            || (read.sourceRevisions ?? []).some(revision => !published.has(revision)));
+        if (!read.pluginSourcesCurrent() || read.pluginRevision !== null && read.pluginRevision !== pluginRevision || sourceChanged) {
           setAttempt(value => value + 1);
           return;
         }

@@ -5,6 +5,8 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
+import { CapabilityAddModalBody } from '@/components/capabilities/add/CapabilityAddModal';
+import { SkillUploadInput } from './SkillUploadInput';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,7 +21,7 @@ vi.mock('react-native-unistyles', async () => {
 
 // The browser's file drop is the platform boundary: the test drops one skill folder through it. Reading the
 // folder, previewing and adding stay the real owners.
-const drop = vi.hoisted(() => ({ onFilesDropped: null as null | ((event: { dataTransfer: unknown }) => Promise<void>) }));
+const drop = vi.hoisted(() => ({ names: ['grill-me'], onFilesDropped: null as null | ((event: { dataTransfer: unknown }) => Promise<void>) }));
 vi.mock('@/hooks/ui/useWebFileDropZone', () => ({
   useWebFileDropZone: (params: { onFilesDropped: (event: { dataTransfer: unknown }) => Promise<void> }) => {
     drop.onFilesDropped = params.onFilesDropped;
@@ -27,14 +29,15 @@ vi.mock('@/hooks/ui/useWebFileDropZone', () => ({
   },
 }));
 vi.mock('@/utils/files/webDroppedEntries', () => ({
-  readWebDroppedEntries: async () => [
-    { file: new File(['---\nname: grill-me\ndescription: Interview the plan.\n---\nAsk.'], 'SKILL.md'), relativePath: 'grill-me/SKILL.md' },
-  ],
+  readWebDroppedEntries: async () => drop.names.map(name => ({
+    file: new File([`---\nname: ${name}\ndescription: Interview the plan.\n---\nAsk.`], 'SKILL.md'), relativePath: `${name}/SKILL.md`,
+  })),
 }));
 
 afterEach(() => {
   standardCleanup();
   drop.onFilesDropped = null;
+  drop.names = ['grill-me'];
 });
 
 const PREVIEW = {
@@ -57,9 +60,7 @@ const execute: MountedAuthoringActionExecute = async (_actionId, input) => {
 };
 
 /** The Upload mode inside the real Add dialog body, as the Skills page opens it. */
-async function renderUpload(answer: MountedAuthoringActionExecute, onSelectAdded: (id: string) => void = () => {}) {
-  const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
-  const { SkillUploadInput } = await import('./SkillUploadInput');
+async function renderUpload(answer: MountedAuthoringActionExecute, onSelectAdded: (id: string) => void = () => {}, onAdded: (id: string) => void = () => {}) {
   const onClose = vi.fn();
   const config = {
     title: 'Add a skill',
@@ -73,7 +74,7 @@ async function renderUpload(answer: MountedAuthoringActionExecute, onSelectAdded
         kind: 'input' as const,
         ownsTools: true,
         renderBody: (ctx: never) => (
-          <SkillUploadInput ctx={ctx} execute={answer} onAdded={() => {}} onSelectAdded={onSelectAdded} onDone={() => {}} testID="upload" />
+          <SkillUploadInput ctx={ctx} execute={answer} onAdded={onAdded} onSelectAdded={onSelectAdded} onDone={() => {}} testID="upload" />
         ),
       },
     ],
@@ -96,6 +97,39 @@ async function renderUpload(answer: MountedAuthoringActionExecute, onSelectAdded
 }
 
 describe('SkillUploadInput', () => {
+  for (const missingRules of [false, true]) it(`retains a real batch content failure while repairing rules (missing rules: ${missingRules})`, async () => {
+    const { createSkillInstallActionHarness } = await import('@/dev/testkit/harness/skillInstallActionHarness');
+    const harness = createSkillInstallActionHarness();
+    drop.names = ['grill-me', 'to-prd', 'not-selected'];
+    harness.setContentUnavailableAfter(1);
+    harness.setRulesUnavailable(missingRules);
+    const onAdded = vi.fn();
+    const { screen } = await renderUpload(harness.execute, () => {}, onAdded);
+    const collection = () => screen.find(node => node.props?.testID === 'skills.add:collection' && node.props?.anatomy);
+    const row = await renderScreen(<>{collection().props.anatomy.leadingControl({ ...PREVIEW, path: 'not-selected', name: 'not-selected' })}</>);
+    await row.pressByTestIdAsync('upload.item.not-selected.tick');
+    await screen.pressByTestIdAsync('upload.add');
+    expect(harness.artifacts.size).toBe(1);
+    expect(onAdded).not.toHaveBeenCalled();
+    expect(screen.findByTestId('upload.add-error')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('to-prd');
+    expect(screen.getTextContent()).not.toContain('Couldn’t add to-prd, not-selected');
+    // The refreshed checklist preserves the unticked skill and drops the one already held.
+    const unselected = collection().props.anatomy.leadingControl({ ...PREVIEW, path: 'not-selected', name: 'not-selected' });
+    expect(unselected.props.checked).toBe(false);
+    harness.setRulesUnavailable(false);
+    await screen.pressByTestIdAsync('upload.add');
+    expect(harness.rules().map(rule => rule.skillId)).toEqual(['skill-1']);
+    expect(harness.artifacts.size).toBe(1);
+    expect(onAdded).not.toHaveBeenCalled();
+    expect(screen.findByTestId('upload.add-error')).not.toBeNull();
+    harness.setContentUnavailableAfter(null);
+    await screen.pressByTestIdAsync('upload.add');
+    expect(onAdded).toHaveBeenCalledExactlyOnceWith('skill-1');
+    expect([...harness.artifacts.keys()]).toEqual(['skill-1', 'skill-2']);
+    expect(harness.rules().map(rule => rule.skillId)).toEqual(['skill-1', 'skill-2']);
+  });
+
   it('opens one uploaded skill straight in its details and adds it with the Where picked there (G8)', async () => {
     const installs: Record<string, unknown>[] = [];
     const answer: MountedAuthoringActionExecute = async (_actionId, input) => {
@@ -126,7 +160,7 @@ describe('SkillUploadInput', () => {
         return { ok: true, result: { items: [PREVIEW] } };
       writes.push(actionId);
       return actionId === 'skills.install'
-        ? { ok: false, error: 'rules unavailable', errorCode: 'skill_rules_write_failed', details: { skillIds: ['uploaded'], incomplete: [{ skillId: 'uploaded', step: 'rules' }] } }
+        ? { ok: true, result: { skillIds: ['uploaded'], includedInSessionId: null, incomplete: [{ skillId: 'uploaded', step: 'rules' }] } }
         : { ok: true, result: { ok: true, revision: 2, items: [{ skillId: 'uploaded', previous: [], rules: [] }] } };
     };
     const selected: string[] = [];

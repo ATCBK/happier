@@ -11,6 +11,7 @@ import type { RegistrySkillContentRefV1 } from '@happier-dev/protocol/registries
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import { readRegistryFailureStatus, type RegistryFailureStatus } from '@/registries/describeRegistrySourceStatus';
 import { readReachRulesAcknowledgment } from '@/sync/domains/capabilities/reach/reachRulesAcknowledgment';
+import { t } from '@/text';
 
 export type SkillInstallSource =
   | Readonly<{
@@ -22,15 +23,29 @@ export type SkillInstallSource =
   | Readonly<{ kind: 'link'; url: string; refs?: readonly RegistrySkillContentRefV1[] }>
   | Readonly<{ kind: 'upload'; files: readonly SkillFileInputV1[] }>;
 
-/** What one add produced: the created skills, and the ones whose rules were not written (IR-70 partial result). */
-export type SkillInstallOutcome =
-  | Readonly<{
-      ok: true;
+export type SkillInstallRequest = Readonly<{
+  source: SkillInstallSource;
+  selectPaths?: readonly string[];
+  where?: ReachRulesChangeV1;
+}>;
+
+/** Content acknowledgments and later failed steps are independent of the batch's terminal content result. */
+type SkillInstallEffects = Readonly<{
       skillIds: readonly string[];
       rulesMissing: readonly string[];
       incomplete: readonly Readonly<{ skillId: string; step: 'rules' | 'session_include' }>[];
+}>;
+export type SkillInstallOutcome = SkillInstallEffects & (
+  | Readonly<{ ok: true }>
+  | Readonly<{
+      ok: false;
+      error: string;
+      status?: RegistryFailureStatus;
+      request: SkillInstallRequest;
+      /** Re-read through the canonical held identity owner; used by the existing checklist and recovery notice. */
+      previews?: readonly SkillInstallPreviewV1[];
     }>
-  | Readonly<{ ok: false; error: string; status?: RegistryFailureStatus }>;
+);
 
 /** A failure keeps the registry's typed status when it has one ("Try again at 14:05"). */
 function failure(result: Readonly<{ errorCode?: string; error: string; details?: unknown }>) {
@@ -45,11 +60,7 @@ function failure(result: Readonly<{ errorCode?: string; error: string; details?:
  */
 export async function installSkills(
   execute: MountedAuthoringActionExecute,
-  input: Readonly<{
-    source: SkillInstallSource;
-    selectPaths?: readonly string[];
-    where?: ReachRulesChangeV1;
-  }>,
+  input: SkillInstallRequest,
 ): Promise<SkillInstallOutcome> {
   const result = await execute('skills.install', {
     source: input.source,
@@ -61,8 +72,11 @@ export async function installSkills(
       result.details,
     );
     if (effects.success && effects.data.skillIds.length > 0) {
+      const preview = await previewSkillInstall(execute, input.source).catch(() => null);
       return {
-        ok: true,
+        ...failure(result),
+        request: input,
+        ...(preview?.ok ? { previews: preview.items } : {}),
         skillIds: effects.data.skillIds,
         incomplete: effects.data.incomplete,
         rulesMissing: effects.data.incomplete
@@ -70,7 +84,7 @@ export async function installSkills(
           .map((entry) => entry.skillId),
       };
     }
-    return failure(result);
+    return { ...failure(result), request: input, skillIds: [], rulesMissing: [], incomplete: [] };
   }
   const parsed = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].safeParse(
     result.result,
@@ -80,7 +94,7 @@ export async function installSkills(
     !('skillIds' in parsed.data) ||
     parsed.data.skillIds.length === 0
   ) {
-    return { ok: false, error: 'skill_install_failed' };
+    return { ok: false, error: 'skill_install_failed', request: input, skillIds: [], rulesMissing: [], incomplete: [] };
   }
   return {
     ok: true,
@@ -137,7 +151,7 @@ export async function retrySkillRules(
   return readReachRulesAcknowledgment('skill', input.skillId, result).ok;
 }
 
-export type SkillInstallAcknowledgment = Extract<SkillInstallOutcome, { ok: true }>;
+export type SkillInstallAcknowledgment = SkillInstallOutcome;
 
 /** Keep every content acknowledgment; a subsequent retry only visits rules still missing. */
 export async function retrySkillInstallRules(
@@ -151,4 +165,32 @@ export async function retrySkillInstallRules(
       incomplete.push(step);
   }
   return { ...outcome, incomplete, rulesMissing: incomplete.filter(step => step.step === 'rules').map(step => step.skillId) };
+}
+
+/** Explicit Try again: repair acknowledged rules, then retry the pinned content through findHeldSkillV1. */
+export async function retrySkillInstall(
+  execute: MountedAuthoringActionExecute,
+  outcome: SkillInstallAcknowledgment,
+  change?: ReachRulesChangeV1,
+): Promise<SkillInstallAcknowledgment> {
+  const repaired = await retrySkillInstallRules(execute, outcome, change ?? (!outcome.ok ? outcome.request.where : undefined));
+  if (repaired.ok) return repaired;
+  // Repeating the selected source at the Action owner skips held content, including uploads by current digest.
+  // Its receipt also acknowledges held identities, but does not repeat their failed rules writes.
+  const retried = await installSkills(execute, repaired.request);
+  const incomplete = [...repaired.incomplete];
+  for (const step of retried.incomplete) {
+    if (!incomplete.some(existing => existing.skillId === step.skillId && existing.step === step.step)) incomplete.push(step);
+  }
+  return { ...retried, ...(!retried.ok && !retried.previews && repaired.previews ? { previews: repaired.previews } : {}),
+    skillIds: [...new Set([...repaired.skillIds, ...retried.skillIds])], incomplete,
+    rulesMissing: incomplete.filter(step => step.step === 'rules').map(step => step.skillId) };
+}
+
+/** One recovery message for Link, Upload, Browse and the shelf, using their existing notice anatomy. */
+export function describeSkillInstallIncomplete(outcome: SkillInstallAcknowledgment): string {
+  if (outcome.ok) return t('capabilities.skillAdd.partial.rules');
+  const names = outcome.previews?.filter(item => item.inLibrary === undefined
+    && (!outcome.request.selectPaths || outcome.request.selectPaths.includes(item.path))).map(item => item.name) ?? [];
+  return t('capabilities.skillAdd.partial.content', { names: names.join(', ') });
 }

@@ -31,7 +31,8 @@ import {
 } from './skillPreviewSelection';
 import {
   installSkills,
-  retrySkillInstallRules,
+  retrySkillInstall,
+  describeSkillInstallIncomplete,
   type SkillInstallAcknowledgment,
   type SkillInstallSource,
 } from './skillInstall';
@@ -99,7 +100,8 @@ export function SkillFoundAdd(
 ) {
   const { theme } = useUnistyles();
   const { execute, source } = props;
-  const items = props.items ?? NONE;
+  const [recoveryItems, setRecoveryItems] = React.useState<readonly Preview[] | null>(null);
+  const items = recoveryItems ?? props.items ?? NONE;
   const several = items.length > 1;
 
   // Ticks follow the found set: a new find starts with every new skill ticked.
@@ -108,7 +110,9 @@ export function SkillFoundAdd(
     ticked: tickAllSkillPreviews(items),
   }));
   const ticked =
-    ticks.items === items ? ticks.ticked : tickAllSkillPreviews(items);
+    ticks.items === items ? ticks.ticked : recoveryItems
+      ? new Set(items.filter(item => item.inLibrary === undefined && ticks.ticked.has(item.path)).map(item => item.path))
+      : tickAllSkillPreviews(items);
   if (ticks.items !== items) setTicks({ items, ticked });
   const [adding, setAdding] = React.useState(false);
   const [addError, setAddError] = React.useState<string | null>(null);
@@ -148,7 +152,7 @@ export function SkillFoundAdd(
     setAdding(true);
     setAddError(null);
     const outcome = acknowledged
-      ? await retrySkillInstallRules(execute, acknowledged)
+      ? await retrySkillInstall(execute, acknowledged)
       : await installSkills(execute, {
           source,
           ...(several
@@ -160,7 +164,7 @@ export function SkillFoundAdd(
             : {}),
         });
     setAdding(false);
-    if (!outcome.ok) {
+    if (!outcome.ok && outcome.skillIds.length === 0) {
       setAddError(
         outcome.status
           ? describeRegistrySourceStatus(outcome.status)
@@ -169,8 +173,9 @@ export function SkillFoundAdd(
       return;
     }
     setAcknowledged(outcome);
-    if (outcome.incomplete.length > 0) {
-      setAddError(t('capabilities.skillAdd.partial.rules'));
+    if (!outcome.ok && outcome.previews) setRecoveryItems(outcome.previews);
+    if (!outcome.ok || outcome.incomplete.length > 0) {
+      setAddError(describeSkillInstallIncomplete(outcome));
       return;
     }
     props.onAdded(outcome.skillIds[0]!);
@@ -267,7 +272,8 @@ export function SkillFoundAdd(
   const detailFooter = React.useCallback(
     (item: Preview) => {
       const note = <View style={styles.note}>{props.detailNote ?? props.note}</View>;
-      if (item.inLibrary !== undefined) {
+      const state = detailAdds.get(item.path);
+      if (item.inLibrary !== undefined && state?.status !== 'added') {
         const held = item.inLibrary;
         return {
           provenance: note,
@@ -277,10 +283,9 @@ export function SkillFoundAdd(
           },
         };
       }
-      const state = detailAdds.get(item.path);
       const setState = (next: DetailAdd) =>
         setDetailAdds((previous) => new Map(previous).set(item.path, next));
-      if (state?.status === 'added' && state.outcome.incomplete.length > 0) {
+      if (state?.status === 'added' && (!state.outcome.ok || state.outcome.incomplete.length > 0)) {
         const acknowledgedAdd = state;
         return {
           provenance: (
@@ -289,20 +294,21 @@ export function SkillFoundAdd(
               style={{ color: theme.colors.status.error }}
               testID={`${props.testID}.detail.partial`}
             >
-              {t('capabilities.skillAdd.partial.rules')}
+              {describeSkillInstallIncomplete(state.outcome)}
             </Text>
           ),
           primary: {
             label: t('capabilities.skillAdd.partial.tryAgain'),
             onPress: async () => {
-              const outcome = await retrySkillInstallRules(
+              const outcome = await retrySkillInstall(
                 execute,
                 acknowledgedAdd.outcome,
                 acknowledgedAdd.where,
               );
               setState({ ...acknowledgedAdd, outcome });
-              if (outcome.incomplete.length > 0)
-                throw new Error(t('capabilities.skillAdd.partial.rules'));
+              if (!outcome.ok && outcome.previews) setRecoveryItems(outcome.previews);
+              if (!outcome.ok || outcome.incomplete.length > 0)
+                throw new Error(describeSkillInstallIncomplete(outcome));
               return { itemId: outcome.skillIds[0]! };
             },
           },
@@ -331,7 +337,7 @@ export function SkillFoundAdd(
                 : {}),
               ...(where ? { where } : {}),
             });
-            if (!outcome.ok) {
+            if (!outcome.ok && outcome.skillIds.length === 0) {
               setDetailAdds((previous) => {
                 const next = new Map(previous);
                 next.delete(item.path);
@@ -344,8 +350,9 @@ export function SkillFoundAdd(
               );
             }
             setState({ status: 'added', outcome, ...(where ? { where } : {}) });
-            if (outcome.incomplete.length > 0)
-              throw new Error(t('capabilities.skillAdd.partial.rules'));
+            if (!outcome.ok && outcome.previews) setRecoveryItems(outcome.previews);
+            if (!outcome.ok || outcome.incomplete.length > 0)
+              throw new Error(describeSkillInstallIncomplete(outcome));
             return { itemId: outcome.skillIds[0]! };
           },
         },
@@ -364,7 +371,7 @@ export function SkillFoundAdd(
     ],
   );
 
-  const allHeld = items.length > 0 ? readAllHeldFooter(items) : null;
+  const allHeld = !acknowledged && items.length > 0 ? readAllHeldFooter(items) : null;
   const footer =
     items.length === 0 ? (props.noteWhileEmpty ? (
       <CapabilityAddFooter testID={`${props.testID}.footer`} start={<View style={styles.note}>{props.note}</View>}>{null}</CapabilityAddFooter>
@@ -412,7 +419,7 @@ export function SkillFoundAdd(
                   : t('capabilities.skillAdd.addToLibrary')
             }
             loading={adding}
-            disabled={adding || (several && ticked.size === 0)}
+            disabled={adding || (!acknowledged && several && ticked.size === 0)}
             onPress={() => void add()}
             testID={`${props.testID}.add`}
           />

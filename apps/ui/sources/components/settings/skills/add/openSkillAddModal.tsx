@@ -36,7 +36,7 @@ import { skillSource, skillSourceVerification } from '../skillsCollectionModel';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 
-import { installSkills, previewSkillInstall, retrySkillInstallRules, type SkillInstallAcknowledgment } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillInstall, describeSkillInstallIncomplete, type SkillInstallAcknowledgment } from './skillInstall';
 import { SkillLinkInput } from './SkillLinkInput';
 import { SkillUploadInput } from './SkillUploadInput';
 import { SkillInLibraryMark } from './SkillPreviewRows';
@@ -204,7 +204,7 @@ export function SkillAddModal(
       const key = rowKey(row);
       const previous = adds.get(key);
       if (previous?.status === 'added') {
-        const outcome = await retrySkillInstallRules(execute, previous.outcome, previous.where);
+        const outcome = await retrySkillInstall(execute, previous.outcome, previous.where);
         setAdd(key, { ...previous, outcome });
         library.retry();
         return outcome;
@@ -220,7 +220,7 @@ export function SkillAddModal(
         ...(selectPaths ? { selectPaths } : {}),
         ...(where ? { where } : {}),
       });
-      if (!outcome.ok) {
+      if (!outcome.ok && outcome.skillIds.length === 0) {
         setAdd(key, { status: 'failed', error: outcome.error });
         throw new Error(outcome.status ? describeRegistrySourceStatus(outcome.status) : t('capabilities.add.addFailed'));
       }
@@ -336,8 +336,8 @@ export function SkillAddModal(
         action: (row) => {
           const key = rowKey(row);
           const state = adds.get(key);
-          if (state?.status === 'added' && state.outcome.incomplete.length > 0) return (
-            <SurfaceStateCard kind="error" size="line" title={t('capabilities.skillAdd.partial.rules')}
+          if (state?.status === 'added' && (!state.outcome.ok || state.outcome.incomplete.length > 0)) return (
+            <SurfaceStateCard kind="error" size="line" title={describeSkillInstallIncomplete(state.outcome)}
               action={{ label: t('capabilities.skillAdd.partial.tryAgain'), onPress: () => quickAdd(row) }}
               testID={`${TEST_ID}.row.${row.itemId}.partial`} />
           );
@@ -507,14 +507,14 @@ export function SkillAddModal(
           };
         }
         if (state?.status === 'added') {
-          const partial = state.outcome.incomplete.length > 0;
+          const partial = !state.outcome.ok || state.outcome.incomplete.length > 0;
           return {
-            provenance: partial ? <Text variant="meta" style={{ color: theme.colors.status.error }}>{t('capabilities.skillAdd.partial.rules')}</Text> : provenance,
+            provenance: partial ? <Text variant="meta" style={{ color: theme.colors.status.error }}>{describeSkillInstallIncomplete(state.outcome)}</Text> : provenance,
             primary: {
               label: t(partial ? 'capabilities.skillAdd.partial.tryAgain' : 'capabilities.skillAdd.open'),
               onPress: async () => {
                 const outcome = partial ? await install(row, version ?? '', state.where) : state.outcome;
-                if (outcome.incomplete.length > 0) throw new Error(t('capabilities.skillAdd.partial.rules'));
+                if (!outcome.ok || outcome.incomplete.length > 0) throw new Error(describeSkillInstallIncomplete(outcome));
                 return { itemId: outcome.skillIds[0]!, then: 'stay' as const };
               },
             },
@@ -542,7 +542,7 @@ export function SkillAddModal(
                 wheres.current.get(key),
                 selections.current.get(key),
               );
-              if (result.incomplete.length > 0) throw new Error(t('capabilities.skillAdd.partial.rules'));
+              if (!result.ok || result.incomplete.length > 0) throw new Error(describeSkillInstallIncomplete(result));
               return { itemId: result.skillIds[0]! };
             },
           },

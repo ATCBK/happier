@@ -273,6 +273,7 @@ export type SkillAddTranslation = Readonly<{
   }>;
   partial: Readonly<{
     rules: string;
+    content: (params: Readonly<{ names: string }>) => string;
     tryAgain: string;
     retrying: string;
   }>;
@@ -364,6 +365,7 @@ const enSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Added · Couldn’t set where it’s on',
+    content: ({ names }) => names ? `Couldn’t add ${names}. Added skills are kept.` : 'Couldn’t finish adding skills. Added skills are kept.',
     tryAgain: 'Try again',
     retrying: 'Setting where it’s on…',
   },
@@ -651,6 +653,7 @@ const caSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Afegida · No s’ha pogut definir on està activada',
+    content: ({ names }) => names ? `No s’ha pogut afegir ${names}. Es conserven les habilitats afegides.` : 'No s’han pogut acabar d’afegir les habilitats. Es conserven les habilitats afegides.',
     tryAgain: 'Torna-ho a provar',
     retrying: 'Definint on està activada…',
   },
@@ -881,6 +884,7 @@ const deSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Hinzugefügt · „Wo er an ist“ konnte nicht gesetzt werden',
+    content: ({ names }) => names ? `${names} konnte nicht hinzugefügt werden. Hinzugefügte Skills bleiben erhalten.` : 'Skills konnten nicht vollständig hinzugefügt werden. Hinzugefügte Skills bleiben erhalten.',
     tryAgain: 'Erneut versuchen',
     retrying: '„Wo er an ist“ wird gesetzt…',
   },
@@ -1105,6 +1109,7 @@ const esSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Añadida · No se pudo definir dónde está activada',
+    content: ({ names }) => names ? `No se pudo añadir ${names}. Se conservan las habilidades añadidas.` : 'No se pudieron terminar de añadir las habilidades. Se conservan las habilidades añadidas.',
     tryAgain: 'Reintentar',
     retrying: 'Definiendo dónde está activada…',
   },
@@ -1333,6 +1338,7 @@ const frSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Ajouté · Impossible de définir où il est activé',
+    content: ({ names }) => names ? `Impossible d’ajouter ${names}. Les compétences ajoutées sont conservées.` : 'Impossible de terminer l’ajout des compétences. Les compétences ajoutées sont conservées.',
     tryAgain: 'Réessayer',
     retrying: 'Définition de l’endroit où il est activé…',
   },
@@ -1554,6 +1560,7 @@ const itSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Aggiunta · Impossibile impostare dove è attiva',
+    content: ({ names }) => names ? `Impossibile aggiungere ${names}. Le competenze aggiunte vengono conservate.` : 'Impossibile completare l’aggiunta delle competenze. Le competenze aggiunte vengono conservate.',
     tryAgain: 'Riprova',
     retrying: 'Imposto dove è attiva…',
   },
@@ -1778,6 +1785,7 @@ const jaSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: '追加しました · オンにする場所を設定できませんでした',
+    content: ({ names }) => names ? `${names} を追加できませんでした。追加済みのスキルは保持されます。` : 'スキルの追加を完了できませんでした。追加済みのスキルは保持されます。',
     tryAgain: 'もう一度試す',
     retrying: 'オンにする場所を設定中…',
   },
@@ -2028,6 +2036,7 @@ const plSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Dodana · Nie udało się ustawić, gdzie jest włączona',
+    content: ({ names }) => names ? `Nie udało się dodać ${names}. Dodane umiejętności są zachowane.` : 'Nie udało się dokończyć dodawania umiejętności. Dodane umiejętności są zachowane.',
     tryAgain: 'Spróbuj ponownie',
     retrying: 'Ustawianie, gdzie jest włączona…',
   },
@@ -2251,6 +2260,7 @@ const ptSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Adicionada · Não foi possível definir onde está ativada',
+    content: ({ names }) => names ? `Não foi possível adicionar ${names}. As habilidades adicionadas são mantidas.` : 'Não foi possível concluir a adição das habilidades. As habilidades adicionadas são mantidas.',
     tryAgain: 'Tentar de novo',
     retrying: 'Definindo onde está ativada…',
   },
@@ -2508,6 +2518,7 @@ const ruSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: 'Добавлен · Не удалось задать, где он включён',
+    content: ({ names }) => names ? `Не удалось добавить ${names}. Добавленные навыки сохранены.` : 'Не удалось завершить добавление навыков. Добавленные навыки сохранены.',
     tryAgain: 'Повторить',
     retrying: 'Задаём, где он включён…',
   },
@@ -2739,6 +2750,7 @@ const zhHansSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: '已添加 · 无法设置在哪里开启',
+    content: ({ names }) => names ? `无法添加 ${names}。已添加的技能会保留。` : '无法完成技能添加。已添加的技能会保留。',
     tryAgain: '重试',
     retrying: '正在设置在哪里开启…',
   },
@@ -2950,6 +2962,7 @@ const zhHantSkillAdd: SkillAddTranslation = {
   },
   partial: {
     rules: '已新增 · 無法設定在哪裡開啟',
+    content: ({ names }) => names ? `無法新增 ${names}。已新增的技能會保留。` : '無法完成技能新增。已新增的技能會保留。',
     tryAgain: '重試',
     retrying: '正在設定在哪裡開啟…',
   },

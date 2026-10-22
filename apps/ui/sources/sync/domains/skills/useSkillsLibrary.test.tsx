@@ -375,16 +375,17 @@ it('publishes the rail library and rules while native inventory is pending, then
     }
 });
 
-it('shares ready catalog authority and the real library read across simultaneous rail and detail observers', async () => {
+it.each(['mounted', 'picker'] as const)('shares ready catalog authority and the real library read across simultaneous rail detail and picker observers (%s first)', async first => {
     let inventories = 0;
     let holdCatalogReads = false;
     const catalogRead = createDeferred<void>();
+    const inventoryRead = createDeferred<void>();
     const catalog = createPromptLibraryCatalogBoundary();
     const home = await createPlainArtifactHomeFixture('https://skills-observers.test', {
         serverFeatures: createRootLayoutFeaturesResponse(),
         handleRequest: async (path, init) => {
             if (path === '/v1/account/entity-rows/prompt-library' && holdCatalogReads) await catalogRead.promise;
-            if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') inventories++;
+            if (path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') { inventories++; await inventoryRead.promise; }
             if (path === '/v2/account/settings/history') return Response.json({ snapshots: [] });
             return catalog.handle(path, init);
         },
@@ -398,14 +399,23 @@ it('shares ready catalog authority and the real library read across simultaneous
     // A list borrows the current publication. A fresh mutation-base read may
     // wait on Home, but it must not hold this already-admitted library hostage.
     holdCatalogReads = true;
+    const earlierPicker = first === 'picker' ? readSkillsLibraryItems(scope) : null;
     const hook = await renderHook(() => ({ rail: useSkillsLibrary(), detail: useSkillsLibrary() }));
+    const picker = earlierPicker ?? readSkillsLibraryItems(scope);
     try {
+        await vi.waitFor(() => expect(inventories).toBeGreaterThan(0));
+        inventoryRead.resolve();
+        await picker;
         await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ rail: { status: 'ready' }, detail: { status: 'ready' } }), { timeout: 10_000 });
         expect(hook.getCurrent().rail.items).toEqual(hook.getCurrent().detail.items);
         // Each inventory opens the Account's encrypted Artifact headers; duplicate reads are material work.
         expect(inventories).toBe(1);
+        await readSkillsLibraryItems(scope);
+        expect(inventories).toBe(2); // Settlement is not a retained cache: reopening reads again.
     } finally {
+        inventoryRead.resolve();
         catalogRead.resolve();
+        await picker;
         await hook.unmount(); stopCatalogObservation(); await home.dispose();
     }
 });
@@ -459,6 +469,9 @@ it.each([false, true])('starts cold content before rules and preserves revision 
                 encryption: null, artifactDataKeys: new Map(),
                 applyArtifacts: (rows, source) => storage.getState().applyArtifacts(rows, source === 'inventory' ? basis : undefined) });
         }, { serverId: home.home.id }));
+        // Partial sync can publish headers already covered by this pending
+        // complete Action result; that is not a content edit or a new read.
+        if (!editDuringRead) await act(async () => storage.setState({ artifactsLoaded: false }));
         bodyReady.resolve();
         await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: false }), { timeout: 10_000 });
         expect(hook.getCurrent().items.find(item => item.skillId === 'cold-skill')).toMatchObject(editDuringRead

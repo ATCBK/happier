@@ -5,7 +5,8 @@ import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionEx
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
-import type { CapabilityAddInputContext } from '@/components/capabilities/add/CapabilityAddModal';
+import { CapabilityAddModalBody, type CapabilityAddInputContext } from '@/components/capabilities/add/CapabilityAddModal';
+import { SkillLinkInput } from './SkillLinkInput';
 import { t } from '@/text';
 
 (
@@ -29,9 +30,6 @@ vi.mock('@/utils/platform/responsive', async (importOriginal) => {
     await importOriginal<typeof import('@/utils/platform/responsive')>();
   return { ...actual, useDeviceType: () => device.current };
 });
-
-const { CapabilityAddModalBody } = await import('@/components/capabilities/add/CapabilityAddModal');
-const { SkillLinkInput } = await import('./SkillLinkInput');
 
 afterEach(() => {
   standardCleanup();

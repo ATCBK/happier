@@ -17,6 +17,57 @@ const { WhereItsOnControl } = await import('@/components/capabilities/where/Wher
 const { SkillAddModal } = await import('./openSkillAddModal');
 
 describe('Skills Add modal through the real Account and registry owners', () => {
+    for (const rulesUnavailable of [false, true]) it(`keeps missing batch content recoverable after an acknowledgment (rules unavailable: ${rulesUnavailable})`, async () => {
+        const { createPromptRegistrySkillFixture } = await import('@/dev/testkit/harness/promptMachineTransferBoundary');
+        const skills = ['review', 'lint'].map(name => createPromptRegistrySkillFixture({ sourceId: 'fixture', itemId: name, title: name,
+            files: [{ path: 'SKILL.md', content: `---\nname: ${name}\ndescription: Check changes\n---\nCheck the changes.` }] }));
+        const fixture = await createRegistrySourcesUiHome(`missing-batch-${rulesUnavailable}`, { external: async url => {
+            if (url.includes('/git/trees/')) return Response.json({ sha: 'a'.repeat(40), tree: skills.flatMap(skill => {
+                if (skill.item.payload.kind !== 'skill') throw new Error('Expected skill fixture');
+                const payload = skill.item.payload.skill;
+                return [{ path: payload.ref.path, type: 'tree', mode: '040000', sha: payload.ref.treeSha },
+                    ...payload.files.map(file => ({ path: `${payload.ref.path}/${file.path}`, type: 'blob', mode: '100644', sha: file.blobSha, size: file.size }))];
+            }) });
+            if (url.startsWith('https://raw.githubusercontent.com/fixture/skills/')) {
+                const skill = skills.find(skill => url.endsWith(`/${skill.item.summary.itemId}/SKILL.md`));
+                if (skill) return new Response(Buffer.from(skill.files[0]!.contentBase64, 'base64').toString('utf8'));
+            }
+            return null;
+        } });
+        const onAdded = vi.fn(), onClose = vi.fn();
+        const screen = await renderScreen(<SkillAddModal onClose={onClose} params={{ modeKey: 'link', onWrite() {}, onAdded }} />);
+        const addBusy = () => screen.find(node => node.props?.testID === 'skills.add.link.add' && typeof node.props.loading === 'boolean').props.loading;
+        await React.act(async () => { screen.changeTextByTestId('skills.add.link.url', 'https://github.com/fixture/skills'); });
+        await screen.pressByTestIdAsync('skills.add.link.find');
+        await waitForHomeGovernance(() => expect(screen.findByTestId('skills.add.link.add')).not.toBeNull());
+        fixture.setContentUnavailableAfter(1);
+        fixture.setRulesUnavailable(rulesUnavailable);
+        await screen.pressByTestIdAsync('skills.add.link.add');
+        await waitForHomeGovernance(() => expect(fixture.home.boundary.list()).toHaveLength(1));
+        await waitForHomeGovernance(() => expect(addBusy()).toBe(false));
+        const acknowledgedId = fixture.home.boundary.list()[0]!.id;
+        expect(onAdded).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.findByTestId('skills.add.link.add-error')).not.toBeNull();
+        // A successful rules-only repair must leave the separate content failure visible.
+        fixture.setRulesUnavailable(false);
+        await screen.pressByTestIdAsync('skills.add.link.add');
+        await waitForHomeGovernance(() => expect(addBusy()).toBe(false));
+        expect(onAdded).not.toHaveBeenCalled();
+        expect(onClose).not.toHaveBeenCalled();
+        expect(screen.findByTestId('skills.add.link.add-error')).not.toBeNull();
+        expect(fixture.home.boundary.list().map(row => row.id)).toEqual([acknowledgedId]);
+        const row = fixture.catalog.read('skill-rules');
+        if (row.key !== 'skill-rules') throw new Error('Expected skill rules');
+        expect(row.value.rules.map(rule => rule.skillId)).toContain(acknowledgedId);
+        fixture.setContentUnavailableAfter(null);
+        await screen.pressByTestIdAsync('skills.add.link.add');
+        await waitForHomeGovernance(() => expect(onAdded).toHaveBeenCalledExactlyOnceWith(acknowledgedId));
+        expect(onClose).toHaveBeenCalledOnce();
+        expect(fixture.home.boundary.list()).toHaveLength(2);
+        expect(fixture.home.boundary.list().map(row => row.id)).toContain(acknowledgedId);
+    });
+
     it('keeps a shelf partial acknowledgment recoverable even when the new content is already in the library', async () => {
         let phase = 'create Home';
         onTestFailed(() => console.error('Shelf recovery phase:', phase));

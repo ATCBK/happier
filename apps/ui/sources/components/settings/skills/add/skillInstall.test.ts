@@ -4,7 +4,7 @@ import { SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/spec
 import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
-import { installSkills, previewSkillInstall, retrySkillRules, retrySkillInstallRules } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillRules, retrySkillInstallRules, retrySkillInstall } from './skillInstall';
 
 /** The Action transport is the boundary: the Home answers `skills.install` / `skills.rules.set`. */
 function home(answer: (actionId: string, input: unknown) => ActionExecuteResult) {
@@ -20,6 +20,36 @@ const POINTER = { kind: 'registry' as const, sourceId: 'builtin:skills-sh', item
 const RULES_CHANGE = { kind: 'replace', rules: [{ target: { t: 'allMachines' }, enabled: true }] } as const satisfies ReachRulesChangeV1;
 
 describe('installSkills (Add to library)', () => {
+    for (const missingRules of [false, true]) it(`retains and recovers the real batch owner's content failure without duplicating held content (missing rules: ${missingRules})`, async () => {
+        const { createSkillInstallActionHarness } = await import('@/dev/testkit/harness/skillInstallActionHarness');
+        const { skillFileFromBytesV1 } = await import('@happier-dev/protocol/prompts/library/skills/skillZipV1');
+        const harness = createSkillInstallActionHarness();
+        harness.setContentUnavailableAfter(1);
+        harness.setRulesUnavailable(missingRules);
+        const source = { kind: 'upload' as const, files: ['first', 'second', 'not-selected'].map(name => skillFileFromBytesV1(
+            `${name}/SKILL.md`, new TextEncoder().encode(`---\nname: ${name}\n---\nInstructions`), 0o644,
+        )) };
+        const outcome = await installSkills(harness.execute, { source, selectPaths: ['first', 'second'] });
+        expect(outcome).toMatchObject({ ok: false, error: 'quota_exceeded', skillIds: ['skill-1'] });
+        expect(harness.artifacts.size).toBe(1);
+        if (outcome.ok) throw new Error('Expected partial content failure');
+        expect(outcome.previews?.map(item => [item.path, item.inLibrary])).toEqual([
+            ['first', 'skill-1'], ['second', undefined], ['not-selected', undefined],
+        ]);
+        harness.setRulesUnavailable(false);
+        const repaired = await retrySkillInstallRules(harness.execute, outcome);
+        expect(repaired).toMatchObject({ ok: false, error: 'quota_exceeded', rulesMissing: [], incomplete: [], skillIds: ['skill-1'] });
+        expect(harness.rules().map(rule => rule.skillId)).toEqual(['skill-1']);
+        const stillMissing = await retrySkillInstall(harness.execute, repaired);
+        expect(stillMissing).toMatchObject({ ok: false, error: 'quota_exceeded', skillIds: ['skill-1'] });
+        expect(harness.artifacts.size).toBe(1);
+        harness.setContentUnavailableAfter(null);
+        const finished = await retrySkillInstall(harness.execute, stillMissing);
+        expect(finished).toEqual({ ok: true, skillIds: ['skill-1', 'skill-2'], rulesMissing: [], incomplete: [] });
+        expect([...harness.artifacts.keys()]).toEqual(['skill-1', 'skill-2']);
+        expect(harness.rules().map(rule => rule.skillId)).toEqual(['skill-1', 'skill-2']);
+    });
+
     it('retains every acknowledged identity and incomplete step, including a session step', async () => {
         const incomplete = [{ skillId: 'sibling', step: 'rules' }, { skillId: 'primary', step: 'session_include' }];
         const { execute } = home(() => ({ ok: true, result: { skillIds: ['primary', 'sibling'], includedInSessionId: null, incomplete } }));
@@ -68,10 +98,10 @@ describe('installSkills (Add to library)', () => {
         }
     });
 
-    it('keeps the created identity when the install fails after the content landed', async () => {
+    it('keeps the terminal content failure and created identity when a batch stops after a content acknowledgment', async () => {
         const { execute } = home(() => ({ ok: false, error: 'rules write failed', errorCode: 'skill_rules_write_failed',
             details: { skillIds: ['sk_2'], incomplete: [{ skillId: 'sk_2', step: 'rules' }] } }));
-        await expect(installSkills(execute, { source: POINTER })).resolves.toEqual({ ok: true, skillIds: ['sk_2'], rulesMissing: ['sk_2'], incomplete: [{ skillId: 'sk_2', step: 'rules' }] });
+        await expect(installSkills(execute, { source: POINTER })).resolves.toMatchObject({ ok: false, error: 'skill_rules_write_failed', skillIds: ['sk_2'], rulesMissing: ['sk_2'], incomplete: [{ skillId: 'sk_2', step: 'rules' }] });
     });
 });
 
