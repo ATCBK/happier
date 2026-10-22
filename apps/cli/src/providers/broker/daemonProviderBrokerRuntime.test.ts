@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { connect } from 'node:net';
 import { once } from 'node:events';
+import { AxiosError } from 'axios';
 import tweetnacl from 'tweetnacl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -27,6 +28,7 @@ import {
 } from '@happier-dev/protocol/teams';
 
 import type { ManagedProviderEndpointHttpAccess } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
+import { logger } from '@/ui/logger';
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import { createAccountConnectionBrokerSourceOpen } from './accountConnectionSource';
@@ -1546,6 +1548,7 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
       resourceRevision?: () => number;
       /** The resource's current request policy, as the Home serves it now. */
       requestPolicy?: () => TeamCredentialResourceSummaryV1['requestPolicy'];
+      providerRequest?: ManagedProviderEndpointHttpAccess['request'];
     }> = {},
   ) {
     // The Home's current resource revision, read by the daemon's request
@@ -1564,7 +1567,7 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
     if (!address || typeof address === 'string') throw new Error('upstream unavailable');
     const access: ManagedProviderEndpointHttpAccess = {
       endpointUrl: () => `http://127.0.0.1:${address.port}/v1`,
-      request: async (request) => {
+      request: options.providerRequest ?? (async (request) => {
         const response = await fetch(`http://127.0.0.1:${address.port}${request.pathAndQuery}`, {
           method: request.method,
           body: request.body,
@@ -1578,7 +1581,7 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
           headers: Object.fromEntries(response.headers.entries()),
           body: response.body,
         };
-      },
+      }),
     };
     const order: string[] = [];
     // The managed Provider process host is the system boundary: starting or
@@ -1679,6 +1682,36 @@ describe('Provider-broker admission precedes source custody (machine/1 admission
       usageEventId: 'usage-1',
     };
   };
+
+  it.each(['home_admission', 'upstream_forward'] as const)(
+    'attributes an unexpected %s failure to the exact broker request without disclosing content',
+    async (phase) => {
+      const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => {});
+      const failure = new AxiosError('private URL/header/body/credential', 'ECONNABORTED');
+      const target = await startTarget(async (request) => {
+        if (phase === 'home_admission') throw failure;
+        return admittedFor(request);
+      }, phase === 'upstream_forward' ? { providerRequest: async () => { throw failure; } } : {});
+      try {
+        const response = await target.infer();
+        expect(response).toContain('HTTP/1.1 403');
+        expect(response).toContain('broker_unavailable');
+        expect(diagnostics).toHaveBeenCalledWith('[provider-broker-application]', expect.objectContaining({
+          stage: 'handler', code: 'exception', phase, brokerRequestId: 'request-0',
+          errorName: 'AxiosError', errorCode: 'ECONNABORTED',
+        }));
+        expect(JSON.stringify(diagnostics.mock.calls)).not.toContain('private');
+        expect(response).not.toContain('private');
+        // A failed request never tries another source. Home refusal cannot
+        // materialize even the selected source; upstream failure keeps it.
+        expect(target.order).toEqual(phase === 'home_admission'
+          ? ['home-admission'] : ['home-admission', 'source-custody']);
+        expect(target.upstreamHits()).toBe(0);
+      } finally {
+        diagnostics.mockRestore();
+      }
+    },
+  );
 
   it('refuses a request revoked after open before any managed source start', async () => {
     const target = await startTarget(async () => ({ ok: false as const, reasonCode: 'resource_forbidden' as const }));
