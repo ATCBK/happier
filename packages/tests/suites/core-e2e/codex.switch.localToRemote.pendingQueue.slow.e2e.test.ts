@@ -15,7 +15,7 @@ import { decryptLegacyBase64Normalized } from '../../src/testkit/decryptLegacyBa
 import { waitFor } from '../../src/testkit/timing';
 import { writeTestManifestForServer } from '../../src/testkit/manifestForServer';
 import { stopDaemonFromHomeDir } from '../../src/testkit/daemon/daemon';
-import { yarnCommand } from '../../src/testkit/process/commands';
+import { pnpmCommand } from '../../src/testkit/process/commands';
 import { createUserScopedSocketCollector } from '../../src/testkit/socketClient';
 import { requestSessionSwitchRpc } from '../../src/testkit/sessionSwitchRpc';
 import { writeCliSessionAttachFile } from '../../src/testkit/cliAttachFile';
@@ -227,11 +227,12 @@ setInterval(() => {}, 1000);
     };
 
     proc = spawnLoggedProcess({
-      command: yarnCommand(),
+      command: pnpmCommand(),
       args: [
-        '-s',
-        'workspace',
+        '--silent',
+        '--filter',
         '@happier-dev/cli',
+        'run',
         'dev',
         'codex',
         '--existing-session',

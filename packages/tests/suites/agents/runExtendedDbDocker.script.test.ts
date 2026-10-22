@@ -14,7 +14,7 @@ type PnpmInvocationResolver = (
 ) => Readonly<{ command: string; args: string[]; windowsVerbatimArguments?: boolean }>;
 
 describe('extended-db container ownership', () => {
-  const originalSignals = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]));
+  const originalSignals = new Map((['SIGINT', 'SIGTERM'] as const).map(signal => [signal, process.listeners(signal)] as const));
   afterEach(() => {
     vi.mocked(spawnSync).mockReset();
     for (const [signal, original] of originalSignals) {

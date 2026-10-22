@@ -3,8 +3,7 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
-import type { Plugin } from 'vite';
-import type { UserConfig } from 'vitest/config';
+import type { Plugin, UserConfig } from 'vitest/config';
 
 import {
   createWorkspacePackageSourcesPlugin,
