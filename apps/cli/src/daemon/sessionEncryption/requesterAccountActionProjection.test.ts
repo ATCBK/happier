@@ -65,6 +65,72 @@ function bootstrap(credentials: StoredCredentials, isCurrent = async () => true)
 }
 
 describe('admitted requester Action projection', () => {
+  it('overlaps admitted profile and Settings-floor reads without opening Settings before identity admission', async () => {
+    let releaseProfile!: () => void;
+    const profileHeld = new Promise<void>(resolve => { releaseProfile = resolve; });
+    let profileStarted = false;
+    let floorStarted = false;
+    let settingsReads = 0;
+    const reads = vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) {
+        profileStarted = true;
+        await profileHeld;
+        return { status: 200, data: { id: 'bob' } };
+      }
+      if (url.endsWith('/v1/account/encryption/currentness')) {
+        floorStarted = true;
+        return { status: 200, data: { mode: 'plain', version: 1, settingsVersion: 2,
+          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      }
+      if (url.endsWith('/v2/account/settings')) {
+        settingsReads++;
+        return { status: 200, data: { content: { t: 'plain', v: {} }, version: 2 } };
+      }
+      throw new Error(`Unexpected requester HTTP read ${url}`);
+    });
+    const input = { authorization: { ...authorization, binding: { ...authorization.binding, accountEncryptionMode: 'plain' as const } },
+      credentials: { token: 'bob', encryption: null }, serverId: 'home-profile', serverIdentityId: 'stable-home',
+      serverHttpBaseUrl: 'https://requester-home.test', isCurrent: async () => true };
+    const pending = requesterAccountOwner.admitRequesterAccountActionContext(input);
+    let overlapped = false;
+    try {
+      await vi.waitFor(() => expect(profileStarted).toBe(true));
+      overlapped = floorStarted;
+      expect(settingsReads).toBe(0);
+    } finally {
+      releaseProfile();
+      const admitted = await pending;
+      await admitted?.dispose();
+    }
+    const samples: number[] = [];
+    reads.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile') || url.endsWith('/v1/account/encryption/currentness')) {
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return { status: 200, data: url.endsWith('/profile') ? { id: 'bob' } : { mode: 'plain', version: 1,
+          settingsVersion: 2, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      }
+      return { status: 200, data: { content: { t: 'plain', v: {} }, version: 2 } };
+    });
+    for (let sample = 0; sample < 3; sample++) {
+      const started = performance.now();
+      const admitted = await requesterAccountOwner.admitRequesterAccountActionContext(input);
+      samples.push(Math.round(performance.now() - started));
+      expect(admitted?.accountSettingsContext.settingsVersion).toBe(2);
+      await admitted?.dispose();
+    }
+    process.stdout.write(`FX182 requester admission samples ${JSON.stringify(samples)}\n`);
+    settingsReads = 0;
+    reads.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'another-account' } };
+      if (url.endsWith('/v1/account/encryption/currentness')) throw new Error('Unavailable Settings floor');
+      settingsReads++;
+      throw new Error('Identity must be admitted before opening Settings');
+    });
+    await expect(requesterAccountOwner.admitRequesterAccountActionContext(input)).resolves.toBeNull();
+    expect(settingsReads).toBe(0);
+    expect(overlapped).toBe(true);
+  });
+
   it('cancels the held Settings HTTP read when finite requester admission is aborted', async () => {
     let settingsStarted!: () => void;
     const requested = new Promise<void>(resolve => { settingsStarted = resolve; });

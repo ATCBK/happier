@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Metadata } from '@/api/types';
+import { readSessionProviderBindingMetadataStateV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
-import { applyActiveModelFacts } from '@/providers/sessions/applyActiveModelFacts';
 import type { AuthorizedSessionModelTransitionTarget } from '@/providers/sessions/sessionModelTransitionCoordinator';
 import {
   createSessionRuntimeModelsPublisher,
@@ -101,6 +101,37 @@ function sessionRunnerRuntime(
 }
 
 describe('createSessionRuntimeModelsPublisher', () => {
+  it('publishes the accepted Team route and withholds proof for an unknown or mismatched open', async () => {
+    const source = createSource();
+    const session = createSession(createTestMetadata());
+    const teamCredentialModel = { kind: 'team_credential_provider_model' as const,
+      teamId: 'team', resourceId: 'resource', expectedResourceRevision: 0, deliveryMode: 'brokered' as const,
+      agentTargetKey: 'backend:codex', modelId: 'shared-model' };
+    let applied: typeof teamCredentialModel | null | undefined = teamCredentialModel;
+    const publisher = createSessionRuntimeModelsPublisher({ agentId: 'codex', agentTargetKey: 'backend:codex',
+      runnerProcessIdentity: { pid: 42, processStartTimeMs: 1 }, session, source,
+      readAppliedTeamCredentialModel: () => applied });
+    try {
+      source.publish({ observedAt: 2, currentModelId: 'shared-model', models: [{ id: 'shared-model', name: 'Shared model' }] });
+      await publisher.flush();
+      expect(session.getMetadataSnapshot().sessionModelsV1?.activeSelectionV1)
+        .toMatchObject({ v: 2, teamCredentialModel, runner: { pid: 42, processStartTimeMs: 1 } });
+      applied = undefined;
+      source.publish({ observedAt: 3, currentModelId: 'shared-model', models: [{ id: 'shared-model', name: 'Shared model' }] });
+      await publisher.flush();
+      expect(session.getMetadataSnapshot().sessionModelsV1?.activeSelectionV1).toBeUndefined();
+      applied = teamCredentialModel;
+      source.publish({ observedAt: 4, currentModelId: 'other-model', models: [{ id: 'other-model', name: 'Other model' }] });
+      await publisher.flush();
+      expect(session.getMetadataSnapshot().sessionModelsV1?.activeSelectionV1).toBeUndefined();
+      applied = null;
+      source.publish({ observedAt: 5, currentModelId: 'other-model', models: [{ id: 'other-model', name: 'Other model' }] });
+      await publisher.flush();
+      expect(session.getMetadataSnapshot().sessionModelsV1?.activeSelectionV1)
+        .toMatchObject({ v: 1, selection: { modelId: 'other-model', providerConnectionId: null } });
+    } finally { publisher.dispose(); }
+  });
+
   it('replaces historical membership and controls with a full runtime observation including empty', async () => {
     const source = createSource();
     const oldState = { v: 1 as const, agentId: 'claude', updatedAt: 1, currentModelId: 'current', availableModels: [
@@ -616,7 +647,7 @@ describe('createSessionRuntimeModelsPublisher', () => {
     publisher.dispose();
   });
 
-  it('honors runtime option suppression after active Provider facts are applied', async () => {
+  it.each([true, false])('combines initial Provider facts and catalog in one publication (runtime observed: %s)', async runtimeObserved => {
     const connectionId = ProviderConnectionIdSchema.parse('pc_runtime_suppression');
     const target = {
       selection: {
@@ -661,17 +692,24 @@ describe('createSessionRuntimeModelsPublisher', () => {
         },
         materialization: { v: 1, kind: 'spawnEnv' },
       },
-      sessionBindingMetadata: null,
+      sessionBindingMetadata: {
+        v: 1,
+        connectionId,
+        contributionKey: null,
+        connectionRevision: 1,
+        model: { id: 'provider-current', name: 'Authorized Provider model' },
+        protocol: 'openai-responses',
+        materialization: 'spawnEnv',
+        compatibilityFingerprint: 'compatibility',
+        bindingSecurityFingerprint: 'security',
+        displaySnapshot: { providerName: 'Provider', connectionName: 'Work',
+          connectionRole: 'named', connectionDisplayNameMode: 'custom' },
+      },
       runtimeBindingBasis: null,
       revalidateBeforeEffect: async () => true,
     } satisfies AuthorizedSessionModelTransitionTarget;
-    const withActiveFacts = applyActiveModelFacts(
-      createTestMetadata({}),
-      target,
-      'generic-agent',
-    );
     const source = createSource();
-    source.publish({
+    if (runtimeObserved) source.publish({
       observedAt: 0,
       currentModelId: 'provider-current',
       models: [{
@@ -680,16 +718,26 @@ describe('createSessionRuntimeModelsPublisher', () => {
         suppressedModelOptionIds: ['reasoning_effort', 'ultracode'],
       }],
     });
-    const session = createSession(withActiveFacts);
+    const session = createSession(createTestMetadata({}));
     const publisher = createSessionRuntimeModelsPublisher({
       agentId: 'generic-agent',
+      agentTargetKey: target.selection.agentTargetKey,
+      runnerProcessIdentity: { pid: 123, processStartTimeMs: 1_000 },
+      initialActiveTarget: target,
       session,
       source,
     });
 
     await publisher.flush();
 
-    expect(session.getMetadataSnapshot().sessionModelsV1?.availableModels).toEqual([{
+    expect(session.getMetadataSnapshot().sessionModelsV1?.currentModelId).toBe('provider-current');
+    expect(session.updateCount()).toBe(1);
+    expect(readSessionProviderBindingMetadataStateV1(session.getMetadataSnapshot())).toMatchObject({
+      kind: 'valid', binding: target.sessionBindingMetadata,
+    });
+    // A descriptive binding without a runtime basis is not exact Provider proof.
+    expect(session.getMetadataSnapshot().sessionModelsV1?.activeSelectionV1).toBeUndefined();
+    expect(session.getMetadataSnapshot().sessionModelsV1?.availableModels).toEqual(runtimeObserved ? [{
       id: 'provider-current',
       name: 'Runtime model',
       description: 'Provider-authored description',
@@ -700,8 +748,29 @@ describe('createSessionRuntimeModelsPublisher', () => {
         type: 'boolean',
         currentValue: 'true',
       }],
-    }]);
+    }] : [target.providerBinding.model]);
     publisher.dispose();
+    if (runtimeObserved) {
+      const nativeTarget = { ...target,
+        selection: { ...target.selection, providerConnectionId: null },
+        providerBinding: null, sessionBindingMetadata: null,
+      } satisfies AuthorizedSessionModelTransitionTarget;
+      const nativeSession = createSession(session.getMetadataSnapshot());
+      const nativePublisher = createSessionRuntimeModelsPublisher({
+        agentId: 'generic-agent', agentTargetKey: nativeTarget.selection.agentTargetKey,
+        runnerProcessIdentity: { pid: 124, processStartTimeMs: 2_000 },
+        initialActiveTarget: nativeTarget, session: nativeSession, source,
+      });
+      try {
+        await nativePublisher.flush();
+        expect(nativeSession.updateCount()).toBe(1);
+        expect(readSessionProviderBindingMetadataStateV1(nativeSession.getMetadataSnapshot())).toEqual({ kind: 'absent' });
+        expect(nativeSession.getMetadataSnapshot().sessionModelsV1?.activeSelectionV1).toMatchObject({
+          source: 'runtime_readback', selection: nativeTarget.selection,
+          runner: { pid: 124, processStartTimeMs: 2_000 },
+        });
+      } finally { nativePublisher.dispose(); }
+    }
   });
 
   it('does not restore stale legacy options omitted by canonical model facts', async () => {
