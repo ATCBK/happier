@@ -3524,9 +3524,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           ...(request.decision ? { decidedAtMs: request.decision.decidedAtMs } : {}),
         } } : {}),
       bypassApprovals: true,
-      ...(sessionDiscussionPublication && originIsCurrent && request.v === 2
+      ...(origin?.success && originIsCurrent && request.v === 2
         && request.status === 'executing' && request.decision?.kind === 'approve'
-        ? { approvedActionReplay: { artifactId: args.artifactId } } : {}),
+        ? { approvedActionReplay: { artifactId: args.artifactId, origin: {
+            surface: origin.data.surface, caller: origin.data.caller,
+            ...(origin.data.sessionId ? { sessionId: origin.data.sessionId } : {}),
+          } } } : {}),
       ...(request.actionId === 'workspace.sync.conflict.resolve'
         ? { actionRequestId: args.artifactId }
         : {}),
@@ -3676,16 +3679,12 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
       }
     }
     const executedAtMs = Date.now();
-    // Blocking approval keeps result custody on the admitted live invocation.
-    // Its Artifact is durable history only, so use the Action's existing safe
-    // observer projection there while returning `exec` unchanged below. A
-    // caller that detached before execution intentionally cannot recover a
-    // one-shot secret from durable approval state.
+    // Private Artifact custody carries ordinary typed results back to a caller
+    // waiting on another host. Blocking flow alone does not make that result
+    // live-only. Only declared live-only results use the safe projection here;
+    // public reads and decisions independently apply the observation projection.
     const persistedExec = actionId !== null
-      && (
-        isBlockingApprovalRequest(request)
-        || getActionSpec(actionId).approvalResultCustody === 'live_only'
-      )
+      && getActionSpec(actionId).approvalResultCustody === 'live_only'
       ? projectActionExecutionObservation(actionId, exec)
       : exec;
     // Settled approval input custody, the input-side sibling of `persistedExec`
@@ -3783,9 +3782,13 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         return { ok: false, errorCode: 'approval_invalid', error: 'approval_invalid' };
       }
       const request = parsed.data;
-      // A durable decision, including a terminal receipt, never reconstructs Bob's live proof.
-      if (request.v === 2 && request.requesterConfirmation) {
-        return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+      // Durable replay cannot reconstruct a requester's live decision proof.
+      if (request.v === 2) {
+        const admission = await admitApprovalRequesterDecisionV1({ request, context: {
+          ...(args.callerAuthority ? { authority: args.callerAuthority } : {}),
+          ...(args.signal ? { signal: args.signal } : {}),
+        } });
+        if (!admission.ok) return admission;
       }
       const parsedRequestActionId = ActionIdSchema.safeParse(request.actionId);
       if ((parsedRequestActionId.success && isApprovalActionId(parsedRequestActionId.data))
@@ -11176,9 +11179,9 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
         const existingParsed = StoredApprovalRequestSchema.safeParse(existingRaw);
         if (!existingParsed.success) return { ok: false, errorCode: 'approval_invalid', error: 'approval_invalid' };
         const existing = existingParsed.data;
+        const admission = await admitApprovalRequesterDecisionV1({ request: existing, context: ctx });
+        if (!admission.ok) return admission;
         if (existing.v === 2) {
-          const admission = await admitApprovalRequesterDecisionV1({ request: existing, context: ctx });
-          if (!admission.ok) return admission;
           if (existing.requesterConfirmation && data.narrowedInput !== undefined) {
             return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
           }

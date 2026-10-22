@@ -101,6 +101,8 @@ import {
 } from '@/plugins/runtime/hostAccess/resolve';
 import type { TargetActionCurrentIntentRequest } from '@/plugins/runtime/invocation/actionExecutor';
 import { createTargetActionCurrentIntentAdapter } from '@/session/actions/approvals/targetActionCurrentIntent';
+import { createTargetActionApprovalDecision } from '@happier-dev/protocol/actions/targetActionApprovalDecision';
+import { getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot, clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import {
   buildTargetActionInvocationRegistry,
 } from '@/plugins/runtime/invocation/buildTargetActionRegistry';
@@ -207,7 +209,7 @@ function createSharedBotContributedContext(sourceKind: 'pat' | 'session' = 'pat'
       ...(request.requesterConfirmation ? { requesterConfirmation: request.requesterConfirmation } : {}),
       publicKey: installationKeyPair.publicKey, signature: origin.externalActionInputSignature })
   );
-  return { context, isApprovalExecutionOriginCurrent, readInstallationIdentity: () => ({ version: 1 as const, installationId: 'bot-installation', createdAt: 1,
+  return { context, publicKey: installationKeyPair.publicKey, isApprovalExecutionOriginCurrent, readInstallationIdentity: () => ({ version: 1 as const, installationId: 'bot-installation', createdAt: 1,
     publicKey: encodeBase64(installationKeyPair.publicKey, 'base64url'), privateKey: encodeBase64(installationKeyPair.secretKey, 'base64url') }) };
 }
 
@@ -231,6 +233,7 @@ function createExternalActionRuntime(
     inputHints?: { fields: readonly { path: string; title: string; widget: 'secret' }[] };
     onInput?: (input: JsonValue) => void;
     confirmationWhen?: PluginActionContributionV2['confirmationWhen'];
+    executionTarget?: 'account';
     hostAccess?: readonly PluginHostAccessRequestV2[];
   }> = {},
 ): ResolvedExecutablePluginRuntimeRegistry {
@@ -263,7 +266,9 @@ function createExternalActionRuntime(
           scopes: [scope],
           // `api` deliberately is not an author-visible Action surface.
           surfaces: actionOptions.surfaces ?? ['cli'],
-          execution: { target: 'daemon' },
+          execution: actionOptions.executionTarget === 'account'
+            ? { target: 'account', account: { artifactId: 'portable', exportName: 'activate' } }
+            : { target: 'daemon' },
           dangerLevel,
           ...(actionOptions.hostAccess ? { hostAccess: actionOptions.hostAccess.map(request => request.id) } : {}),
           ...(actionOptions.inputSchema === undefined ? {} : { inputSchema: actionOptions.inputSchema }),
@@ -319,6 +324,7 @@ function createExternalActionRuntime(
     : { kind: 'development', registeredRootId: `fixture-root:${pluginId}` } as const;
   const fixtureOccurrenceId = actionOptions.occurrenceId ?? createPluginRuntimeOccurrenceId(pluginId);
   const targetActionInvocations = buildTargetActionInvocationRegistry({
+    ...(actionOptions.executionTarget === 'account' ? { executionRealm: 'account' as const } : {}),
     contributes,
     targetRegistrations: activationOnly ? [] : resolvedActions.map((entry) => ({
       pluginId,
@@ -376,6 +382,8 @@ function createExternalActionRuntime(
   });
 
   const runtime = {
+    ...(actionOptions.executionTarget === 'account'
+      ? { executionRealm: 'account' as const, revalidateAccountExecution: async () => true } : {}),
     claimReleaseLessDeclarations: async () => undefined,
     contributes,
     generation: 1,
@@ -508,6 +516,97 @@ function createExternalActionIngressExecutor(scope: 'global' | 'session' = 'sess
 
 describe('createDaemonExternalActionContributedInvoker', () => {
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it.each([
+    { requester: 'unknown', waive: false },
+    { requester: 'bob', waive: false },
+    { requester: 'absent', waive: false },
+    { requester: 'bob', waive: true },
+    { requester: 'unknown', waive: true },
+  ] as const)('preserves requester consent through public Account-target action.invoke ($requester, waive=$waive)', async ({ requester, waive }) => {
+    const previousSettings = getActiveAccountSettingsSnapshot();
+    setActiveAccountSettingsSnapshot({ source: 'cache', settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+      settings: accountSettingsParse({ actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
+        ...(waive ? { approvalWaivedSurfaces: { 'acme.account/actions/inspect': ['agent'] } } : {}),
+      }) }) });
+    const controller = new AbortController();
+    const source = createSharedBotContributedContext('session');
+    let effects = 0;
+    const runtime = createExternalActionRuntime('session', 'acme.account', () => { effects += 1; },
+      undefined, undefined, undefined, undefined, 'writesRemote', undefined, { surfaces: ['agent'], executionTarget: 'account' });
+    const row: { request: TargetActionApprovalRequestV1 | null } = { request: null };
+    let notifyCreated!: () => void;
+    const created = new Promise<void>(resolve => { notifyCreated = resolve; });
+    const update = async ({ request }: { request: TargetActionApprovalRequestV1 }) => {
+      if (!row.request) throw new Error('Missing approval');
+      const admission = admitTargetActionApprovalTransition(row.request, request);
+      if (!admission.ok) return admission;
+      row.request = TargetActionApprovalRequestV1Schema.parse(request);
+      return { ok: true as const };
+    };
+    const lease: PluginRuntimeRegistryLease = { registry: runtime, source: 'committed', durableRevision: 1, release: async () => {} };
+    const list = createDaemonExternalActionContributedDefinitionLister({ tryAcquireRuntimeRegistryLease: () => lease });
+    const invoke = createCommittedContributedActionInvoker({ acquireRuntimeRegistryLease: async () => lease,
+      requestCurrentIntent: createTargetActionCurrentIntentAdapter({
+        create: async request => { row.request = TargetActionApprovalRequestV1Schema.parse(request); notifyCreated(); return { artifactId: 'account-write' }; },
+        read: async () => row.request, update,
+      }) });
+    const actionInput = { action: { pluginId: 'acme.account', localId: 'inspect' }, input: {} };
+    const pending = createExternalActionExecutor(invoke, list).execute('action.invoke', actionInput, {
+      ...source.context, signal: controller.signal,
+      ...(requester === 'absent' ? {} : { actionRequestAttributionV1: { requestRef: 'account-request',
+        requester: requester === 'bob' ? { serverId: 'server-external', accountId: 'bob' } : null,
+        persona: { serverId: 'server-external', sessionId: 'bot-session' }, origin: null } }),
+    });
+    try {
+      const first = await Promise.race([created.then(() => ({ created: true as const })),
+        pending.then(result => ({ created: false as const, result }))]);
+      if (waive || requester === 'unknown') {
+        expect(first).toMatchObject({ created: false, result: waive ? { ok: true }
+          : { ok: false, errorCode: 'approval_requester_unavailable' } });
+        expect(row.request).toBeNull();
+        expect(effects).toBe(waive ? 1 : 0);
+        return;
+      }
+      expect(first).toEqual({ created: true });
+      await vi.waitFor(() => expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount('account-write')).toBe(1));
+      const decide = createTargetActionApprovalDecision({ read: async () => row.request, update, hasLiveInvocation: () => true,
+        isRequesterSourceCurrent: async request => {
+          const origin = request.executionOriginV1;
+          return Boolean(origin?.externalActionExecutionAuthorization && origin.target && origin.externalActionInputSignature
+            && verifyExternalActionApprovalInputV1({ authorizationToken: origin.externalActionExecutionAuthorization.token,
+              actionId: 'action.invoke', target: origin.target, input: actionInput,
+              requesterConfirmation: request.requesterConfirmation, publicKey: source.publicKey, signature: origin.externalActionInputSignature }));
+        } });
+      const ownerContext: ActionExecutorContext = { surface: 'ui', authority: 'present_user', runtimeAccountId: 'alice' };
+      const ownerDecision = await decide({ artifactId: 'account-write', decision: 'approve', context: ownerContext });
+      if (requester === 'bob') {
+        expect(ownerDecision).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+        expect(row.request).toMatchObject({ status: 'open', approvalInputCustody: 'live_only',
+          requesterConfirmation: { requesterAccountId: 'bob', executionAccountId: 'alice' },
+          executionOriginV1: { accountId: 'alice', actionRequestAttributionV1: { requester: { accountId: 'bob' } } } });
+        expect(effects).toBe(0);
+      } else expect(ownerDecision).toMatchObject({ ok: true });
+      const context: ActionExecutorContext = requester === 'bob' ? { ...ownerContext, requesterApprovalDecision: {
+        sessionId: 'bot-session', actor: { kind: 'accountUser', accountId: 'bob', relationship: 'sharedApprover' },
+        isCurrent: async () => true,
+      } } : ownerContext;
+      if (requester === 'bob') expect(await decide({ artifactId: 'account-write', decision: 'approve', context }))
+        .toMatchObject({ ok: true });
+      expect(await pending).toMatchObject({ ok: true });
+      expect(row.request).toMatchObject({ status: 'executed', execution: { ok: true, effectAttempted: true } });
+      expect(effects).toBe(1);
+      expect(await decide({ artifactId: 'account-write', decision: 'approve', context }))
+        .toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+      expect(effects).toBe(1);
+    } finally {
+      controller.abort();
+      await pending.catch(() => undefined);
+      await runtime.dispose();
+      if (previousSettings) setActiveAccountSettingsSnapshot(previousSettings);
+      else clearActiveAccountSettingsSnapshot();
+    }
+  });
 
   it.each(['current', 'wrong-home', 'stale-source'] as const)('decides target approvals through the real CLI and exact daemon (%s)', async mode => {
     const scratch = await mkdtemp(join(tmpdir(), 'happier-fx45-'));
