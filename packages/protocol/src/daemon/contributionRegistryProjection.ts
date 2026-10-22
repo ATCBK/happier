@@ -179,6 +179,9 @@ import {
   assertPluginProjectionFamilyIdsV2,
 } from '../plugins/contributions/catalog.js';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '../connect/connectedAccountUiProjectionV1.js';
+import { AgentProviderRequirementsV1Schema } from '../providers/compatibility/v1.js';
+import { ProviderContributionV1Schema } from '../providers/contributions/v1.js';
+import { parseQualifiedPluginContributionKey } from '../plugins/contributionIdentity.js';
 import {
   PluginContributionIntrospectionProjectionV1Schema,
   PluginDiagnosticRecordV1Schema,
@@ -1234,6 +1237,7 @@ export const PluginProjectedAgentV2Schema = lazyZodSchema(() => z.strictObject({
   acpRegistryIds: PluginAgentCatalogV2Schema.shape.acpRegistryIds,
   connectedServiceIds: z.optional(PluginProjectedAgentConnectedServiceIdsV2Schema),
   connectedAccounts: z.optional(PluginProjectedAgentConnectedAccountsV2Schema),
+  providerRequirements: z.optional(AgentProviderRequirementsV1Schema),
   providerOwnedEnvironmentKeys: z._default(PluginProjectedProviderOwnedEnvironmentKeysV2Schema, []),
   capabilities: zMini.optional(PluginAgentCapabilitiesV2Schema),
   cli: zMini.optional(PluginAgentCliMetadataSchema),
@@ -1729,6 +1733,19 @@ const PluginProjectedDefinitionEntryV2Schema = lazyZodSchema(() => strictProject
   'contributionKey',
   'definition',
 ] as const));
+const PluginProjectedProviderEntryV2Schema = lazyZodSchema(() => z.strictObject({
+  ...PluginProjectedFamilyEntryBaseV2Shape,
+  pluginId: PluginIdSchema,
+  definition: z.optional(ProviderContributionV1Schema),
+  provenance: z.optional(z.enum(['first_party', 'external'])),
+  sourceKind: z.optional(z.enum(['bundled', 'path', 'archive', 'marketplace', 'package'])),
+}).check(z.superRefine((entry, context) => {
+  const identity = parseQualifiedPluginContributionKey(entry.id);
+  if (!identity || identity.pluginId !== entry.pluginId
+    || (entry.definition && identity.localId !== entry.definition.id)) {
+    context.addIssue({ code: 'custom', path: ['id'], message: 'Provider identity must match its declaration and producer' });
+  }
+})));
 const PluginProjectedWorkflowEntryV1Schema = lazyZodSchema(() => z.strictObject({
   ...PluginProjectedFamilyEntryBaseV2Shape,
   pluginVersion: z.string().check(z.trim(), z.minLength(1)),
@@ -2651,6 +2668,7 @@ export const PluginProjectedFamilyEntryV2Schema: z.ZodMiniUnion<readonly [
   typeof PluginProjectedRegistrySourceEntryV1Schema,
   typeof PluginProjectedLanguageServerEntryV1Schema,
   typeof PluginProjectedSkillEntryV1Schema,
+  typeof PluginProjectedProviderEntryV2Schema,
   typeof PluginProjectedDefinitionEntryV2Schema,
   typeof PluginProjectedWorkflowEntryV1Schema,
   typeof PluginProjectedVoiceProviderEntryV2Schema,
@@ -2675,6 +2693,7 @@ export const PluginProjectedFamilyEntryV2Schema: z.ZodMiniUnion<readonly [
   PluginProjectedRegistrySourceEntryV1Schema,
   PluginProjectedLanguageServerEntryV1Schema,
   PluginProjectedSkillEntryV1Schema,
+  PluginProjectedProviderEntryV2Schema,
   PluginProjectedDefinitionEntryV2Schema,
   PluginProjectedWorkflowEntryV1Schema,
   PluginProjectedVoiceProviderEntryV2Schema,
@@ -2705,7 +2724,7 @@ function projectedFamilySchema<
   });
 }
 
-const PluginProjectedProvidersFamilyV2Schema = lazyZodSchema(() => projectedFamilySchema('providers', PluginProjectedDefinitionEntryV2Schema));
+const PluginProjectedProvidersFamilyV2Schema = lazyZodSchema(() => projectedFamilySchema('providers', PluginProjectedProviderEntryV2Schema));
 const PluginProjectedConnectedAccountsFamilyV2Schema = lazyZodSchema(() => projectedFamilySchema('connectedAccounts', ConnectedAccountUiProjectionEntryV1Schema));
 const PluginProjectedScmHostingProvidersFamilyV2Schema = lazyZodSchema(() => projectedFamilySchema('scmHostingProviders', PluginProjectedScmHostingProviderEntryV2Schema));
 const PluginProjectedScmBackendsFamilyV2Schema = lazyZodSchema(() => projectedFamilySchema('scmBackends', PluginProjectedScmBackendEntryV2Schema));

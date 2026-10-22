@@ -1220,7 +1220,7 @@ describe('buildPluginProjectionV2', () => {
             contributionKey: 'com.acme.voice/conversation', definition: provider,
         });
     });
-    it('projects only bounded provider-owned environment key names from accepted agent contributions', () => {
+    it('projects admitted Agent provider requirements with provider-owned environment key names', () => {
         const registry = {
             ...createEmptyResolvedContributionRegistry(),
             agents: [{
@@ -1290,7 +1290,8 @@ describe('buildPluginProjectionV2', () => {
         expect(PluginProjectionV2Schema.parse(projection).agentsById['acme-agent']?.connectedServiceIds)
             .toEqual(['openai-codex']);
         expect(projection.agentsById['acme-agent']).not.toHaveProperty('providerSupport');
-        expect(projection.agentsById['acme-agent']).not.toHaveProperty('providerRequirements');
+        expect(PluginProjectionV2Schema.parse(projection).agentsById['acme-agent']?.providerRequirements)
+            .toEqual(registry.agents[0].definition.providerRequirements);
         expect(buildPluginProjectionV2({
             registry: createEmptyResolvedContributionRegistry(),
             generation: 10,
@@ -1520,7 +1521,7 @@ describe('buildPluginProjectionV2', () => {
             .toThrow(/qualified identity/i);
     });
 
-    it('projects provider identity without shipping definitions unread by the UI', () => {
+    it('projects admitted Provider declarations with exact identity and source authority', () => {
         const occurrenceId = createPluginRuntimeOccurrenceId('acme.gateway');
         const registry = {
             ...createEmptyResolvedContributionRegistry(),
@@ -1561,7 +1562,25 @@ describe('buildPluginProjectionV2', () => {
             id: 'acme.gateway/main',
             pluginId: 'acme.gateway',
             occurrenceId,
+            definition: registry.providers[0].definition,
+            provenance: 'external',
+            sourceKind: 'path',
         });
+        expect(PluginProjectionV2Schema.parse(projection).familiesById.providers?.entriesById['acme.gateway/main'])
+            .toEqual(projection.familiesById.providers?.entriesById['acme.gateway/main']);
+        const entry = projection.familiesById.providers?.entriesById['acme.gateway/main'];
+        for (const invalid of [
+            { ...entry, id: 'acme.other/main' },
+            { ...entry, definition: { ...registry.providers[0].definition, id: 'other' } },
+            { ...entry, definition: { ...registry.providers[0].definition, trusted: true } },
+            { ...entry, provenance: 'trusted' },
+            { ...entry, sourceKind: 'external' },
+        ]) {
+            expect(PluginProjectionV2Schema.safeParse({ ...projection, familiesById: {
+                ...projection.familiesById,
+                providers: { family: 'providers', entriesById: { 'acme.gateway/main': invalid } },
+            } }).success).toBe(false);
+        }
     });
 
     it('does not allow callers to override catalog-owned projection families', () => {

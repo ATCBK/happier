@@ -15,6 +15,7 @@ import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGatewayRegistry.testkit';
+import type { AgentProviderRequirementsV1 } from '@happier-dev/protocol/providers/compatibility/v1';
 
 /** Real committed plugin/Agent/Provider source. Only endpoint transport is
  * supplied by each test; no authorization, registry or materializer is mocked. */
@@ -30,6 +31,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
   runtimeCredentialHeader?: Readonly<{ name: string; format: 'raw' | 'bearer' }>;
   acceptedCredentialFormats?: readonly ('raw' | 'bearer')[];
   connectedAccounts?: readonly ConnectedAccountPurposeDeclarationV1[];
+  requiredCapabilities?: AgentProviderRequirementsV1['required'];
   resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-managed-run-'));
   const pluginId = 'acme.managed-run';
@@ -77,7 +79,7 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
         } } : {}),
         capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true,
           executionRunContext: { versions: [1] } } },
-        providerRequirements: { acceptsProtocols: ['openai-responses'], required: { streaming: true },
+        providerRequirements: { acceptsProtocols: ['openai-responses'], required: input.requiredCapabilities ?? { streaming: true },
           credentialSupport: { supportsNoAuth: true, apiKeyTransports: [{ protocol: 'openai-responses',
             destination: { kind: 'httpHeader', names: 'anyValidated', formats: input.acceptedCredentialFormats ?? [input.runtimeCredentialHeader?.format ?? 'bearer'] } }] },
           authIsolation: { suppressConnectedServiceIds: [], ownedEnvKeys: ['RUN_PROVIDER_TOKEN'] },

@@ -14,6 +14,7 @@ import { isDynamicPluginResourceContributionV2, PluginAgentCapabilitiesV2Schema,
 import { PluginActionDeclaredExecutionV2Schema, PluginActionScopeV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 import { getPluginMachineExecutionOriginRef, PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { PluginSettingsProjectionError, projectPluginSettingsContributionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { AgentProviderRequirementsV1Schema } from '@happier-dev/protocol/providers/compatibility/v1';
 
 import type { PluginCatalogEntry } from '@/plugins/projection/catalog/installed';
 import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
@@ -650,6 +651,7 @@ export function buildAgentsById(
             throw new Error(`Agent '${agent.id}' is missing its manifest-qualified identity`);
         }
         const projectionDefinition = readAgentProjectionDefinition(agent);
+        const providerRequirements = AgentProviderRequirementsV1Schema.safeParse(projectionDefinition.providerRequirements);
         const externalSessions = projectAgentExternalSessions(agent, generation);
         const capabilities = projectAgentCapabilities(agent);
         const connectedServiceIds = agent.catalogEntry?.connectedServiceIds ?? [];
@@ -678,6 +680,7 @@ export function buildAgentsById(
                 ? { connectedServiceIds: [...connectedServiceIds] }
                 : {}),
             ...(connectedAccounts.length > 0 ? { connectedAccounts } : {}),
+            ...(providerRequirements.success ? { providerRequirements: providerRequirements.data } : {}),
             providerOwnedEnvironmentKeys: [...readAgentProviderOwnedEnvironmentKeys(projectionDefinition)],
             ...(capabilities ? { capabilities } : {}),
             ...(agent.cliMetadata ? { cli: agent.cliMetadata } : {}),

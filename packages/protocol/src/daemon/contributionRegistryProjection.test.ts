@@ -1915,7 +1915,7 @@ describe('daemon contribution registry projection (wire)', () => {
           },
         },
       },
-    }).success).toBe(true);
+    }).success).toBe(false);
   });
 
   it('accepts platform selection without exact framework or engine compatibility facts', () => {

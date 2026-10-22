@@ -14,6 +14,9 @@ export const providerProjectionFamily = definePluginProjectionFamilyV2({
                     Object.freeze({
                         id: contributionKey,
                         pluginId: provider.pluginId,
+                        definition: provider.definition,
+                        provenance: provider.provenance,
+                        sourceKind: provider.source.kind,
                     }),
                 ];
             }),
