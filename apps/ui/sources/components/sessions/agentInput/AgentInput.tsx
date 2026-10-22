@@ -2480,7 +2480,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         handleSuggestionSelect,
         onOpenPromptPicker: promptLibraryAvailable && dictationEditable && !controlsOnly ? openPromptPickerFromSlash : undefined,
         settledEmpty: suggestionsSettledEmpty,
-        emptyStateWhenResolved: referencePickerTrigger !== null,
+        // Only a focused composer that is querying holds the picker frame; a blurred draft shows no empty picker.
+        emptyStateWhenResolved: referencePickerTrigger !== null && activeSuggestionQuery !== null,
         kindTabs: referencePickerKinds,
     });
     // Lab P1: the reference picker keeps one height as results narrow and says how it is driven, on a
