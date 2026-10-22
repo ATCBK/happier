@@ -5703,7 +5703,7 @@ describe('daemon contribution registry projection rpc handler', () => {
         expect(resolveActionPresentUserGatePolicy).toHaveBeenCalledWith(pluginId, actionId);
     });
 
-    it('serves a client Action only from its current projected target, exact origin, and declared generated Artifact', async () => {
+    it.each(['client', 'account'] as const)('serves a %s Action generated Artifact through its current byte owner', async (target) => {
         const projectionModule = await import('./daemonContributionRegistryProjection');
         projectionModule.invalidateDaemonContributionRegistryProjectionCache?.();
         const { registerDaemonContributionRegistryProjectionHandler } = projectionModule;
@@ -5767,7 +5767,10 @@ describe('daemon contribution registry projection rpc handler', () => {
                     },
                     inputHints: null,
                     inputSchema: {},
-                    execution: {
+                    execution: target === 'account' ? {
+                        target: 'account',
+                        account: { artifactId: artifactGraph.artifactId, exportName: 'activate' },
+                    } : {
                         target: 'client',
                         client: {
                             artifactId: artifactGraph.artifactId,
