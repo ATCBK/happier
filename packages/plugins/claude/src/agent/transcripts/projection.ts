@@ -4,7 +4,7 @@ import {
     AgentExternalSessionTranscriptRawRecordSchema,
     type AgentExternalSessionTranscriptItem,
 } from '@happier-dev/plugin-sdk/sessions/external';
-import { parseTimestampMs } from '@happier-dev/plugin-sdk';
+import { isRecord, parseTimestampMs } from '@happier-dev/plugin-sdk';
 import { createExternalSessionUnsupportedTranscriptItem } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 import { classifyClaudeNativeTranscriptRow } from './nativeSemanticProjection.js';
@@ -137,13 +137,58 @@ export type ClaudeJsonlLineRecordProjection =
         items: readonly [];
     }>;
 
-export function projectClaudeJsonlLineRecord(params: Readonly<{
+type ClaudeJsonlLineRecordParams = Readonly<{
     fileRelPath: string;
     lineStartOffsetBytes: number;
     lineValue: unknown;
     maxItems?: number;
-}>): ClaudeJsonlLineRecordProjection {
-    const projected = projectClaudeJsonlLine(params);
+}>;
+
+type ClaudeJsonlContentSearchProjection = Readonly<{
+    disposition: ClaudeJsonlLineRecordProjection['disposition'];
+    itemCount: number;
+    match: Readonly<{ itemIndex: number; sourceItemId: string; snippet: string }> | null;
+}>;
+
+export function projectClaudeJsonlLineRecord(params: ClaudeJsonlLineRecordParams & Readonly<{
+    projection: 'content_search';
+    matchText: (text: string) => string | null;
+}>): ClaudeJsonlContentSearchProjection;
+export function projectClaudeJsonlLineRecord(params: ClaudeJsonlLineRecordParams): ClaudeJsonlLineRecordProjection;
+export function projectClaudeJsonlLineRecord(params: ClaudeJsonlLineRecordParams & Readonly<{
+    projection?: 'content_search';
+    matchText?: (text: string) => string | null;
+}>): ClaudeJsonlLineRecordProjection | ClaudeJsonlContentSearchProjection {
+    // Tool/thinking bodies cannot match conversation text. Their canonical
+    // fallback marker still can: validate/materialize them when it could hit.
+    const projected = projectClaudeJsonlLine({ ...params,
+        countEventsOnly: params.projection === 'content_search'
+            && params.matchText?.(unsupportedContentMessage('content')) === null });
+    if (params.projection === 'content_search') {
+        const skipped = projected.countedEventIndices ?? [];
+        const itemCount = projected.items.length + skipped.length;
+        let match: ClaudeJsonlContentSearchProjection['match'] = null;
+        for (let index = 0; index < projected.items.length; index++) {
+            const item = projected.items[index]!;
+            const content = item.raw.content;
+            const text = isRecord(content)
+                ? content.type === 'text' && typeof content.text === 'string' ? content.text
+                    : content.type === 'acp' && 'data' in content && isRecord(content.data)
+                        && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
+                : null;
+            const snippet = text === null ? null : params.matchText?.(text);
+            if (snippet == null) continue;
+            let itemIndex = index;
+            for (const skippedIndex of skipped) {
+                if (skippedIndex > itemIndex) break;
+                itemIndex++;
+            }
+            match = { itemIndex, sourceItemId: item.id, snippet };
+            break;
+        }
+        return { disposition: projected.unsupportedRecord ? 'unsupported' : itemCount > 0 ? 'mapped' : 'known_non_transcript',
+            itemCount, match };
+    }
     if (projected.unsupportedRecord) return { disposition: 'unsupported', items: projected.items };
     if (projected.items.length > 0) return { disposition: 'mapped', items: projected.items };
     return {
@@ -181,6 +226,7 @@ type ClaudeJsonlLineProjection = Readonly<{
     items: AgentExternalSessionTranscriptItem[];
     withheldEveryPart: boolean;
     unsupportedRecord?: boolean;
+    countedEventIndices?: readonly number[];
 }>;
 
 function projectClaudeJsonlLine(params: Readonly<{
@@ -193,6 +239,8 @@ function projectClaudeJsonlLine(params: Readonly<{
      * receives one explicit marker rather than a partial row.
      */
     maxItems?: number;
+    /** Search needs their ordinal slots, not immutable transport snapshots. */
+    countEventsOnly?: boolean;
 }>): ClaudeJsonlLineProjection {
     const noItems: ClaudeJsonlLineProjection = { items: [], withheldEveryPart: false };
     // File paths stay private paging state; transcript item ids are source-local and recipient-safe.
@@ -299,6 +347,7 @@ function projectClaudeJsonlLine(params: Readonly<{
     }
 
     const items: AgentExternalSessionTranscriptItem[] = [];
+    let countedEventIndices: number[] | undefined;
     let preservedTextIdentity = false;
     let withheldPart = false;
     for (const [index, part] of classification.semanticParts.entries()) {
@@ -348,6 +397,12 @@ function projectClaudeJsonlLine(params: Readonly<{
             continue;
         }
 
+        if (params.countEventsOnly && (part.kind === 'tool_use' || part.kind === 'tool_result' || part.kind === 'thinking')) {
+            countedEventIndices ??= [];
+            countedEventIndices.push(items.length + countedEventIndices.length);
+            continue;
+        }
+
         const data = part.kind === 'thinking'
             ? { type: 'thinking', text: part.text }
             : part.kind === 'tool_use'
@@ -387,9 +442,11 @@ function projectClaudeJsonlLine(params: Readonly<{
     const maxItems = params.maxItems === undefined
         ? null
         : Math.max(1, Math.trunc(params.maxItems));
-    if (items.length === 0 && !withheldPart && !classification.knownNonTranscriptRecord) return unsupportedRecord();
-    if (maxItems === null || items.length <= maxItems) {
-        return { items, withheldEveryPart: items.length === 0 && withheldPart,
+    const itemCount = items.length + (countedEventIndices?.length ?? 0);
+    if (itemCount === 0 && !withheldPart && !classification.knownNonTranscriptRecord) return unsupportedRecord();
+    if (maxItems === null || itemCount <= maxItems) {
+        return { items, withheldEveryPart: itemCount === 0 && withheldPart,
+            ...(countedEventIndices ? { countedEventIndices } : {}),
             ...(classification.semanticParts.some(part => part.kind === 'unsupported') ? { unsupportedRecord: true } : {}) };
     }
     const raw = createClaudeAgentMessageRaw(unsupportedContentMessage('content'));

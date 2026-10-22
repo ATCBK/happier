@@ -8,6 +8,48 @@ import {
 } from './projection.js';
 
 describe('Claude JSONL projection', () => {
+    it('summarizes searchable text and exact ordinals without transporting tool payloads', () => {
+        const params = { fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42,
+            lineValue: { type: 'user', uuid: 'mixed-result', message: { role: 'user', content: [
+                { type: 'tool_result', tool_use_id: 'read', content: 'private tool output '.repeat(1000) },
+                { type: 'text', text: 'First visible text' },
+                { type: 'thinking', thinking: ' ' },
+                { type: 'tool_use', id: 'call', name: 'Read', input: { path: 'private tool metadata' } },
+                { type: 'text', text: 'Second visible text' },
+                { type: 'image', source: { type: 'base64', data: 'private image bytes' } },
+            ] }, toolUseResult: { file: { content: 'private duplicate output' } } } };
+        const full = projectClaudeJsonlLineRecord(params);
+        expect(full.items).toHaveLength(5);
+        expect(projectClaudeJsonlLineRecord({ ...params, projection: 'content_search',
+            matchText: text => text.includes('visible') ? text : null })).toEqual({
+            disposition: 'unsupported', itemCount: 5,
+            match: { itemIndex: 1, sourceItemId: 'claude:000000000042', snippet: 'First visible text' },
+        });
+    });
+    it.each([
+        { name: 'tool-only phrase', query: 'private output', lineValue: { type: 'user', uuid: 'result',
+            message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call', content: 'private output' }] } },
+            itemCount: 1, matchingItemIndex: null },
+        { name: 'tool transport fallback', query: 'unsupported content block',
+            // JSON.parse can produce a non-finite number from a native JSON exponent.
+            lineValue: JSON.parse('{"type":"assistant","uuid":"tool","message":{"content":[{"type":"tool_use","id":"call","name":"Read","input":{"number":1e999}}]}}'),
+            itemCount: 1, matchingItemIndex: 0 },
+        { name: 'empty thinking', query: 'anything', lineValue: { type: 'assistant', uuid: 'thinking',
+            message: { content: [{ type: 'thinking', thinking: '  ' }] } }, itemCount: 0, matchingItemIndex: null },
+        { name: 'withheld meta text', query: 'private', lineValue: { type: 'user', uuid: 'meta', isMeta: true,
+            message: { content: 'private context' } }, itemCount: 0, matchingItemIndex: null },
+        { name: 'unknown row', query: 'unsupported', lineValue: { type: 'future-record' },
+            itemCount: 1, matchingItemIndex: 0 },
+    ])('keeps the transcript count and text semantics for $name', ({ query, lineValue, itemCount, matchingItemIndex }) => {
+        const params = { fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42, lineValue };
+        const full = projectClaudeJsonlLineRecord(params);
+        const summary = projectClaudeJsonlLineRecord({ ...params, projection: 'content_search',
+            matchText: text => text.includes(query) ? text : null });
+        const matchedItem = matchingItemIndex === null ? null : full.items[matchingItemIndex]!;
+        expect(summary).toMatchObject({ disposition: full.disposition, itemCount,
+            match: matchedItem ? { itemIndex: matchingItemIndex, sourceItemId: matchedItem.id, snippet: expect.stringContaining(query) } : null });
+        expect(summary.itemCount).toBe(full.items.length);
+    });
     it('projects image tool results without inline bytes while retaining text, tool correlation and the visible unsupported image', () => {
         const bytes = 'A'.repeat(628_392);
         const projection = projectClaudeJsonlLineRecord({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42,

@@ -307,19 +307,14 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                             let match = progress.match;
                             let partial = progress.partial || (tailOffsetBytes !== null && tailOffsetBytes < initialEndOffsetBytes);
                             if (selected.selected) {
-                                const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath, lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value });
+                                const projected = projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath,
+                                    lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value,
+                                    projection: 'content_search', matchText });
                                 partial ||= projected.disposition === 'unsupported';
-                                for (let itemIndex = projected.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-                                    const item = projected.items[itemIndex]!;
-                                    const content = item.raw.content;
-                                    const text = isTranscriptObject(content)
-                                        ? content.type === 'text' && typeof content.text === 'string' ? content.text
-                                            : content.type === 'acp' && 'data' in content && isTranscriptObject(content.data) && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
-                                        : null;
-                                    const snippet = text !== null ? matchText(text) : null;
-                                    if (snippet !== null) match = { startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes, itemIndex, newerItems: count };
-                                    count += 1;
-                                }
+                                if (projected.match !== null) match = { startOffsetBytes: line.startOffsetBytes,
+                                    endOffsetBytes: line.endOffsetBytes, itemIndex: projected.match.itemIndex,
+                                    newerItems: count + projected.itemCount - projected.match.itemIndex - 1 };
+                                count += projected.itemCount;
                             }
                             const row = { startOffsetBytes: line.startOffsetBytes, endOffsetBytes: line.endOffsetBytes };
                             const titleRecord = applyClaudeTitleRecord({ customTitle: null, aiTitle: null, fallbackTitle: null }, line.value, remoteSessionId, 'backward');
@@ -355,15 +350,10 @@ export async function searchClaudeExternalTranscript(params: Readonly<{
                 // A caller's opaque continuation carries positions, never
                 // authoritative text. Re-read and re-match the native row.
                 const line = progress.match ? await readSearchRow(progress.match) : null;
-                const item = line && progress.match ? projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath,
-                    lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value }).items[progress.match.itemIndex] : undefined;
-                const content = item?.raw.content;
-                const text = isTranscriptObject(content)
-                    ? content.type === 'text' && typeof content.text === 'string' ? content.text
-                        : content.type === 'acp' && 'data' in content && isTranscriptObject(content.data) && content.data.type === 'message' && typeof content.data.message === 'string' ? content.data.message : null
-                    : null;
-                const snippet = text !== null ? matchText(text) : null;
-                return { records: item && snippet !== null && progress.match ? [{ id: item.id, snippet,
+                const matched = line && progress.match ? projectClaudeJsonlLineRecord({ fileRelPath: params.fileRelPath,
+                    lineStartOffsetBytes: line.startOffsetBytes, lineValue: line.value,
+                    projection: 'content_search', matchText }).match : null;
+                return { records: matched && progress.match && matched.itemIndex === progress.match.itemIndex ? [{ id: matched.sourceItemId, snippet: matched.snippet,
                     messageIndex: progress.count - progress.match.newerItems - 1 }] : [],
                     partial: progress.partial || typeof progress.branchParentUuid === 'string' };
             },
