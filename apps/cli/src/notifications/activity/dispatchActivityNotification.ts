@@ -313,9 +313,9 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   channels?: readonly string[];
   pluginNotifications?: Pick<StablePluginNotificationsOwner, 'availableHostChannels' | 'sendHostNotification'> | null;
   usageNoticeArtifactStore?: Readonly<{ accountId: string; store: Pick<ReturnType<typeof createAccountArtifactStore>, 'create'> }>;
-  /** Existing personal Follow CAS before outward delivery; Runs first retain their Inbox notice. */
+  /** Existing source-owned personal Follow CAS before outward delivery. Inbox rows stay derived. */
   acceptSourceFollowDelivery?: () => Promise<boolean>;
-}>): Promise<Readonly<{ attemptedChannels: number; deliveredChannels: number; inboxRepresented?: true }>> {
+}>): Promise<Readonly<{ attemptedChannels: number; deliveredChannels: number }>> {
   const admission = await resolveSessionActivityNotificationAdmission(params);
   if (!admission.eligible) {
     return { attemptedChannels: 0, deliveredChannels: 0 };
@@ -323,7 +323,6 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   const sourceSessionId = params.event.topic === 'ready' || params.event.topic === 'permission_request'
     || params.event.topic === 'user_action_request' || params.event.topic === 'follow_update' && 'sessionId' in params.event ? params.event.sessionId : null;
   const sourceFollow = params.event.topic === 'follow_update' && 'original' in params.event.follow ? params.event.follow : null;
-  const discussionFollow = sourceFollow !== null && 'kind' in sourceFollow.original;
   if (sourceSessionId || sourceFollow) {
     const operation = params.operationContext;
     const scopes = params.readAccountSessionDeliveryMutedScopes
@@ -362,7 +361,6 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   });
   let attemptedChannels = 0;
   let deliveredChannels = 0;
-  let inboxRepresented: true | undefined;
   const selectedChannelIds = params.channels ? new Set(params.channels) : null;
   const selects = (id: string) => !selectedChannelIds || selectedChannelIds.has(id);
   const pluginNotifications = params.pluginNotifications === undefined
@@ -380,12 +378,12 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   }
   await assertCurrent();
 
-  // Runs use the existing private Account notice. Discussion Inbox reads its
-  // original C3 messages and private read cursor; never copy that lifecycle here.
-  if ((params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit'
-    || params.event.topic === 'follow_update' && 'original' in params.event.follow && !discussionFollow) && params.usageNoticeArtifactStore && !selectedChannelIds) {
+  // Only notices own stored Inbox content. Run and Discussion rows read their
+  // original owners, so their resolution cannot diverge from a copied Artifact.
+  if ((params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit')
+    && params.usageNoticeArtifactStore && !selectedChannelIds) {
     const decision = channelDecision('badge');
-    if (sourceFollow || decision.delivery !== 'suppress') {
+    if (decision.delivery !== 'suppress') {
       const notice = params.event;
       const content = buildActivityNotificationContent(notice, {
         readyIncludeMessageText: true, requestIncludeMessageText: true, previewBehavior: 'include_preview',
@@ -401,21 +399,19 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
           body: JSON.stringify(AccountNoticeArtifactBodyV1Schema.parse({ v: 1, resolved: false, type: 'update', source: { kind: 'host', topic: notice.topic }, notice })),
         });
         deliveredChannels += 1;
-        if (sourceFollow) inboxRepresented = true;
       } catch (error) {
         // The Artifact id is this Account's witnessed occurrence. Never overwrite
         // its read/dismiss state or deliver the same occurrence again.
         if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'conflict') {
-          if (!sourceFollow) return { attemptedChannels, deliveredChannels };
-          inboxRepresented = true;
+          return { attemptedChannels, deliveredChannels };
         } else {
           throw error;
         }
       }
     }
   }
-  if (sourceFollow && ((!discussionFollow && !inboxRepresented) || !await params.acceptSourceFollowDelivery?.())) {
-    return { attemptedChannels, deliveredChannels, ...(inboxRepresented ? { inboxRepresented } : {}) };
+  if (sourceFollow && !await params.acceptSourceFollowDelivery?.()) {
+    return { attemptedChannels, deliveredChannels };
   }
 
   const expoDecision = channelDecision('expo_push');
@@ -529,6 +525,5 @@ export async function dispatchActivityNotificationAsync(params: Readonly<{
   return {
     attemptedChannels,
     deliveredChannels,
-    ...(inboxRepresented ? { inboxRepresented } : {}),
   };
 }

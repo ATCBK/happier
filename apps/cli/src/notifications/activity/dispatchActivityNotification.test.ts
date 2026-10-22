@@ -9,6 +9,7 @@ import {
   decodePlainArtifactStoredContent,
 } from '@happier-dev/protocol';
 import { readAccountNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { RunFollowUpdateNotificationV1Schema } from '@happier-dev/protocol/activity/webhookPayload';
 
 import { logger } from '@/ui/logger';
 import type {
@@ -73,6 +74,46 @@ vi.mock('@/ui/logger', () => ({
 }));
 
 describe('dispatchActivityNotificationAsync', () => {
+  it.each([
+    { original: { source: { kind: 'workflow_run', runId: 'followed-workflow' }, revision: 2 }, event: { kind: 'update_posted' } },
+    { original: { source: { kind: 'execution_run', sessionId: 'run-session', runId: 'followed-execution' }, terminalEventId: 'terminal-1' },
+      event: { kind: 'failed_or_stopped' } },
+  ])('delivers $original.source.kind from its source custody without materializing an Inbox notice', async follow => {
+    const event = RunFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow });
+    const create = vi.fn(async () => ({ artifactId: 'unwanted-notice', revision: { headerVersion: 1, bodyVersion: 1 } }));
+    const sent: unknown[] = [];
+    let accepted = false;
+    const input = { settings: accountSettingsParse({}), event, pluginNotifications: null,
+      admittedRulePolicies: [{ preset: 'everything' as const }],
+      usageNoticeArtifactStore: { accountId: 'owner', store: { create } },
+      acceptSourceFollowDelivery: async () => { accepted = true; return true; },
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => {
+        expect(accepted).toBe(true);
+        sent.push(args);
+        return true;
+      } },
+    };
+    const result = await dispatchActivityNotificationAsync(input);
+    expect(create).not.toHaveBeenCalled();
+    expect(result).toEqual({ attemptedChannels: 1, deliveredChannels: 1 });
+    expect(sent).toHaveLength(1);
+    // Acceptance belongs to the source Follow owner, including when no notice store exists.
+    accepted = false;
+    expect(await dispatchActivityNotificationAsync({ ...input, usageNoticeArtifactStore: undefined }))
+      .toEqual({ attemptedChannels: 1, deliveredChannels: 1 });
+    expect(accepted).toBe(true);
+    // A stale/replayed source cannot send again; mute also precedes source acceptance.
+    expect(await dispatchActivityNotificationAsync({ ...input, acceptSourceFollowDelivery: async () => false }))
+      .toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+    accepted = false;
+    expect(await dispatchActivityNotificationAsync({ ...input, readAccountSessionDeliveryMutedScopes: async () => [
+      { kind: 'source', source: event.follow.original.source },
+    ] })).toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+    expect(accepted).toBe(false);
+    expect(create).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(2);
+  });
+
   it('uses captured Account mute scopes before outward delivery, retaining unrelated sources and refusing unavailable reads', async () => {
     const source = 'muted-source';
     const home = 'https://mute-delivery.example';

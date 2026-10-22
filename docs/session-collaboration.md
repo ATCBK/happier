@@ -262,11 +262,14 @@ The key includes each request's id and creation time, so an id reused for a new
 request is distinct. Acceptance revalidates the exact current source; a cleared
 or replaced permission cannot consume progress or admit an outward effect.
 For supported Account occurrences, the captured authorized Account daemon uses the same
-dispatcher and the existing private Inbox
-notice and personal Follow progress. Only acceptance of that notice advances
+dispatcher and source-owned personal Follow progress. That acceptance advances
 the Run cursor and admits one outward channel attempt; channel success is not
-the acceptance fact. A crash after that acceptance can leave the Inbox notice
-without a channel alert. Explicit Run Follow choices suppress the incumbent
+the acceptance fact. Inbox Run rows stay derived from the Run owner's attention
+projection and recede when the owner settles them. Run Follow does not write a
+private Account notice with an independent lifetime, and retired development
+Run notice copies are no longer admitted as Inbox notices. A crash after source
+acceptance can leave the source-backed Inbox state without a channel alert.
+Explicit Run Follow choices suppress the incumbent
 implicit Workflow report, so the two adapters do not send the same original.
 Discussion personal follows retain the exact Discussion message reference and
 original committed producer classification, but reuse the source-backed

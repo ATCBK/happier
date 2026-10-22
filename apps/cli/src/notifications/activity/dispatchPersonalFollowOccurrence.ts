@@ -3,8 +3,6 @@ import type { FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessi
 import { SessionFollowUpdateNotificationV1Schema, SourceFollowUpdateNotificationV1Schema,
   type DiscussionFollowUpdateNotificationV1 } from '@happier-dev/protocol/activity/webhookPayload';
 import type { SessionFollowRunOccurrence } from '@/daemon/sessions/sessionActivityChangedContract';
-import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
-import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
@@ -26,16 +24,15 @@ export type PersonalFollowOccurrenceDispatch = Readonly<({
 export type PersonalFollowOccurrenceDispatchResult = Readonly<{
   attemptedChannels: number;
   deliveredChannels: number;
-  inboxRepresented?: true;
 }> & SessionActivityChangedResult;
 
-/** Thin Account adapter; Follow selects routes and Activity owns channel/notice custody. */
+/** Thin Account adapter; Follow selects routes and Activity owns channel delivery. */
 export function createPersonalFollowOccurrenceDispatcher(params: Readonly<{
   operationContext: SavedSecretOperationContextV1;
   /** Reuses the caller's original-source/publisher/request and admitted-route currentness. */
   isCurrent: (input: PersonalFollowOccurrenceDispatch) => boolean | Promise<boolean>;
 }> & Pick<Parameters<typeof dispatchActivityNotificationAsync>[0],
-  'expoPushSender' | 'pluginNotifications' | 'fetchSessionNotificationContext' | 'readAccountSessionDeliveryMutedScopes' | 'webhookNetwork' | 'nowMs' | 'usageNoticeArtifactStore'>) {
+  'expoPushSender' | 'pluginNotifications' | 'fetchSessionNotificationContext' | 'readAccountSessionDeliveryMutedScopes' | 'webhookNetwork' | 'nowMs'>) {
   return async (input: PersonalFollowOccurrenceDispatch): Promise<PersonalFollowOccurrenceDispatchResult> => {
     const isCurrent = async () => !input.signal.aborted && await params.operationContext.isCurrent() && await params.isCurrent(input);
     const assertCurrent = async () => {
@@ -44,15 +41,10 @@ export function createPersonalFollowOccurrenceDispatcher(params: Readonly<{
     };
     await assertCurrent();
     if ('original' in input.occurrence || 'discussion' in input.occurrence) {
-      const accountId = readAccountIdFromToken(params.operationContext.credentials.token);
-      if (!accountId) throw new Error('personal_follow_account_unavailable');
       return await runWithServerHttpBaseUrl(params.operationContext.serverHttpBaseUrl, () => dispatchActivityNotificationAsync({
         ...params, settings: params.operationContext.readSnapshot()?.settings, isCurrent,
         admittedRulePolicies: input.policies,
         acceptSourceFollowDelivery: 'acceptDelivery' in input ? input.acceptDelivery : undefined,
-        usageNoticeArtifactStore: params.usageNoticeArtifactStore ?? {
-          accountId, store: createCredentialedAccountArtifactStore(params.operationContext.credentials),
-        },
         event: SourceFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow: 'discussion' in input.occurrence
           ? { original: input.occurrence.discussion.original, event: input.occurrence.discussion.event } : input.occurrence }),
       }));

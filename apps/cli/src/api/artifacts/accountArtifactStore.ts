@@ -1,6 +1,5 @@
 import axios from 'axios';
 import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
-import { deriveSessionFollowOriginalOccurrenceKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import { z } from 'zod/mini';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, encodeArtifactUploadFrameV1 } from '@happier-dev/transfers';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
@@ -169,11 +168,6 @@ function usageNoticeOccurrence(params: Readonly<{ accountId: string; notice: Usa
 
 function accountNoticeOccurrence(accountId: string, notice: Pick<AccountNoticeArtifactHeaderV1, 'source' | 'notice'>): string {
   if (notice.source.kind === 'host' && notice.notice) {
-    if (notice.notice.topic === 'follow_update') {
-      const original = notice.notice.follow.original;
-      return JSON.stringify(['happier:run-follow-notice:v1', accountId,
-        deriveSessionFollowOriginalOccurrenceKeyV1(original)]);
-    }
     return usageNoticeOccurrence({ accountId, notice: notice.notice });
   }
   return JSON.stringify(['happier:plugin-notice:v1', accountId, notice.source]);
