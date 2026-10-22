@@ -4,6 +4,11 @@ export type TaskLifecycleEvent = {
     createdAt: number;
 };
 
+/** Transcript inference is only a fallback for Sessions without canonical Turn authority. */
+export function shouldInferSessionLifecycleFromTranscript(session: Readonly<{ latestTurnId?: string | null }>): boolean {
+    return !session.latestTurnId;
+}
+
 export function getTaskLifecycleEventFromRawContent(content: unknown, createdAt: number): TaskLifecycleEvent | null {
     const rawContent = content as { content?: { type?: string; data?: { type?: string; id?: string } } } | null;
     const contentType = rawContent?.content?.type;

@@ -18,6 +18,7 @@ import { refreshWorkflowRunsByIds } from '@/sync/engine/workflows/refreshWorkflo
 import { invalidateMachinePoolProjection } from '@/sync/engine/machines/machinePoolProjection';
 import { invalidateSavedSecretCatalogProjection } from '@/sync/engine/settings/savedSecretCatalogEngine';
 import { readSessionMetadataLayoutVersion } from './engine/sessions/parsePlainSessionPayload';
+import { shouldInferSessionLifecycleFromTranscript } from './engine/sessions/taskLifecycle';
 import Constants from 'expo-constants';
 import { t } from '@/text';
 import {
@@ -9531,7 +9532,7 @@ class Sync {
         }
 
         const session = storage.getState().sessions[sessionId];
-        if (!session) {
+        if (!session || !shouldInferSessionLifecycleFromTranscript(session)) {
             return;
         }
 

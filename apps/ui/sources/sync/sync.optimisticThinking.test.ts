@@ -3133,6 +3133,27 @@ describe('sync.sendMessage optimistic thinking', () => {
         expect(storage.getState().sessions[sessionId].optimisticThinkingAt ?? null).toBeNull();
     });
 
+    it('keeps canonical Turn thinking and optimistic state when a historical lifecycle callback arrives', async () => {
+        const sessionId = 'canonical_turn_lifecycle_callback';
+        storage.getState().applySessions([{
+            ...createSession({ sessionId }),
+            latestTurnId: 'new-turn',
+            latestTurnStatus: 'in_progress',
+            latestTurnStatusObservedAt: 100,
+            thinking: true,
+        }]);
+        storage.getState().markSessionOptimisticThinking(sessionId);
+        const optimisticThinkingAt = storage.getState().sessions[sessionId].optimisticThinkingAt;
+        const { sync } = await import('./sync');
+        const applyLifecycle = Reflect.get(sync, 'applySessionThinkingFromTaskLifecycle') as
+            (sessionId: string, event: import('./engine/sessions/taskLifecycle').TaskLifecycleEvent) => void;
+        applyLifecycle(sessionId, { type: 'turn_cancelled', id: 'old-turn', createdAt: 1000 });
+        expect(storage.getState().sessions[sessionId]).toMatchObject({
+            latestTurnId: 'new-turn', latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: 100,
+            thinking: true, optimisticThinkingAt,
+        });
+    });
+
     it('keeps running approved tools active when a turn is aborted without tool error proof', async () => {
         const sessionId = 's_turn_aborted_tools';
         const now = Date.now();

@@ -18,7 +18,7 @@ import type {
     SessionRealtimeProjectionMode,
 } from '@/sync/domains/session/realtime/sessionRealtimeRouting';
 import { decideDurableSessionRealtimeRoute } from '@/sync/domains/session/realtime/sessionRealtimeRouting';
-import { getTaskLifecycleEventFromRawContent, type TaskLifecycleEvent } from './taskLifecycle';
+import { getTaskLifecycleEventFromRawContent, shouldInferSessionLifecycleFromTranscript, type TaskLifecycleEvent } from './taskLifecycle';
 import { isLegacyMemoryArtifactTranscriptRow } from './legacyMemoryArtifactTranscriptRows';
 import {
     advanceSessionReceivedMessageCurrentness,
@@ -100,6 +100,7 @@ function shouldApplyLifecycleLatestTurnStatus(params: Readonly<{
     latestTurnStatus: Session['latestTurnStatus'] | undefined;
 }>): boolean {
     if (!params.lifecycleEvent || !params.latestTurnStatus) return false;
+    if (!shouldInferSessionLifecycleFromTranscript(params.session)) return false;
     if (params.latestTurnStatus !== 'in_progress') return true;
     if (!isEndedLatestTurnStatus(params.session.latestTurnStatus)) return true;
 
@@ -645,7 +646,7 @@ async function handleSessionMessageSocketUpdate(params: HandleSessionMessageSock
                     updateType,
                 });
                 const lifecyclePatch: Partial<Session> = {
-                    ...(shouldInferLifecycle && isTaskComplete ? { thinking: false } : {}),
+                    ...(shouldInferLifecycle && isTaskComplete && shouldApplyLifecycleStatus ? { thinking: false } : {}),
                     ...(shouldInferLifecycle && isTaskStarted && shouldApplyLifecycleStatus ? { thinking: true } : {}),
                     ...(shouldApplyLifecycleStatus ? {
                         latestTurnStatus,
