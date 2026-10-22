@@ -1948,7 +1948,10 @@ Same-realm widget mounts bind their ephemeral shared scope to the physical
 surface's admitted plugin occurrence, captured Account lifetime and execution
 origin. Targeted-contribution metadata is not required for sharing. The existing
 shared-scope owner reuses values across current mounts of that occurrence and
-refuses access after mount, occurrence or Account retirement.
+refuses access after mount, occurrence or Account retirement. Independent routed
+credential readers of the same Home/Account participate in that one scope;
+retiring one reader fences its own facade without disposing a surviving reader's
+values. The final current binding's retirement disposes the Account scope.
 
 Native mounts, hosted read/watch bridges and this Action share the existing contextual Resource owner under the captured canonical Account and exact machine/occurrence/context. Declared global Resources share across physical hosts; Session Resources retain the selected Session identity. Final-consumer release or Account retirement disposes the store. Canceling an Action releases its wait rather than canceling another mount's shared read. Headless/client-only execution, missing declarations/scope or unavailable surface provenance returns typed unavailable, without child capability registries or current-UI routing. Native builtin definitions have no plugin Resource declaration; they retain their native data subscriptions/Retry and this Resource Refresh Action is unavailable for them.
 

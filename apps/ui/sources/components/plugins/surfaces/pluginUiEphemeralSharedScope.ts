@@ -4,6 +4,7 @@ import type { PluginUiArtifactDigestV1 } from '@happier-dev/protocol/plugins/ui'
 import { useLayoutEffect, useState } from 'react';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 
 type SharedValueEntry = {
     value: unknown;
@@ -33,10 +34,11 @@ type PluginScopeRecord = {
 
 type AccountScopeRecord = {
     retired: boolean;
+    readonly lifetimes: Set<ActiveServerAccountScopeLifetime>;
     readonly plugins: Map<string, PluginScopeRecord>;
 };
 
-const accountScopes = new WeakMap<ActiveServerAccountScopeLifetime, AccountScopeRecord>();
+const accountScopes = new Map<string, AccountScopeRecord>();
 
 function disposeSharedValue(entry: SharedValueEntry): void {
     entry.leases.clear();
@@ -65,6 +67,7 @@ function retireAccount(record: AccountScopeRecord): void {
         plugin.origins.clear();
     }
     record.plugins.clear();
+    record.lifetimes.clear();
 }
 
 function readExecutionOriginSlot(executionOrigin: PluginMachineExecutionOriginV1 | null | undefined): string {
@@ -76,15 +79,24 @@ function readAccountRecord(
     accountLifetime: ActiveServerAccountScopeLifetime,
 ): AccountScopeRecord | null {
     if (!accountLifetime.isCurrent()) return null;
-    const existing = accountScopes.get(accountLifetime);
-    if (existing) return existing.retired ? null : existing;
-
-    const record: AccountScopeRecord = {
-        retired: false,
-        plugins: new Map(),
-    };
-    accountScopes.set(accountLifetime, record);
-    accountLifetime.onRetire(() => retireAccount(record));
+    const key = serverAccountScopeKeySuffix(accountLifetime.scope);
+    let record = accountScopes.get(key);
+    if (!record) {
+        record = { retired: false, lifetimes: new Set(), plugins: new Map() };
+        accountScopes.set(key, record);
+    }
+    if (!record.lifetimes.has(accountLifetime)) {
+        const shared = record;
+        shared.lifetimes.add(accountLifetime);
+        // Credential readers have independent cancellation lifetimes. They
+        // participate in one Account scope; unmounting one cannot retire peers.
+        accountLifetime.onRetire(() => {
+            shared.lifetimes.delete(accountLifetime);
+            if ([...shared.lifetimes].some(lifetime => lifetime.isCurrent())) return;
+            if (accountScopes.get(key) === shared) accountScopes.delete(key);
+            retireAccount(shared);
+        });
+    }
     return record.retired || !accountLifetime.isCurrent() ? null : record;
 }
 
@@ -261,7 +273,8 @@ export function retireIdlePluginUiEphemeralSharedValuesExcept(
     accountLifetime: ActiveServerAccountScopeLifetime | null,
     enabledPluginIds: ReadonlySet<string>,
 ): void {
-    const account = accountLifetime ? accountScopes.get(accountLifetime) : undefined;
+    const account = accountLifetime?.isCurrent()
+        ? accountScopes.get(serverAccountScopeKeySuffix(accountLifetime.scope)) : undefined;
     if (!account || account.retired) return;
     for (const [pluginId, plugin] of account.plugins) {
         if (enabledPluginIds.has(pluginId)) continue;

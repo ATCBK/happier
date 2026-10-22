@@ -13911,6 +13911,9 @@ describe('installed Session widget through the mounted plugin controller', () =>
         reactNativeSurfaceRuntime.enabled = true;
         reactNativeSurfaceRuntime.module = { renderSurface: defineUiSurface(SharedWidget) };
         reactNativeSurfaceProps.length = 0;
+        targetedContributionsReadMock.mockClear();
+        resourceReadMock.mockClear();
+        declarativeActionExecuteMock.mockClear();
         // Project Widgets and Session Board both retain WidgetSurface below
         // their pane. Exercise the real widget host beneath that same boundary.
         const retainedWidget = (active: boolean) => <RetainedPanelSurface isActive={active}>{renderWidget('shared-widget-first')}</RetainedPanelSurface>;
@@ -13919,9 +13922,10 @@ describe('installed Session widget through the mounted plugin controller', () =>
             typeof node.props.testID === 'string').map(node => node.props.testID))).toBeGreaterThan(0));
         await flushHookEffects();
         const firstProps = reactNativeSurfaceProps.at(-1) as MountedProps;
-        // This presentation-only widget shares by its admitted Artifact, not
-        // by borrowing a daemon execution occurrence it does not need.
-        expect(firstProps.renderContext.surface.machineExecutionReady).toBe(false);
+        // Readiness observes this declaration's reachable producer; it does
+        // not make that Machine a requirement for presentation or sharing.
+        expect(firstProps.renderContext.surface.machineExecutionReady).toBe(true);
+        expect(first.findByTestId('plugin-surface-execution.chip')).toBeNull();
         expect(firstProps.privateHostBindings?.ephemeralSharedScope).not.toBeNull();
         expect(first.getTextContent()).toContain('Shared provider ready');
         expect(firstProps.renderContext.surface.mount).toMatchObject({ kind: 'embedded', role: 'widget' });
@@ -13929,6 +13933,7 @@ describe('installed Session widget through the mounted plugin controller', () =>
         expect(firstScope).not.toBeNull();
         const dispose = vi.fn();
         const firstLease = firstScope!.acquire('latest', () => ({ value: { rows: ['current'] }, dispose }));
+        expect(firstLease).not.toBeNull();
         await first.update(retainedWidget(false));
         expect(firstProps.renderContext.signal.aborted).toBe(false);
         const hiddenLease = firstScope!.acquire('latest', () => { throw new Error('Hidden widget must retain its shared scope'); });
@@ -13940,14 +13945,31 @@ describe('installed Session widget through the mounted plugin controller', () =>
         const second = await renderScreen(renderWidget('shared-widget-second'));
         await flushHookEffects();
         expect(second.getTextContent()).toContain('Shared provider ready');
+        expect((reactNativeSurfaceProps.at(-1) as MountedProps).renderContext.surface.machineExecutionReady).toBe(true);
+        expect(targetedContributionsReadMock).not.toHaveBeenCalled();
+        expect(resourceReadMock).not.toHaveBeenCalled();
+        expect(declarativeActionExecuteMock).not.toHaveBeenCalled();
         const secondScope = readScope();
         const secondLease = secondScope!.acquire('latest', () => { throw new Error('Shared occurrence must reuse the provider'); });
         expect(secondLease?.value).toBe(firstLease?.value);
+        pluginSurfaceConnectivity.machineOnlineById.set('machine_1', false);
+        applyPluginSurfaceConnectivity();
+        await vi.waitFor(() => expect((reactNativeSurfaceProps.at(-1) as MountedProps)
+            .renderContext.surface.machineExecutionReady).toBe(false));
+        expect(first.getTextContent()).toContain('Shared provider ready');
+        expect(second.getTextContent()).toContain('Shared provider ready');
+        const offlineLease = readScope()!.acquire('latest', () => { throw new Error('Offline presentation must retain sharing'); });
+        expect(offlineLease?.value).toBe(firstLease?.value);
+        offlineLease?.release();
         await first.unmount();
         expect(firstScope!.acquire('late', () => ({ value: 'stale', dispose }))).toBeNull();
         expect(dispose).not.toHaveBeenCalled();
         firstLease?.release();
-        await act(async () => { retireActiveServerAccountScopeLifetime(); });
+        // Retire the routed credential bindings, not only the unrelated
+        // active-Sync capture: the mounted producer addresses this exact Home.
+        await act(async () => { await pluginSurfaceAccountLifetime.setScope({
+            serverId: scope.serverId, accountId: 'account-b',
+        }, { serverIdentityId: 'srv_server_1' }); });
         expect(secondScope!.acquire('late', () => ({ value: 'stale', dispose }))).toBeNull();
         expect(dispose).toHaveBeenCalledOnce();
         secondLease?.release();

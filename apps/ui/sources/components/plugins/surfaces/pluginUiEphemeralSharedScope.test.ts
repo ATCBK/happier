@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createElement } from 'react';
 import { act, create } from 'react-test-renderer';
 
@@ -16,11 +16,11 @@ type TestAccountLifetime = ActiveServerAccountScopeLifetime & Readonly<{
     retire(): void;
 }>;
 
-function createAccountLifetime(): TestAccountLifetime {
+function createAccountLifetime(accountId = 'account-a'): TestAccountLifetime {
     let current = true;
     const listeners = new Set<() => void>();
-    return Object.freeze({
-        scope: Object.freeze({ serverId: 'server-a', accountId: 'account-a' }),
+    const lifetime = Object.freeze({
+        scope: Object.freeze({ serverId: 'server-a', accountId }),
         isCurrent: () => current,
         onRetire(listener: () => void) {
             if (!current) {
@@ -37,6 +37,8 @@ function createAccountLifetime(): TestAccountLifetime {
             listeners.clear();
         },
     });
+    onTestFinished(() => lifetime.retire());
+    return lifetime;
 }
 
 function executionOrigin(machineId: string) {
@@ -51,6 +53,32 @@ function executionOrigin(machineId: string) {
 }
 
 describe('plugin UI ephemeral shared scope', () => {
+    it('shares across independent credential readers and retires only after their last Account binding', () => {
+        const firstAccount = createAccountLifetime();
+        const secondAccount = createAccountLifetime();
+        const input = { pluginId: 'acme.triage', occurrenceId: 'occurrence-a', isCurrent: () => true };
+        const firstScope = getPluginUiEphemeralSharedScope({ ...input, accountLifetime: firstAccount });
+        const secondScope = getPluginUiEphemeralSharedScope({ ...input, accountLifetime: secondAccount });
+        const dispose = vi.fn();
+        const first = firstScope!.acquire('window', () => ({ value: { rows: ['current'] }, dispose }));
+        const second = secondScope!.acquire('window', () => { throw new Error('Account readers must share'); });
+        expect(second!.value).toBe(first!.value);
+        firstAccount.retire();
+        expect(firstScope!.acquire('late', () => { throw new Error('Retired reader must refuse'); })).toBeNull();
+        expect(dispose).not.toHaveBeenCalled();
+        const surviving = secondScope!.acquire('window', () => { throw new Error('Live reader must retain the value'); });
+        expect(surviving!.value).toBe(first!.value);
+        secondAccount.retire();
+        expect(dispose).toHaveBeenCalledOnce();
+        const replacement = getPluginUiEphemeralSharedScope({ ...input, accountLifetime: createAccountLifetime() });
+        const renewed = replacement!.acquire('window', () => ({ value: { rows: ['renewed'] }, dispose() {} }));
+        expect(renewed!.value).not.toBe(first!.value);
+        first!.release();
+        second!.release();
+        surviving!.release();
+        renewed!.release();
+    });
+
     it('binds admitted presentation bytes without a Machine occurrence and retires values when those bytes change', () => {
         const accountLifetime = createAccountLifetime();
         const mountLifetime = Object.freeze({ isCurrent: () => true });
@@ -395,7 +423,7 @@ describe('plugin UI ephemeral shared scope', () => {
 
     it('isolates opaque values by Account and plugin', () => {
         const accountA = createAccountLifetime();
-        const accountB = createAccountLifetime();
+        const accountB = createAccountLifetime('account-b');
         const scope = (accountLifetime: TestAccountLifetime, pluginId: string) => (
             getPluginUiEphemeralSharedScope({
                 accountLifetime,
