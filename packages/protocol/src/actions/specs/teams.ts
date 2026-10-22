@@ -280,7 +280,9 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   },
   ...TEAM_CREDENTIAL_HOME_ACTION_IDS_V1.map((id) => teamCredentialActionRow({
     mcp: id === 'teams.credentials.preparation.get' || id === 'teams.credentials.create'
-      || id === 'teams.credentials.entitled.list',
+      || id === 'teams.credentials.entitled.list' || id === 'teams.credentials.delete'
+      || id === 'teams.credentials.limits.delete' || id === 'teams.credentials.externalKeys.revoke'
+      || id === 'teams.credentials.externalKeys.revokeAll',
     id, approval: ['teams.credentials.create', 'teams.credentials.update', 'teams.credentials.audience.set', 'teams.credentials.delete', 'teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll'].includes(id) ? { result: 'required', flow: 'deferred' } : { result: 'required' },
     title: {
       'teams.credentials.list': 'List Team credentials',

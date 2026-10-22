@@ -48,11 +48,22 @@ function homeAccountRow(): HomeAccountRowV1 {
 }
 
 describe('createActionExecutor (Home governance and Teams)', () => {
-  it.each(['teams.archive', 'teams.restore'] as const)(
-    'discovers %s on MCP and executes its Home intent only after deferred approval', async (actionId) => {
-      const input = { v: 1 as const, teamId: 'team-1' };
-      const output = TeamSummaryV1Schema.parse({
-        id: input.teamId, name: 'Research', description: null, logo: null,
+  it.each([
+    ['teams.archive', { v: 1, teamId: 'team-1' }, null],
+    ['teams.restore', { v: 1, teamId: 'team-1' }, null],
+    ['teams.credentials.delete', { resourceId: 'resource-1', expectedRevision: 7 },
+      { resourceId: 'resource-1', revision: 8 }],
+    ['teams.credentials.limits.delete', { resourceId: 'resource-2', expectedRevision: 11, limitId: 'limit-1' },
+      { resourceId: 'resource-2', revision: 12 }],
+    ['teams.credentials.externalKeys.revoke',
+      { resourceId: 'resource-3', keyId: '123e4567-e89b-42d3-a456-426614174000' },
+      { keyId: '123e4567-e89b-42d3-a456-426614174000', revoked: true }],
+    ['teams.credentials.externalKeys.revokeAll', { resourceId: 'resource-4' },
+      { resourceId: 'resource-4', revokedCount: 2 }],
+  ] as const)(
+    'discovers %s on MCP and executes its Home intent only after deferred approval', async (actionId, input, result) => {
+      const output = result ? getActionSpec(actionId).outputSchema.parse(result) : TeamSummaryV1Schema.parse({
+        id: 'team-1', name: 'Research', description: null, logo: null,
         archivedAt: actionId === 'teams.archive' ? 1 : null,
         recovery: null, viewerRole: 'owner', capabilities: NO_TEAM_CAPABILITIES_V1,
         counts: null, admission: { historyChoice: { admin: 'choice', member: 'choice', guest: 'hidden' } },

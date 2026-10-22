@@ -27,6 +27,7 @@ import { resolveTeamCredentialEntitlementInTx } from "./resourceAccess";
 import { recordTeamCredentialActivityInTx, type TeamCredentialActivityActor } from "./resourceActivity";
 import { createSha256SecretDigest, sha256SecretDigestMatches } from "../../auth/secretDigest";
 import { qualifyTeamCredentialOperationInTx } from "./resourceRead";
+import { admitTeamCredentialWithdrawalInTx } from "./resourceWithdrawalAdmission";
 
 const EXTERNAL_API_KEY_SECRET_BYTES = 32;
 
@@ -324,8 +325,7 @@ export async function revokeTeamCredentialExternalApiKeyInTx(
     input: Readonly<{ actorAccountId: string; resourceId: string; keyId: string; authentication: TeamOperationAuthenticationContext }>,
 ): Promise<RevokeTeamCredentialExternalApiKeyResult> {
     if (!input.resourceId.trim() || !input.keyId.trim()) return { ok: false, error: "invalid_resource_input" };
-    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId }, select: { teamId: true } });
-    if (resourceIdentity) await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId, accountIds: [input.actorAccountId] });
+    if (!await admitTeamCredentialWithdrawalInTx(tx, input)) return { ok: false, error: "resource_not_found" };
     const managed = await resolveManagedResourceInTx(tx, input);
     if (managed.status === "missing") return { ok: false, error: "resource_not_found" };
     if (managed.status === "forbidden") return { ok: false, error: "resource_forbidden" };
@@ -347,8 +347,7 @@ export async function revokeAllTeamCredentialExternalApiKeysInTx(
     input: Readonly<{ actorAccountId: string; resourceId: string; authentication: TeamOperationAuthenticationContext }>,
 ): Promise<RevokeAllTeamCredentialExternalApiKeysResult> {
     if (!input.resourceId.trim()) return { ok: false, error: "invalid_resource_input" };
-    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: input.resourceId }, select: { teamId: true } });
-    if (resourceIdentity) await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId, accountIds: [input.actorAccountId] });
+    if (!await admitTeamCredentialWithdrawalInTx(tx, input)) return { ok: false, error: "resource_not_found" };
     const managed = await resolveManagedResourceInTx(tx, input);
     if (managed.status === "missing") return { ok: false, error: "resource_not_found" };
     if (managed.status === "forbidden") return { ok: false, error: "resource_forbidden" };

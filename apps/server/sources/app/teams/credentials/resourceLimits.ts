@@ -26,6 +26,7 @@ import { canonicalUsageLimitMaximum, projectTeamCredentialUsageLimitsInTx, type 
 import { resolveTeamCredentialEntitlementInTx } from './resourceAccess';
 import { qualifyTeamCredentialOperationInTx } from './resourceRead';
 import { resolveCurrentTeamCredentialUsageCapabilitiesForResource } from './usageCapabilities';
+import { admitTeamCredentialWithdrawalInTx } from './resourceWithdrawalAdmission';
 
 type LimitError = 'invalid_limit' | 'not_found_or_not_visible' | 'forbidden' | 'resource_changed'
     | 'limit_identity_immutable' | 'subject_not_in_team' | 'token_limit_unavailable' | 'cost_limit_unavailable'
@@ -313,8 +314,9 @@ export async function deleteTeamCredentialUsageLimitInTx(
 ): Promise<Readonly<{ ok: true; resourceId: string; revision: number } | { ok: false; error: LimitError }>> {
     const parsed = TeamCredentialUsageLimitDeleteInputV1Schema.safeParse(input.body);
     if (!parsed.success) return { ok: false, error: 'invalid_limit' };
-    const resourceIdentity = await tx.teamCredentialResource.findUnique({ where: { id: parsed.data.resourceId }, select: { teamId: true } });
-    if (resourceIdentity) await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: resourceIdentity.teamId, accountIds: [input.actorAccountId] });
+    if (!await admitTeamCredentialWithdrawalInTx(tx, { actorAccountId: input.actorAccountId, resourceId: parsed.data.resourceId })) {
+        return { ok: false, error: 'not_found_or_not_visible' };
+    }
     const auth = await resolveManagerResourceInTx(tx, input.actorAccountId, parsed.data.resourceId, input.authentication);
     if (!auth.ok) return auth;
     if (auth.resource.revision !== parsed.data.expectedRevision) return { ok: false, error: 'resource_changed' };

@@ -32,7 +32,8 @@ describe('Team credential Action contracts', () => {
         path: TEAM_CREDENTIAL_ACTION_PATHS_V1[id],
       });
       expect(spec.requiredAuthority).toBe('account_automation');
-      expect(spec.surfaces).toMatchObject({ ui: true, cli: true, agent: true, mcp: false });
+      expect(spec.surfaces).toMatchObject({ ui: true, cli: true, agent: true,
+        mcp: id === 'teams.credentials.externalKeys.revoke' || id === 'teams.credentials.externalKeys.revokeAll' });
     }
   });
   it('registers each live resource operation through the canonical Home transport', () => {
@@ -52,7 +53,9 @@ describe('Team credential Action contracts', () => {
         cli: true,
         agent: true,
         mcp: id === 'teams.credentials.test' || String(id) === 'teams.credentials.preparation.get'
-          || id === 'teams.credentials.create' || id === 'teams.credentials.entitled.list',
+          || id === 'teams.credentials.create' || id === 'teams.credentials.entitled.list'
+          || id === 'teams.credentials.delete' || id === 'teams.credentials.limits.delete'
+          || id === 'teams.credentials.externalKeys.revoke' || id === 'teams.credentials.externalKeys.revokeAll',
         api: id !== 'teams.credentials.test',
         plugin: true,
       });

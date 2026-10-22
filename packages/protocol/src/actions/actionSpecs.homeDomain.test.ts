@@ -499,7 +499,10 @@ describe('Home and Teams Action family', () => {
   });
 
   it.each(['teams.create', 'teams.members.add', 'teams.credentials.create', 'teams.credentials.entitled.list',
-    'teams.archive', 'teams.restore'] as const)('admits %s through normalized MCP discovery', (actionId) => {
+    'teams.archive', 'teams.restore', 'teams.credentials.delete', 'teams.credentials.limits.delete',
+    'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll',
+    'teams.credentials.preparation.get', 'connectedServices.pools.delete',
+    'connectedServices.pools.members.remove'] as const)('admits %s through normalized MCP discovery', (actionId) => {
     expect(resolveActionSurfaceAvailability({ actionId, surface: 'mcp' }))
       .toMatchObject({ available: true, reason: 'available' });
     expect(getActionSpec(actionId).requiredAuthority).toBe('account_automation');

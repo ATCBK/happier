@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { homeDomainActionPathForMethod } from "@/app/api/routes/actions/homeDomainActionRoute";
+import { peerMediationGrantSigningEnv } from "@/testkit/env";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
@@ -29,6 +31,9 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
             HANDY_MASTER_SECRET: "fix-c74-disposable-test",
             HAPPIER_FEATURE_TEAMS__ENABLED: "1",
             HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES__ENABLED: "1",
+            HAPPIER_FEATURE_TEAMS_CREDENTIAL_RESOURCES_EXTERNAL_API__ENABLED: "1",
+            HAPPIER_PUBLIC_SERVER_URL: "https://home.example.test",
+            ...peerMediationGrantSigningEnv(),
             HAPPIER_DB_CONNECTION_LIMIT: "10",
         })) {
             previousEnv.set(key, process.env[key]);
@@ -52,6 +57,8 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
     afterAll(async () => {
         if (app) await app.close();
         if (connected) {
+            await db.teamCredentialExternalApiKey.deleteMany({ where: { resource: { teamId: { in: teamIds } } } });
+            await db.teamCredentialResource.deleteMany({ where: { teamId: { in: teamIds } } });
             await db.team.deleteMany({ where: { id: { in: teamIds } } });
             await db.machine.deleteMany({ where: { accountId: { in: accountIds } } });
             await db.account.deleteMany({ where: { id: { in: accountIds } } });
@@ -69,7 +76,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         return row;
     }
 
-    async function fixture(kind: "create" | "member" | "provider_resource" | "pool_resource" | "archive" | "restore") {
+    async function fixture(kind: "create" | "member" | "provider_resource" | "pool_resource" | "archive" | "restore" | "resource_delete" | "key_revoke" | "keys_revoke_all" | "limit_delete" | "material_withdraw") {
         const owner = await account();
         if (kind === "create") return {
             owner, url: "/v1/teams/create", payload: { v: 1, name: "Contended Team", requestKey: randomUUID() },
@@ -82,7 +89,65 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
         };
         const team = await db.team.create({ data: { name: "Contended membership and credentials" } });
         teamIds.push(team.id);
-        await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "owner" } });
+        const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: owner.id, role: "owner" } });
+        if (kind === "resource_delete" || kind === "key_revoke" || kind === "keys_revoke_all" || kind === "limit_delete" || kind === "material_withdraw") {
+            const resource = await db.teamCredentialResource.create({ data: {
+                teamId: team.id, custodianAccountId: owner.id, displayName: "Contended deletion",
+                disclosureCeiling: "brokered_only", sessionUsePolicy: "personal_allowed",
+                sourceBindingJson: JSON.stringify({ v: 1, kind: "provider_connection", connectionId: randomUUID(),
+                    connectionSecurityFingerprint: `connection-security:v1:${"r".repeat(43)}`, credentialSlotId: "apiKey" }),
+                directSourceVersionsJson: JSON.stringify({ member: "current", sibling: "retained" }),
+            } });
+            const key = await db.teamCredentialExternalApiKey.create({ data: {
+                resourceId: resource.id, teamMembershipId: membership.id, label: "Disposable key",
+                secretDigest: randomUUID(), displayPrefix: "fixture",
+            } });
+            if (kind === "limit_delete") {
+                const limit = await db.teamCredentialUsageLimit.create({ data: {
+                    resourceId: resource.id, subjectKind: "resource", period: "day", metric: "inference_requests", maximum: "10",
+                } });
+                return {
+                    owner, url: homeDomainActionPathForMethod("teams.credentials.limits.delete", "POST"),
+                    payload: { resourceId: resource.id, expectedRevision: resource.revision, limitId: limit.id },
+                    verify: async () => {
+                        expect(await db.teamCredentialUsageLimit.count({ where: { resourceId: resource.id } })).toBe(0);
+                        expect(await db.teamCredentialResource.findUniqueOrThrow({ where: { id: resource.id } })).toMatchObject({ revision: resource.revision + 1 });
+                    },
+                };
+            }
+            if (kind === "material_withdraw") {
+                for (const [sourceMemberKey, sourceVersion] of [["member", "current"], ["sibling", "retained"]]) {
+                    await db.teamCredentialRecipientMaterial.create({ data: {
+                        resourceId: resource.id, recipientAccountId: owner.id, sourceMemberKey, sourceVersion,
+                        recipientMode: "plain", storedMaterial: Buffer.from("{}"),
+                    } });
+                }
+                return {
+                    owner, method: "DELETE" as const, url: `/v2/teams/${team.id}/credential-resources/${resource.id}/direct-material`,
+                    payload: { sourceMemberKey: "member", expectedResourceRevision: resource.revision, expectedPublishedSourceVersion: "current" },
+                    verify: async () => {
+                        expect(await db.teamCredentialRecipientMaterial.findMany({ where: { resourceId: resource.id }, select: { sourceMemberKey: true } }))
+                            .toEqual([{ sourceMemberKey: "sibling" }]);
+                        expect((await db.teamCredentialResource.findUniqueOrThrow({ where: { id: resource.id } })).directSourceVersionsJson)
+                            .toBe(JSON.stringify({ sibling: "retained" }));
+                    },
+                };
+            }
+            return {
+                owner,
+                url: homeDomainActionPathForMethod(kind === "resource_delete" ? "teams.credentials.delete"
+                    : kind === "key_revoke" ? "teams.credentials.externalKeys.revoke" : "teams.credentials.externalKeys.revokeAll", "POST"),
+                payload: { resourceId: resource.id, ...(kind === "resource_delete" ? { expectedRevision: resource.revision }
+                    : kind === "key_revoke" ? { keyId: key.id } : {}) },
+                verify: async () => {
+                    expect(await db.teamCredentialExternalApiKey.count({ where: { resourceId: resource.id } })).toBe(0);
+                    expect(await db.teamCredentialResource.count({ where: { id: resource.id } })).toBe(kind === "resource_delete" ? 0 : 1);
+                    expect(await db.teamCredentialActivityEvent.count({ where: {
+                        resourceId: resource.id, kind: kind === "resource_delete" ? "resource_deleted" : "external_key_revoked",
+                    } })).toBe(1);
+                },
+            };
+        }
         if (kind === "archive" || kind === "restore") {
             if (kind === "restore") await db.team.update({ where: { id: team.id }, data: { archivedAt: new Date() } });
             return {
@@ -277,7 +342,7 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
     });
 
     for (const competition of ["same-account-publication", "foreign-serializable"] as const) {
-        it.each(["create", "member", "provider_resource", "pool_resource", "archive", "restore"] as const)(`%s commits with ${competition}`, async kind => {
+        it.each(["create", "member", "provider_resource", "pool_resource", "archive", "restore", "resource_delete", "key_revoke", "keys_revoke_all", "limit_delete", "material_withdraw"] as const)(`%s commits with ${competition}`, async kind => {
             const input = await fixture(kind);
             const foreign = await account();
             await db.$executeRaw`ANALYZE "Account"`;
@@ -338,17 +403,24 @@ describe.skipIf(getDbProviderFromEnv(process.env, "postgres") !== "postgres")("T
                 }, ...args.slice(1)]);
             } });
             try {
-                const response = await app.inject({ method: "POST", url: input.url,
+                const method = "method" in input ? input.method : "POST" as const;
+                const response = await app.inject({ method, url: input.url,
                     headers: { "x-test-user-id": input.owner.id }, payload: input.payload });
                 expect(response.statusCode, response.body).toBe(200);
                 await input.verify(response.json());
                 expect(competitions).toBeGreaterThan(0);
                 // A lost response can replay each public operation without a
                 // duplicate Team, membership lifetime or resource identity.
-                const repeated = await app.inject({ method: "POST", url: input.url,
+                const repeated = await app.inject({ method, url: input.url,
                     headers: { "x-test-user-id": input.owner.id }, payload: input.payload });
-                expect(repeated.statusCode, repeated.body).toBe(200);
-                expect(repeated.json().id).toBe(response.json().id);
+                if (kind === "resource_delete") {
+                    expect(repeated.statusCode, repeated.body).toBe(404);
+                } else if (kind === "limit_delete") {
+                    expect(repeated.statusCode, repeated.body).toBe(409);
+                } else {
+                    expect(repeated.statusCode, repeated.body).toBe(200);
+                    expect(repeated.json().id).toBe(response.json().id);
+                }
             } finally {
                 db.$transaction = original;
                 const outcomes = await Promise.allSettled(peers);

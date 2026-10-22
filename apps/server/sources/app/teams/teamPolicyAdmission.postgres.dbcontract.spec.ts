@@ -7,6 +7,8 @@ import { getDbProviderFromEnv } from '@/storage/prisma';
 
 import { setTeamPolicyInTx } from './policy';
 import { archiveTeamInTx, restoreTeamInTx } from './lifecycle';
+import { deleteTeamCredentialResourceInTx } from './credentials/resourceDelete';
+import { revokeTeamCredentialExternalApiKeyInTx, revokeAllTeamCredentialExternalApiKeysInTx } from './credentials/externalApiKey';
 
 function deferred() {
     let resolve!: () => void;
@@ -30,13 +32,22 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
         else process.env.HAPPIER_DB_TX_MAX_RETRIES = previousRetries;
     });
 
-    it.each(['policy', 'archive', 'restore'] as const)('%s exclusively admits the affected Session owner before taking the Team resource lock', async operation => {
+    it.each(['policy', 'archive', 'restore', 'resource_delete', 'key_revoke', 'keys_revoke_all'] as const)('%s exclusively admits the affected Account before taking the Team resource lock', async operation => {
         const suffix = randomUUID();
         const reader = await db.account.create({ data: { id: `a-reader-${suffix}`, encryptionMode: 'plain' } });
         const actor = await db.account.create({ data: { id: `z-actor-${suffix}`, encryptionMode: 'plain' } });
         const team = await db.team.create({ data: { name: `Admission ${suffix}`,
             ...(operation === 'restore' ? { archivedAt: new Date() } : {}) } });
-        await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: 'owner' } });
+        const membership = await db.teamMembership.create({ data: { teamId: team.id, accountId: actor.id, role: 'owner' } });
+        const resource = operation === 'resource_delete' || operation === 'key_revoke' || operation === 'keys_revoke_all'
+            ? await db.teamCredentialResource.create({ data: {
+                teamId: team.id, custodianAccountId: reader.id, displayName: 'Departed custodian source',
+                disclosureCeiling: 'brokered_only', sessionUsePolicy: 'personal_allowed', sourceBindingJson: '{}',
+            } }) : null;
+        const key = resource ? await db.teamCredentialExternalApiKey.create({ data: {
+            resourceId: resource.id, teamMembershipId: membership.id, label: 'Revocable key',
+            secretDigest: randomUUID(), displayPrefix: 'fixture',
+        } }) : null;
         const session = await db.session.create({ data: {
             accountId: reader.id, tag: randomUUID(), encryptionMode: 'plain', metadata: '{}',
         } });
@@ -47,6 +58,16 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
         let finished = false;
         const mutate = () => inTx(async tx => {
             const input = { actorAccountId: actor.id, teamId: team.id };
+            if (resource && key) {
+                const authentication = { authenticationAuthority: 'present_user', authenticationEvidence: [] } as const;
+                if (operation === 'resource_delete') return deleteTeamCredentialResourceInTx(tx, {
+                    ...input, resourceId: resource.id, expectedRevision: resource.revision, authentication,
+                });
+                if (operation === 'key_revoke') return revokeTeamCredentialExternalApiKeyInTx(tx, {
+                    ...input, resourceId: resource.id, keyId: key.id, authentication,
+                });
+                return revokeAllTeamCredentialExternalApiKeysInTx(tx, { ...input, resourceId: resource.id, authentication });
+            }
             if (operation === 'archive') return archiveTeamInTx(tx, input);
             if (operation === 'restore') return restoreTeamInTx(tx, input);
             return setTeamPolicyInTx(tx, { ...input, previousAuthenticationPolicy: null, authenticationPolicy: null });
@@ -83,17 +104,22 @@ describe.skipIf(getDbProviderFromEnv(process.env, 'postgres') !== 'postgres')('T
             expect(outcome.value).toMatchObject({ ok: true });
             if (operation === 'policy') {
                 expect(await db.accountChange.count({ where: { accountId: reader.id, kind: 'session', entityId: session.id } })).toBeGreaterThan(0);
-            } else {
+            } else if (operation === 'archive' || operation === 'restore') {
                 const persisted = await db.team.findUniqueOrThrow({ where: { id: team.id } });
                 if (operation === 'archive') expect(persisted.archivedAt).not.toBeNull();
                 else expect(persisted.archivedAt).toBeNull();
                 expect(await db.session.findUnique({ where: { id: session.id } })).not.toBeNull();
+            } else {
+                expect(await db.teamCredentialExternalApiKey.count({ where: { resourceId: resource!.id } })).toBe(0);
+                expect(await db.teamCredentialResource.count({ where: { id: resource!.id } })).toBe(operation === 'resource_delete' ? 0 : 1);
             }
         } finally {
             release.resolve();
             await holderOutcome;
             await mutationOutcome;
             await db.session.deleteMany({ where: { id: session.id } });
+            await db.teamCredentialExternalApiKey.deleteMany({ where: { resource: { teamId: team.id } } });
+            await db.teamCredentialResource.deleteMany({ where: { teamId: team.id } });
             await db.team.deleteMany({ where: { id: team.id } });
             await db.account.deleteMany({ where: { id: { in: [actor.id, reader.id] } } });
         }

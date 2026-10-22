@@ -218,8 +218,11 @@ A client never reconstructs a capability from a role, and a projection is never 
 for the authorization the mutation itself performs: every mutation re-reads the actor's
 Account status, Home authority, Team membership, and the Team's archived state inside its
 transaction after ordered Account admission. In development source, Team creation,
-archive/restore, direct member addition, and credential-resource creation use exclusive
-admission of their complete Account audience before authority reads and run at ReadCommitted isolation. The existing
+archive/restore, direct member addition, credential-resource creation, and credential
+withdrawal (resource deletion, external-key revocation, limit removal, and direct-material
+withdrawal) use exclusive admission of their complete Account audience before authority
+reads and run at ReadCommitted isolation. Withdrawal includes a departed custodian in
+that audience and rereads resource identity after the Team lock. The existing
 audience rechecks and resource-specific locks preserve their mutation invariants while
 unrelated Account publications cannot repeatedly invalidate a Serializable snapshot.
 

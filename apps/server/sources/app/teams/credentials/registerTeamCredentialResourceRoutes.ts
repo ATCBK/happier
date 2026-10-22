@@ -535,7 +535,7 @@ export function registerTeamCredentialResourceRoutes(
             });
             if (withdrawn.ok && withdrawn.changed) await publishTeamChangedInTx(tx, { teamId: params.data.teamId });
             return withdrawn;
-        }, { isolationLevel: "Serializable" /* Material withdrawal participates in resource and recipient epoch/currentness admission. */ });
+        }, { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission precedes withdrawal's Team/resource and source-version checks. */ });
         if (!result.ok) return fail(reply, result.reason === 'source_changed' || result.reason === 'resource_changed'
             ? 'source_replaced_or_missing' : result.reason);
         return reply.send(TeamCredentialDirectMaterialWithdrawResponseV1Schema.parse({ status: 'withdrawn' }));
@@ -1354,7 +1354,7 @@ export function registerTeamCredentialResourceRoutes(
             actorAccountId: request.userId,
             body: body.data,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Limit removal participates in the read-usage-then-admit quota family. */ });
+        }), { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission precedes Team/resource locks and revision-fenced limit removal. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send({ resourceId: result.resourceId, revision: result.revision });
     });
@@ -1449,9 +1449,9 @@ export function registerTeamCredentialResourceRoutes(
             resourceId: body.data.resourceId,
             keyId: body.data.keyId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Key revocation audit and deletion must agree with the observed key state. */ });
+        }), { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission precedes Team/resource locks and the key census. */ });
         if (!result.ok) return fail(reply, result.error);
-        return reply.send(TeamCredentialExternalApiKeyRevokeOutputV1Schema.parse(result));
+        return reply.send(TeamCredentialExternalApiKeyRevokeOutputV1Schema.parse({ keyId: result.keyId, revoked: result.revoked }));
     });
 
     routes.post(homeDomainActionPathForMethod("teams.credentials.externalKeys.revokeAll", "POST"), {
@@ -1465,9 +1465,9 @@ export function registerTeamCredentialResourceRoutes(
             actorAccountId: request.userId,
             resourceId: body.data.resourceId,
             authentication: readTeamOperationAuthenticationFromRequest(request),
-        }), { isolationLevel: "Serializable" /* Bulk key revocation must include concurrently admitted keys in its resource census. */ });
+        }), { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission fences concurrently admitted keys before the census. */ });
         if (!result.ok) return fail(reply, result.error);
-        return reply.send(TeamCredentialExternalApiKeyRevokeAllOutputV1Schema.parse(result));
+        return reply.send(TeamCredentialExternalApiKeyRevokeAllOutputV1Schema.parse({ resourceId: result.resourceId, revokedCount: result.revokedCount }));
     });
 
     routes.post(homeDomainActionPathForMethod("teams.credentials.create", "POST"), {
@@ -1633,7 +1633,7 @@ export function registerTeamCredentialResourceRoutes(
                 authentication: readTeamOperationAuthenticationFromRequest(request),
             });
             return deleted.ok ? { ok: true as const, result: { resourceId: body.data.resourceId, revision: body.data.expectedRevision } } : deleted;
-        }, { isolationLevel: "Serializable" /* Resource deletion composes audience/key census with source and managed-consumer admission. */ });
+        }, { isolationLevel: "ReadCommitted" /* Exclusive complete Account admission precedes Team/resource locks and currentness reads. */ });
         if (!result.ok) return fail(reply, result.error);
         return reply.send(result.result);
     });

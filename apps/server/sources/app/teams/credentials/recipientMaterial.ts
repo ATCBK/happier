@@ -6,6 +6,7 @@ import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/acco
 import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
 import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
+import { admitTeamCredentialWithdrawalInTx } from "./resourceWithdrawalAdmission";
 import { readSessionAccountCursorAudienceInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialEntitlementInTx } from "./resourceAccess";
@@ -409,11 +410,7 @@ export async function withdrawTeamCredentialRecipientMaterialInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ) {
-    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
-    const resource = await tx.teamCredentialResource.findUnique({
-        where: { id: input.resourceId },
-        select: { id: true, teamId: true, custodianAccountId: true, revision: true, directSourceVersionsJson: true },
-    });
+    const resource = await admitTeamCredentialWithdrawalInTx(tx, input);
     if (!resource || resource.teamId !== input.teamId) return { ok: false as const, reason: 'resource_not_found' as const };
     if (resource.custodianAccountId !== input.actorAccountId) return { ok: false as const, reason: 'source_owner_required' as const };
     const qualification = await qualifyCurrentTeamCredentialSourceCustodianInTx(tx, input);
