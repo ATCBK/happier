@@ -865,6 +865,17 @@ host consumes the snapshot before capturing native runtime inputs. Only an
 accepted brokered inference binding satisfies native-auth preflight; native
 Sessions retain their sign-in check. Broker open and each request still enforce
 current resource, source and consumer authority, including Execution Run custody.
+The running route display reads the runtime-opened source from the existing
+`sessionModelsV1.activeSelectionV1` carrier. Its closed V2 witness retains the
+accepted Team model identity alongside the exact model tuple and runner; native
+and Account Provider witnesses retain V1. The legacy carrier name does not make
+a V2 witness readable as V1. Both owner metadata and client stored readers retain
+the same witness, and a missing or mismatched open cannot supply active proof.
+V1 intent or `sessionAppliedModelV1` with a null Provider connection cannot by
+itself distinguish a Team source from native sign-in. Pending choices remain
+separate from the applied source; retained proof may describe history without
+authorizing a replacement runner. This is unreleased 0.3 development behavior;
+the daemon, Home metadata reader and UI must load the matching source together.
 New Session credential readiness uses the selected current Team model's binding
 facts and the Agent's admitted authentication-isolation declaration, as Account
 Provider selections do. When that binding replaces native authentication, native
