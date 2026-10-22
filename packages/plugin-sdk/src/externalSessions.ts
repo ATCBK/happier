@@ -17,6 +17,7 @@ export const HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1: string =
 
 import type { ManagedServiceSpec } from './managed-services/contract.js';
 import type { ExecService } from './exec.js';
+import type { LoggerService } from './services/core.js';
 import type { JsonValue } from './identity.js';
 import type { SessionMessageRole, SessionSchema } from './services/sessions.js';
 import type { UsageObservationCost, UsageObservationScope, UsageObservationTokens } from './usage.js';
@@ -135,6 +136,8 @@ export type AgentExternalSessionsRipgrep = Readonly<{
 
 export type AgentExternalSessionsInvocation =
     AgentExternalSessionsInvocationBounds & Readonly<{
+        /** Optional host file logger; diagnostics must exclude transcript text. */
+        logger?: Pick<LoggerService, 'debug'>;
         /**
          * Host-stamped for every generation-bound auxiliary call. Isolated
          * harnesses must supply a fail-closed callback when no endpoint exists.

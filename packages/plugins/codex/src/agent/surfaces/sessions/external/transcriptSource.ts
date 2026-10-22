@@ -5,6 +5,7 @@ import { readCodexSessionMetaFromRollout } from '../../../rollout/discovery/inde
 import { decodeCodexNativeTranscriptCursor, pageCodexNativeTranscript } from './nativeTranscript.js';
 import { createHash } from 'node:crypto';
 import { open, stat, type FileHandle } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { z } from 'zod/mini';
 
 import type { AgentExternalSessionTranscriptItem, AgentExternalSessionsInvocation } from '@happier-dev/plugin-sdk/sessions/external';
@@ -104,6 +105,16 @@ function isCodexContentScanComplete(progress: CodexContentSearchProgress) { retu
 
 export class CodexExternalTranscriptSourceUnavailableError extends Error {
   constructor() { super('Codex transcript source no longer exists.'); }
+}
+
+/** Private reader context; no source text or absolute path crosses this error. */
+export class CodexExternalTranscriptReadError extends Error {
+  readonly fileBasename: string;
+  constructor(readonly phase: 'page_scan' | 'timestamp_scan', filePath: string, readonly byteOffset: number) {
+    super('Codex transcript source contains malformed UTF-8.');
+    this.fileBasename = basename(filePath);
+  }
+  readonly code = 'CODEX_TRANSCRIPT_MALFORMED_UTF8';
 }
 
 /** Native rollback replay, shared by content, import and bounded older pages. */
@@ -1068,7 +1079,8 @@ async function readPrecedingCodexRolloutTimestamp(params: Readonly<{
     const page = await readJsonlFileBackwardPage({ filePath: params.stream.filePath, endOffsetBytes,
       maxBytes: params.maxBytes, maxItems: params.maxBytes, signal: params.signal,
       fileSystem: createCodexExternalSessionJsonlScannerFileSystem(params) });
-    if (page.diagnostics?.length) throw new Error('Codex transcript source contains malformed UTF-8.');
+    if (page.diagnostics?.length) throw new CodexExternalTranscriptReadError('timestamp_scan', params.stream.filePath,
+      page.diagnostics[0]!.positions[0] ?? page.nextEndOffsetBytes);
     for (let index = page.items.length - 1; index >= 0; index -= 1) {
       const timestampMs = readCodexRolloutLineTimestampMs(page.items[index]!.value);
       if (timestampMs !== null) return timestampMs;
@@ -1330,7 +1342,8 @@ export async function pageCodexExternalSessionTranscript(params: Readonly<{
     });
     throwIfCodexExternalSessionInvocationStopped(params);
     if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
-      throw new Error('Codex transcript source contains malformed UTF-8.');
+      throw new CodexExternalTranscriptReadError('page_scan', stream.filePath,
+        page.diagnostics.find(diagnostic => diagnostic.code === 'malformed_source_utf8')!.positions[0] ?? page.nextEndOffsetBytes);
     }
     if (!page.reachedStart && page.nextEndOffsetBytes >= endOffsetBytes) {
       return { items: [], nextCursor: null, tailCursor, hasMore: false, truncated: true };

@@ -15,6 +15,7 @@ import type {
     AgentExternalSessionTranscriptItem,
     AgentExternalSessionTerminalObservation,
     AgentExternalSessionsContribution,
+    AgentExternalSessionsInvocation,
     AgentExternalSessionsFailureCode,
     AgentExternalSessionsManagedEndpointRead,
     AgentExternalSessionsReadAfterDiagnostic,
@@ -39,6 +40,7 @@ import type {
 import { measureSerializedValidatedStrictPluginJsonUtf8Bytes } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { run as runPackagedRipgrep } from '@/integrations/ripgrep';
+import { logger } from '@/ui/logger';
 
 import {
     serializeManagedServiceEndpointReadRequestHeaders,
@@ -1135,6 +1137,9 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
      */
     createInvocationExec(signal: AbortSignal): Promise<ExecService>;
 }>): BoundedAgentExternalSessionsContribution {
+    const invocationLogger: NonNullable<AgentExternalSessionsInvocation['logger']> = Object.freeze({
+        debug: (message, fields) => logger.debug(message, fields),
+    });
     const terminalBeforeAdmission = (signal: AbortSignal): AgentExternalSessionsResult<never> | null => {
         if (!params.isCurrent() || params.retirementSignal.aborted) return unavailable();
         if (signal.aborted) return getAgentExternalSessionsInvocationFailure({ signal })?.code === 'timeout' ? timeout() : cancelled();
@@ -1186,7 +1191,7 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                 return Object.freeze(result);
             },
         });
-        return Object.freeze({ managedEndpointRead, exec, ripgrep });
+        return Object.freeze({ managedEndpointRead, exec, ripgrep, logger: invocationLogger });
     };
     const wrap = Object.freeze({
         supportsAccounting: typeof params.contribution.readAccounting === 'function',

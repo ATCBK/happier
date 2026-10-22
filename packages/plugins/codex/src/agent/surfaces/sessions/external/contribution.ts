@@ -12,6 +12,7 @@ import type {
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { discoverAgentAccountingJsonlSource } from '@happier-dev/plugin-sdk/sessions/file-stores';
+import { canonicalizePath } from '@happier-dev/plugin-sdk/fs';
 import { getAgentExternalSessionsInvocationFailure } from '@happier-dev/plugin-sdk/sessions/external';
 import { CODEX_NATIVE_ACCOUNTING_SOURCE, readCodexNativeAccounting } from '../../../usage/nativeAccounting.js';
 
@@ -40,6 +41,7 @@ import {
   pageCodexExternalSessionTranscript,
   readAfterCodexExternalSessionTranscript,
   CodexExternalTranscriptSourceUnavailableError,
+  CodexExternalTranscriptReadError,
 } from './transcriptSource.js';
 import {
   isCodexExternalSessionLinkDataValue,
@@ -66,6 +68,22 @@ function failed(
     message,
     ...(typeof retryable === 'boolean' ? { retryable } : {}),
   };
+}
+
+/** Only reader-owned location facts and exception identifiers enter file logs. */
+function logTranscriptReadFailure(request: AgentExternalSessionsInvocation & Readonly<{ remoteSessionId: string }>,
+  error: unknown, phase: 'pageTranscript' | 'readAfterTranscript') {
+  const record = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+  const code = typeof record?.code === 'string' && /^[A-Z][A-Z0-9_]+$/.test(record.code) ? record.code : undefined;
+  const errno = typeof record?.errno === 'number' && Number.isSafeInteger(record.errno) ? record.errno : undefined;
+  const location = error instanceof CodexExternalTranscriptReadError ? error : null;
+  request.logger?.debug('[codex] Native transcript read failed', {
+    exceptionClass: error instanceof TypeError ? 'TypeError' : error instanceof RangeError ? 'RangeError'
+      : error instanceof SyntaxError ? 'SyntaxError' : error instanceof Error ? 'Error' : 'Unknown',
+    ...(code ? { code } : {}), ...(errno === undefined ? {} : { errno }),
+    phase: location?.phase ?? phase, sourceItemId: request.remoteSessionId,
+    byteOffset: location?.byteOffset ?? null, ...(location ? { fileBasename: location.fileBasename } : {}),
+  });
 }
 
 function isSafeConnectedServiceId(raw: unknown): raw is string {
@@ -327,7 +345,10 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         source: validation.value.publicSource,
         transcriptMediaReadRoots: mediaReadRoots.value,
       }, request.maxSerializedBytes, 'external_sessions_result_byte_budget');
-      const roots = mediaReadRoots.value.flatMap((home) => [join(home, 'sessions'), join(home, 'archived_sessions')]);
+      // Materialized homes may link native history directories. The watcher
+      // requires physical roots; both aliases must observe the same writes.
+      const roots = [...new Set(await Promise.all(mediaReadRoots.value.flatMap((home) =>
+        [join(home, 'sessions'), join(home, 'archived_sessions')]).map(canonicalizePath)))];
       const inventory = await discoverAgentAccountingJsonlSource(roots, request.signal);
       return bounded(
         {
@@ -455,6 +476,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         if (after) return after;
         if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
         if (error instanceof CodexExternalTranscriptSourceUnavailableError) return failed('candidate_not_found', 'Codex transcript source is no longer available.', false);
+        logTranscriptReadFailure(request, error, 'pageTranscript');
         return failed(
           'agent_error',
           'external_sessions_transcript_read_failed',
@@ -489,6 +511,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
         if (isPluginError(error) && error.code === 'JSONL_RECORD_TOO_LARGE') return failed('agent_error', error.message, false);
+        logTranscriptReadFailure(request, error, 'readAfterTranscript');
         return ok({ outcome: 'read_failed' });
       }
     },
