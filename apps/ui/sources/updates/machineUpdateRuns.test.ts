@@ -319,6 +319,19 @@ describe('runMachineItemUpdate — a remote CLI update is started, then observed
         expect(runs.readUnseenUpdateCompletions({ serverId: serverA, accountId: 'account-a' }).size).toBe(0);
     });
 
+    it('shows the extraction size failure from the real typed install-job path', async () => {
+        vi.useRealTimers();
+        rpc.jobOutcome = { kind: 'failed', code: 'archive_expanded_byte_limit', stepId: 'cli', message: '[release-runtime] archive exceeds expanded-byte limit' };
+        const codex: UpdateItem = { ...remoteCli, id: 'studio:agent:codex', subject: { kind: 'agent-cli', agentId: 'codex' }, title: 'Codex' };
+        const scope = { serverId: serverA, accountId: 'account-a' };
+        await runs.runMachineItemUpdate(codex, { scope });
+        expect(runs.observeMachineUpdateRun(runs.readMachineUpdateRuns(serverA), codex.id)).toMatchObject({
+            running: false,
+            errorMessage: 'agentInstallJob.archiveExpandedByteLimitBody',
+        });
+        expect(runs.readUnseenUpdateCompletions(scope).has(codex.id)).toBe(false);
+    });
+
     it('raw installer output never becomes the row\'s sentence; typed failures are localized', async () => {
         rpc.invoke.mockImplementation(async () => ({
             supported: true,

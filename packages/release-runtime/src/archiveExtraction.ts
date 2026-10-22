@@ -22,6 +22,15 @@ const MAX_TAR_METADATA_ENTRY_BYTES = 1024 * 1024;
 // so this is the bound that keeps that read proportionate to what a real target can be.
 const MAX_SYMLINK_TARGET_BYTES = 4096;
 
+export class ArchiveExpandedByteLimitError extends Error {
+  readonly code = 'archive-expanded-byte-limit';
+
+  constructor() {
+    super('[release-runtime] archive exceeds expanded-byte limit');
+    this.name = 'ArchiveExpandedByteLimitError';
+  }
+}
+
 export type ArchiveExtractionLimits = Readonly<{
   maxArchiveBytes: number;
   maxEntries: number;
@@ -132,7 +141,7 @@ function createArchiveBudget(params: Readonly<{
       }
       expandedBytes += byteLength;
       if (expandedBytes > params.limits.maxExpandedBytes) {
-        throw new Error('[release-runtime] archive exceeds expanded-byte limit');
+        throw new ArchiveExpandedByteLimitError();
       }
       if (expandedBytes / Math.max(1, params.archiveBytes) > params.limits.maxCompressionRatio) {
         throw new Error('[release-runtime] archive exceeds compression ratio limit');

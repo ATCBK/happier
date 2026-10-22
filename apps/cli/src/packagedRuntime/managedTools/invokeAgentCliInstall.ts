@@ -35,6 +35,7 @@ export type AgentCliInstallInvocationResult =
         | 'install-not-available'
         | 'update-not-available'
         | 'install-confirmation-required'
+        | 'archive-expanded-byte-limit'
         | 'download-failed'
         | 'rate-limited'
         | 'verification-failed'
@@ -121,7 +122,7 @@ export async function invokeAgentCliInstall(params: Readonly<{
             ? 'update-not-available'
           : errorCode === 'vendor-recipe-disallowed'
             ? 'install-confirmation-required'
-            : errorCode === 'download-failed' || errorCode === 'rate-limited' || errorCode === 'verification-failed' || errorCode === 'command-timed-out' || errorCode === 'termination-failed'
+            : errorCode === 'archive-expanded-byte-limit' || errorCode === 'download-failed' || errorCode === 'rate-limited' || errorCode === 'verification-failed' || errorCode === 'command-timed-out' || errorCode === 'termination-failed'
               ? errorCode
             : 'install-failed',
       errorMessage: result.errorMessage,

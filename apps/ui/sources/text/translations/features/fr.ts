@@ -550,7 +550,7 @@ return { addFlowsTranslations };
 const Domain_agentInstallJobTranslations = (() => {
 const en = Shared_agentInstallJobTranslations.en;
 
-const agentInstallJobTranslations = { fr: { ...en } };
+const agentInstallJobTranslations = { 'fr': { ...en, archiveExpandedByteLimitBody: "Le moteur téléchargé dépasse la limite de taille d’extraction. Mettez Happier à jour avant de réessayer." } };
 
 return { agentInstallJobTranslations };
 })();

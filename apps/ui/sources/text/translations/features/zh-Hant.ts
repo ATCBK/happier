@@ -550,7 +550,7 @@ return { addFlowsTranslations };
 const Domain_agentInstallJobTranslations = (() => {
 const en = Shared_agentInstallJobTranslations.en;
 
-const agentInstallJobTranslations = { zhHant: { ...en } };
+const agentInstallJobTranslations = { zhHant: { ...en, archiveExpandedByteLimitBody: "下載的執行環境超過了解壓縮大小限制。請更新 Happier 後重試。" } };
 
 return { agentInstallJobTranslations };
 })();

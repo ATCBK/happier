@@ -550,7 +550,7 @@ return { addFlowsTranslations };
 const Domain_agentInstallJobTranslations = (() => {
 const en = Shared_agentInstallJobTranslations.en;
 
-const agentInstallJobTranslations = { ja: { ...en } };
+const agentInstallJobTranslations = { 'ja': { ...en, archiveExpandedByteLimitBody: "ダウンロードしたランタイムは展開サイズの上限を超えています。Happierを更新してから再試行してください。" } };
 
 return { agentInstallJobTranslations };
 })();

@@ -544,7 +544,7 @@ return { addFlowsTranslations };
 const Domain_agentInstallJobTranslations = (() => {
 const en = Shared_agentInstallJobTranslations.en;
 
-const agentInstallJobTranslations = { de: { ...en } };
+const agentInstallJobTranslations = { 'de': { ...en, archiveExpandedByteLimitBody: "Die heruntergeladene Laufzeit überschreitet die Größenbegrenzung beim Entpacken. Aktualisiere Happier, bevor du es erneut versuchst." } };
 
 return { agentInstallJobTranslations };
 })();

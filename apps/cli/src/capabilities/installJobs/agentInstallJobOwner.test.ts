@@ -4,7 +4,7 @@ import { createServer, type ServerResponse, type IncomingMessage } from 'node:ht
 import type { RequestOptions } from 'node:https';
 import { mkdtemp, readdir, rm, access, readFile, writeFile, mkdir, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, test, vi } from 'vitest';
 import { resolveAgentCliManagedCommandPathForRuntime, type AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
 import { execFileWithDeadline, isPidPresent, ExecFileTerminationError } from '@happier-dev/cli-common/process';
@@ -124,6 +124,85 @@ test('an exhausted GitHub REST install retains a typed rate-limit outcome and re
     expect(DaemonAgentInstallReadResponseSchema.safeParse(owner.read({ jobId: started.jobId, cursor: 0 })).success).toBe(true);
   } finally {
     await stopFixture(owner);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.platform === 'win32')('archive total limit survives the update job boundary and preserves the previous runtime', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-job-archive-limit-'));
+  let owner: AgentInstallJobOwner | undefined;
+  const binaryName = 'fixture-archive-limit';
+  const previousBinary = '#!/bin/sh\nprintf "fixture-archive-limit 1.0.0\\n"\n';
+  const nextBinary = Buffer.from(previousBinary.replace('1.0.0', '2.0.0'));
+  const unusedResource = Buffer.alloc(nextBinary.length, 0x78);
+  const assetName = `${binaryName}-${process.platform}-${process.arch}.tar.gz`;
+  const payloadDir = join(root, 'payload');
+  await mkdir(payloadDir);
+  await writeFile(join(payloadDir, binaryName), nextBinary, { mode: 0o755 });
+  await writeFile(join(payloadDir, 'unused-resource'), unusedResource);
+  const archivePath = join(root, assetName);
+  await createTar({ cwd: payloadDir, gzip: true, portable: true, file: archivePath }, [binaryName, 'unused-resource']);
+  const archive = await readFile(archivePath);
+  let origin = '';
+  const server = createServer((request, response) => {
+    if (request.url === '/archive') {
+      response.writeHead(200, { 'content-length': archive.length });
+      response.end(archive);
+      return;
+    }
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ assets: [{
+      name: assetName, browser_download_url: `${origin}/archive`,
+      digest: `sha256:${createHash('sha256').update(archive).digest('hex')}`,
+    }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing HTTP address');
+    origin = `http://127.0.0.1:${address.port}`;
+    const spec: AgentCliRuntimeDescriptor = {
+      id: binaryName, title: 'Fixture archive limit', binaryName,
+      sourcePreferenceDefault: 'managed-first', manualInstallKind: 'none', manualInstallRecipes: null,
+      acceptsJavaScriptFileOverride: false,
+      managedInstall: {
+        kind: 'github_release_binary', githubRepo: 'fixture/archive-limit', binaryName,
+        archiveEntriesByPlatform: {
+          darwin: [{ archivePath: binaryName, destinationPath: `bin/${binaryName}` }],
+          linux: [{ archivePath: binaryName, destinationPath: `bin/${binaryName}` }],
+          win32: [{ archivePath: binaryName, destinationPath: `bin/${binaryName}.exe` }],
+        },
+        // Each file fits; only their combined size exceeds the total budget.
+        // The unselected resource still counts toward that same archive budget.
+        archiveExtractionLimits: { maxFileBytes: nextBinary.length, maxExpandedBytes: nextBinary.length + unusedResource.length - 1 },
+      },
+    };
+    const env = { HOME: root, HAPPIER_HOME_DIR: root, PATH: '' };
+    const installedPath = resolveAgentCliManagedCommandPathForRuntime(spec, { processEnv: env });
+    await mkdir(dirname(installedPath), { recursive: true });
+    await writeFile(installedPath, previousBinary, { mode: 0o755 });
+    owner = createAgentInstallJobOwner({ env, readRegistry: () => registryWith(spec), installerDeps: {
+      // Redirect only GitHub HTTP; release parsing, hashing, extraction, install
+      // classification, invoke translation and job settlement remain real.
+      fetchGitHubLatestRelease: (params) => fetchGitHubLatestRelease({ ...params,
+        fetchImpl: (url, init) => fetch(`${origin}${new URL(String(url)).pathname}`, init),
+      }),
+    } });
+    const started = owner.start({ agentId: spec.id, intent: 'update', consent: { vendorRecipe: false } });
+    if (!started.ok) throw new Error('Expected update admission');
+    const completed = await outcome(owner, started.jobId);
+    expect(completed, JSON.stringify(completed)).toMatchObject({
+      kind: 'failed', code: 'archive_expanded_byte_limit', stepId: `cli.${spec.id}`,
+    });
+    expect(DaemonAgentInstallReadResponseSchema.parse(owner.read({ jobId: started.jobId, cursor: 0 }))).toMatchObject({
+      ok: true, done: true, outcome: { kind: 'failed', code: 'archive_expanded_byte_limit' },
+      events: expect.arrayContaining([{ t: 'log', line: '[release-runtime] archive exceeds expanded-byte limit' }]),
+    });
+    expect(await readFile(installedPath, 'utf8')).toBe(previousBinary);
+  } finally {
+    await stopFixture(owner);
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });

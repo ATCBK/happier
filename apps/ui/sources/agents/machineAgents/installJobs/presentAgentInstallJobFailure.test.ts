@@ -15,6 +15,12 @@ import { AgentInstallJobRpcError } from './api';
 import { presentAgentInstallJobFailure, presentAgentInstallJobRpcFailure } from './presentAgentInstallJobFailure';
 
 describe('agent install failure presentation', () => {
+    it('explains an extraction size refusal without exposing raw paths', () => {
+        expect(presentAgentInstallJobFailure({ kind: 'failed', code: 'archive_expanded_byte_limit', stepId: 'cli', message: 'Extraction failed in C:\\private\\install.log.' })).toMatchObject({
+            body: 'agentInstallJob.archiveExpandedByteLimitBody',
+        });
+    });
+
     it('distinguishes unavailable job operations from an unreachable machine without inventing an install outcome', () => {
         expect(presentAgentInstallJobRpcFailure(new AgentInstallJobRpcError('unavailable'))).toMatchObject({
             title: 'agentInstallJob.jobUnavailable', body: 'agentInstallJob.jobUnavailableBody',

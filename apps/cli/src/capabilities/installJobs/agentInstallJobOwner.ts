@@ -64,6 +64,7 @@ function failureCode(code: string): AgentInstallJobFailureCode {
     case 'unsupported-platform': return 'unsupported_platform';
     case 'no-recipe': return 'install_not_available';
     case 'install-not-available': return 'install_not_available';
+    case 'archive-expanded-byte-limit': return 'archive_expanded_byte_limit';
     case 'download-failed': return 'download_failed';
     case 'rate-limited': return 'rate_limited';
     case 'verification-failed':

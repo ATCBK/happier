@@ -12,6 +12,7 @@ export const en = {
     rateLimited: 'Downloads are temporarily limited',
     rateLimitedBody: ({ time }: { time: string }) => `The download source is limiting requests right now. Try again after ${time}.`,
     rateLimitedBodyNoTime: 'The download source is limiting requests right now. Try again in a little while.',
+    archiveExpandedByteLimitBody: "The downloaded runtime exceeds the extraction size limit. Update Happier before retrying.",
     verificationFailed: 'The agent could not be verified',
     verificationBody: 'The installed agent did not pass its check. Try installing it again.',
     timeout: 'The installer took too long',

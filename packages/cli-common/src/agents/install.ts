@@ -67,6 +67,7 @@ export type InstallAgentCliResult =
         | 'command-exec-failed'
         | 'command-timed-out'
         | 'command-failed'
+        | 'archive-expanded-byte-limit'
         | 'managed-runtime-unavailable'
         | 'download-failed'
         | 'rate-limited'
