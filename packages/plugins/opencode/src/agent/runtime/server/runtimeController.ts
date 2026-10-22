@@ -40,6 +40,7 @@ import {
   readOpenCodePermissionRequestId,
 } from './permissionBridge.js';
 import type { OpenCodePromptModel } from './promptConfig.js';
+import { OpenCodePromptIdentityUnresolvedError } from './promptSubmissionError.js';
 import { normalizeOpenCodePromptConfigUpdate } from './promptConfig.js';
 import { maybeFailOnOpenCodeRetryStatus } from './retryFailure.js';
 import { publishOpenCodeProviderSessionId } from './sessionIdentity.js';
@@ -98,15 +99,6 @@ function projectOpenCodeNativeChildStatus(
     || part.state.status === 'aborted'
   ) return 'aborted';
   return 'running';
-}
-
-class OpenCodePromptIdentityUnresolvedError extends Error {
-  readonly code = 'opencode_prompt_identity_unresolved';
-
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'OpenCodePromptIdentityUnresolvedError';
-  }
 }
 
 class OpenCodePromptTurnRetiredBeforeDispatchError extends Error {
@@ -240,6 +232,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
   let providerObservedBusy = false;
   let nativeCommandTurnId: string | null = null;
   let nativeCommandResponsePending = false;
+  let observePendingPromptAcceptance: (() => Promise<void>) | null = null;
   const liveMessageProjectionById = new Map<string, 'assistant' | 'suppressed'>();
   const livePartTypes = new Map<string, string>();
   const livePartTexts = new Map<string, string>();
@@ -587,6 +580,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     for (let index = 0; index < messages.length; index += 1) {
       const message = messages[index];
       publishPaidUsage(asRecord(asRecord(message)?.info));
+      if (readNonBlankOpaqueIdentifier(asRecord(asRecord(message)?.info)?.sessionID) !== state.providerSessionId) continue;
       const projection = classifyOpenCodeMessageForProjection(message);
       if (projection.kind !== 'user_transcript') continue;
       const messageIdMatchesCurrentTurn = Boolean(
@@ -1036,6 +1030,8 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
     // Native idle can arrive while the accepted user identity is being persisted.
     // Admission still owns that identity until sendTurnPrompt can return it.
     if (state.currentTurnPromptAcceptedAtMs === null) return;
+    if (readStatusType(status) === 'busy'
+      || (providerObservedBusy && readStatusType(status) !== 'idle')) return;
     const hasTerminalAssistantHistory = historyProjection.terminalAssistantMessageCount > 0
       || state.currentTurnTerminalAssistantMessageIds.size > 0;
     if (!hasTerminalAssistantHistory) {
@@ -1801,6 +1797,14 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       return;
     }
 
+    // V1 commits the user and its parts before entering the long prompt loop.
+    // The live event is a wake to read that committed identity, never an ack by itself.
+    if (eventSessionId === state.providerSessionId && observePendingPromptAcceptance
+      && (type === 'message.updated' || type === 'message.part.updated' || type === 'message.part.created'
+        || type === 'session.status' || type === 'session.idle')) {
+      await observePendingPromptAcceptance();
+    }
+
     if (type.startsWith('session.next.')) {
       const messageId = readNonBlankOpaqueIdentifier(properties.messageID)
         ?? readNonBlankOpaqueIdentifier(properties.assistantMessageID)
@@ -1860,6 +1864,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
 
     if (type === 'server.connected') {
       markServerConnected();
+      await observePendingPromptAcceptance?.();
       await refreshModelCatalog();
       await refreshModeCatalog();
       await refreshAcceptedMode();
@@ -2316,6 +2321,7 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
       const turnId = state.activeTurnId;
       if (!providerSessionId || !turnId) throw new Error('OpenCode session failed to initialize');
       const nativeCommand = await resolveNativeCommand(prompt);
+      let nativeInputDispatched = false;
 
       const assertPromptTurnStillOwnsDispatch = (): void => {
         if (
@@ -2324,7 +2330,9 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           || state.activeTurnId !== turnId
           || state.providerSessionId !== providerSessionId
         ) {
-          throw new OpenCodePromptTurnRetiredBeforeDispatchError();
+          throw nativeInputDispatched
+            ? new OpenCodePromptIdentityUnresolvedError('OpenCode turn retired while dispatched input custody remained unresolved.')
+            : new OpenCodePromptTurnRetiredBeforeDispatchError();
         }
       };
 
@@ -2345,8 +2353,6 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         submittedAtMs: promptSubmittedAtMs,
       });
       const failPromptSubmission = async (error: unknown): Promise<void> => {
-        if (!ownsActiveHostTurn(turnId)) return;
-        if (!nativeCommand) await markCurrentProviderUserMessageFromHistoryBestEffort('prompt_submission_failed', turnId);
         if (!ownsActiveHostTurn(turnId)) return;
         const failedTurnId = claimOpenCodeActiveTurnForTerminalEvent(state);
         if (failedTurnId) {
@@ -2432,11 +2438,14 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           const retired = createDeferred<never>();
           const retirePendingCallback = (event: OpenCodeRuntimeEvent): void => {
             if ('turnId' in event && event.turnId === turnId && (event.kind === 'turn-cancelled' || event.kind === 'turn-failed')) {
-              retired.reject(new OpenCodePromptTurnRetiredBeforeDispatchError());
+              retired.reject(new OpenCodePromptIdentityUnresolvedError(
+                'OpenCode turn retired while dispatched input custody remained unresolved.',
+              ));
             }
           };
           messageHandlers.add(retirePendingCallback);
           try {
+            nativeInputDispatched = true;
             await Promise.race([retired.promise, client.sessionCommand({ sessionId: providerSessionId, ...nativeCommand,
               parts: (meta?.promptParts ?? []).filter((part, index) => !(index === 0 && part.type === 'text' && part.text === prompt)),
               ...(modelForPrompt ? { model: modelForPrompt } : {}),
@@ -2454,7 +2463,33 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           }
           return { providerUserMessageId: null, ...(modelForPrompt ? { effectiveModelId: `${modelForPrompt.providerID}/${modelForPrompt.modelID}` } : {}) };
         }
-        const promptSubmission = await client.sessionPromptAsync({
+        const committedInput = createDeferred<string>();
+        let committedProviderUserMessageId: string | null = null;
+        const observeAcceptance = async (): Promise<void> => {
+          if (observePendingPromptAcceptance !== observeAcceptance || !ownsActiveHostTurn(turnId)) return;
+          try {
+            const messages = await client.sessionMessages({ sessionId: providerSessionId });
+            if (observePendingPromptAcceptance !== observeAcceptance || !ownsActiveHostTurn(turnId)) return;
+            const resolution = await adoptCurrentProviderUserMessageFromAuthoritativeInventory(messages, turnId);
+            if (resolution.status !== 'resolved' || observePendingPromptAcceptance !== observeAcceptance) return;
+            committedProviderUserMessageId = resolution.providerUserMessageId;
+            committedInput.resolve(resolution.providerUserMessageId);
+          } catch (error) {
+            params.ctx.logger.debug('[OpenCodeServer] native input commit observation unavailable', { error });
+          }
+        };
+        const retireAcceptance = (event: OpenCodeRuntimeEvent): void => {
+          if ('turnId' in event && event.turnId === turnId
+            && (event.kind === 'turn-cancelled' || event.kind === 'turn-failed')) {
+            committedInput.reject(new OpenCodePromptIdentityUnresolvedError(
+              'OpenCode turn retired while dispatched input custody remained unresolved.',
+            ));
+          }
+        };
+        observePendingPromptAcceptance = observeAcceptance;
+        messageHandlers.add(retireAcceptance);
+        nativeInputDispatched = true;
+        const submission = client.sessionPromptAsync({
           sessionId: providerSessionId,
           text: prompt,
           ...(meta?.promptParts ? { parts: meta.promptParts } : {}),
@@ -2462,10 +2497,31 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
           ...(promptAgent ? { agent: promptAgent } : {}),
           ...(state.promptVariant ? { variant: state.promptVariant } : {}),
           ...(state.promptConfig ? { config: state.promptConfig } : {}),
-        });
+        }).then(
+          response => ({ kind: 'response' as const, response }),
+          (error: unknown) => ({ kind: 'error' as const, error }),
+        );
+        let promptSubmission: unknown;
+        try {
+          const outcome = await Promise.race([
+            submission,
+            committedInput.promise.then(id => ({ kind: 'committed' as const, id })),
+          ]);
+          if (outcome.kind === 'error') {
+            // A lost HTTP response cannot erase an input already committed natively.
+            await observeAcceptance();
+            if (!committedProviderUserMessageId) throw outcome.error;
+          } else if (outcome.kind === 'response') {
+            promptSubmission = outcome.response;
+          }
+        } finally {
+          if (observePendingPromptAcceptance === observeAcceptance) observePendingPromptAcceptance = null;
+          messageHandlers.delete(retireAcceptance);
+        }
         assertPromptTurnStillOwnsDispatch();
         void refreshCommandCatalog().catch((error: unknown) => params.ctx.logger.warn('opencode_command_catalog_read_failed', { error }));
-        const admittedMessageId = readNonBlankOpaqueIdentifier(asRecord(promptSubmission)?.id);
+        const admittedMessageId = committedProviderUserMessageId
+          ?? readNonBlankOpaqueIdentifier(asRecord(promptSubmission)?.id);
         let providerUserMessageId: string;
         if (admittedMessageId) {
           providerUserMessageId = admittedMessageId;
@@ -2504,8 +2560,17 @@ export function createOpenCodeServerRuntimeController(params: Readonly<{
         }
         queueMicrotask(() => {
           void (async () => {
+            if (ownsActiveHostTurn(turnId) && state.currentTurnIdleObserved) {
+              await settleCurrentTurnFromAuthoritativeInventoryAfterIdle(true);
+            }
+            const outcome = await submission;
+            if (!ownsActiveHostTurn(turnId)) return;
+            if (outcome.kind === 'error') {
+              params.ctx.logger.warn('opencode_prompt_response_unavailable_after_input_commit', { turnId });
+              return;
+            }
             await inspectPromptSubmissionResponseForFinality(
-              promptSubmission,
+              outcome.response,
               providerUserMessageId,
               turnId,
             );

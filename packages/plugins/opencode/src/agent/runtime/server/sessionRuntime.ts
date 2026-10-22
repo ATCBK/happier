@@ -24,6 +24,7 @@ import {
   OpenCodePromptProjectionError,
 } from './promptParts.js';
 import { projectOpenCodeSessionConfiguration } from './promptConfig.js';
+import { OpenCodePromptIdentityUnresolvedError } from './promptSubmissionError.js';
 import { projectOpenCodeTurnCancellationCause, projectOpenCodeRuntimeIssueDiagnostic } from './openCodeRuntimeEvents.js';
 import type { OpenCodeActiveSkillsReaderRegistrar } from '../controls.js';
 import { OPEN_CODE_TURN_COMPLETION_FALLBACK_INTERVAL_MS } from './timeoutPolicy.js';
@@ -613,10 +614,11 @@ export function createOpenCodeSessionRuntime(params: Readonly<{
       return { status: 'admitted' as const };
     } catch (error) {
       if (ownedPendingSend) {
+        const identityUnproven = error instanceof OpenCodePromptIdentityUnresolvedError;
         publishInputCustody(
           ownedPendingSend,
-          'rejected',
-          'opencode_input_rejected',
+          identityUnproven ? 'unknown' : 'rejected',
+          identityUnproven ? 'opencode_input_custody_unknown' : 'opencode_input_rejected',
           error instanceof Error ? error.message : String(error),
         );
       }

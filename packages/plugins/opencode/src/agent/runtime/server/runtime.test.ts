@@ -535,7 +535,7 @@ describe('createOpenCodeServerRuntime', () => {
       await conversation.cancel!({ turnId: 'old-turn', reason: 'user' });
       await expect(conversation.send(input('new-turn'))).resolves.toMatchObject({ status: 'admitted' });
       releasePrompt();
-      await expect(oldSend).resolves.toMatchObject({ status: 'rejected' });
+      await expect(oldSend).resolves.toMatchObject({ status: 'unavailable', retryable: false });
       await expect(conversation.cancel!({ turnId: 'new-turn', reason: 'user' })).resolves.toMatchObject({ status: 'requested' });
     } finally { await conversation.dispose(); }
   });
@@ -633,17 +633,18 @@ describe('createOpenCodeServerRuntime', () => {
     let resolveCallback!: () => void;
     vi.mocked(client.sessionCommand).mockImplementationOnce(() => new Promise<void>((resolve) => { resolveCallback = resolve; }));
     const operations = await createStartedRuntime({ client });
-    beginTestHostTurn(operations);
-    let result: 'pending' | 'resolved' | 'rejected' = 'pending';
-    const submitted = operations.sendTurnPrompt('/review').then(() => { result = 'resolved'; }, () => { result = 'rejected'; });
+    const runtime = createNativeSessionRuntimeForTest(operations);
+    const submitted = runtime.send({ inputIds: ['command-input'], input: { text: '/review' },
+      delivery: { kind: 'newTurn', turnId: 'command-turn' } });
     await vi.waitFor(() => expect(client.sessionCommand).toHaveBeenCalled());
     await operations.cancelTurn();
     try {
-      await vi.waitFor(() => expect(result).toBe('rejected'));
+      await expect(submitted).resolves.toMatchObject({ status: 'unavailable', retryable: false,
+        diagnostic: { code: 'opencode_input_custody_unknown' } });
     } finally {
       resolveCallback();
       await submitted;
-      await operations.resetOrDisposeRuntime();
+      await runtime.dispose();
     }
   });
 
@@ -1332,6 +1333,18 @@ describe('createOpenCodeServerRuntime', () => {
       inventoryError: undefined,
     },
     {
+      label: 'foreign native session',
+      messages: [{ info: { id: 'msg_foreign', role: 'user', sessionID: 'ses-foreign', time: { created: 1_001 } },
+        parts: [{ type: 'text', text: 'Current prompt' }] }],
+      inventoryError: undefined,
+    },
+    {
+      label: 'missing native session',
+      messages: [{ info: { id: 'msg_unbound', role: 'user', time: { created: 1_001 } },
+        parts: [{ type: 'text', text: 'Current prompt' }] }],
+      inventoryError: undefined,
+    },
+    {
       label: 'inventory read failure',
       messages: [],
       inventoryError: new Error('authoritative inventory unavailable'),
@@ -1382,7 +1395,35 @@ describe('createOpenCodeServerRuntime', () => {
     await runtime.dispose?.();
   });
 
-  it('accepts only after the exact OpenCode message request succeeds without waiting for turn completion', async () => {
+  it('accepts the committed native user while its message HTTP operation is still pending', async () => {
+    const { ctx, harness, runtimeEvents } = createContextFixture();
+    const client = createClientFixture();
+    let releaseResponse!: () => void;
+    const response = new Promise<void>(resolve => { releaseResponse = resolve; });
+    client.suppressNextNativePromptPersistence();
+    vi.mocked(client.sessionPromptImplementation).mockImplementationOnce(async () => response);
+    const runtime = await createStartedRuntime({ ctx, client, harness });
+    beginTestHostTurn(runtime);
+    const dispatch = runtime.sendTurnPrompt('Committed original prompt');
+    await expect.poll(() => vi.mocked(client.sessionPromptAsync).mock.calls.length).toBe(1);
+    const user = { info: { id: 'msg_committed_original', role: 'user', sessionID: 'ses-1',
+      time: { created: Date.now() } }, parts: [{ id: 'part-original', type: 'text', text: 'Committed original prompt' }] };
+    client.setMessages([user]);
+    await runtime.handleProviderEvent({ type: 'message.updated', properties: { info: user.info } });
+    const observed = observePromisePending(dispatch);
+    await flushMicrotasks();
+    try {
+      await expect.poll(() => observed.isPending()).toBe(false);
+      await expect(dispatch).resolves.toEqual({ providerUserMessageId: user.info.id });
+      expect(runtimeEvents.some(event => event.kind === 'turn-complete')).toBe(false);
+    } finally {
+      releaseResponse();
+      await dispatch.catch(() => undefined);
+      await runtime.resetOrDisposeRuntime();
+    }
+  });
+
+  it('accepts after the exact OpenCode message request succeeds when no earlier commit evidence arrives', async () => {
     const { ctx, harness } = createContextFixture();
     const client = createClientFixture();
     let settlePromptRequest: (() => void) | null = null;
@@ -3342,7 +3383,7 @@ describe('createOpenCodeServerRuntime', () => {
     ]));
   });
 
-  it('does not passively mirror provider user rows after prompt submission rejects with provider history', async () => {
+  it('preserves committed native input custody after the HTTP response fails without declaring native finality', async () => {
     const { ctx, harness, runtimeEvents } = createContextFixture();
     const client = createClientFixture();
     vi.mocked(client.sessionPromptImplementation).mockImplementationOnce(async (input) => {
@@ -3366,15 +3407,11 @@ describe('createOpenCodeServerRuntime', () => {
     beginTestHostTurn(runtime);
     await expect(
       runtime.sendTurnPrompt('internal submit-reject guidance\n\nUSER_MARKER'),
-    ).rejects.toThrow('provider rejected after writing the user row');
+    ).resolves.toEqual({ providerUserMessageId: 'msg-happier-provider-user-before-submit-reject' });
     expect(runtime.isHappierAuthoredProviderUserMessageId(
       'msg-happier-provider-user-before-submit-reject',
     )).toBe(true);
-    await vi.waitFor(() => {
-      expect(runtimeEvents).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'turn-failed' }),
-      ]));
-    });
+    expect(runtimeEvents.some(event => event.kind === 'turn-failed' || event.kind === 'turn-complete')).toBe(false);
 
     await runtime.handleProviderEvent({
       payload: {
@@ -6425,6 +6462,7 @@ describe('createOpenCodeServerRuntime', () => {
         const prompt = `host authored prompt ${index}`;
         const submittedAtMs = 10_000 + (index * 100_000);
         const message = externalUserMessage(`msg-authored-${index}`, prompt, submittedAtMs);
+        message.info.sessionID = 'provider-session-long';
         authoredMessages.push(message);
         vi.setSystemTime(submittedAtMs);
         client.setMessages([message]);

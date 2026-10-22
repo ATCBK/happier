@@ -8,6 +8,7 @@ import type { OpenCodeRuntimeTurnOperations } from './operations.js';
 import { asRecord, readNonBlankOpaqueIdentifier } from './openCodeParsing.js';
 import { projectOpenCodeTurnCancellationCause, projectOpenCodeRuntimeIssueDiagnostic } from './openCodeRuntimeEvents.js';
 import { buildOpenCodePromptParts, OpenCodePromptProjectionError } from './promptParts.js';
+import { OpenCodePromptIdentityUnresolvedError } from './promptSubmissionError.js';
 
 function diagnostic(code: string, message?: string | null) {
   return {
@@ -121,10 +122,14 @@ export function createOpenCodeExecutionRunConversation(params: Readonly<{
         return { status: 'admitted' };
       } catch (error) {
         if (activeTurnId === request.delivery.turnId) activeTurnId = null;
+        const identityUnproven = error instanceof OpenCodePromptIdentityUnresolvedError;
         return {
-          status: 'rejected',
+          status: identityUnproven ? 'unavailable' : 'rejected',
+          ...(identityUnproven ? { retryable: false } : {}),
           diagnostic: diagnostic(
-            error instanceof OpenCodePromptProjectionError
+            identityUnproven
+              ? 'opencode_input_custody_unknown'
+              : error instanceof OpenCodePromptProjectionError
               ? error.code
               : 'opencode_input_rejected',
             error instanceof Error ? error.message : String(error),
