@@ -2551,7 +2551,6 @@
     "sources/components/tools/shell/permissions/permissionShellTestHelpers.ts",
     "sources/components/tools/shell/permissions/presentation/usePermissionPromptModel.ts",
     "sources/components/tools/shell/permissions/useMcpAlwaysAllow.ts",
-    "sources/components/tools/shell/presentation/ToolHeader.tsx",
     "sources/components/tools/shell/presentation/ToolStatusIndicator.tsx",
     "sources/components/tools/shell/presentation/toolShellPresentationTestHelpers.ts",
     "sources/components/tools/shell/views/ToolView.testHelpers.ts",
