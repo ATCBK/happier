@@ -162,7 +162,7 @@ export function listBundledPluginUiArtifactExports(packageJson) {
 }
 
 export async function collectBundledPluginUiArtifactSources(repoRoot, initialPluginFailures = [], artifactRoots, pluginManifests = {}, artifactOutputDirs = {}, artifactStoreDir) {
-  const { PluginPortableReleaseManifestV1Schema } = await import('@happier-dev/protocol/plugins/availability');
+  const { PluginPortableReleaseManifestV1Schema, computePluginAccountBundledCustodyV1 } = await import('@happier-dev/protocol/plugins/availability');
   const { projectPluginPortableUiDeclarationsV1 } = await import('@happier-dev/protocol/plugins/contributions/ui');
   const { normalizePluginAccountCollectionContractsV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
   const {
@@ -240,18 +240,24 @@ export async function collectBundledPluginUiArtifactSources(repoRoot, initialPlu
 
     let destination = artifactOutputDirs[pluginDirectory] && resolve(artifactOutputDirs[pluginDirectory]);
     const declaration = PluginPortableReleaseManifestV1Schema.safeParse(pluginManifest);
-    const uiDeclaration = declaration.success ? {
+    const normalizedManifest = declaration.success ? { ...declaration.data, version: packageVersion } : null;
+    // Empty (e.g. brand-only) artifact inventories emit no declaration row.
+    const uiDeclaration = normalizedManifest && parsedManifest.data.entries.length > 0 ? {
       pluginId, pluginVersion: packageVersion, packageName,
-      displayName: typeof declaration.data.displayName === 'string' ? declaration.data.displayName : declaration.data.displayName.fallback,
-      normalizedManifest: { ...declaration.data, version: packageVersion },
+      displayName: typeof normalizedManifest.displayName === 'string' ? normalizedManifest.displayName : normalizedManifest.displayName.fallback,
+      normalizedManifest,
       artifactGraphs: parsedManifest.data.entries,
+      // Immutable app-package correspondence, like the collection contracts below.
+      // Use the shared algorithm here, not on the UI's first Account publication.
+      accountCustody: computePluginAccountBundledCustodyV1({ packageName, manifest: normalizedManifest,
+        artifacts: parsedManifest.data.entries }),
       declaredExecution: {
-        daemonActions: declaration.data.contributes.actions?.some(action => !action.execution || action.execution.target === 'daemon') === true,
-        contributionPoints: (declaration.data.contributes.pluginContributionPoints?.length ?? 0) > 0,
+        daemonActions: normalizedManifest.contributes.actions?.some(action => !action.execution || action.execution.target === 'daemon') === true,
+        contributionPoints: (normalizedManifest.contributes.pluginContributionPoints?.length ?? 0) > 0,
       },
-      entriesById: projectPluginPortableUiDeclarationsV1({ ...declaration.data, version: packageVersion }, parsedManifest.data.entries),
+      entriesById: projectPluginPortableUiDeclarationsV1(normalizedManifest, parsedManifest.data.entries),
       collectionContracts: normalizePluginAccountCollectionContractsV1({ pluginId,
-        contributions: declaration.data.contributes.accountCollections }).map(({ pluginId, collectionId, schemaVersion, contractDigest }) =>
+        contributions: normalizedManifest.contributes.accountCollections }).map(({ pluginId, collectionId, schemaVersion, contractDigest }) =>
         ({ pluginId, collectionId, schemaVersion, contractDigest })),
     } : undefined;
     const pluginSources = [];

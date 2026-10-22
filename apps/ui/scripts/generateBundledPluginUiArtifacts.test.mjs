@@ -152,6 +152,10 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     assert.equal(declaration.normalizedManifest.id, manifest.id);
     assert.deepEqual(declaration.normalizedManifest.contributes.actions, manifest.contributes.actions);
     assert.deepEqual(declaration.artifactGraphs, JSON.parse(await readFile(join(fixture.artifactRoot, 'ui-artifacts.json'), 'utf8')).entries);
+    const { computePluginAccountBundledCustodyV1 } = await import('@happier-dev/protocol/plugins/availability');
+    assert.deepEqual(declaration.accountCustody, computePluginAccountBundledCustodyV1({
+      packageName: declaration.packageName, manifest: declaration.normalizedManifest, artifacts: declaration.artifactGraphs,
+    }));
     assert.deepEqual(declaration.declaredExecution, { daemonActions: true, contributionPoints: true });
     const { normalizePluginAccountCollectionContractV1 } = await import('@happier-dev/protocol/plugins/data/collectionsV1');
     const compiled = normalizePluginAccountCollectionContractV1({ pluginId: manifest.id, contribution: collection });
@@ -169,6 +173,11 @@ test('the UI prebuild owns one universal exact app-preseed registry from canonic
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'write' });
     const clientOnlyOutput = await readFile(outputPath, 'utf8');
     const clientOnlyDeclaration = JSON.parse(clientOnlyOutput.match(/const BUNDLED_PLUGIN_UI_APP_DECLARATION_0 = (.+);/)[1]);
+    assert.notEqual(clientOnlyDeclaration.accountCustody.custodyId, declaration.accountCustody.custodyId);
+    assert.deepEqual(clientOnlyDeclaration.accountCustody, computePluginAccountBundledCustodyV1({
+      packageName: clientOnlyDeclaration.packageName, manifest: clientOnlyDeclaration.normalizedManifest,
+      artifacts: clientOnlyDeclaration.artifactGraphs,
+    }));
     assert.deepEqual(clientOnlyDeclaration.declaredExecution, { daemonActions: false, contributionPoints: false });
 
     await generateBundledPluginUiArtifacts({ repoRoot: fixture.repoRoot, mode: 'check' });
