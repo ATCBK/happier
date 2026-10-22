@@ -1237,7 +1237,7 @@ export function UniversalSearchController(props: UniversalSearchControllerProps)
                         openFile,
                         isTargetCurrent: isBuiltInTargetCurrent,
                     }, { intent });
-                    return outcome.ok;
+                    return outcome.ok ? true : outcome.reason === 'cancelled' ? null : false;
                 }
                 if (pluginActivation) {
                     const outcome = await pluginActivation() as PluginSearchActivationOutcome;

@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { runUniversalSearchActivation } from './runUniversalSearchActivation';
 
 describe('runUniversalSearchActivation', () => {
+    it.each([null, false] as const)('distinguishes a cancelled open (%s) from a refused open after dismissal', async outcome => {
+        const order: string[] = [];
+        await runUniversalSearchActivation({
+            dismiss: () => { order.push('dismiss'); },
+            activate: async () => { order.push('activate'); return outcome; },
+            presentFailure: () => { order.push('failure'); },
+        });
+        expect(order).toEqual(outcome === null ? ['dismiss', 'activate'] : ['dismiss', 'activate', 'failure']);
+    });
+
     it('abandons a selected file when query, workspace or close supersedes async preparation', async () => {
         let current = true;
         const activate = vi.fn(async () => true);

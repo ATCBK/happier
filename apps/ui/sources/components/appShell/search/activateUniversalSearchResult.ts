@@ -25,7 +25,7 @@ import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/
 
 export type UniversalSearchActivationOutcome =
     | Readonly<{ ok: true }>
-    | Readonly<{ ok: false; reason: 'unavailable' | 'failed' }>;
+    | Readonly<{ ok: false; reason: 'unavailable' | 'failed' | 'cancelled' }>;
 
 export type UniversalSearchActivationOwners = Readonly<{
     openExternalConversation?: (target: Extract<UniversalSearchTarget, { kind: 'externalConversation' }>) => Promise<boolean>;
@@ -42,9 +42,9 @@ export type UniversalSearchActivationOwners = Readonly<{
     /** Canonical router push for non-session destinations. */
     push: (path: string) => void;
     /** Canonical project opener, including persisted surface/worktree state. */
-    openProject: (workspaceRefId: string, options?: OpenProjectOptions) => Promise<boolean>;
+    openProject: (workspaceRefId: string, options?: OpenProjectOptions) => Promise<boolean | null>;
     /** The shared workspace.tabs.open file Action, including destination Find custody. */
-    openFile?: (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean>;
+    openFile?: (target: WorkspaceFileOpenTarget, options?: WorkspaceFileOpenOptions) => Promise<boolean | null>;
     /**
      * Re-resolves whether the exact target still exists for this reader RIGHT
      * NOW. Returning `false` keeps the surface coherent instead of navigating to
@@ -52,6 +52,11 @@ export type UniversalSearchActivationOwners = Readonly<{
      */
     isTargetCurrent?: (target: UniversalSearchTarget) => boolean;
 }>;
+
+function navigationOutcome(opened: boolean | null): UniversalSearchActivationOutcome {
+    return opened === null ? { ok: false, reason: 'cancelled' }
+        : opened ? { ok: true } : { ok: false, reason: 'unavailable' };
+}
 
 export async function activateUniversalSearchResult(
     target: UniversalSearchTarget,
@@ -86,10 +91,7 @@ export async function activateUniversalSearchResult(
             }
             case 'project': {
                 if (!target.workspaceRefId.trim()) return { ok: false, reason: 'unavailable' };
-                if (!await owners.openProject(target.workspaceRefId, { serverId: target.serverId })) {
-                    return { ok: false, reason: 'unavailable' };
-                }
-                return { ok: true };
+                return navigationOutcome(await owners.openProject(target.workspaceRefId, { serverId: target.serverId }));
             }
             case 'settingsPage': {
                 if (!target.route.trim()) return { ok: false, reason: 'unavailable' };
@@ -117,17 +119,17 @@ export async function activateUniversalSearchResult(
                         ? { ...query, target: { kind: 'project-file', workspaceRefId: address.workspaceRefId, ...scope } }
                         : { ...query, target: { kind: 'session-file', sessionId: address.sessionId, ...scope } };
                 }
-                return await owners.openFile(address, { intent: options?.intent ?? 'preview',
+                return navigationOutcome(await owners.openFile(address, { intent: options?.intent ?? 'preview',
                     ...(target.anchor ? { anchor: target.anchor } : {}), ...(anchorSource ? { anchorSource } : {}), ...(find ? { find } : {}) })
-                    ? { ok: true } : { ok: false, reason: 'unavailable' };
+                );
             }
             case 'workspaceCommit': {
                 if (target.workspaceRefId) {
-                    return await owners.openProject(target.workspaceRefId, {
+                    return navigationOutcome(await owners.openProject(target.workspaceRefId, {
                         serverId: target.scope.serverId,
                         activeRootPath: target.scope.rootPath,
                         initialResource: { kind: 'commit', sha: target.sha },
-                    }) ? { ok: true } : { ok: false, reason: 'unavailable' };
+                    }));
                 }
                 if (!target.sessionId) return { ok: false, reason: 'unavailable' };
                 await owners.navigateToSession(target.sessionId, {

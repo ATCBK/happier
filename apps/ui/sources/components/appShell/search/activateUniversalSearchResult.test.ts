@@ -12,6 +12,8 @@ import { selectDocumentOutline } from '@/sync/domains/workspaces/languageIntelli
 import { WORKSPACE_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/workspaceActionFamily';
 
 installFileFindAccountBoundaryMocks();
+// Load the real external owner after its boundaries, outside an individual activation's deadline.
+const { openExternalSessionCandidate } = await import('@/components/sessions/external/browse/openExternalSessionCandidate');
 
 async function expectSavedWorkspaceResourceOpensInProject(
     target: UniversalSearchTarget,
@@ -33,6 +35,15 @@ async function expectSavedWorkspaceResourceOpensInProject(
 }
 
 describe('activateUniversalSearchResult', () => {
+    it('preserves a declined file navigation as cancellation instead of unavailable', async () => {
+        expect(await activateUniversalSearchResult({ kind: 'workspaceFile', path: 'src/a.ts',
+            scope: { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' },
+            workspaceRefId: 'project-a', sessionId: null, serverId: 'home-a', accountId: 'account-a' }, {
+            navigateToSession: vi.fn(), push: vi.fn(), openProject: async () => true,
+            openFile: async () => null,
+        })).toEqual({ ok: false, reason: 'cancelled' });
+    });
+
     it.each(['preview', 'beside'] as const)('opens a syntax outline result at its line through the shared file activation owner with %s intent', async (intent) => {
         const scope = { serverId: 'home-a', machineId: 'machine-a', rootPath: '/repo' };
         const range = { start: { line: 10, character: 0 }, end: { line: 13, character: 1 } };
@@ -88,7 +99,6 @@ describe('activateUniversalSearchResult', () => {
         handoff.dispose();
     });
     it('opens an external conversation through the existing candidate opener with a message Find seed', async () => {
-        const { openExternalSessionCandidate } = await import('@/components/sessions/external/browse/openExternalSessionCandidate');
         const openSession = vi.fn();
         const target: UniversalSearchTarget = { kind: 'externalConversation', serverId: 'home-a', accountId: 'account-a',
             machineId: 'machine-a', query: 'quartz', agentId: 'fixture-agent',

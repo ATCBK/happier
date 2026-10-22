@@ -10,7 +10,8 @@ export async function runUniversalSearchActivation(input: Readonly<{
     isCurrent?(): boolean;
     prepare?(): boolean | Promise<boolean>;
     dismiss(): void;
-    activate(): Promise<boolean>;
+    /** Null is a declined navigation, not a failed search. */
+    activate(): Promise<boolean | null>;
     presentFailure(): void;
 }>): Promise<void> {
     if (input.isCurrent?.() === false) return;
@@ -27,11 +28,11 @@ export async function runUniversalSearchActivation(input: Readonly<{
         return;
     }
     input.dismiss();
-    let succeeded = false;
+    let succeeded: boolean | null = false;
     try {
         succeeded = await input.activate();
     } catch {
         succeeded = false;
     }
-    if (!succeeded) input.presentFailure();
+    if (succeeded === false) input.presentFailure();
 }

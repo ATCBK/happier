@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { captureMountedWorkspaceAction } from '@/components/appShell/workspace/workspaceActionRuntime';
+import { captureMountedWorkspaceAction, resolveWorkspaceUiActionOutcome } from '@/components/appShell/workspace/workspaceActionRuntime';
 
 import { useOptionalAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
 import { useMobileWorkspaceExperienceState } from '@/components/workspaceCockpit/useMobileWorkspaceExperienceState';
@@ -32,7 +32,7 @@ export type OpenProjectOptions = Readonly<{
 }>;
 
 /** Opens an existing project through the shared persisted surface/worktree policy. */
-export type OpenProject = ((workspaceRefId: string, options?: OpenProjectOptions) => Promise<boolean>) & Readonly<{
+export type OpenProject = ((workspaceRefId: string, options?: OpenProjectOptions) => Promise<boolean | null>) & Readonly<{
     resolution: Exclude<WorkspaceRefResolutionV1, { kind: 'resolved' }> | null;
     dismissResolution(): void;
 }>;
@@ -132,7 +132,7 @@ export function useOpenProject(): OpenProject {
             persistedWorktreeId: activeWorktreeId,
         }));
 
-        async function openHref(href: string, find?: unknown): Promise<boolean> {
+        async function openHref(href: string, find?: unknown): Promise<boolean | null> {
             const execute = captureMountedWorkspaceAction();
             if (!execute) {
                 if (find) return false;
@@ -140,7 +140,7 @@ export function useOpenProject(): OpenProject {
                 return true;
             }
             const result = await execute({ actionId: 'workspace.tabs.open', input: { href, ...(find ? { find } : {}) } });
-            return result.ok;
+            return resolveWorkspaceUiActionOutcome(result);
         }
     }, [cockpitEnabled, deviceType, openFile, lastActiveRootPathByWorkspaceRefId, lastActiveWorktreeIdByWorkspaceRefId, lastMobileSurfaceByWorkspaceRefId, paneContext, publishIssue, router, workspaceRefs]);
     return React.useMemo(() => Object.defineProperties(open, {
