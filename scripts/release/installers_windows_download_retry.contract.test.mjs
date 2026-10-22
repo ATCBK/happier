@@ -20,13 +20,16 @@ test('install.ps1 retries transient GitHub installer downloads and release metad
   assert.match(trimmed, /\$release\s*=\s*Invoke-InstallerRestMethodWithRetry -Uri "https:\/\/api\.github\.com\/repos\/\$Repo\/releases\/tags\/\$tag" -Headers \$GitHubHeaders/i);
 });
 
-test('install.ps1 retries GitHub requests without a rejected GitHub token', async () => {
+test('install.ps1 retries GitHub requests without a rejected (401) GitHub token', async () => {
   const path = join(repoRoot, 'scripts', 'release', 'installers', 'install.ps1');
   const raw = await readFile(path, 'utf8');
 
-  assert.match(raw, /function Remove-InstallerGitHubTokenAfterFailure\b[\s\S]*?\$Headers\.Remove\("Authorization"\)/);
+  const dropToken = raw.match(/function Remove-InstallerGitHubTokenAfterFailure\b[\s\S]*?\n}/)?.[0] ?? '';
+  // Only a rejected credential (401) drops the token; transient 5xx/transport retries keep it.
+  assert.match(dropToken, /Test-InstallerWebExceptionStatus -ErrorRecord \$ErrorRecord -StatusCode 401/);
+  assert.match(dropToken, /\$Headers\.Remove\("Authorization"\)/);
   for (const helper of ['Invoke-InstallerWebRequestWithRetry', 'Invoke-InstallerRestMethodWithRetry']) {
     const body = raw.match(new RegExp(`function ${helper}\\b[\\s\\S]*?\\n}`))?.[0] ?? '';
-    assert.match(body, /catch \{\s*if \(Remove-InstallerGitHubTokenAfterFailure -Headers \$Headers\)/, helper);
+    assert.match(body, /catch \{\s*if \(Remove-InstallerGitHubTokenAfterFailure -Headers \$Headers -ErrorRecord \$_\)/, helper);
   }
 });
