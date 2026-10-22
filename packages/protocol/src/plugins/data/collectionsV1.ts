@@ -961,9 +961,7 @@ export type PluginCollectionGetRequestV1 = z.infer<typeof PluginCollectionGetReq
 
 export const PluginCollectionGetResultV1Schema = lazyZodSchema(() => z.strictObject({
   row: z.nullable(PluginCollectionRowV1Schema),
-  // Direct-cut servers always return this; the default preserves a safe stale
-  // rejection when a transitional mocked/older response omits it.
-  absenceEpoch: z._default(PluginCollectionAbsenceEpochV1Schema, 0),
+  absenceEpoch: PluginCollectionAbsenceEpochV1Schema,
 }));
 export type PluginCollectionGetResultV1 = z.infer<typeof PluginCollectionGetResultV1Schema>;
 

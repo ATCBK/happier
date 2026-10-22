@@ -1167,6 +1167,9 @@ describe('Plugin Account Collection contracts', () => {
     });
     expect(PluginCollectionGetResultV1Schema.parse({ row, absenceEpoch: 0 })).toEqual({ row, absenceEpoch: 0 });
     expect(PluginCollectionGetResultV1Schema.parse({ row: null, absenceEpoch: 0 })).toEqual({ row: null, absenceEpoch: 0 });
+    // An unpublished pre-epoch response cannot supply a current absence witness.
+    expect(PluginCollectionGetResultV1Schema.safeParse({ row }).success).toBe(false);
+    expect(PluginCollectionGetResultV1Schema.safeParse({ row: null }).success).toBe(false);
 
     expect(PluginCollectionQueryRequestV1Schema.parse({
       pluginId: 'example.tasks',
