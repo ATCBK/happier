@@ -84,7 +84,7 @@ export type MachineAgentInstallActionResultById = {
             checksum?: 'verified' | 'not_published' | undefined;
         } | {
             kind: 'failed';
-            code: 'not_managed' | 'in_use' | 'consent_required' | 'unsupported_platform' | 'install_not_available' | 'download_failed' | 'rate_limited' | 'verification_failed' | 'timeout' | 'cancelled' | 'install_failed' | 'update_not_available';
+            code: 'not_managed' | 'in_use' | 'consent_required' | 'unsupported_platform' | 'install_not_available' | 'archive_expanded_byte_limit' | 'download_failed' | 'rate_limited' | 'verification_failed' | 'timeout' | 'cancelled' | 'install_failed' | 'update_not_available';
             stepId: string;
             message: string;
             guideUrl?: string | undefined;
