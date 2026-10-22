@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { act, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { DiffHunkInfo } from './diffViewerTypes';
@@ -65,6 +65,13 @@ async function expectFileAnnotationBeforeCode(props: FileDiffProps<React.ReactNo
 
 describe.each(['happier', 'pierre'] as const)('DiffViewer shared hunk contract (%s)', (engine) => {
     let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+    async function expectSelectedRenderer(screen: Awaited<ReturnType<typeof renderScreen>>) {
+        // The chunk resolving is not the worker-readiness handoff. Observe the mounted host.
+        await vi.waitFor(async () => {
+            await act(async () => { await vi.dynamicImportSettled(); });
+            expect(screen.findAllByType(FileDiff).length > 0).toBe(engine === 'pierre');
+        });
+    }
     beforeEach(async () => {
         browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
         // A working worker transport: a throwing one now (correctly) routes Pierre to its Happier fallback.
@@ -87,8 +94,8 @@ describe.each(['happier', 'pierre'] as const)('DiffViewer shared hunk contract (
         const caller = () => <>comment;</>;
         const screen = await renderScreen(<DiffViewer mode="unified" virtualized={false} filePath="a.ts" unifiedDiff={PATCH}
             renderAfterLine={caller} hunks={{ onHunks, renderNote, currentIndex: 0 }} />);
+        await expectSelectedRenderer(screen);
         const table = onHunks.mock.calls.at(-1)?.[0];
-        expect(screen.findAllByType(FileDiff).length > 0).toBe(engine === 'pierre');
         expect(table?.map((hunk) => hunk.firstChangeLineId)).toEqual(['r:4', 'r:7']);
         expect(screen.getTextContent()).toContain('note-0;');
         expect(screen.getTextContent()).toContain('note-1;');
@@ -105,7 +112,7 @@ describe.each(['happier', 'pierre'] as const)('DiffViewer shared hunk contract (
         const screen = await renderScreen(<DiffViewer mode="unified" virtualized={false} filePath="a.ts"
             unifiedDiff={'--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+after\n'}
             hunks={{ renderNote: () => <>first-change-note;</> }} />);
-        expect(screen.findAllByType(FileDiff).length > 0).toBe(engine === 'pierre');
+        await expectSelectedRenderer(screen);
         expect(screen.getTextContent()).toContain('first-change-note;');
         if (engine === 'pierre') await expectFileAnnotationBeforeCode(pierrePaint.latest!);
     });
@@ -117,7 +124,7 @@ describe.each(['happier', 'pierre'] as const)('DiffViewer shared hunk contract (
         const screen = await renderScreen(<DiffViewer mode="text" virtualized={false} filePath="a.ts"
             oldText={'first\nbefore\nmiddle\nold\nlast\n'} newText={'first\nafter\nmiddle\nnew\nlast\n'}
             hunks={{ onHunks, renderNote: (hunk) => <>{`text-note-${hunk.index};`}</> }} />);
-        expect(screen.findAllByType(FileDiff).length > 0).toBe(engine === 'pierre');
+        await expectSelectedRenderer(screen);
         expect(onHunks.mock.calls.at(-1)?.[0].map((hunk) => hunk.firstChangeLineId)).toEqual(['tr:0:1', 'tr:0:4']);
         expect(screen.getTextContent()).toContain('text-note-0;');
         expect(screen.getTextContent()).toContain('text-note-1;');
@@ -131,6 +138,7 @@ describe.each(['happier', 'pierre'] as const)('DiffViewer shared hunk contract (
         const { DiffViewer } = await import('./DiffViewer.web');
         const screen = await renderScreen(<DiffViewer mode="unified" virtualized={false} filePath="a.ts"
             unifiedDiff={unifiedDiff} hunks={{ renderNote: () => <>file-note;</> }} />);
+        await expectSelectedRenderer(screen);
         expect(screen.getTextContent()).toContain('file-note;');
         if (engine === 'pierre') {
             const viewer = pierrePaint.latest!;
@@ -147,6 +155,7 @@ describe.each(['happier', 'pierre'] as const)('DiffViewer shared hunk contract (
             unifiedDiff={'--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-before\n+after\n@@ -10 +10 @@\n-old\n+new\n'}
             renderAfterLine={(line) => line.renderCodeText === 'after' ? <>caller-note;</> : null}
             hunks={{ renderNote: (hunk) => <>{`hunk-note-${hunk.index};`}</> }} />);
+        await expectSelectedRenderer(screen);
         expect(screen.getTextContent()).toContain('caller-note;');
         expect(screen.getTextContent()).toContain('hunk-note-0;');
         expect(screen.getTextContent()).toContain('hunk-note-1;');

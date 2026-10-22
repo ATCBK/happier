@@ -68,9 +68,12 @@ describe('editor Compare displayed-place choices', () => {
         // Vitest resolves the portable entry. Feed its actual consumer props into
         // the real web wrapper to exercise the Pierre platform seam as well.
         const web = renderer === 'pierre' ? await renderScreen(<WebDiffViewer {...diffProps()} />) : null;
-        await act(async () => { await vi.dynamicImportSettled(); });
         const displayed = web ?? screen;
-        if (web) expect(web.findAllByType('pierre-file-diff')).toHaveLength(1);
+        if (web) await vi.waitFor(async () => {
+            // Lazy import completion precedes the real worker-pool readiness handoff.
+            await act(async () => { await vi.dynamicImportSettled(); });
+            expect(web.findAllByType('pierre-file-diff')).toHaveLength(1);
+        });
         for (const place of original.places) {
             expect(displayed.findHostByTestId(`file-editor-compare-place-${place.hunk.index}`)).not.toBeNull();
         }
