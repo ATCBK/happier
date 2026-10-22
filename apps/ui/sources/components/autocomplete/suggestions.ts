@@ -46,13 +46,14 @@ export type { ComposerSuggestionCatalogs } from './composerSuggestionCatalogs';
  */
 
 /**
- * Wall clock one kind gets to produce rows for one query.
+ * Presentation deadline for kinds bounded by daemon RPC.
  *
  * `Promise.allSettled` alone does not satisfy INV-2: it does not settle until
  * every promise settles, so a single hung kind would hide every healthy section
  * (D-25). The catalog kinds perform daemon RPC, so "hung" is a real state and not
  * a hypothetical one. Past this bound the kind contributes no rows, the other
- * sections still render, and the user has typed on anyway.
+ * sections still render. A producer-owned kind can publish partial rows without
+ * finishing its other sources; those rows must not cancel its pending producer.
  */
 export const COMPOSER_SUGGESTION_KIND_DEADLINE_MS = SHARED_COMPOSER_SUGGESTION_KIND_DEADLINE_MS;
 
