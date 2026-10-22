@@ -54,6 +54,7 @@ import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/App
 import { resolveApprovalHomeServerId } from '@/components/approvals/approvalHomeServerId';
 import { readableSessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
+import type { SessionActivityAttention } from '@/activity/attention/activityAttentionTypes';
 
 import { useInboxFriendRequests } from './useInboxFriendRequests';
 import { useInboxDiscussionSource } from './useInboxDiscussionSource';
@@ -83,6 +84,8 @@ export type InboxModel = Readonly<{
     openAccountNotices: readonly AccountNoticeArtifact[];
     dismissAccountNotice: (entry: AccountNoticeArtifact) => Promise<void>;
     items: readonly InboxItem[];
+    /** Current canonical Activity facts, including Sessions that no longer need an answer. */
+    sessionCandidates: readonly SessionActivityAttention[];
     discussionAttention: ReturnType<typeof useInboxDiscussionSource>;
     markItemOpened: (item: InboxItem) => Promise<void>;
     friendRequests: ReturnType<typeof useInboxFriendRequests>['requests'];
@@ -476,6 +479,7 @@ function useCreateInboxModel(): InboxModel {
         openAccountNotices,
         dismissAccountNotice,
         items,
+        sessionCandidates: overview.candidates,
         discussionAttention,
         markItemOpened,
         friendRequests: friends.requests,
@@ -513,6 +517,7 @@ function useCreateInboxModel(): InboxModel {
         openAccountNotices,
         dismissAccountNotice,
         items,
+        overview.candidates,
         discussionAttention,
         markItemOpened,
         pendingReadKeys,

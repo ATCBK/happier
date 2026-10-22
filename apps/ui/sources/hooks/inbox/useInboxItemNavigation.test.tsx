@@ -23,20 +23,23 @@ const initialItems: readonly InboxItem[] = ['first', 'next', 'update', 'mention'
     focus: { kind: 'session', serverId: 'home-a', id }, pageRoute: `/session/${id}?serverId=home-a`,
 }));
 let state: Readonly<{ focus: InboxItemFocus | null; setFocus: React.Dispatch<React.SetStateAction<InboxItemFocus | null>>;
-    setItems: React.Dispatch<React.SetStateAction<readonly InboxItem[]>>; setView: React.Dispatch<React.SetStateAction<InboxItemView>> }> | null = null;
+    setItems: React.Dispatch<React.SetStateAction<readonly InboxItem[]>>; setView: React.Dispatch<React.SetStateAction<InboxItemView>>;
+    setSelectedResolved: React.Dispatch<React.SetStateAction<boolean>> }> | null = null;
 
 function Probe() {
     const [items, setItems] = React.useState(initialItems);
     const [focus, setFocus] = React.useState<InboxItemFocus | null>(null);
     const [view, setView] = React.useState<InboxItemView>('needs_you');
+    const [selectedResolved, setSelectedResolved] = React.useState(false);
     const close = React.useCallback(() => setFocus(null), []);
     const open = React.useCallback((route: string) => { opened.push(route); }, []);
     const markOpened = React.useCallback(async (item: InboxItem) => {
         read.push(item.key);
         setItems(items => items.map(row => row.key === item.key ? { ...row, read: true } : row));
     }, []);
-    useInboxItemNavigation({ items, view, focus, enabled: true, select: setFocus, close, open, markOpened });
-    state = { focus, setFocus, setItems, setView };
+    useInboxItemNavigation({ items, view, focus, enabled: true, select: setFocus, close, open, markOpened,
+        ...{ selectedResolved } });
+    state = { focus, setFocus, setItems, setView, setSelectedResolved };
     return null;
 }
 
@@ -107,7 +110,10 @@ describe('Inbox selection through the shared keyboard runtime', () => {
     it('advances only a resolved Needs-you selection; informational opens read only the selected row', async () => {
         await renderScreen(<KeyboardShortcutProvider handlers={{}}><Probe /></KeyboardShortcutProvider>);
         await act(async () => key('ArrowDown'));
-        await act(async () => state!.setItems(items => items.map(row => row.key === 'first' ? { ...row, type: 'update', view: 'updates' } : row)));
+        await act(async () => {
+            state!.setSelectedResolved(true);
+            state!.setItems(items => items.map(row => row.key === 'first' ? { ...row, type: 'update', view: 'updates' } : row));
+        });
         expect(state?.focus?.id).toBe('next');
         expect(read).toEqual([]);
         await act(async () => { state!.setView('updates'); state!.setFocus(initialItems[2]!.focus); });
@@ -118,5 +124,28 @@ describe('Inbox selection through the shared keyboard runtime', () => {
         expect(read).toEqual(['update', 'mention']);
         await act(async () => state!.setItems(items => items.filter(row => row.key !== 'mention')));
         expect(state?.focus?.id).toBe('mention');
+    });
+
+    it('keeps the selected request through hydration gaps and advances once its owner confirms it is answered', async () => {
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><Probe /></KeyboardShortcutProvider>);
+        await act(async () => key('ArrowDown'));
+        await act(async () => state!.setItems(items => items.filter(row => row.key !== 'first')));
+        expect(state?.focus?.id).toBe('first');
+        await act(async () => state!.setItems(initialItems));
+        expect(state?.focus?.id).toBe('first');
+        await act(async () => state!.setItems(items => items.filter(row => row.key !== 'first')));
+        expect(state?.focus?.id).toBe('first');
+        await act(async () => state!.setSelectedResolved(true));
+        expect(state?.focus?.id).toBe('next');
+        expect(read).toEqual([]);
+    });
+
+    it('consumes an answered selection with no survivor instead of opening a later arrival', async () => {
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><Probe /></KeyboardShortcutProvider>);
+        await act(async () => key('ArrowDown'));
+        await act(async () => { state!.setItems([]); state!.setSelectedResolved(true); });
+        expect(state?.focus?.id).toBe('first');
+        await act(async () => state!.setItems([initialItems[1]!]));
+        expect(state?.focus?.id).toBe('first');
     });
 });

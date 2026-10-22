@@ -37,6 +37,7 @@ import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/o
 import { UserProfileSchema } from '@happier-dev/protocol/social/friends';
 import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
 import { useInboxItemNavigation } from '@/hooks/inbox/useInboxItemNavigation';
+import { useInboxItemResolved } from '@/hooks/inbox/useInboxItemResolved';
 import type { InboxItemFocus } from './inboxItemFocus';
 import type { InboxItemView } from './inboxItems';
 import { InboxWorkItemRow } from './workGroups/InboxWorkItemRow';
@@ -92,11 +93,12 @@ function storedSession(id: string, facts: Readonly<{ lead?: string; managedSessi
     });
 }
 
-function candidate(session: Session, attentionState: string, reasons: readonly string[]) {
+function candidate(session: Session, attentionState: string, reasons: readonly string[], serverId = 'server-a') {
+    if (session.serverId !== serverId) session = { ...session, serverId };
     return {
         sessionId: session.id,
-        serverId: 'server-a',
-        address: { serverId: 'server-a', sessionId: session.id },
+        serverId,
+        address: { serverId, sessionId: session.id },
         session,
         awareness: projectUiSessionAwareness(session, NOW),
         title: `Session ${session.id}`,
@@ -118,6 +120,7 @@ const snoozed = storedSession('snoozed');
 const sessions = new Map([lead, worker, stalledWorker, stopped, failed, snoozed].map((value) => [value.id, value]));
 
 function createModel(options: Readonly<{
+    serverId?: string;
     openApprovals?: ReadonlyArray<Readonly<{ id: string; header: Record<string, unknown> }>>;
     workflowStale?: boolean;
     needsYou?: boolean;
@@ -133,19 +136,20 @@ function createModel(options: Readonly<{
     extraItems?: readonly InboxItem[];
 }> = {}): InboxModel {
     const needsYou = options.needsYou ?? true;
-    const attention = createInboxAttentionFixture('server-a');
+    const serverId = options.serverId ?? 'server-a';
+    const attention = createInboxAttentionFixture(serverId);
     const sessionEntries = needsYou ? [
         // A worker permission prompt and a stopped session's pending request (A17: "Resume").
-        { candidate: candidate(worker, 'action_required', ['permission_required']), pendingPermissions: [{ id: 'p-worker' }], pendingUserActions: [] },
-        { candidate: candidate(stopped, 'action_required', ['permission_required']), pendingPermissions: [{ id: 'p-stopped' }], pendingUserActions: [] },
-        { candidate: candidate(failed, 'failed', ['failed']), pendingPermissions: [], pendingUserActions: [] },
+        { candidate: candidate(worker, 'action_required', ['permission_required'], serverId), pendingPermissions: [{ id: 'p-worker' }], pendingUserActions: [] },
+        { candidate: candidate(stopped, 'action_required', ['permission_required'], serverId), pendingPermissions: [{ id: 'p-stopped' }], pendingUserActions: [] },
+        { candidate: candidate(failed, 'failed', ['failed'], serverId), pendingPermissions: [], pendingUserActions: [] },
     ] : [];
     const readySession = storedSession('ready');
-    const ready = candidate(readySession, 'ready', ['unread']);
+    const ready = candidate(readySession, 'ready', ['unread'], serverId);
     const readyTarget = {
-        key: buildServerScopedSessionKey('ready', 'server-a'),
+        key: buildServerScopedSessionKey('ready', serverId),
         sessionId: 'ready',
-        serverId: 'server-a',
+        serverId,
         readState: 'unread',
     };
     const approvals = needsYou ? (options.openApprovals ?? [{ id: 'approval-1', header: {} }]).map(artifact => ({
@@ -161,7 +165,7 @@ function createModel(options: Readonly<{
             ...(options.heldStep && id === 'library-run' ? { heldStep: options.heldStep } : {}),
         }), null)) : [],
         automationRuns: options.automationRunRows ?? [],
-        automationServerId: options.automationServerId ?? 'server-a',
+        automationServerId: options.automationServerId ?? serverId,
         openApprovals: approvals as never,
         stalledSessions: needsYou ? [stalledWorker] : [],
         landings: [],
@@ -176,7 +180,7 @@ function createModel(options: Readonly<{
         pendingRequestHydrationTargets: [],
     };
     const items = [...buildInboxItems({ workGroups, sessionPresentation: sessionPresentation as never,
-        workflowServerId: 'server-a', accountServerId: 'server-a', notices: [] }), ...(options.extraItems ?? [])];
+        workflowServerId: serverId, accountServerId: serverId, notices: [] }), ...(options.extraItems ?? [])];
     return {
         source: { isDataReady: true, sessionsById: Object.fromEntries(sessions), sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
@@ -207,6 +211,7 @@ function createModel(options: Readonly<{
         spansHomes: true,
         ...attention,
         items,
+        sessionCandidates: [...sessionEntries.map(entry => entry.candidate), ready],
         workflowAttention: options.workflowStale
             ? { ...attention.workflowAttention, available: true, phase: 'loaded', refreshFailed: true,
                 runIds: needsYou ? ['library-run'] : [], knownAt: NOW - 60_000 }
@@ -239,8 +244,10 @@ function pressInboxKey(key: string) {
 function NavigableInbox(props: Readonly<{ model: InboxModel; view: InboxItemView; content: typeof import('./InboxContent')['InboxContent'] }>) {
     const [focus, select] = React.useState<InboxItemFocus | null>(null);
     const close = React.useCallback(() => select(null), []);
+    const selectedResolved = useInboxItemResolved(focus, { sessionCandidates: props.model.sessionCandidates,
+        accountNotices: props.model.accountNotices, isDataReady: props.model.source.isDataReady });
     useInboxItemNavigation({ items: props.model.items, view: props.view, focus, enabled: true,
-        select, open: routerPush, close, markOpened: props.model.markItemOpened });
+        selectedResolved, select, open: routerPush, close, markOpened: props.model.markItemOpened });
     const Content = props.content;
     return <><Content model={props.model} view={props.view} focusedItem={focus} onSelectItem={select} />
         <Text testID="inbox.selected">{JSON.stringify(focus)}</Text></>;
@@ -705,7 +712,11 @@ function mentionItem(id: string): InboxItem {
 }
 
 describe('InboxContent renders the canonical item model in three views (C1 L10, lab P4)', () => {
-    afterEach(() => { standardCleanup(); vi.unstubAllGlobals(); storage.setState(initialStorageState, true); });
+    afterEach(async () => {
+        standardCleanup(); vi.unstubAllGlobals();
+        await connection?.dispose(); connection = null;
+        storage.setState(initialStorageState, true);
+    });
     it('groups Needs you by type — Approvals, Decisions, Blocked — never by work root', async () => {
         const { InboxContent } = await import('./InboxContent');
         const model = createModel({ heldStep: { invocationId: 'inv-1', label: 'Write changelog' } });
@@ -745,10 +756,12 @@ describe('InboxContent renders the canonical item model in three views (C1 L10, 
 
     it('walks and auto-advances the mounted Needs-you order across work groups and request types', async () => {
         const { InboxContent } = await import('./InboxContent');
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-a' });
+        const serverId = (await import('@/sync/domains/server/serverRuntime')).getActiveServerSnapshot().serverId;
         vi.stubGlobal('window', new EventTarget());
         vi.stubGlobal('navigator', { platform: 'Linux' });
         storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutsV2Enabled: true, keyboardSingleKeyShortcutsEnabled: true } });
-        const base = createModel({ heldStep: { invocationId: 'inv-order', label: 'Review result' } });
+        const base = createModel({ serverId, heldStep: { invocationId: 'inv-order', label: 'Review result' } });
         const decision = base.items.find(item => item.type === 'decision')!;
         const approvals = base.items.filter(item => item.type === 'approval');
         const model = { ...base, items: [decision, ...base.items.filter(item => item !== decision)], markItemOpened: async () => {} };
@@ -766,7 +779,9 @@ describe('InboxContent renders the canonical item model in three views (C1 L10, 
             await act(async () => pressInboxKey('k'));
             expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(item.focus));
         }
-        await screen.update(render({ ...model, items: model.items.filter(item => item.key !== expected[0]!.key) }));
+        await screen.update(render({ ...model, items: model.items.filter(item => item.key !== expected[0]!.key),
+            sessionCandidates: model.sessionCandidates.map(entry => entry.sessionId === expected[0]!.focus.id
+                ? candidate(entry.session, 'quiet', [], serverId) : entry) }));
         expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(expected[1]!.focus));
     });
 

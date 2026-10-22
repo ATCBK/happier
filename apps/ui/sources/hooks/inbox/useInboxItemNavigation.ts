@@ -15,6 +15,8 @@ export function useInboxItemNavigation(options: Readonly<{
     items: readonly InboxItem[];
     view: InboxItemView;
     focus: InboxItemFocus | null;
+    /** A current owning record confirms the selected item has been answered. Missing rows do not. */
+    selectedResolved: boolean;
     enabled: boolean;
     select: (focus: InboxItemFocus) => void;
     open: (route: string) => void;
@@ -28,12 +30,17 @@ export function useInboxItemNavigation(options: Readonly<{
     const previous = React.useRef({ items: visibleItems, view: options.view, focus: selectionKey(options.focus), selectedKey: selected?.key });
     React.useEffect(() => {
         const before = previous.current;
-        if (options.enabled && before.view === options.view && before.focus === selectionKey(options.focus) && before.selectedKey) {
+        const sameSelection = before.view === options.view && before.focus === selectionKey(options.focus);
+        const resolved = options.selectedResolved;
+        if (options.enabled && sameSelection && before.selectedKey && resolved) {
             const next = advanceResolvedInboxItem(options.view, before.items, visibleItems, before.selectedKey);
             if (next) options.select(next.focus);
         }
+        // A missing projection is not an answer. Keep the existing navigation anchor until
+        // the same owning record resolves, the row returns, or the person changes selection.
+        if (sameSelection && before.selectedKey && !selected && !resolved) return;
         previous.current = { items: visibleItems, view: options.view, focus: selectionKey(options.focus), selectedKey: selected?.key };
-    }, [options.enabled, options.focus, options.select, options.view, selected?.key, visibleItems]);
+    }, [options.enabled, options.focus, options.select, options.selectedResolved, options.view, selected?.key, selected?.view, visibleItems]);
 
     // Selection is a real read intent only in the two informational views. Answering remains at the request owner.
     React.useEffect(() => {

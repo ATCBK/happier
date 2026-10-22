@@ -8,7 +8,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { SetSessionAttentionStandingRequestSchema, SetSessionAttentionStandingResponseSchema } from '@happier-dev/protocol/sessions/organization/standings';
 import { SessionReadStateSetResultV1Schema } from '@happier-dev/protocol/sessions/readState/actions';
 
-import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, createSessionFixture, createSessionViewerFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -52,6 +52,13 @@ import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approva
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { InboxSummaryProvider, useSharedInboxSummary, type InboxSummary } from './useInboxSummary';
 import { countInbox, countInboxNeedsYou } from '@/components/inbox/inboxCounts';
+import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
+import { useInboxItemNavigation } from './useInboxItemNavigation';
+import { useInboxItemResolved } from './useInboxItemResolved';
+import type { InboxItemFocus } from '@/components/inbox/inboxItemFocus';
+import { buildSessionActivityAttention } from '@/activity/attention/buildSessionActivityAttention';
+import { readAccountNoticeArtifactHeader } from '@/sync/domains/artifacts/usageNoticeArtifacts';
+import { workflowRunRowFromSummary } from '@/sync/store/domains/workflowRuns';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -240,14 +247,15 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         listRuns.mockResolvedValue(page([]));
         let lastReadSeq = 0;
         let proposalOpen = true;
-        const message = DiscussionMessageV1Schema.parse({ id: 'mention-1', discussionId: 'doc-comments', localId: null,
+        let message = DiscussionMessageV1Schema.parse({ id: 'mention-1', discussionId: 'doc-comments', localId: null,
             seq: 1, authorAccountId: null, accountActor: null, producerV1: { v: 1, kind: 'agent', sessionId: 'inbox-bot' },
             content: { t: 'plain', v: type === 'decision' ? { kind: 'doc_edit_proposal', proposal: {
                 target: { ref: { kind: 'doc', artifactId: 'plan', serverId: appliedSnapshot().serverId },
                     revision: { headerVersion: 1, bodyVersion: 1 }, range: { start: 0, end: 6 }, quote: 'Before' },
                 baseRevision: { headerVersion: 1, bodyVersion: 1 }, before: 'Before', after: 'After', reason: 'Clarify',
             } } : { v: 1, parts: [{ t: 'text', text: 'Review this passage' }] } },
-            mentionedAccountIds: ['account-a'], createdAt: 1 });
+            mentionedAccountIds: ['account-a'], createdAt: 1,
+            ...(type === 'decision' ? { docEditProposalDispositionV1: { state: 'open' } } : {}) });
         const summary = () => DiscussionSummaryV1Schema.parse({ id: 'doc-comments', ownerAccountId: 'account-a', encryptionMode: 'plain',
             anchor: { kind: 'doc', doc: { ref: { kind: 'doc', artifactId: 'plan', serverId: appliedSnapshot().serverId },
                 revision: { headerVersion: 1, bodyVersion: 1 } } }, access: 'owner', keyReadiness: true, dataEncryptionKey: null,
@@ -289,6 +297,9 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(repository!.getSnapshot().threads).toEqual({});
         expect(discussionBoundary.request.mock.calls.filter(([path]) => path.includes('/messages'))).toEqual([]);
         const row = model!.items.find(item => item.source.kind === 'discussion');
+        const resolution = await renderHook(() => useInboxItemResolved(row!.focus,
+            { sessionCandidates: [], accountNotices: [], isDataReady: true }));
+        expect(resolution.getCurrent()).toBe(false);
         expect(row).toMatchObject({ type, view: type === 'decision' ? 'needs_you' : 'mentions', read: false,
             pageRoute: `/discussions/doc-comments?serverId=${encodeURIComponent(scope.serverId)}&messageId=mention-1`,
             focus: { kind: 'discussion', serverId: scope.serverId,
@@ -312,11 +323,17 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             expect(badge).toEqual({ count: 1, hasContent: true });
             proposalOpen = false;
             await act(async () => { await repository!.refreshAttention(); });
+            expect(resolution.getCurrent()).toBe(false);
+            message = DiscussionMessageV1Schema.parse({ ...message,
+                docEditProposalDispositionV1: { state: 'declined', decidedBy: { accountId: 'account-a', atMs: 2 } } });
+            await act(async () => { await repository!.refreshDiscussion('doc-comments'); });
+            expect(resolution.getCurrent()).toBe(true);
         } else expect(lastReadSeq).toBe(1);
         expect(model!.items.filter(item => item.source.kind === 'discussion')).toEqual([]);
         expect(countInbox(model!)).toBe(0);
         expect(badge).toEqual({ count: 0, hasContent: false });
         expect(executed.filter(item => item.actionId === 'session.read_state.set')).toEqual([]);
+        await resolution.unmount();
         await screen.unmount();
         await chrome.unmount();
     });
@@ -342,6 +359,111 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             encryptedContentAvailability: 'encrypted_content_unavailable' } } }); });
         expect(model!.items.find(item => item.source.kind === 'approval')?.source.displayName).toBeNull();
         await screen.unmount();
+    });
+
+    it('keeps the exact selected approval through missing and crossed revisions, then advances on its admitted answer', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const serverId = appliedSnapshot().serverId;
+        const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'cli' }, actionId: 'account.name.set', actionArgs: { name: 'Captain' }, summary: 'Change name',
+            executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+                serverId, actionId: 'account.name.set', requestId: 'selected-approval' } });
+        const open: DecryptedArtifact = { id: 'selected-approval', isDecrypted: true, title: request.summary,
+            header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request),
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 2, updatedAt: 2 };
+        const next = { ...open, id: 'next-approval', createdAt: 1, updatedAt: 1 };
+        storage.setState({ artifacts: { [open.id]: open, [next.id]: next } });
+        // A real body demand may remain pending during the missing projection; it is not an answer.
+        const hydration = createDeferred<Response>();
+        artifactReadBoundary.request.mockImplementation(() => hydration.promise);
+        let focus: InboxItemFocus | null = null;
+        function SelectedApproval() {
+            const inbox = useInboxModel();
+            const [selected, select] = React.useState<InboxItemFocus | null>({ kind: 'approval', id: open.id, serverId });
+            const selectedResolved = useInboxItemResolved(selected, { sessionCandidates: inbox.sessionCandidates,
+                accountNotices: inbox.accountNotices, isDataReady: inbox.source.isDataReady });
+            const close = React.useCallback(() => select(null), []);
+            const openPage = React.useCallback(() => {}, []);
+            useInboxItemNavigation({ items: inbox.items, view: 'needs_you', focus: selected, selectedResolved,
+                enabled: true, select, close, open: openPage, markOpened: inbox.markItemOpened });
+            focus = selected;
+            return null;
+        }
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}>
+            <InboxModelProvider><Probe /><SelectedApproval /></InboxModelProvider>
+        </KeyboardShortcutProvider>);
+        expect(model!.items.some(item => item.focus.id === open.id)).toBe(true);
+        await act(async () => storage.setState({ artifacts: { [open.id]: { ...open, body: undefined }, [next.id]: next } }));
+        expect(model!.items.some(item => item.focus.id === open.id)).toBe(false);
+        expect(focus).toMatchObject({ id: open.id });
+        await act(async () => storage.setState({ artifacts: { [open.id]: open, [next.id]: next } }));
+        expect(focus).toMatchObject({ id: open.id });
+        const answered = ApprovalRequestV2Schema.parse({ ...request, status: 'canceled', updatedAtMs: 3 });
+        const terminal = { ...open, header: buildApprovalRequestArtifactHeaderV1(answered), headerVersion: 2, bodyVersion: 2, updatedAt: 3 };
+        await act(async () => storage.setState({ artifacts: { [open.id]: terminal, [next.id]: next } }));
+        expect(focus).toMatchObject({ id: open.id });
+        await act(async () => storage.setState({ artifacts: { [open.id]: { ...terminal, body: JSON.stringify(answered) }, [next.id]: next } }));
+        expect(focus).toMatchObject({ id: next.id });
+        await act(async () => storage.setState({ artifacts: { [open.id]: { ...terminal, body: JSON.stringify(answered) },
+            [next.id]: { ...next, body: undefined } } }));
+        expect(focus).toMatchObject({ id: next.id });
+        hydration.resolve(Response.json({ error: 'unavailable' }, { status: 503 }));
+        await screen.unmount();
+    });
+
+    it('uses an owned notice disposition and follows the canonical scope through retirement and renewal', async () => {
+        const serverId = appliedSnapshot().serverId;
+        const artifact = createAccountNoticeArtifactFixture({ header: { type: 'decision' } });
+        const header = readAccountNoticeArtifactHeader(artifact, 'account-a')!;
+        const focus: InboxItemFocus = { kind: 'notice', id: artifact.id, serverId };
+        const input: Parameters<typeof useInboxItemResolved>[1] = { sessionCandidates: [], accountNotices: [{ artifact, header }], isDataReady: true };
+        const hook = await renderHook((props: { focus: InboxItemFocus | null; input: typeof input }) => useInboxItemResolved(props.focus, props.input),
+            { initialProps: { focus: null, input } });
+        expect(hook.getCurrent()).toBe(false);
+        expect(await hook.rerender({ focus, input })).toBe(false);
+        expect(await hook.rerender({ focus, input: { ...input, accountNotices: [] } })).toBe(false);
+        const dismissed = createAccountNoticeArtifactFixture({ header: { type: 'decision', status: 'dismissed' } });
+        const settled = { ...input, accountNotices: [{ artifact: dismissed, header: readAccountNoticeArtifactHeader(dismissed, 'account-a')! }] };
+        expect(await hook.rerender({ focus, input: settled })).toBe(true);
+        expect(await hook.rerender({ focus: { ...focus, serverId: 'other-home' }, input: settled })).toBe(false);
+        expect(await hook.rerender({ focus, input: settled })).toBe(true);
+        const unavailable = { ...settled, isDataReady: false };
+        expect(await hook.rerender({ focus, input: unavailable })).toBe(false);
+        await act(async () => (await import('@/sync/domains/scope/activeServerAccountScope')).retireActiveServerAccountScopeLifetime());
+        expect(hook.getCurrent()).toBe(false);
+        expect(await hook.rerender({ focus, input: settled })).toBe(true);
+        await act(async () => storage.setState({ profileScope: null }));
+        expect(hook.getCurrent()).toBe(false);
+    });
+
+    it('uses the selected retained workflow row after it leaves attention, never a missing row', async () => {
+        const serverId = appliedSnapshot().serverId;
+        const summary = createWorkflowRunSummaryFixture({ id: 'selected-run', state: 'waiting_for_review' });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, null)]);
+        const focus: InboxItemFocus = { kind: 'workflow_run', id: summary.id, serverId };
+        const hook = await renderHook(() => useInboxItemResolved(focus,
+            { sessionCandidates: [], accountNotices: [], isDataReady: true }));
+        expect(hook.getCurrent()).toBe(false);
+        await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary({ ...summary, revision: summary.revision + 1, state: 'running' }, null)]));
+        expect(hook.getCurrent()).toBe(true);
+        await act(async () => storage.getState().removeWorkflowRun(summary.id));
+        expect(hook.getCurrent()).toBe(false);
+    });
+
+    it('uses the Session Activity owner after an answer and keeps missing or unreadable Sessions unknown', async () => {
+        const serverId = appliedSnapshot().serverId;
+        const viewer = createSessionViewerFixture({ relevance: { relevant: true, reasons: ['followed_by_me'] },
+            attention: { needsAttention: true, presentation: 'full', primary: 'user_action_required', reasons: ['user_action_required'] } });
+        const session = createSessionFixture({ id: 'selected-session', serverId, viewer });
+        const focus: InboxItemFocus = { kind: 'session', id: session.id, serverId };
+        const input: Parameters<typeof useInboxItemResolved>[1] = { sessionCandidates: [buildSessionActivityAttention({ session })], accountNotices: [], isDataReady: true };
+        const hook = await renderHook((value: typeof input) => useInboxItemResolved(focus, value), { initialProps: input });
+        expect(hook.getCurrent()).toBe(false);
+        expect(await hook.rerender({ ...input, sessionCandidates: [] })).toBe(false);
+        const answered = { ...session, viewer: createSessionViewerFixture({ relevance: viewer.relevance }) };
+        expect(await hook.rerender({ ...input, sessionCandidates: [buildSessionActivityAttention({ session: answered })] })).toBe(true);
+        const locked = createSessionFixture({ ...answered, encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable' });
+        expect(await hook.rerender({ ...input, sessionCandidates: [buildSessionActivityAttention({ session: locked })] })).toBe(false);
     });
 
     it('hydrates a header-only managed Delete Ask and lists it exactly once', async () => {

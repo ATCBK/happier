@@ -22,6 +22,7 @@ import {
 import { t } from '@/text';
 import { useIsTablet } from '@/utils/platform/responsive';
 import { useInboxItemNavigation } from '@/hooks/inbox/useInboxItemNavigation';
+import { useInboxItemResolved } from '@/hooks/inbox/useInboxItemResolved';
 import { InboxKeyHints } from '@/components/inbox/InboxKeyHints';
 import { selectInboxItemsForView } from '@/components/inbox/inboxItems';
 import { useDestinationFocus, useDestinationVisibility } from '@/components/appShell/workspace/DestinationInstanceHost';
@@ -78,8 +79,11 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
     const select = React.useCallback((focus: InboxItemFocus) => { router.replace(createInboxItemRoute(focus) as never); }, [router]);
     const close = React.useCallback(() => { router.replace('/inbox' as never); }, [router]);
     const open = React.useCallback((route: string) => { router.push(route as never); }, [router]);
+    const selectedResolved = useInboxItemResolved(destinationFocused && destinationVisible ? focusedItem : null, {
+        sessionCandidates: model.sessionCandidates, accountNotices: model.accountNotices, isDataReady: model.source.isDataReady,
+    });
     useInboxItemNavigation({ items: model.items, focus: focusedItem, view, enabled: destinationFocused && destinationVisible,
-        select, close, open, markOpened: model.markItemOpened });
+        selectedResolved, select, close, open, markOpened: model.markItemOpened });
     const needsYouCount = countInboxNeedsYou(model);
     const updatesCount = countInboxUpdates(model);
     const mentionsCount = countInboxMentions(model);
