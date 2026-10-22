@@ -88,6 +88,12 @@ if (args[0] === 'install') {
   fs.mkdirSync(path.join(process.cwd(), 'node_modules'), { recursive: true });
   fs.writeFileSync(path.join(process.cwd(), 'node_modules', '.modules.yaml'), 'packageManager: pnpm@12.14.0\\nnodeLinker: hoisted\\n');
 } else if (args.join(' ') === '--filter @happier-dev/server run --silent generate:providers') {
+  const lockPath = ${JSON.stringify(fixture.path('.project', 'tmp', 'dependency-install.lock'))};
+  const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  const custody = JSON.parse(process.env.HAPPIER_BUILD_DEPENDENCY_CUSTODY || 'null');
+  if (Array.isArray(owner.readers) || custody?.[0] !== lockPath || custody?.[1] !== owner.pid || custody?.[2] !== owner.createdAtMs) {
+    throw new Error('Server generation did not inherit its active dependency writer');
+  }
   if (${JSON.stringify(failGeneration)}) process.exit(47);
   fs.mkdirSync(path.dirname(${JSON.stringify(generated)}), { recursive: true });
   fs.writeFileSync(${JSON.stringify(generated)}, 'module.exports = { PrismaClient: class PrismaClient {} };\\n');
@@ -104,7 +110,7 @@ if (args[0] === 'install') {
         : withPnpmInstallGuard({ installDir: fixture.root, env }, async ({ env: installEnv }) =>
             execPnpm(REMOTE_INITIAL_DEPENDENCY_INSTALL_ARGS, { cwd: fixture.root, env: installEnv }));
     if (failGeneration) {
-      await assert.rejects(prepare, error => error.status === 47);
+      await assert.rejects(prepare, { exitCode: 47 });
       await assert.rejects(stat(marker), { code: 'ENOENT' });
     } else {
       await prepare;

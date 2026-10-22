@@ -33,7 +33,12 @@ test('Stack CLI readiness jointly admits its complete locked publication transac
   // The package manager is the genuine external build boundary. Its failure
   // must retain the public readiness error while releasing the joint lease.
   writeFakeBin({ root, name: 'pnpm', content: `#!${process.execPath}
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+if (process.argv.includes('install')) {
+  mkdirSync('node_modules', { recursive: true });
+  writeFileSync('node_modules/.modules.yaml', 'layoutVersion: 5\\nnodeLinker: hoisted\\npackageManager: pnpm@12.14.0\\n');
+  process.exit(0);
+}
 if (process.argv.includes('--version')) console.log('12.14.0');
 else if (process.argv.includes('build:prepared')) {
   writeFileSync(process.env.FIXTURE_OBSERVED, JSON.stringify({ token: process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN,
@@ -87,7 +92,7 @@ else if (process.argv.includes('build:prepared')) {
     assert.equal(existsSync(observedPath), false);
     await withWorkspaceBundleLock(() => writeFile(memoryPath, '31457280 73400320\n'), { lockPath });
     assert.deepEqual(await exited, { status: 7, signal: null }, stderr);
-    const { message, ...failure } = JSON.parse(stdout);
+  const { message, ...failure } = JSON.parse(stdout.trim().split('\n').at(-1));
     assert.deepEqual(failure, { code: 'EEXIT', exitCode: 7, signal: null, diagnostic: true });
     assert.match(message, /fixture CLI compiler diagnostic/);
     const observed = JSON.parse(await readFile(observedPath, 'utf8'));

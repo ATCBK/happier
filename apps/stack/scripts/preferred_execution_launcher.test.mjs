@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
 import { prepareCommandRepository, renderNativeExecutionProjection } from './utils/dev_targets/native_execution_projection.mjs';
@@ -192,15 +193,27 @@ test('controller explicit local compilation refuses without override and overrid
   await mkdir(bin);
   // Keep the real runner/selector/leaf admission. Only its native compiler
   // process and physical worker state are adapted at the OS spawn boundary.
-  const compilerPath = resolveTypeScriptCliInvocation({}).compilerPath;
   const compiler = join(root, 'compiler.cjs');
   const preload = join(root, 'compiler-process.mjs');
   const lifecycle = join(root, 'package-lifecycle.mjs');
   const parentState = join(root, 'package-parent.json');
-  const compilerArgs = ['--noEmit', '-p', join(repoRoot, 'apps/ui/tsconfig.json')];
+  const compilerArgs = ['--noEmit', '-p', 'apps/ui/tsconfig.json'];
+  await writeFile(join(checkout, 'apps/ui/tsconfig.json'), JSON.stringify({ compilerOptions: { noEmit: true }, files: ['fixture.ts'] }));
+  await writeFile(join(checkout, 'apps/ui/fixture.ts'), 'export {};\n');
+  const compilerPath = resolveTypeScriptCliInvocation({ args: compilerArgs, workspaceDir: checkout }).compilerPath;
   await writeFile(compiler, `process.stdout.write('compiler-started\\n'); process.exit(7);\n`);
-  await writeFile(join(checkout, 'scripts/workspaces/runTypeScriptCli.mjs'),
-    `await import(${JSON.stringify(new URL('../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url).href)});\n`);
+  // The real entry and selector derive repository identity from their location.
+  // Keep that identity in this fixture while forwarding installed dependencies.
+  for (const entry of ['runTypeScriptCli.mjs', 'resolveTypeScriptCliInvocation.mjs']) {
+    const sourceModule = new URL(`../../../scripts/workspaces/${entry}`, import.meta.url);
+    const source = await readFile(sourceModule, 'utf8');
+    const forwarded = source.replace(/(from\s+|import\()(['"])(\.[^'"]+)\2/g, (match, prefix, quote, specifier) => {
+      if (entry === 'runTypeScriptCli.mjs' && specifier === './resolveTypeScriptCliInvocation.mjs') return match;
+      return `${prefix}${quote}${new URL(specifier, sourceModule).href}${quote}`;
+    }).replace("from 'typescript'", `from ${JSON.stringify(import.meta.resolve('typescript'))}`)
+      .replace('createRequire(import.meta.url)', `createRequire(${JSON.stringify(sourceModule.href)})`);
+    await writeFile(join(checkout, 'scripts/workspaces', entry), forwarded);
+  }
   const { packageManager } = JSON.parse(await readFile(join(checkout, 'package.json'), 'utf8'));
   await writeFile(join(checkout, 'package.json'), JSON.stringify({ private: true, packageManager, scripts: {
       pretypecheck: 'node scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json',
@@ -217,7 +230,7 @@ const prepared = await runWorkspaceBuildAdmission({ command: process.execPath, a
   cwd: ${JSON.stringify(checkout)}, env: process.env });
 if (prepared.error || prepared.signal || prepared.status !== 0) throw prepared.error ?? new Error('prerequisite failed');
 process.argv = [process.execPath, ${JSON.stringify(join(checkout, 'scripts/workspaces/runTypeScriptCli.mjs'))}, ...${JSON.stringify(compilerArgs)}];
-await import(${JSON.stringify(new URL('../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url).href)});
+await import(${JSON.stringify(pathToFileURL(join(checkout, 'scripts/workspaces/runTypeScriptCli.mjs')).href)});
 `);
   await writeFile(preload, `
 import { createRequire, syncBuiltinESMExports } from 'node:module';
@@ -645,6 +658,53 @@ test('native launcher hands Mac workspace execution to the configured execution-
   const local = spawnSync('/bin/sh', [launcher, '--local', '--', 'probe-command'], invocation);
   assert.equal(local.status, 0, local.stderr);
   assert.equal(local.stdout, 'unexpected-local\n');
+});
+
+test('runtime skip targets accepts comma and whitespace while retaining configured names outside the pool', async (t) => {
+  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12 });
+  fixture.config.targets.push({ ...fixture.config.targets[0], name: 'configured-only' });
+  await writeFile(fixture.configPath, JSON.stringify(fixture.config));
+  await writeNativeProjectionFixture(join(fixture.stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(fixture.config, { repoRoot }));
+  for (const skip of ['starved configured-only', 'starved,configured-only', ' \tstarved,,\n configured-only, ']) {
+    const result = spawnSync('/bin/sh', [launcher, '--', 'probe-command'], {
+      ...fixture.invocation,
+      env: { ...fixture.invocation.env, HSTACK_EXEC_RUNTIME_SKIP_TARGETS: skip },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /roomy/);
+    assert.doesNotMatch(result.stdout, /starved/);
+  }
+});
+
+test('runtime skip targets rejects unknown names before automatic or explicit remote work', async (t) => {
+  const fixture = await memoryRoutingFixture(t);
+  for (const selection of [[], ['--target=roomy']]) {
+    const result = spawnSync('/bin/sh', [launcher, ...selection, '--', 'probe-command'], {
+      ...fixture.invocation,
+      env: { ...fixture.invocation.env, HSTACK_EXEC_RUNTIME_SKIP_TARGETS: 'starvd' },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /HSTACK_EXEC_RUNTIME_SKIP_TARGETS/);
+    assert.match(result.stderr, /starvd/);
+    await assert.rejects(access(fixture.invocation.env.FIXTURE_TRACE), { code: 'ENOENT' });
+    await assert.rejects(access(fixture.invocation.env.DISPATCHES), { code: 'ENOENT' });
+  }
+});
+
+test('runtime skip targets refreshes a future-dated legacy projection without trusting an inherited name field', async (t) => {
+  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12 });
+  const projectionPath = join(fixture.stackDir, 'dev-target-exec-v1.sh');
+  const legacy = (await readFile(projectionPath, 'utf8')).replace(/^configured_target_names=.*\n/m, '');
+  await writeFile(projectionPath, legacy);
+  const future = new Date(Date.now() + 60000);
+  await utimes(projectionPath, future, future);
+  const result = spawnSync('/bin/sh', [launcher, '--target=roomy', '--', 'probe-command'], {
+    ...fixture.invocation,
+    env: { ...fixture.invocation.env, HSTACK_EXEC_RUNTIME_SKIP_TARGETS: 'starved', configured_target_names: 'stale-only' },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /roomy/);
+  assert.match(await readFile(projectionPath, 'utf8'), /^configured_target_names=/m);
 });
 
 async function memoryRoutingFixture(t, { availableKiB = 5242880, totalKiB = 28311552, roomyLoad = 4, roomyAvailableKiB = 25480397, roomyTotalKiB = 28311552, fallback = 'error' } = {}) {
