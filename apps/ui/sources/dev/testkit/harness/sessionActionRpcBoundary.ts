@@ -78,5 +78,8 @@ export function installSessionActionFixture(params: Readonly<{
     const wire = createPlainSessionByIdResponseFixture(session).session;
     homes.answer(serverId, `/v2/sessions/${session.id}`, { body: { session: wire } });
     homes.answer(serverId, `/v2/sessions/${session.id}?accessProjectionVersion=1`, { body: { session: wire } });
+    // The Home answers the turn projection of every Session it serves; this fixture declares none.
+    homes.answer(serverId, `/v1/sessions/${session.id}/turns`, { body: session.sessionTurns
+        ?? { v: 1, sessionId: session.id, updatedAt: session.updatedAt, turns: [] } });
     return session;
 }

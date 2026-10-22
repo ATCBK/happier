@@ -1,7 +1,21 @@
 import { expect, it } from 'vitest';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture, createSessionOwnerViewerFixture } from './sessionFixtures';
+import { createLockedEncryptedSessionByIdResponseFixture, createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionDataKeyFixture, createSessionFixture, createSessionOwnerViewerFixture } from './sessionFixtures';
+
+it('serves a locked Session with genuine ciphertext and no recipient key or plaintext owner fields', async () => {
+    const session = createSessionFixture({ encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_access_pending',
+        metadata: { name: 'Private title', path: '/private/project', host: 'private.local' } });
+    const { session: wire } = await createLockedEncryptedSessionByIdResponseFixture(session);
+    expect(wire.dataEncryptionKey).toBeNull();
+    expect(wire.ownerMetadata).toBeUndefined();
+    expect(JSON.stringify(wire)).not.toContain('Private title');
+    expect(JSON.stringify(wire)).not.toContain('/private/project');
+    const { AES256Encryption } = await import('@/sync/encryption/encryptor');
+    const { decodeBase64 } = await import('@/encryption/base64');
+    expect(await new AES256Encryption(createSessionDataKeyFixture()).decrypt([decodeBase64(wire.metadata, 'base64')]))
+        .toEqual([session.metadata]);
+});
 
 it('preserves private launch profile identity through the real owner metadata envelope', () => {
     const metadata = { ...createSessionFixture().metadata!, profileId: 'work' };

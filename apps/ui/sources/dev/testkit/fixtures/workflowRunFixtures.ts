@@ -51,6 +51,37 @@ export function createWorkflowRunSummaryFixture(overrides: SummaryOverrides = {}
     });
 }
 
+/** Real accepted-snapshot/key producers for full private Run-list HTTP answers. */
+export async function createWorkflowRunListStorageFixture(params: Readonly<{
+    runs: readonly WorkflowRunSummaryV1[];
+    definition: WorkflowDefinitionV1;
+    metadata?: Readonly<{ title: string }>;
+}>) {
+    const { materializeWorkflowAcceptedSnapshotV1 } = await import('@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1');
+    const { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } = await import('@happier-dev/protocol/workflows/workflowStoredContentV1');
+    const { WorkflowRunRecipientCensusResponseV1Schema } = await import('@happier-dev/protocol/workflows/workflowRunKeyV1');
+    const entries = await Promise.all(params.runs.map(async run => {
+        const materialized = await materializeWorkflowAcceptedSnapshotV1({
+            definition: params.definition, admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+            context: { source: run.origin.kind === 'automation' ? { kind: 'automation', automationId: run.origin.automationId } : { kind: 'inline' },
+                inputs: {}, machineId: run.machineId, executionTarget: { kind: 'session' },
+                workspaceTarget: { project: { machineId: run.machineId, directory: '/repo', checkoutRootPath: '/repo' } },
+                ...(run.origin.kind === 'direct' ? { origin: run.origin } : { actionCaller: { kind: 'automationRun' as const,
+                    runId: run.id, automationId: run.origin.automationId, cause: { kind: 'manual' as const, invokedAt: 1 } } }),
+                ...(params.metadata ? { metadata: params.metadata } : {}), authorization: { principal: { kind: 'host' } } },
+        });
+        if (!materialized.ok) throw new Error(`fixture_materialization_failed:${materialized.error.code}`);
+        const envelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+            binding: { v: 1, purpose: 'accepted_snapshot', accountId: run.ownerAccountId, runId: run.id }, acceptedSnapshot: materialized.snapshot }));
+        const census = WorkflowRunRecipientCensusResponseV1Schema.parse({ runId: run.id, ownerAccountId: run.ownerAccountId,
+            access: 'owner', encryptionMode: 'plain', dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [], visibleTeamId: null,
+            ownerAccountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+        return { id: run.id, envelope, census };
+    }));
+    return { runs: params.runs, acceptedEnvelopesByRunId: Object.fromEntries(entries.map(row => [row.id, row.envelope])),
+        keyCensusByRunId: Object.fromEntries(entries.map(row => [row.id, row.census])) };
+}
+
 export function createWorkflowInvocationIndexFixture(
     overrides: Partial<WorkflowRunInvocationIndexV1> = {},
 ): WorkflowRunInvocationIndexV1 {

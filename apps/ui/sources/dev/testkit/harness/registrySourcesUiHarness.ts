@@ -34,9 +34,16 @@ export async function createRegistrySourcesUiHome(suffix: string, options: Reado
     const catalog = createPromptLibraryCatalogBoundary({ records: [initial], revision: 4,
         tombstones: PromptLibraryCatalogKeyV1Schema.options.filter(key => key !== initial.key) });
     let failRulesWrites = false;
+    let failContentAfter: number | null = null;
+    let contentWrites = 0;
     let headCommit = payload.ref.commit;
     const homeFixture = await createPlainArtifactHomeFixture(`https://registry-ui-${suffix}.test`, {
         handleRequest: async (path, init) => {
+            if (path === '/v1/artifacts' && init?.method === 'POST') {
+                if (failContentAfter !== null && contentWrites >= failContentAfter)
+                    return Response.json({ error: 'quota_exceeded' }, { status: 400 });
+                contentWrites++;
+            }
             if (path === '/v1/account/saved-secrets/resources/materials') return Response.json(SavedSecretResourceMaterialsResponseV1Schema.parse({
                 resources: (options.savedSecretResourceIds ?? []).map(resourceId => ({ resourceId, encryptionMode: 'plain',
                     storedContent: { t: 'plain', v: { v: 1, name: resourceId, kind: 'token', value: 'fixture-token' } }, recipientEnvelope: null,
@@ -76,5 +83,6 @@ export async function createRegistrySourcesUiHome(suffix: string, options: Reado
     const home = { ...homeFixture, read: () => ({ record: catalog.read('registry-sources'), revision: catalog.revision('registry-sources') }) };
     onTestFinished(async () => { await standardCleanup(); await home.dispose(); });
     return { home, source, sourceId, skill, externalRequests, catalog, setRulesUnavailable: (next: boolean) => { failRulesWrites = next; },
+        setContentUnavailableAfter: (count: number | null) => { failContentAfter = count; },
         moveBranch: () => { headCommit = 'b'.repeat(40); } };
 }

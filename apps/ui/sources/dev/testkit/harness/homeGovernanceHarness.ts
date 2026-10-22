@@ -31,6 +31,7 @@ import type { Settings } from '@/sync/domains/settings/settings';
 import { waitForNetworkResponseForTests } from '../mocks/runtimeFetch';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
 import { MachineReadBatchRequestV1Schema, MachineReadBatchResponseV1Schema } from '@happier-dev/protocol/machines/machineReadBatchV1';
+import { createSessionReadBatchHttpBoundary } from './sessionReadBatchHttpBoundary';
 import type { ManagedMachineActionInputV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 import type { ActionExecutorContext, WorkflowActionExecute } from '@happier-dev/protocol';
 import { DiscussionCreateRequestV1Schema, DiscussionCreateResponseV1Schema, DiscussionPostRequestV1Schema,
@@ -709,6 +710,17 @@ async function answerForEndpoint(
         }
         // Do not repair sparse fixtures or invent authority: validate the actual wire rows once.
         return Response.json(MachineReadBatchResponseV1Schema.parse({ results }));
+    }
+    if (!answer && record && method === 'POST' && route === '/v2/sessions/read-batch') {
+        // Session parts are the same external facts the per-Session paths answer; each part is recorded as its own request.
+        const parts = createSessionReadBatchHttpBoundary(async component => {
+            const partPath = `${component.url.pathname}${component.url.search}`;
+            current.requests.push(Object.freeze({ serverId: record.serverId, serverUrl, path: partPath, input: null, token }));
+            const selected = await selectHomeDomainAnswer(record, partPath, 'GET', null, component.url.href, { ...init, method: 'GET', body: undefined });
+            return selected ? await renderHomeDomainAnswer(selected, partPath, 'GET', null, init?.signal) : undefined;
+        });
+        return (await parts.handle({ home: serverUrl, method, path: route, url: new URL(url), accountId: null,
+            headers: new Headers(init?.headers), body: input, signal: init?.signal }))!;
     }
     if (!answer && path === '/v1/account/profile') {
         let accountId: string | null = null;

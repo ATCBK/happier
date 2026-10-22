@@ -183,6 +183,31 @@ export function createPlainSessionByIdResponseFixture(session: Session): V2Sessi
     } });
 }
 
+/** A locked layout-zero E2EE Session: genuine ciphertext, with no recipient key published. */
+export async function createLockedEncryptedSessionByIdResponseFixture(session: Session): Promise<V2SessionByIdResponse> {
+    if (session.encryptionMode !== 'e2ee' || isSessionContentReadable(readSessionContentAvailability(session))) {
+        throw new Error('A locked encrypted Session HTTP fixture requires an unreadable E2EE Session');
+    }
+    const { AES256Encryption } = await import('@/sync/encryption/encryptor');
+    const { encodeBase64 } = await import('@/encryption/base64');
+    const cipher = new AES256Encryption(createSessionDataKeyFixture());
+    const [metadata] = await cipher.encrypt([readSessionOwnerMetadataView(session) ?? {}]);
+    if (!metadata) throw new Error('Expected encrypted Session fixture metadata');
+    const access = session.access;
+    return V2SessionByIdResponseSchema.parse({ session: {
+        id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
+        active: session.active, activeAt: session.activeAt,
+        encryptionMode: 'e2ee', metadataLayoutVersion: 0,
+        metadata: encodeBase64(metadata, 'base64'), metadataVersion: session.metadataVersion,
+        agentState: null, agentStateVersion: session.agentStateVersion,
+        dataEncryptionKey: null,
+        responsibleAccountId: session.responsibleAccountId ?? null,
+        responsibleAccount: session.responsibleAccount ?? null,
+        ...(access ? { effectiveAccess: { v: 1, level: access.level,
+            capabilities: access.capabilities, sources: access.sources ?? [] } } : {}),
+    } });
+}
+
 /** Owner HTTP fixture with no Follow, discussion, pin or explicit attention rows. */
 export function createSessionOwnerViewerFixture(session: Session): SessionViewerProjectionV1 {
     if (session.viewer) return SessionViewerProjectionV1Schema.parse(session.viewer);
