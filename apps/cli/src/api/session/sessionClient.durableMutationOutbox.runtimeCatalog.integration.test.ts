@@ -1989,7 +1989,9 @@ describe('ApiSessionClient durable mutation outbox', () => {
     await vi.advanceTimersToNextTimerAsync();
     expect(Date.now()).toBe(200);
     expect(reconnectReasons).not.toContain('timer');
-    await drainAsyncWork();
+    // The automatic timer delivery crosses real filesystem persistence. Wait
+    // for that boundary without forcing a flush or advancing the fake clock.
+    await waitForAsyncCondition(async () => httpActions.length >= 3);
     expect(httpActions).toEqual(['begin', 'begin', 'complete']);
     await outbox.flush('flush');
     await expect(readPersistedOutboxMutationCount('s1')).resolves.toBe(0);
