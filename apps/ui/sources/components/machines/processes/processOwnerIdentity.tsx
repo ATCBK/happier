@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import type {
   OwnerRowV1,
   ProcessRowV1,
@@ -165,7 +165,7 @@ function SessionOwnerMark(
   const { theme } = useUnistyles();
   const session = useSession(props.sessionId, props.serverId);
   const agentId = session
-    ? resolveAgentIdFromSessionMetadata(session.metadata)
+    ? readSessionPresentationAgentId(session)
     : null;
   if (!agentId)
     return (

@@ -7,6 +7,10 @@ import { ListPresentationProvider } from '@/components/ui/lists/listPresentation
 
 import { ProcessDetail } from './ProcessDetail';
 import { processRow } from './testkit/processesAnswerFixture';
+import { ProcessOwnerMark } from './processOwnerIdentity';
+import { MachineAgentMark } from '@/components/machines/agents/MachineAgentMark';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { getStorage } from '@/sync/domains/state/storage';
 
 afterEach(standardCleanup);
 
@@ -28,6 +32,20 @@ async function mountDetail(row: ReturnType<typeof processRow>) {
 }
 
 describe('ProcessDetail', () => {
+  it.each(['codex', 'acme.agent', null])('marks a Session process with public Agent %s instead of owner-only identity', async agentId => {
+    const initial = getStorage().getState();
+    const session = createSessionFixture({ id: 'process-agent', serverId: 'home', metadataLayoutVersion: 1,
+      metadata: { v: 1, ...(agentId ? { agentPresentation: { agentId } } : {}) } as never,
+      ownerMetadataView: { path: '/private', host: 'home', flavor: 'claude' } });
+    getStorage().setState({ sessions: { [session.id]: session } });
+    try {
+      const screen = await renderScreen(<ProcessOwnerMark owner={{ kind: 'session', sessionId: session.id }} serverId="home" machineId="machine" />);
+      const markType = 'type' in MachineAgentMark ? MachineAgentMark.type : MachineAgentMark;
+      expect(screen.tree.root.findAll(node => node.type === markType).map(node => node.props.agentId)).toEqual(agentId ? [agentId] : []);
+      await screen.unmount();
+    } finally { getStorage().setState(initial, true); }
+  });
+
   it('names the process once at the end of its started-by chain, though the daemon chain ends with the process itself', async () => {
     const row = processRow('main', 'owner', {
       name: 'MainThread',
