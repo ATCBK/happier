@@ -1,5 +1,6 @@
 import type { AcpCatalogRecordV1, AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { AcpCatalogCleanupV1 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
@@ -15,8 +16,10 @@ export function getAcpCatalogSnapshot(scope: ServerAccountScope | null | undefin
 export function applyAcknowledgedAcpCatalog(scope: ServerAccountScope, record: AcpCatalogRecordV1, revision: number, current: boolean): void {
     const previous = getAcpCatalogSnapshot(scope);
     if (!canPublishCatalogReceipt({ current, revision, retainedRevision: previous?.revision })) return;
-    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, catalog: loading, data: record, revision, stale: true,
-        ...(previous?.cleanup ? { cleanup: previous.cleanup } : {}) });
+    const next: AcpCatalogSnapshot = { scope, catalog: loading, data: record, revision, stale: true,
+        ...(previous?.cleanup ? { cleanup: previous.cleanup } : {}) };
+    if (previous && sameStrictJsonValue(previous, next)) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), next);
     for (const listener of [...listeners]) listener();
 }
 /** A captured nonfocused read stands alone; observed domain refreshes withdraw older facts. */

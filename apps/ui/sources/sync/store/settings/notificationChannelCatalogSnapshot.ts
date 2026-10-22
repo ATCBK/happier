@@ -1,5 +1,6 @@
 import type { NotificationChannelCatalogSnapshotV1, NotificationChannelRecordV1,
     NotificationChannelCatalogDiagnosticV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
@@ -34,9 +35,13 @@ export function applyAcknowledgedNotificationChannelCatalog(scope: ServerAccount
     const old = getNotificationChannelCatalogValue(scope);
     if (!canPublishCatalogReceipt({ current, revision, retainedRevision: old.revision })) return;
     const previous = getNotificationChannelCatalogSnapshot(scope);
+    const value: NotificationChannelCatalogValueSnapshot = {
+        status: 'loading', channels, revision, diagnostics: [], stale: true, reason: 'loading',
+    };
+    if (sameStrictJsonValue(old, value)) return;
     snapshots.set(serverAccountScopeKeySuffix(scope), { scope, projection: { catalog: { status: 'loading' },
         rawSettings: previous?.rawSettings ?? {}, sourceSettingsVersion: previous?.sourceSettingsVersion ?? 0 },
-        value: { status: 'loading', channels, revision, diagnostics: [], stale: true, reason: 'loading' } });
+        value });
     for (const listener of [...listeners]) listener();
 }
 export function applyNotificationChannelCatalogSnapshot(scope: ServerAccountScope, projection: NotificationChannelCatalogProjection, current: boolean): void {

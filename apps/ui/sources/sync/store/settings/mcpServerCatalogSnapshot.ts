@@ -1,5 +1,6 @@
 import type { McpServerCatalogSnapshotV1, McpServerCatalogSourceCleanupV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import type { McpServerCatalogV1, McpServerCatalogDiagnosticV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 
@@ -23,9 +24,11 @@ export function getMcpServerCatalogSnapshot(scope: ServerAccountScope | null | u
 export function applyAcknowledgedMcpServerCatalog(scope: ServerAccountScope, catalog: McpServerCatalogV1, revision: number, current: boolean): void {
     const previous = getMcpServerCatalogSnapshot(scope);
     if (!canPublishCatalogReceipt({ current, revision, retainedRevision: previous.revision })) return;
-    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, value: { status: 'loading', value: catalog,
+    const next: McpServerCatalogValueSnapshot = { status: 'loading', value: catalog,
         revision, authority: 'active', stale: true, diagnostics: [], reason: 'loading',
-        ...(previous.cleanup ? { cleanup: previous.cleanup } : {}) } });
+        ...(previous.cleanup ? { cleanup: previous.cleanup } : {}) };
+    if (sameStrictJsonValue(previous, next)) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, value: next });
     for (const listener of [...listeners]) listener();
 }
 export function projectMcpServerCatalogSnapshot(snapshot: McpServerCatalogSnapshotV1,

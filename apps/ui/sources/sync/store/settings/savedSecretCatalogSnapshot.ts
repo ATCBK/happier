@@ -1,4 +1,5 @@
 import { parseSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { SavedSecretCatalogCorruptEntryV1, SavedSecretCatalogEntryV1, SavedSecretCatalogMaterialStatusV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { formatSavedSecretCatalogFingerprintV1, formatSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import type { SavedSecret, SavedSecretLegacyImportResult } from '@/sync/domains/settings/savedSecretTypes';
@@ -36,6 +37,13 @@ function notify(): void {
     for (const listener of [...listeners]) listener();
 }
 
+function publish(next: SavedSecretCatalogSnapshot): void {
+    const previous = getSavedSecretCatalogSnapshot(next.scope);
+    if (previous && sameStrictJsonValue(previous, next)) return;
+    snapshots.set(key(next.scope), Object.freeze(next));
+    notify();
+}
+
 export function subscribeSavedSecretCatalogSnapshots(listener: () => void): () => void {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
@@ -52,19 +60,20 @@ export function applyAcknowledgedSavedSecretCatalogEntry(scope: ServerAccountSco
     if (!receiptOrdering.admit(scope, entry.ref, entry.revision)) return;
     const entries = previous?.data ?? [];
     const data = old ? entries.map(candidate => candidate.ref === entry.ref ? entry : candidate) : [...entries, entry];
-    snapshots.set(key(scope), Object.freeze({ scope, status: 'refreshing', data: Object.freeze(data),
+    publish({ scope, status: 'refreshing', data: Object.freeze(data),
         corruptEntries: previous?.corruptEntries ?? EMPTY_CORRUPT_ENTRIES, materializedSecrets: EMPTY_MATERIALIZED_SECRETS,
         legacyImport: previous?.legacyImport ?? null, lastObservedAt: previous?.lastObservedAt ?? null,
-        stale: true, reachability: previous?.reachability ?? 'unknown', error: null }));
-    notify();
+        stale: true, reachability: previous?.reachability ?? 'unknown', error: null });
 }
 
 function preserveRows(previous: readonly SavedSecretCatalogEntryV1[] | null, incoming: readonly SavedSecretCatalogEntryV1[]): readonly SavedSecretCatalogEntryV1[] {
     const byRef = new Map(previous?.map((entry) => [entry.ref, entry]) ?? []);
-    return Object.freeze(incoming.map((entry) => {
+    const rows = incoming.map((entry) => {
         const current = byRef.get(entry.ref);
         return current && JSON.stringify(current) === JSON.stringify(entry) ? current : Object.freeze({ ...entry });
-    }));
+    });
+    return previous && previous.length === rows.length && rows.every((entry, index) => entry === previous[index])
+        ? previous : Object.freeze(rows);
 }
 
 function hasCurrentMaterial(snapshot: SavedSecretCatalogSnapshot | null): snapshot is SavedSecretCatalogSnapshot {
@@ -74,7 +83,7 @@ function hasCurrentMaterial(snapshot: SavedSecretCatalogSnapshot | null): snapsh
 
 export function beginSavedSecretCatalogLoad(scope: ServerAccountScope): void {
     const current = getSavedSecretCatalogSnapshot(scope);
-    snapshots.set(key(scope), Object.freeze({
+    publish({
         scope,
         status: current?.data ? 'refreshing' : 'loading',
         data: current?.data ?? null,
@@ -87,8 +96,7 @@ export function beginSavedSecretCatalogLoad(scope: ServerAccountScope): void {
         stale: current?.stale ?? false,
         reachability: current?.reachability ?? 'unknown',
         error: null,
-    }));
-    notify();
+    });
 }
 
 export function applySavedSecretCatalogPage(params: Readonly<{ scope: ServerAccountScope; entries: readonly SavedSecretCatalogEntryV1[]; corruptEntries?: readonly SavedSecretCatalogCorruptEntryV1[]; materializedSecrets?: readonly SavedSecret[]; legacyImport?: SavedSecretLegacyImportResult; observedAt: number; current?: boolean }>): void {
@@ -103,7 +111,7 @@ export function applySavedSecretCatalogPage(params: Readonly<{ scope: ServerAcco
             // An opaque corrupt identity cannot match a valid metadata receipt; preserve its repair row unchanged.
         }
     }
-    snapshots.set(key(params.scope), Object.freeze({
+    publish({
         scope: params.scope,
         status: 'ready',
         data: preserveRows(previous?.data ?? null, params.entries),
@@ -114,8 +122,7 @@ export function applySavedSecretCatalogPage(params: Readonly<{ scope: ServerAcco
         stale: params.current === false,
         reachability: 'reachable',
         error: null,
-    }));
-    notify();
+    });
 }
 
 export function applySavedSecretCatalogFailure(params: Readonly<{ scope: ServerAccountScope; error: ScopedSnapshotError }>): void {
@@ -123,7 +130,7 @@ export function applySavedSecretCatalogFailure(params: Readonly<{ scope: ServerA
     const authoritativeRefusal = isAuthoritativeScopedSnapshotRefusal(params.error);
     if (authoritativeRefusal) receiptOrdering.clearScope(params.scope);
     const retained = authoritativeRefusal ? null : (current?.data ?? null);
-    snapshots.set(key(params.scope), Object.freeze({
+    publish({
         scope: params.scope,
         status: 'error',
         data: retained,
@@ -136,8 +143,7 @@ export function applySavedSecretCatalogFailure(params: Readonly<{ scope: ServerA
         stale: true,
         reachability: reachabilityForScopedSnapshotError(params.error),
         error: params.error,
-    }));
-    notify();
+    });
 }
 
 export function invalidateSavedSecretCatalog(scope: ServerAccountScope): void {

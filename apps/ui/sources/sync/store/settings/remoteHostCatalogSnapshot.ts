@@ -1,4 +1,5 @@
 import type { RemoteHostCatalogSnapshotV1, RemoteHostRecordV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import * as React from 'react';
 import { observeRemoteHostCatalog } from '@/sync/engine/settings/remoteHostCatalogEngine';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -20,8 +21,7 @@ function publish(next: RemoteHostCatalogSnapshot): void {
     const key = serverAccountScopeKeySuffix(next.scope);
     const previous = snapshots.get(key);
     next = { ...next, revision: next.revision ?? retainCatalogRevision(next.catalog, previous?.revision) };
-    if (previous?.catalog === next.catalog && previous.data === next.data && previous.stale === next.stale
-        && previous.revision === next.revision) return;
+    if (previous && sameStrictJsonValue(previous, next)) return;
     snapshots.set(key, Object.freeze(next));
     for (const listener of [...listeners]) listener();
 }

@@ -1,5 +1,6 @@
 import type { ProviderConnectionsCatalogSnapshotV1, ProviderConnectionsCatalogV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialChange, type HomeCredentialMutationEvent } from '@/sync/runtime/orchestration/homeAccountChange';
@@ -64,8 +65,10 @@ export function applyAcknowledgedProviderCatalog(scope: ServerAccountScope, data
     current: boolean, cryptoAdmission: ProviderCatalogCryptoAdmission | null): void {
     const previous = getProviderCatalogSnapshot(scope);
     if (!canPublishCatalogReceipt({ current, revision, retainedRevision: previous?.revision })) return;
-    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, status: 'loading', catalog: { status: 'loading' },
-        data, revision, stale: true, cryptoAdmission });
+    const next: ProviderCatalogSnapshot = { scope, status: 'loading', catalog: { status: 'loading' },
+        data, revision, stale: true, cryptoAdmission };
+    if (previous && sameStrictJsonValue(previous, next)) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), next);
     syncCredentialSubscription();
     for (const listener of [...listeners]) listener();
 }

@@ -3,6 +3,7 @@ import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/co
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { canPublishCatalogReceipt, retainCatalogRevision } from './wholeCatalogReceiptOrdering';
 import { admitAgentConnectedAccountPurposeBindings } from '@happier-dev/protocol/account/settings/connected-services';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type ConnectedAccountCatalogValue<K extends ConnectedAccountCatalogKeyV1> = Extract<ConnectedAccountCatalogRecordV1, { key: K }>['value'];
 export type ConnectedAccountCatalogValueSnapshot<K extends ConnectedAccountCatalogKeyV1> = Readonly<{
@@ -37,8 +38,12 @@ export function applyAcknowledgedConnectedAccountCatalog(scope: ServerAccountSco
     const old = getConnectedAccountCatalogValue(scope, record.key);
     if (!canPublishCatalogReceipt({ current, revision, retainedRevision: old.revision })) return;
     record = admitCatalogRecord(record);
+    const value: ConnectedAccountCatalogValueSnapshot<ConnectedAccountCatalogKeyV1> = {
+        status: 'loading', value: record.value, revision, stale: true, reason: 'loading',
+    };
+    if (sameStrictJsonValue(old, value)) return;
     snapshots.set(snapshotKey(scope, record.key), { scope, key: record.key, catalog: { status: 'loading' },
-        value: { status: 'loading', value: record.value, revision, stale: true, reason: 'loading' } });
+        value });
     for (const listener of [...listeners]) listener();
 }
 export function applyConnectedAccountCatalogSnapshot(scope: ServerAccountScope, key: ConnectedAccountCatalogKeyV1,

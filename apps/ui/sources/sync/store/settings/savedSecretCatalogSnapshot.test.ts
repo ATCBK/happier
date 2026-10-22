@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { SavedSecretCatalogCorruptEntryV1, SavedSecretCatalogEntryV1 } from '@happier-dev/protocol';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
@@ -17,6 +17,7 @@ import {
     removeDeletedSavedSecretCatalogResource,
     resolveSavedSecretReference,
     resetSavedSecretCatalogSnapshotsForTests,
+    subscribeSavedSecretCatalogSnapshots,
 } from './savedSecretCatalogSnapshot';
 
 const scope = { serverId: 'home-a', accountId: 'account-a' } as const;
@@ -42,6 +43,31 @@ function sharedEntry(overrides?: Partial<SavedSecretCatalogEntryV1>): SavedSecre
 
 describe('savedSecretCatalogSnapshot', () => {
     beforeEach(() => resetSavedSecretCatalogSnapshotsForTests());
+
+    it('retains equal page and lifecycle snapshots without notifying and publishes real freshness changes', () => {
+        const notify = vi.fn();
+        const unsubscribe = subscribeSavedSecretCatalogSnapshots(notify);
+        onTestFinished(unsubscribe);
+        const page = () => ({ scope, entries: [sharedEntry()], observedAt: 10 });
+        applySavedSecretCatalogPage(page());
+        const ready = getSavedSecretCatalogSnapshot(scope);
+        applySavedSecretCatalogPage(page());
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(ready);
+        expect(notify).toHaveBeenCalledTimes(1);
+        beginSavedSecretCatalogLoad(scope);
+        const refreshing = getSavedSecretCatalogSnapshot(scope);
+        beginSavedSecretCatalogLoad(scope);
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(refreshing);
+        expect(notify).toHaveBeenCalledTimes(2);
+        applySavedSecretCatalogFailure({ scope, error: { kind: 'unreachable', retryable: true } });
+        const failed = getSavedSecretCatalogSnapshot(scope);
+        applySavedSecretCatalogFailure({ scope, error: { kind: 'unreachable', retryable: true } });
+        expect(getSavedSecretCatalogSnapshot(scope)).toBe(failed);
+        expect(notify).toHaveBeenCalledTimes(3);
+        applySavedSecretCatalogPage({ ...page(), observedAt: 11 });
+        expect(getSavedSecretCatalogSnapshot(scope)?.lastObservedAt).toBe(11);
+        expect(notify).toHaveBeenCalledTimes(4);
+    });
 
     it.each(['delete', 'empty refresh', 'failed revalidation'] as const)('rejects a delayed update receipt after %s without restoring material', phase => {
         const entry = sharedEntry({ revision: 5 });

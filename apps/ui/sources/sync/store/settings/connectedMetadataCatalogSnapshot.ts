@@ -1,4 +1,5 @@
 import type { ConnectedMetadataCatalogV1 } from '@happier-dev/protocol/connect/connectedMetadataCatalogV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { connectedAcknowledgementSubjectKeyV1, projectConnectedPresentationLabelsV1,
     type ConnectedPresentationRecordV1, type ConnectedAcknowledgementsRecordV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -76,8 +77,10 @@ export function applyAcknowledgedConnectedMetadata(scope: ServerAccountScope,
     const next = projectSnapshot(acknowledged.kind === 'presentation'
         ? { ...previous, presentation: { status: 'ready', entries: acknowledged.record.entries, revision, diagnostics: [] } }
         : { ...previous, acknowledgements: { status: 'ready', entries: acknowledged.record.entries, revision, diagnostics: [] } }, previous);
-    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, snapshot: { ...next,
-        ...(acknowledged.kind === 'presentation' ? { presentationStale: true } : { acknowledgementsStale: true }) } });
+    const snapshot = { ...next,
+        ...(acknowledged.kind === 'presentation' ? { presentationStale: true } : { acknowledgementsStale: true }) };
+    if (sameStrictJsonValue(previous, snapshot)) return;
+    snapshots.set(serverAccountScopeKeySuffix(scope), { scope, snapshot });
     for (const listener of [...listeners]) listener();
 }
 /** Seed-owned display fixture only. Real Account scopes and mutation admission never use it. */
