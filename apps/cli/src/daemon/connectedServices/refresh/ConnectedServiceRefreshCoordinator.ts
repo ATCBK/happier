@@ -36,6 +36,7 @@ import {
   materializeConnectedServicesForSpawn,
 } from '../materialize/materializeConnectedServicesForSpawn';
 import { resolveConnectedServiceMaterializedRootDir } from '../materialize/resolveConnectedServiceMaterializedRootDir';
+import { observeCurrentConnectedServiceMaterializationPhase } from '../materialize/materializationPhase';
 import { resolveForcedRefreshFreshnessDecision } from './credentialFreshness/adoptFreshFirst';
 import {
   computeConnectedServiceAccessTokenFingerprint,
@@ -1632,16 +1633,18 @@ export class ConnectedServiceRefreshCoordinator {
         return { status: 'refresh_failed' };
       }
       try {
-        if (await this.isQualifiedReconnectRequired(profile.ref, profile.credentialRevision)) {
+        if (await observeCurrentConnectedServiceMaterializationPhase('refresh_reconnect_inventory',
+          () => this.isQualifiedReconnectRequired(profile.ref, profile.credentialRevision))) {
           return { status: 'reconnect_required' };
         }
         // Native OAuth profiles need not project their expiry into metadata.
         // The established plugin status still observes that exact credential.
-        const invocation = await runtime.establishedRuntimeOwner.invokeWithReceipt({
+        const invocation = await observeCurrentConnectedServiceMaterializationPhase('refresh_status_invocation',
+          () => runtime.establishedRuntimeOwner.invokeWithReceipt({
           account: profile.ref,
           expectedCredentialRevision: profile.credentialRevision,
           operation: Object.freeze({ kind: 'status' as const }),
-        });
+        }));
         if (invocation.basis.credentialRevision !== profile.credentialRevision
           || invocation.basis.credentialConfigurationRevision !== profile.configurationRevision
           || !invocation.basis.isCurrent()) {
@@ -1653,7 +1656,8 @@ export class ConnectedServiceRefreshCoordinator {
         // health write must not prevent the provider exchange from running.
         if (!refreshNeeded) {
           try {
-            await this.settleQualifiedConnectedAccountHealth({ account: profile.ref, basis: invocation.basis, health });
+            await observeCurrentConnectedServiceMaterializationPhase('refresh_health_settlement',
+              () => this.settleQualifiedConnectedAccountHealth({ account: profile.ref, basis: invocation.basis, health }));
           } catch (error) {
             if (!health.reconnectRequired || !invocation.basis.isCurrent()) throw error;
             logger.warn('[DAEMON RUN] Qualified Connected Account rejection health did not settle', {
