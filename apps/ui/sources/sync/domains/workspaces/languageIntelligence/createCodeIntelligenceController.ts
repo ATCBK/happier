@@ -301,7 +301,12 @@ export function createCodeIntelligenceController(input: CodeIntelligenceControll
             return response;
         },
         cancel: (): void => { abortPending(); if (snapshot.status === 'searching' || snapshot.status === 'loading') publish({ ...snapshot, status: snapshot.result ? 'ready' : 'idle' }); },
-        dismiss: (): void => { abortPending(); publish({ ...snapshot, status: 'idle', selection: null, querySelection: null, kind: null, result: null, reason: undefined }); },
+        dismiss: (): void => {
+            abortPending();
+            if (snapshot.status === 'idle' && snapshot.selection === null && snapshot.querySelection === null
+                && snapshot.kind === null && snapshot.result === null && snapshot.reason === undefined) return;
+            publish({ ...snapshot, status: 'idle', selection: null, querySelection: null, kind: null, result: null, reason: undefined });
+        },
         dispose: (): void => { abortPending(); stopText?.(); document?.dispose(); retirement.dispose(); disposed = true; listeners.clear(); },
     };
 }

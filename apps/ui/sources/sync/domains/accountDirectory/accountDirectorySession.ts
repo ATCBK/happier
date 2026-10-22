@@ -15,6 +15,7 @@ import {
     normalizeAccountDirectoryEndpoint,
 } from '@/auth/accountDirectory/accountDirectoryCredentialStorage';
 import type { AccountServiceDirectoryAdoptionResult } from '@happier-dev/cli-common/accountService';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 export type AccountDirectorySessionStatus = 'idle' | 'loading' | 'ready' | 'stale' | 'unsupported' | 'error';
 export type AccountDirectoryReconciliationResult =
@@ -143,7 +144,7 @@ export class AccountDirectorySession {
             const account = await this.client.getMe();
             if (!isCurrent()) return this.snapshotValue.account;
             this.update({ ...this.snapshotValue, account });
-            return account;
+            return this.snapshotValue.account;
         } catch {
             return this.snapshotValue.account;
         }
@@ -211,8 +212,23 @@ export class AccountDirectorySession {
     }
 
     private update(next: AccountDirectorySessionSnapshot): void {
-        this.snapshotValue = next;
-        for (const listener of this.listeners) listener(next);
+        const previous = this.snapshotValue;
+        const previousHomes = new Map(previous.homes.map(home => [home.homeServerIdentityId, home]));
+        const rows = next.homes.map(home => {
+            const before = previousHomes.get(home.homeServerIdentityId);
+            return before && sameStrictJsonValue(before, home) ? before : home;
+        });
+        const homes = rows.length === previous.homes.length && rows.every((home, index) => home === previous.homes[index])
+            ? previous.homes : rows;
+        const account = sameStrictJsonValue(previous.account, next.account) ? previous.account : next.account;
+        const reconciliation = sameStrictJsonValue(previous.reconciliation, next.reconciliation)
+            ? previous.reconciliation : next.reconciliation;
+        if (previous.endpoint === next.endpoint && previous.status === next.status
+            && previous.preferredHomeServerIdentityId === next.preferredHomeServerIdentityId
+            && previous.refreshedAtMs === next.refreshedAtMs && previous.error === next.error
+            && previous.homes === homes && previous.account === account && previous.reconciliation === reconciliation) return;
+        this.snapshotValue = { ...next, homes, account, reconciliation };
+        for (const listener of this.listeners) listener(this.snapshotValue);
     }
 
     /** Publishes the result of reconciling the current Directory snapshot into local Home profiles. */
@@ -245,7 +261,7 @@ export class AccountDirectorySession {
                     reconciliation: { kind: 'not_run' },
                 };
                 this.update(next);
-                return next;
+                return this.snapshotValue;
             } catch (error) {
                 if (!isCurrent()) return this.snapshotValue;
                 const next: AccountDirectorySessionSnapshot = {
@@ -254,7 +270,7 @@ export class AccountDirectorySession {
                     error,
                 };
                 this.update(next);
-                return next;
+                return this.snapshotValue;
             } finally {
                 this.refreshPromise = null;
             }

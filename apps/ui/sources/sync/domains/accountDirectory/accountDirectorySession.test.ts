@@ -20,6 +20,33 @@ describe('AccountDirectorySession', () => {
         await TokenStorage.accountDirectoryAuthCredentials.set(target, { token: 'directory-token' });
     });
 
+    it('retains equal reconciliation and account snapshots without notifying, while publishing changes', async () => {
+        const session = createSession();
+        const notify = vi.fn();
+        const unsubscribe = session.subscribe(notify);
+        try {
+            const initial = session.snapshot;
+            expect(session.recordReconciliation({ kind: 'not_run' })).toBe(initial);
+            expect(notify).not.toHaveBeenCalled();
+            session.recordReconciliation({ kind: 'snapshot_unavailable', snapshotStatus: 'stale', error: null });
+            const reconciled = session.snapshot;
+            session.recordReconciliation({ kind: 'snapshot_unavailable', snapshotStatus: 'stale', error: null });
+            expect(session.snapshot).toBe(reconciled);
+            expect(notify).toHaveBeenCalledTimes(1);
+            const me = { v: 1, accountId: 'account-directory', displayName: 'Ada', avatar: null, linkedAuthenticationMethods: [] };
+            request.mockImplementation(async () => json(me));
+            await session.refreshAccount();
+            const account = session.snapshot;
+            await session.refreshAccount();
+            expect(session.snapshot).toBe(account);
+            expect(notify).toHaveBeenCalledTimes(2);
+            request.mockImplementation(async () => json({ ...me, displayName: 'Changed' }));
+            await session.refreshAccount();
+            expect(session.snapshot.account?.displayName).toBe('Changed');
+            expect(notify).toHaveBeenCalledTimes(3);
+        } finally { unsubscribe(); }
+    });
+
     it('disconnects only the selected identity at a reused URL', async () => {
         const other = { ...target, serverIdentityId: 'other-directory' };
         await TokenStorage.accountDirectoryAuthCredentials.set(other, { token: 'other-token' });

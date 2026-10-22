@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { act, createMachineFixture, renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
 import { ACTION_OPERATION_RPC_METHODS_V2, projectActionOperationSnapshotForV1Reader } from '@happier-dev/protocol/actions/operations/v1';
@@ -10,6 +14,7 @@ import { createActionOperationSelectors } from './actionOperationSelectors';
 import { actionOperationAddressKey, actionOperationMachineAddressKey } from './qualifiedActionOperation';
 import {
     bindActionOperationRuntimeToAccountLifetime,
+    ActionOperationRuntime,
     reconcileActionOperationsOnce,
     type ActionOperationMachineRuntimeScope,
 } from './actionOperationRuntime';
@@ -39,6 +44,33 @@ function operation(overrides: Partial<ActionOperationSnapshotV1> = {}): ActionOp
 }
 
 describe('action operation observation runtime', () => {
+    it('does not commit its mounted runtime when visible Machine details change without membership changes', async () => {
+        const previous = storage.getState();
+        const serverId = getActiveServerSnapshot().serverId;
+        let machine = createMachineFixture({ id: 'quiet-operation-machine', activeAt: Date.now() });
+        const publish = () => storage.setState({
+            profileScope: null,
+            machines: { [machine.id]: machine },
+            machineListByServerId: { [serverId]: [machine] },
+        });
+        let commits = 0;
+        publish();
+        const screen = await renderScreen(React.createElement(React.Profiler, {
+            id: 'operation-runtime', onRender: () => { commits++; },
+        }, React.createElement(ActionOperationRuntime)));
+        try {
+            const before = commits;
+            for (let tick = 1; tick <= 5; tick++) {
+                machine = { ...machine, updatedAt: machine.updatedAt + 1, daemonStateVersion: tick };
+                await act(async () => publish());
+            }
+            expect(commits - before).toBe(0);
+        } finally {
+            await screen.unmount();
+            storage.setState(previous, true);
+        }
+    });
+
     it.each(['retained before reconnect', 'arrives during predecessor read'] as const)(
         'preserves current rich facts when they are %s and V2 is unavailable', async timing => {
             const store = createActionOperationStore();

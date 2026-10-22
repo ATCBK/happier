@@ -208,7 +208,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
         if (retired || !isScopeHome(session)) return;
         for (const entry of sessions.get(session.sessionId)?.queries.values() ?? []) {
             entry.invalidatedWhileLoading = Boolean(entry.pending);
-            publish(entry, { ...entry.snapshot, freshness: 'stale' });
+            if (entry.snapshot.freshness !== 'stale') publish(entry, { ...entry.snapshot, freshness: 'stale' });
             if (entry.listeners.size > 0 && !entry.pending) void refresh(session, entry.query);
         }
     }
@@ -282,7 +282,7 @@ export function createSessionSystemRecordRepository(options: SessionSystemRecord
                 if (entry.listeners.size === 0) continue;
                 if (options?.force !== true && entry.snapshot.freshness !== 'stale') continue;
                 entry.invalidatedWhileLoading = Boolean(entry.pending);
-                publish(entry, { ...entry.snapshot, freshness: 'stale' });
+                if (entry.snapshot.freshness !== 'stale') publish(entry, { ...entry.snapshot, freshness: 'stale' });
                 if (!entry.pending) void refresh(entry.session, entry.query);
             }
         },

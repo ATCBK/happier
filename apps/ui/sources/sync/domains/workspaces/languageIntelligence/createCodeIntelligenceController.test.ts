@@ -30,6 +30,28 @@ function fixture() {
 }
 
 describe('fallback code intelligence controller', () => {
+    it('does not notify for an already dismissed view and still dismisses a real search', async () => {
+        const f = fixture();
+        const notify = vi.fn();
+        f.controller.subscribe(notify);
+        const idle = f.controller.getSnapshot();
+        f.controller.dismiss();
+        expect(f.controller.getSnapshot()).toBe(idle);
+        expect(notify).not.toHaveBeenCalled();
+        const pending = f.controller.references({ line: 0, character: 16 });
+        await Promise.resolve();
+        f.controller.dismiss();
+        expect(f.requests[0].signal.aborted).toBe(true);
+        const dismissed = f.controller.getSnapshot();
+        notify.mockClear();
+        f.controller.dismiss();
+        expect(f.controller.getSnapshot()).toBe(dismissed);
+        expect(notify).not.toHaveBeenCalled();
+        f.requests[0].resolve(result);
+        await pending;
+        expect(f.controller.getSnapshot()).toBe(dismissed);
+        f.controller.dispose();
+    });
     it('resolves the identifier from current text and opens the best definition through the provided file opener', async () => {
         const f = fixture();
         const pending = f.controller.definition({ line: 0, character: 16 });

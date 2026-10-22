@@ -20,6 +20,26 @@ const record = {
 const page = () => new Response(JSON.stringify({ records: [record], nextCursor: null, hasNext: false }));
 
 describe('Account-scoped Session System Record repository', () => {
+    it('keeps an already stale hidden query stable and still refreshes it when observed again', async () => {
+        let requests = 0;
+        const repository = createSessionSystemRecordRepository({ scope, request: async () => { requests++; return page(); } });
+        const stop = repository.subscribe(session, query, () => {});
+        await repository.refresh(session, query);
+        stop();
+        repository.invalidate(session);
+        const stale = repository.getSnapshot(session, query);
+        repository.invalidate(session);
+        expect(repository.getSnapshot(session, query)).toBe(stale);
+        expect(requests).toBe(1);
+        const notify = vi.fn();
+        const remounted = repository.subscribe(session, query, notify);
+        await repository.refresh(session, query);
+        expect(requests).toBe(2);
+        expect(repository.getSnapshot(session, query)).toMatchObject({ freshness: 'fresh', loading: 'idle' });
+        expect(notify).toHaveBeenCalled();
+        remounted();
+        repository.retire();
+    });
     it('shares an addressed item opening across subscribers and reopens only when crypto context changes', async () => {
         const value = { v: 1, destination: 'transcript', title: 'Visual', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
             source: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Visible' } } } };
