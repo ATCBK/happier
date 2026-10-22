@@ -305,6 +305,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     happyHomeDir:
                         opts.happyHomeDir ?? configuration.happyHomeDir,
                     accountSettingsSnapshot,
+                    savedSecretOperationContext: opts.resolveAccountSettingsSnapshot?.readOperationContext?.() ?? undefined,
                     ...(opts.resolveManagedPurposeBindingIntent ? { resolveManagedPurposeBindingIntent: opts.resolveManagedPurposeBindingIntent } : {}),
                     ...(opts.readModelProjection ? { readModelProjection: opts.readModelProjection } : {}),
                     ...(opts.prepareManagedEndpoint ? { prepareManagedEndpoint: opts.prepareManagedEndpoint } : {}),

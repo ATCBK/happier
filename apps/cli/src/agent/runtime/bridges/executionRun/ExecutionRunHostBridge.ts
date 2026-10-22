@@ -2156,6 +2156,7 @@ export class ExecutionRunHostBridge implements ExecutionRunHostBridgeContract {
             featureEnabled: await this.resolveProvidersFeatureEnabled?.() ?? false,
             happyHomeDir: this.happyHomeDir ?? configuration.happyHomeDir,
             accountSettingsSnapshot,
+            savedSecretOperationContext: this.resolveAccountSettingsSnapshot?.readOperationContext?.() ?? undefined,
             ...(this.resolveManagedPurposeBindingIntent ? { resolveManagedPurposeBindingIntent: this.resolveManagedPurposeBindingIntent } : {}),
             ...(this.readModelProjection ? { readModelProjection: this.readModelProjection } : {}),
           });

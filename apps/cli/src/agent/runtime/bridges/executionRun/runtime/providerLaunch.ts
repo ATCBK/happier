@@ -17,6 +17,7 @@ import { createProviderRedactionLease } from '@/providers/spawn/redaction';
 import type { ProviderRuntimeModelProjectionReader } from '@/providers/spawn/runtimeCatalog';
 import type { ResolveManagedProviderPurposeBindingIntent } from '@/providers/managed/resolvePurposeBindingSnapshot';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
 import { createExecutionRunCodedError } from '../errors';
 
 type Cleanup = (() => void | Promise<void>) | null;
@@ -33,6 +34,7 @@ export type ExecutionRunProviderSelectionInput = Readonly<{
     happyHomeDir: string;
     accountSettingsSnapshot?: ActiveAccountSettingsSnapshot | null;
     readAccountSettingsSnapshot?: () => ActiveAccountSettingsSnapshot | null;
+    savedSecretOperationContext?: SavedSecretOperationContextV1;
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
     /** Borrowed from this Run's pinned daemon snapshot; its owner releases it. */
@@ -137,6 +139,7 @@ function createExecutionRunProviderPreparation(
     input: ExecutionRunProviderSelectionInput,
     lease: Awaited<ReturnType<typeof acquireAuthoritativePluginRuntimeRegistryLease>>,
 ): Parameters<typeof prepareProviderLaunch>[0] {
+    const operationContext = input.savedSecretOperationContext;
     return {
         selection: { v: 1, ref: input.selection, updatedAt: Date.now() },
         backendTarget: input.backendTarget,
@@ -161,7 +164,10 @@ function createExecutionRunProviderPreparation(
                 selection, machineId, agentTargetKey, agentId, lease,
                 // Each child is authorized against its owning Account, never
                 // the process-global Account of another active Session.
-                getAccountSettingsSnapshot: input.readAccountSettingsSnapshot ?? (() => input.accountSettingsSnapshot ?? null),
+                getAccountSettingsSnapshot: input.readAccountSettingsSnapshot
+                    ?? (operationContext ? () => operationContext.readSnapshot()
+                        : () => input.accountSettingsSnapshot ?? null),
+                savedSecretOperationContext: input.savedSecretOperationContext,
                 runtimeStateStore: createProviderRuntimeStateStore({ happyHomeDir: input.happyHomeDir, machineId }),
                 materializationBaseDir: join(input.happyHomeDir, 'providers', 'materialized'),
                 scope: { kind: 'execution_run', executionRunId: input.runId },
@@ -198,6 +204,7 @@ export async function prepareExecutionRunProviderLaunch(input: Readonly<{
     happyHomeDir: string;
     accountSettingsSnapshot?: ActiveAccountSettingsSnapshot | null;
     readAccountSettingsSnapshot?: () => ActiveAccountSettingsSnapshot | null;
+    savedSecretOperationContext?: SavedSecretOperationContextV1;
     prepareTeamCredentialProviderBinding?: ExecutionRunTeamCredentialProviderBindingPreparer;
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
