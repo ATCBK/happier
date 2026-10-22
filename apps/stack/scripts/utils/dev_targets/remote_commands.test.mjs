@@ -2345,6 +2345,7 @@ test('remote Stack server uses the stable outer public URL and projects only sup
         HAPPIER_DB_CONNECTION_LIMIT: '30',
         HAPPIER_STACK_SERVER_LOG_LEVEL: 'debug',
         HAPPIER_SERVER_LOG_LEVEL: 'info',
+        HAPPIER_SERVER_LOG_FORMAT: 'json',
         HAPPIER_WEB_LATENCY_TRACE: '1',
         HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__ENABLED: '1',
         HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__MAX_ARTIFACT_BYTES: '16777216',
@@ -2370,6 +2371,8 @@ test('remote Stack server uses the stable outer public URL and projects only sup
   // A Stack's own server log level must reach its server wherever it is placed.
   assert.match(command, /HAPPIER_STACK_SERVER_LOG_LEVEL=debug/);
   assert.match(command, /HAPPIER_SERVER_LOG_LEVEL=info/);
+  // Its log format travels with the level: a debug level without the chosen format falls back to pretty.
+  assert.match(command, /HAPPIER_SERVER_LOG_FORMAT=json/);
   // So does its request-latency trace switch, the server's existing correlation owner.
   assert.match(command, /HAPPIER_WEB_LATENCY_TRACE=1/);
   assert.doesNotMatch(command, /do-not-forward|private\/remote-state|never-forward-this|HAPPIER_MASTER_SECRET/);

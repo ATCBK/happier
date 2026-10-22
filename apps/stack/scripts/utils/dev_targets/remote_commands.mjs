@@ -1330,6 +1330,7 @@ const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_KEYS = new Set([
   // The Stack's chosen server log level (resolved by server_env.mjs) applies wherever its server runs.
   'HAPPIER_STACK_SERVER_LOG_LEVEL',
   'HAPPIER_SERVER_LOG_LEVEL',
+  'HAPPIER_SERVER_LOG_FORMAT',
   'HAPPIER_WEB_LATENCY_TRACE',
 ]);
 const REMOTE_SERVER_LIGHT_SEMANTIC_ENV_PREFIXES = [
