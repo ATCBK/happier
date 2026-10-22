@@ -1,7 +1,7 @@
 import type { CuaNativeClient } from './nativeClient.js';
 import { createCuaLocalSandbox } from './localSandbox.js';
 import type { CuaPowerIntent } from './nativePower.js';
-import { readCuaSpaceRegistry, removeCuaSpaceRegistration } from './nativeSpaces.js';
+import { readCuaSpaceRegistryEntry, removeCuaSpaceRegistration } from './nativeSpaces.js';
 import { CuaLocalLaunchV1Schema, CuaNativeSpaceRegistrySchema, CuaNativeSpaceSchema, parseCuaLocalResource, type CuaLocalResourceV1 } from './schemas.js';
 
 type SpaceResource = Extract<CuaLocalResourceV1, { kind: 'space' }>;
@@ -29,6 +29,15 @@ function spaceResource(input: unknown): SpaceResource {
 
 export function createCuaLocalSpace(native: CuaNativeClient) {
     const sandbox = createCuaLocalSandbox(native);
+    // The one Space inspection. Native `sandbox info` reports a null image for VM
+    // Spaces; only the registry row names the image the Space was created from.
+    async function inspectSpace(resource: SpaceResource, signal?: AbortSignal) {
+        const inspected = await sandbox.inspect(resource, signal);
+        const registry = await readCuaSpaceRegistryEntry(native, resource.spaceId, signal, 'local');
+        if (inspected.existence !== 'present') return { ...inspected, resource, registry: registry.presence };
+        const imageId = inspected.imageId ?? registry.image;
+        return { ...inspected, ...(imageId !== undefined ? { imageId } : {}), resource, registry: registry.presence };
+    }
 
     return {
         async create(input: unknown, name: string, imageDiskBytes: number, signal?: AbortSignal): Promise<CuaLocalSpaceCreate> {
@@ -66,20 +75,15 @@ export function createCuaLocalSpace(native: CuaNativeClient) {
                 return { kind: 'unknown', recovery: resource };
             }
             // Registry presence cannot qualify selected compute: inspect the same
-            // exact sandbox, never create again. Native `sandbox info` reports a
-            // null image for VMs; the registry row then names the image the Space
-            // was created from.
-            const inspected = await sandbox.inspect(resource, signal);
-            return inspected.existence === 'present'
-                && (inspected.imageId ?? parsed.data.spaces[0].image) === launch.imageId
+            // exact sandbox, never create again. `spaces create` answers a row
+            // without an image, so the qualification reads the registry listing.
+            const inspected = await inspectSpace(resource, signal);
+            return inspected.existence === 'present' && inspected.registry === 'present' && inspected.imageId === launch.imageId
                 ? { kind: 'bound', resource }
                 : { kind: 'unknown', recovery: resource };
         },
         async inspect(input: unknown, signal?: AbortSignal) {
-            const resource = spaceResource(input);
-            const inspected = await sandbox.inspect(resource, signal);
-            const registry = await readCuaSpaceRegistry(native, resource.spaceId, signal, 'local');
-            return { ...inspected, resource, registry };
+            return inspectSpace(spaceResource(input), signal);
         },
         async power(input: unknown, intent: CuaPowerIntent, signal?: AbortSignal) {
             const resource = spaceResource(input);

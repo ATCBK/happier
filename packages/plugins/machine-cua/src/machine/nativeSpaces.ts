@@ -9,13 +9,20 @@ export type CuaSpaceRegistryPresence = 'present' | 'absent' | 'unknown';
  */
 export async function readCuaSpaceRegistry(native: CuaNativeClient, spaceId: string, signal?: AbortSignal,
     provider?: string): Promise<CuaSpaceRegistryPresence> {
+    return (await readCuaSpaceRegistryEntry(native, spaceId, signal, provider)).presence;
+}
+
+/** The same read, also naming the image the registry row was created from (only `spaces ls` carries it). */
+export async function readCuaSpaceRegistryEntry(native: CuaNativeClient, spaceId: string, signal?: AbortSignal,
+    provider?: string): Promise<{ presence: CuaSpaceRegistryPresence; image?: string }> {
     const result = await native.json(['--embedded', 'spaces', 'ls'], signal);
-    if (result.kind !== 'success') return 'unknown';
+    if (result.kind !== 'success') return { presence: 'unknown' };
     const parsed = CuaNativeSpaceRegistrySchema.safeParse(result.value);
-    if (!parsed.success) return 'unknown';
+    if (!parsed.success) return { presence: 'unknown' };
     const selected = parsed.data.spaces.find((entry) => entry.id === spaceId);
-    if (!selected) return 'absent';
-    return provider === undefined || selected.provider === provider ? 'present' : 'unknown';
+    if (!selected) return { presence: 'absent' };
+    if (provider !== undefined && selected.provider !== provider) return { presence: 'unknown' };
+    return { presence: 'present', ...(selected.image !== undefined ? { image: selected.image } : {}) };
 }
 
 /**

@@ -36,12 +36,13 @@ function harness(...responses: Array<PluginProcessResult | Error>) {
 
 describe('created local Cua Space native leaf', () => {
     it('binds the exact local Space only after inspecting its sandbox on the selected runtime', async () => {
-        const h = harness(result({ spaces: [registered] }), result(sandbox));
+        const h = harness(result({ spaces: [registered] }), result(sandbox), result({ spaces: [registered] }));
         expect(await h.spaces.create(launch, 'owned', 20 * 1024 ** 3)).toEqual({ kind: 'bound', resource });
         expect(h.argv).toEqual([
             ['--json', '--embedded', 'spaces', 'create', '--on=local', '--runtime=qemu', '--name=owned',
                 '--cpus=4', '--memory-mb=4096', '--disk-gb=40', '--', launch.imageId],
             ['--json', '--embedded', 'sandbox', 'info', 'local:owned'],
+            ['--json', '--embedded', 'spaces', 'ls'],
         ]);
     });
 
@@ -56,27 +57,32 @@ describe('created local Cua Space native leaf', () => {
     });
 
     it('refuses a local Space whose native sandbox is actually on another runtime', async () => {
-        const h = harness(result({ spaces: [registered] }), result({ ...sandbox, runtime: 'runc' }));
+        const h = harness(result({ spaces: [registered] }), result({ ...sandbox, runtime: 'runc' }), result({ spaces: [registered] }));
         expect(await h.spaces.create(launch, 'owned', launch.size.diskBytes)).toMatchObject({ kind: 'unknown', recovery: resource });
-        expect(h.argv).toHaveLength(2);
+        expect(h.argv).toHaveLength(3);
     });
 
     it('does not bind a VM Space whose actual image differs from the selected image', async () => {
-        const h = harness(result({ spaces: [registered] }), result({ ...sandbox, image: 'ghcr.io/acme/linux@sha256:neighbor' }));
+        const h = harness(result({ spaces: [registered] }), result({ ...sandbox, image: 'ghcr.io/acme/linux@sha256:neighbor' }),
+            result({ spaces: [registered] }));
         expect(await h.spaces.create(launch, 'owned', launch.size.diskBytes)).toEqual({ kind: 'unknown', recovery: resource });
-        expect(h.argv).toHaveLength(2);
+        expect(h.argv).toHaveLength(3);
     });
 
     it('qualifies a VM Space by its registry image when native sandbox info omits the image', async () => {
-        // Observed on cua 0.5.0: `sandbox info` of a qemu Space reports image null,
-        // while the Space registry row names the image it was created from.
+        // Observed on cua 0.5.0: `spaces create` answers a row without an image and
+        // `sandbox info` of a qemu Space reports image null; only `spaces ls` names
+        // the image the Space was created from.
         const noImage = { ...sandbox, image: null };
-        const bound = harness(result({ spaces: [{ ...registered, image: launch.imageId }] }), result(noImage));
+        const listed = (image?: string) => result({ spaces: [{ ...registered, ...(image ? { image } : {}) }] });
+        const bound = harness(result({ spaces: [registered] }), result(noImage), listed(launch.imageId));
         expect(await bound.spaces.create(launch, 'owned', launch.size.diskBytes)).toEqual({ kind: 'bound', resource });
-        const other = harness(result({ spaces: [{ ...registered, image: 'ghcr.io/acme/linux@sha256:neighbor' }] }), result(noImage));
+        const other = harness(result({ spaces: [registered] }), result(noImage), listed('ghcr.io/acme/linux@sha256:neighbor'));
         expect(await other.spaces.create(launch, 'owned', launch.size.diskBytes)).toEqual({ kind: 'unknown', recovery: resource });
-        const silent = harness(result({ spaces: [registered] }), result(noImage));
+        const silent = harness(result({ spaces: [registered] }), result(noImage), listed());
         expect(await silent.spaces.create(launch, 'owned', launch.size.diskBytes)).toEqual({ kind: 'unknown', recovery: resource });
+        const later = harness(result(noImage), listed(launch.imageId));
+        expect(await later.spaces.inspect(resource)).toMatchObject({ existence: 'present', imageId: launch.imageId, registry: 'present' });
     });
 
     it('does not round hardware sizes that the native integer MiB/GiB flags cannot represent', async () => {
