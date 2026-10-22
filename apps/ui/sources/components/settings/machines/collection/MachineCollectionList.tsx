@@ -272,6 +272,8 @@ export const MachineCollectionList = React.memo(function MachineCollectionList(p
             titleQualifier={row.titleParts.hint}
             titleLines={1}
             accessibilityLabel={[row.title, statusLine(row, true)].filter(Boolean).join(', ')}
+            // At the rail's narrowest the name wins: the summary steps aside before it shortens the name.
+            rightElementYields
             rightElement={(
                 <MachineListRowSummary
                     testID={`settings.machines.row.${row.serverId}.${row.kind === 'managed' ? row.managedId : row.machineId}.summary`}

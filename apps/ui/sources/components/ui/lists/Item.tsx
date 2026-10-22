@@ -173,6 +173,12 @@ export interface ItemProps {
      */
     rowRole?: 'item' | 'menu';
     rightElement?: React.ReactNode;
+    /**
+     * The right element is facts (telemetry, a quiet word), not a control: when the title would fall below
+     * its floor (the one a title meta keeps), the facts step aside whole and the name keeps the line. A
+     * resizable collection rail narrowed to its minimum shows the name, not "NLD…" beside sparklines.
+     */
+    rightElementYields?: boolean;
     onPress?: () => void;
     onDoublePress?: () => void;
     onLongPress?: () => void;
@@ -585,6 +591,9 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
         alignItems: 'center',
         flexShrink: 0,
     },
+    accessoryYielded: {
+        display: 'none',
+    },
     accessoryInline: {
         // Bound the accessory's root to its slot. Its internal flexible content can then
         // shrink around controls instead of painting past the row's trailing edge.
@@ -702,6 +711,7 @@ export const Item = React.memo<ItemProps>((props) => {
         showChevron = true,
         keepChevronWithRightElement = false,
         rightElementOutsidePressable = false,
+        rightElementYields = false,
         accessoryLayout = 'inline',
         accessoryMaxWidth = 'half',
         fieldAccessory = false,
@@ -1046,6 +1056,30 @@ export const Item = React.memo<ItemProps>((props) => {
         onFieldSaturated: handleFieldSaturated,
     }), [fieldMaxWidthPx, handleFieldSaturated, stackAccessory]);
     stackAccessoryRef.current = stackAccessory;
+    // Yielding facts: the title's column and the facts' natural width decide, with the title-meta floor.
+    const factsMeasure = React.useRef({ title: 0, titleNatural: Number.NaN, facts: 0, yielded: false });
+    // A text title is measured out of flow; the rule waits for that width instead of assuming the floor.
+    const titleMeasuredForFacts = React.useRef(false);
+    titleMeasuredForFacts.current = rightElementYields && (typeof title === 'string' || typeof title === 'number');
+    const [factsYielded, setFactsYielded] = React.useState(false);
+    const placeFacts = React.useCallback((next: Partial<{ title: number; titleNatural: number; facts: number }>) => {
+        const measure = factsMeasure.current;
+        Object.assign(measure, next);
+        if (measure.title <= 0 || measure.facts <= 0) return;
+        if (titleMeasuredForFacts.current && Number.isNaN(measure.titleNatural)) return;
+        // The name needs its whole width up to the floor a title meta keeps. Shown facts yield once the name's
+        // column falls short of that; yielded facts return once the column holds them, and the name.
+        const titleNeeds = Math.min(Number.isNaN(measure.titleNatural) ? Number.POSITIVE_INFINITY : measure.titleNatural, ITEM_TITLE_META_TITLE_MIN_PX);
+        // The facts' laid-out box already carries the gap the right slot keeps before them.
+        const yielded = measure.yielded ? measure.title - measure.facts < titleNeeds : measure.title < titleNeeds;
+        measure.yielded = yielded;
+        setFactsYielded(yielded);
+    }, []);
+    const handleFactsLayout = React.useCallback((event: LayoutChangeEvent) => {
+        const widthPx = event.nativeEvent.layout.width;
+        if (!Number.isFinite(widthPx) || widthPx <= 0) return;
+        placeFacts({ facts: widthPx });
+    }, [placeFacts]);
     const handleAccessoryLayout = React.useCallback((event: LayoutChangeEvent) => {
         // Only the inline position reports the control's natural width; a stacked control spans the row.
         if (stackAccessoryRef.current) return;
@@ -1199,6 +1233,13 @@ export const Item = React.memo<ItemProps>((props) => {
                 </ItemRowHoverProvider>
             </ItemRowAccessibleNameProvider>
         );
+        if (rightElementYields && !measuresRowWidth && !stackAccessory) return (
+            // Laid out as shrinkable as any inline accessory: its drawn width, not its widest, is what it gives back.
+            <View onLayout={handleFactsLayout} style={[styles.accessoryInline, factsYielded ? styles.accessoryYielded : null]}
+                {...(factsYielded ? { 'aria-hidden': true, accessibilityElementsHidden: true, importantForAccessibility: 'no-hide-descendants' as const } : {})}>
+                {named}
+            </View>
+        );
         // A stacked control is never measured, but its field still needs to know it spans the row.
         if (!measuresRowWidth) return (
             <View style={stackAccessory ? styles.accessoryMeasureStacked : styles.accessoryInline}>
@@ -1210,7 +1251,7 @@ export const Item = React.memo<ItemProps>((props) => {
                 <HappierPageRowFieldLayoutContext.Provider value={fieldLayout}>{named}</HappierPageRowFieldLayoutContext.Provider>
             </View>
         );
-    }, [accessoryAccessibleName, handleAccessoryLayout, isAccessoryHovered, isHovered, isPageRow, measuresRowWidth, rightElement, fieldLayout, stackAccessory]);
+    }, [accessoryAccessibleName, factsYielded, handleAccessoryLayout, handleFactsLayout, isAccessoryHovered, isHovered, isPageRow, measuresRowWidth, rightElement, rightElementYields, fieldLayout, stackAccessory]);
     const subtitleAccessoryNode = React.useMemo(() => normalizeNodeForView(subtitleAccessory ?? null), [subtitleAccessory]);
     const titleMetaNode = normalizeNodeForView(titleMeta ?? null);
     const [titleMetaPlacement, setTitleMetaPlacement] = React.useState<'inline' | 'beneath'>('inline');
@@ -1326,7 +1367,11 @@ export const Item = React.memo<ItemProps>((props) => {
             {/* Center Section */}
             <View
                 style={styles.centerContent}
-                {...(titleMetaCell === null ? {} : { onLayout: (event: LayoutChangeEvent) => placeTitleMeta({ row: event.nativeEvent.layout.width }) })}
+                {...(titleMetaCell === null && !rightElementYields ? {} : { onLayout: (event: LayoutChangeEvent) => {
+                    const widthPx = event.nativeEvent.layout.width;
+                    if (titleMetaCell !== null) placeTitleMeta({ row: widthPx });
+                    if (rightElementYields && Number.isFinite(widthPx) && widthPx > 0) placeFacts({ title: widthPx });
+                } })}
             >
                 {title === '' && titleMetaCell === null && !titleTrailing ? null : (typeof title === 'string' || typeof title === 'number') && titleMetaCell !== null ? (
                     <>
@@ -1501,10 +1546,20 @@ export const Item = React.memo<ItemProps>((props) => {
                 <Text style={[styles.title, titleSizeStyle, titleStyle, styles.detailMeasure]} numberOfLines={1} onLayout={handleTitleMeasureLayout}
                     aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{title as string | number}</Text>
             ) : null}
+            {rightElementYields && (typeof title === 'string' || typeof title === 'number') ? (
+                <Text style={[styles.title, titleSizeStyle, titleStyle, styles.detailMeasure]} numberOfLines={1}
+                    onLayout={(event: LayoutChangeEvent) => {
+                        const widthPx = event.nativeEvent.layout.width;
+                        if (Number.isFinite(widthPx) && widthPx > 0) placeFacts({ titleNatural: widthPx });
+                    }}
+                    aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{title}</Text>
+            ) : null}
         </>
     );
     }, [
         chevronAccessory,
+        placeFacts,
+        rightElementYields,
         detailBeneath,
         measuresDetail,
         measuresTitle,
