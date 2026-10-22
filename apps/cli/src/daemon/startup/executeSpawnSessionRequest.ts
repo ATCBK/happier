@@ -1220,10 +1220,10 @@ export async function executeSpawnSessionRequest(
                         'connected_account_request_auth_unavailable',
                 });
             }
-            // A committed Session was created with its initial access; the
-            // attaching runner receives none of the fresh-creation fields.
+            // Existing Sessions already own their birth context. Keep it for
+            // daemon preparation and protected attach, never fresh runner creation.
             const initialAccessFile = effectiveOptionsForSpawn.initialAccess === undefined
-                || committedLaunchSession
+                || launchExistingSessionId
                 ? undefined
                 : await createSessionInitialAccessFile(configuration.happyHomeDir, effectiveOptionsForSpawn.initialAccess);
             if (initialAccessFile) launchResourceScope.register(initialAccessFile.cleanup);
@@ -1326,7 +1326,7 @@ export async function executeSpawnSessionRequest(
                 terminalRequest,
                 terminalPresentation,
                 directory,
-                options: committedLaunchSession
+                options: launchExistingSessionId
                     ? withoutFreshSessionCreationFields(effectiveOptionsForSpawn)
                     : effectiveOptionsForSpawn,
                 trackedSpawnOptions,

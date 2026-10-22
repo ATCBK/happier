@@ -4628,7 +4628,11 @@ and final environment checks still run after accepted Team material is available
 In 0.3 development source, an authenticated same-key rejoin of a committed,
 inactive Session with runtime Activity revision zero and no runner-authored
 `hostPid` launches that same Session through the existing committed-row spawn
-owner before submitting initial input. The Action operation owner also carries
+owner before submitting initial input. Every existing-Session launch, including
+this retry and explicit Resume, keeps accepted Team context in daemon preparation,
+tracked spawn options and protected attach. Its runner receives the existing
+Session id without fresh-creation Team or initial-access arguments; the Session
+already owns those birth facts. The Action operation owner also carries
 the previous same-input creation's typed launch refusal in its existing
 host-only acceptance context. A dying runner can publish Activity and its process
 identity before native startup; physical-launch nonce success alone does not
