@@ -103,7 +103,8 @@ export const PageHeaderMenu = React.memo(function PageHeaderMenu(props: Readonly
             popoverAnchorAlign="end"
             variant="slim"
             matchTriggerWidth={false}
-            maxWidthCap={260}
+            // Room for a checked row's title beside its check ("Don't pause this Discussion ✓") without truncating.
+            maxWidthCap={280}
             showCategoryTitles={false}
             popoverPortalWebTarget="body"
             trigger={({ toggle }) => (
