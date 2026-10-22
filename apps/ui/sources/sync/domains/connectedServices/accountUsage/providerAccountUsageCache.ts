@@ -42,9 +42,10 @@ export function subscribeProviderAccountUsageCache(listener: () => void): () => 
 }
 
 /**
- * Retains the exact usage rows required by a mounted surface. The cache is a
- * last-known-good presentation owner, not a session-history archive, so the
- * final release removes rows that no live consumer can render.
+ * Retains acquisition only for the exact usage rows demanded by a mounted surface.
+ * Last-known-good rows survive observation gaps in this Account scope, so reopening
+ * can display them while the new observation revalidates. A scope replacement
+ * drops the previous Account's rows at the existing publication boundary.
  */
 export function retainProviderAccountUsageCacheEntries(
     credentialScope: string,
@@ -78,23 +79,18 @@ export function retainProviderAccountUsageCacheEntries(
             if (retained.observerCount === 0) {
                 retained.disposeObservation?.();
                 retained.disposeObservation = null;
+                // Facts survive the last observer, its cancelled activity does not.
+                // Only touch a scope still present: an old release cannot republish
+                // a superseded Account after a replacement scope has arrived.
+                const current = providerAccountUsageCacheState.entriesByCredentialScope[credentialScope]?.[recordId];
+                if (current?.loading) updateProviderAccountUsageCacheEntries(credentialScope, entries => ({
+                    ...entries, [recordId]: { ...current, loading: false },
+                }));
             }
             if (retained.count === 0) counts.delete(recordId);
         }
         if (counts.size === 0) providerAccountUsageCacheRetainCounts.delete(credentialScope);
 
-        const currentEntries = providerAccountUsageCacheState
-            .entriesByCredentialScope[credentialScope];
-        if (!currentEntries) return;
-        const nextEntries = Object.fromEntries(
-            Object.entries(currentEntries).filter(([recordId]) => counts.has(recordId)),
-        );
-        if (Object.keys(nextEntries).length === Object.keys(currentEntries).length) return;
-        publishProviderAccountUsageCacheState({
-            entriesByCredentialScope: Object.keys(nextEntries).length === 0
-                ? {}
-                : { [credentialScope]: nextEntries },
-        });
     };
 }
 
@@ -124,7 +120,7 @@ export function updateProviderAccountUsageCacheEntries(
     const retained = providerAccountUsageCacheRetainCounts.get(credentialScope);
     const incomingEntries = retained && retained.size > 0
         ? Object.fromEntries(
-            Object.entries(updatedEntries).filter(([recordId]) => retained.has(recordId)),
+            Object.entries(updatedEntries).filter(([recordId]) => retained.has(recordId) || recordId in currentEntries),
         )
         : updatedEntries;
     const nowMs = Date.now();

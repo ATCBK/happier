@@ -113,11 +113,11 @@ describe('useUsageSummary', () => {
     it('prefers what this launch read and keeps it on the device with its time', async () => {
         state.summaries = [liveSummary(2_000)];
         const { useUsageSummary } = await import('./useUsageSummary');
-        const hook = await renderHook(() => useUsageSummary({ load: 'once' }));
+        const hook = await renderHook(() => useUsageSummary({ load: 'visible' }));
         await flushHookEffects({ cycles: 2 });
 
         expect(hook.getCurrent()).toMatchObject({ source: 'live', asOf: 2_000 });
-        expect(new Set(state.policies)).toEqual(new Set(['once']));
+        expect(new Set(state.policies)).toEqual(new Set(['poll']));
         expect(state.saved.at(-1)).toMatchObject({
             v: 1,
             entries: [{ key: 'claude/work', fetchedAt: 2_000, meters: [{ meterId: '5h', remainingPct: 42, resetsAt: 1_000 }] }],
@@ -132,7 +132,7 @@ describe('useUsageSummary', () => {
             state: 'unavailable',
         }];
         const { useUsageSummary } = await import('./useUsageSummary');
-        const hook = await renderHook(() => useUsageSummary({ load: 'once' }));
+        const hook = await renderHook(() => useUsageSummary({ load: 'visible' }));
         await flushHookEffects({ cycles: 2 });
 
         expect(hook.getCurrent().accounts).toEqual([

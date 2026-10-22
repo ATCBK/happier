@@ -108,13 +108,13 @@ export function buildUsageSummary(input: Readonly<{
 /**
  * The Account's usage windows (each connected account's quota meters), for the hubs and the
  * sidebar Usage popover. It shows what this launch read, else the last value this device saved with
- * its time, and saves each new read. `load: 'once'` reads once per launch (explicit intent, such as
- * opening the popover); `load: 'cache'` never starts a read (a hub opening): every quota read goes
- * through the connected-account admission, which asks a machine (see lane h, craft pass).
+ * its time, and saves each new read. `load: 'visible'` retains the shared quota observation while
+ * the surface is open, revalidating retained data on return. `load: 'cache'` never starts a read.
+ * Reads keep the quota owner's exact Account/ref admission; explicit provider refresh stays separate.
  */
-export function useUsageSummary(options: Readonly<{ load: 'once' | 'cache' }>): UsageSummary {
+export function useUsageSummary(options: Readonly<{ load: 'visible' | 'cache' }>): UsageSummary {
     const { summaries, accountsWithoutUsage } = useConnectedServiceQuotaSummaries({
-        fetchPolicy: options.load === 'once' ? 'once' : 'cache_only',
+        fetchPolicy: options.load === 'visible' ? 'poll' : 'cache_only',
     });
     const scope = useActiveServerAccountScope();
     const serverId = scope?.serverId ?? null;

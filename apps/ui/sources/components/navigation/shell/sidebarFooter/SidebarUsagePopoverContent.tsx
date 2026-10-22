@@ -5,7 +5,6 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { SurfaceAsOfLabel } from '@/components/ui/surfaces/SurfaceAsOfLabel';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
-import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { groupUsageByProvider, type UsageAccountRow } from '@/components/hub/usage/usageByProvider';
 import { useUsageSummary, type UsageSummary } from '@/components/hub/usage/useUsageSummary';
 import { ConnectedAccountIdentityText } from '@/components/settings/connectedServices/ConnectedAccountIdentityText';
@@ -79,6 +78,7 @@ export type UsagePopoverPrivacy = Readonly<{
 /** Refresh and its state belong to the connected-account quota store, not the popover. */
 export type UsagePopoverRefresh = Readonly<{
     keys: readonly string[];
+    loadingByKey?: Readonly<Record<string, boolean>>;
     refreshingByKey: Readonly<Record<string, boolean>>;
     errorsByKey: Readonly<Record<string, string | null>>;
     run(keys?: readonly string[]): Promise<void>;
@@ -150,7 +150,7 @@ export function useUsagePopoverData(): Readonly<{
     privacy: UsagePopoverPrivacy;
     refresh: UsagePopoverRefresh;
 }> {
-    const usage = useUsageSummary({ load: 'once' });
+    const usage = useUsageSummary({ load: 'visible' });
     // The facts beside usage come from the same summaries owner the usage summary reads.
     const quota = useConnectedServiceQuotaSummaries({ fetchPolicy: 'cache_only' });
     // Each read account's subscription lives on its provider usage record (one batched read while open).
@@ -176,12 +176,20 @@ export function useUsagePopoverData(): Readonly<{
         accounts,
     }), [accounts, quota.accountsNeedingSignIn, quota.keysWithoutLimits]);
     const privacy = useConnectedAccountIdentityPrivacy({ mutation: true });
+    const loadingByKey = React.useMemo(() => {
+        const loading = { ...quota.loadingByKey };
+        for (const [key, recordId] of Object.entries(quota.usageRecordIdsByKey)) {
+            if (recordId && usageRecords.loadingByRecordId[recordId]) loading[key] = true;
+        }
+        return loading;
+    }, [quota.loadingByKey, quota.usageRecordIdsByKey, usageRecords.loadingByRecordId]);
     const refresh = React.useMemo((): UsagePopoverRefresh => ({
         keys: quota.refreshableKeys,
+        loadingByKey,
         refreshingByKey: quota.refreshingByKey,
         errorsByKey: quota.errorsByKey,
         run: quota.refresh,
-    }), [quota.refreshableKeys, quota.refreshingByKey, quota.errorsByKey, quota.refresh]);
+    }), [loadingByKey, quota.refreshableKeys, quota.refreshingByKey, quota.errorsByKey, quota.refresh]);
     return { usage, facts, privacy, refresh };
 }
 
@@ -245,7 +253,7 @@ export function SidebarUsagePopoverView(props: Readonly<{
     const refreshKeys = scoped
         ? refresh?.keys.filter((key) => key === session?.accountKey) ?? []
         : refresh?.keys ?? [];
-    const refreshing = refreshKeys.some((key) => refresh?.refreshingByKey[key] === true);
+    const refreshing = refreshKeys.some((key) => refresh?.refreshingByKey[key] === true || refresh?.loadingByKey?.[key] === true);
     const refreshError = refreshKeys.map((key) => refresh?.errorsByKey[key]).find((error) => error != null);
     const shownAsOf = scoped ? sessionAccount?.account.fetchedAt ?? null : usage.asOf;
 
@@ -337,6 +345,7 @@ export function SidebarUsagePopoverView(props: Readonly<{
                             accessibilityLabel={t('common.refresh')}
                             tooltip={t('common.refresh')}
                             disabled={refreshing}
+                            busy={refreshing}
                             onPress={() => refresh.run(scoped ? refreshKeys : undefined)}
                         />
                     ) : null}
@@ -347,9 +356,6 @@ export function SidebarUsagePopoverView(props: Readonly<{
                     />
                 </View>
             </View>
-            {refreshing ? (
-                <SurfaceStateCard testID="sidebar-usage-refresh-status" size="line" kind="loading" title={t('connectedServices.quota.refreshing')} />
-            ) : null}
             {refreshError ? (
                 <SurfaceFreshnessLine testID="sidebar-usage-refresh-error" reason={refreshError} tone="warning" />
             ) : null}
