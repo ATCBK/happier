@@ -1924,14 +1924,24 @@ renewals use the existing heartbeat endpoint and retain its server-returned expi
 Transient transport/server failures keep observation alive only within that
 confirmed lease; a successful renewal replaces the expiry. Definitive refusal,
 revocation, worker cancellation or expiry ends observation. The heartbeat's one
-cadence timer also observes expiry while a renewal request is pending, so a lost
+timer also observes expiry while a renewal request is pending, so a lost
 or late response cannot extend the lease or resurrect an expired claim.
+In 0.3 development, healthy renewals retain the configured cadence (15 seconds
+for the default 30-second lease). A claim delivered with less than one cadence
+remaining renews immediately. Each attempt gets half the remaining confirmed
+lease. Only transient retries shorten their spacing, using one third of the
+remaining lease at attempt start, bounded by the configured cadence and the
+existing one-second floor. The same timer cancels publisher-proof waiting and
+HTTP at that deadline; proof preparation consumes the HTTP budget,
+which also retains its existing request ceiling. A transient failure resumes a
+missed retry tick serially; requests never overlap.
+Neither an unavailable server nor a late proof extends the confirmed lease.
 Authorization and control reads remain serialized independently of renewal;
 a slow read cannot withhold the next heartbeat, and its eventual refusal still
 aborts the claimed execution.
 Local-file observations carry the Run, Machine and claim attempt with each
-renewal start, success, failure, expiry, stop and late response. Timer due time,
-last confirmed expiry and pending renewal/currentness state distinguish a late
+failure, expiry, stop and late response; healthy starts and successes stay quiet.
+Timer due time, last confirmed expiry and pending renewal/currentness state distinguish a late
 timer from a pending request. The existing transport separately records
 publisher-proof preparation, HTTP dispatch, response or decode failure, using
 only timings, status and structural error classification. No proof, token,
@@ -1981,8 +1991,9 @@ Habit history uses the shared Run window filtered by `automationId`; last
 results page the shared Account window until the relevant latest Runs are
 known, rather than issuing a request per trigger row. Active destination rows
 retain the destination Session id and show that destination's accepted
-`step N · title` labels alongside aggregate Run progress. The existing root
-`stepProgress.destinations` projection carries each accepted leaf's last observed
+`step N · title` labels alongside aggregate Run progress. The lean row shows the
+Run's canonical lifecycle word once; individual step outcomes remain in Run detail.
+The existing root `stepProgress.destinations` projection carries each accepted leaf's last observed
 invocation lifecycle, physical record identity and revision. Unopened observations
 survive reload; missing observations remain unknown. An observed completed loop
 iteration does not claim that the whole loop is complete. This uses the existing
@@ -2770,12 +2781,17 @@ Workspace comparisons use the target-platform path owner; Windows paths ignore
 case and comparisons keep separator boundaries without rewriting stored roots.
 
 Project rules follow the Account Project across checkout roots and Machines.
-The CLI's [session Project owner](../apps/cli/src/workspaces/resolveSessionProjectKey.ts)
-resolves the Session's Account association through the same WorkspaceRef used
-by its Project context stack. A directory-only Session or preview selects the
+The CLI's [session Project adapter](../apps/cli/src/workspaces/resolveSessionProjectKey.ts)
+and the UI's [Session context reader](../apps/ui/sources/sync/ops/actions/readUiMemoryInheritedContext.ts)
+use the shared [Session association owner](../packages/protocol/src/workspaces/workspaceRefResolutionV1.ts)
+to resolve the Account WorkspaceRef used by Project context and Memory. A directory-only Session or preview selects the
 unique exact checkout on its Machine and canonical Home identity; it does not
 infer a Project by containing-folder prefixes. An explicit workspace id must
-still agree with that checkout and any explicit Project id. Reach asks for this association only when a
+still agree with that checkout and any explicit Project id. A fresh Session's
+directory intent is sufficient: association is derived from those Account rows,
+not a second persisted birth marker. In 0.3 development, Save as decision uses
+that same Project context before falling back to Account Memory.
+Reach asks for this association only when a
 receivable item has a Project rule. An unavailable association remains
 `project_association_unavailable`; it does not become an absent Project or an
 Off decision. The existing MCP preview accepts an explicit `projectKey`, including
