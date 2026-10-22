@@ -9,17 +9,24 @@ export type MemoryFactCandidateV1 = Readonly<{
 }>;
 
 const normalize = (text: string) => text.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLowerCase();
+// English function words carry no useful duplicate evidence; keep this filtering out of recall/search.
+const STOP_WORDS = new Set(`a an and are as at be been being but by can could did do does for from had has have
+  he her him his how if in into is it its may might must no nor not of on or our out over own same she should
+  so some than that the their them then there these they this those through to too under until up us was we
+  were what when where which while who why will with would you your`.split(/\s+/u));
 
 /** Possible lexical matches in the already-admitted document; never semantic equality or cross-scope recall. */
 export function findMemoryFactCandidatesV1(body: MemoryDocBodyV1, text: string, nowMs: number, excludeFactId?: string): MemoryFactCandidateV1[] {
   const normalized = normalize(text);
-  const tokens = new Set(tokenizeMemoryText(text));
+  const tokens = new Set(tokenizeMemoryText(text).filter(token => Array.from(token).length > 1 && !STOP_WORDS.has(token)));
   const candidates: MemoryFactCandidateV1[] = [];
   const visit = (facts: readonly MemoryFactV1[], topic?: string) => {
     for (const fact of facts) {
       if (fact.id === excludeFactId || (fact.expiresAtMs !== undefined && fact.expiresAtMs <= nowMs)) continue;
+      // One shared word is insufficient evidence: require at least two distinct meaningful tokens.
+      // The shared tokenizer deduplicates tokens and retains CJK bigrams after single characters are ignored.
       const match = normalize(fact.text) === normalized ? 'exact'
-        : tokenizeMemoryText(fact.text).some(token => tokens.has(token)) ? 'related' : null;
+        : tokenizeMemoryText(fact.text).filter(token => tokens.has(token)).length > 1 ? 'related' : null;
       if (match) candidates.push({ factId: fact.id, text: fact.text, ...(fact.decision ? { decision: fact.decision } : {}),
         ...(topic === undefined ? {} : { topic }), match });
     }

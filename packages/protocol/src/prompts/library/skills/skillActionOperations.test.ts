@@ -20,6 +20,8 @@ import retainedFrontmatter from '../../../../fixtures/0.2-retained-skill-frontma
 import { estimateTokensV1 } from '../../../capabilities/estimateTokensV1.js';
 import { readSkillLibraryCatalog } from './readSkillLibraryCatalog.js';
 import { listArtifactHeadersV1 } from '../../../artifacts/artifactListSelectionV1.js';
+import { createActionExecutor, type ActionExecutorContext } from '../../../actions/actionExecutor.js';
+import { ApprovalRequestV2Schema, type ApprovalRequest } from '../../../approvals/approvalRequestV1.js';
 
 const markdown = '---\nname: sample\ndescription: A useful skill\n---\nInstructions';
 const files = [{ path: 'SKILL.md', contentBase64: encodeBase64(new TextEncoder().encode(markdown), 'base64'), contentKind: 'utf8' as const }];
@@ -84,6 +86,53 @@ function harness(registry?: RegistryPorts, foundReader?: (machineId: string, pat
     failRules: (value: boolean) => { failRules = value; }, failSession: (value: boolean) => { failSession = value; } };
 }
 describe('skill library Actions', () => {
+  it.each(['approved', 'waived', 'explicit', 'held'] as const)('keeps Session-created skills scoped through %s execution', async mode => {
+    const h = harness();
+    let approval: ApprovalRequest | null = null;
+    const contexts: ActionExecutorContext[] = [];
+    const executor = createActionExecutor({
+      // Independently committed Artifact/row/Session persistence are the boundaries.
+      approvalsCreate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { artifactId: 'approval' }; },
+      approvalsGet: async () => approval,
+      approvalsUpdate: async ({ request }) => { approval = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async () => true,
+      ...(mode === 'waived' ? { isActionApprovalRequired: () => false } : {}),
+      skillActionExecute: async ({ actionId, input, context }) => {
+        contexts.push(context);
+        return h.execute(actionId, input, { ...context, surface: context.surface ?? null,
+          ...(context.defaultSessionId ? { sessionId: context.defaultSessionId } : {}) }, context.signal);
+      },
+    });
+    const source = { kind: 'upload', files };
+    if (mode === 'held') await h.execute('skills.install', { source }, { surface: 'ui' });
+    const proposed = await executor.execute('skills.install', { source,
+      ...(mode === 'explicit' ? { where: { kind: 'write', write: { place: { t: 'machine', machineId: 'chosen' }, state: 'on' } } } : {}),
+    }, { surface: 'mcp', authority: 'account_automation', serverId: 'home', serverIdentityId: 'srv_01234567890123456789012345678901', runtimeAccountId: 'account',
+      defaultSessionId: 'creating-session', actionRequestId: 'create-skill',
+      actionCaller: { kind: 'session', sessionId: 'creating-session', starterDepth: 0, turnDepth: 0 } });
+    if (mode !== 'waived') {
+      expect(proposed).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      expect(ApprovalRequestV2Schema.parse(approval).executionOriginV1).toMatchObject({
+        caller: { kind: 'session', sessionId: 'creating-session' }, surface: 'agent',
+      });
+      const decided = await executor.execute('approval.request.decide', { artifactId: 'approval', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', serverId: 'other-device-profile', serverIdentityId: 'srv_01234567890123456789012345678901', runtimeAccountId: 'account',
+        defaultSessionId: 'deciding-session', actionCaller: { kind: 'host' },
+      });
+      expect(decided).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+      // The approving person still owns execution; creation provenance grants no authority.
+      expect(contexts.at(-1)).toMatchObject({ surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'other-device-profile' });
+    } else expect(proposed).toMatchObject({ ok: true, result: { skillIds: ['skill-1'], includedInSessionId: 'creating-session' } });
+    if (mode === 'explicit') {
+      expect(h.rules()).toEqual([expect.objectContaining({ skillId: 'skill-1', enabled: true, target: { t: 'machine', machineId: 'chosen' } })]);
+      expect(h.includes.size).toBe(0);
+    } else {
+      if (mode !== 'held') expect(h.rules()).toEqual([]);
+      expect(h.includes.get('creating-session')).toEqual(['skill-1']);
+      expect(h.includes.has('deciding-session')).toBe(false);
+    }
+    expect(h.creates()).toBe(1);
+  });
   it('opens a page through the batched Artifact owner while retaining per-item failures', async () => {
     const h = harness();
     const created = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].parse(await h.execute('skills.create', { name: 'sample', files }, { surface: 'ui' }));

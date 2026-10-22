@@ -17,6 +17,7 @@ import { throwIfAborted } from '@/utils/runtime/abortSignals';
 import { randomUUID } from '@/platform/randomUUID';
 import { readRegisteredStorageState } from '@/sync/domains/state/storageStateReaderBridge';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { PromptLibraryCatalogProjection } from '@/sync/store/settings/promptLibraryCatalogSnapshot';
 
 function readCompleteAccountArtifactInventory(scope: ServerAccountScope) {
   const state = readRegisteredStorageState();
@@ -169,22 +170,34 @@ export function createUiPromptLibraryArtifactStore(
     body: typeof artifact.body === 'string' ? artifact.body : null,
     owned: artifact.access === 'owner', access: artifact.access,
   } : null;
+  // Parallel row demands share this captured read only until it settles. The
+  // observed catalog lifecycle alone owns retained Settings/history maintenance.
+  let catalogRead: Readonly<{ signal: AbortSignal | undefined; pending: Promise<PromptLibraryCatalogProjection> }> | null = null;
   const organization: ArtifactFolderActionPortV1 | undefined = account ? {
     serverId: account.serverId,
     matchesServerId: serverId => areServerProfileIdentifiersEquivalent(serverId, account.serverId),
     assertCurrent: account.assertCurrent,
     readCatalog: async (signal, key = 'folders') => {
-      const { refreshPromptLibraryCatalog } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
       const { getPromptLibraryCatalogSnapshot, getPromptLibraryCatalogValue } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
       throwIfAborted(signal);
       account.assertCurrent();
-      // The catalog loader publishes readable authority before retained-source/history maintenance,
-      // and owns the Account lifetime until that maintenance settles. Actions share that read owner.
       const scope = { serverId: account.serverId, accountId: account.accountId };
       // The reviewed fresh row is usable authority; the Home CAS detects any unobserved remote edit.
       // A known-stale row is never used to construct a mutation.
       const row = getPromptLibraryCatalogValue(scope, key);
-      if (row.status !== 'ready' || row.stale) await refreshPromptLibraryCatalog(scope);
+      if (row.status !== 'ready' || row.stale) {
+        if (!catalogRead || catalogRead.signal !== signal) {
+          const read = { signal, pending: import('@/sync/api/account/apiPromptLibraryCatalog')
+            .then(({ readPromptLibraryCatalogProjectionInContext }) => readPromptLibraryCatalogProjectionInContext(account, signal)) };
+          catalogRead = read;
+          const release = () => { if (catalogRead === read) catalogRead = null; };
+          void read.pending.then(release, release);
+        }
+        const projection = await catalogRead.pending;
+        throwIfAborted(signal);
+        account.assertCurrent();
+        return projection;
+      }
       throwIfAborted(signal);
       account.assertCurrent();
       const projection = getPromptLibraryCatalogSnapshot(scope);

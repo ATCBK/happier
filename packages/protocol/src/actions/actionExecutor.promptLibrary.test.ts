@@ -1018,7 +1018,8 @@ describe('createActionExecutor (prompt library actions)', () => {
       if (!first.ok) throw new Error('Expected scope creation');
       const receipt = MemoryMutationResultV1Schema.parse(first.result);
       expect(await executor.execute('memory.remember', { ...target, text: 'Second fact' }, context))
-        .toMatchObject({ ok: true, result: { ok: false, errorCode: 'memory_duplicate_choice_required', ref: { artifactId: receipt.artifactId } } });
+        .toMatchObject({ ok: true, result: { ok: true, artifactId: receipt.artifactId } });
+      expect(JSON.parse(artifacts.get(receipt.artifactId)!.body!).index).toMatchObject([{ text: 'Second fact' }]);
       expect(JSON.parse(artifacts.get(receipt.artifactId)!.body!).topics[0].facts[0].sourceSessionRef).toBeNull();
     }
     expect(creates).toBe(2);

@@ -37,6 +37,43 @@ function emptyOrganizationPort(): ArtifactFolderActionPortV1 {
 }
 
 describe('prompt library action operations', () => {
+  it.each([
+    ['single meaningful token', 'Store billing reports monthly', 'Water garden plants monthly'],
+    ['repeated shared token', 'Store billing reports monthly monthly', 'Water garden plants monthly monthly'],
+    ['stop-words', 'The backups are on the server', 'The flowers are on the balcony'],
+    ['single characters', 'Route x y z through Paris', 'Send x y z toward Berlin'],
+    ['CJK single characters', '山 川 林', '山 川 海'],
+    ['one CJK bigram', '搜索账单', '搜索花卉'],
+  ])('saves without a duplicate choice for %s overlap', async (_label, existingText, text) => {
+    const existing = { id: 'old', text: existingText, createdAtMs: 1, sourceSessionRef: null };
+    let stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 1, bodyVersion: 1 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' },
+      body: JSON.stringify({ v: 1, index: [existing], topics: [] }) };
+    const store: PromptLibraryArtifactStore = { read: async () => stored, update: async input => {
+      stored = { ...stored, body: input.body, revision: { headerVersion: 1, bodyVersion: 2 } };
+    } };
+    expect(await rememberMemoryFactInLibrary({ store, nowMs: () => 10, randomId: () => 'new', sourceSessionRef: null,
+      request: { ref: { kind: 'doc', serverId: 'home', artifactId: 'memory' }, expectedRevision: stored.revision, text } }))
+      .toMatchObject({ ok: true, factId: 'new' });
+    expect(MemoryDocBodyV1Schema.parse(JSON.parse(stored.body!)).index).toEqual([
+      existing, { id: 'new', text, createdAtMs: 10, sourceSessionRef: null },
+    ]);
+  });
+  it.each([
+    ['Unicode words', 'Déployer mémoire durable', 'Préférer mémoire durable'],
+    ['CJK bigrams', '使用内存搜索', '启用内存搜索'],
+    ['normalized tokenless exact match', '🚀', '  🚀  '],
+  ])('keeps duplicate review for %s', async (_label, existingText, text) => {
+    const stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 1, bodyVersion: 1 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' },
+      body: JSON.stringify({ v: 1, index: [{ id: 'old', text: existingText, createdAtMs: 1, sourceSessionRef: null }], topics: [] }) };
+    const store: PromptLibraryArtifactStore = { read: async () => stored,
+      update: async () => { throw new Error('Duplicate review must not write'); } };
+    expect(await rememberMemoryFactInLibrary({ store, nowMs: () => 10, randomId: () => 'new', sourceSessionRef: null,
+      request: { ref: { kind: 'doc', serverId: 'home', artifactId: 'memory' }, expectedRevision: stored.revision, text } }))
+      .toMatchObject({ ok: false, errorCode: 'memory_duplicate_choice_required', revision: stored.revision,
+        candidates: [{ factId: 'old', match: _label === 'normalized tokenless exact match' ? 'exact' : 'related' }] });
+  });
   it.each(['keep_both', 'update', 'replace'] as const)('edits A against reviewed candidate B atomically (%s)', async kind => {
     const earlier = { id: 'A-prior', text: 'Prefer black tea', createdAtMs: 0, sourceSessionRef: null };
     const edited = { id: 'A', text: 'Prefer green tea', createdAtMs: 1, sourceSessionRef: null, expiresAtMs: 500,
@@ -106,7 +143,7 @@ describe('prompt library action operations', () => {
       errorCode: 'memory_duplicate_choice_required', ref: request.ref, revision: stored.revision,
       candidates: [{ factId: 'old', topic: 'Storage', match: 'exact' }] });
     expect(writes).toBe(0);
-    expect(await rememberMemoryFactInLibrary({ ...author, request: { ...request, text: 'Prefer PostgreSQL' } }))
+    expect(await rememberMemoryFactInLibrary({ ...author, request: { ...request, text: 'Prefer PostgreSQL for storage' } }))
       .toMatchObject({ ok: false, candidates: [{ factId: 'old', match: 'related' }] });
     await rememberMemoryFactInLibrary({ ...author, request: { ...request,
       duplicateChoice: { kind: 'update', factId: 'old', expectedRevision: stored.revision } } });

@@ -79,6 +79,57 @@ async function home(
 }
 
 describe('UI qualified prompt-library Artifact authority', () => {
+  it('shares finite catalog rows without starting retained Settings maintenance', async () => {
+    const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+    const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+    resetPromptLibraryCatalogEngineForTests();
+    resetPromptLibraryCatalogSnapshotsForTests();
+    const catalog = createPromptLibraryCatalogBoundary();
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: catalog.handle });
+    const before = f.requests.length;
+    await withUiPromptLibraryArtifactStore(async store => {
+      if (!store.organization) throw new Error('Expected captured organization reader');
+      const rows = await Promise.all((['skill-rules', 'skill-usage', 'folders'] as const)
+        .map(key => store.organization!.readCatalog(undefined, key)));
+      expect(rows.every(row => row.catalog.status === 'ready')).toBe(true);
+    }, { serverId: f.home.id });
+    const requests = f.requests.slice(before);
+    expect(requests.filter(request => request.method === 'GET'
+      && request.path === '/v1/account/entity-rows/prompt-library')).toHaveLength(1);
+    expect(requests.filter(request => request.path === '/v2/account/settings')).toHaveLength(0);
+    expect(catalog.requests).toEqual([]);
+  });
+  it('keeps independent finite catalog callers live when a sibling cancels', async () => {
+    const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
+    const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
+    resetPromptLibraryCatalogEngineForTests();
+    resetPromptLibraryCatalogSnapshotsForTests();
+    const catalog = createPromptLibraryCatalogBoundary();
+    const requested = createDeferred<void>();
+    const release = createDeferred<void>();
+    let reads = 0;
+    const f = await home('prompt_doc.v2', undefined, { handleRequest: async (path, init) => {
+      if (path === '/v1/account/entity-rows/prompt-library' && (init?.method ?? 'GET') === 'GET') {
+        reads++;
+        if (reads === 1) { requested.resolve(); await release.promise; }
+      }
+      return catalog.handle(path, init);
+    } });
+    await withUiPromptLibraryArtifactStore(async store => {
+      if (!store.organization) throw new Error('Expected captured organization reader');
+      const controller = new AbortController();
+      const cancelled = store.organization.readCatalog(controller.signal).catch(error => error);
+      try {
+        await requested.promise;
+        controller.abort();
+        const surviving = await store.organization.readCatalog();
+        expect(surviving.catalog.status).toBe('ready');
+        expect(reads).toBe(2);
+      } finally { release.resolve(); }
+      const outcome = await cancelled;
+      expect(outcome).not.toMatchObject({ catalog: { status: 'ready' } });
+    }, { serverId: f.home.id });
+  });
   it('prepares addressed skill reach from independent current catalog and content reads before writing', async () => {
     const catalog = createPromptLibraryCatalogBoundary();
     const catalogRequested = createDeferred<void>();
