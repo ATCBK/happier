@@ -111,6 +111,13 @@ describe('managed creation presentation', () => {
     };
     expect(managedCreationState(removed, { operation: failed })).toEqual({ kind: 'absent' });
     expect(currentManagedCreationOperation(removed, failed)).toBeNull();
+    // Retention started before Delete can settle after native absence. Its
+    // settlement is not a new request against the removed resource.
+    const retention = { ...failed, snapshot: { ...failed.snapshot,
+      actionId: 'machines.managed.power.set' as const, settledAt: 40,
+      progress: { kind: 'phase' as const, phase: 'managed.intent.waiting-idle', label: 'Waiting for unused machine' },
+    } };
+    expect(currentManagedCreationOperation(removed, retention)).toBeNull();
     const later = { ...failed, snapshot: { ...failed.snapshot, createdAt: 35, settledAt: 40 } };
     expect(currentManagedCreationOperation(removed, later)).toBe(later);
     expect(currentManagedCreationOperation(machine, failed)).toBe(failed);

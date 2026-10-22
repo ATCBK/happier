@@ -129,10 +129,12 @@ export function currentManagedCreationOperation(machine: ManagedMachineV1, opera
     if (!operation) return null;
     const snapshot = operation.snapshot;
     // Confirmed removal supersedes an earlier failed request on this resource.
-    // Keep history in Activity, and keep failures newer than the absence visible.
+    // A superseded operation can fail after Delete observed absence. Compare
+    // request admission, not settlement; later requests still need attention.
+    // Activity retains the historical failure.
     if (machine.desired === 'delete' && machine.allocation === 'confirmed-absent'
         && machine.observation?.availability === 'absent' && snapshot.state === 'failed'
-        && snapshot.settledAt !== undefined && snapshot.settledAt <= machine.observation.observedAt) return null;
+        && snapshot.createdAt <= machine.observation.observedAt) return null;
     if (snapshot.domainRef?.kind === 'machineEnvironment') {
         const reference = snapshot.domainRef;
         const scopeMatches = snapshot.actionId === 'machines.environment.apply' && snapshot.scope.machineId === machine.enrolledMachineId

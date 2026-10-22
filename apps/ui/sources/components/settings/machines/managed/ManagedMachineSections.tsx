@@ -193,7 +193,9 @@ export function ManagedMachineSections(props: SectionProps) {
         const binding = props.binding;
         setPolicyParent(null);
         setParentReadFailed(false);
-        if (!props.current || !binding?.isCurrent() || !policyController) return;
+        // Inventory revalidation flips `current` on every Home change; the read is keyed on the resource and its controller, not on that.
+        if (!policyController) { setParentReadFailed(true); return; }
+        if (!binding?.isCurrent()) return;
         const abort = new AbortController();
         const retirement = binding.onRetire(() => { abort.abort(); setPolicyParent(null); });
         const timeout = setTimeout(() => {
@@ -211,7 +213,7 @@ export function ManagedMachineSections(props: SectionProps) {
             if (!abort.signal.aborted) { clearTimeout(timeout); setParentReadFailed(true); }
         });
         return () => { clearTimeout(timeout); abort.abort(); retirement.dispose(); };
-    }, [props.binding, props.current, parentControllerAvailable, parentReadKey, parentReadRevision]);
+    }, [props.binding, parentControllerAvailable, parentReadKey, parentReadRevision]);
     const policy = proposedPolicy ?? machine;
     const supportedIntents = policyParent?.capabilities.supportedIntents ?? machine.reviewedFacts?.retentionCapabilities.supportedIntents ?? [];
     const canManage = props.binding?.accountId === machine.custodianAccountId

@@ -68,7 +68,7 @@ import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestrati
 
 const operationRpcBoundary = vi.hoisted(() => ({ answer: null as unknown, registryAnswer: null as unknown, schemaAnswer: null as unknown,
     requests: [] as Array<Readonly<{ serverId?: string | null; accountId?: string | null; machineId: string; method: string }>> }));
-const policyParentBoundary = vi.hoisted(() => ({ pending: false }));
+const policyParentBoundary = vi.hoisted(() => ({ pending: false, reads: 0 }));
 let restoreActionExecutorModuleLoader: (() => void) | undefined;
 beforeEach(async () => { restoreActionExecutorModuleLoader = await installRealActionExecutorModuleLoader(); });
 
@@ -101,8 +101,10 @@ vi.mock('@/modal', async () => {
 vi.mock('@/text', async () => await vi.importActual<typeof import('@/text')>('@/text'));
 vi.mock('./managedMachinePolicyParent', async importOriginal => {
     const actual = await importOriginal<typeof import('./managedMachinePolicyParent')>();
-    return { ...actual, readManagedMachinePolicyParent: (input: Parameters<typeof actual.readManagedMachinePolicyParent>[0]) =>
-        policyParentBoundary.pending ? new Promise<never>(() => {}) : actual.readManagedMachinePolicyParent(input) };
+    return { ...actual, readManagedMachinePolicyParent: (input: Parameters<typeof actual.readManagedMachinePolicyParent>[0]) => {
+        policyParentBoundary.reads += 1;
+        return policyParentBoundary.pending ? new Promise<never>(() => {}) : actual.readManagedMachinePolicyParent(input);
+    } };
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
@@ -121,6 +123,7 @@ afterEach(() => {
     vi.unstubAllGlobals();
     operationRpcBoundary.answer = null; operationRpcBoundary.registryAnswer = null; operationRpcBoundary.schemaAnswer = null;
     policyParentBoundary.pending = false;
+    policyParentBoundary.reads = 0;
     resetMachineProjectionReadsForTests();
     operationRpcBoundary.requests = []; actionOperationStore.reset();
 });
@@ -1031,7 +1034,7 @@ describe('managed Machine detail', () => {
                         launch: variant === 'different-launch' ? { ...choices, nativeSizeId: 'other-native-size' } : launch.choices,
                         available: variant !== 'unavailable' && !refreshFailed, ...(variant === 'descriptor-fallback' ? {} : {
                             retention: finite ? { supportedIntents: ['delete'], finiteOnly: true } : { supportedIntents: ['start', 'stop', 'delete'], finiteOnly: false },
-                        }) }] }) : { available: true };
+                        }) }] }) : actionId === 'machines.managed.inspect' ? { machine } : { available: true };
                 return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, requestId: request.requestId, actionId,
                     execution: { ok: true, result } }));
             }
@@ -1052,7 +1055,10 @@ describe('managed Machine detail', () => {
         if (variant === 'refresh-unavailable') {
             expect(screen.tree.findByType(ManagedMachinePolicySection).props.keep.defaultPolicy).toBeDefined();
             refreshFailed = true;
-            await act(async () => screen.tree.findByType(ManagedMachineSections).props.onChanged());
+            // A completed Action re-reads the parent: Check now is the real one that changes no state but observes.
+            const check = screen.tree.findAllByType(RoundButton).find(button =>
+                button.props.testID === 'managed-machine.progress:checkNow' || button.props.testID === 'managed-machine.observation-check');
+            await act(async () => check!.props.onPress());
             await flushHookEffects({ cycles: 35 });
         }
         const keep = screen.tree.findByType(ManagedMachinePolicySection).props.keep;
@@ -2081,6 +2087,37 @@ describe('managed Machine detail', () => {
             capabilitiesAvailable: false,
             unavailableReason: t('managedRetention.waitsForProvider', { provider: t('common.machine') }),
         });
+        await screen.unmount();
+    });
+    it('keeps one Keep parent read running across a Home change that revalidates the same resource', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-keep-revalidate.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_keep_revalidate');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
+        const launch: ManagedMachineV1['launch'] = { provider: { pluginId: 'custom.provisioner', localId: 'native' },
+            schemaVersion: 1, name: 'Revalidated resource', choices: {} };
+        const machine: ManagedMachineV1 = { id: 'managed-keep-revalidate', homeId: 'srv_managed_keep_revalidate', custodianAccountId: 'owner', launch,
+            controller: { machineId: 'controller', installationId: 'installation' }, enrolledMachineId: 'ordinary-enrolled',
+            resource: { contributionRef: launch.provider, schemaVersion: 1, value: {} }, allocation: 'bound', creationState: 'active',
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
+        storage.getState().applyMachines([createMachineFixture({ id: machine.controller.machineId,
+            installationId: machine.controller.installationId, activeAt: Date.now() })], true,
+            { sourceServerId: resolveServerProfileScopeIdForIdentifier(target.id) });
+        setRuntimeFetch(async input => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/machines/managed/actions/list') return Response.json({ machines: [machine] });
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        policyParentBoundary.pending = true;
+        const screen = await renderScreen(<ManagedEnrolledMachineSections enrolledMachineId={machine.enrolledMachineId!} serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        await flushHookEffects({ cycles: 20 });
+        expect(policyParentBoundary.reads).toBe(1);
+        // Busy Homes publish changes constantly; a revalidation of the same row must not abort and restart the read.
+        await act(async () => publishHomeAccountChange(target.id));
+        await flushHookEffects({ cycles: 20 });
+        expect(policyParentBoundary.reads).toBe(1);
         await screen.unmount();
     });
     it('mounts the enrolled association with the immutable receipt and removes it on read refusal', async () => {
