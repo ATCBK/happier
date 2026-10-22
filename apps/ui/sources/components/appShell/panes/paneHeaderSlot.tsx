@@ -33,6 +33,11 @@ export type PaneHeaderLineSegment =
  */
 export type PaneHeaderLine = Readonly<{
     leading?: React.ReactNode;
+    /**
+     * The leading leaf is words (a folder crumb, an author) that the line joins to its facts with its own
+     * " · "; without it the facts follow the leading mark directly, as they follow a glyph.
+     */
+    leadingSeparated?: boolean;
     segments: readonly PaneHeaderLineSegment[];
 }>;
 
@@ -64,7 +69,7 @@ function sameSegment(left: PaneHeaderLineSegment, right: PaneHeaderLineSegment):
 function sameLine(left: PaneHeaderLine | null | undefined, right: PaneHeaderLine | null | undefined): boolean {
     if (left === right) return true;
     if (!left || !right) return false;
-    if (left.leading !== right.leading || left.segments.length !== right.segments.length) return false;
+    if (left.leading !== right.leading || left.leadingSeparated !== right.leadingSeparated || left.segments.length !== right.segments.length) return false;
     return left.segments.every((segment, index) => sameSegment(segment, right.segments[index]!));
 }
 

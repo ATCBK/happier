@@ -66,27 +66,30 @@ async function renderLine(
   };
 }
 
-describe('PaneHeaderLineView one-line clip', { timeout: 240_000 }, () => {
+describe('PaneHeaderLineView facts clip', { timeout: 240_000 }, () => {
+  // The band keeps one line; a phone's large header has the whole width under its title, so facts that
+  // run out of room wrap to a second line before any drops (lab FV6p), and only a third line is clipped.
   describe.each([
-    ['band', false],
-    ['large', true],
-  ] as const)('%s facts row', (_name, large) => {
-    it('clips to the same line the native Text renders at default, the largest in-app size and an OS font scale', async () => {
+    ['band', false, 1, 'height'],
+    ['large', true, 2, 'maxHeight'],
+  ] as const)('%s facts row', (_name, large, lines, clip) => {
+    it('clips to the lines the native Text renders at default, the largest in-app size and an OS font scale', async () => {
       for (const [uiScale, osScale] of [[1, 1], [1.3, 1], [1, 1.5]] as const) {
         settings.osFontScale = osScale;
         const { facts, firstFactStyle } = await renderLine('ios', uiScale, large);
         expect(facts).toMatchObject({ overflow: 'hidden', flexWrap: 'wrap' });
         // Native Text scales its own line height by the in-app size; the host scales it again by the OS size.
-        expect(facts.height as number).toBeCloseTo((firstFactStyle.lineHeight as number) * osScale, 5);
+        expect(facts[clip] as number).toBeCloseTo((firstFactStyle.lineHeight as number) * osScale * lines, 5);
+        if (large) expect(facts.height).toBeUndefined();
       }
     });
 
     it('scales the web clip by the in-app size alone, as the CSS variable scales the Text line height', async () => {
-      const base = (await renderLine('web', 1, large)).facts.height as number;
+      const base = (await renderLine('web', 1, large)).facts[clip] as number;
       settings.osFontScale = 1.5;
       const largest = (await renderLine('web', 1.3, large)).facts;
       expect(largest).toMatchObject({ overflow: 'hidden', flexWrap: 'wrap' });
-      expect(largest.height as number).toBeCloseTo(base * 1.3, 5);
+      expect(largest[clip] as number).toBeCloseTo(base * 1.3, 5);
     });
   });
 

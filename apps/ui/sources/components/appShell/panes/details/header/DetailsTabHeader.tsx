@@ -153,7 +153,10 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
         const width = Math.ceil(event.nativeEvent.layout.width);
         setLeadingWidth((current) => current === width ? current : width);
     };
-    const lineNeed = factsNeed > 0 ? factsNeed + (props.metaLeading ? leadingWidth + theme.space.s4 : 0) : 0;
+    // Words before the facts are joined to them by the line's own " · " (a mark is followed directly).
+    const leadingWords = props.metaLeading !== undefined && props.metaLeading !== null && props.metaLeadingKind !== 'mark';
+    // The measured line carries the words' join (an empty leading), so only the live leading's own width is added.
+    const lineNeed = factsNeed > 0 ? factsNeed + (props.metaLeading ? leadingWidth + (leadingWords ? 0 : theme.space.s4) : 0) : 0;
     // The measured copy carries no ids or presses of its own (the visible line owns them).
     const measureSegments = React.useMemo(() => segments.map((segment) => {
         if (typeof segment === 'string') return segment;
@@ -323,7 +326,7 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
         <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" pointerEvents="none" style={styles.lineMeasure}
             onLayout={(event) => { const width = Math.ceil(event.nativeEvent.layout.width); setLineNeed((current) => current === width ? current : width); }}
             testID={`${testID}.lineMeasure`}>
-            <PaneHeaderLineView line={{ segments: measureSegments }} testID={`${testID}.lineMeasureLine`} />
+            <PaneHeaderLineView line={{ segments: measureSegments, ...(leadingWords ? { leading: <View />, leadingSeparated: true } : {}) }} testID={`${testID}.lineMeasureLine`} />
         </View>
     ) : null;
 
@@ -343,8 +346,8 @@ export const DetailsTabHeader = React.memo(function DetailsTabHeader(props: Deta
                     segments,
                     leading: props.metaLeading ? <View style={styles.liveFacts} onLayout={phone ? undefined : measureLeading}>
                         {props.metaLeading}
-                        {segments.length > 0 && props.metaLeadingKind !== 'mark' ? <Text style={[styles.metaSeparator, metrics.meta]}>·</Text> : null}
                     </View> : undefined,
+                    leadingSeparated: leadingWords,
                 } : null}
                 actions={bandActions}
                 size={phone ? 'large' : 'band'}
@@ -382,10 +385,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         flexShrink: 1,
         minWidth: 0,
         gap: theme.space.s4,
-    },
-    metaSeparator: {
-        ...Typography.default(),
-        color: theme.colors.text.secondary,
     },
     below: {
         gap: theme.space.s4,

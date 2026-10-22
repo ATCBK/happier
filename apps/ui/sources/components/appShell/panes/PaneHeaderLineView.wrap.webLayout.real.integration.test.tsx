@@ -1,0 +1,121 @@
+// @vitest-environment jsdom
+
+import * as React from 'react';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { View } from 'react-native';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  measureWebLayout,
+  type WebLayoutRect,
+} from '@/dev/testkit/render/measureWebLayout';
+
+/** A phone File page's facts as a browser wraps them (files lab FV1p/FV6p). */
+
+vi.mock('react-native', async () => vi.importActual('react-native-web'));
+vi.mock('react-native-unistyles', async () => {
+  const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+  return createUnistylesMock();
+});
+// The in-app text size is device-local storage, outside the line owner.
+vi.mock('@/sync/store/hooks', () => ({ useLocalSetting: () => 1 }));
+
+let root: Root | null = null;
+let host: HTMLElement | null = null;
+
+afterEach(async () => {
+  await act(async () => root?.unmount());
+  root = null;
+  host?.remove();
+  host = null;
+});
+
+const FACTS = [
+  'New, not tracked yet',
+  'MPEG-4 video',
+  '0:04',
+  '55.8 KB',
+] as const;
+
+async function measureLargeLine(width: number) {
+  const { PaneHeaderLineView } = await import('./PaneHeader');
+  const { Text } = await import('@/components/ui/text/Text');
+  host = document.createElement('div');
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => {
+    root!.render(
+      <View testID="column" style={{ width }}>
+        <PaneHeaderLineView
+          large
+          testID="header"
+          line={{
+            leading: <Text testID="crumb">assets</Text>,
+            leadingSeparated: true,
+            segments: FACTS,
+          }}
+        />
+      </View>,
+    );
+  });
+  return measureWebLayout(host, {
+    viewport: { width: Math.max(width, 400), height: 300 },
+    texts: ['·', 'assets', ...FACTS],
+  });
+}
+
+const sameLine = (a: WebLayoutRect, b: WebLayoutRect) =>
+  Math.abs((a.top + a.bottom) / 2 - (b.top + b.bottom) / 2) <= 3;
+
+describe("a phone header's wrapped facts, as a browser lays them out", () => {
+  it("starts the second line at the title's edge and never leads a line with a separator", async () => {
+    const layout = await measureLargeLine(300);
+    const column = layout.rect('column');
+    const clip = layout.rect('header.subtitle');
+    const crumb = layout.textRects('assets')[0]!;
+    const facts = FACTS.map((fact) => layout.textRects(fact)[0]!);
+    // The crumb opens the one row at the title's edge, and the facts wrap beneath it.
+    expect(crumb.left).toBeCloseTo(column.left, 0);
+    expect(sameLine(crumb, facts[0]!)).toBe(true);
+    const wrapped = facts.filter((fact) => !sameLine(fact, crumb));
+    expect(wrapped.length).toBeGreaterThan(0);
+    // The wrapped line starts where the title does, not under the crumb.
+    expect(Math.min(...wrapped.map((fact) => fact.left))).toBeCloseTo(
+      column.left,
+      0,
+    );
+    // Every separator a reader can see sits between two facts on its own line.
+    const words = [crumb, ...facts];
+    const visibleDots = layout
+      .textRects('·')
+      .filter((dot) => dot.right > clip.left + 0.5);
+    expect(visibleDots.length).toBe(FACTS.length - 1);
+    for (const dot of visibleDots) {
+      expect(
+        words.some(
+          (word) => sameLine(word, dot) && word.right <= dot.left + 0.5,
+        ),
+      ).toBe(true);
+      expect(
+        words.some(
+          (word) => sameLine(word, dot) && word.left >= dot.right - 0.5,
+        ),
+      ).toBe(true);
+    }
+    // Two lines at most, inside the column.
+    expect(clip.right).toBeLessThanOrEqual(column.right + 0.5);
+  });
+
+  it('keeps the crumb and every fact on one line when they fit', async () => {
+    const layout = await measureLargeLine(640);
+    const crumb = layout.textRects('assets')[0]!;
+    for (const fact of FACTS)
+      expect(sameLine(layout.textRects(fact)[0]!, crumb)).toBe(true);
+    expect(
+      layout
+        .textRects('·')
+        .filter((dot) => dot.right > layout.rect('header.subtitle').left + 0.5),
+    ).toHaveLength(FACTS.length);
+  });
+});

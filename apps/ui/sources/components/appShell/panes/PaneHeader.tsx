@@ -39,6 +39,9 @@ function readSegmentText(segment: PaneHeaderLineSegment): string {
     return typeof segment === 'string' ? segment : segment.text;
 }
 
+/** A phone's large header gives its facts up to two lines; the band keeps one. */
+const LARGE_FACTS_LINES = 2;
+
 /**
  * The height of one line of facts as the facts' own text renders it. The row clips to this height,
  * so it follows the same effective line height as the child `Text`: the in-app text size
@@ -72,78 +75,124 @@ export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: 
     const { line, large } = props;
     const testID = props.testID ?? 'pane-header';
     const factsLineHeight = useFactsLineHeight(large === true);
+    const leadingSeparated = line?.leadingSeparated === true && line.segments.length > 0;
+    const hasLink = line?.segments.some(isLinkSegment) === true;
+    const subtitleStyle = [styles.subtitle, large ? styles.largeSubtitle : null];
+    // One fact, after the `separator` that joins it to the one before (the band's " · ", or none).
+    const renderFact = (segment: PaneHeaderLineSegment, index: number, separator: string): React.ReactNode => {
+        if (typeof segment !== 'string' && 'icon' in segment) {
+            // A glyph-led fact stays one item: the separator, its glyph, then its words.
+            const onPress = segment.onPress;
+            const fact = (hovered: boolean) => <>
+                <Icon name={segment.icon} size={ICON_SIZE.xs} color={hovered ? theme.colors.text.primary : theme.colors.text.secondary} />
+                <Text numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null, styles.iconFactText, hovered ? styles.linkHovered : null]}>{segment.text}</Text>
+            </>;
+            return (
+                <View key={index} style={[styles.iconFact, index === 0 ? null : styles.followingFact]}>
+                    {separator ? <Text style={[styles.subtitle, large ? styles.largeSubtitle : null]}>{separator}</Text> : null}
+                    {onPress ? (
+                        <HappierPressable testID={segment.testID} accessibilityRole="link" accessibilityLabel={segment.accessibilityLabel ?? segment.text}
+                            onPress={onPress} style={(state) => [styles.iconFact, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
+                                focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
+                            {(state) => fact(state.hovered || state.focused)}
+                        </HappierPressable>
+                    ) : fact(false)}
+                </View>
+            );
+        }
+        if (typeof segment !== 'string' && 'failure' in segment && segment.onPress) {
+            // A failure count that leads to its list ("3 problems" opens Problems).
+            const onPress = segment.onPress;
+            return (
+                <View key={index} style={[styles.iconFact, index === 0 ? null : styles.followingFact]}>
+                    {separator ? <Text style={[styles.subtitle, large ? styles.largeSubtitle : null]}>{separator}</Text> : null}
+                    <HappierPressable testID={segment.testID} accessibilityRole="link" accessibilityLabel={segment.accessibilityLabel ?? segment.text}
+                        onPress={onPress} style={(state) => [state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
+                            focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
+                        {(state) => (
+                            <Text numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null, styles.failure,
+                                state.hovered || state.focused ? styles.failureHovered : null]}>{segment.text}</Text>
+                        )}
+                    </HappierPressable>
+                </View>
+            );
+        }
+        return (
+            <Text
+                key={index}
+                numberOfLines={1}
+                style={[styles.subtitle, large ? styles.largeSubtitle : null, index === 0 ? null : styles.followingFact]}
+            >
+                {separator}
+                {typeof segment === 'string'
+                    ? segment
+                    : 'tone' in segment
+                        ? <Text style={segment.tone === 'added' ? styles.added : styles.removed}>{segment.text}</Text>
+                        : 'attention' in segment
+                            ? <Text style={styles.attention}>{segment.text}</Text>
+                            : 'failure' in segment
+                                ? <Text style={styles.failure}>{segment.text}</Text>
+                            : <Text style={styles.emphasis}>{segment.text}</Text>}
+            </Text>
+        );
+    };
+    // The band's facts: each fact is its own flex item, where web collapses a leading space; a no-break space keeps the gap.
+    const bandSeparator = (index: number): string => index === 0 || !line ? ''
+        : isToneSegment(line.segments[index]!) && isToneSegment(line.segments[index - 1]!) ? NO_BREAK_SPACE : `${NO_BREAK_SPACE}·${NO_BREAK_SPACE}`;
+    if (large && line && (line.segments.length > 0 || line.leading)) {
+        // A phone's large header: the leading words and the facts are one quiet row that wraps from the
+        // title's edge (files lab FV1p/FV6p). Every item carries its separator in a fixed-width box before it,
+        // and the row starts one box to the left under the clip, so a separator that would open a line never shows.
+        const items: React.ReactNode[][] = [];
+        if (line.leading) items.push([<View key="leading" style={styles.lineLeading}>{line.leading}</View>]);
+        line.segments.forEach((segment, index) => {
+            const previous = index === 0 ? null : line.segments[index - 1]!;
+            // `+4 −2` stays together; a mark's first fact follows it directly.
+            const joined = previous ? isToneSegment(segment) && isToneSegment(previous) : line.leading !== undefined && line.leading !== null && !leadingSeparated;
+            const fact = renderFact(segment, index, joined && previous ? NO_BREAK_SPACE : '');
+            if (joined && items.length > 0) items[items.length - 1]!.push(fact);
+            else items.push([fact]);
+        });
+        return (
+            <View style={[styles.line, styles.largeLine]}>
+                <View
+                    testID={`${testID}.subtitle`}
+                    accessible={!hasLink && !line.leading}
+                    accessibilityLabel={hasLink || line.leading ? undefined : line.segments.map(readSegmentText).join(', ')}
+                    style={[styles.facts, styles.largeFacts, { maxHeight: factsLineHeight * LARGE_FACTS_LINES }]}
+                >
+                    <View style={styles.largeFlow}>
+                        {items.map((nodes, index) => (
+                            <View key={index} style={styles.largeItem}>
+                                <View style={styles.largeSeparator}>{index === 0 ? null : <Text style={subtitleStyle}>·</Text>}</View>
+                                {nodes}
+                            </View>
+                        ))}
+                    </View>
+                </View>
+                {props.lineEnd}
+            </View>
+        );
+    }
     return (
-        <View style={[styles.line, large ? styles.largeLine : null]}>
-            {line?.leading ? <View style={[styles.lineLeading, line.segments.length === 0 ? styles.leadingOnly : null]}>{line.leading}</View> : null}
+        <View style={styles.line}>
+            {line?.leading ? (
+                <View style={[styles.lineLeading, line.segments.length === 0 ? styles.leadingOnly : null, leadingSeparated ? styles.leadingSeparated : null]}>
+                    {line.leading}
+                    {leadingSeparated ? <Text style={subtitleStyle}>·</Text> : null}
+                </View>
+            ) : null}
             {line && line.segments.length > 0 ? (
                 // One line of facts. A fact that does not fit wraps below the clip and drops whole, so
                 // the band never ends on half a word ("6 wo…"); a lone long fact still ellipsizes.
                 <View
                     testID={`${testID}.subtitle`}
                     // One spoken line, unless a fact on it is a link of its own to reach.
-                    accessible={!line.segments.some(isLinkSegment)}
-                    accessibilityLabel={line.segments.some(isLinkSegment) ? undefined : line.segments.map(readSegmentText).join(', ')}
-                    style={[styles.facts, large ? styles.largeFacts : null, { height: factsLineHeight }]}
+                    accessible={!hasLink}
+                    accessibilityLabel={hasLink ? undefined : line.segments.map(readSegmentText).join(', ')}
+                    style={[styles.facts, { height: factsLineHeight }]}
                 >
-                    {line.segments.map((segment, index) => {
-                        // Each fact is its own flex item, where web collapses a leading space; a no-break space keeps the gap.
-                        const separator = index === 0 ? '' : isToneSegment(segment) && isToneSegment(line.segments[index - 1]!) ? NO_BREAK_SPACE : `${NO_BREAK_SPACE}·${NO_BREAK_SPACE}`;
-                        if (typeof segment !== 'string' && 'icon' in segment) {
-                            // A glyph-led fact stays one item: the separator, its glyph, then its words.
-                            const onPress = segment.onPress;
-                            const fact = (hovered: boolean) => <>
-                                <Icon name={segment.icon} size={ICON_SIZE.xs} color={hovered ? theme.colors.text.primary : theme.colors.text.secondary} />
-                                <Text numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null, styles.iconFactText, hovered ? styles.linkHovered : null]}>{segment.text}</Text>
-                            </>;
-                            return (
-                                <View key={index} style={[styles.iconFact, index === 0 ? null : styles.followingFact]}>
-                                    {separator ? <Text style={[styles.subtitle, large ? styles.largeSubtitle : null]}>{separator}</Text> : null}
-                                    {onPress ? (
-                                        <HappierPressable testID={segment.testID} accessibilityRole="link" accessibilityLabel={segment.accessibilityLabel ?? segment.text}
-                                            onPress={onPress} style={(state) => [styles.iconFact, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
-                                                focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
-                                            {(state) => fact(state.hovered || state.focused)}
-                                        </HappierPressable>
-                                    ) : fact(false)}
-                                </View>
-                            );
-                        }
-                        if (typeof segment !== 'string' && 'failure' in segment && segment.onPress) {
-                            // A failure count that leads to its list ("3 problems" opens Problems).
-                            const onPress = segment.onPress;
-                            return (
-                                <View key={index} style={[styles.iconFact, index === 0 ? null : styles.followingFact]}>
-                                    {separator ? <Text style={[styles.subtitle, large ? styles.largeSubtitle : null]}>{separator}</Text> : null}
-                                    <HappierPressable testID={segment.testID} accessibilityRole="link" accessibilityLabel={segment.accessibilityLabel ?? segment.text}
-                                        onPress={onPress} style={(state) => [state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
-                                            focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
-                                        {(state) => (
-                                            <Text numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null, styles.failure,
-                                                state.hovered || state.focused ? styles.failureHovered : null]}>{segment.text}</Text>
-                                        )}
-                                    </HappierPressable>
-                                </View>
-                            );
-                        }
-                        return (
-                            <Text
-                                key={index}
-                                numberOfLines={1}
-                                style={[styles.subtitle, large ? styles.largeSubtitle : null, index === 0 ? null : styles.followingFact]}
-                            >
-                                {separator}
-                                {typeof segment === 'string'
-                                    ? segment
-                                    : 'tone' in segment
-                                        ? <Text style={segment.tone === 'added' ? styles.added : styles.removed}>{segment.text}</Text>
-                                        : 'attention' in segment
-                                            ? <Text style={styles.attention}>{segment.text}</Text>
-                                            : 'failure' in segment
-                                                ? <Text style={styles.failure}>{segment.text}</Text>
-                                            : <Text style={styles.emphasis}>{segment.text}</Text>}
-                            </Text>
-                        );
-                    })}
+                    {line.segments.map((segment, index) => renderFact(segment, index, bandSeparator(index)))}
                 </View>
             ) : null}
             {props.lineEnd}
@@ -335,7 +384,8 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
         color: theme.colors.chrome.header.foreground,
     },
-    // The facts' row is exactly one line tall (height set from useFactsLineHeight): what wraps beneath it is clipped.
+    // The facts' row is exactly one line tall (height set from useFactsLineHeight), two at most on a phone's
+    // large header: what wraps beneath that is clipped.
     facts: {
         flexShrink: 1,
         minWidth: 0,
@@ -346,6 +396,34 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
     largeFacts: {
         marginTop: 0,
+        flexGrow: 1,
+    },
+    // The phone's one row of leading words and facts: it starts one separator box to the left of the clip.
+    largeFlow: {
+        flexGrow: 1,
+        flexShrink: 1,
+        flexBasis: 0,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        marginLeft: -theme.space.s16,
+    },
+    largeItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    // Every item's separator box is the same width, so the clip hides exactly the one that opens a line.
+    largeSeparator: {
+        width: theme.space.s16,
+        alignItems: 'center',
+        flexShrink: 0,
+    },
+    leadingSeparated: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s4,
     },
     subtitle: {
         ...HEADER_BAND_SUBTITLE_TEXT,
