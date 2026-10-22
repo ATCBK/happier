@@ -4,7 +4,7 @@ import { readInboxItemFocus } from '@/components/inbox/inboxItemFocus';
 import { InboxView } from '@/components/navigation/shell/InboxView';
 import { useRequireInboxAvailable } from '@/hooks/inbox/useRequireInboxAvailable';
 
-/** The Inbox route owns its one focus parameter, `item` (`createInboxItemRoute`). */
+/** The Inbox destination retains item focus and view; InboxView reads the view parameter. */
 export function InboxPage() {
     const enabled = useRequireInboxAvailable();
     const params = useLocalSearchParams<{ item?: string | string[]; invocationId?: string | string[]; jumpSeq?: string | string[] }>();

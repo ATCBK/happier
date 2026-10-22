@@ -11,6 +11,7 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 
 // The scroll instance is a renderer/platform boundary; the model and store remain real.
 const scrollOwner = vi.hoisted(() => ({ mounts: 0, unmounts: 0, offset: 0 }));
+const routeBoundary = vi.hoisted(() => ({ resetParams: () => {} }));
 vi.mock('react-native', async () => {
     const ReactModule = await import('react');
     return (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
@@ -26,7 +27,11 @@ vi.mock('react-native', async () => {
     });
 });
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('expo-router', async () => {
+    const boundary = (await import('@/dev/testkit/mocks/router')).createExpoRouterMock();
+    routeBoundary.resetParams = boundary.resetParams;
+    return boundary.module;
+});
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 vi.mock('expo-image', () => ({ Image: 'Image' }));
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
@@ -40,6 +45,7 @@ async function setContent(populated: boolean) {
 
 describe('InboxView scroll owner stability', () => {
     beforeEach(() => {
+        routeBoundary.resetParams();
         scrollOwner.mounts = 0;
         scrollOwner.unmounts = 0;
         scrollOwner.offset = 0;

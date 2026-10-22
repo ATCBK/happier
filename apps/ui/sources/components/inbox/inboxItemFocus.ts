@@ -7,7 +7,13 @@ import type { AccountNoticeArtifactHeaderV1, UsageNoticeArtifactHeaderV1 } from 
 import { inboxNoticeFocusKeyV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 import { machineVitalsNoticeHref } from '@/components/machines/page/machinePageHref';
 import { buildDiscussionRouteHref } from '@/components/discussions/discussionRoutes';
-import { buildSessionExecutionRunRouteHref } from '@/components/sessions/agents/navigation/buildSessionExecutionRunRouteHref';
+import type { InboxItemView } from './inboxItemProjection';
+
+/** The selected Inbox view travels with its destination, including phone Back. */
+export function readInboxView(raw: string | string[] | undefined): InboxItemView | null {
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    return value === 'needs_you' || value === 'updates' || value === 'mentions' ? value : null;
+}
 
 /**
  * The Inbox route's one focus parameter (`session:<Home>:<id>`, `run:<Home>:<id>` or
@@ -57,7 +63,7 @@ export function resolveInboxNoticePageRoute(id: string, notice?: InboxItemDetail
         ?? `/inbox?item=${encodeURIComponent(inboxNoticeFocusKeyV1(serverId ?? '', id))}`;
 }
 
-/** The page a notice points at (a plugin page, usage, a machine, a run), or null when the notice is its own content. */
+/** The page a notice points at (a plugin page, usage or a machine), or null when the notice is its own content. */
 export function resolveInboxNoticeOwnPageRoute(notice?: InboxItemDetailContext['notice'], serverId?: string): string | null {
     if (notice?.kind === 'account_notice.v1' && notice.source.kind === 'plugin' && notice.page) {
         return buildPluginAppPageRoutePath({ pluginId: notice.source.pluginId, localId: notice.page.pageId,
@@ -65,22 +71,16 @@ export function resolveInboxNoticeOwnPageRoute(notice?: InboxItemDetailContext['
     }
     if (notice?.notice?.topic === 'connected_service_usage') return '/settings/usage';
     if (notice?.notice?.topic === 'resource_limit') return machineVitalsNoticeHref(notice.notice, serverId);
-    if (notice?.notice?.topic === 'follow_update') {
-        const source = notice.notice.follow.original.source;
-        const route = source.kind === 'execution_run'
-            ? buildSessionExecutionRunRouteHref({ sessionId: source.sessionId, runId: source.runId, serverId })
-            : createWorkflowRunRoute(source.runId, serverId);
-        if (route) return route;
-    }
     return null;
 }
 
-export function createInboxItemRoute(focus: InboxItemFocus) {
+export function createInboxItemRoute(focus: InboxItemFocus, view?: InboxItemView) {
     return { pathname: '/inbox', params: {
         item: focus.kind === 'notice' ? inboxNoticeFocusKeyV1(focus.serverId, focus.id)
             : `${INBOX_ITEM_DETAIL_REGISTRY[focus.kind].prefix}${encodeURIComponent(focus.serverId)}:${encodeURIComponent(focus.id)}${focus.kind === 'automation_run' ? `:${encodeURIComponent(focus.automationId)}` : focus.kind === 'discussion' ? `:${encodeURIComponent(focus.messageId)}` : ''}`,
         ...(focus.kind === 'workflow_run' && focus.invocationId ? { invocationId: focus.invocationId } : {}),
         ...(focus.kind === 'session' && readInboxJumpSeq(focus.jumpSeq) !== null ? { jumpSeq: String(focus.jumpSeq) } : {}),
+        ...(view ? { view } : {}),
     } } as const;
 }
 

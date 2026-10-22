@@ -16,19 +16,27 @@ import type { InboxModel } from './useInboxModel';
 /** Selection consumes the existing owners' positive answer facts, never absence from a list. */
 export function useInboxItemResolved(
     focus: InboxItemFocus | null,
-    model: Pick<InboxModel, 'sessionCandidates' | 'accountNotices'> & Readonly<{ isDataReady: boolean }>,
+    model: Pick<InboxModel, 'sessionCandidates' | 'accountNotices'> & Readonly<{
+        isDataReady: boolean;
+        sessionScopes?: InboxModel['source']['audienceScopes'];
+    }>,
 ): boolean {
     const lifetime = useActiveServerAccountScopeLifetime();
     const scope = lifetime?.scope ?? null;
     const sameHome = Boolean(focus && scope && (!focus.serverId && focus.kind === 'approval'
         || areServerProfileIdentifiersEquivalent(focus.serverId, scope.serverId)));
+    // Activity already binds multi-Home Session candidates to their exact credentials.
+    // Other Inbox producers use the active Account store; do not rebind those records.
+    const sessionScope = focus?.kind === 'session' ? model.sessionScopes?.get(focus.serverId) : null;
+    const readableHome = sameHome || Boolean(focus?.kind === 'session' && sessionScope
+        && areServerProfileIdentifiersEquivalent(sessionScope.serverId, focus.serverId));
     const kind = focus?.kind;
     const id = focus?.id;
     const messageId = focus?.kind === 'discussion' ? focus.messageId : null;
     // Reuse the canonical store's exact record, independently of list membership. No
     // selected entity means no detail subscription; unrelated records retain this snapshot.
     const readRecord = React.useCallback(() => {
-        if (!lifetime?.isCurrent() || !sameHome || !id) return null;
+        if (!lifetime?.isCurrent() || !readableHome || !id) return null;
         if (kind === 'approval') return storage.getState().artifacts[id] ?? null;
         if (kind === 'workflow_run') return storage.getState().workflowRunsById[workflowRunStoreKey(id, lifetime.scope)] ?? null;
         if (kind === 'discussion') {
@@ -42,7 +50,7 @@ export function useInboxItemResolved(
                 ? attention : thread ?? attention ?? null;
         }
         return true as const;
-    }, [id, kind, lifetime, messageId, sameHome]);
+    }, [id, kind, lifetime, messageId, readableHome]);
     const subscribe = React.useCallback((notify: () => void) => {
         if (!lifetime || !sameHome || !id) return () => {};
         const unsubscribe = kind === 'discussion'

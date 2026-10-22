@@ -245,7 +245,8 @@ function NavigableInbox(props: Readonly<{ model: InboxModel; view: InboxItemView
     const [focus, select] = React.useState<InboxItemFocus | null>(null);
     const close = React.useCallback(() => select(null), []);
     const selectedResolved = useInboxItemResolved(focus, { sessionCandidates: props.model.sessionCandidates,
-        accountNotices: props.model.accountNotices, isDataReady: props.model.source.isDataReady });
+        accountNotices: props.model.accountNotices, isDataReady: props.model.source.isDataReady,
+        sessionScopes: props.model.source.audienceScopes });
     useInboxItemNavigation({ items: props.model.items, view: props.view, focus, enabled: true,
         selectedResolved, select, open: routerPush, close, markOpened: props.model.markItemOpened });
     const Content = props.content;

@@ -4,15 +4,19 @@ import { createAccountNoticeArtifactFixture, createUsageNoticeArtifactFixture } 
 import { readAccountNoticeArtifactHeader, readOpenUsageNoticeArtifactHeader } from './usageNoticeArtifacts';
 
 describe('private Account notice reader', () => {
-    it('retains a Run Follow notice without misclassifying it as a legacy usage notice', () => {
+    it('does not project retired Run Follow notice copies as Account Inbox items', () => {
         const notice = RunFollowUpdateNotificationV1Schema.parse({ topic: 'follow_update', follow: {
             original: { source: { kind: 'workflow_run', runId: 'run-1' }, revision: 2 },
             event: { kind: 'finished' },
         } });
-        const artifact = createAccountNoticeArtifactFixture({ header: {
-            source: { kind: 'host', topic: 'follow_update' }, page: undefined, notice,
-        } });
-        expect(readAccountNoticeArtifactHeader(artifact, 'account-a')?.notice).toEqual(notice);
+        // Retained 0.3 development bytes from the removed writer, not a current notice producer.
+        const content = { v: 1, type: 'update', resolved: false,
+            source: { kind: 'host', topic: 'follow_update' }, notice };
+        const header = { ...content, kind: 'account_notice.v1', title: 'Run finished', status: 'open' };
+        const artifact = { ...createAccountNoticeArtifactFixture(),
+            header, rawHeader: header,
+            body: JSON.stringify(content) };
+        expect(readAccountNoticeArtifactHeader(artifact, 'account-a')).toBeNull();
         expect(readOpenUsageNoticeArtifactHeader(artifact, 'account-a')).toBeNull();
         expect(readOpenUsageNoticeArtifactHeader(createUsageNoticeArtifactFixture(), 'account-a'))
             .toMatchObject({ kind: 'usage_notice.v1', notice: { topic: 'connected_service_usage' } });

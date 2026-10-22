@@ -417,8 +417,9 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         const header = readAccountNoticeArtifactHeader(artifact, 'account-a')!;
         const focus: InboxItemFocus = { kind: 'notice', id: artifact.id, serverId };
         const input: Parameters<typeof useInboxItemResolved>[1] = { sessionCandidates: [], accountNotices: [{ artifact, header }], isDataReady: true };
-        const hook = await renderHook((props: { focus: InboxItemFocus | null; input: typeof input }) => useInboxItemResolved(props.focus, props.input),
-            { initialProps: { focus: null, input } });
+        type Props = { focus: InboxItemFocus | null; input: typeof input };
+        const initialProps: Props = { focus: null, input };
+        const hook = await renderHook((props: Props) => useInboxItemResolved(props.focus, props.input), { initialProps });
         expect(hook.getCurrent()).toBe(false);
         expect(await hook.rerender({ focus, input })).toBe(false);
         expect(await hook.rerender({ focus, input: { ...input, accountNotices: [] } })).toBe(false);
@@ -464,6 +465,18 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(await hook.rerender({ ...input, sessionCandidates: [buildSessionActivityAttention({ session: answered })] })).toBe(true);
         const locked = createSessionFixture({ ...answered, encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_content_unavailable' });
         expect(await hook.rerender({ ...input, sessionCandidates: [buildSessionActivityAttention({ session: locked })] })).toBe(false);
+    });
+
+    it('uses the Activity sources exact-Home scope for an answered Session on a non-active Home', async () => {
+        const serverId = 'other-home';
+        const session = createSessionFixture({ id: 'other-home-session', serverId,
+            viewer: createSessionViewerFixture({ relevance: { relevant: true, reasons: ['followed_by_me'] } }) });
+        const focus: InboxItemFocus = { kind: 'session', id: session.id, serverId };
+        const input = { sessionCandidates: [buildSessionActivityAttention({ session })], accountNotices: [], isDataReady: true,
+            sessionScopes: new Map([[serverId, { serverId, accountId: 'other-home-account' }]]) };
+        const hook = await renderHook((value: typeof input) => useInboxItemResolved(focus, value), { initialProps: input });
+        expect(hook.getCurrent()).toBe(true);
+        expect(await hook.rerender({ ...input, sessionScopes: new Map() })).toBe(false);
     });
 
     it('hydrates a header-only managed Delete Ask and lists it exactly once', async () => {
@@ -638,7 +651,14 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(model?.showCaughtUp).toBe(true);
     });
 
-    it('lists an off-page hold once as its own work root, and lets it recede when it leaves the window', async () => {
+    it('lists a followed Run once from its owner and clears it on settlement despite a retained notice copy', async () => {
+        // Historical 0.3 writer output. Current Run attention must not inherit its independent lifetime.
+        const content = { v: 1, type: 'update', resolved: false, source: { kind: 'host', topic: 'follow_update' },
+            notice: { topic: 'follow_update', follow: { original: { source: { kind: 'workflow_run', runId: 'run-held' }, revision: 1 },
+                event: { kind: 'update_posted' } } } };
+        const header = { ...content, kind: 'account_notice.v1', title: 'Run updated', status: 'open' };
+        const retiredNotice = createUsageNoticeArtifactFixture({ header, rawHeader: header, body: JSON.stringify(content) });
+        storage.setState({ artifacts: { [retiredNotice.id]: retiredNotice } });
         listRuns
             .mockResolvedValueOnce(page([createWorkflowRunSummaryFixture({ id: 'run-held', state: 'interrupted' })]))
             .mockResolvedValueOnce(page([]));
@@ -648,6 +668,9 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         expect(model?.workGroups.map((group) => group.key)).toEqual(['run:run-held']);
         expect(model?.workGroups[0]?.items.map((item) => item.key)).toEqual(['run:run-held']);
         expect(model?.hasPrimaryAttention).toBe(true);
+        expect(model?.items).toEqual([expect.objectContaining({ producer: 'live', source: {
+            kind: 'workflow_run', id: 'run-held', serverId: appliedSnapshot().serverId, displayName: expect.any(String),
+        } })]);
         expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'ready', groups: [
             { key: model?.workGroups[0]?.key, root: { kind: 'run', runId: 'run-held' },
                 items: [{ kind: 'workflow_run', key: model?.workGroups[0]?.items[0]?.key, runId: 'run-held' }] },
@@ -660,6 +683,8 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         await act(async () => {});
 
         expect(model?.workGroups).toEqual([]);
+        expect(model?.items).toEqual([]);
+        expect(storage.getState().artifacts[retiredNotice.id]).toBe(retiredNotice);
         await screen.unmount();
         expect(await readInbox()).toMatchObject({ ok: true, result: { status: 'unavailable' } });
     });

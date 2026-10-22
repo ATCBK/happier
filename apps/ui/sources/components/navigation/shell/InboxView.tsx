@@ -5,9 +5,9 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { COLLECTION_RAIL_MIN_WIDTH_PX, HappierListDetailLayout, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '@happier-dev/plugin-ui/advanced';
 
-import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { useLocalSearchParams, useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { InboxContent, type InboxView as InboxContentView } from '@/components/inbox/InboxContent';
-import { createInboxItemRoute, resolveInboxItemPageRoute, resolveInboxNoticeOwnPageRoute, type InboxItemDetailContext, type InboxItemFocus } from '@/components/inbox/inboxItemFocus';
+import { createInboxItemRoute, readInboxView, resolveInboxItemPageRoute, resolveInboxNoticeOwnPageRoute, type InboxItemDetailContext, type InboxItemFocus } from '@/components/inbox/inboxItemFocus';
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { countInboxMentions, countInboxNeedsYou, countInboxUpdates } from '@/components/inbox/inboxCounts';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -61,26 +61,30 @@ const InboxViewContent = React.memo(function InboxViewContent(props: Readonly<{ 
     // step), with the view control under it and no purpose line; the tabs and groups say what it holds.
     // Wide layouts have no navigation title either: the page header carries it beside the control.
     const phone = !useIsTablet();
-    // `/inbox?item=` (a Boards card): open on Needs you with that item's row selected; where the list is
+    // `/inbox?item=` (a Boards card) classifies the selected row; where the list is
     // the whole page, the item's own page opens instead (`OpenFocusedItemPage`).
     const focusedItem = props.focusedItem ?? null;
-    const [view, setView] = React.useState<InboxContentView>('needs_you');
+    const params = useLocalSearchParams<{ view?: string | string[] }>();
+    const routedView = readInboxView(params.view);
+    const view = routedView ?? 'needs_you';
+    const setView = React.useCallback((next: InboxContentView) => {
+        router.setParams({ view: next });
+    }, [router]);
     const selected = focusedItem ? model.items.find(item => createInboxItemRoute(item.focus).params.item === createInboxItemRoute(focusedItem).params.item) : undefined;
     const selectionRouteKey = focusedItem ? createInboxItemRoute(focusedItem).params.item : null;
-    const observedSelection = React.useRef<Readonly<{ key: string | null; classified: boolean }>>({ key: null, classified: false });
     React.useEffect(() => {
-        const previous = observedSelection.current;
-        // A new route chooses a view. Resolving an already-open request must not move the user into Updates and read it unseen.
-        if (selectionRouteKey && (previous.key !== selectionRouteKey || (!previous.classified && selected))) {
-            setView(selected?.view ?? 'needs_you');
+        // Classify a new deep link once its owner is ready. A retained route
+        // keeps its view even if opening/answering removed that item on Back.
+        if (selectionRouteKey && selected && routedView === null) {
+            setView(selected.view);
         }
-        observedSelection.current = { key: selectionRouteKey, classified: selected !== undefined };
-    }, [selectionRouteKey, selected?.view]);
-    const select = React.useCallback((focus: InboxItemFocus) => { router.replace(createInboxItemRoute(focus) as never); }, [router]);
-    const close = React.useCallback(() => { router.replace('/inbox' as never); }, [router]);
+    }, [selectionRouteKey, selected?.view, routedView, setView]);
+    const select = React.useCallback((focus: InboxItemFocus) => { router.replace(createInboxItemRoute(focus, view) as never); }, [router, view]);
+    const close = React.useCallback(() => { router.replace({ pathname: '/inbox', params: { view } } as never); }, [router, view]);
     const open = React.useCallback((route: string) => { router.push(route as never); }, [router]);
     const selectedResolved = useInboxItemResolved(destinationFocused && destinationVisible ? focusedItem : null, {
         sessionCandidates: model.sessionCandidates, accountNotices: model.accountNotices, isDataReady: model.source.isDataReady,
+        sessionScopes: model.source.audienceScopes,
     });
     useInboxItemNavigation({ items: model.items, focus: focusedItem, view, enabled: destinationFocused && destinationVisible,
         selectedResolved, select, close, open, markOpened: model.markItemOpened });
