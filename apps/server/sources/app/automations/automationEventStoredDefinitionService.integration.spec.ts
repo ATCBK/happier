@@ -12,7 +12,9 @@ import {
 import { createPluginEventAutomationSetupResultV1JsonSchema } from "@happier-dev/protocol/automations/event-setup-result";
 
 import { db } from "@/storage/db";
+import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { ensureAutomationEventCatalogStateTx } from "./automationCrudService";
 
 import {
     AutomationEventStoredDefinitionsReadError,
@@ -145,7 +147,7 @@ function automationDefinition(index: number) {
                 kind: "newSession",
                 spawn: {
                     executionTarget: { serverId: "server", machineId: "machine" },
-                    directory: "/tmp/automation-stored-definition",
+                    directory: { kind: "path", path: "/tmp/automation-stored-definition" },
                     agentTarget: {
                         kind: "agent",
                         identity: { pluginId: "happier.agent.codex", localId: "codex" },
@@ -234,7 +236,7 @@ describe("Automation Event stored-definition projection", () => {
         ]);
     });
 
-    async function seed(definitionCount: number): Promise<void> {
+    async function seed(definitionCount: number, catalogRevision: bigint | null = 7n): Promise<void> {
         const release = releaseFacts();
         await db.account.create({
             data: { id: ACCOUNT_ID, publicKey: null, encryptionMode: "plain" },
@@ -292,9 +294,11 @@ describe("Automation Event stored-definition projection", () => {
         await db.automationTrigger.createMany({
             data: Array.from({ length: definitionCount }, (_, index) => automationTrigger(index + 1)),
         });
-        await db.automationEventCatalogState.create({
-            data: { accountId: ACCOUNT_ID, eventSourceDefinitionsRevision: 7n },
-        });
+        if (catalogRevision !== null) {
+            await db.automationEventCatalogState.create({
+                data: { accountId: ACCOUNT_ID, eventSourceDefinitionsRevision: catalogRevision },
+            });
+        }
     }
 
     async function seedCurrentDurablePushEndpoint(): Promise<void> {
@@ -404,6 +408,36 @@ describe("Automation Event stored-definition projection", () => {
             lease: { leaseId, revision: 1 },
         } as const;
     }
+
+    it("initializes an uncreated catalog once so an empty observer can park and later see its first source", async () => {
+        await seed(0, null);
+        const read = (knownRevision?: string) => readAutomationEventStoredDefinitionsV1({
+            accountId: ACCOUNT_ID,
+            caller,
+            input: { transport: { kind: "checkpointedPull" }, ...(knownRevision === undefined ? {} : { knownRevision }) },
+        });
+        await expect(read()).resolves.toMatchObject({ kind: "page", revision: "0", definitions: [], nextCursor: null });
+        await expect(read("0")).resolves.toMatchObject({ kind: "unchanged", revision: "0" });
+        expect(await db.automationEventCatalogState.findUnique({ where: { accountId: ACCOUNT_ID } }))
+            .toMatchObject({ eventSourceDefinitionsRevision: 0n });
+        await inTx(async tx => {
+            await tx.automation.create({ data: automationDefinition(1) });
+            await tx.automationTrigger.create({ data: automationTrigger(1) });
+            await ensureAutomationEventCatalogStateTx({ tx, accountId: ACCOUNT_ID, projectionChanged: true });
+        });
+        await expect(read("0")).resolves.toMatchObject({ kind: "page", revision: "1", nextCursor: null,
+            definitions: [{ triggerId: triggerId(1) }] });
+        await expect(read("1")).resolves.toMatchObject({ kind: "unchanged", revision: "1" });
+    });
+
+    it("does not initialize an uncreated catalog for a refused watcher", async () => {
+        await seed(0, null);
+        await db.machine.update({ where: { id: MACHINE_ID }, data: { kind: "ephemeral_session_runner" } });
+        await expect(readAutomationEventStoredDefinitionsV1({ accountId: ACCOUNT_ID, caller,
+            input: { transport: { kind: "checkpointedPull" } } }))
+            .rejects.toMatchObject({ code: "caller_materialization_not_current" });
+        expect(await db.automationEventCatalogState.findUnique({ where: { accountId: ACCOUNT_ID } })).toBeNull();
+    });
 
     it("rejects an ephemeral watcher before disclosing stored definitions", async () => {
         await seed(1);
