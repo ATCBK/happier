@@ -2,6 +2,7 @@ import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract
 import { SessionStartupInputRefusalError } from '@/agent/runtime/session/input/sessionStartupInputRefusal';
 import type { ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
 import { logger } from '@/ui/logger';
+import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS } from '@/agent/runtime/session/errors/sessionPreparationFailure';
 
 import type { SessionLifecycleActionHandler, SessionLifecycleMachineDeps, SessionLifecycleMachineHandlers } from './sessionLifecycleTypes';
 
@@ -62,9 +63,13 @@ export function createSessionStartupProjectSpawn(input: Readonly<{
             throw new SessionStartupInputRefusalError({ code: opened.code,
                 message: 'The selected native Agent mode is not available in this Session.' });
         }
-        if (opened.status !== 'opened') throw Object.assign(
-            new Error('Agent runner exited before native Session startup completed'),
-            { code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED });
+        if (opened.status !== 'opened') {
+            const code = opened.status === 'runner_exited' ? readSessionPreparationFailureCode(opened.code) : null;
+            const message = code ? SESSION_PREPARATION_FAILURE_PREVIEWS[code]
+                : 'Agent runner exited before native Session startup completed';
+            return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: message,
+                errorDetail: { kind: 'launch_error', code: code ?? SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, message } };
+        }
         return result;
     };
 }

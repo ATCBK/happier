@@ -12,7 +12,7 @@ import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 describe('classifyPrimarySessionRuntimeIssue', () => {
   it.each(['plugin_mcp_preparation_unavailable', 'agent_runtime_daemon_service_generation_not_current',
-    'native_agent_privileged_effect_authority_unavailable', 'skills_unavailable'])(
+    'native_agent_privileged_effect_authority_unavailable', 'native_agent_privileged_effect_outcome_unknown', 'skills_unavailable'])(
     'publishes the closed preparation refusal %s without private plugin data', code => {
       const error = Object.assign(new Error('PRIVATE_BODY'), { code, details: { secret: 'PRIVATE_TOKEN' } });
       const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error, occurredAt: 100 });

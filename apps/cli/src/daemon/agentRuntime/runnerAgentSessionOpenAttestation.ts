@@ -2,6 +2,8 @@ import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaq
 import { processIdentityMatches } from '@happier-dev/cli-common/processInstance';
 
 import type { AgentSessionOpenRequest } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
+import { readSessionPreparationFailureCode, type SessionPreparationFailureCode } from '@/agent/runtime/session/errors/sessionPreparationFailure';
 
 import {
   AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema,
@@ -133,6 +135,7 @@ export async function recordTrackedRunnerAgentSessionOpenAttestation(
 export async function awaitTrackedRunnerAgentSessionOpen(
   input: Readonly<{
     getTrackedSessions(): readonly TrackedSession[];
+    readStartupFailure?: (tracked: TrackedSession) => Promise<SessionRuntimeIssueV1 | null>;
     sessionId: string;
     /** `null` retains provider-owned completion custody without a generic deadline. */
     timeoutMs?: number | null;
@@ -144,7 +147,7 @@ export async function awaitTrackedRunnerAgentSessionOpen(
       request: AgentSessionOpenRequest;
     }>
   /** A runner that had registered this child exited before committing its open. */
-  | Readonly<{ status: 'runner_exited' }>
+  | Readonly<{ status: 'runner_exited'; code?: SessionPreparationFailureCode }>
   | Readonly<{
       status: 'refused';
       code: 'native_agent_session_mode_unavailable';
@@ -163,7 +166,26 @@ export async function awaitTrackedRunnerAgentSessionOpen(
       ? Math.trunc(requestedTimeoutMs)
       : DEFAULT_OPEN_ATTESTATION_TIMEOUT_MS;
   const deadlineMs = timeoutMs === null ? null : Date.now() + timeoutMs;
-  let observedTrackedSession = false;
+  let observedTrackedSession: TrackedSession | null = null;
+  const exited = async (): Promise<Readonly<{ status: 'runner_exited'; code?: SessionPreparationFailureCode }>> => {
+    const tracked = observedTrackedSession;
+    try {
+      const issue = tracked ? await input.readStartupFailure?.(tracked) : null;
+      input.signal?.throwIfAborted();
+      const code = readSessionPreparationFailureCode(issue?.code);
+      // A retained failure from an older runner cannot explain this launch.
+      if (code && tracked?.happySessionId === sessionId && issue?.scope === 'primary_session'
+        && issue.status === 'failed' && issue.source === 'agent_session_error'
+        && typeof tracked.processStartTimeMs === 'number' && Number.isFinite(tracked.processStartTimeMs)
+        && issue.occurredAt >= tracked.processStartTimeMs) {
+        return Object.freeze({ status: 'runner_exited' as const, code });
+      }
+    } catch {
+      input.signal?.throwIfAborted();
+      // A failed diagnostic read cannot turn an observed runner exit into open.
+    }
+    return Object.freeze({ status: 'runner_exited' as const });
+  };
   while (sessionId) {
     input.signal?.throwIfAborted();
     const matches = input.getTrackedSessions().filter(
@@ -171,7 +193,7 @@ export async function awaitTrackedRunnerAgentSessionOpen(
     );
     if (matches.length === 1) {
       const tracked = matches[0]!;
-      observedTrackedSession = true;
+      observedTrackedSession = tracked;
       const attestation =
         tracked.agentRuntimeDaemonServiceSessionOpenAttestation;
       if (
@@ -199,7 +221,7 @@ export async function awaitTrackedRunnerAgentSessionOpen(
         });
       }
       if (timeoutMs === null && hasObservedRunnerExited(tracked)) {
-        return Object.freeze({ status: 'runner_exited' as const });
+        return await exited();
       }
     } else if (
       timeoutMs === null
@@ -208,7 +230,7 @@ export async function awaitTrackedRunnerAgentSessionOpen(
     ) {
       // The daemon removes a tracked runner only after its child-exit owner has
       // observed a terminal exit. This is terminal evidence, not a clock.
-      return Object.freeze({ status: 'runner_exited' as const });
+      return await exited();
     }
     const remainingMs = deadlineMs === null ? null : deadlineMs - Date.now();
     if (remainingMs !== null && remainingMs <= 0) break;

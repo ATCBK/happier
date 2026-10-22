@@ -15,6 +15,7 @@ import { HomeTargetResolutionError } from '@happier-dev/cli-common/homeTarget';
 import { AGENT_STARTUP_FAILURE_PREVIEWS, readAgentStartupFailureCode, SessionRuntimeIssueSourceV1Schema, SessionRuntimeTeamCredentialDenialDetailsV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { sanitizeConnectedServiceRuntimeFailureClassification } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceRuntimeFailureClassification';
 import { hasConnectedServiceRuntimeAuthRecoveryContext } from './connectedServiceRuntimeAuthRecoveryContext';
+import { readSessionPreparationFailureCode, SESSION_PREPARATION_FAILURE_PREVIEWS } from './sessionPreparationFailure';
 import { AGENT_CLI_MISSING_PREVIEW } from '@/packagedRuntime/managedTools/agentCliNotFoundError';
 import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process/agentRuntimeBridgeError';
 import { classifyProviderOutputFailure } from '@/agent/runtime/classifyProviderOutputFailure';
@@ -96,6 +97,7 @@ export function readSessionPreparationFailureDiagnostic(error: unknown): Readonl
 }
 
 const preparationDiagnosticCodes = new Set([
+  ...Object.keys(SESSION_PREPARATION_FAILURE_PREVIEWS),
   ...ProviderErrorCodeV1Schema.options,
   ...ProviderBrokerAdmissionFailureCodeV1Schema.options,
   'team_credential_provider_selection_not_current',
@@ -530,6 +532,8 @@ export function classifyPrimarySessionRuntimeIssue(
   const teamCredential = teamCredentialDenial?.details ?? null;
   const startupFailureCode = !teamCredentialDenial && input.cause === 'session_error'
     && errorCode.kind === 'string' ? readAgentStartupFailureCode(errorCode.value) : null;
+  const sessionPreparationFailureCode = !teamCredentialDenial && input.cause === 'session_error'
+    && errorCode.kind === 'string' ? readSessionPreparationFailureCode(errorCode.value) : null;
   const missingCli = !teamCredentialDenial
     && errorCode.kind === 'string'
     && errorCode.value === SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING;
@@ -585,7 +589,7 @@ export function classifyPrimarySessionRuntimeIssue(
     code: missingCli ? SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING
       : catalogUnavailable ? DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
       : metadataPrivacyUpgradeRequired ? 'metadata_privacy_upgrade_required'
-      : promptPreparationCode ?? startupFailureCode ?? (temporaryThrottle ? 'provider_temporary_throttle'
+      : promptPreparationCode ?? startupFailureCode ?? sessionPreparationFailureCode ?? (temporaryThrottle ? 'provider_temporary_throttle'
         : source === 'agent_session_error' ? typedDiagnostic?.code ?? source : source),
     source,
     occurredAt,
@@ -600,6 +604,7 @@ export function classifyPrimarySessionRuntimeIssue(
       ?? (homeHttpFailure ? 'Session startup could not reach a ready Home. Check the Home connection, then retry the Session.' : null)
       ?? (promptPreparationCode ? 'Prompt context could not be prepared. Check the selected documents and Home connection, then retry the Session.' : null)
       ?? (startupFailureCode ? AGENT_STARTUP_FAILURE_PREVIEWS[startupFailureCode] : null)
+      ?? (sessionPreparationFailureCode ? SESSION_PREPARATION_FAILURE_PREVIEWS[sessionPreparationFailureCode] : null)
       ?? buildSafeModelNotFoundPreview(input.error)
       ?? (temporaryThrottle ? 'Provider is temporarily limiting requests'
         : source === 'agent_session_error' ? diagnosticPreview ?? sanitizedPreviewBySource[source] : sanitizedPreviewBySource[source]),

@@ -2848,7 +2848,7 @@ export async function startDaemonSessionControlRuntime(
     awaitAgentSessionOpen: (
       input: Omit<
         Parameters<typeof awaitTrackedRunnerAgentSessionOpen>[0],
-        'getTrackedSessions'
+        'getTrackedSessions' | 'readStartupFailure'
       >,
     ) => ReturnType<typeof awaitTrackedRunnerAgentSessionOpen>;
     installExternalSessionHostOperations(
@@ -6424,6 +6424,46 @@ export async function startDaemonSessionControlRuntime(
       );
     }
   };
+  const readStartupFailure: NonNullable<Parameters<typeof createSessionRunnerRespawnManager>[0]['readStartupFailure']> =
+    async ({ sessionId, trackedSession: tracked, runnerExitCode }) => {
+      if (typeof tracked.processStartTimeMs !== 'number'
+        || !Number.isFinite(tracked.processStartTimeMs)) return null;
+      const attribution = tracked.requesterWorkAttributionV1 ?? tracked.spawnOptions?.requesterWorkAttributionV1;
+      return await withSessionAccountContext(sessionId, async (context) => {
+        const rawSession = await withSessionAccountHome(context, () => fetchSessionByIdCompat({
+          token: context?.bootstrap.credentials.token ?? params.credentials.token,
+          sessionId,
+        }));
+        await assertSessionAccountCurrent(sessionId, context, attribution);
+        const issue = rawSession?.id === sessionId && rawSession.latestTurnStatus === 'failed'
+          ? rawSession.lastRuntimeIssue ?? null : null;
+        const execution = tracked.spawnOptions?.executionAuthorization;
+        const pending = rawSession?.pendingActivationAuthorization;
+        const target = pending?.admittedTarget;
+        if (isCurrentDefiniteSessionStartupFailure(issue, tracked.processStartTimeMs, runnerExitCode)
+          && execution?.provenance === 'user_request' && typeof execution.requestedAt === 'number'
+          && pending?.status === 'waiting' && pending.requestId === execution.requestId
+          && pending.requestedAt === execution.requestedAt && target?.sessionId === sessionId
+          && target.accountId === (context?.bootstrap.attribution.accountId ?? params.externalActionAccountId)
+          && target.machineId === params.machineId
+          && target.installationId === readInstallationIdentityIfExistsSync()?.installationId) {
+          const origin = await params.resolveCurrentMachineExecutionOriginContext?.();
+          if (origin?.serverIdentityId === target.homeId && origin.machineId === target.machineId) {
+            await assertSessionAccountCurrent(sessionId, context, attribution);
+            // The webhook admitted process custody before Agent construction. Its
+            // later definite refusal still owns this exact retained activation.
+            // Home keeps the managed-compute running guard and request CAS.
+            await withSessionAccountHome(context, () => reportPendingSessionActivationFailure({
+              token: context?.bootstrap.credentials.token ?? params.credentials.token,
+              sessionId, requestId: execution.requestId, requestedAt: execution.requestedAt!,
+              failureCode: 'runtime_start_failed',
+              failureDetails: { reason: 'spawn-rejected', spawnErrorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED },
+            }));
+          }
+        }
+        return issue;
+      }, attribution);
+    };
   const sessionRunnerRespawnManager = createSessionRunnerRespawnManager({
     // Runner death is non-fatal: the respawn owner is adopt-first (reattaches the durable
     // terminal host / claude session, never blind-relaunches a healthy one) and storm-bounded
@@ -6473,45 +6513,7 @@ export async function startDaemonSessionControlRuntime(
     ),
     isSessionAlreadyRunning: async (sessionId) =>
       await isSessionRunnerActive(sessionId),
-    readStartupFailure: async ({ sessionId, trackedSession: tracked, runnerExitCode }) => {
-      if (typeof tracked.processStartTimeMs !== 'number'
-        || !Number.isFinite(tracked.processStartTimeMs)) return null;
-      const attribution = tracked.requesterWorkAttributionV1 ?? tracked.spawnOptions?.requesterWorkAttributionV1;
-      return await withSessionAccountContext(sessionId, async (context) => {
-        const rawSession = await withSessionAccountHome(context, () => fetchSessionByIdCompat({
-          token: context?.bootstrap.credentials.token ?? params.credentials.token,
-          sessionId,
-        }));
-        await assertSessionAccountCurrent(sessionId, context, attribution);
-        const issue = rawSession?.id === sessionId && rawSession.latestTurnStatus === 'failed'
-          ? rawSession.lastRuntimeIssue ?? null : null;
-        const execution = tracked.spawnOptions?.executionAuthorization;
-        const pending = rawSession?.pendingActivationAuthorization;
-        const target = pending?.admittedTarget;
-        if (isCurrentDefiniteSessionStartupFailure(issue, tracked.processStartTimeMs, runnerExitCode)
-          && execution?.provenance === 'user_request' && typeof execution.requestedAt === 'number'
-          && pending?.status === 'waiting' && pending.requestId === execution.requestId
-          && pending.requestedAt === execution.requestedAt && target?.sessionId === sessionId
-          && target.accountId === (context?.bootstrap.attribution.accountId ?? params.externalActionAccountId)
-          && target.machineId === params.machineId
-          && target.installationId === readInstallationIdentityIfExistsSync()?.installationId) {
-          const origin = await params.resolveCurrentMachineExecutionOriginContext?.();
-          if (origin?.serverIdentityId === target.homeId && origin.machineId === target.machineId) {
-            await assertSessionAccountCurrent(sessionId, context, attribution);
-            // The webhook admitted process custody before Agent construction. Its
-            // later definite refusal still owns this exact retained activation.
-            // Home keeps the managed-compute running guard and request CAS.
-            await withSessionAccountHome(context, () => reportPendingSessionActivationFailure({
-              token: context?.bootstrap.credentials.token ?? params.credentials.token,
-              sessionId, requestId: execution.requestId, requestedAt: execution.requestedAt!,
-              failureCode: 'runtime_start_failed',
-              failureDetails: { reason: 'spawn-rejected', spawnErrorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED },
-            }));
-          }
-        }
-        return issue;
-      }, attribution);
-    },
+    readStartupFailure,
     // Only the current intended respawn cycle may finish during shutdown drain.
     // An existing version handoff must also retain this exact predecessor.
     spawnSession: (options, predecessor) => spawnSessionWithAdmission(options, {
@@ -20372,6 +20374,7 @@ export async function startDaemonSessionControlRuntime(
         getTrackedSessions: () =>
           Array.from(params.pidToTrackedSession.values()),
         ...input,
+        readStartupFailure: trackedSession => readStartupFailure({ sessionId: input.sessionId, trackedSession }),
       }),
     installExternalSessionHostOperations: (operations) =>
       externalSessionHostOperationOwner.install(operations),

@@ -2,6 +2,8 @@ import { HostTerminalTranscriptFollowAdmissionError } from '@/agent/runtime/sess
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import { logger } from '@/ui/logger';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { readSessionPreparationFailureCode } from '@/agent/runtime/session/errors/sessionPreparationFailure';
+import { inspectOwnErrorCodeDataProperty } from '@/agent/runtime/session/process/agentRuntimeBridgeError';
 import { readUnexpectedActionErrorDiagnosticV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 import {
   isAgentSessionContinuationUnreachableError,
@@ -29,9 +31,13 @@ export function resolveSessionRunnerFailureExitCode(error: unknown): number {
 /** Report the command failure and preserve its existing supervised process exit. */
 export function reportSessionRunnerFailure(error: unknown): number {
   const exitCode = resolveSessionRunnerFailureExitCode(error);
+  const errorCode = inspectOwnErrorCodeDataProperty(error);
+  const preparationCode = errorCode.kind === 'string' ? readSessionPreparationFailureCode(errorCode.value) : null;
+  const diagnostic = readUnexpectedActionErrorDiagnosticV1(error);
   logger.infoFile('[Session] Runner failed', {
     phase: 'runner_exit', exitCode,
-    ...readUnexpectedActionErrorDiagnosticV1(error),
+    ...diagnostic,
+    errorCode: preparationCode ?? diagnostic.errorCode,
   });
   const issue = classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error });
   if (issue.source === 'dependency_failure' && issue.code === 'preparation_pending') {

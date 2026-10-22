@@ -398,8 +398,12 @@ describe('Session startup operation custody', () => {
         await vi.advanceTimersByTimeAsync(25);
       }
       await vi.waitFor(() => expect(operations.store.get(scope, 'original-startup')).toMatchObject({
-        state: outcome === 'cancel' ? 'cancelled' : outcome === 'exit' ? 'failed' : 'succeeded',
+        state: outcome === 'cancel' ? 'cancelled' : 'succeeded',
       }));
+      if (outcome === 'exit') expect(operations.store.get(scope, 'original-startup')).toMatchObject({
+        result: { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
+          errorDetail: { kind: 'launch_error', code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED } },
+      });
     } finally { vi.useRealTimers(); }
   });
 });

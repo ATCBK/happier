@@ -293,8 +293,9 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   }
   const publishCapabilityNotice = async (items: SessionCapabilityNoticeV1['items']) => {
     const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items });
-    // Native preparation needs durable diagnostic custody, not its Home ACK.
-    // The existing journal owns delivery/retry after this admission returns.
+    // This optional diagnostic has no delivery-dependent caller. Await journal
+    // admission; its stable identity is retried and deduplicated by Home, so
+    // native preparation need not await the delivery acknowledgement.
     await params.session.enqueueSessionEventCommitted({
       type: 'message',
       message: notice.items.map(item => `${item.name} couldn't start · ${item.detail ?? item.code}`).join('\n'),
