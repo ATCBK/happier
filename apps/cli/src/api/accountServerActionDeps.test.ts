@@ -797,6 +797,26 @@ describe('Account API token HTTP adapter', () => {
       .resolves.toEqual({ ok: false, errorCode: 'present_user_required', error: 'present_user_required' });
   });
 
+  it('sends the exact revoke request and preserves a typed transaction refusal', async () => {
+    const tokenId = '12345678-1234-4234-8234-123456789abc';
+    let requests = 0;
+    app.post('/v1/auth/api-tokens/revoke', async (request, reply) => {
+      requests += 1;
+      expect(request.method).toBe('POST');
+      expect(request.url).toBe('/v1/auth/api-tokens/revoke');
+      expect(request.body).toEqual({ tokenId });
+      return reply.code(503).send({ error: 'database_transaction_conflict_exhausted', statusCode: 503 });
+    });
+    const deps = createAccountServerActionDeps({ token: 'interactive', serverId: 'home', serverHttpBaseUrl: 'http://account.test' });
+    await expect(deps.accountApiTokensRevokeAction!({ input: { tokenId }, context: { surface: 'cli' } }))
+      .resolves.toEqual({
+        ok: false,
+        errorCode: 'database_transaction_conflict_exhausted',
+        error: 'database_transaction_conflict_exhausted',
+      });
+    expect(requests).toBe(1);
+  });
+
   it('refuses account management addressed to a different selected Home before sending credentials', async () => {
     let requests = 0;
     app.post('/v1/auth/api-tokens/list', async () => {
