@@ -48,9 +48,7 @@ export function useSessionDetailsPanelPluginRuntime(params: Readonly<{
         pluginUiProjection: params.pluginUiProjection,
         platform: params.platform,
     });
-    const profile = useProfile();
-
-    const profileId = readProfileId(profile);
+    const profileId = useProfile(readProfileId);
     const derivedObservabilityScope = React.useMemo<PeerMediationObservabilityScopeV1 | null>(() => {
         if (!pluginRuntime.machineId || !profileId) {
             return null;
