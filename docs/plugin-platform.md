@@ -3683,9 +3683,11 @@ when `ManagedServiceRequest.timeoutMs` is omitted in 0.3 development source.
 An explicit request deadline bounds validated response headers, while the
 response body retains the caller and handle lifetime. A native prompt that
 waits for inference is ordinary request work, not server startup; the host
-transport disables inherited connection, header and body deadlines rather
-than imposing a five-minute cutoff on that turn. Transport failures retain
-their original exception as the typed error's non-serialized cause; request
+transport disables inherited header and body deadlines rather than imposing
+a five-minute cutoff on that turn. Node retains Undici's default connection
+establishment budget, including TLS negotiation; Bun retains its native
+transport behavior. Transport failures retain their original exception as the
+typed error's non-serialized cause; request
 bodies and credentials are not added to its public diagnostic data.
 
 The managed endpoint transport's open and next-read phases consume the same

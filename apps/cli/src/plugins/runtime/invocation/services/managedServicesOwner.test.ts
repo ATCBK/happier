@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
 import { createServer, type ServerResponse } from 'node:http';
+import { createServer as createTcpServer, type Socket as TcpSocket } from 'node:net';
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -2809,13 +2810,24 @@ describe('managed-services SVC09 owner', () => {
         }
     });
 
-    it.each(['headers', 'body'] as const)('keeps real managed HTTP %s under caller lifetime beyond inherited transport deadlines', async phase => {
-        // This is the actual managed HTTP/Undici boundary, with a shorter ambient
-        // default so the regression remains independent of Undici's fast clock.
+    it.each([
+        { phase: 'headers', wiring: 'bound' },
+        { phase: 'body', wiring: 'bound' },
+        { phase: 'headers', wiring: 'missing-dispatcher' },
+    ] as const)('keeps real managed HTTP $phase under caller lifetime only with $wiring transport wiring', async ({ phase, wiring }) => {
+        // This is the actual managed HTTP/Undici boundary, with shorter ambient
+        // deadlines. Keep its cached native/coarse timers on the real clock.
         const previousDispatcher = getGlobalDispatcher();
         const ambientDispatcher = new Agent({ headersTimeout: 25, bodyTimeout: 25 });
         setGlobalDispatcher(ambientDispatcher);
-        if (phase === 'headers') vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        // Negative wiring control at the real fetch boundary: losing the
+        // host dispatcher must expose the ambient header deadline again.
+        const platformFetch = globalThis.fetch.bind(globalThis);
+        const miswiredFetch = wiring === 'missing-dispatcher'
+            ? vi.spyOn(globalThis, 'fetch').mockImplementation((target, init) => {
+                const { dispatcher: _dispatcher, ...options } = init as RequestInit & { dispatcher?: unknown };
+                return platformFetch(target, options);
+            }) : undefined;
         const arrived = deferred<ServerResponse>();
         const server = createServer((request, response) => {
             request.resume();
@@ -2842,9 +2854,17 @@ describe('managed-services SVC09 owner', () => {
                 .then(response => ({ response }), error => ({ error }));
             const nativeResponse = await arrived.promise;
             if (phase === 'headers') {
-                await vi.advanceTimersByTimeAsync(300_001);
+                // As for the body case, allow the ambient coarse timer to tick.
+                await new Promise(resolve => setTimeout(resolve, 2_000));
                 nativeResponse.end('completed');
                 const result = await pending;
+                if (wiring === 'missing-dispatcher') {
+                    expect(result).toMatchObject({ error: {
+                        code: 'plugin_managed_service_unavailable',
+                        cause: { cause: { code: 'UND_ERR_HEADERS_TIMEOUT' } },
+                    } });
+                    return;
+                }
                 expect(result).toMatchObject({ response: { status: 200 } });
                 if ('response' in result) await result.response.body?.cancel();
             } else {
@@ -2865,12 +2885,63 @@ describe('managed-services SVC09 owner', () => {
             }
         } finally {
             await handle?.dispose();
+            miswiredFetch?.mockRestore();
             setGlobalDispatcher(previousDispatcher);
             vi.useRealTimers();
             server.closeAllConnections();
             await new Promise<void>(resolve => server.close(() => resolve()));
             await ambientDispatcher.destroy();
         }
+    });
+
+    it('fails stalled TLS establishment through an external public attach handle without caller cancellation', async ({ onTestFinished }) => {
+        const sockets = new Set<TcpSocket>();
+        const server = createTcpServer(socket => {
+            sockets.add(socket);
+            socket.on('close', () => sockets.delete(socket));
+            // Accept TCP and consume the ClientHello, but never complete TLS.
+            socket.resume();
+        });
+        const { owner } = createLifecycleHarness([], 'daemon');
+        const caller = new AbortController();
+        let handle: ManagedServiceHandle | undefined;
+        // The existing test lifecycle owns the timeout. This hook also runs
+        // when a missing connect budget leaves the request pending at timeout.
+        onTestFinished(async () => {
+            caller.abort('test cleanup');
+            try {
+                await handle?.dispose();
+            } finally {
+                try {
+                    await owner.dispose();
+                } finally {
+                    for (const socket of sockets) socket.destroy();
+                    await new Promise<void>(resolve => server.close(() => resolve()));
+                }
+            }
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('Missing loopback endpoint');
+        handle = await owner.bindScope({
+            occurrenceId: 'external-stalled-tls',
+            pluginId: 'acme.external',
+            contributionQualifiedId: 'acme.external/agents/native',
+            operationId: 'stalled-tls',
+            isOccurrenceCurrent: () => true,
+        }, exec).supervise({
+            id: 'native-service',
+            mode: { kind: 'attach', baseUrl: `https://127.0.0.1:${address.port}` },
+            healthCheck: { kind: 'none' },
+        });
+        const error: unknown = await handle.request({ pathAndQuery: '/native/message', signal: caller.signal })
+            .then(() => null, (error: unknown) => error);
+        expect(error).toBeInstanceOf(PluginError);
+        expect(error).toMatchObject({
+            code: 'plugin_managed_service_unavailable',
+            cause: { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } },
+        });
+        expect(caller.signal.aborted).toBe(false);
     });
 
     it('preserves the transport exception on a typed failure without adding request data', async () => {

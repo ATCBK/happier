@@ -225,7 +225,7 @@ const MAX_MANAGED_SERVICE_REQUEST_TIMEOUT_MS = 300_000;
 // Like the incumbent ambient fetch pool, this pool lives with the process.
 // Individual caller/handle signals still own each request and response body.
 const managedServiceHttpDispatcher = new Agent({
-    connect: { timeout: 0 }, headersTimeout: 0, bodyTimeout: 0,
+    headersTimeout: 0, bodyTimeout: 0,
 });
 
 export function projectManagedServiceSpawnEnvironmentKeys(
