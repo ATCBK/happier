@@ -927,7 +927,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
         await performDelete();
     }, [currentExecutionMachinePresence.reachability, currentExecutionMachineLabel, metadata, performDelete]);
 
-    const handleRenameSession = useCallback(async () => {
+    const [, handleRenameSession] = useHappyAction(async () => {
         if (!canRenameSession) return;
         const newName = await Modal.prompt(
             t('sessionInfo.renameSession'),
@@ -947,7 +947,7 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                 input: { title: newName },
             });
         }
-    }, [canRenameSession, sessionActionTarget, sessionName]);
+    });
 
     const formatDate = useCallback((timestamp: number) => {
         return new Date(timestamp).toLocaleString();

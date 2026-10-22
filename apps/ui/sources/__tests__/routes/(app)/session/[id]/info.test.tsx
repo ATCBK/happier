@@ -27,7 +27,7 @@ import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
-import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -36,6 +36,7 @@ import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/
 import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
+import { SessionMetadataTuplePatchSuccessV1Schema, SessionMetadataTuplePatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { AUTHORING_MEMORY_ROUTE_V1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -88,6 +89,7 @@ const modalConfirmSpy = vi.fn(async () => true);
 const modalPromptSpy = vi.fn(async () => 'urgent, review');
 const modalShowSpy = vi.hoisted(() => vi.fn<typeof import('@/modal').Modal.show>());
 let hideInactiveSessions = false;
+let metadataMutationStatus = 200;
 let organizationPinnedSessionKeys: unknown = null;
 let organizationTagsBySessionKey: unknown = null;
 let organizationFolders: unknown = null;
@@ -464,6 +466,7 @@ describe('/session/[id]/info', () => {
         machineRpcWithServerScopeSpy.mockClear();
         useSessionExecutionRunsSupportedSpy.mockClear();
         hideInactiveSessions = false;
+        metadataMutationStatus = 200;
         organizationPinnedSessionKeys = null;
         organizationTagsBySessionKey = null;
         organizationFolders = null;
@@ -555,6 +558,15 @@ describe('/session/[id]/info', () => {
             }
             if (url.pathname === '/v2/sessions' || url.pathname === '/v2/sessions/active') return answerSessionHttp(Response.json({ sessions: sessionRecordForHttp?.serverId === fixtureHomeId && sessionRecordForHttp.encryptionMode === 'plain'
                     ? [sessionByIdForHttp!.session] : [], next: null, hasNext: false }), init?.signal);
+            if (url.pathname === '/v2/sessions/session-1' && method === 'PATCH') {
+                if (metadataMutationStatus !== 200) return Response.json({ error: 'Forbidden' }, { status: metadataMutationStatus });
+                // Explicit Stop commits its owner tuple first; acknowledge the next versions of the tuple it sent.
+                const patch = SessionMetadataTuplePatchV1Schema.parse(body);
+                if (patch.mode !== 'owner' && patch.mode !== 'owner_migration') throw new Error('Expected an owner metadata mutation');
+                return Response.json(SessionMetadataTuplePatchSuccessV1Schema.parse({ success: true, metadataLayoutVersion: 1,
+                    sharedMetadata: { version: (patch.mode === 'owner' ? patch.sharedMetadata.expectedVersion : patch.source.metadata.version) + 1 },
+                    agentState: { version: (patch.mode === 'owner' ? patch.agentState.expectedVersion : patch.source.agentState.version) + 1 } }));
+            }
             if (url.pathname === '/v2/sessions/session-1/archive') {
                 const status = archiveStatuses.shift() ?? 200;
                 return Response.json(status === 409 ? { error: 'session_active' } : { archivedAt: 1 }, { status });
@@ -565,6 +577,8 @@ describe('/session/[id]/info', () => {
                 return Response.json({ pools: machinePoolListByServerIdState.current[homeId] ?? [] });
             }
             if (url.pathname === '/v1/machines') return Response.json(machineCensusByServerId[fixtureHomeId] ?? []);
+            if (url.pathname === '/v1/machines/read-batch' && method === 'POST') return createMachineReadBatchResponseFixture(body,
+                machineId => machineCensusByServerId[fixtureHomeId]?.find(row => row.id === machineId) ?? null);
             const machineRead = /^\/v1\/machines\/([^/]+)$/.exec(url.pathname);
             if (machineRead) {
                 const machine = machineCensusByServerId[fixtureHomeId]?.find(row => row.id === decodeURIComponent(machineRead[1]!));
@@ -1493,7 +1507,7 @@ describe('/session/[id]/info', () => {
 
             expect(items.some((node: any) =>
                 node.props?.title === 'sessionInfo.sessionStatus'
-                && node.props?.detail === 'Connected'
+                && node.props?.detail === 'status.ready'
             ), JSON.stringify(items.filter(node => node.props.title === 'sessionInfo.sessionStatus')
                 .map(node => ({ title: node.props.title, detail: node.props.detail })))).toBe(true);
             expect(items.some((node: any) => node.props?.title === 'sessionInfo.thinking')).toBe(false);
@@ -2710,6 +2724,32 @@ describe('/session/[id]/info', () => {
             'sessionInfo.renameSessionSubtitle',
             expect.objectContaining({ confirmText: 'common.save' }),
         ));
+    });
+
+    it('reports a refused rename in the existing in-app alert and keeps the current title', async () => {
+        metadataMutationStatus = 403;
+        modalPromptSpy.mockResolvedValueOnce('QA43 Codex via Team share');
+        mockSession = createSessionFixture({ metadata: { path: '/repo', host: 'tester.local', summary: { text: 'Ready', updatedAt: 1 } } });
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('session-info-menu.trigger');
+        await waitForHeaderMenuOutcome(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull());
+        await screen.pressByTestIdAsync('session-info-rename');
+        await waitForHeaderMenuOutcome(() => expect(modalAlertSpy).toHaveBeenCalledWith(
+            'common.error', 'sessionInfo.failedToRenameSession', [{ text: 'common.ok', style: 'cancel' }],
+        ));
+        expect(screen.getTextContent()).toContain('Ready');
+    });
+
+    it('settles a refused gentle Stop in the existing in-app alert without archiving or navigating away', async () => {
+        mockSession = createSessionFixture({ active: true });
+        network.respond(RPC_METHODS.STOP_SESSION, { status: 'incomplete', reason: 'destroy_failed' });
+        const screen = await renderInfoScreen();
+        await screen.pressByTestIdAsync('sessionInfo.stopSession');
+        await waitForHomeGovernance(() => expect(modalAlertSpy).toHaveBeenCalledWith(
+            'common.error', 'Session stop incomplete: destroy_failed', [{ text: 'common.ok', style: 'cancel' }],
+        ));
+        expect(requestsFor('/v2/sessions/session-1/archive')).toEqual([]);
+        expect(safeRouterBackSpy).not.toHaveBeenCalled();
     });
 
     it.each([true, false])('offers Delete from the page header menu for a retired eligible session with rename rights %s and the existing confirmation', async (canRename) => {
