@@ -1033,6 +1033,37 @@ describe('BrowserShell', () => {
         expect(screen.findByTestId('browser-shell-view-unavailable')).toBeNull();
     });
 
+    it('offers no page tools beside the launchpad, so having no page never reads as an unopenable target', async () => {
+        const { BrowserShell } = await import('./BrowserShell');
+        const reducer = await import('@/sync/domains/browser/control/reducer');
+
+        const screen = await renderScreen(
+            <BrowserShell
+                browserSessionId="browser_session_1"
+                platform="web"
+                state={reducer.createBrowserControlState()}
+                onCommand={vi.fn()}
+                browserContext={{
+                    state: createBrowserContextState(),
+                    contextCapabilities: {
+                        ...contextCapabilities,
+                        supportedContextKinds: ['browserPageReference', 'browserAnnotation'],
+                    } satisfies BrowserContextCapabilities,
+                    enabled: true,
+                    onStateChange: vi.fn(),
+                }}
+                launchpadRows={[]}
+                launchpadRefreshStatus="idle"
+                testID="browser-shell"
+            />,
+        );
+
+        expect(screen.findByTestId('browser-shell-launchpad')).toBeTruthy();
+        expect(screen.findByTestId('browser-shell-mark-up')).toBeNull();
+        expect(screen.findByTestId('browser-shell-attach-page')).toBeNull();
+        expect(screen.getTextContent()).not.toContain('browserShell.unavailable.targetKindUnavailable');
+    });
+
     it.each(['preparing', 'opening'] as const)('shows the Connecting state instead of the launchpad while the first open is %s', async (firstUse) => {
         const { BrowserShell } = await import('./BrowserShell');
         const reducer = await import('@/sync/domains/browser/control/reducer');

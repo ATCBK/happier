@@ -405,13 +405,10 @@ export function useBrowserAnnotationController(input: Readonly<{
     const captureProducerUnavailable = captureCapability.available === false;
     const contextDisabledReason = React.useMemo(() => {
         const disabledReason = browserContext?.disabledReason;
-        if (typeof disabledReason === 'string' && disabledReason.length > 0) {
-            return resolveReasonCopy({ reasonCode: disabledReason, kind: 'browserFrame' }).message;
-        }
-        return !activeView
-            ? resolveReasonCopy({ reasonCode: 'target_kind_unavailable', kind: 'browserFrame' }).message
+        return typeof disabledReason === 'string' && disabledReason.length > 0
+            ? resolveReasonCopy({ reasonCode: disabledReason, kind: 'browserFrame' }).message
             : null;
-    }, [activeView, browserContext?.disabledReason]);
+    }, [browserContext?.disabledReason]);
     const captureDisabledReason = captureCapability.available === false
         ? resolveReasonCopy({ reasonCode: captureCapability.disabledReason, kind: 'browserFrame' }).message
         : null;

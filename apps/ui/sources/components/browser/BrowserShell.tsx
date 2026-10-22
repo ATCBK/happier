@@ -521,7 +521,9 @@ export function BrowserShell(props: Readonly<{
         const { browserSessionId, viewId } = activeView;
         props.onCommand({ kind: 'takeControl', commandId: createCommandId('takeControl', viewId), browserSessionId, viewId });
     }, [activeView, agentDrivesPage, props.onCommand]);
-    const browserContextPresent = Boolean(props.browserContext) && !agentDrivesPage;
+    // The page tools act on the page in view. The launchpad has no page, so they are not offered there
+    // (a disabled pair could only say the target cannot be opened, which is not what the launchpad is).
+    const browserContextPresent = Boolean(props.browserContext) && Boolean(activeView) && !agentDrivesPage;
     const markUpOffered = browserContextPresent && annotation.supported;
     const markUpDisabledReason = annotation.contextButtonDisabled
         ? annotation.contextDisabledReason
