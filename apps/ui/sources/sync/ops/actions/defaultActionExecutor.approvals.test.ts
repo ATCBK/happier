@@ -1323,6 +1323,28 @@ describe('createDefaultActionExecutor approvals', () => {
             sessionId: 's1', requestId: 'req-1', decision: 'approved',
         }, context())).resolves.toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
     });
+    it.each(['permission', 'user-action'] as const)('retains an unconfirmed %s answer when its issued request is cancelled', async family => {
+        await connectPermissionTransport();
+        const controller = new AbortController();
+        rpcAcknowledgement = new Promise(() => {});
+        const pending = family === 'permission'
+            ? executor.execute('session.permission.respond', {
+                sessionId: 's1', requestId: 'req-1', turnId: 'turn-1', decision: 'approved',
+            }, { ...context(), signal: controller.signal })
+            : executor.execute('session.user_action.answer', {
+                sessionId: 's1', requestId: 'req-1', answers: [{ question: 'Continue?', values: ['Yes'] }],
+            }, { ...context(), signal: controller.signal });
+        const method = 's1:' + (family === 'permission'
+            ? RPC_METHODS.SESSION_PERMISSION_RESPOND : RPC_METHODS.SESSION_USER_ACTION_ANSWER);
+        await vi.waitFor(() => expect(outgoing.filter(request => request.method === method)).toHaveLength(1));
+        controller.abort();
+        const result = await pending;
+        expect(result).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+        if (result.ok) throw new Error('Expected an unconfirmed answer');
+        const { readPermissionActionDisposition } = await import('@/components/tools/shell/permissions/permissionActionFailure');
+        expect(readPermissionActionDisposition({ code: result.errorCode })).toBe('outcomeUnknown');
+        expect(outgoing.filter(request => request.method === method)).toHaveLength(1);
+    });
     it('keeps an applied permission receipt when its Account retires as the reply is admitted', async () => {
         await connectPermissionTransport();
         const { retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');

@@ -476,9 +476,9 @@ function projectSessionInteractionRpcResult(result: unknown): unknown {
 
 function projectSessionInteractionRpcFailure(error: unknown) {
   // The transport's issuance evidence survives Action serialization. A lost
-  // answer must not become a retryable failure merely because it has no code.
-  const errorCode = readRpcErrorCode(error) ?? (readRpcRequestDisposition(error) === 'outcomeUnknown'
-    ? RPC_ERROR_CODES.OUTCOME_UNKNOWN : null);
+  // answer stays uncertain even when cancellation also carries a typed code.
+  const errorCode = readRpcRequestDisposition(error) === 'outcomeUnknown'
+    ? RPC_ERROR_CODES.OUTCOME_UNKNOWN : readRpcErrorCode(error);
   if (!errorCode) throw error;
   return { ok: false, errorCode, errorMessage: error instanceof Error ? error.message : errorCode };
 }
