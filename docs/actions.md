@@ -1494,6 +1494,15 @@ to observe startup without submitting another create. `session create --json`
 retains it beside `session_create_pending` and the existing spawn-attempt id.
 An unknown outcome without an observed operation does not invent an address.
 
+The shared UI Session-creation client joins a returned operation through
+`action.operations.get` with `waitForTerminal: true` and the original invocation's
+signal and Action transport. New Session, Voice carriers and embedded creation
+therefore consume the same terminal result without another create. The qualified
+terminal result advances the shared operation store even if its socket notification
+was missed. An embed credential still needs its existing operation-read grant;
+creation does not widen that credential's authority. Pending receipts without an
+operation retain the same-creation-key reconciliation contract above.
+
 In 0.3 development, a signed-out Agent keeps the non-retryable
 `agent_signed_out` creation result and its Agent identity. Its existing
 `launchError` detail carries safe recovery guidance: sign in on the target
