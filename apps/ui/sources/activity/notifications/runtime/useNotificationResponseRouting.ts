@@ -137,7 +137,7 @@ export function useNotificationResponseRouting(params: Readonly<{
         }
 
         const maybeRedirectFromResponse = (response: unknown, defaultActionIdentifier: string, allowExecution = true) => {
-            const parsed = parseNotificationTap({
+            let parsed = parseNotificationTap({
                 response,
                 defaultActionIdentifier,
             });
@@ -148,7 +148,13 @@ export function useNotificationResponseRouting(params: Readonly<{
             // invoke the same guarded executor before navigation/server switching.
             if (Platform.OS === 'android' && isNotificationPermissionAction(parsed)) {
                 fireAndForget(executeNotificationPermissionAction(parsed, { allowExecution }).then(showRecoveryIfActive), { tag: 'notificationPermissionAction' });
-                return;
+                // A live press stays where the user is; the executor owns the decision.
+                if (allowExecution) return;
+                // A saved response reached us only because its press launched the app
+                // (foreground fallback). It never executes, so take the user to the
+                // session to review the current request through the ordinary tap
+                // navigation and its server-safety rules, with no auto-send.
+                parsed = { ...parsed, permissionAction: null, isOpenAction: true };
             }
 
             if (parsed.dedupeKey) {

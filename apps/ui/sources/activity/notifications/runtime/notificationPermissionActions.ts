@@ -35,7 +35,6 @@ export async function executeNotificationPermissionAction(
     parsed: ParsedNotificationTap,
     options: Readonly<{
         allowExecution?: boolean;
-        explicitRetry?: boolean;
         // Bundle-loader seams, like loadExpoNotifications; domain behavior stays real.
         importTarget?: () => Promise<typeof import('./resolveNotificationPermissionTarget')>;
         importJournal?: ImportJournal;
@@ -66,16 +65,16 @@ export async function executeNotificationPermissionAction(
         // getLastNotificationResponseAsync is a saved event, not new user intent.
         // It may report an issued result, but must never initiate/retry a decision.
         return report(await coordinator(request, async (onIssued, signal) => {
-            const { sessionRpcWithServerAccountScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc');
-            return sessionRpcWithServerAccountScope<unknown, { id: string; approved: boolean; decision: string; reason?: string }>({
+            // The ops module owns the decision payload and dispatch, shared with
+            // the foreground sessionAllow/sessionDeny owner.
+            const { sessionPermissionDecisionWithServerAccountScope } = await import('@/sync/ops/sessionPermissionDecision');
+            return sessionPermissionDecisionWithServerAccountScope({
                 scope,
                 sessionId,
-                method: 'permission',
+                requestId,
+                action,
                 networkMode: 'background-task',
                 signal,
-                payload: action === 'allow'
-                    ? { id: requestId, approved: true, decision: 'approved' }
-                    : { id: requestId, approved: false, decision: 'denied', reason: 'Denied from notification' },
                 onIssued,
             });
         }, options));

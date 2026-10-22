@@ -13,11 +13,15 @@ type Record = NotificationPermissionRequest & Readonly<{
     state: NotificationPermissionState;
     updatedAt: number;
 }>;
-type JournalStorage = Pick<MMKV, 'getString' | 'set' | 'getAllKeys'>;
+type JournalStorage = Pick<MMKV, 'getString' | 'set' | 'delete' | 'getAllKeys'>;
 const PREFIX = 'request:v1:';
 
-// A device-local replay journal, not a queue. The bound limits retained approval
-// metadata. At capacity we require in-app review; eviction would enable replay.
+// A device-local replay journal, not a queue. Only an ambiguous issuance carries
+// a durable replay obligation: the CLI's admission/settlement already refuses
+// decisions for claimed or no-longer-outstanding requests, and a never-sent
+// record issued nothing. At capacity, settled or never-sent records are
+// reclaimed oldest-first; if only ambiguous records remain, admission fails
+// closed and requires in-app review. The bound limits ambiguity retention.
 const MAX_RECORDS = 512;
 export class NotificationPermissionJournal {
     constructor(private readonly storage: JournalStorage, private readonly capacity = MAX_RECORDS) {}
@@ -45,8 +49,34 @@ export class NotificationPermissionJournal {
 
     ensureCapacity(request: NotificationPermissionRequest): void {
         if (this.storage.getString(this.key(request)) !== undefined) return;
-        if (this.storage.getAllKeys().filter((key) => key.startsWith(PREFIX)).length >= this.capacity) {
-            throw new Error('Notification permission journal is full');
+        const keys = this.storage.getAllKeys().filter((key) => key.startsWith(PREFIX));
+        const excess = keys.length - this.capacity + 1;
+        if (excess <= 0) return;
+        const reclaimable: { key: string; updatedAt: number }[] = [];
+        for (const key of keys) {
+            const candidate = this.readReclaimCandidate(key);
+            if (candidate) reclaimable.push(candidate);
+        }
+        if (reclaimable.length < excess) throw new Error('Notification permission journal is full');
+        reclaimable.sort((a, b) => a.updatedAt - b.updatedAt);
+        for (const candidate of reclaimable.slice(0, excess)) this.storage.delete(candidate.key);
+    }
+
+    // Issued/unconfirmed records must survive: they are the only proof that a
+    // decision may already have reached the CLI. Everything else is reclaimable,
+    // including an unreadable record, which cannot express a replay obligation.
+    private readReclaimCandidate(key: string): { key: string; updatedAt: number } | null {
+        const raw = this.storage.getString(key);
+        if (raw === undefined) return { key, updatedAt: 0 };
+        try {
+            const record: unknown = JSON.parse(raw);
+            if (typeof record !== 'object' || record === null) return { key, updatedAt: 0 };
+            const state = 'state' in record ? record.state : undefined;
+            if (state === 'issued' || state === 'unconfirmed') return null;
+            const updatedAt = 'updatedAt' in record && typeof record.updatedAt === 'number' ? record.updatedAt : 0;
+            return { key, updatedAt };
+        } catch {
+            return { key, updatedAt: 0 };
         }
     }
 

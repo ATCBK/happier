@@ -179,14 +179,45 @@ describe('Android notification permission entry points', () => {
         expect(notificationPermissionJournal.read({ serverId: 'srv_notification_identity', accountId: 'account', sessionId: 'session', requestId: 'request', action: 'allow' })?.state).toBe('confirmed');
     });
 
-    it('does not issue without credentials, rejects mismatched account hints, then allows an explicit retry', async () => {
+    it('applies denial thinking recovery for the active scope but never for another scope', async () => {
+        const { storage } = await import('@/sync/domains/state/storage');
+        const initialState = storage.getState();
+        try {
+            const session = {
+                id: 'session', seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+                metadata: null, metadataVersion: 0, agentState: null, agentStateVersion: 0,
+                thinking: true, thinkingAt: 1, presence: 'online' as const,
+            };
+            storage.getState().applySessions([session]);
+            storage.getState().markSessionOptimisticThinking('session');
+            await expect(executeNotificationPermissionAction(parsed(response(PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1))))
+                .resolves.toMatchObject({ status: 'confirmed' });
+            expect(storage.getState().sessions['session']?.thinking).toBe(false);
+
+            // Same decision against a now-inactive server scope: the authenticated
+            // send still works, but it must not touch the active scope's UI state.
+            storage.getState().applySessions([{ ...session, thinking: true }]);
+            const other = profiles.upsertServerProfile({ serverUrl: 'https://other.example.test', name: 'Other' });
+            profiles.setActiveServerId(other.id, { scope: 'device' });
+            await TokenStorage.setCredentials({ token: token('other-account') });
+            const foreign = parsed(response(PUSH_NOTIFICATION_ACTION_IDS.permissionDenyV1, 'n2'));
+            await expect(executeNotificationPermissionAction({ ...foreign, permissionAction: { ...foreign.permissionAction!, requestId: 'foreign-request' } }))
+                .resolves.toMatchObject({ status: 'confirmed' });
+            expect(storage.getState().sessions['session']?.thinking).toBe(true);
+            expect(profiles.getActiveServerUrl()).toBe(other.serverUrl);
+        } finally {
+            storage.setState(initialState, true);
+        }
+    });
+
+    it('does not issue without credentials, rejects mismatched account hints, then allows a fresh press to retry', async () => {
         await TokenStorage.removeCredentials();
         await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'not_sent' });
         expect(boundary.rpc).not.toHaveBeenCalled();
         await TokenStorage.setCredentials({ token: token('replacement') });
         await expect(executeNotificationPermissionAction({ ...parsed(), accountId: 'account' })).resolves.toMatchObject({ status: 'not_sent' });
         expect(boundary.rpc).not.toHaveBeenCalled();
-        await expect(executeNotificationPermissionAction(parsed(), { explicitRetry: true })).resolves.toMatchObject({ status: 'confirmed' });
+        await expect(executeNotificationPermissionAction(parsed())).resolves.toMatchObject({ status: 'confirmed' });
     });
 
     it('fails closed for absent scope and invalid authentication', async () => {
@@ -356,12 +387,13 @@ describe('Android notification permission entry points', () => {
         expect(boundary.rpc).toHaveBeenCalledTimes(1);
     });
 
-    it('does not execute a saved response on cold start', async () => {
+    it('navigates to the session for a saved cold-start response without executing it', async () => {
         boundary.lastResponse = response();
         const hook = await renderHook(() => useNotificationResponseRouting({ enabled: true, refreshAuth: async () => {} }));
         await flushHookEffects();
         expect(boundary.rpc).not.toHaveBeenCalled();
-        expect(boundary.push).not.toHaveBeenCalled();
+        expect(boundary.push).toHaveBeenCalledWith('/session/session');
+        expect(profiles.getActiveServerUrl()).toBe(serverUrl);
         await hook.unmount();
     });
 

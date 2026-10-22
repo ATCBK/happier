@@ -12,7 +12,7 @@ export function createNotificationPermissionCoordinator(journal: NotificationPer
     return function run(
         request: NotificationPermissionRequest,
         send: (onIssued: () => void, signal: AbortSignal) => Promise<unknown>,
-        options: Readonly<{ explicitRetry?: boolean; allowExecution?: boolean }> = {},
+        options: Readonly<{ allowExecution?: boolean }> = {},
     ): Promise<NotificationPermissionOutcome> {
         const key = journal.key(request);
         const pending = inFlight.get(key);
@@ -26,12 +26,13 @@ export function createNotificationPermissionCoordinator(journal: NotificationPer
             const lifetime = new AbortController();
             try {
                 const previous = journal.read(request);
-                if (previous) {
+                if (previous && previous.state !== 'not_sent') {
                     if (previous.action !== request.action) return { status: 'conflict' };
-                    if (previous.state !== 'not_sent' || !options.explicitRetry) {
-                        return { status: previous.state === 'issued' ? 'unconfirmed' : previous.state, duplicate: true };
-                    }
+                    return { status: previous.state === 'issued' ? 'unconfirmed' : previous.state, duplicate: true };
                 }
+                // A never-sent record issued nothing: a live press may retry or
+                // change the decision. Saved responses are observations, not
+                // fresh intent, and still cannot execute.
                 if (options.allowExecution === false) return { status: 'not_sent' };
                 journal.ensureCapacity(request);
                 const result = await withTimeout(() => send(() => {
@@ -41,7 +42,9 @@ export function createNotificationPermissionCoordinator(journal: NotificationPer
                     // an inter-process CAS or an exactly-once delivery guarantee.
                     if (finished) throw new Error('Notification action execution ended');
                     const current = journal.read(request);
-                    if (current && (current.action !== request.action || current.state !== 'not_sent')) {
+                    // A never-sent record of either action is overwritable by this
+                    // live press; anything else means an issuance already happened.
+                    if (current && current.state !== 'not_sent') {
                         throw new Error('Notification permission was already issued');
                     }
                     journal.write(request, 'issued');
