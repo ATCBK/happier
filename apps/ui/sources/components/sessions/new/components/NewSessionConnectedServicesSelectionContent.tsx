@@ -107,12 +107,17 @@ export function NewSessionConnectedServicesSelectionContent(props: NewSessionCon
     const nativeAgentTargetKey = props.nativeAgentTargetKey ?? props.routeSources?.agentTargetKey;
     const nativeRoute = React.useMemo(() => nativeAgentTargetKey ? {
         agentTargetKey: nativeAgentTargetKey,
-        active: props.appliedRoute?.kind === 'native',
+        // A Team route runs the Agent's own models through a brokered Team credential: its Team row (the
+        // session's binding) is the current choice, exactly as a connected account is on a native route.
+        active: props.appliedRoute?.kind === 'native' || (
+            props.appliedRoute?.kind === 'team'
+            && Object.values(props.bindingsByServiceId).some((binding) => binding?.source === 'team_resource')
+        ),
         onBrowse: sourceBrowse ? () => sourceBrowse(nativeAgentTargetKey, {
             connectionId: null,
             label: t('connectedServices.authModal.nativeAuthTitle'),
         }) : undefined,
-    } : undefined, [nativeAgentTargetKey, props.appliedRoute?.kind, sourceBrowse]);
+    } : undefined, [nativeAgentTargetKey, props.appliedRoute?.kind, props.bindingsByServiceId, sourceBrowse]);
 
     /** Public applied-descriptor title; neutral fallback for an unknown service. */
     const resolveServiceTitle = React.useCallback((serviceId: string) => {
