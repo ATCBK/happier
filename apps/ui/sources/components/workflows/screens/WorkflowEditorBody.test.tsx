@@ -416,12 +416,16 @@ async function renderChooserLifetimeEditor() {
     getStorage().setState({ isDataReady: true, sessions: {}, sessionListRowsByServerId: {} });
     let host!: ReturnType<typeof useWorkflowAuthoringHost>;
     let runtime!: ReturnType<typeof useEntityDragDropRuntime>;
+    let changeMachine!: (machineId: string) => void;
     function Editor({ serverId }: { serverId: string }) {
-        host = useWorkflowAuthoringHost({ serverId, projectTarget: { machineId: 'machine-1', directory: '/Users/me/project' } });
+        const [machineId, setMachineId] = React.useState('machine-1');
+        changeMachine = setMachineId;
+        const projectTarget = { machineId, directory: '/Users/me/project' };
+        host = useWorkflowAuthoringHost({ serverId, projectTarget });
         runtime = useEntityDragDropRuntime();
         const [draft, setDraft] = React.useState(() => buildDraft(harness));
         return <harness.WorkflowEditorBody {...host} draft={draft} onChange={setDraft}
-            machineName="Mac Studio" projectTarget={{ machineId: 'machine-1', directory: '/Users/me/project' }}
+            machineName="Mac Studio" projectTarget={projectTarget}
             selectedBlockId="analyze" onSelectBlock={() => {}} onCustomizeBlock={() => {}}
             view="steps" onChangeView={() => {}} inspectorGroupDisclosure={OPEN_SETTINGS_GROUPS} />;
     }
@@ -453,6 +457,7 @@ async function renderChooserLifetimeEditor() {
         host: () => host, runtime: () => runtime,
         fail: () => { failSnapshot = true; },
         block: () => { snapshotGate = createDeferred<void>(); return snapshotGate; },
+        changeMachine: (machineId: string) => act(async () => { changeMachine(machineId); }),
         switchHome: () => screen.update(<AddressedEditor serverId={homes.homes.other!.id} />),
     };
 }
@@ -507,6 +512,32 @@ it('retains the second inspector demand until its chooser also closes', async ()
     await editor.screen.unmount();
 });
 
+it.each(['defaults', 'step'] as const)('keeps the %s chooser intent when real acquisition is loading with no current options', async inspector => {
+    const editor = await renderChooserLifetimeEditor();
+    const prefix = editor[inspector];
+    if (inspector === 'step') await editor.screen.pressByTestIdAsync('workflow-editor-step-analyze-customize');
+    await editor.open(prefix);
+    const gate = editor.block();
+    const before = editor.reads();
+    try {
+        await editor.refresh();
+        await waitForHomeGovernance(() => expect(editor.reads()).toBeGreaterThan(before));
+        expect(editor.host().sessionOptionsStatus).toBe('loading');
+        await editor.changeMachine('machine-elsewhere');
+        expect(editor.host().existingSessions).toEqual([]);
+        expect(editor.picker(prefix)).toBeUndefined();
+        await editor.changeMachine('machine-1');
+        expect(editor.picker(prefix)).toBeDefined();
+    } finally { await act(async () => { gate.resolve(); }); }
+    await waitForHomeGovernance(() => expect(editor.host().sessionOptionsStatus).toBe('ready'));
+    await act(async () => { editor.picker(prefix)!.props.onRequestClose(); });
+    await flushHookEffects();
+    const after = editor.reads();
+    await editor.refresh();
+    expect(editor.reads()).toBe(after);
+    await editor.screen.unmount();
+});
+
 it.each(['Home', 'Account'] as const)('retires chooser intent during %s acquisition', async retirement => {
     const editor = await renderChooserLifetimeEditor();
     await editor.open();
@@ -520,6 +551,9 @@ it.each(['Home', 'Account'] as const)('retires chooser intent during %s acquisit
     } finally { await act(async () => { gate.resolve(); }); }
     await waitForHomeGovernance(() => expect(editor.picker(editor.defaults)).toBeUndefined());
     await flushHookEffects();
+    if (retirement === 'Home') {
+        expect(editor.homes.requests.filter(request => request.home === 'other' && request.path === '/v2/sessions')).toHaveLength(0);
+    }
     const after = editor.reads();
     await editor.refresh();
     expect(editor.reads()).toBe(after);

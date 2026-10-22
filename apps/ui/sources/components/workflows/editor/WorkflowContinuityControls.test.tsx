@@ -1,7 +1,8 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { renderScreen, standardCleanup, withPopoverWebGlobals } from '@/dev/testkit';
 
 import type { WorkflowConversationSelection } from '@happier-dev/protocol/workflows/workflowReferenceV1';
 import { createWorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
@@ -75,6 +76,36 @@ async function renderControls(conversation: WorkflowConversationSelection) {
 }
 
 describe('WorkflowContinuityControls continuation disclosure', () => {
+    it.each(['empty', 'error'] as const)('keeps pending Session intent through loading and retires it on %s', async terminal => {
+        const restore = withPopoverWebGlobals();
+        try {
+            const demand = vi.fn();
+            const props = {
+                draft: createWorkflowEditorDraft({ draftId: 'pending', name: 'Review', blocks: [stepBlock('step', 'Review')] }),
+                conversation: { kind: 'shared_run' as const }, workspace: { kind: 'inherit' as const },
+                onSessionOptionsDemandChange: demand,
+                onBindExistingSession: async () => ({ status: 'applied' as const }),
+                onChangeConversation: () => {}, onChangeWorkspace: () => {}, testIDPrefix: 'pending',
+            };
+            const options = [{ sessionId: 'session', machineId: 'machine', label: 'Review' }];
+            const screen = await renderScreen(<WorkflowContinuityControls {...props} existingSessions={options} sessionOptionsStatus="ready" />);
+            const field = () => screen.findAll(node => node.props.testID === 'pending-conversation-field'
+                && Array.isArray(node.props.items))[0]!;
+            await act(async () => { field().props.onOpenChange(true); field().props.onSelect('existing_session'); });
+            await act(async () => { field().props.onOpenChange(false); });
+            await screen.update(<WorkflowContinuityControls {...props} existingSessions={[]} sessionOptionsStatus="loading" />);
+            expect(demand.mock.calls.map(([value]) => value)).toEqual([true]);
+            await screen.update(<WorkflowContinuityControls {...props} existingSessions={terminal === 'empty' ? [] : options}
+                sessionOptionsStatus={terminal === 'empty' ? 'ready' : 'error'} />);
+            expect(demand.mock.calls.map(([value]) => value)).toEqual([true, false]);
+            await screen.update(<WorkflowContinuityControls {...props} existingSessions={options} sessionOptionsStatus="ready" />);
+            expect(screen.findByTestId('pending-conversation-session-picker')).toBeNull();
+            await screen.unmount();
+        } finally {
+            await standardCleanup();
+            restore();
+        }
+    });
     it('does not offer Session binding without the mounted qualified binding owner', async () => {
         const changed = vi.fn();
         const screen = await renderScreen(<WorkflowContinuityControls

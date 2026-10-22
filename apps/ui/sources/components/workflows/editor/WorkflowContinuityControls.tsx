@@ -18,10 +18,12 @@ import { type WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEdito
 import { findWorkflowBlock, walkWorkflowBlocks } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 import { useSessionDisplayNameSource } from '@/sync/store/hooks';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 
 import { workflowEditorStyles } from './workflowEditorStyles';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
 /**
  * Conversation and workspace continuity, authored as the canonical selection
@@ -174,6 +176,7 @@ export function WorkflowContinuityControls(props: Readonly<{
     }>;
     /** Existing Sessions the host offers for continuation; absent means none can be offered here. */
     existingSessions?: readonly WorkflowExistingSessionOption[];
+    sessionOptionsStatus?: 'loading' | 'ready' | 'error';
     onSessionOptionsDemandChange?: (demanded: boolean) => void;
     onChangeConversation: (value: WorkflowConversationSelection | undefined) => void;
     onBindExistingSession?: (sessionId: string) => Promise<EntityDropOutcomeV1>;
@@ -220,6 +223,24 @@ export function WorkflowContinuityControls(props: Readonly<{
     // and the picker closes.
     const [choosingSession, setChoosingSession] = React.useState(false);
     const [conversationOpen, setConversationOpen] = React.useState(false);
+    const focusedLifetime = useActiveServerAccountScopeLifetime();
+    const addressedLifetime = useWorkflowAccountLifetime();
+    const accountLifetime = addressedLifetime === undefined ? focusedLifetime : addressedLifetime;
+    React.useEffect(() => {
+        const retire = () => { setChoosingSession(false); setConversationOpen(false); };
+        retire();
+        const retirement = accountLifetime?.onRetire(retire);
+        return () => retirement?.dispose();
+    }, [accountLifetime]);
+    React.useEffect(() => {
+        if (!choosingSession) return;
+        // Empty options during acquisition are not a completed empty result.
+        // Once it settles, a vanished picker no longer owns pending intent.
+        if (props.sessionOptionsStatus === 'error'
+            || (props.sessionOptionsStatus ?? 'ready') === 'ready' && !existingSessionOffered) {
+            setChoosingSession(false);
+        }
+    }, [choosingSession, existingSessionOffered, props.sessionOptionsStatus]);
     const sessionOptionsDemanded = conversationOpen || choosingSession;
     const onSessionOptionsDemandChange = props.onSessionOptionsDemandChange;
     React.useEffect(() => {
@@ -343,6 +364,7 @@ export function WorkflowContinuityControls(props: Readonly<{
                 items={conversationItems}
                 selectedId={conversationSelectedId}
                 onSelect={(id) => {
+                    if (id !== EXISTING_SESSION_OPTION_ID) setChoosingSession(false);
                     if (id === DEFAULT_OPTION_ID) {
                         onChangeConversation(undefined);
                         return;
