@@ -1,14 +1,13 @@
 import * as React from 'react';
 import { shallow } from 'zustand/shallow';
-import { useStoreWithEqualityFn } from 'zustand/traditional';
 import { buildMachineAgentsDetectRequest, buildMachineAgentInventoryKey, projectAcpCatalogForMachineInventory } from '@happier-dev/protocol/capabilities';
 import { getAcpCatalogSnapshot, subscribeAcpCatalogSnapshots } from '@/sync/store/settings/acpCatalogSnapshot';
 import { observeAcpCatalog, refreshAcpCatalog } from '@/sync/engine/settings/acpCatalogEngine';
 
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { getMachineCapabilitiesCacheState, prefetchMachineCapabilities, prefetchMachineCapabilitiesIfStale, subscribeMachineCapabilitiesCacheState } from '@/hooks/server/useMachineCapabilitiesCache';
-import { loadDaemonMergedProjectionCacheEntry, readCachedDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
-import { getMachineContributionRegistryProjectionRevision, subscribeMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { captureDaemonMergedProjectionReader, loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
+import { getMachineContributionRegistryProjectionRevision } from '@/sync/ops/machineContributionRegistryProjectionRevision';
 import { useDaemonMergedProjectionInputs, type DaemonMergedProjectionInputsState } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { getStorage } from '@/sync/domains/state/storage';
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
@@ -17,6 +16,10 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { serverAccountScopedResourceKey, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { isMachineSelectableForFleet, resolveFleetMachineAvailability } from '@/sync/domains/machines/administration/fleetUnion';
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useMachinePresenceSnapshot } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
+import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { captureServerProfileScopeResolver, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { getInstallablesRegistryEntries } from '@/capabilities/installablesRegistry';
 import { buildMachineAgentInventoryDescriptors } from './machineAgentCatalog';
 import { createMachineAgentInventoryPersistence } from './machineAgentInventoryPersistence';
@@ -39,13 +42,43 @@ export function readMachineAgentsForScope(lifetime: ServerAccountScopeLifetime, 
 }
 const capabilitySalt = (lifetime: ServerAccountScopeLifetime, revision: number) => serverAccountScopedResourceKey(lifetime.scope, 'machine-agents-capabilities', String(revision));
 
-function useInventoryProjectionRevisions(serverId: string, machineIds: readonly string[]): string {
+function useInventoryProjectionReaders(serverId: string, machineIds: readonly string[]) {
+    const profilesGeneration = useServerProfilesGeneration();
+    return React.useMemo(() => {
+        if (machineIds.length === 0) return [];
+        const resolveScopeId = captureServerProfileScopeResolver();
+        return machineIds.map(machineId => captureDaemonMergedProjectionReader({ serverId, machineId }, resolveScopeId));
+    }, [machineIds, profilesGeneration, serverId]);
+}
+
+function useInventoryProjectionRevisions(readers: ReturnType<typeof useInventoryProjectionReaders>): string {
     const subscribe = React.useCallback((listener: () => void) => {
-        const disposers = machineIds.map((machineId) => subscribeMachineContributionRegistryProjectionInvalidation({ serverId, machineId }, listener));
+        const disposers = readers.map(reader => reader.subscribeInvalidation(listener));
         return () => { for (const dispose of disposers) dispose(); };
-    }, [machineIds, serverId]);
-    const read = React.useCallback(() => JSON.stringify(machineIds.map((machineId) => getMachineContributionRegistryProjectionRevision({ serverId, machineId }))), [machineIds, serverId]);
+    }, [readers]);
+    const read = React.useCallback(() => JSON.stringify(readers.map(reader => reader.readRevision())), [readers]);
     return React.useSyncExternalStore(subscribe, read, read);
+}
+
+/** Agent targets may include ephemeral Machines; reuse presence timing, not the persistent-picker filter. */
+function useInventoryMachineFacts(serverId: string, machineIds: readonly string[], lifetime: ServerAccountScopeLifetime | null) {
+    const activeServerId = useActiveServerSnapshot(machineIds.length > 0).serverId;
+    const readMachines = React.useCallback((resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver()) => {
+        if (machineIds.length === 0) return [];
+        const state = getStorage().getState();
+        const machines = resolveServerScopedMachines({ serverId: serverId || activeServerId, activeServerId,
+            get activeMachines() { return Object.values(state.machines); },
+            machineListByServerId: state.machineListByServerId,
+            machineListStatusByServerId: state.machineListStatusByServerId,
+        }, resolveScopeId);
+        return machineIds.map(id => machines?.find(machine => machine.id === id) ?? null);
+    }, [activeServerId, machineIds, serverId]);
+    const readFacts = React.useCallback((nowMs: number) => {
+        const resolveScopeId = captureServerProfileScopeResolver();
+        const scope = lifetime?.isCurrent() ? lifetime.scope : null;
+        return readMachines(resolveScopeId).map(machine => Boolean(machine && isMachineSelectableForFleet(scope, machine, nowMs, resolveScopeId)));
+    }, [lifetime, readMachines]);
+    return useMachinePresenceSnapshot(readMachines, readFacts, shallow);
 }
 
 function hydrate(lifetime: ServerAccountScopeLifetime, machineId: string): void {
@@ -160,14 +193,12 @@ function useInventoryDriver(target: MachineAgentsTarget) {
     const serverId = lifetime?.scope.serverId ?? requestedServerId;
     const key = enabled && lifetime ? scopeKey(lifetime, machineId) : null;
     const reachabilityRevision = useMachineReachabilityRevision(enabled);
-    const machine = useStoreWithEqualityFn(getStorage(), (state) => {
-        const row = enabled ? resolveServerScopedMachine(state, serverId, machineId) : null;
-        return { online: Boolean(row && isMachineSelectableForFleet(lifetime?.scope, row)) };
-    }, shallow);
     const machineIds = React.useMemo(() => enabled ? [machineId] : [], [enabled, machineId]);
-    const projectionRevisions = useInventoryProjectionRevisions(serverId, machineIds);
-    const revision = enabled ? getMachineContributionRegistryProjectionRevision({ serverId, machineId }) : 0;
-    const projection = useDaemonMergedProjectionInputs({ machineId, serverId, enabled, load: enabled && machine.online && target.load !== false });
+    const online = useInventoryMachineFacts(serverId, machineIds, lifetime)[0] === true;
+    const projectionReaders = useInventoryProjectionReaders(serverId, machineIds);
+    const projectionRevisions = useInventoryProjectionRevisions(projectionReaders);
+    const revision = enabled ? projectionReaders[0]!.readRevision() : 0;
+    const projection = useDaemonMergedProjectionInputs({ machineId, serverId, enabled, load: enabled && online && target.load !== false });
     const readAcp = React.useCallback(() => lifetime ? getAcpCatalogSnapshot(lifetime.scope) : null, [lifetime]);
     const acpCatalog = React.useSyncExternalStore(subscribeAcpCatalogSnapshots, readAcp, readAcp);
     React.useEffect(() => enabled && lifetime && target.load !== false && (!agentId || definitionId)
@@ -181,13 +212,13 @@ function useInventoryDriver(target: MachineAgentsTarget) {
         publish();
         const unsubscribe = subscribeMachineCapabilitiesCacheState(machineId, serverId, capabilitySalt(lifetime, revision), publish, lifetime.scope.accountId);
         return unsubscribe;
-    }, [acpCatalog, authentication, key, lifetime, machine.online, reachabilityRevision, revision, machineId, projection.inputs, projection.phase, serverId]);
+    }, [acpCatalog, authentication, key, lifetime, online, reachabilityRevision, revision, machineId, projection.inputs, projection.phase, serverId]);
     React.useEffect(() => {
-        if (!lifetime || !enabled || !machine.online || target.load === false) return;
+        if (!lifetime || !enabled || !online || target.load === false) return;
         const abort = new AbortController();
         void refreshMachineAgents({ serverId, machineId, accountLifetime: lifetime, agentId, definitionId, signal: abort.signal });
         return () => abort.abort();
-    }, [acpCatalog?.data, agentId, definitionId, enabled, lifetime, machine.online, projectionRevisions, machineId, projection.inputs, serverId, target.load]);
+    }, [acpCatalog?.data, agentId, definitionId, enabled, lifetime, online, projectionRevisions, machineId, projection.inputs, serverId, target.load]);
     const refreshAbort = React.useRef<AbortController | null>(null);
     React.useEffect(() => () => refreshAbort.current?.abort(), [agentId, definitionId, enabled, lifetime, machineId, serverId]);
     const refresh = React.useCallback(async () => {
@@ -244,16 +275,12 @@ export function useMachineAgentsByMachine(target: Readonly<{ serverId: string; m
     const idsKey = JSON.stringify([...new Set(target.machineIds)].sort());
     const machineIds = React.useMemo(() => JSON.parse(idsKey) as string[], [idsKey]);
     const reachabilityRevision = useMachineReachabilityRevision(machineIds.length > 0);
-    // Presence can expire between React's reads of the same store snapshot.
-    // The selector adapter retains that observation until the next render/update.
-    const machineFacts = useStoreWithEqualityFn(getStorage(), (state) => machineIds.flatMap((machineId) => {
-        const machine = resolveServerScopedMachine(state, target.serverId, machineId);
-        return [Boolean(machine && isMachineSelectableForFleet(lifetime?.scope, machine))];
-    }), shallow);
-    const projectionRevisions = useInventoryProjectionRevisions(target.serverId, machineIds);
+    const machineFacts = useInventoryMachineFacts(target.serverId, machineIds, lifetime);
+    const projectionReaders = useInventoryProjectionReaders(target.serverId, machineIds);
+    const projectionRevisions = useInventoryProjectionRevisions(projectionReaders);
     const authentication = useMachineAgentAuthentication({ lifetime, serverId: target.serverId,
-        enabled: machineIds.some(machineId => {
-            const cached = readCachedDaemonMergedProjectionCacheEntry({ machineId, serverId: target.serverId });
+        enabled: projectionReaders.some(reader => {
+            const cached = reader.readCached();
             return (cached?.kind === 'ready' || cached?.kind === 'error')
                 && Object.values(cached.inputs?.pluginProjectionV2?.agentsById ?? {}).some(agent => agent.connectedAccounts?.length);
         }) });
@@ -281,13 +308,13 @@ export function useMachineAgentsByMachine(target: Readonly<{ serverId: string; m
         if (!lifetime) return;
         for (const [index, machineId] of machineIds.entries()) {
             hydrate(lifetime, machineId);
-            const inputs = readCachedDaemonMergedProjectionCacheEntry({ machineId, serverId: target.serverId });
+            const inputs = projectionReaders[index]!.readCached();
             if (machineFacts[index] !== true || inputs?.kind === 'ready' || inputs?.kind === 'error') {
-                observe({ lifetime, machineId, authentication, revision: getMachineContributionRegistryProjectionRevision({ serverId: target.serverId, machineId }),
+                observe({ lifetime, machineId, authentication, revision: projectionReaders[index]!.readRevision(),
                     projection: { phase: inputs?.kind === 'ready' || inputs?.kind === 'error' ? inputs.kind : 'idle',
                         inputs: inputs?.kind === 'ready' || inputs?.kind === 'error' ? inputs.inputs ?? null : null } });
             }
         }
-    }, [authentication, lifetime, machineFacts, machineIds, projectionRevisions, reachabilityRevision, target.load, target.serverId]);
+    }, [authentication, lifetime, machineFacts, machineIds, projectionReaders, projectionRevisions, reachabilityRevision, target.load, target.serverId]);
     return React.useSyncExternalStore(subscribe, read, read);
 }

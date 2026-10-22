@@ -8,7 +8,8 @@ import { useAllProfileMachineInventorySnapshots } from '@/sync/domains/machines/
 import { useMachinePresenceSummaries } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { formatMachineDisplayNameParts, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import { useMachineAgentsByMachine } from '@/agents/machineAgents/useMachineAgents';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerProfileIdentifiersEquivalent, captureServerProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { useReachRulesCatalog } from '@/sync/store/useReachRulesCatalog';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useProjectAccountRows } from '@/sync/domains/workspaces/projectAccountRows';
@@ -22,8 +23,7 @@ import { readInstalledMachineAgentInventory } from './installedMachineAgents';
 import { getAcpCatalogSnapshot, subscribeAcpCatalogSnapshots } from '@/sync/store/settings/acpCatalogSnapshot';
 import type { PluginProjectionV2 } from '@happier-dev/protocol';
 import {
-  readDaemonMergedProjectionSummary,
-  subscribeDaemonMergedProjectionSummary,
+  captureDaemonMergedProjectionReader,
   type DaemonMergedProjectionSummary,
 } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 
@@ -111,6 +111,11 @@ export function useReachMachines(): Readonly<{
     () => machines.map((machine) => machine.id),
     [machines],
   );
+  const profilesGeneration = useServerProfilesGeneration();
+  const projectionReaders = React.useMemo(() => {
+    const resolveScopeId = captureServerProfileScopeResolver();
+    return machineIds.map(machineId => captureDaemonMergedProjectionReader({ machineId, serverId }, resolveScopeId));
+  }, [machineIds, profilesGeneration, serverId]);
   const installed = useMachineAgentsByMachine({
     serverId: scope?.serverId ?? '',
     machineIds,
@@ -122,16 +127,16 @@ export function useReachMachines(): Readonly<{
   const nameHints = React.useMemo(() => resolveMachineDisplayNameParts(machines), [machines]);
   const declarationsRef = React.useRef<readonly DaemonMergedProjectionSummary[]>([]);
   const readDeclarations = React.useCallback(() => {
-    const next = machineIds.map(machineId => readDaemonMergedProjectionSummary({ machineId, serverId }));
+    const next = projectionReaders.map(reader => reader.readSummary());
     const previous = declarationsRef.current;
     if (previous.length === next.length && next.every((row, index) => row === previous[index])) return previous;
     declarationsRef.current = next;
     return next;
-  }, [machineIds, serverId]);
+  }, [projectionReaders]);
   const subscribeDeclarations = React.useCallback((listener: () => void) => {
-    const disposers = machineIds.map(machineId => subscribeDaemonMergedProjectionSummary({ machineId, serverId }, listener));
+    const disposers = projectionReaders.map(reader => reader.subscribeSummary(listener));
     return () => { for (const dispose of disposers) dispose(); };
-  }, [machineIds, serverId]);
+  }, [projectionReaders]);
   const declarations = React.useSyncExternalStore(subscribeDeclarations, readDeclarations, readDeclarations);
   const readAcp = React.useCallback(() => getAcpCatalogSnapshot(scope), [scope]);
   const acp = React.useSyncExternalStore(subscribeAcpCatalogSnapshots, readAcp, readAcp);

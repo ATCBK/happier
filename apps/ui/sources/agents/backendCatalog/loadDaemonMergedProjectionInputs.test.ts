@@ -554,6 +554,33 @@ describe('loadDaemonMergedProjectionCacheEntry', () => {
         }
     });
 
+    it('keeps prepared descriptive keys live for invalidation, locale and Account retirement without crossing Homes', async () => {
+        const { loadDaemonMergedProjectionCacheEntry, captureDaemonMergedProjectionReader } = await import('./loadDaemonMergedProjectionInputs');
+        const account = createAccountLifetime('account-a');
+        projectionDescribeMock.mockResolvedValue({ supported: true, projection: daemonProjection(7) });
+        await loadDaemonMergedProjectionCacheEntry({ ...projectionScope, accountLifetime: account.lifetime });
+        const reader = captureDaemonMergedProjectionReader(projectionScope);
+        const foreign = captureDaemonMergedProjectionReader({ ...projectionScope, serverId: 'server-2' });
+        const first = reader.readSummary();
+        expect(first.current).toBe(true);
+        expect(foreign.readSummary()).toMatchObject({ inputs: null, current: false });
+        const notify = vi.fn();
+        const stop = reader.subscribeSummary(notify);
+        try {
+            for (let index = 0; index < 100; index++) expect(reader.readSummary()).toBe(first);
+            textBoundary.locale = 'fr';
+            expect(reader.readSummary()).toMatchObject({ inputs: first.inputs, current: false });
+            textBoundary.locale = 'en';
+            expect(reader.readSummary()).toBe(first);
+            publishMachineContributionRegistryProjectionInvalidation(projectionScope);
+            expect(notify).toHaveBeenCalled();
+            expect(reader.readSummary()).toMatchObject({ inputs: first.inputs, current: false });
+            account.retire();
+            expect(reader.readCached()).toBeNull();
+            expect(reader.readSummary()).toMatchObject({ inputs: null, current: false });
+        } finally { stop(); }
+    });
+
     it.each(['settled', 'publishing'] as const)('keeps a reused settled projection while another same-Account reader remains mounted (%s)', async (joinAt) => {
         const { loadDaemonMergedProjectionCacheEntry, readDaemonMergedProjectionSummary, subscribeDaemonMergedProjectionSummary } = await import('./loadDaemonMergedProjectionInputs');
         const issuer = createAccountLifetime('account-a');

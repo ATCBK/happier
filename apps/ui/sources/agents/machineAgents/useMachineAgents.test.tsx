@@ -5,10 +5,12 @@ import type { MachineAgentInventoryItem, PluginProjectionV2 } from '@happier-dev
 import { FeaturesResponseSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import { QualifiedConnectedAccountPurposeV1Schema } from '@happier-dev/protocol/connect/connected-account-purposes';
 import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import { isMachineAgentReady } from './resolveMachineAgentState';
 import { resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 
 // Install physical HTTP/Socket.IO before loading the real scoped-RPC owner.
 const network = await installSessionOpsNetworkBoundary();
@@ -52,6 +54,37 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine inventory lifecycle boundary', () => {
+    it('does not reacquire Home correspondence for unchanged Agent inventory notifications or per Machine on rerender', async () => {
+        const server = await network.addHome('https://perf-b3-r4.example.test', 'perf-b3-r4');
+        const rows = Array.from({ length: 100 }, (_, index) => createMachineFixture({ id: `perf-b3-${index}`, active: false, activeAt: 0 }));
+        storage.setState({ machineListByServerId: { [server.id]: rows }, machineListStatusByServerId: { [server.id]: 'idle' },
+            profileScope: { serverId: server.id, accountId: 'perf-b3-r4' } });
+        let ids = [rows[0]!.id];
+        const hook = await renderHook(() => useMachineAgentsByMachine({ serverId: server.id, machineIds: ids, load: false }));
+        await vi.waitFor(() => expect(hook.getCurrent().get(ids[0])?.status).toBe('offline'));
+        const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+        const active = vi.spyOn(serverProfiles, 'getActiveServerSnapshot');
+        const capture = vi.spyOn(serverProfiles, 'captureServerProfileScopeResolver');
+        try {
+            for (let index = 0; index < 3; index++) await hook.rerender();
+            const singleReads = { resolve: resolve.mock.calls.length, active: active.mock.calls.length, capture: capture.mock.calls.length };
+            ids = rows.map(row => row.id);
+            await hook.rerender();
+            await vi.waitFor(() => expect(hook.getCurrent().size).toBe(100));
+            resolve.mockClear(); active.mockClear(); capture.mockClear();
+            for (let index = 0; index < 3; index++) await hook.rerender();
+            expect({ resolve: resolve.mock.calls.length, active: active.mock.calls.length, capture: capture.mock.calls.length }).toEqual(singleReads);
+            resolve.mockClear(); active.mockClear(); capture.mockClear();
+            for (let index = 0; index < 10; index++) await act(async () => {
+                storage.setState(state => ({ isDataReady: !state.isDataReady }));
+            });
+            expect(resolve).not.toHaveBeenCalled();
+            expect(active).not.toHaveBeenCalled();
+            expect(capture).not.toHaveBeenCalled();
+            expect(hook.getCurrent().get(ids[0])?.status).toBe('offline');
+            expect(rpc.mock.calls.filter(([request]) => request.method === 'capabilities.detect')).toHaveLength(0);
+        } finally { resolve.mockRestore(); active.mockRestore(); capture.mockRestore(); await hook.unmount(); }
+    });
     it('uses acquired Connected Account descriptors without reparsing the raw machine family', async () => {
         const { publishDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
         const { useMachineAgentAuthentication } = await import('./useMachineAgentAuthentication');
@@ -270,6 +303,8 @@ describe('machine inventory lifecycle boundary', () => {
     });
 
     it('projects Account purpose defaults into single-machine and fleet sign-in, including changes without a CLI probe', async () => {
+        const { useMachineAgentAuthentication } = await import('./useMachineAgentAuthentication');
+        const { publishDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters');
         const server = await network.addHome('https://default-auth-inventory.example.test', 'inventory-account');
         const scope = { serverId: server.id, accountId: 'inventory-account' };
         const lifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
@@ -308,10 +343,11 @@ describe('machine inventory lifecycle boundary', () => {
             }] : [] } },
         }, true);
         publishDefaults(1, null);
-        const hook = await renderHook(() => ({
+        const hook = await renderHook(({ authenticationLifetime }: { authenticationLifetime: typeof lifetime }) => ({
             inventory: useMachineAgents({ serverId: server.id, machineId: machine.id, load: false }),
             fleet: useMachineAgentsByMachine({ serverId: server.id, machineIds: [machine.id], load: false }),
-        }));
+            authentication: useMachineAgentAuthentication({ lifetime: authenticationLifetime, serverId: server.id, enabled: true }),
+        }), { initialProps: { authenticationLifetime: lifetime } });
         try {
             const rows = () => [hook.getCurrent().inventory.agents[0], hook.getCurrent().fleet.get(machine.id)?.agents[0]];
             await vi.waitFor(() => { for (const row of rows()) expect(row).toMatchObject({ signIn: { status: 'signedOut', via: null } }); });
@@ -320,6 +356,22 @@ describe('machine inventory lifecycle boundary', () => {
             await vi.waitFor(() => { for (const row of rows()) expect(row).toMatchObject({ signIn: {
                 status: 'signedIn', via: { kind: 'connected', profileLabel: 'Work account' },
             } }); });
+            const acquired = publishDaemonMergedProjectionInputs({ projection });
+            const readAuthentication = () => hook.getCurrent().authentication({ phase: 'ready', inputs: acquired });
+            const parse = vi.spyOn(QualifiedConnectedAccountPurposeV1Schema, 'parse');
+            try {
+                for (let index = 0; index < 100; index++) {
+                    expect(readAuthentication().credentialSelectionsByAgentId?.review?.credentialBindings).toEqual({
+                        v: 2, bindingsByServiceId: { 'acme.review/account': { source: 'connected', selection: 'profile', profileId: 'work' } },
+                    });
+                }
+                expect(parse).toHaveBeenCalledTimes(0);
+            } finally { parse.mockRestore(); }
+            const connections = storage.getState().profile.connectedAccountsV4;
+            await act(async () => storage.setState({ profile: { ...storage.getState().profile, connectedAccountsV4: [] } }));
+            await vi.waitFor(() => { for (const row of rows()) expect(row?.signIn.status).toBe('signedOut'); });
+            await act(async () => storage.setState({ profile: { ...storage.getState().profile, connectedAccountsV4: connections } }));
+            await vi.waitFor(() => { for (const row of rows()) expect(row?.signIn.status).toBe('signedIn'); });
             const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
             await act(async () => machineAgentInventoryStore.publishJobs(key, new Map()));
             expect(machineAgentInventoryStore.read(key).agents[0]?.signIn.status).toBe('signedIn');
@@ -332,6 +384,9 @@ describe('machine inventory lifecycle boundary', () => {
                 publishDefaults(3, { kind: 'group', service, groupId: 'pool' });
             });
             await vi.waitFor(() => { for (const row of rows()) expect(row?.signIn.status).toBe('signedIn'); });
+            expect(readAuthentication().credentialSelectionsByAgentId?.review?.credentialBindings).toEqual({
+                v: 2, bindingsByServiceId: { 'acme.review/account': { source: 'connected', selection: 'group', groupId: 'pool' } },
+            });
             await act(async () => storage.setState({ profile: { ...storage.getState().profile,
                 connectedAccountGroupsV4: [{ ...group, activeConnectedAccountId: null }] } }));
             await vi.waitFor(() => { for (const row of rows()) expect(row?.signIn.status).toBe('signedOut'); });
@@ -345,6 +400,17 @@ describe('machine inventory lifecycle boundary', () => {
             await act(async () => publishDefaults(4, null));
             await vi.waitFor(() => { for (const row of rows()) expect(row).toMatchObject({ signIn: { status: 'signedOut', via: null } }); });
             expect(network.requests.filter(({ method }) => method === 'capabilities.detect')).toEqual([]);
+            const successorScope = { ...scope, accountId: 'successor-account' };
+            await hook.rerender({ authenticationLifetime: { ...lifetime, scope: successorScope } });
+            expect(readAuthentication().credentialSelectionsByAgentId?.review).toMatchObject({
+                credentialBindings: null, credentialBindingsReady: false,
+            });
+            await act(async () => applyConnectedAccountCatalogSnapshot(successorScope, 'purposes', { status: 'ready', revision: 1,
+                record: { key: 'purposes', value: { v: 1, bindings: [{ purpose: { consumer: identity, purpose: 'primary' },
+                    target: { kind: 'account', account: { service, accountId: 'successor-work' } } }] } } }, true));
+            expect(readAuthentication().credentialSelectionsByAgentId?.review?.credentialBindings).toEqual({
+                v: 2, bindingsByServiceId: { 'acme.review/account': { source: 'connected', selection: 'profile', profileId: 'successor-work' } },
+            });
         } finally { await hook.unmount(); resetServerFeaturesClientForTests(); }
     });
     it.each(['signedIn', 'signedOut', 'unavailable'] as const)('keeps an untouched embedded Agent idle and settles its demanded probe to %s', async (outcome) => {
@@ -575,6 +641,8 @@ describe('machine inventory lifecycle boundary', () => {
     it.each(['detail', 'summary'] as const)('keeps one store snapshot stable when the presence grace expires between clock reads (%s)', async mode => {
         const server = await network.addHome(`https://presence-boundary-${mode}-inventory.example.test`, 'inventory-account');
         const scope = { serverId: server.id, accountId: 'inventory-account' };
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        vi.setSystemTime(10_000);
         vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '1000');
         const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
         const machine = createMachineFixture({ id: `presence-boundary-${mode}-machine`, active: true, activeAt: 10_000 });
@@ -599,11 +667,18 @@ describe('machine inventory lifecycle boundary', () => {
             expect(errors.mock.calls.filter(args => args.some(value => String(value).includes('getSnapshot should be cached')))).toEqual([]);
             // Reusing one observation must not hide a later expired presence read.
             await hook.rerender({ crossBoundary: false });
-            await vi.waitFor(() => expect(hook.getCurrent()?.status).toBe('offline'));
+            // Drive the existing shared deadline, rather than advancing Date
+            // while leaving its scheduled timer in an unrelated real clock.
+            // The render need not consume the one-shot Date probe after it
+            // delegates unchanged reads to the shared presence snapshot.
+            clock.mockReset().mockReturnValue(11_001);
+            await act(async () => { vi.advanceTimersByTime(1_001); });
+            expect(hook.getCurrent()?.status).toBe('offline');
         } finally {
             await hook.unmount();
             errors.mockRestore();
             clock.mockRestore();
+            vi.useRealTimers();
             vi.unstubAllEnvs();
         }
     });

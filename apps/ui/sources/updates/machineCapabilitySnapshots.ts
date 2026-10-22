@@ -1,5 +1,8 @@
 import * as React from 'react';
-import { getMachineContributionRegistryProjectionRevision, subscribeMachineContributionRegistryProjectionInvalidation } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { captureMachineContributionRegistryProjectionScope } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { captureServerProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 
 import {
     getMachineCapabilitiesSnapshot,
@@ -17,30 +20,36 @@ export function useMachinesCapabilitySnapshots(
     accountId?: string | null,
 ): ReadonlyMap<string, MachineCapabilitiesSnapshot | null> {
     const key = [...new Set(machineIds)].join('\u0000');
+    const active = useActiveServerSnapshot(!serverId);
+    const effectiveServerId = serverId || active.serverId;
+    const profilesGeneration = useServerProfilesGeneration();
+    const scopes = React.useMemo(() => {
+        const resolveScopeId = captureServerProfileScopeResolver();
+        return (key ? key.split('\u0000') : []).map(machineId => ({ machineId,
+            ...captureMachineContributionRegistryProjectionScope({ serverId: effectiveServerId, machineId }, resolveScopeId) }));
+    }, [effectiveServerId, key, profilesGeneration]);
     const lastRef = React.useRef<ReadonlyMap<string, MachineCapabilitiesSnapshot | null>>(new Map());
     const scopeKey = JSON.stringify([serverId, accountId ?? null]);
     const lastScopeRef = React.useRef(scopeKey);
     const subscribeRevisions = React.useCallback((listener: () => void) => {
-        const disposers = (key ? key.split('\u0000') : []).map(machineId => subscribeMachineContributionRegistryProjectionInvalidation({ serverId, machineId }, listener));
+        const disposers = scopes.map(scope => scope.subscribe(listener));
         return () => disposers.forEach(dispose => dispose());
-    }, [key, serverId]);
-    const readRevisions = React.useCallback(() => JSON.stringify((key ? key.split('\u0000') : []).map(machineId =>
-        getMachineContributionRegistryProjectionRevision({ serverId, machineId }))), [key, serverId]);
+    }, [scopes]);
+    const readRevisions = React.useCallback(() => JSON.stringify(scopes.map(scope => scope.readRevision())), [scopes]);
     const revisions = React.useSyncExternalStore(subscribeRevisions, readRevisions, readRevisions);
     const subscribe = React.useCallback((listener: () => void) => {
-        const ids = key ? key.split('\u0000') : [];
-        const unsubscribes = ids.map((id) => subscribeMachineCapabilitiesCacheState(id, serverId,
-            getMachineContributionRegistryProjectionRevision({ serverId, machineId: id }) || null, listener, accountId));
+        const unsubscribes = scopes.map(scope => subscribeMachineCapabilitiesCacheState(scope.machineId, serverId,
+            scope.readRevision() || null, listener, accountId));
         return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
-    }, [accountId, key, revisions, serverId]);
+    }, [accountId, revisions, scopes, serverId]);
     const getSnapshot = React.useCallback(() => {
-        const ids = key ? key.split('\u0000') : [];
         const previous = lastRef.current;
-        let changed = previous.size !== ids.length;
+        let changed = previous.size !== scopes.length;
         const next = new Map<string, MachineCapabilitiesSnapshot | null>();
-        for (const id of ids) {
+        for (const scope of scopes) {
+            const id = scope.machineId;
             const snapshot = getMachineCapabilitiesSnapshot(id, serverId,
-                getMachineContributionRegistryProjectionRevision({ serverId, machineId: id }) || null, accountId)
+                scope.readRevision() || null, accountId)
                 ?? (lastScopeRef.current === scopeKey ? previous.get(id) ?? null : null);
             next.set(id, snapshot);
             if (previous.get(id) !== snapshot) changed = true;
@@ -49,7 +58,7 @@ export function useMachinesCapabilitySnapshots(
         lastScopeRef.current = scopeKey;
         lastRef.current = next;
         return next;
-    }, [accountId, key, revisions, scopeKey, serverId]);
+    }, [accountId, revisions, scopeKey, scopes, serverId]);
     return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 

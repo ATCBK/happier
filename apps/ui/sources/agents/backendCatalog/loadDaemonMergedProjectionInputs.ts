@@ -9,8 +9,8 @@ import {
     type ActiveServerAccountScopeLifetime,
 } from '@/sync/domains/scope/activeServerAccountScope';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { machineContributionRegistryProjectionScopeKey } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { areServerProfileIdentifiersEquivalent, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
+import { captureMachineContributionRegistryProjectionScope, machineContributionRegistryProjectionScopeKey } from '@/sync/ops/machineContributionRegistryProjectionRevision';
 import {
     forgetPluginUiProjectionAdmissionSnapshot,
     pluginUiProjectionAdmissionTargetKey,
@@ -103,13 +103,17 @@ export function readDaemonMergedProjectionSummary(params: Readonly<{
     serverId?: string | null;
 }>): DaemonMergedProjectionSummary {
     const entry = readCachedDaemonMergedProjectionCacheEntry(params);
+    return readProjectionSummary(entry, () => getMachineContributionRegistryProjectionRevision({
+        machineId: normalizeKeyPart(params.machineId), serverId: normalizeKeyPart(params.serverId) || null,
+    }));
+}
+
+function readProjectionSummary(entry: ProjectionCacheEntry | null, readRevision: () => number): DaemonMergedProjectionSummary {
     if (!entry || !entry.accountCurrentness || (entry.kind !== 'ready' && entry.kind !== 'error') || !entry.inputs) {
         return EMPTY_PROJECTION_SUMMARY;
     }
     return entry.kind === 'ready'
-        && entry.projectionRevision === getMachineContributionRegistryProjectionRevision({
-            machineId: normalizeKeyPart(params.machineId), serverId: normalizeKeyPart(params.serverId) || null,
-        })
+        && entry.projectionRevision === readRevision()
         && entry.locale === getPreferredLanguage()
         ? entry.summaries.current : entry.summaries.stale;
 }
@@ -123,6 +127,14 @@ export function subscribeDaemonMergedProjectionSummary(params: Readonly<{
     if (!machineId) return () => {};
     const serverId = normalizeKeyPart(params.serverId) || null;
     const key = buildCacheKey(machineId, serverId);
+    return subscribeProjectionSummary(key, listener => subscribeMachineContributionRegistryProjectionInvalidation({ machineId, serverId }, listener), listener);
+}
+
+function subscribeProjectionSummary(
+    key: string,
+    subscribeRevision: (listener: () => void) => () => void,
+    listener: () => void,
+): () => void {
     let subscription = PROJECTION_SUMMARY_SUBSCRIPTIONS.get(key);
     if (!subscription) {
         const listeners = new Set<() => void>();
@@ -137,7 +149,7 @@ export function subscribeDaemonMergedProjectionSummary(params: Readonly<{
             }
             for (const consumer of listeners) consumer();
         };
-        const unsubscribe = subscribeMachineContributionRegistryProjectionInvalidation({ machineId, serverId }, notify);
+        const unsubscribe = subscribeRevision(notify);
         subscription = { listeners, notify, dispose: () => { unsubscribe(); retirement?.dispose(); } };
         PROJECTION_SUMMARY_SUBSCRIPTIONS.set(key, subscription);
         notify();
@@ -150,6 +162,26 @@ export function subscribeDaemonMergedProjectionSummary(params: Readonly<{
             captured.dispose();
             if (PROJECTION_SUMMARY_SUBSCRIPTIONS.get(key) === captured) PROJECTION_SUMMARY_SUBSCRIPTIONS.delete(key);
         }
+    };
+}
+
+/** Prepare only correspondence/key parts. Account, revision and locale stay live on every read. */
+export function captureDaemonMergedProjectionReader(params: Readonly<{
+    machineId: string | null | undefined;
+    serverId?: string | null;
+}>, resolveScopeId?: ProfileScopeResolver) {
+    const machineId = normalizeKeyPart(params.machineId);
+    const scope = captureMachineContributionRegistryProjectionScope({
+        machineId, serverId: normalizeKeyPart(params.serverId) || null,
+    }, resolveScopeId);
+    const readCached = () => machineId ? currentProjectionCacheEntry(scope.key) : null;
+    return {
+        readCached,
+        readRevision: scope.readRevision,
+        subscribeInvalidation: scope.subscribe,
+        readSummary: () => readProjectionSummary(readCached(), scope.readRevision),
+        subscribeSummary: (listener: () => void) => machineId
+            ? subscribeProjectionSummary(scope.key, scope.subscribe, listener) : () => {},
     };
 }
 const DEFAULT_PROJECTION_STALE_MS = 60_000;

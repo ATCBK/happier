@@ -1,5 +1,5 @@
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { captureServerProfileScopeResolver, resolveServerProfileScopeIdForIdentifier, type ProfileScopeResolver } from '@/sync/domains/server/serverProfiles';
 
 /**
  * The one currentness revision for a machine's contribution-registry
@@ -21,9 +21,10 @@ const projectionListenersByScope = new Map<string, Set<() => void>>();
 
 export function machineContributionRegistryProjectionScopeKey(
     scope: MachineContributionRegistryProjectionScope,
+    resolveScopeId: ProfileScopeResolver = resolveServerProfileScopeIdForIdentifier,
 ): string {
     return JSON.stringify([
-        resolveServerProfileScopeIdForIdentifier(scope.serverId ?? getActiveServerSnapshot().serverId),
+        resolveScopeId(scope.serverId ?? getActiveServerSnapshot().serverId),
         scope.machineId,
     ]);
 }
@@ -39,12 +40,29 @@ export function subscribeMachineContributionRegistryProjectionInvalidation(
     listener: () => void,
 ): () => void {
     const key = machineContributionRegistryProjectionScopeKey(scope);
+    return subscribeProjectionKey(key, listener);
+}
+
+function subscribeProjectionKey(key: string, listener: () => void): () => void {
     const listeners = projectionListenersByScope.get(key) ?? new Set<() => void>();
     listeners.add(listener);
     projectionListenersByScope.set(key, listeners);
     return () => {
         listeners.delete(listener);
         if (listeners.size === 0) projectionListenersByScope.delete(key);
+    };
+}
+
+/** Descriptive key preparation only; every read still observes the live revision map. */
+export function captureMachineContributionRegistryProjectionScope(
+    scope: MachineContributionRegistryProjectionScope,
+    resolveScopeId: ProfileScopeResolver = captureServerProfileScopeResolver(),
+) {
+    const key = machineContributionRegistryProjectionScopeKey(scope, resolveScopeId);
+    return {
+        key,
+        readRevision: () => projectionRevisionByScope.get(key) ?? 0,
+        subscribe: (listener: () => void) => subscribeProjectionKey(key, listener),
     };
 }
 

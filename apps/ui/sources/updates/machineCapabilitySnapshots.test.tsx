@@ -1,16 +1,33 @@
-import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { act, renderHook, standardCleanup, type RenderHookResult } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 
 // Install the physical transport boundary before importing the real cache owner.
 const network = await installSessionOpsNetworkBoundary();
 const { useMachinesCapabilitySnapshots } = await import('./machineCapabilitySnapshots');
+beforeEach(() => network.resetRequests());
 
 afterEach(() => standardCleanup());
 afterAll(() => network.dispose());
 
 describe('useMachinesCapabilitySnapshots', () => {
+    it('does not resolve a Home again per unchanged capability snapshot read', async () => {
+        const ids = Array.from({ length: 100 }, (_, index) => `perf-b3-${index}`);
+        const hook = await renderHook(() => useMachinesCapabilitySnapshots('perf-b3-home', ids, 'perf-b3-account'));
+        const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+        const capture = vi.spyOn(serverProfiles, 'captureServerProfileScopeResolver');
+        try {
+            const first = hook.getCurrent();
+            for (let index = 0; index < 3; index++) {
+                await hook.rerender();
+                expect(hook.getCurrent()).toBe(first);
+            }
+            expect(resolve).not.toHaveBeenCalled();
+            expect(capture).not.toHaveBeenCalled();
+        } finally { resolve.mockRestore(); capture.mockRestore(); await hook.unmount(); }
+    });
     it('follows readiness invalidation without losing the last answer and never retains another Account snapshot', async () => {
         const home = await network.addHome('https://snapshot-readiness.test', 'snapshot-account');
         const { prefetchMachineCapabilities } = await import('@/hooks/server/useMachineCapabilitiesCache');

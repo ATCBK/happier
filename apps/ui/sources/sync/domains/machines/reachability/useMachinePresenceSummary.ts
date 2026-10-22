@@ -161,6 +161,7 @@ export function useMachinePresenceMembership(
 export function useMachinePresenceSnapshot<T>(
     readMachines: Parameters<typeof useMachinePresenceSubscription>[0],
     readSnapshot: (nowMs: number) => T,
+    areEqual?: (left: T, right: T) => boolean,
 ): T {
     const store = getStorage();
     const getSnapshot = React.useMemo(() => {
@@ -188,14 +189,15 @@ export function useMachinePresenceSnapshot<T>(
             // Wall time is captured only at a source transition. Reading it on
             // every getSnapshot can cross a lease between React's consistency
             // reads before the shared deadline callback has delivered its event.
-            const value = readSnapshot(Date.now());
+            const nextValue = readSnapshot(Date.now());
+            const value = cached && areEqual?.(cached.value, nextValue) ? cached.value : nextValue;
             cached = { machines: state.machines, machineListByServerId: state.machineListByServerId,
                 machineListStatusByServerId: state.machineListStatusByServerId,
                 machinePresenceById: state.machinePresenceById, machinePresenceByServerId: state.machinePresenceByServerId,
                 clockNowMs, requestRevision, value };
             return value;
         };
-    }, [store, readSnapshot]);
+    }, [store, readSnapshot, areEqual]);
     const subscribe = useMachinePresenceSubscription(readMachines);
     return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

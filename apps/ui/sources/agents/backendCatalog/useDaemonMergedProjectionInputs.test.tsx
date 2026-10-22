@@ -8,6 +8,7 @@ import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
 
 const daemonDescribe = vi.hoisted(() => vi.fn());
 const homeIds = vi.hoisted(() => new Map<string, string>());
@@ -22,10 +23,13 @@ vi.mock('@/text', async () => {
 // and detached cached transport factories from their boundary's request log.
 const network = await installSessionOpsNetworkBoundary();
 await loadSyncSingletonForTests();
+// The managed socket lazily imports this runtime. Finish that real startup
+// module load before measuring unchanged summary reads, not during the loop.
+await import('@/sync/domains/session/humanPresence/sessionHumanPresenceRuntime');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
 const { clearDaemonMergedProjectionCacheForTests, loadDaemonMergedProjectionCacheEntry } = await import('./loadDaemonMergedProjectionInputs');
-const { useDaemonMergedProjectionInputs } = await import('./useDaemonMergedProjectionInputs');
+const { useDaemonMergedProjectionInputs, useDaemonMergedProjectionSummary } = await import('./useDaemonMergedProjectionInputs');
 const { storage } = await import('@/sync/domains/state/storage');
 const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
 const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
@@ -71,6 +75,42 @@ function browserActionProjection(operation?: ActionOperationDeclarationV1) {
 describe('useDaemonMergedProjectionInputs', () => {
     let serverId: string;
     let otherServerId: string;
+
+    it('does not resolve the descriptive Home key again on unchanged summary renders', async () => {
+        await primeCache(7);
+        const hook = await renderHook(() => useDaemonMergedProjectionSummary({ serverId, machineId: 'machine-1' }));
+        const resolve = vi.spyOn(serverProfiles, 'resolveServerProfileScopeIdForIdentifier');
+        const capture = vi.spyOn(serverProfiles, 'captureServerProfileScopeResolver');
+        try {
+            const first = hook.getCurrent();
+            expect(first.current).toBe(true);
+            for (let index = 0; index < 3; index++) {
+                await hook.rerender();
+                expect(hook.getCurrent()).toBe(first);
+            }
+            expect(resolve).not.toHaveBeenCalled();
+            expect(capture).not.toHaveBeenCalled();
+        } finally { resolve.mockRestore(); capture.mockRestore(); await hook.unmount(); }
+    });
+
+    it('rebinds a summary key on real Home correspondence publication without borrowing a foreign Home', async () => {
+        await primeCache(7);
+        const hook = await renderHook(() => useDaemonMergedProjectionSummary({ serverId, machineId: 'machine-1' }));
+        try {
+            expect(hook.getCurrent().current).toBe(true);
+            await act(async () => {
+                const learned = await serverProfiles.setServerProfileIdentityForUrl('https://projection-hook.example.test', 'srv_perf_b3_summary');
+                expect(learned?.serverIdentityId).toBe('srv_perf_b3_summary');
+            });
+            expect(hook.getCurrent()).toMatchObject({ inputs: null, current: false });
+            const { readDaemonMergedProjectionSummary } = await import('./loadDaemonMergedProjectionInputs');
+            expect(readDaemonMergedProjectionSummary({ machineId: 'machine-1', serverId: otherServerId }))
+                .toMatchObject({ inputs: null, current: false });
+        } finally {
+            await hook.unmount();
+            await serverProfiles.removeServerProfile(serverId);
+        }
+    });
 
     beforeEach(async () => {
         network.resetRequests();

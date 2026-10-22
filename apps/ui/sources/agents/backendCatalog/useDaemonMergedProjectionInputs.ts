@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { getPreferredLanguage } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 
 import {
     getMachineContributionRegistryProjectionRevision,
@@ -19,8 +21,8 @@ import {
     loadDaemonMergedProjectionCacheEntry,
     readCachedDaemonMergedProjectionCacheEntry,
     readReusableDaemonMergedProjectionCacheEntry,
-    readDaemonMergedProjectionSummary,
     subscribeDaemonMergedProjectionSummary,
+    captureDaemonMergedProjectionReader,
     type DaemonMergedProjectionInputs,
     type DaemonMergedProjectionSummary,
 } from './loadDaemonMergedProjectionInputs';
@@ -51,13 +53,12 @@ export function useDaemonMergedProjectionSummary(params: Readonly<{
     useSetting('preferredLanguage');
     const machineId = normalizeKeyPart(params.machineId);
     const serverId = normalizeKeyPart(params.serverId);
-    const subscribe = React.useCallback((listener: () => void) => (
-        subscribeDaemonMergedProjectionSummary({ machineId, serverId }, listener)
-    ), [machineId, serverId]);
-    const getSnapshot = React.useCallback(() => (
-        readDaemonMergedProjectionSummary({ machineId, serverId })
-    ), [machineId, serverId]);
-    return React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const active = useActiveServerSnapshot(!serverId);
+    const effectiveServerId = serverId || active.serverId;
+    const profilesGeneration = useServerProfilesGeneration();
+    const reader = React.useMemo(() => captureDaemonMergedProjectionReader({ machineId, serverId: effectiveServerId }),
+        [effectiveServerId, machineId, profilesGeneration]);
+    return React.useSyncExternalStore(reader.subscribeSummary, reader.readSummary, reader.readSummary);
 }
 
 export function useDaemonMergedProjectionInputs(params: Readonly<{
