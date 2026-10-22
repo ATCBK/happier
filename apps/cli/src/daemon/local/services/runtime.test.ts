@@ -252,7 +252,7 @@ describe('createLocalServicesDaemonRuntime', () => {
         await runtime.stop();
     });
 
-    it('uses the existing scan loop for summary demand and stops scanning when its last reader leaves', async () => {
+    it('does not scan for a passive Machine summary publisher without an inventory reader', async () => {
         vi.useFakeTimers();
         try {
             const scan = vi.fn(async () => ({ listeners: [], processes: new Map(), workspaces: [], diagnostics: [] }));
@@ -263,7 +263,19 @@ describe('createLocalServicesDaemonRuntime', () => {
             expect(runtime.subscribeSummary).toBeTypeOf('function');
             const unsubscribe = runtime.subscribeSummary(() => {});
             await vi.advanceTimersByTimeAsync(3_000);
+            expect(scan).not.toHaveBeenCalled();
+            expect(vi.getTimerCount()).toBe(0);
+            // An actual read still acquires fresh facts through the same owner.
+            await runtime.inventoryRoutes.getSnapshot();
+            expect(scan).toHaveBeenCalledTimes(1);
+            expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 0 });
+            const watched = runtime.inventoryRoutes.watchSnapshot({
+                sinceGeneratedAt: runtime.inventoryRegistry.getSnapshot().generatedAt,
+            });
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect((await watched).changed).toBe(true);
             expect(scan.mock.calls.length).toBeGreaterThan(1);
+            expect(runtime.inventoryRoutes.watcherCount()).toBe(0);
             unsubscribe();
             const count = scan.mock.calls.length;
             expect(vi.getTimerCount()).toBe(0);
@@ -271,14 +283,14 @@ describe('createLocalServicesDaemonRuntime', () => {
             expect(scan.mock.calls.length).toBe(count);
             const unsubscribeAgain = runtime.subscribeSummary(() => {});
             await vi.advanceTimersByTimeAsync(1_000);
-            expect(scan.mock.calls.length).toBeGreaterThan(count);
+            expect(scan.mock.calls.length).toBe(count);
             unsubscribeAgain();
             expect(vi.getTimerCount()).toBe(0);
             await runtime.stop();
         } finally { vi.useRealTimers(); }
     });
 
-    it('publishes native summary changes without HTTP presentation work until an inventory reader arrives', async () => {
+    it('does no native or presentation work for summary observers until an inventory reader arrives', async () => {
         vi.useFakeTimers();
         const readProcessFacts = vi.fn(async () => new Map([
             [400, { pid: 400, ppid: 1, command: 'node server.js', cwd: '/repo/app' }],
@@ -299,14 +311,14 @@ describe('createLocalServicesDaemonRuntime', () => {
         const unsubscribe = runtime.subscribeSummary(() => {});
         try {
             await vi.advanceTimersByTimeAsync(2_000);
-            expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
+            expect(runtime.getSummary()).toEqual({ v: 1, state: 'unknown' });
             expect(readProcessFacts).not.toHaveBeenCalled();
-            // A count-only observation cannot replace or freshen the detailed inventory.
             expect(runtime.inventoryRegistry.getSnapshot().generatedAt).toBe(0);
             expect(probe).not.toHaveBeenCalled();
             expect(title).not.toHaveBeenCalled();
             const watched = await runtime.inventoryRoutes.watchSnapshot({ sinceGeneratedAt: 0 });
             expect(watched.changed).toBe(true);
+            expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
             if (!watched.changed) throw new Error('Expected the newly scanned inventory');
             expect(watched.snapshot.entries[0]?.endpoint?.probeState).toBe('ready');
             expect(watched.snapshot.entries[0]?.presentation?.pageTitle).toBe('Local app');
@@ -318,37 +330,6 @@ describe('createLocalServicesDaemonRuntime', () => {
             expect(title).toHaveBeenCalled();
             expect(readProcessFacts).toHaveBeenCalled();
         } finally { unsubscribe(); await runtime.stop(); vi.useRealTimers(); }
-    });
-
-    it('promotes a pending summary scan when a presentation reader joins the same flight', async () => {
-        vi.useFakeTimers();
-        let releaseScan!: () => void;
-        const pendingScan = new Promise<void>(resolve => { releaseScan = resolve; });
-        const scan = vi.fn(async () => {
-            await pendingScan;
-            return { listeners: [{ address: '127.0.0.1', port: 5173, protocol: 'tcp' as const, pid: 400 }],
-                processes: new Map(), workspaces: [], diagnostics: [],
-                readProcessFacts: async () => new Map([
-                    [400, { pid: 400, ppid: 1, command: 'node server.js', cwd: '/repo/app' }],
-                ]) };
-        });
-        const runtime = createLocalServicesDaemonRuntime({
-            machineId: 'machine-a', inventoryEnabled: () => true, refreshIntervalMs: 1_000, scan,
-            endpointEnricher: createLocalServiceEndpointEnricher({ now: Date.now,
-                timeoutMs: 250, concurrency: 1, successTtlMs: 30_000, failureTtlMs: 5_000,
-                probe: async () => true }),
-        });
-        const unsubscribe = runtime.subscribeSummary(() => {});
-        try {
-            await vi.advanceTimersByTimeAsync(1_000);
-            const presented = runtime.inventoryRoutes.getSnapshot();
-            releaseScan();
-            const snapshot = await presented;
-            expect(snapshot.entries[0]?.endpoint?.probeState).toBe('ready');
-            expect(snapshot.entries[0]?.provenance?.process?.cwd).toBe('/repo/app');
-            expect(scan).toHaveBeenCalledTimes(1);
-            expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
-        } finally { releaseScan(); unsubscribe(); await runtime.stop(); vi.useRealTimers(); }
     });
 
     it('does not treat registered preview access as evidence of a running listener', async () => {

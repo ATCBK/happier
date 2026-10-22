@@ -40,7 +40,7 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
         vi.resetModules();
     });
 
-    it('attributes only internal listeners for summaries, then fully attributes a presentation reader joining that scan', async () => {
+    it('opens no listener owners for passive summaries and fully attributes an actual inventory reader', async () => {
         vi.useFakeTimers();
         const restorePlatform = mockProcessPlatform('linux');
         const processes = [
@@ -63,12 +63,9 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
             openedFdOwners.push(name);
             return ['3'] as never;
         });
-        let releaseInternalRead: (() => void) | undefined;
-        let holdInternalRead = false;
         vi.mocked(fs.readlink).mockImplementation(async path => {
             const name = String(path);
             if (name === '/proc/100/fd/3') {
-                if (holdInternalRead) await new Promise<void>(resolve => { releaseInternalRead = resolve; });
                 return 'socket:[99999]';
             }
             if (name === '/proc/321/fd/3') return 'socket:[12345]';
@@ -83,17 +80,10 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
         const unsubscribe = runtime.subscribeSummary(() => {});
         try {
             await vi.advanceTimersByTimeAsync(1_000);
-            expect(runtime.getSummary()).toEqual({ v: 1, state: 'ready', runningCount: 1 });
-            expect(openedFdOwners).toEqual(['/proc/100/fd']);
+            expect(runtime.getSummary()).toEqual({ v: 1, state: 'unknown' });
+            expect(openedFdOwners).toEqual([]);
             expect(runtime.inventoryRegistry.getSnapshot().generatedAt).toBe(0);
-            openedFdOwners.length = 0;
-            holdInternalRead = true;
-            await vi.advanceTimersByTimeAsync(1_000);
-            expect(releaseInternalRead).toBeTypeOf('function');
-            const detailed = runtime.inventoryRoutes.getSnapshot();
-            holdInternalRead = false;
-            releaseInternalRead?.();
-            const snapshot = await detailed;
+            const snapshot = await runtime.inventoryRoutes.getSnapshot();
             expect(snapshot.entries.find(entry => entry.port === 5173)?.provenance?.process)
                 .toMatchObject({ pid: 321, cwd: '/repo/web' });
             expect(snapshot.entries.find(entry => entry.port === 8081)?.classification?.kind).toBe('happier');
@@ -104,8 +94,6 @@ describe('createLocalServicesDaemonRuntime platform scanner dispatch', () => {
             await vi.advanceTimersByTimeAsync(3_000);
             expect(openedFdOwners).toEqual([]);
         } finally {
-            holdInternalRead = false;
-            releaseInternalRead?.();
             unsubscribe();
             await runtime.stop();
             restorePlatform();
