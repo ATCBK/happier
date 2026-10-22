@@ -49,14 +49,8 @@ import type { StopSessionResult } from '@/daemon/sessions/stopSessionContract';
 import { activatePendingInactiveSession, type PendingInactiveSessionActivationRejected } from '@/daemon/sessions/activatePendingInactiveSession';
 import { fetchInactiveSessionFollowObservations } from '@/session/transport/http/sessionFollowInactiveObservationsHttp';
 import { createDiscussionFollowInputIntake } from '@/agent/runtime/session/follow/discussionFollowInput';
-import { createSessionFollowSourceHydrator } from '@/agent/runtime/session/follow/sessionFollowSourceHydrator';
-import { shouldWakeForSessionFollowObservation } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
-import { isSessionFollowFrontierEqualV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import type { SessionFollowSessionPendingObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
-import { resolveSessionAutoResumeAdmissionV1 } from '@happier-dev/protocol/sessions/metadata/sessionExplicitStopV1';
-import { requestInactiveSessionResume } from '@/session/services/requestInactiveSessionResume';
-import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import {
   createPendingSessionActivationRecovery,
@@ -1819,51 +1813,8 @@ export async function bootstrapMachineSyncRuntime(
             const sessionObservations = observed.observations.filter((observation): observation is SessionFollowSessionPendingObservationV1 =>
               'sourceSessionId' in observation && !('kind' in observation)
               && (sourceSessionId === undefined || observation.sourceSessionId === sourceSessionId));
-            const dispatched = await params.dispatchSessionFollowOccurrence?.({ destinationSessionId: sessionId, observations: sessionObservations,
+            await params.dispatchSessionFollowOccurrence?.({ destinationSessionId: sessionId, observations: sessionObservations,
               ...(sourceSessionId ? { sourceSessionId } : {}) });
-            // Message-backed semantics enter Pending before any host wake.
-            // Retain only the old Turn semantics that have no committed
-            // original of the same kind in this exact observed range.
-            const legacyObservations = dispatched && 'coveredEvents' in dispatched ? sessionObservations.filter(observation => {
-              const turn = observation.observed.turn;
-              if (!turn || isSessionFollowFrontierEqualV1(observation.delivered, observation.observed)) return false;
-              const kind = turn.status === 'completed' ? 'finished'
-                : turn.status === 'failed' || turn.status === 'cancelled' ? 'failed_or_stopped'
-                : turn.status === 'waiting' ? 'needs_you' : 'stalled';
-              return !dispatched.coveredEvents.some(event => event.sourceSessionId === observation.sourceSessionId && event.kind === kind);
-            }) : sessionObservations;
-            if (legacyObservations.length === 0 || await params.isSessionAlreadyRunning(sessionId) || !await isCurrent()) return;
-            const readReceiver = async () => {
-              const receiver = await resolveSessionTransportContext({ credentials, idOrPrefix: sessionId, signal: followLifetime.signal });
-              if (!receiver.ok || receiver.sessionId !== sessionId || !await isCurrent()) return null;
-              const metadata = tryDecryptSessionOwnerMetadataView({ credentials, rawSession: receiver.rawSession,
-                accountEncryptionMode: receiver.accountEncryptionCurrentness.mode });
-              return metadata && resolveSessionAutoResumeAdmissionV1({ metadata, archivedAt: receiver.rawSession.archivedAt,
-                machineAvailable: true, authorityAvailable: true }) === 'eligible' ? { ...receiver, metadata } : null;
-            };
-            if (!await readReceiver()) return;
-            const hydrate = createSessionFollowSourceHydrator({ session, credentials });
-            for (const observation of legacyObservations) {
-              if (!await isCurrent()) return;
-              const source = await hydrate({ observation, signal: followLifetime.signal, discoverHumanIngress: true });
-              if (!source || !shouldWakeForSessionFollowObservation(observation, source)
-                || source.recheckWorkerUpdateAdmission && !await source.recheckWorkerUpdateAdmission(followLifetime.signal)) continue;
-              const receiver = await readReceiver();
-              if (!receiver || !await isCurrent()) return;
-              // Launch only while the same exact admitted source progress remains
-              // pending. The resumed host still owns input acceptance and ACK.
-              const current = await readObservations();
-              const pending = current?.observations.find(candidate => 'sourceSessionId' in candidate && !('kind' in candidate)
-                && candidate.sourceSessionId === observation.sourceSessionId && candidate.relation === observation.relation
-                && candidate.attachedAt === observation.attachedAt
-                && isSessionFollowFrontierEqualV1(candidate.delivered, observation.delivered)
-                && isSessionFollowFrontierEqualV1(candidate.observed, observation.observed));
-              if (!pending || !('sourceSessionId' in pending) || !shouldWakeForSessionFollowObservation(pending, source)) return;
-              if (!await isCurrent() || await params.isSessionAlreadyRunning(sessionId)) return;
-              await requestInactiveSessionResume({ credentials, sessionId, rawSession: receiver.rawSession, metadata: receiver.metadata,
-                requestId: randomUUID(), executionAuthority: 'account_automation', spawnSession, signal: followLifetime.signal });
-              return;
-            }
           });
       };
       const reconcileFollowReceiver = async (sessionId: string, sourceSessionId?: string): Promise<void> => {
