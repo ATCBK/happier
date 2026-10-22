@@ -3,6 +3,7 @@ import {
     RPC_ERROR_CODES,
     SessionCreationKeyV1Schema,
     type SessionSpawnNewResultV1,
+    type ActionOperationSnapshotV1,
 } from '@happier-dev/protocol';
 import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
 import {
@@ -10,6 +11,7 @@ import {
     settleSpawnAttemptCustodyFromActionOperation,
 } from '@/sync/domains/session/spawn/spawnAttemptNonceStore';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 
 const frontDoorExecute = vi.fn<(...args: Parameters<import('./frontDoorRuntimeActionExecutor').FrontDoorActionExecute>) => Promise<ActionExecuteResult>>();
 
@@ -18,6 +20,7 @@ import {
     completeManualSessionSpawnNewActionCustody,
     executeManualSessionSpawnNewAction as executeManualSessionSpawnNewActionImpl,
     executeSessionSpawnNewAction as executeSessionSpawnNewActionImpl,
+    readCommittedSessionSpawnNewActionResult,
     type StrictSessionSpawnNewInput,
 } from './sessionSpawnNewAction';
 
@@ -53,6 +56,77 @@ const result: SessionSpawnNewResultV1 = {
 beforeEach(() => frontDoorExecute.mockReset());
 
 describe('executeSessionSpawnNewAction tracking', () => {
+    it.each(['direct', 'pending', 'recovered', 'waiting'] as const)(
+        'qualifies a daemon-spelled %s result before marking manual creation committed', async receipt => {
+            getPersistenceStorage().clearAll();
+            actionOperationStore.reset();
+            const userAttemptId = `attempt-daemon-${receipt}`;
+            const scope = { serverId: 'server-1', accountId: 'account-1' };
+            const daemonResult = { ...result, executionTarget: { ...result.executionTarget, serverId: 'stack_agent-qa-voice-dev__id_default' } };
+            const operation: ActionOperationSnapshotV1 = {
+                version: 1, operationId: 'pending-operation', revision: 3, actionId: 'session.spawn_new', state: 'succeeded',
+                scope: { accountId: scope.accountId, machineId: input.executionTarget.machineId },
+                requestId: userAttemptId, title: 'Create session', createdAt: 1, startedAt: 2, settledAt: 3,
+                cancellation: 'supported', result: daemonResult,
+            };
+            const manualInput = { ...input, creationKey: buildManualSessionCreationKey(userAttemptId) };
+            const context = { surface: 'ui' as const, actionRequestId: userAttemptId };
+            const params = { scope, machineHomeDir: '/home/tester', userAttemptId, seedNonce: 'daemon-result-nonce' };
+            if (receipt === 'recovered') {
+                frontDoorExecute.mockResolvedValueOnce({ ok: false, errorCode: 'target_unavailable', error: 'unavailable' });
+                await executeManualSessionSpawnNewAction(manualInput, context, params);
+                actionOperationStore.mergeSnapshots({ serverId: scope.serverId, snapshots: [operation] });
+            } else if (receipt === 'pending') {
+                frontDoorExecute.mockResolvedValueOnce({ ok: true, result: {
+                    type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
+                    operation: { ...daemonResult.executionTarget, operationId: operation.operationId },
+                } }).mockResolvedValueOnce({ ok: true, result: { kind: 'found', operation } });
+            } else if (receipt === 'waiting') {
+                frontDoorExecute.mockResolvedValueOnce({ ok: false, errorCode: 'session_follow_source_key_preparation_waiting',
+                    error: 'session_follow_source_key_preparation_waiting', details: {
+                        status: 'waiting', reason: 'source_key_unavailable', edgeCommitted: true, source: daemonResult,
+                    } });
+            } else {
+                frontDoorExecute.mockResolvedValueOnce({ ok: true, result: daemonResult });
+            }
+            try {
+                const settled = await executeManualSessionSpawnNewAction(manualInput, context, params);
+                expect(settled).toMatchObject({ status: 'executed', custody: { createdSessionId: result.sessionId } });
+                if (settled.status !== 'executed') throw new Error('Expected executed manual action');
+                expect(readCommittedSessionSpawnNewActionResult(settled.action)).toEqual(result);
+                const persisted = readSpawnAttemptCustodyState(scope);
+                if (persisted.status !== 'valid') throw new Error('Expected valid manual custody');
+                expect(Object.values(persisted.attempts)).toEqual([expect.objectContaining({ createdSessionId: result.sessionId })]);
+            } finally {
+                getPersistenceStorage().clearAll();
+                actionOperationStore.reset();
+            }
+        },
+    );
+
+    it.each(['receiptMachineId', 'operationId', 'actionId', 'accountId', 'machineId', 'resultMachineId'] as const)(
+        'refuses a pending settlement with a mismatched %s', async mismatch => {
+            const operation: ActionOperationSnapshotV1 = {
+                version: 1, operationId: mismatch === 'operationId' ? 'other-operation' : 'pending-operation', revision: 3,
+                actionId: mismatch === 'actionId' ? 'session.stop' : 'session.spawn_new', state: 'succeeded',
+                scope: { accountId: mismatch === 'accountId' ? 'other-account' : 'account-1',
+                    machineId: mismatch === 'machineId' ? 'other-machine' : input.executionTarget.machineId },
+                requestId: 'spawn-request', title: 'Create session', createdAt: 1, startedAt: 2, settledAt: 3,
+                cancellation: 'supported', result: { ...result, executionTarget: { ...result.executionTarget,
+                    ...(mismatch === 'resultMachineId' ? { machineId: 'other-machine' } : {}) } },
+            };
+            frontDoorExecute.mockResolvedValueOnce({ ok: true, result: {
+                type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
+                operation: { serverId: 'stack_agent-qa-voice-dev__id_default',
+                    machineId: mismatch === 'receiptMachineId' ? 'other-machine' : input.executionTarget.machineId,
+                    operationId: 'pending-operation' },
+            } }).mockResolvedValueOnce({ ok: true, result: { kind: 'found', operation } });
+            await expect(executeSessionSpawnNewAction(input, {
+                surface: 'ui', serverId: input.executionTarget.serverId, expectedAccountId: 'account-1',
+            })).resolves.toEqual({ ok: false, errorCode: 'action_operation_result_unavailable', error: 'action_operation_result_unavailable' });
+        },
+    );
+
     it('retains the exact created Session in manual custody while key preparation remains explicitly waiting', async () => {
         getPersistenceStorage().clearAll();
         const failure = { ok: false as const, errorCode: 'session_follow_source_key_preparation_waiting',

@@ -1662,7 +1662,7 @@ export function useCreateNewSession(params: Readonly<{
                         return;
                     }
                     observedCanonicalSettlement = true;
-                    actionResult = projectManualSessionSpawnOperationResult(operation);
+                    actionResult = projectManualSessionSpawnOperationResult(operation, spawnInput.executionTarget);
                 }
                 if (!actionResult.ok) {
                     if (actionResult.errorCode === 'approval_rejected' || actionResult.errorCode === 'approval_canceled'

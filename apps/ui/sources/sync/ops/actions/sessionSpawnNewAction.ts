@@ -40,7 +40,6 @@ import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prep
 import { t } from '@/text';
 import { buildManualSessionCreationKey, readManualSessionSpawnOperation, readManualSessionSpawnOperationDetails } from '@/sync/domains/session/spawn/manualSessionSpawnOperation';
 import { recordBugReportUserAction } from '@/utils/system/bugReportActionTrail';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 export { buildManualSessionCreationKey } from '@/sync/domains/session/spawn/manualSessionSpawnOperation';
 
 export type StrictSessionSpawnNewInput = SessionSpawnNewInputV2 & Readonly<{
@@ -118,6 +117,20 @@ export function readCommittedSessionSpawnNewActionResult(action: SessionSpawnNew
     const preparation = SessionFollowSourceKeyPreparationResultV1Schema.safeParse({ kind: 'waiting', reason: record.reason });
     const committed = SessionSpawnNewResultV1Schema.safeParse(record.source);
     return preparation.success && committed.success && committed.data.type === 'success' ? committed.data : null;
+}
+
+/** The authenticated request qualifies a daemon result; daemon-local Home names are not client routes. */
+function qualifySessionSpawnNewActionResult(
+    action: SessionSpawnNewActionResult,
+    executionTarget: SessionSpawnNewInputV2['executionTarget'],
+): SessionSpawnNewActionResult {
+    const committed = readCommittedSessionSpawnNewActionResult(action);
+    if (!committed) return action;
+    if (committed.executionTarget.machineId !== executionTarget.machineId) return { ok: false,
+        errorCode: 'action_operation_result_unavailable', error: 'action_operation_result_unavailable' };
+    const result = { ...committed, executionTarget: { ...committed.executionTarget, serverId: executionTarget.serverId } };
+    if (action.ok) return { ok: true, result };
+    return { ...action, details: { ...(typeof action.details === 'object' ? action.details : {}), source: result } };
 }
 
 /**
@@ -279,20 +292,22 @@ export async function executeSessionSpawnNewAction(
 ): Promise<SessionSpawnNewActionResult> {
     const execute = createFrontDoorActionExecute(executor);
     const result = await execute('session.spawn_new', input, context);
-    if (!result.ok) return result;
+    if (!result.ok) return qualifySessionSpawnNewActionResult(result, input.executionTarget);
     requireActionSuccess(result);
     const spawn = SessionSpawnNewResultV1Schema.parse(result.result);
-    if (spawn.type !== 'pending' || !spawn.operation) return { ok: true, result: spawn };
+    if (spawn.type !== 'pending' || !spawn.operation) return qualifySessionSpawnNewActionResult({ ok: true, result: spawn }, input.executionTarget);
     // A pending receipt names the existing creation owner. Join it through the
     // same admitted Action transport (including embed credentials), never spawn
     // again or depend on a best-effort socket notification to finish the caller.
     const address = spawn.operation;
+    // The daemon may name its Home with a stack-local identifier. As with push
+    // and manual operation reads, the requester owns routing and store scope.
+    const serverId = input.executionTarget.serverId;
     const unavailable = (): SessionSpawnNewActionResult => ({ ok: false,
         errorCode: 'action_operation_result_unavailable', error: 'action_operation_result_unavailable' });
-    if (!areServerProfileIdentifiersEquivalent(address.serverId, input.executionTarget.serverId)
-        || address.machineId !== input.executionTarget.machineId) return unavailable();
+    if (address.machineId !== input.executionTarget.machineId) return unavailable();
     context.signal?.throwIfAborted();
-    const observed = await execute('action.operations.get', { ...address, waitForTerminal: true }, context);
+    const observed = await execute('action.operations.get', { ...address, serverId, waitForTerminal: true }, context);
     if (!observed.ok) return observed;
     requireActionSuccess(observed);
     const parsed = ActionOperationGetV1ResponseSchema.safeParse(observed.result);
@@ -302,14 +317,12 @@ export async function executeSessionSpawnNewAction(
         || operation.scope.machineId !== address.machineId
         || context.expectedAccountId && operation.scope.accountId !== context.expectedAccountId
         || !['succeeded', 'failed', 'cancelled'].includes(operation.state)) return unavailable();
-    const settled = projectManualSessionSpawnOperationResult(operation);
-    if (settled.ok && settled.result.type === 'success'
-        && (!areServerProfileIdentifiersEquivalent(settled.result.executionTarget.serverId, input.executionTarget.serverId)
-            || settled.result.executionTarget.machineId !== input.executionTarget.machineId)) return unavailable();
+    const settled = projectManualSessionSpawnOperationResult(operation, input.executionTarget);
+    if (operation.state === 'succeeded' && !settled.ok) return settled;
     // Requester reads and pushes advance the same revision-checked store. A
     // missed notification must not leave every other consumer on `running`.
     const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
-    actionOperationStore.mergeSnapshots({ serverId: address.serverId, snapshots: [operation] });
+    actionOperationStore.mergeSnapshots({ serverId, snapshots: [operation] });
     context.signal?.throwIfAborted();
     return settled;
 }
@@ -428,9 +441,12 @@ export async function dispatchSessionSpawnNewWithManagerPreparation(params: Read
 }
 
 /** The operation, rather than Session existence, owns accepted startup and first-input settlement. */
-export function projectManualSessionSpawnOperationResult(operation: ActionOperationSnapshotV1): SessionSpawnNewActionResult {
+export function projectManualSessionSpawnOperationResult(
+    operation: ActionOperationSnapshotV1,
+    executionTarget: SessionSpawnNewInputV2['executionTarget'],
+): SessionSpawnNewActionResult {
     if (operation.state === 'succeeded') {
-        return { ok: true, result: SessionSpawnNewResultV1Schema.parse(operation.result) };
+        return qualifySessionSpawnNewActionResult({ ok: true, result: SessionSpawnNewResultV1Schema.parse(operation.result) }, executionTarget);
     }
     if (operation.state === 'failed' || operation.state === 'cancelled') {
         return { ok: false, errorCode: operation.error?.errorCode ?? 'action_cancelled', error: operation.error?.error ?? 'action_cancelled',
@@ -562,19 +578,19 @@ export async function executeManualSessionSpawnNewAction(
         ? await readManualSessionSpawnOperationDetails(params.scope, observedOperation,
             () => params.sourceAccountLifetime?.isCurrent() !== false)
         : null;
-    const observed = operation ? projectManualSessionSpawnOperationResult(operation) : null;
+    const observed = operation ? projectManualSessionSpawnOperationResult(operation, input.executionTarget) : null;
     const reconciled = !observed && acquired.reused && acquired.record.submissionState === 'submitted'
         ? await reconcileManualSessionCreation(input, submitted, params.sourceAccountLifetime)
         : null;
     // Custody acquisition and reconciliation may outlive the originating draft's
     // Account authority. Fence actual issuance after those reads have settled.
     const sourceAdmissionRetired = params.sourceAccountLifetime !== undefined && !params.sourceAccountLifetime.isCurrent();
-    let action: SessionSpawnNewActionResult = sourceAdmissionRetired
+    let action: SessionSpawnNewActionResult = qualifySessionSpawnNewActionResult(sourceAdmissionRetired
         ? { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' }
         : observed ?? reconciled ?? await (params.executeAction ?? executeSessionSpawnNewAction)(input, {
             ...context,
             expectedAccountId: params.scope.accountId,
-        });
+        }), input.executionTarget);
     if (!observed && ((!action.ok && action.errorCode === 'action_failed') || (action.ok && action.result.type === 'pending' && action.result.outcome === 'unknown'))) {
         action = await reconcileManualSessionCreation(input, submitted, params.sourceAccountLifetime) ?? action;
     }

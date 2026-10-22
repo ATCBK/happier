@@ -28,8 +28,14 @@ afterEach(async () => {
 });
 
 describe('Session creation pending settlement', () => {
-    it.each(['succeeded', 'failed', 'cancelled'] as const)('joins the returned operation and publishes its %s result without another creation', async state => {
+    it.each([
+        { state: 'succeeded', daemonReceipt: true },
+        { state: 'failed', daemonReceipt: true },
+        { state: 'cancelled', daemonReceipt: true },
+        { state: 'succeeded', daemonReceipt: false },
+    ] as const)('joins the returned operation in requester scope ($state, daemon receipt: $daemonReceipt)', async ({ state, daemonReceipt }) => {
         const home = await boundary.addHome('https://spawn-pending.test', 'spawn-account');
+        const daemonServerId = 'stack_agent-qa-voice-dev__id_default';
         const input = { creationKey: SessionCreationKeyV1Schema.parse('pending-creation'),
             executionTarget: { serverId: home.id, machineId: 'machine-1' }, directory: { kind: 'managed' as const },
             agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
@@ -37,7 +43,7 @@ describe('Session creation pending settlement', () => {
             actionId: 'session.spawn_new', state: 'running', scope: { accountId: 'spawn-account', machineId: 'machine-1' },
             requestId: 'transport-request', title: 'Create session', createdAt: 1, startedAt: 2, cancellation: 'supported' };
         const success: SessionSpawnNewResultV1 = { type: 'success', disposition: 'created', sessionId: 'settled-session',
-            executionTarget: input.executionTarget, organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
+            executionTarget: { ...input.executionTarget, serverId: daemonServerId }, organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'notRequested' } };
         const settled: ActionOperationSnapshotV1 = { ...running, revision: 3, state, settledAt: 3,
             ...(state === 'succeeded' ? { result: success }
                 : state === 'failed' ? { error: { errorCode: 'target_unavailable', error: 'operation_refused' } } : {}) };
@@ -47,7 +53,7 @@ describe('Session creation pending settlement', () => {
         boundary.setRpcResponder(async request => {
             requests.push(request.method);
             if (request.method === RPC_METHODS.SESSION_SPAWN_NEW) return { type: 'pending', outcome: 'accepted', retryWithSameCreationKey: true,
-                operation: { ...input.executionTarget, operationId: running.operationId } };
+                operation: { ...input.executionTarget, serverId: daemonReceipt ? daemonServerId : home.id, operationId: running.operationId } };
             if (request.method === 'actionOperation.get.v2') {
                 expect(request.payload).toEqual({ operationId: running.operationId, waitForTerminal: true });
                 reading.resolve();
@@ -59,6 +65,7 @@ describe('Session creation pending settlement', () => {
         const executor = createActionExecutor(createActionExecutorBoundaryFixture({
             sessionSpawnNew: async () => await sessionSpawnNewAction.dispatchSessionSpawnNewToMachine({ payload: input }),
             actionOperationAction: async ({ actionId, input, signal }) => {
+                expect(input.serverId).toBe(home.id);
                 const { executeActionOperationActionV1 } = await import('@happier-dev/protocol/actions/executor/actionOperationActions');
                 const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
                 return await executeActionOperationActionV1({ actionId, input, signal, transport: machineRpcWithServerScope });
@@ -70,11 +77,12 @@ describe('Session creation pending settlement', () => {
         try {
             await Promise.race([reading.promise, action.then(() => { throw new Error('Pending creation returned before settlement'); })]);
             terminal.resolve();
-            await expect(action).resolves.toEqual(state === 'succeeded' ? { ok: true, result: success }
+            await expect(action).resolves.toEqual(state === 'succeeded' ? { ok: true, result: { ...success, executionTarget: input.executionTarget } }
                 : state === 'failed' ? { ok: false, ...settled.error }
                     : { ok: false, errorCode: 'action_cancelled', error: 'action_cancelled' });
             expect([...actionOperationStore.getSnapshot().operationsByKey.values()]).toContainEqual({ serverId: home.id,
                 snapshot: settled });
+            expect([...actionOperationStore.getSnapshot().operationsByKey.values()].some(operation => operation.serverId === daemonServerId)).toBe(false);
             expect(requests.filter(method => method === RPC_METHODS.SESSION_SPAWN_NEW)).toHaveLength(1);
         } finally {
             terminal.resolve();
@@ -91,10 +99,10 @@ describe('Session directory preflight through the Action and Machine transport o
         boundary.resetRequests();
         const home = await boundary.addHome('https://spawn-preflight.test', 'spawn-account');
         const account = await captureLazyActionAccountContext(home.id);
-        const reading = createDeferred<void>();
+        let reading = false;
         boundary.setHttpResponder(async (input, init) => {
             if (!['/v1/machines/machine-1', '/v1/machines/read-batch'].includes(new URL(String(input)).pathname)) return null;
-            reading.resolve();
+            reading = true;
             return await new Promise<Response>((_resolve, reject) => {
                 init?.signal?.addEventListener('abort', () => reject(new DOMException('private request detail', 'AbortError')), { once: true });
             });
@@ -109,7 +117,9 @@ describe('Session directory preflight through the Action and Machine transport o
         try {
             const action = sessionSpawnNewAction.executeSessionSpawnNewAction(input,
                 { surface: 'ui', authority: 'present_user' }, executor);
-            await Promise.race([reading.promise, action.then(() => { throw new Error('Directory preflight was bypassed'); })]);
+            // Batch reads dispatch on the next task; let the fake clock run
+            // setup before advancing the Machine RPC deadline under test.
+            await vi.waitFor(() => expect(reading).toBe(true));
             await vi.advanceTimersByTimeAsync(DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS);
             const result = await action;
             expect(result).toMatchObject({ ok: true, result: {
