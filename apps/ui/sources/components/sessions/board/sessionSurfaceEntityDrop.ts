@@ -79,7 +79,8 @@ export function resolveSessionBoardEntityDrop(input: Context & Readonly<{ viewId
     if (!source || !target || source.synthetic || target.synthetic) return sessionSurfaceDropRefused('target-gone');
     if (source.id !== target.id && target.placements.some(p => p.itemId === item.itemId)) return sessionSurfaceDropRefused('already-placed');
     const ids = target.placements.map(p => p.itemId);
-    if (anchor && (anchor.itemId === item.itemId || !ids.includes(anchor.itemId))) return sessionSurfaceDropRefused('anchor-gone');
+    if (anchor?.itemId === item.itemId) return sessionSurfaceDropRefused('same-position');
+    if (anchor && !ids.includes(anchor.itemId)) return sessionSurfaceDropRefused('anchor-gone');
     const without = ids.filter(id => id !== item.itemId);
     const index = anchor ? without.indexOf(anchor.itemId) + (anchor.side === 'after' ? 1 : 0) : without.length;
     if (source.id === target.id && ids.indexOf(item.itemId) === index) return sessionSurfaceDropRefused('same-position');
@@ -88,7 +89,8 @@ export function resolveSessionBoardEntityDrop(input: Context & Readonly<{ viewId
     // use this same owner rather than waiting on cross-surface transfer admission.
     return atDestination({ status: 'allowed', effect: { actionId: 'session.board.layout.update', preview: { ...input.preview, glyph: anchor ? anchor.side === 'before' ? 'above' : 'below' : 'move' }, input: {
         sessionId: input.address.sessionId, expectedLayoutRevision: board.layoutRevision,
-        operation: { op: 'item.move', itemId: item.itemId, fromTabId: source.id, toTabId: target.id, ...(anchor ? { anchor } : {}) },
+        operation: { op: 'item.move', itemId: item.itemId, fromTabId: source.id, toTabId: target.id,
+            ...(anchor ? { anchor: { side: anchor.side, itemId: anchor.itemId } } : {}) },
     } } }, ['session-board-position', input.scope, input.address.sessionId, target.id, index]);
 }
 

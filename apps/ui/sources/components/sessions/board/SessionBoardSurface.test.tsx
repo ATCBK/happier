@@ -710,6 +710,45 @@ describe('SessionBoardSurface', () => {
         expect(screen.getTextContent()).toContain('Plan');
     });
 
+    it('offers current phone card destinations whose admitted move reaches the strict Board writer', async () => {
+        const serverUrl = 'https://board-phone-chooser.example.test';
+        const serverId = 'srv_board_phone_chooser';
+        await upsertServerProfile({ serverUrl, name: 'Board chooser Home' });
+        await setServerProfileIdentityForUrl(serverUrl, serverId);
+        expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'board-editor' })).toString('base64url')}.signature`,
+        })).toBe(true);
+        const puts: unknown[] = [];
+        const actions = realBoardActions(async (_path, init) => {
+            if (init?.method !== 'PUT') return Response.json({ record: {
+                id: 'layout-row', address: { owner: 'host', namespace: 'surface', kind: 'layout.v1', localId: 'layout' },
+                content: { t: 'plain', v: mutableLayout(MOVABLE) }, revision: REVISION,
+                createdAt: '2026-09-26T00:00:00.000Z', updatedAt: '2026-09-26T00:00:00.000Z',
+            } });
+            puts.push(SessionBoardMutationV1Schema.parse(JSON.parse(String(init.body))));
+            return Response.json({ operation: 'update_layout', outcome: 'updated', layoutRevision: NEXT_REVISION });
+        }, undefined, ADDRESS);
+        const screen = await renderScreen(<Harness serverId={serverId} actions={actions} host="mobileCockpit" snapshot={snapshot({
+            layout: MOVABLE, items: [{ itemId: 'note-1', item: note('Plan') }, { itemId: 'note-2', item: note('Review') }],
+        })} />);
+        try {
+            await vi.waitFor(() => expect(screen.findHostByTestId('session-board-item-note-2-move-handle')).not.toBeNull());
+            const handle = screen.tree.root.findAllByType(SessionSurfaceEntityDragHandle)
+                .find(node => node.props.testID === 'session-board-item-note-2-move-handle')!;
+            const drag = handle.props.drag as React.ComponentProps<typeof SessionSurfaceEntityDragHandle>['drag'];
+            const destinations = drag.runtime.getDestinations(drag.sourceId);
+            const destination = destinations.find(row => row.admission.status === 'allowed');
+            expect(destination).toBeDefined();
+            let outcome: unknown;
+            await act(async () => { outcome = await drag.runtime.perform(drag.sourceId, destination!.targetId, destination!.destination); });
+            expect(outcome).toEqual({ status: 'applied' });
+            expect(puts).toHaveLength(1);
+            expect(puts[0]).toMatchObject({ operation: 'update_layout', layoutContent: { t: 'plain', v: {
+                tabs: [{ items: [{ itemId: 'note-2' }, { itemId: 'note-1' }] }],
+            } } });
+        } finally { await screen.unmount(); }
+    });
+
     it('offers a view move only toward a neighbour that can anchor it', async () => {
         // The layout Action silently returns when there is nothing to anchor
         // against, so an "earlier" entry on the first view is a control the

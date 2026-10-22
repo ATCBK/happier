@@ -127,6 +127,12 @@ describe('qualified Session surface entity drops', () => {
             operation: { op: 'item.move', itemId: 'one', fromTabId: 'a', toTabId: 'b' },
         } } });
     });
+    it('classifies either side of the carried card as unchanged so the chooser omits it', () => {
+        for (const side of ['before', 'after'] as const) {
+            expect(resolveSessionBoardEntityDrop({ item, scope, address, board: board(), viewId: 'a',
+                anchor: { side, itemId: 'one' }, preview })).toMatchObject({ status: 'refused', reason: { code: 'same-position' } });
+        }
+    });
     it('moves the placement through the existing layout operation, retaining item content and current anchors', () => {
         const admission = resolveSessionBoardEntityDrop({ item, scope, address, board: board(), viewId: 'b', anchor: { side: 'before', itemId: 'three' }, preview });
         expect(admission.status).toBe('allowed');
