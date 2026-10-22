@@ -1684,11 +1684,16 @@ describe('useCreateNewSession (daemon unavailable UX)', () => {
     const router = { push: vi.fn(), replace: vi.fn() };
     const settlement = vi.fn();
     const attempts = vi.fn();
-    const hook = await renderHook(() => context.useCreateNewSession(createRetryParams(context.storageState.settings, {
-      draftScope: context.scope, targetAccountScope: context.scope, targetServerId: context.scope.serverId,
-      allowedTargetServerIds: [context.scope.serverId], draftId, launchUserAttemptId: userAttemptId,
-      promptStore: createNewSessionPromptStore(prompt), router, onLaunchAttemptChange: attempts,
-    })));
+    const promptStore = createNewSessionPromptStore(prompt);
+    const hook = await renderHook(() => {
+      const [isCreating, setIsCreating] = React.useState(false);
+      const launch = context.useCreateNewSession(createRetryParams(context.storageState.settings, {
+        draftScope: context.scope, targetAccountScope: context.scope, targetServerId: context.scope.serverId,
+        allowedTargetServerIds: [context.scope.serverId], draftId, launchUserAttemptId: userAttemptId,
+        promptStore, router, onLaunchAttemptChange: attempts, setIsCreating,
+      }));
+      return { ...launch, isCreating };
+    });
     await act(async () => {
       hook.getCurrent().handleCreateSession({ onAfterCreatedSettled: settlement });
       await flushHookEffects({ cycles: 8, turns: 4 });
