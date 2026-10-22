@@ -5,22 +5,17 @@ import {
     readKnownPendingQueueState,
 } from './pendingQueueState';
 
-describe('pendingQueueState regression adoption', () => {
-    it('adopts regressive server pending state as a bookkeeping correction instead of dropping it', () => {
-        const current = { known: true as const, pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 10 };
+describe('pendingQueueState ordering', () => {
+    it('does not let a delayed empty snapshot hide a newer pending row', () => {
+        const current = { known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 10 };
         const applied = applyKnownPendingQueueState(current, {
             known: true,
-            pendingCount: 2,
+            pendingCount: 0,
             pendingBlockedCount: 0,
             pendingVersion: 8,
         });
-        expect(applied.changed).toBe(true);
-        expect(applied.state).toEqual({
-            known: true,
-            pendingCount: 2,
-            pendingBlockedCount: 0,
-            pendingVersion: 8,
-        });
+        expect(applied.changed).toBe(false);
+        expect(applied.state).toEqual(current);
     });
 
     it('still deduplicates same-version replays without waking', () => {

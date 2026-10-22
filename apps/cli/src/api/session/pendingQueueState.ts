@@ -51,44 +51,13 @@ export function applyKnownPendingQueueState(
     next: KnownPendingQueueState,
 ): { state: PendingQueueState; changed: boolean } {
     const normalizedNext = normalizeKnownPendingQueueState(next);
-    // The server owns the monotonic pendingVersion. A regressive authoritative state is proof of
-    // local bookkeeping drift; adopting it (and reporting the change) lets the next hint or ack
-    // correct the belief. Dropping it strands every later update as "stale" and permanently
-    // parks the pending consumer — the lost-wake deadlock behind zombie sessions.
+    if (current.known && normalizedNext.pendingVersion < current.pendingVersion) {
+        return { state: current, changed: false };
+    }
+
     const changed = !current.known
         || current.pendingCount !== normalizedNext.pendingCount
         || normalizeKnownPendingQueueState(current).pendingBlockedCount !== normalizedNext.pendingBlockedCount
         || current.pendingVersion !== normalizedNext.pendingVersion;
     return { state: normalizedNext, changed };
-}
-
-export function derivePendingQueueStateAfterMaterializeResult(params: Readonly<{
-    current: PendingQueueState;
-    didMaterialize: boolean;
-    authoritativeState?: KnownPendingQueueState | null;
-}>): { state: PendingQueueState; changed: boolean } {
-    if (params.authoritativeState) {
-        return applyKnownPendingQueueState(params.current, params.authoritativeState);
-    }
-
-    if (!params.current.known) {
-        return { state: params.current, changed: false };
-    }
-
-    if (!params.didMaterialize) {
-        return applyKnownPendingQueueState(params.current, {
-            known: true,
-            pendingCount: 0,
-            pendingBlockedCount: 0,
-            pendingVersion: params.current.pendingVersion,
-        });
-    }
-
-    const pendingCount = Math.max(0, params.current.pendingCount - 1);
-    return applyKnownPendingQueueState(params.current, {
-        known: true,
-        pendingCount,
-        pendingBlockedCount: Math.min(params.current.pendingBlockedCount, pendingCount),
-        pendingVersion: params.current.pendingVersion + 1,
-    });
 }

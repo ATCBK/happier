@@ -332,7 +332,6 @@ import {
 import {
     applyKnownPendingQueueState,
     countMaterializablePendingRows,
-    derivePendingQueueStateAfterMaterializeResult,
     readKnownPendingQueueState,
     UNKNOWN_PENDING_QUEUE_STATE,
     type KnownPendingQueueState,
@@ -1586,14 +1585,6 @@ export class ApiSessionClient extends EventEmitter {
     }
 
     private applyPendingQueueState(state: KnownPendingQueueState, opts?: { emit?: boolean }): boolean {
-        if (this.pendingQueueState.known && state.pendingVersion < this.pendingQueueState.pendingVersion) {
-            logger.infoFile('[pendingQueue] regressive pending state adopted; local version bookkeeping corrected', {
-                sessionId: this.sessionId,
-                fromPendingVersion: this.pendingQueueState.pendingVersion,
-                toPendingVersion: state.pendingVersion,
-                pendingCount: state.pendingCount,
-            });
-        }
         const applied = applyKnownPendingQueueState(this.pendingQueueState, state);
         this.pendingQueueState = applied.state;
         if (applied.changed) {
@@ -2892,7 +2883,6 @@ export class ApiSessionClient extends EventEmitter {
             });
             if (stateUpdateResult.handled) {
                 const pendingWakeSeqBefore = this.pendingWakeSeq;
-                const pendingQueueStateBefore = this.pendingQueueState;
                 const shouldWithholdPendingEligibility = this.accountSettingsSyncBarrierState === 'applying';
                 const runtimeActivityWasIdle = this.runtimeActivityProjection.runtimeActivityState === 'idle'
                     && this.runtimeActivityProjection.runtimeActivityActiveCount === 0;
@@ -2904,18 +2894,6 @@ export class ApiSessionClient extends EventEmitter {
                     ? pendingWakeSeqBefore
                     : stateUpdateResult.pendingWakeSeq;
                 this.pendingQueueState = stateUpdateResult.pendingQueueState;
-                if (
-                    pendingQueueStateBefore?.known === true
-                    && stateUpdateResult.pendingQueueState.known === true
-                    && stateUpdateResult.pendingQueueState.pendingVersion < pendingQueueStateBefore.pendingVersion
-                ) {
-                    logger.infoFile('[pendingQueue] regressive pending hint adopted; local version bookkeeping corrected', {
-                        sessionId: this.sessionId,
-                        fromPendingVersion: pendingQueueStateBefore.pendingVersion,
-                        toPendingVersion: stateUpdateResult.pendingQueueState.pendingVersion,
-                        pendingCount: stateUpdateResult.pendingQueueState.pendingCount,
-                    });
-                }
                 this.applyRuntimeActivityProjectionFromServer(stateUpdateResult.runtimeActivityProjection, {
                     // handleSessionStateUpdate is the one wake-sequence owner for this envelope.
                     // The projection applier updates local Activity state without publishing a
@@ -6567,13 +6545,10 @@ export class ApiSessionClient extends EventEmitter {
                 },
             };
         }
-        const pendingStateUpdate = derivePendingQueueStateAfterMaterializeResult({
-            current: this.pendingQueueState,
-            didMaterialize: materializeResult.didMaterialize,
-            authoritativeState: materializeResult.pendingQueueState ?? null,
-        });
-        if (pendingStateUpdate.state.known) {
-            this.applyPendingQueueState(pendingStateUpdate.state);
+        // Released-server acknowledgements omit the projection. Its post-commit hint may
+        // already be applied, so only the server can advance these counters and version.
+        if (materializeResult.pendingQueueState) {
+            this.applyPendingQueueState(materializeResult.pendingQueueState);
         }
         if (this.closed || this.runtimeTerminationStarted) {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };
@@ -6596,14 +6571,7 @@ export class ApiSessionClient extends EventEmitter {
                 };
             }
             if (materializeResult.deferredReason === 'pending_version_mismatch') {
-                return {
-                    didMaterialize: false,
-                    result: {
-                        type: 'deferred',
-                        reason: 'pending_version_mismatch',
-                        retryAfterMs: materializeResult.retryAfterMs ?? 250,
-                    },
-                };
+                return { didMaterialize: false, result: { type: 'deferred', reason: 'pending_version_mismatch' } };
             }
             if (materializeResult.deferredReason === 'waiting_for_predecessor') {
                 return { didMaterialize: false, result: { type: 'deferred', reason: 'waiting_for_predecessor' } };

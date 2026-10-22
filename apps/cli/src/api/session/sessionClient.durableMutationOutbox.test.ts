@@ -1138,10 +1138,10 @@ describe('ApiSessionClient durable mutation outbox', () => {
     it.each([
       'publisher readiness',
       'version-mismatch acknowledgement and matching hint',
-      'ahead-drift version mismatch without another hint',
+      'version-mismatch acknowledgement without another hint',
     ] as const)('delivers Pending through the real consumer after %s without another queue mutation', async (contract) => {
       const versionMismatch = contract !== 'publisher readiness';
-      const withoutSecondHint = contract === 'ahead-drift version mismatch without another hint';
+      const withoutSecondHint = contract === 'version-mismatch acknowledgement without another hint';
       useRealSupervisor = true;
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
         features: { sharing: { pendingQueueV2: { enabled: true }, pendingDeliveryState: { enabled: true } } },
@@ -1177,7 +1177,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
             if (versionMismatch) {
               expect(payload).toMatchObject({
                 sid: 's1',
-                expectedPendingVersion: pendingClaims === 1 ? (withoutSecondHint ? 3 : 1) : 2,
+                expectedPendingVersion: pendingClaims === 1 ? 1 : 2,
               });
             }
             if (versionMismatch && pendingClaims === 1) {
@@ -1242,7 +1242,7 @@ describe('ApiSessionClient durable mutation outbox', () => {
         }
         sessionSocketStub.trigger('update', {
           id: 'early-pending-hint', seq: 1, createdAt: 1,
-          body: { t: 'pending-changed', sid: 's1', pendingCount: 1, pendingBlockedCount: 0, pendingVersion: withoutSecondHint ? 3 : 1 },
+          body: { t: 'pending-changed', sid: 's1', pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 },
         });
         const batch = consumer.waitForNextInput({ abortSignal: controller.signal });
         const received: Array<Awaited<typeof batch>> = [];
