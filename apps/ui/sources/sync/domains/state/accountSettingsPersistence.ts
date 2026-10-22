@@ -221,7 +221,20 @@ function saveAccountSettingsEnvelope(
             ]),
         ),
     };
-    getPersistenceStorage().set(accountSettingsKey(scope), JSON.stringify({ settings: persistedSettings, version, nativeNotificationPreviews }));
+    const storage = getPersistenceStorage();
+    const key = accountSettingsKey(scope);
+    const envelope = { settings: persistedSettings, version, nativeNotificationPreviews };
+    const serialized = JSON.stringify(envelope);
+    const previous = storage.getString(key);
+    if (previous === serialized) return;
+    if (previous) {
+        try {
+            if (areAccountSettingsJsonValuesEqual(JSON.parse(previous) as unknown, JSON.parse(serialized) as unknown)) return;
+        } catch {
+            // A malformed prior cache must be replaced by the current complete envelope.
+        }
+    }
+    storage.set(key, serialized);
     for (const listener of [...accountSettingsPersistenceMutationListeners]) {
         try { listener(scope); } catch { /* persistence success remains authoritative */ }
     }

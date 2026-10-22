@@ -434,6 +434,10 @@ describe('machine storage cleanup and item lists', () => {
 
     it('holds one receipt per machine after a Trash move, puts that batch back on Undo and frees it on Empty now', async () => {
         const h = harness();
+        const receiptChanged = vi.fn();
+        const stopReceipt = h.store.observeReceipt(key, receiptChanged);
+        h.store.dismissReceipt(key);
+        expect(receiptChanged).not.toHaveBeenCalled();
         await h.store.read(key);
         const calls: Array<[string, unknown]> = [];
         boundary.reply.mockImplementation((action: string, input: unknown) => {
@@ -465,6 +469,13 @@ describe('machine storage cleanup and item lists', () => {
         expect((await h.store.emptyReceipt(key)).ok).toBe(true);
         expect(calls.filter(([action]) => action === 'machines.storage.trash.empty').at(-1)?.[1]).toMatchObject({ batchId: 'batch-1' });
         expect(h.store.getReceipt(key)).toEqual({ kind: 'emptied', count: 1, freedBytes: 5 });
+        expect(receiptChanged).toHaveBeenCalledTimes(4);
+        h.store.dismissReceipt(key);
+        expect(h.store.getReceipt(key)).toBeNull();
+        expect(receiptChanged).toHaveBeenCalledTimes(5);
+        h.store.dismissReceipt(key);
+        expect(receiptChanged).toHaveBeenCalledTimes(5);
+        stopReceipt();
         release();
     });
 

@@ -1,4 +1,5 @@
 import type { WorkspaceSyncConflictListV1 } from '@happier-dev/protocol';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { listWorkspaceSyncConflicts } from '@/sync/ops/workspaceSync';
 import type { WorkspaceSyncStatusScope } from './workspaceSyncStatusStore';
@@ -40,6 +41,25 @@ function entryFor(scope: WorkspaceSyncStatusScope): Entry {
 }
 
 function publish(entry: Entry, snapshot: WorkspaceSyncConflictSnapshot): void {
+    const previous = entry.snapshot;
+    const previousList = previous.list;
+    let list = snapshot.list;
+    if (previousList && list && previousList !== list) {
+        const previousByPath = new Map(previousList.conflicts.map(conflict => [conflict.path, conflict]));
+        const conflicts = list.conflicts.map(conflict => {
+            const retained = previousByPath.get(conflict.path);
+            return retained && sameStrictJsonValue(retained, conflict) ? retained : conflict;
+        });
+        const retainedConflicts = conflicts.length === previousList.conflicts.length
+            && conflicts.every((conflict, index) => conflict === previousList.conflicts[index])
+            ? previousList.conflicts : conflicts;
+        list = { ...list, conflicts: retainedConflicts };
+        if (sameStrictJsonValue(previousList, list)) list = previousList;
+    }
+    if (previous.phase === snapshot.phase && previous.list === list
+        && previous.nextCursor === snapshot.nextCursor && previous.hasMore === snapshot.hasMore
+        && previous.invalidated === snapshot.invalidated && previous.error === snapshot.error) return;
+    if (snapshot.list !== list) snapshot = { ...snapshot, list };
     entry.snapshot = snapshot;
     for (const listener of entry.listeners) listener();
 }
@@ -127,7 +147,7 @@ function applyPage(
         phase: 'ready', list, nextCursor: page.nextCursor,
         hasMore: page.nextCursor !== null, invalidated: false, error: null,
     });
-    return list;
+    return entry.snapshot.list ?? list;
 }
 
 export function refreshWorkspaceSyncConflicts(scope: WorkspaceSyncStatusScope): Promise<WorkspaceSyncConflictListV1> {

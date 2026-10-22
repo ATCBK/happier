@@ -26,6 +26,7 @@ import {
     loadMoreWorkspaceSyncConflicts,
     refreshWorkspaceSyncConflicts,
     resetWorkspaceSyncConflictStoreForTests,
+    subscribeWorkspaceSyncConflicts,
 } from './workspaceSyncConflictStore';
 import { applyWorkspaceSyncRuntimeEvent } from './applyWorkspaceSyncRuntimeEvent';
 
@@ -63,6 +64,44 @@ describe('workspaceSyncConflictStore', () => {
             hasMore: true,
             invalidated: false,
         });
+    });
+
+    it('retains an idle conflict snapshot across repeated unobserved invalidations', () => {
+        const scope = { relationshipId: 'relationship-1', controllerMachineId: 'machine-1' };
+        const initial = getWorkspaceSyncConflictSnapshot(scope);
+        invalidateWorkspaceSyncConflicts(scope);
+        invalidateWorkspaceSyncConflicts(scope);
+        expect(getWorkspaceSyncConflictSnapshot(scope)).toBe(initial);
+        expect(listWorkspaceSyncConflicts).not.toHaveBeenCalled();
+    });
+
+    it('retains equal lists and unchanged rows while publishing refresh, cursor, and content transitions', async () => {
+        const scope = { relationshipId: 'relationship-1', controllerMachineId: 'machine-1' };
+        const page = { status: 'page', relationshipId: scope.relationshipId, totalCount: 2, nextCursor: 'next',
+            conflicts: [
+                { relationshipId: scope.relationshipId, path: 'a.txt', alpha: { kind: 'file' }, beta: { kind: 'file' } },
+                { relationshipId: scope.relationshipId, path: 'b.txt', alpha: { kind: 'file' }, beta: { kind: 'file' } },
+            ] };
+        listWorkspaceSyncConflicts.mockResolvedValueOnce(page).mockResolvedValueOnce(page)
+            .mockResolvedValueOnce({ ...page, nextCursor: null, conflicts: [page.conflicts[0],
+                { ...page.conflicts[1], beta: { kind: 'missing' } }] });
+        await refreshWorkspaceSyncConflicts(scope);
+        const initial = getWorkspaceSyncConflictSnapshot(scope);
+        const listener = vi.fn();
+        subscribeWorkspaceSyncConflicts(scope, listener);
+        const equal = refreshWorkspaceSyncConflicts(scope);
+        expect(getWorkspaceSyncConflictSnapshot(scope)).toMatchObject({ phase: 'refreshing' });
+        expect(getWorkspaceSyncConflictSnapshot(scope).list).toBe(initial.list);
+        expect(await equal).toBe(initial.list);
+        expect(getWorkspaceSyncConflictSnapshot(scope).list).toBe(initial.list);
+        expect(listener).toHaveBeenCalledTimes(2);
+        await refreshWorkspaceSyncConflicts(scope);
+        const changed = getWorkspaceSyncConflictSnapshot(scope);
+        expect(changed).toMatchObject({ phase: 'ready', nextCursor: null, hasMore: false });
+        expect(changed.list?.conflicts[0]).toBe(initial.list?.conflicts[0]);
+        expect(changed.list?.conflicts[1]).not.toBe(initial.list?.conflicts[1]);
+        expect(changed.list?.conflicts[1]?.beta.kind).toBe('missing');
+        expect(listener).toHaveBeenCalledTimes(4);
     });
 
     it('appends public cursor pages and preserves loaded conflicts when the engine invalidates the cursor', async () => {

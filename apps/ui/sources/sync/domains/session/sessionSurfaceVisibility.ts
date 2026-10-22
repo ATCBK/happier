@@ -175,7 +175,8 @@ function emitReset(): void {
     }
 }
 
-function refreshSnapshot(): void {
+// Address readers share this snapshot subscription; a same-id Home change must publish too.
+function refreshSnapshot(addressChanged = false): void {
     const surfaces: SessionAddress[] = [];
     for (const [sessionId, keys] of visibleScopedSessionKeysBySessionId) {
         for (const key of keys) {
@@ -185,15 +186,24 @@ function refreshSnapshot(): void {
     }
     surfaces.sort((a, b) => a.serverId.localeCompare(b.serverId) || a.sessionId.localeCompare(b.sessionId));
     const previous = sessionSurfaceVisibilityState.visibleSurfaces;
-    if (!previous || previous.length !== surfaces.length || surfaces.some((value, index) => (
+    const surfacesChanged = !previous || previous.length !== surfaces.length || surfaces.some((value, index) => (
         value.serverId !== previous[index].serverId || value.sessionId !== previous[index].sessionId
-    ))) sessionSurfaceVisibilityState.visibleSurfaces = surfaces;
+    ));
+    if (surfacesChanged) sessionSurfaceVisibilityState.visibleSurfaces = surfaces;
 
+    const previousSnapshot = sessionSurfaceVisibilityState.snapshot;
+    const visibleSessionIds = Array.from(visibleSessionRefCount.keys());
+    const visibleIdsChanged = visibleSessionIds.length !== previousSnapshot.visibleSessionIds.length
+        || visibleSessionIds.some((sessionId, index) => sessionId !== previousSnapshot.visibleSessionIds[index]);
+    if (!surfacesChanged && !visibleIdsChanged && !addressChanged
+        && previousSnapshot.focusedSessionId === sessionSurfaceVisibilityState.focusedSessionId
+        && previousSnapshot.routeAnchorSessionId === sessionSurfaceVisibilityState.routeAnchorSessionId) return;
     sessionSurfaceVisibilityState.snapshot = {
         focusedSessionId: sessionSurfaceVisibilityState.focusedSessionId,
         routeAnchorSessionId: sessionSurfaceVisibilityState.routeAnchorSessionId,
-        visibleSessionIds: Array.from(visibleSessionRefCount.keys()),
+        visibleSessionIds: visibleIdsChanged ? visibleSessionIds : previousSnapshot.visibleSessionIds,
     };
+    emitChange();
 }
 
 /** Only exact, actually rendered Home-qualified surfaces; no focus/subscription inference. */
@@ -313,7 +323,6 @@ export function markSessionSurfaceVisible(sessionId: string, serverId?: string |
         }
     }
     refreshSnapshot();
-    emitChange();
 }
 
 function decrementVisibleScopedSession(identity: Readonly<{
@@ -352,15 +361,16 @@ export function markSessionSurfaceHidden(sessionId: string, serverId?: string | 
         sessionKey: identity.sessionKey,
     });
     refreshSnapshot();
-    emitChange();
 }
 
 export function setFocusedSessionId(sessionId: string | null, serverId?: string | null): void {
     const identity = resolveVisibleSessionIdentity(sessionId, serverId);
+    const address = identity.serverId && identity.sessionId
+        ? { serverId: identity.serverId, sessionId: identity.sessionId } : null;
+    const previousAddress = sessionSurfaceVisibilityState.focusedSessionAddress;
+    const addressChanged = previousAddress?.serverId !== address?.serverId || previousAddress?.sessionId !== address?.sessionId;
     sessionSurfaceVisibilityState.focusedSessionId = identity.sessionId;
-    sessionSurfaceVisibilityState.focusedSessionAddress = identity.serverId && identity.sessionId
-        ? { serverId: identity.serverId, sessionId: identity.sessionId }
-        : null;
+    if (addressChanged) sessionSurfaceVisibilityState.focusedSessionAddress = address;
     // Every real activation converges here, including retained tabs and routed opens.
     // Visibility alone (for example an unfocused split pane) is not a recent visit.
     const state = identity.sessionKey ? readRegisteredStorageState() : null;
@@ -371,8 +381,7 @@ export function setFocusedSessionId(sessionId: string | null, serverId?: string 
             state.applyLocalSettings({ sessionMruOrderV1: nextOrder });
         }
     }
-    refreshSnapshot();
-    emitChange();
+    refreshSnapshot(addressChanged);
 }
 
 export function clearFocusedSessionId(sessionId: string, serverId?: string | null): void {
@@ -387,7 +396,6 @@ export function clearFocusedSessionId(sessionId: string, serverId?: string | nul
         sessionSurfaceVisibilityState.focusedSessionId = null;
         sessionSurfaceVisibilityState.focusedSessionAddress = null;
         refreshSnapshot();
-        emitChange();
     }
 }
 
@@ -397,12 +405,13 @@ export function getFocusedSessionId(): string | null {
 
 export function setRouteAnchorSessionId(sessionId: string | null, serverId?: string | null): void {
     const identity = resolveVisibleSessionIdentity(sessionId, serverId);
+    const address = serverId !== null && identity.serverId && identity.sessionId
+        ? { serverId: identity.serverId, sessionId: identity.sessionId } : null;
+    const previousAddress = sessionSurfaceVisibilityState.routeAnchorSessionAddress;
+    const addressChanged = previousAddress?.serverId !== address?.serverId || previousAddress?.sessionId !== address?.sessionId;
     sessionSurfaceVisibilityState.routeAnchorSessionId = identity.sessionId;
-    sessionSurfaceVisibilityState.routeAnchorSessionAddress = serverId !== null && identity.serverId && identity.sessionId
-        ? { serverId: identity.serverId, sessionId: identity.sessionId }
-        : null;
-    refreshSnapshot();
-    emitChange();
+    if (addressChanged) sessionSurfaceVisibilityState.routeAnchorSessionAddress = address;
+    refreshSnapshot(addressChanged);
 }
 
 export function clearRouteAnchorSessionId(sessionId: string): void {
@@ -412,7 +421,6 @@ export function clearRouteAnchorSessionId(sessionId: string): void {
         sessionSurfaceVisibilityState.routeAnchorSessionId = null;
         sessionSurfaceVisibilityState.routeAnchorSessionAddress = null;
         refreshSnapshot();
-        emitChange();
     }
 }
 
@@ -452,7 +460,6 @@ function clearSessionSurfaceVisibility(options: Readonly<{ notifyMountedSurfaces
     sessionSurfaceVisibilityState.routeAnchorSessionId = null;
     sessionSurfaceVisibilityState.routeAnchorSessionAddress = null;
     refreshSnapshot();
-    emitChange();
     if (options.notifyMountedSurfaces) {
         sessionSurfaceVisibilityState.resetVersion += 1;
         emitReset();

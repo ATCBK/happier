@@ -1,4 +1,5 @@
 import type { WorkspaceSyncStatusV1 } from '@happier-dev/protocol';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { getWorkspaceSyncStatus, listWorkspaceSyncStatuses } from '@/sync/ops/workspaceSync';
 
@@ -52,12 +53,22 @@ function entryFor(scope: WorkspaceSyncStatusScope): Entry {
 }
 
 function publish(entry: Entry, snapshot: WorkspaceSyncStatusSnapshot): void {
+    const previous = entry.snapshot;
+    let status = snapshot.status;
+    if (previous.status && status && previous.status !== status) {
+        const alpha = sameStrictJsonValue(previous.status.endpointStates.alpha, status.endpointStates.alpha)
+            ? previous.status.endpointStates.alpha : status.endpointStates.alpha;
+        const beta = sameStrictJsonValue(previous.status.endpointStates.beta, status.endpointStates.beta)
+            ? previous.status.endpointStates.beta : status.endpointStates.beta;
+        const endpointStates = alpha === previous.status.endpointStates.alpha && beta === previous.status.endpointStates.beta
+            ? previous.status.endpointStates : { alpha, beta };
+        status = { ...status, endpointStates };
+        if (sameStrictJsonValue(previous.status, status)) status = previous.status;
+    }
+    if (previous.phase === snapshot.phase && previous.status === status && previous.error === snapshot.error) return;
+    if (snapshot.status !== status) snapshot = { ...snapshot, status };
     entry.snapshot = snapshot;
     for (const listener of entry.listeners) listener();
-}
-
-function statusesEqual(left: WorkspaceSyncStatusV1 | null, right: WorkspaceSyncStatusV1 | null): boolean {
-    return left === right || JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function getWorkspaceSyncStatusSnapshot(scope: WorkspaceSyncStatusScope): WorkspaceSyncStatusSnapshot {
@@ -92,7 +103,6 @@ export function subscribeWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope, li
 export function setWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope, status: WorkspaceSyncStatusV1): void {
     const entry = entryFor(scope);
     entry.admissionGeneration += 1;
-    if (entry.snapshot.phase === 'ready' && statusesEqual(entry.snapshot.status, status)) return;
     publish(entry, { phase: 'ready', status, error: null });
 }
 
@@ -136,9 +146,8 @@ export function refreshWorkspaceSyncStatus(scope: WorkspaceSyncStatusScope): Pro
     const inFlight = getWorkspaceSyncStatus({ ...scope, signal: controller.signal }).then(
         (status) => {
             if (entry.admissionGeneration !== admissionGeneration) return entry.snapshot.status;
-            const retainedStatus = statusesEqual(entry.snapshot.status, status) ? entry.snapshot.status : status;
-            publish(entry, { phase: 'ready', status: retainedStatus, error: null });
-            return retainedStatus;
+            publish(entry, { phase: 'ready', status, error: null });
+            return entry.snapshot.status;
         },
         (error: unknown) => {
             if (entry.admissionGeneration === admissionGeneration) {
@@ -186,9 +195,7 @@ export async function refreshWorkspaceSyncStatuses(scopes: readonly WorkspaceSyn
                 const entry = entryFor(scope);
                 if (entry.admissionGeneration !== generation) continue;
                 const status = byId.get(scope.relationshipId) ?? null;
-                const unchanged = statusesEqual(entry.snapshot.status, status);
-                if (entry.snapshot.phase === 'ready' && unchanged) continue;
-                publish(entry, { phase: 'ready', status: unchanged ? entry.snapshot.status : status, error: null });
+                publish(entry, { phase: 'ready', status, error: null });
             }
         }, (error: unknown) => {
             for (const { scope, generation } of read.scopes.values()) {

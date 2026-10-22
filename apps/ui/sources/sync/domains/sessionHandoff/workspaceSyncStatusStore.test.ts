@@ -26,6 +26,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 import {
     applyWorkspaceSyncStatusEvent,
     getWorkspaceSyncStatusSnapshot,
+    invalidateWorkspaceSyncStatuses,
     refreshWorkspaceSyncStatus,
     refreshWorkspaceSyncStatuses,
     resetWorkspaceSyncStatusStoreForTests,
@@ -275,6 +276,43 @@ describe('workspaceSyncStatusStore', () => {
         applyWorkspaceSyncStatusEvent(scope, { ...status });
         expect(listener).toHaveBeenCalledOnce();
         expect(getWorkspaceSyncStatusSnapshot(scope)).toBe(first);
+    });
+
+    it('retains an already idle snapshot across repeated unobserved invalidations', () => {
+        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const initial = getWorkspaceSyncStatusSnapshot(scope);
+        invalidateWorkspaceSyncStatuses(scope);
+        invalidateWorkspaceSyncStatuses(scope);
+        expect(getWorkspaceSyncStatusSnapshot(scope)).toBe(initial);
+        expect(listWorkspaceSyncStatuses).not.toHaveBeenCalled();
+    });
+
+    it('reconciles status endpoints at publication while keeping freshness and recovery observable', async () => {
+        const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' };
+        const status = {
+            relationshipId: scope.relationshipId, controllerMachineId: scope.controllerMachineId, state: 'watching' as const,
+            alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced' as const,
+            endpointStates: { alpha: { connected: true, scanned: true, scanProblemCount: 0, transitionProblemCount: 0 }, beta: null },
+            conflictCount: 0, lastCycleObservedAtMs: 1,
+        };
+        applyWorkspaceSyncStatusEvent(scope, status);
+        const listener = vi.fn();
+        subscribeWorkspaceSyncStatus(scope, listener);
+        const failure = new Error('daemon unavailable');
+        getWorkspaceSyncStatus.mockRejectedValueOnce(failure);
+        await expect(refreshWorkspaceSyncStatus(scope)).rejects.toBe(failure);
+        expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'error', error: failure });
+        applyWorkspaceSyncStatusEvent(scope, { ...status, endpointStates: { ...status.endpointStates, alpha: { ...status.endpointStates.alpha } } });
+        const recovered = getWorkspaceSyncStatusSnapshot(scope);
+        expect(recovered).toMatchObject({ phase: 'ready', error: null });
+        expect(recovered.status).toBe(status);
+        expect(listener).toHaveBeenCalledTimes(3);
+        applyWorkspaceSyncStatusEvent(scope, { ...status, lastCycleObservedAtMs: 2,
+            endpointStates: { ...status.endpointStates, alpha: { ...status.endpointStates.alpha } } });
+        const fresh = getWorkspaceSyncStatusSnapshot(scope);
+        expect(fresh.status?.lastCycleObservedAtMs).toBe(2);
+        expect(fresh.status?.endpointStates).toBe(status.endpointStates);
+        expect(listener).toHaveBeenCalledTimes(4);
     });
 
     it('does not let an older in-flight refresh overwrite a newer runtime status event', async () => {

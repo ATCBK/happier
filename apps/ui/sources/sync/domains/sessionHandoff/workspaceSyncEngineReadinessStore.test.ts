@@ -41,6 +41,37 @@ describe('workspaceSyncEngineReadinessStore', () => {
         });
     });
 
+    it('retains equal readiness snapshots and publishes engine, carrier, and recovery changes', () => {
+        const scope = { serverId: 'server-1', machineId: 'machine-1' } as const;
+        const listener = vi.fn();
+        subscribeWorkspaceSyncEngineReadiness(scope, listener);
+        applyWorkspaceSyncEngineReadinessEvent(scope, {
+            engine: { state: 'unavailable', errorCode: 'engine_unavailable' },
+            carrier: { state: 'unavailable', errorCode: 'carrier_unavailable' },
+        });
+        const unavailable = getWorkspaceSyncEngineReadinessSnapshot(scope);
+        applyWorkspaceSyncEngineReadinessEvent(scope, {
+            engine: { state: 'unavailable', errorCode: 'engine_unavailable' },
+            carrier: { state: 'unavailable', errorCode: 'carrier_unavailable' },
+        });
+        expect(getWorkspaceSyncEngineReadinessSnapshot(scope)).toBe(unavailable);
+        expect(listener).toHaveBeenCalledOnce();
+
+        applyWorkspaceSyncEngineReadinessEvent(scope, {
+            engine: { state: 'unavailable', errorCode: 'engine_not_installed' },
+            carrier: { state: 'unavailable', errorCode: 'carrier_unavailable' },
+        });
+        expect(getWorkspaceSyncEngineReadinessSnapshot(scope).errorCode).toBe('engine_not_installed');
+        applyWorkspaceSyncEngineReadinessEvent(scope, {
+            engine: { state: 'unavailable', errorCode: 'engine_not_installed' },
+            carrier: { state: 'ready' },
+        });
+        expect(getWorkspaceSyncEngineReadinessSnapshot(scope).carrierErrorCode).toBeNull();
+        applyWorkspaceSyncEngineReadinessEvent(scope, { engine: { state: 'ready' }, carrier: { state: 'ready' } });
+        expect(getWorkspaceSyncEngineReadinessSnapshot(scope).phase).toBe('ready');
+        expect(listener).toHaveBeenCalledTimes(4);
+    });
+
     it('keeps the exact carrier failure when the engine is ready', () => {
         const scope = { machineId: 'machine-1' } as const;
 

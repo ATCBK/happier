@@ -22,6 +22,7 @@ import {
     clearFocusedSessionId,
     clearRouteAnchorSessionId,
     getFocusedSessionAddress,
+    getRouteAnchorSessionAddress,
     getSessionSurfaceVisibilitySnapshot,
     getVisibleSessionSurfaces,
     getVisibleSessionListSurfaces,
@@ -33,6 +34,7 @@ import {
     retainVisibleSessionListSurfaces,
     setFocusedSessionId,
     setRouteAnchorSessionId,
+    subscribeSessionSurfaceVisibility,
 } from './sessionSurfaceVisibility';
 
 describe('sessionSurfaceVisibility', () => {
@@ -95,6 +97,63 @@ describe('sessionSurfaceVisibility', () => {
         expect(getVisibleSessionSurfaces()).toBe(first);
         markSessionSurfaceHidden('same', 'home-a');
         expect(getVisibleSessionSurfaces()).toEqual([{ serverId: 'home-b', sessionId: 'same' }]);
+    });
+
+    it('publishes visible membership changes without publishing duplicate retain or release counts', () => {
+        const listener = vi.fn();
+        const unsubscribe = subscribeSessionSurfaceVisibility(listener);
+        try {
+            markSessionSurfaceVisible('same', 'home-a');
+            const first = getSessionSurfaceVisibilitySnapshot();
+            const surfaces = getVisibleSessionSurfaces();
+            markSessionSurfaceVisible('same', 'home-a');
+            markSessionSurfaceHidden('same', 'home-a');
+            expect(getSessionSurfaceVisibilitySnapshot()).toBe(first);
+            expect(getVisibleSessionSurfaces()).toBe(surfaces);
+            expect(listener).toHaveBeenCalledOnce();
+
+            markSessionSurfaceVisible('same', 'home-b');
+            expect(getSessionSurfaceVisibilitySnapshot().visibleSessionIds).toBe(first.visibleSessionIds);
+            expect(getVisibleSessionSurfaces()).toHaveLength(2);
+            expect(listener).toHaveBeenCalledTimes(2);
+            markSessionSurfaceHidden('same', 'home-a');
+            expect(isSessionSurfaceVisible('same', 'home-b')).toBe(true);
+            expect(listener).toHaveBeenCalledTimes(3);
+            markSessionSurfaceHidden('same', 'home-b');
+            expect(getSessionSurfaceVisibilitySnapshot().visibleSessionIds).toEqual([]);
+            expect(listener).toHaveBeenCalledTimes(4);
+            const empty = getSessionSurfaceVisibilitySnapshot();
+            markSessionSurfaceHidden('same', 'home-b');
+            expect(getSessionSurfaceVisibilitySnapshot()).toBe(empty);
+            expect(listener).toHaveBeenCalledTimes(4);
+        } finally { unsubscribe(); }
+    });
+
+    it('retains repeated focus and route identities while notifying a same-id Home change', () => {
+        const listener = vi.fn();
+        const unsubscribe = subscribeSessionSurfaceVisibility(listener);
+        try {
+            setFocusedSessionId('same', 'home-a');
+            setRouteAnchorSessionId('same', 'home-a');
+            const snapshot = getSessionSurfaceVisibilitySnapshot();
+            const focused = getFocusedSessionAddress();
+            const anchor = getRouteAnchorSessionAddress();
+            setFocusedSessionId(' same ', 'home-a');
+            setRouteAnchorSessionId('same', ' home-a ');
+            expect(getSessionSurfaceVisibilitySnapshot()).toBe(snapshot);
+            expect(getFocusedSessionAddress()).toBe(focused);
+            expect(getRouteAnchorSessionAddress()).toBe(anchor);
+            expect(listener).toHaveBeenCalledTimes(2);
+            setFocusedSessionId('same', 'home-b');
+            expect(getSessionSurfaceVisibilitySnapshot()).not.toBe(snapshot);
+            expect(getSessionSurfaceVisibilitySnapshot().visibleSessionIds).toBe(snapshot.visibleSessionIds);
+            expect(getFocusedSessionAddress()).toEqual({ serverId: 'home-b', sessionId: 'same' });
+            const afterFocus = getSessionSurfaceVisibilitySnapshot();
+            setRouteAnchorSessionId('same', 'home-b');
+            expect(getSessionSurfaceVisibilitySnapshot()).not.toBe(afterFocus);
+            expect(getRouteAnchorSessionAddress()).toEqual({ serverId: 'home-b', sessionId: 'same' });
+            expect(listener).toHaveBeenCalledTimes(4);
+        } finally { unsubscribe(); }
     });
 
     it('tracks visible, focused, and route-anchor session ids independently', () => {

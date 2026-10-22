@@ -228,6 +228,7 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
     });
     const notifyReceipt = (input: MachineStorageKey) => { for (const listener of receiptListeners.get(machineKey(input)) ?? []) listener(); };
     const setReceipt = (input: MachineStorageKey, receipt: MachineStorageReceipt | null) => {
+        if ((receipts.get(machineKey(input)) ?? null) === receipt) return;
         if (receipt) receipts.set(machineKey(input), receipt); else receipts.delete(machineKey(input));
         notifyReceipt(input);
     };

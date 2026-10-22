@@ -158,6 +158,30 @@ describe('accountSettingsPersistence', () => {
         expect(mutations).toEqual([scopeA]);
     });
 
+    it('notifies only for changed persisted content, version or scope', async () => {
+        const mod = await loadAccountSettingsPersistenceModule();
+        expect(mod).not.toBeNull();
+        if (!mod) return;
+        mod.saveAccountSettings(scopeA, settingsDefaults, 3);
+        const previousBytes = store.get(accountSettingsStorageKey(scopeA));
+        const mutations: AccountSettingsScope[] = [];
+        const unsubscribe = mod.subscribeAccountSettingsPersistenceMutations((scope) => mutations.push(scope));
+        try {
+            mod.saveAccountSettings({ ...scopeA }, structuredClone(settingsDefaults), 3);
+            const reorderedSettings = Object.fromEntries(Object.entries(structuredClone(settingsDefaults)).reverse()) as Settings;
+            mod.saveAccountSettings(scopeA, reorderedSettings, 3);
+            expect(mutations).toEqual([]);
+            expect(store.get(accountSettingsStorageKey(scopeA))).toBe(previousBytes);
+
+            mod.saveAccountSettings(scopeA, settingsDefaults, 4);
+            mod.saveAccountSettings(scopeA, { ...settingsDefaults, analyticsOptOut: true }, 4);
+            mod.saveAccountSettings(sameServerDifferentAccount, settingsDefaults, 4);
+            expect(mutations).toEqual([scopeA, scopeA, sameServerDifferentAccount]);
+        } finally {
+            unsubscribe();
+        }
+    });
+
     it('persists account settings separately for each server/account scope', async () => {
         const mod = await loadAccountSettingsPersistenceModule();
         expect(mod, 'account settings persistence module should exist').not.toBeNull();

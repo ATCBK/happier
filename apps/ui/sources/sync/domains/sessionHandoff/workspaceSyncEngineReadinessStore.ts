@@ -36,6 +36,11 @@ function entryFor(scope: WorkspaceSyncEngineScope): Entry {
 }
 
 function publish(entry: Entry, snapshot: WorkspaceSyncEngineReadinessSnapshot): void {
+    const previous = entry.snapshot;
+    if (previous.phase === snapshot.phase
+        && previous.errorCode === snapshot.errorCode
+        && previous.carrierPhase === snapshot.carrierPhase
+        && previous.carrierErrorCode === snapshot.carrierErrorCode) return;
     entry.snapshot = snapshot;
     for (const listener of entry.listeners) listener();
 }
