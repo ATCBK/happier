@@ -1,15 +1,20 @@
 import * as React from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { act, createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { act, createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createSeededSkillsHome } from '@/dev/testkit/harness/skillsSurfaceHarness';
 import { SkillFoundListResultV1Schema } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { SessionCapabilitySelectionAuthoringV1Schema, type SessionCapabilitySelectionV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { prepareWarmCacheEncryptionKey } from '../state/warmCacheEncryptionKey';
 import type { ActiveSuggestionsHandler } from '@/components/autocomplete/useActiveSuggestions';
+import type { AutocompleteSuggestion } from '@/components/autocomplete/autocompleteTypes';
+import type { ComposerSuggestionCatalogs } from '@/components/autocomplete/composerSuggestionCatalogs';
+import { formatInlineReferenceTokenV1 } from '@happier-dev/protocol/runtime/input/inlineReferenceTokenV1';
+import { buildMentionRefForKindV1, MENTION_KIND_V1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 
 installDisconnectedServerSocketBoundary();
 const transport = vi.hoisted(() => vi.fn<(input: unknown) => Promise<unknown>>());
@@ -36,6 +41,65 @@ const { useActiveSuggestions } = await import('@/components/autocomplete/useActi
 const { useAgentInputCommandMenu } = await import('@/components/sessions/agentInput/commandMenu/useAgentInputCommandMenu');
 
 afterEach(() => { vi.useRealTimers(); standardCleanup(); resetPromptLibraryCatalogEngineForTests(); resetPromptLibraryCatalogSnapshotsForTests(); });
+
+it('does not reread the real Skills library for an unchanged query after an unrelated Action publication', async () => {
+    const { useSessionComposerSuggestions } = await import('@/components/sessions/agentInput/useSessionComposerSuggestions');
+    const home = await createSeededSkillsHome('https://skill-composer-trigger-lifetime.test', { skills: [{ id: 'library-skill' }] });
+    seedAutocompleteSessions({ s1: { active: true, metadata: { path: '/repo' } } });
+    sessionTransport.mockResolvedValue(SessionSkillCatalogListResponseV1Schema.parse({ skills: [] }));
+    const kinds = ['skill'] as const;
+    const actions = { listSlashCommands: () => [] };
+    const hook = await renderHook(({ query, actions: currentActions }: { query: string | null; actions: typeof actions }) => {
+        const skills = useSkillComposerSource({ serverId: home.home.id, agentId: 'codex', machineId: null,
+            machineName: null, owner: () => {} });
+        const source = useSessionComposerSuggestions({ sessionId: 's1', kinds, composerReferenceHost: null,
+            actionController: currentActions, skillSource: skills });
+        const [suggestions] = useActiveSuggestions(query, source);
+        return { skills, suggestions };
+    }, { initialProps: { query: null as string | null, actions } });
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent().skills).not.toBeNull());
+        // Observation only: this spy calls the real source, Actions and HTTP-backed library.
+        const read = vi.spyOn(hook.getCurrent().skills!, 'read');
+        await hook.rerender({ query: '$library', actions });
+        await vi.waitFor(() => expect(hook.getCurrent().suggestions).toContainEqual(expect.objectContaining({ label: 'library-skill' })));
+        expect(read).toHaveBeenCalledTimes(1);
+        await hook.rerender({ query: '$library', actions: { ...actions } });
+        await flushHookEffects();
+        expect(read).toHaveBeenCalledTimes(1);
+    } finally { await hook.unmount(); await home.dispose(); }
+});
+
+it.each([false, true])('publishes Skills rows only for new source facts and retains the completed rows (catalog changed: %s)', async catalogChanged => {
+    const home = await createSeededSkillsHome(`https://skill-composer-publication-${catalogChanged}.test`, { skills: [{ id: 'library-skill' }] });
+    const hook = await renderHook(() => useSkillComposerSource({ serverId: home.home.id, agentId: 'codex',
+        machineId: null, machineName: null, owner: () => {} }));
+    try {
+        await vi.waitFor(() => expect(hook.getCurrent()).not.toBeNull());
+        const catalogs: ComposerSuggestionCatalogs = { skills: [{ id: 'vendor:codex:review', name: 'review', origin: 'vendor', backendId: 'codex' }] };
+        const current = { skills: catalogChanged
+            ? [...catalogs.skills!, { id: 'vendor:codex:changed', name: 'changed', origin: 'vendor', backendId: 'codex' }]
+            : catalogs.skills!.map(item => ({ ...item })) };
+        const publications: Array<readonly AutocompleteSuggestion[]> = [];
+        const rows = await resolveComposerSuggestionKind('skill').resolve({
+            sessionId: null, serverId: home.home.id, workspace: null, trigger: '$', query: '', scopedQuery: '', scope: null,
+            catalogs, loadCatalogs: async () => current, skillSource: hook.getCurrent(), limit: 20,
+            publish: rows => publications.push(rows),
+        });
+        expect(rows.filter(row => row.group === 'In this session').map(row => row.label)).toEqual(catalogChanged ? ['review', 'changed'] : ['review']);
+        expect(rows).toContainEqual(expect.objectContaining({ group: 'Your library', label: 'library-skill' }));
+        expect(publications).toHaveLength(catalogChanged ? 3 : 2);
+        expect(rows).toBe(publications.at(-1));
+        publications.length = 0;
+        const reopened = await resolveComposerSuggestionKind('skill').resolve({
+            sessionId: null, serverId: home.home.id, workspace: null, trigger: '$', query: '', scopedQuery: '', scope: null,
+            catalogs: current, loadCatalogs: async () => current, skillSource: hook.getCurrent(), limit: 20,
+            publish: rows => publications.push(rows),
+        });
+        expect(publications).toHaveLength(1);
+        expect(reopened).toBe(publications[0]);
+    } finally { await hook.unmount(); await home.dispose(); }
+});
 
 it.each(['http', 'header'] as const)('opens the same mounted Session composer after a cold %s library failure', async (failure) => {
     const catalog = createPromptLibraryCatalogBoundary();
@@ -101,14 +165,17 @@ it.each(['http', 'header'] as const)('opens the same mounted Session composer af
 });
 
 it.each([
-    { lateLibrary: false, abort: false },
-    { lateLibrary: true, abort: false },
-    { lateLibrary: true, abort: true },
-])('keeps the Account library current while the Session catalog is pending (late: $lateLibrary, abort: $abort)', async ({ lateLibrary, abort }) => {
+    { lateLibrary: false, abort: false, readyCatalog: false },
+    { lateLibrary: true, abort: false, readyCatalog: false },
+    { lateLibrary: true, abort: true, readyCatalog: false },
+    { lateLibrary: true, abort: false, readyCatalog: true },
+    { lateLibrary: true, abort: true, readyCatalog: true },
+    { lateLibrary: true, abort: 'sync' as const, readyCatalog: true },
+])('keeps the Account library current while the Session catalog is pending (late: $lateLibrary, abort: $abort, catalog ready: $readyCatalog)', async ({ lateLibrary, abort, readyCatalog }) => {
     const catalog = createPromptLibraryCatalogBoundary();
     const inventoryRequested = createDeferred<void>();
     const inventory = createDeferred<void>();
-    const home = await createPlainArtifactHomeFixture(`https://skill-composer-pending-${lateLibrary}-${abort}.test`, {
+    const home = await createPlainArtifactHomeFixture(`https://skill-composer-pending-${lateLibrary}-${abort}-${readyCatalog}.test`, {
         serverFeatures: createRootLayoutFeaturesResponse(),
         handleRequest: async (path, init) => {
             if (lateLibrary && path.split('?')[0] === '/v1/artifacts' && (init?.method ?? 'GET') === 'GET') {
@@ -138,11 +205,22 @@ it.each([
         if (lateLibrary) vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         pending = getSuggestions('s1', '$', {
             kinds: ['skill'], skillSource: hook.getCurrent(), signal: controller.signal,
-            onUpdate: rows => published.push(rows.map(row => `${row.group}:${row.label}`)),
+            ...(readyCatalog ? { catalogs: { skills: [{ name: 'review', origin: 'vendor', backendId: 'codex' }] } } : {}),
+            onUpdate: rows => {
+                published.push(rows.map(row => `${row.group}:${row.label}`));
+                if (abort === 'sync') controller.abort();
+            },
         });
         if (lateLibrary) {
             await inventoryRequested.promise;
             await vi.advanceTimersByTimeAsync(COMPOSER_SUGGESTION_KIND_DEADLINE_MS + COMPOSER_SUGGESTION_COLD_START_GRACE_MS + 1);
+            if (readyCatalog) {
+                expect(published.some(rows => rows.includes('In this session:review'))).toBe(true);
+                let settled = false;
+                void pending.then(() => { settled = true; });
+                await Promise.resolve();
+                expect(settled).toBe(abort === 'sync');
+            }
             if (abort) {
                 controller.abort();
                 expect(await pending).toEqual([]);
@@ -157,8 +235,10 @@ it.each([
         // This is observable first paint, not the eventual list after the slow RPC settles.
         await vi.waitFor(() => expect(published.some(rows => rows.includes('Your library:happier'))).toBe(true));
         if (lateLibrary) {
-            // The cold query settles on the first usable publication without waiting for the Machine.
-            expect((await pending).map(row => `${row.group}:${row.label}`)).toEqual(['Your library:happier']);
+            // Partial rows paint without the Machine. The producer owns terminal completion.
+            gate.resolve(SessionSkillCatalogListResponseV1Schema.parse({ skills: [] }));
+            expect((await pending).map(row => `${row.group}:${row.label}`)).toEqual(readyCatalog
+                ? ['In this session:review', 'Your library:happier'] : ['Your library:happier']);
         } else {
             gate.resolve(producer);
             const rows = await pending;
@@ -263,7 +343,9 @@ it('applies a known library pick to its Session when the unrelated Account inven
         let result: Awaited<ReturnType<typeof select>> | undefined;
         await act(async () => { result = await select(picked!); });
         expect(result, JSON.stringify({ writeOutcome, requests: home.requests })).toEqual({ handled: false });
-        expect(applySuggestion('$', { start: 1, end: 1 }, picked!.text, ['skill']).text).toBe('$picker-check ');
+        expect(applySuggestion('$', { start: 1, end: 1 }, picked!.text, ['skill']).text).toBe(
+            `${formatInlineReferenceTokenV1({ label: 'picker-check', ref: buildMentionRefForKindV1(MENTION_KIND_V1.skill, skillId) })} `,
+        );
         expect(hook.getCurrent().capabilities.selection.skills?.forceIncludeSkillIds).toEqual([skillId]);
         if (row.ownerMetadata?.t !== 'plain') throw new Error('Expected plain owner metadata');
         expect(projectSessionOwnerCompatibilityViewV1({ sharedMetadata: { v: 1 }, ownerMetadata: row.ownerMetadata.v }))
