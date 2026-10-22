@@ -56,8 +56,7 @@ function roles(id: CuaLocalProvisionerId) {
         options: { ...defaults, title: 'Read Cua local image and runtime choices', dangerLevel: 'safe' as const,
             inputSchema: CuaLocalOptionsQueryV1Schema, resultSchema: MachineProvisionerOptionsResultV1Schema,
             inputHints: { fields: [
-                { path: 'runtimeId', title: configurationLabel('runtimeId'), widget: 'text' as const },
-                { path: 'imageId', title: configurationLabel('imageId'), widget: 'text' as const },
+                // Runtime and image are picked from the choices this read returns, never typed as filters.
                 { path: 'size.cpu', title: configurationLabel('cpu'), widget: 'integer' as const, required: true, defaultValue: 2 },
                 { path: 'size.memoryBytes', title: configurationLabel('memoryBytes'), widget: 'integer' as const, unit: 'bytes' as const, required: true, defaultValue: 4 * GIB },
                 // The disk follows the chosen image; only a Space may be given its own.
@@ -114,7 +113,9 @@ function roles(id: CuaLocalProvisionerId) {
             inputSchema: schemas.execInput, resultSchema: MachineProvisionerNativeExecResultV1Schema,
             async run(input: ReturnType<typeof schemas.execInput.parse>, context: PluginInvocationContext) {
                 const result = await (await provider(id, context)).exec(input.resource, input.argv,
-                    input.inputBase64 === undefined ? undefined : bytes(input.inputBase64), input.timeoutMs);
+                    input.inputBase64 === undefined ? undefined : bytes(input.inputBase64), input.timeoutMs,
+                    input.processConfig, context.services.managedServices);
+                if ('kind' in result) return result;
                 return { termination: result.termination, stdoutBase64: Buffer.from(result.stdout).toString('base64'),
                     stderrBase64: Buffer.from(result.stderr).toString('base64'),
                     stdoutTruncated: result.stdoutTruncated, stderrTruncated: result.stderrTruncated };

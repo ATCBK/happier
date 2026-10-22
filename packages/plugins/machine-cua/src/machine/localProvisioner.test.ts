@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import type { PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
-import type { ManagedDependencyStatus } from '@happier-dev/plugin-sdk/managed-services';
+import type { ManagedDependencyStatus, ManagedServiceSpec } from '@happier-dev/plugin-sdk/managed-services';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import type { ExecService, PluginExecSpawnRequest, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import { createCuaNativeClient } from './nativeClient.js';
@@ -25,7 +25,7 @@ function result(value: unknown): PluginProcessResult {
     return { termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
         stdout: new TextEncoder().encode(JSON.stringify(value)), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
 }
-function harness(createReplyLost = false) {
+function harness(createReplyLost = false, observedRuntime: 'qemu' | 'gvisor' | 'runc' = 'qemu') {
     const requests: PluginExecSpawnRequest[] = [];
     let temporaryId = 0;
     const run = async (request: PluginExecSpawnRequest) => {
@@ -39,8 +39,8 @@ function harness(createReplyLost = false) {
             return result({ id: `local:${name}`, name, location: 'local', runtime: 'qemu', kind: 'vm',
                 image: launch.imageId, status: 'ready', state: 'running', ephemeral: false });
         }
-        if (args.includes('info')) return result({ id: resource.sandboxId, name: 'owned', location: 'local', runtime: 'qemu',
-            kind: 'vm', image: launch.imageId, status: 'ready', state: 'running', ephemeral: false });
+        if (args.includes('info')) return result({ id: resource.sandboxId, name: 'owned', location: 'local', runtime: observedRuntime,
+            kind: observedRuntime === 'qemu' ? 'vm' : 'container', image: launch.imageId, status: 'ready', state: 'running', ephemeral: false });
         if (args.includes('cp')) {
             const content = await readFile(args[args.indexOf('cp') + 1]);
             return result({ direction: 'upload', size: content.length, sha256: createHash('sha256').update(content).digest('hex') });
@@ -53,8 +53,9 @@ function harness(createReplyLost = false) {
     return { requests, run, provider: createCuaLocalProvisioner(createCuaNativeClient({ exec: { run }, executable: { kind: 'systemTool', id: 'cua' } }), 'local-sandbox', 10) };
 }
 
-async function activated(dependencyReady = true, nativeRun?: ExecService['run'], signal = new AbortController().signal, version = '0.5.0') {
-    const h = harness();
+async function activated(dependencyReady = true, nativeRun?: ExecService['run'], signal = new AbortController().signal,
+    version = '0.5.0', supervise?: (spec: ManagedServiceSpec) => Promise<unknown>, observedRuntime: 'qemu' | 'gvisor' | 'runc' = 'qemu') {
+    const h = harness(false, observedRuntime);
     const actions = new Map<string, ActionHandler>();
     // Substitute only external host registration/services and native processes;
     // real author admission, Action schemas and local lifecycle logic execute.
@@ -66,7 +67,8 @@ async function activated(dependencyReady = true, nativeRun?: ExecService['run'],
         managedServices: { dependencies: { status: async (): Promise<ManagedDependencyStatus> => dependencyReady ? ({
             state: 'ready', id: 'cua-cli', version, sourceId: 'system',
             executable: { kind: 'managedDependency', id: { pluginId: CUA_PLUGIN.manifest.id, localId: 'cua-cli' } },
-        }) : ({ state: 'missing', id: 'cua-cli', supported: true }) } },
+        }) : ({ state: 'missing', id: 'cua-cli', supported: true }) },
+            supervise: supervise ?? (async () => { throw new Error('Unexpected managed service'); }) },
     } } as unknown as PluginInvocationContext;
     const action = (id: string) => {
         const handler = actions.get(id);
@@ -81,9 +83,9 @@ describe('consumed Cua local provisioner roles', () => {
         const h = await activated();
         const options = CUA_PLUGIN.manifest.contributes.actions?.find(action => action.id === `${prefix}-options`);
         const paths = options?.inputHints?.fields.map(field => field.path) ?? [];
-        expect(paths).toEqual(expect.arrayContaining(['runtimeId', 'imageId', 'size.cpu', 'size.memoryBytes']));
-        // The disk follows the image, so only a Space is asked for one.
-        expect(paths.includes('size.diskBytes')).toBe(prefix === 'space');
+        // Runtime and image are chosen from the returned choices, so they are not also asked as text filters;
+        // the disk follows the image, so only a Space is asked for one.
+        expect(paths).toEqual(['size.cpu', 'size.memoryBytes', ...(prefix === 'space' ? ['size.diskBytes'] : [])]);
         expect(options?.inputHints?.fields.filter(field => field.required).map(field => [field.path, field.defaultValue]))
             .toEqual([['size.cpu', 2], ['size.memoryBytes', 4 * 1024 ** 3]]);
         const choices = await h.action(`${prefix}-options`)({ runtimeId: launch.runtimeId, imageId: launch.imageId, size }, h.context);
@@ -262,6 +264,42 @@ describe('consumed Cua local provisioner roles', () => {
             .toEqual({ kind: 'confirmed' });
         expect(JSON.stringify(h.requests)).not.toContain('AP4K');
         await expect(h.action('sandbox-exec')({ resource: { ...resource, future: true }, argv: ['cat'] }, h.context)).rejects.toThrow();
+    });
+    it('qualifies only the observed runc foreground hold while leaving QEMU on its system service path', async () => {
+        const runc = harness(false, 'runc');
+        await expect(runc.provider.bootstrap({ ...resource, runtimeId: 'runc' })).resolves.toMatchObject({ kind: 'native',
+            guestHome: { homeDir: '/root', happyHomeDir: '/root/.happier', daemonStartup: 'native-process' } });
+        const h = harness();
+        await expect(h.provider.bootstrap(resource)).resolves.not.toHaveProperty('guestHome');
+        const gvisor = harness(false, 'gvisor');
+        await expect(gvisor.provider.bootstrap({ ...resource, runtimeId: 'gvisor' }))
+            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
+    });
+    it('hands the exact runc foreground daemon hold to managed services again after controller replacement', async () => {
+        const specs: ManagedServiceSpec[] = [];
+        const supervise = async (spec: ManagedServiceSpec) => { specs.push(spec); return {}; };
+        const runc = { ...resource, runtimeId: 'runc' as const };
+        const processConfig = { environment: { HOME: '/root', HAPPIER_HOME_DIR: '/root/.happier' } };
+        const argv = ['sh', '-c', "exec env '/root/.happier/cli/current/happier' 'daemon' 'start-sync'"];
+        const shellCommand = argv.map((value) => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
+        const first = await activated(true, undefined, new AbortController().signal, '0.5.0', supervise, 'runc');
+        await expect(first.action('sandbox-exec')({ resource: runc, argv, processConfig }, first.context))
+            .resolves.toEqual({ kind: 'process-configured' });
+        const replacement = await activated(true, undefined, new AbortController().signal, '0.5.0', supervise, 'runc');
+        await expect(replacement.action('sandbox-exec')({ resource: runc, argv, processConfig }, replacement.context))
+            .resolves.toEqual({ kind: 'process-configured' });
+        expect(specs).toHaveLength(2);
+        expect(specs[1]).toEqual(specs[0]);
+        expect(specs[0]).toMatchObject({ id: 'guest-daemon/local/owned', healthCheck: { kind: 'none' }, mode: { kind: 'spawn', launch: {
+            args: ['--embedded', 'sandbox', 'shell', 'local:owned', shellCommand],
+            env: { HOME: expect.any(String) },
+        }, endpoint: { kind: 'none' } } });
+    });
+    it('returns a typed unavailable reason when an unqualified guest asks for a foreground hold', async () => {
+        const h = await activated(true, undefined, new AbortController().signal, '0.5.0', undefined, 'gvisor');
+        const processConfig = { environment: { HOME: '/root', HAPPIER_HOME_DIR: '/root/.happier' } };
+        await expect(h.action('sandbox-exec')({ resource: { ...resource, runtimeId: 'gvisor' }, argv: ['true'], processConfig }, h.context))
+            .rejects.toMatchObject({ code: 'cua_guest_daemon_hold_unqualified' });
     });
     it('qualifies the installed cua CLI against the oldest release that has every flag called, failing at check and before any native effect', async () => {
         // 0.3.0 is the first release containing the pinned vendor commit (trycua/cua@2bce4442) all flags were read from.

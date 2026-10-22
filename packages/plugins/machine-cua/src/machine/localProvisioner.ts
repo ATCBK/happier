@@ -1,3 +1,5 @@
+import { PluginError } from '@happier-dev/plugin-sdk';
+import type { ManagedServices } from '@happier-dev/plugin-sdk/managed-services';
 import type { MachineProvisionerAcquireResultV1, MachineProvisionerObservationV1, MachineProvisionerOptionsResultV1,
     MachineProvisionerPowerResultV1, MachineProvisionerNativeIntentV1 } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { createCuaLocalSandbox } from './localSandbox.js';
@@ -78,8 +80,14 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
             return pending(recovery);
         },
         async bootstrap(input: unknown) {
-            await running(input);
-            return { kind: 'native' as const, transport: { contributionRef, schemaVersion: 1 } };
+            const value = await running(input);
+            if (value.runtimeId === 'gvisor') {
+                throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
+                    message: 'This Cua runtime does not provide a qualified foreground guest daemon hold.' });
+            }
+            return { kind: 'native' as const, transport: { contributionRef, schemaVersion: 1 },
+                ...(value.runtimeId === 'runc' ? { guestHome: { homeDir: '/root', happyHomeDir: '/root/.happier',
+                    daemonStartup: 'native-process' as const } } : {}) };
         },
         inspect,
         async inspectStored(input: unknown) {
@@ -109,8 +117,19 @@ export function createCuaLocalProvisioner(native: CuaNativeClient, localId: CuaL
             }
             return this.destroy(value);
         },
-        async exec(input: unknown, argv: readonly string[], inputBytes?: Uint8Array, timeoutMs?: number | null) {
+        async exec(input: unknown, argv: readonly string[], inputBytes?: Uint8Array, timeoutMs?: number | null,
+            processConfig?: Readonly<{ environment: Readonly<Record<string, string>> }>, managedServices?: ManagedServices) {
             const value = await running(input);
+            if (processConfig) {
+                if (inputBytes !== undefined || value.runtimeId !== 'runc' || managedServices === undefined
+                    || processConfig.environment.HOME !== '/root'
+                    || processConfig.environment.HAPPIER_HOME_DIR !== '/root/.happier') {
+                    throw new PluginError({ code: 'cua_guest_daemon_hold_unqualified',
+                        message: 'This Cua runtime does not provide a qualified foreground guest daemon hold.' });
+                }
+                await native.configureGuestProcess(value.sandboxId, argv, managedServices, signal);
+                return { kind: 'process-configured' as const };
+            }
             return native.execGuest(value.sandboxId, argv, inputBytes, signal, timeoutMs);
         },
         async putFile(input: unknown, guestPath: string, bytes: Uint8Array, mode?: number) {

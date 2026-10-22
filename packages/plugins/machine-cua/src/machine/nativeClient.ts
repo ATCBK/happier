@@ -1,5 +1,7 @@
+import { PluginError } from '@happier-dev/plugin-sdk';
 import type { ExecService, PluginExecSpawnRequest } from '@happier-dev/plugin-sdk/exec';
 import { createSecureTempDirectorySync, writeAtomicFile } from '@happier-dev/plugin-sdk/fs';
+import type { ManagedServiceSpec, ManagedServices } from '@happier-dev/plugin-sdk/managed-services';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -133,6 +135,24 @@ export function createCuaNativeClient(options: {
     }
     return {
         putGuestFile,
+        async configureGuestProcess(sandboxId: string, argv: readonly string[], services: ManagedServices, signal?: AbortSignal) {
+            const qualified = qualifiedSandboxId(sandboxId);
+            if (!argv.length || argv.some((arg) => arg.includes('\0'))) throw new Error('cua_invalid_guest_argv');
+            const [, name] = qualified.split(':');
+            const spec = {
+                id: `guest-daemon/local/${name}`,
+                mode: { kind: 'spawn', launch: { executable: options.executable,
+                    args: ['--embedded', 'sandbox', 'shell', qualified, argv.map(quote).join(' ')], env: environment },
+                endpoint: { kind: 'none' } },
+                healthCheck: { kind: 'none' },
+            } satisfies ManagedServiceSpec;
+            try {
+                await services.supervise(spec, { signal });
+            } catch (error) {
+                throw new PluginError({ code: 'cua_guest_daemon_hold_unavailable',
+                    message: 'Cua could not establish the managed foreground guest daemon hold.' }, { cause: error });
+            }
+        },
         async execGuest(sandboxId: string, argv: readonly string[], input?: Uint8Array, signal?: AbortSignal, timeoutMs?: number | null) {
             qualifiedSandboxId(sandboxId);
             if (!argv.length || argv.some((arg) => arg.includes('\0'))) throw new Error('cua_invalid_guest_argv');

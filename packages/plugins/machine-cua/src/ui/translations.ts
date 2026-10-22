@@ -22,20 +22,20 @@ export function machinePresentationLabel(id: keyof typeof MACHINE_PRESENTATION_L
 }
 
 const CONFIGURATION_LABELS = {
-  en: ['Runtime', 'Image', 'CPU cores', 'Memory', 'Disk', 'Cloud'],
-  de: ['Laufzeit', 'Image', 'CPU-Kerne', 'Arbeitsspeicher', 'Festplatte', 'Cloud'],
-  ru: ['Среда', 'Образ', 'Ядра CPU', 'Память', 'Диск', 'Облако'],
-  pl: ['Środowisko', 'Obraz', 'Rdzenie CPU', 'Pamięć', 'Dysk', 'Chmura'],
-  es: ['Entorno', 'Imagen', 'Núcleos de CPU', 'Memoria', 'Disco', 'Nube'],
-  fr: ['Environnement', 'Image', 'Cœurs CPU', 'Mémoire', 'Disque', 'Cloud'],
-  it: ['Ambiente', 'Immagine', 'Core CPU', 'Memoria', 'Disco', 'Cloud'],
-  pt: ['Ambiente', 'Imagem', 'Núcleos de CPU', 'Memória', 'Disco', 'Nuvem'],
-  ca: ['Entorn', 'Imatge', 'Nuclis de CPU', 'Memòria', 'Disc', 'Núvol'],
-  'zh-Hans': ['运行环境', '镜像', 'CPU 核心', '内存', '磁盘', '云平台'],
-  'zh-Hant': ['執行環境', '映像', 'CPU 核心', '記憶體', '磁碟', '雲端平台'],
-  ja: ['ランタイム', 'イメージ', 'CPU コア', 'メモリ', 'ディスク', 'クラウド'],
+  en: ['CPU cores', 'Memory', 'Disk', 'Cloud'],
+  de: ['CPU-Kerne', 'Arbeitsspeicher', 'Festplatte', 'Cloud'],
+  ru: ['Ядра CPU', 'Память', 'Диск', 'Облако'],
+  pl: ['Rdzenie CPU', 'Pamięć', 'Dysk', 'Chmura'],
+  es: ['Núcleos de CPU', 'Memoria', 'Disco', 'Nube'],
+  fr: ['Cœurs CPU', 'Mémoire', 'Disque', 'Cloud'],
+  it: ['Core CPU', 'Memoria', 'Disco', 'Cloud'],
+  pt: ['Núcleos de CPU', 'Memória', 'Disco', 'Nuvem'],
+  ca: ['Nuclis de CPU', 'Memòria', 'Disc', 'Núvol'],
+  'zh-Hans': ['CPU 核心', '内存', '磁盘', '云平台'],
+  'zh-Hant': ['CPU 核心', '記憶體', '磁碟', '雲端平台'],
+  ja: ['CPU コア', 'メモリ', 'ディスク', 'クラウド'],
 } satisfies Record<keyof typeof MACHINE_PRESENTATION_LABELS, readonly string[]>;
-const configurationIds = ['runtimeId', 'imageId', 'cpu', 'memoryBytes', 'diskBytes', 'cloud'] as const;
+const configurationIds = ['cpu', 'memoryBytes', 'diskBytes', 'cloud'] as const;
 export function configurationLabel(id: typeof configurationIds[number]): PresentationLocalizedString {
   return { key: 'machineCua.configure.' + id, fallback: CONFIGURATION_LABELS.en[configurationIds.indexOf(id)] };
 }
