@@ -239,6 +239,12 @@ export const WALKTHROUGH_SPECIMEN_FRAMES: readonly WalkthroughSpecimenFrame[] = 
         view={{ ...base(phone ? 'phone' : 'wide'), failure: SPECIMEN_START_FAILURES.outdated, onRetry: noop }} /> },
     { id: 'L7e', title: 'WT2-L7 · regeneration refused: Explain changes is off, reading kept', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={0} bar={!phone}
         view={{ ...base(phone ? 'phone' : 'wide'), failure: SPECIMEN_START_FAILURES.explainOff, onRetry: noop, onEnableExplain: noop }} /> },
+    { id: 'L9', title: 'WT2-L9 · Start unconfirmed: nothing written yet', render: (phone) => <LiveMarks
+        input={{ ...COMPLETE, walkthrough: { state: 'pending' }, analysis: SPECIMEN_ANALYSIS_EARLY }} reviewedCount={0} bar={!phone}
+        view={{ ...base(phone ? 'phone' : 'wide'), admission: 'outcomeUnknown', onCheckAdmission: noop }} /> },
+    { id: 'L9w', title: 'WT2-L9 · Start unconfirmed: some stops captured', render: (phone) => <LiveMarks
+        input={{ ...COMPLETE, walkthrough: { state: 'writing', value: { ...SPECIMEN_WALKTHROUGH, stops: SPECIMEN_WALKTHROUGH.stops.slice(0, 2), otherChangeRefs: [] } }, analysis: SPECIMEN_ANALYSIS_MOST }}
+        reviewedCount={0} bar={!phone} view={{ ...base(phone ? 'phone' : 'wide'), admission: 'outcomeUnknown', onCheckAdmission: noop }} /> },
     { id: 'L8', title: 'WT2-L8 · Machine offline', render: (phone) => <LiveMarks input={COMPLETE} reviewedCount={2}
         view={{ ...base(phone ? 'phone' : 'wide'), offline: { machine: 'MacBook Pro', time: '10:42' } }} /> },
     {

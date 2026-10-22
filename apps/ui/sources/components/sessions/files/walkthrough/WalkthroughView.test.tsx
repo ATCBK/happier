@@ -257,6 +257,63 @@ describe('WalkthroughView (lab WT1-A)', () => {
     });
 });
 
+describe('an uncertain Start (the Machine may not have received it)', () => {
+    const texts = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.findAll((node) => typeof node.type === 'string')
+        .flatMap((node) => node.children.filter((child): child is string => typeof child === 'string'));
+    const pending = { ...COMPLETE, walkthrough: { state: 'pending' as const }, analysis: SPECIMEN_ANALYSIS_EARLY };
+
+    it('says it may not have started, keeps every file readable, and drops the writing presentation', async () => {
+        const healthy = await renderScreen(view(pending, { notify: <View testID="notify-offer" /> }));
+        // The healthy pending reading is the control: it writes, offers notification and labels each file as being read.
+        expect(texts(healthy)).toContain('walkthrough.readingChanges');
+        expect(texts(healthy)).toContain('walkthrough.inventory.reading');
+        expect(healthy.findByTestId('notify-offer')).toBeTruthy();
+        expect(healthy.findByTestId('walkthrough-notice-unknown')).toBeNull();
+
+        const screen = await renderScreen(view(pending, { admission: 'outcomeUnknown', onCheckAdmission: vi.fn(), notify: <View testID="notify-offer" /> }));
+        expect(screen.findByTestId('walkthrough-notice-unknown')).toBeTruthy();
+        expect(texts(screen)).toContain('walkthrough.notice.unknownStart');
+        expect(texts(screen)).not.toContain('walkthrough.readingChanges');
+        expect(texts(screen)).not.toContain('walkthrough.inventory.reading');
+        expect(screen.findByTestId('notify-offer')).toBeNull();
+        expect(hostIds(screen, 'walkthrough-inventory-')).toHaveLength(SPECIMEN_COMPARISON.inventory.files.length);
+        // Nothing here starts another Run.
+        expect(screen.findByTestId('walkthrough-start')).toBeNull();
+        expect(screen.findByTestId('walkthrough-retry')).toBeNull();
+    });
+
+    it('checks again only through the supplied callback, and shows it working until it settles', async () => {
+        let settle = () => {};
+        const onCheckAdmission = vi.fn(() => new Promise<void>((resolve) => { settle = resolve; }));
+        const screen = await renderScreen(view(pending, { admission: 'outcomeUnknown', onCheckAdmission }));
+        await screen.pressByTestIdAsync('walkthrough-check-admission');
+        expect(onCheckAdmission).toHaveBeenCalledTimes(1);
+        await screen.pressByTestIdAsync('walkthrough-check-admission');
+        expect(onCheckAdmission).toHaveBeenCalledTimes(1);
+        await act(async () => settle());
+        await screen.pressByTestIdAsync('walkthrough-check-admission');
+        expect(onCheckAdmission).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps captured prose readable and stops announcing that more is arriving', async () => {
+        const first = { ...SPECIMEN_WALKTHROUGH, stops: SPECIMEN_WALKTHROUGH.stops.slice(0, 2) };
+        const writing = { ...COMPLETE, walkthrough: { state: 'writing' as const, value: first } };
+        const healthy = await renderScreen(view(writing, { notify: <View testID="notify-offer" /> }));
+        expect(healthy.findByTestId('walkthrough-arriving')).toBeTruthy();
+        const screen = await renderScreen(view(writing, { admission: 'outcomeUnknown', onCheckAdmission: vi.fn(), notify: <View testID="notify-offer" /> }));
+        expect(screen.findByTestId('walkthrough-notice-unknown')).toBeTruthy();
+        expect(hostIds(screen, 'walkthrough-stop-')).toHaveLength(2);
+        expect(screen.findByTestId('walkthrough-arriving')).toBeNull();
+        expect(screen.findByTestId('notify-offer')).toBeNull();
+        expect(screen.findByTestId('walkthrough-editorial-header')?.findAll((node) => node.props.markdown === first.intro)).not.toHaveLength(0);
+    });
+
+    it('does not claim uncertainty for a reading whose original Run is already known', async () => {
+        const screen = await renderScreen(view(COMPLETE, { admission: 'outcomeUnknown', onCheckAdmission: vi.fn() }));
+        expect(screen.findByTestId('walkthrough-notice-unknown')).toBeNull();
+    });
+});
+
 describe('stop arrival motion', () => {
     const fading = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.tree.root
         .findAll((node) => node.props.entering !== undefined && node.findAll((inner) => typeof inner.props.testID === 'string'

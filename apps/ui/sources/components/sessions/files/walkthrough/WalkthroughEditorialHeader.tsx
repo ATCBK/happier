@@ -34,6 +34,8 @@ export type WalkthroughEditorialHeaderProps = Readonly<{
     onSelectStop: (stopId: string) => void;
     /** What the eyebrow says while nothing is written yet; "Reading the changes…" by default. */
     writingLabel?: string;
+    /** The Start may not have reached the Machine: nothing is being written, so the header stops saying so. */
+    uncertain?: boolean;
     /** A second coverage line from another owner (a review's findings, lab WT5-R1). */
     extraFact?: React.ReactNode;
     /** A note under the coverage (a narrator saying it read the diffs but did not review them, lab WT5-R9). */
@@ -49,7 +51,9 @@ export const WalkthroughEditorialHeader = React.memo(function WalkthroughEditori
     const { theme } = useUnistyles();
     const reading = props.reading;
     const phone = props.phone === true;
-    const writing = reading.phase === 'inventory' || (Boolean(props.writingLabel) && reading.phase === 'arriving');
+    const live = props.uncertain !== true;
+    const arriving = live && reading.phase === 'arriving';
+    const writing = live && (reading.phase === 'inventory' || (Boolean(props.writingLabel) && reading.phase === 'arriving'));
     const hasStops = reading.stops.length > 0;
     const coverage = {
         fileCount: reading.source.fileCount,
@@ -72,7 +76,7 @@ export const WalkthroughEditorialHeader = React.memo(function WalkthroughEditori
                     mark={props.analysisMark}
                 />
             ) : null}
-            {props.reviewedProgressAvailable !== false && hasStops && !writing && reading.phase !== 'arriving' ? (
+            {props.reviewedProgressAvailable !== false && hasStops && !writing && !arriving ? (
                 <WalkthroughReviewedFact count={reading.reviewedCount} total={reading.stops.length} />
             ) : null}
         </>
@@ -103,7 +107,7 @@ export const WalkthroughEditorialHeader = React.memo(function WalkthroughEditori
                 </View>
             ) : null}
             {reading.titleEdited ? <Text testID="walkthrough-title-edited" style={styles.titleEdited}>{t('walkthrough.progress.titleEdited')}</Text> : null}
-            {reading.intro && reading.phase !== 'arriving' ? (
+            {reading.intro && !arriving ? (
                 <View style={styles.introFrame}>
                     <MarkdownView
                         markdown={reading.intro}
@@ -115,7 +119,7 @@ export const WalkthroughEditorialHeader = React.memo(function WalkthroughEditori
             <View style={[styles.coverage, phone ? styles.coveragePhone : null]}>{facts}</View>
             {props.extraFact ? <View style={styles.extraFact}>{props.extraFact}</View> : null}
             {props.note}
-            {hasStops && reading.phase !== 'arriving' && reading.codeMap.length > 1 ? (
+            {hasStops && !arriving && reading.codeMap.length > 1 ? (
                 <WalkthroughOverviewStrip
                     files={reading.codeMap}
                     stops={reading.stops}

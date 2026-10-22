@@ -15,6 +15,8 @@ import type { WalkthroughInventoryRow, WalkthroughOtherChange } from './walkthro
 export const WalkthroughInventory = React.memo(function WalkthroughInventory(props: Readonly<{
     rows: readonly WalkthroughInventoryRow[];
     phone?: boolean;
+    /** Nothing is being read: a file not yet read carries no progress mark. */
+    uncertain?: boolean;
     onOpenFile?: (path: string) => void;
 }>) {
     usePreferredLanguage();
@@ -28,7 +30,7 @@ export const WalkthroughInventory = React.memo(function WalkthroughInventory(pro
                     style={[styles.inventoryRow, props.phone ? { minHeight: 44 } : null]}
                     onPress={props.onOpenFile ? () => props.onOpenFile!(row.path) : undefined}
                     tag={row.lockfile ? t('scmComparison.lockfileTag') : row.generated ? t('scmComparison.generatedTag') : null}
-                    trailingElement={!row.lockfile && !row.generated ? <View style={styles.readState}>
+                    trailingElement={!row.lockfile && !row.generated && !(props.uncertain && row.reading === 'reading') ? <View style={styles.readState}>
                         <Icon name={row.reading === 'read' ? 'check' : row.reading === 'unavailable' ? 'lock' : 'circle'}
                             size={12} color={row.reading === 'read' ? theme.colors.state.success.foreground : theme.colors.text.tertiary} />
                         <Text style={styles.readStateText}>{row.reading === 'read' ? t('walkthrough.inventory.read') : row.reading === 'unavailable' ? t('walkthrough.inventory.unavailable') : t('walkthrough.inventory.reading')}</Text>

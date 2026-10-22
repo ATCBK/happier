@@ -171,6 +171,13 @@ export const WalkthroughView = React.memo(function WalkthroughView(
   const [overviewOpen, setOverviewOpen] = React.useState(
     props.initialOverviewOpen === true,
   );
+  const [checkingAdmission, setCheckingAdmission] = React.useState(false);
+  const onCheckAdmission = props.onCheckAdmission;
+  const checkAdmission = React.useCallback(() => {
+    if (!onCheckAdmission || checkingAdmission) return;
+    setCheckingAdmission(true);
+    void Promise.resolve(onCheckAdmission()).finally(() => setCheckingAdmission(false));
+  }, [onCheckAdmission, checkingAdmission]);
   // Stops present on first paint appear as they are; only later arrivals while writing fade into their slot.
   const initialStopIds = React.useRef(
     new Set(reading.stops.map((stop) => stop.id)),
@@ -396,11 +403,38 @@ export const WalkthroughView = React.memo(function WalkthroughView(
     );
   }
 
+  // The Start may not have reached the Machine: whatever was captured stays readable, but nothing here is being written.
+  const uncertainStart =
+    props.admission === 'outcomeUnknown' &&
+    (reading.phase === 'inventory' || reading.phase === 'arriving');
   const notices: React.ReactNode[] = [];
   if (props.review?.notice)
     notices.push(
       <React.Fragment key="review">{props.review.notice}</React.Fragment>,
     );
+  if (uncertainStart) {
+    notices.push(
+      <AttentionBanner
+        key="unknown"
+        presentation="strip"
+        testID="walkthrough-notice-unknown"
+        tone="warning"
+        iconName="question"
+        title={t('walkthrough.notice.unknownStart')}
+        description={t('walkthrough.notice.unknownStartReason')}
+        secondaryAction={
+          props.onCheckAdmission
+            ? {
+                testID: 'walkthrough-check-admission',
+                label: t('walkthrough.notice.checkAgain'),
+                onPress: checkAdmission,
+                disabled: checkingAdmission,
+              }
+            : null
+        }
+      />,
+    );
+  }
   if (props.endedConversation && !props.offline) {
     notices.push(
       <AttentionBanner
@@ -541,6 +575,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
         highlightedStopId={currentStop?.id ?? null}
         onSelectStop={scrollToStop}
         writingLabel={props.review?.writingLabel}
+        uncertain={uncertainStart}
         extraFact={props.review?.headerFact}
         note={props.review?.headerNote}
       />
@@ -553,6 +588,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
         {props.savedActions}
       </View>
       {props.notify &&
+      !uncertainStart &&
       (reading.phase === 'inventory' || reading.phase === 'arriving') ? (
         <View
           testID="walkthrough-notify"
@@ -606,7 +642,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
       </Animated.View>
     );
   });
-  const stillWriting = reading.phase === 'arriving';
+  const stillWriting = reading.phase === 'arriving' && !uncertainStart;
   const stoppedEarly =
     reading.phase === 'failed' ||
     reading.phase === 'partial' ||
@@ -661,6 +697,7 @@ export const WalkthroughView = React.memo(function WalkthroughView(
     reading.phase === 'inventory' ? (
       <WalkthroughInventory
         rows={reading.inventory}
+        uncertain={uncertainStart}
         phone={phone}
         onOpenFile={props.onOpenFile}
       />
