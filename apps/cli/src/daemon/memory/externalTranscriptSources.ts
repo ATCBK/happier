@@ -45,6 +45,7 @@ export function createMemoryExternalTranscriptTraversal() {
     failure?: Pick<MemoryIndexSourceStatusV1, 'errorCode' | 'errorReason'> };
   const candidates = new Map<string, Entry>();
   let preferRefresh = true;
+  let preferUnstarted = false;
   return {
     replace(next: readonly MemoryExternalTranscriptCandidate[], refreshIds?: ReadonlySet<string>) {
       const discovered: [string, Entry][] = [];
@@ -124,6 +125,7 @@ export function createMemoryExternalTranscriptTraversal() {
         let unstartedRefresh: [string, Entry] | undefined;
         let backfill: [string, Entry] | undefined;
         let continuation: [string, Entry] | undefined;
+        let unstarted: [string, Entry] | undefined;
         for (const pair of candidates) {
           if (selected.has(pair[0])) continue;
           first ??= pair;
@@ -132,19 +134,22 @@ export function createMemoryExternalTranscriptTraversal() {
             else refresh ??= pair;
           }
           if (pair[1].state !== 'current') backfill ??= pair;
+          if (pair[1].state === undefined) unstarted ??= pair;
           if (pair[1].state === 'more' && !pair[1].refresh) continuation ??= pair;
           if (refresh && continuation) break;
         }
-        // Finish admitted history pages before opening another conversation.
-        // Otherwise each page waits behind the whole unstarted corpus. Explicit
-        // refreshes still alternate with backfill under the same allowance.
+        // Continue admitted history without queuing every page behind the whole
+        // corpus. Unstarted pre-opt-in histories share the existing alternate
+        // slot, so one large transcript cannot postpone all their first pages.
         const history = continuation ?? backfill;
-        // Keep admitted append/rewrite work ahead of newly discovered history.
-        // Both use the existing refresh allowance; initial backfill still gets
-        // every other selection.
-        const requested = refresh ?? unstartedRefresh;
+        // A continuously refreshed sibling and an admitted continuation must
+        // not monopolize both slots. Share the requested slot with initial
+        // history while preserving the continuation slot and Map rotation.
+        const initial = unstartedRefresh ?? unstarted;
+        const requested = preferUnstarted ? initial ?? refresh : refresh ?? initial;
         const next = preferRefresh ? requested ?? history ?? first : history ?? requested ?? first;
         if (!next) break;
+        if (next === requested && refresh && initial) preferUnstarted = !preferUnstarted;
         const [id, entry] = next;
         selected.add(id);
         candidates.delete(id);

@@ -11,6 +11,17 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 describe('getMemoryWindow', () => {
+  it('keeps an explicit native locator discontinuity instead of silently reading a different window', async () => {
+    const source = { type: 'external_transcript' as const, agentId: 'pi', sourceKey: 'local', nativeSessionId: 'native' };
+    const cursors: (string | undefined)[] = [];
+    await expect(getMemoryWindow({ source, sourceItemId: 'wanted', paddingMessages: 8, cursor: 'stale-explicit',
+      fetchExternalTranscriptPage: async request => {
+        cursors.push(request.cursor);
+        return { items: [], nextCursor: null, hasMore: false, truncated: true };
+      },
+    })).rejects.toThrow('memory_external_transcript_cursor_missing');
+    expect(cursors).toEqual(['stale-explicit']);
+  });
   it.each(['discontinuity', 'unavailable'] as const)('restarts from the native head when an indexed locator is %s after a rewrite', async failure => {
     const directory = await mkdtemp(join(tmpdir(), 'memory-stale-window-'));
     const db = openDeepIndexDb({ dbPath: join(directory, 'deep.sqlite') });

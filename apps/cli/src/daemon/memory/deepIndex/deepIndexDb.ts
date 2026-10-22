@@ -146,7 +146,7 @@ export type DeepIndexDbHandle = Readonly<{
    * FTS rows) and the embeddings keyed to those chunk ranges, which have
    * no foreign key and would otherwise keep consuming the deep-index budget.
    */
-  deleteSessionIndexData: (args: Readonly<{ sessionId: string }>) => void;
+  deleteSessionIndexData: (args: Readonly<{ sessionId: string; retainExternalSource?: boolean }>) => void;
   checkpointAndVacuum: () => void;
   close: () => void;
 }>;
@@ -984,14 +984,18 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
       }
       return doomed.length + doomedDocuments.length;
     },
-    deleteSessionIndexData: ({ sessionId }) => {
+    deleteSessionIndexData: ({ sessionId, retainExternalSource }) => {
       const id = String(sessionId ?? '').trim();
       if (!id) return;
       db.exec('BEGIN IMMEDIATE');
       try {
         deleteSessionEmbeddingsStmt.run(id);
         deleteSessionChunksStmt.run(id);
-        db.prepare('DELETE FROM external_source_state WHERE sessionId=?;').run(id);
+        if (retainExternalSource) {
+          // A rewrite invalidates text/progress, not the native conversation's
+          // existence. Keep its source identity while the next page rebuilds.
+          db.prepare('UPDATE external_source_state SET cursor=NULL, nextOrdinal=1, coverageComplete=1 WHERE sessionId=?;').run(id);
+        } else db.prepare('DELETE FROM external_source_state WHERE sessionId=?;').run(id);
         db.exec('COMMIT');
       } catch (error) {
         db.exec('ROLLBACK');

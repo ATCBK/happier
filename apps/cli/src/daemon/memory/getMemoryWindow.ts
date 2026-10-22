@@ -41,6 +41,7 @@ async function getExternalMemoryWindow(params: ExternalMemoryWindowRequest): Pro
     sessionId: externalMemoryStorageId(params.source), sourceItemId: params.sourceItemId, paddingMessages: padding,
   });
   let indexedStart = params.cursor === undefined && cursor !== undefined;
+  let recoverNewerPadding = params.cursor !== undefined;
   const visited = new Set<string>();
   let newerContext: MemoryExternalSnippetV1[] = [];
   let before: MemoryExternalSnippetV1[] = [];
@@ -78,6 +79,20 @@ async function getExternalMemoryWindow(params: ExternalMemoryWindowRequest): Pro
       } else {
         newerContext = snippets.slice(0, padding);
       }
+    }
+    if (target && after.length < padding && recoverNewerPadding) {
+      // An explicit older-page locator may end at the target. Validate that
+      // locator first, then use the same indexed-neighbor/head traversal as an
+      // implicit window to recover its missing newer context.
+      recoverNewerPadding = false;
+      const neighbor = params.db?.getExternalSourceItemCursor({
+        sessionId: externalMemoryStorageId(params.source), sourceItemId: params.sourceItemId, paddingMessages: padding,
+      });
+      cursor = neighbor === cursor ? undefined : neighbor;
+      indexedStart = cursor !== undefined;
+      newerContext = []; before = []; target = undefined; after = [];
+      visited.clear();
+      continue;
     }
     if (target && before.length >= padding) break;
     if (page.hasMore === false && page.truncated !== true) break;

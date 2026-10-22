@@ -36,7 +36,9 @@ export function resolveExternalMemoryIndexPolicy(settings: MemorySettingsV1): Re
   key: string;
 }> {
   const external = settings.conversationSearch.indexExternal;
-  const policy = resolveMemoryIndexPolicy({ ...settings,
+  // Native opt-in has its own history window. Happier's new_only backfill
+  // cannot exclude native conversations that predate enabling this index.
+  const policy = resolveMemoryIndexPolicy({ ...settings, backfillPolicy: 'all_history',
     contentPolicy: { ...settings.contentPolicy, includeToolOutputs: external.includeToolOutput } });
   return { policy, key: JSON.stringify([memoryIndexPolicyKey(policy), external.historyDays]) };
 }
@@ -76,7 +78,6 @@ export async function syncExternalMemoryTranscriptsBatch(input: Readonly<
   }
 >): Promise<void> {
   const { candidates, onSourceResult, ...operation } = input;
-  const errors: unknown[] = [];
   operation.signal.throwIfAborted();
   for (const candidate of candidates) {
     operation.signal.throwIfAborted();
@@ -87,12 +88,9 @@ export async function syncExternalMemoryTranscriptsBatch(input: Readonly<
     catch (error) {
       onSourceResult?.(candidate.source, 'error', memoryExternalSourceFailure(error));
       operation.signal.throwIfAborted();
-      errors.push(error);
     }
     operation.signal.throwIfAborted();
   }
-  if (errors.length === 1) throw errors[0];
-  if (errors.length > 1) throw new AggregateError(errors, 'memory_external_transcript_sources_failed');
 }
 
 /** One bounded page per existing memory-worker turn; native cursors stay opaque. */
@@ -136,7 +134,7 @@ export async function syncExternalMemoryTranscriptOnce(input: Readonly<{
       return 'removed';
     }
     if (result.value.outcome === 'source_replaced' || result.value.outcome === 'gap_or_cursor_expired') {
-      input.db.deleteSessionIndexData({ sessionId });
+      input.db.deleteSessionIndexData({ sessionId, retainExternalSource: true });
       return 'more';
     }
     if (result.value.outcome !== 'advanced') throw new Error('memory_external_transcript_read_failed');
