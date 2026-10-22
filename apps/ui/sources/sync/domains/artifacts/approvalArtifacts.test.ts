@@ -5,6 +5,7 @@ import type { DecryptedArtifact } from './artifactTypes';
 import {
     collectOpenApprovalSessionReferences,
     isOpenApprovalInboxArtifact,
+    listOpenApprovalInboxArtifactHydrationRequests,
     readOpenApprovalDiscussionAttention,
     readOpenManagedMachineApprovalId,
     listOpenApprovalArtifactsForSession,
@@ -218,6 +219,20 @@ describe('listOpenApprovalArtifactsForSession', () => {
         });
 
         expect(approvals).toEqual([]);
+    });
+    it('requests each bodyless open Ask for Inbox admission exactly once and ignores settled indexes', () => {
+        const open = artifact('managed-delete', {
+            v: 1, kind: 'approval_request.v1', title: 'Delete managed machine', approvalStatus: 'open',
+            actionId: 'machines.managed.delete', serverIdentityId: 'home-a',
+        });
+        const duplicate = { ...open };
+        const settled = artifact('settled-delete', {
+            v: 1, kind: 'approval_request.v1', title: 'Delete managed machine', approvalStatus: 'executed',
+            actionId: 'machines.managed.delete', serverIdentityId: 'home-a',
+        });
+        expect(listOpenApprovalInboxArtifactHydrationRequests([open, duplicate, settled])).toEqual([
+            { artifactId: 'managed-delete', serverId: 'home-a' },
+        ]);
     });
 
     it('parses available approval bodies and drops malformed bodies', () => {

@@ -144,6 +144,23 @@ export function isOpenApprovalInboxArtifact(artifact: DecryptedArtifact): boolea
     return readOpenApprovalInboxArtifact(artifact) !== null;
 }
 
+/** Header-only open Asks are candidates, not decisions: demand their authoritative bodies before Inbox admission. */
+export function listOpenApprovalInboxArtifactHydrationRequests(
+    artifacts: Iterable<DecryptedArtifact>,
+    fallbackServerId?: string | null,
+): readonly Readonly<{ artifactId: string; serverId: string }>[] {
+    const requests = new Map<string, Readonly<{ artifactId: string; serverId: string }>>();
+    for (const artifact of artifacts) {
+        if (artifact.draft === true || artifact.isDecrypted !== true || artifact.body !== undefined
+            || artifact.header?.kind !== 'approval_request.v1' || artifact.header.approvalStatus !== 'open') continue;
+        const serverId = readString(artifact.header.serverIdentityId) ?? readString(artifact.header.serverId)
+            ?? readString(fallbackServerId);
+        if (!serverId || requests.has(artifact.id)) continue;
+        requests.set(artifact.id, { artifactId: artifact.id, serverId });
+    }
+    return [...requests.values()];
+}
+
 function collectApprovalLinkedSessionReferences(
     artifact: DecryptedArtifact,
     approval?: ApprovalRequest | null,

@@ -12,7 +12,8 @@ import { createDeferred, createPlainAccountEncryptionCurrentnessFixture, createS
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
-import { FeaturesResponseSchema, compilePluginJsonSchema, encodePluginCollectionLogicalValueV1, isValidPluginJsonSchemaValue,
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, FeaturesResponseSchema, compilePluginJsonSchema, encodePlainArtifactStoredContent,
+    encodePluginCollectionLogicalValueV1, isValidPluginJsonSchemaValue,
     normalizePluginAccountCollectionContractV1, PluginAccountCollectionContributionV1Schema } from '@happier-dev/protocol';
 import { ConversationBindingV1Schema } from '@happier-dev/channels-protocol/v1';
 import { clearPluginAccountAvailabilityProjection, replacePluginAccountAvailabilityProjection } from '@/sync/domains/plugins/availability/projection';
@@ -62,6 +63,7 @@ const executed = vi.hoisted(() => [] as Array<{ actionId: string; input: unknown
 const automationBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const collectionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 const discussionBoundary = vi.hoisted(() => ({ request: vi.fn() }));
+const artifactReadBoundary = vi.hoisted(() => ({ request: vi.fn() }));
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let disposeActionLoader: (() => void) | undefined;
@@ -121,6 +123,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         automationBoundary.request.mockReset();
         collectionBoundary.request.mockReset().mockResolvedValue(null);
         discussionBoundary.request.mockReset().mockResolvedValue(null);
+        artifactReadBoundary.request.mockReset().mockResolvedValue(null);
         automationBoundary.request.mockImplementation(async () => new Response(JSON.stringify({ runs: [], nextCursor: null }), { status: 200 }));
         const base = createRootLayoutFeaturesResponse();
         const features = FeaturesResponseSchema.parse({
@@ -162,6 +165,7 @@ describe('useInboxModel work groups (ORC R-10)', () => {
             }
             if (path.startsWith('/v1/plugins/data')) return collectionBoundary.request(path, init);
             if (path.startsWith('/v1/discussions')) return discussionBoundary.request(path, init);
+            if (path === '/v1/artifacts/read') return artifactReadBoundary.request(path, init);
             return null;
         } });
         publishAppliedActiveServerSnapshot(appliedSnapshot());
@@ -336,6 +340,40 @@ describe('useInboxModel work groups (ORC R-10)', () => {
         await act(async () => { storage.setState({ sessions: { [bot.id]: { ...bot, encryptionMode: 'e2ee',
             encryptedContentAvailability: 'encrypted_content_unavailable' } } }); });
         expect(model!.items.find(item => item.source.kind === 'approval')?.source.displayName).toBeNull();
+        await screen.unmount();
+    });
+
+    it('hydrates a header-only managed Delete Ask and lists it exactly once', async () => {
+        listRuns.mockResolvedValue(page([]));
+        const serverId = appliedSnapshot().serverId;
+        const request = ApprovalRequestV2Schema.parse({
+            v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1, createdBy: { surface: 'cli' }, requestedSurface: 'ui',
+            actionId: 'machines.managed.delete',
+            actionArgs: { homeId: serverId, managedId: 'managed-a', when: 'now', expectedRevision: 3,
+                intent: 'delete', reviewedDependencies: true },
+            summary: 'Delete managed machine',
+            executionOriginV1: { v: 1, authority: 'present_user', surface: 'ui', caller: { kind: 'host' },
+                serverId, accountId: 'account-a', machineId: 'controller-a', target: { kind: 'machine', machineId: 'controller-a' },
+                actionId: 'machines.managed.delete', requestId: 'delete-request' },
+        });
+        const header = buildApprovalRequestArtifactHeaderV1(request);
+        const artifact: DecryptedArtifact = { id: 'delete-ask', isDecrypted: true, title: request.summary, header,
+            body: undefined, headerVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+        storage.setState({ artifacts: { [artifact.id]: artifact } });
+        artifactReadBoundary.request.mockImplementation(async (_path: string, init?: RequestInit) => {
+            expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: [artifact.id] });
+            return Response.json({ items: [{ artifactId: artifact.id, ok: true, recipientCensus: null, artifact: {
+                id: artifact.id, kind: 'approval_request', ownerAccountId: 'account-a', access: 'owner', encryptionMode: 'plain',
+                publicAudience: 'none', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+                header: encodePlainArtifactStoredContent(header),
+                body: encodePlainArtifactStoredContent({ body: JSON.stringify(request) }),
+                headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+            } }] });
+        });
+        const screen = await renderModel();
+        await expect.poll(() => model?.openApprovals.map(row => row.id)).toEqual([artifact.id]);
+        expect(model?.items.filter(item => item.source.kind === 'approval')).toHaveLength(1);
+        expect(artifactReadBoundary.request).toHaveBeenCalledTimes(1);
         await screen.unmount();
     });
 

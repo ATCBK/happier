@@ -6,7 +6,7 @@ import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityRe
 import { isOpenApprovalInboxArtifact } from '@/sync/domains/artifacts/approvalArtifacts';
 import { readAccountNoticeArtifactHeader, isUnreadAccountNotice } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { useInboxActionOperationSummary } from '@/sync/domains/actionOperations/useActionOperations';
-import { useFriendRequestCount } from '@/sync/domains/state/storage';
+import { useArtifacts, useFriendRequestCount, useInboxApprovalBodyHydration } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { StorageState } from '@/sync/store/types';
 import { countInboxDiscussionItems, countInboxItems } from '@/components/inbox/inboxCounts';
@@ -48,6 +48,9 @@ const selectOpenApprovalInboxCount = createOpenApprovalInboxCountSelector();
 
 export function useInboxSummary(): InboxSummary {
     const activity = useActivityOverviewSummary();
+    const artifacts = useArtifacts();
+    const serverId = storage(state => state.profileScope?.serverId ?? null);
+    useInboxApprovalBodyHydration(artifacts, serverId);
     const openApprovalCount = storage(selectOpenApprovalInboxCount);
     const friendsEnabled = useFriendsEnabled();
     const friendsIdentityReadiness = useFriendsIdentityReadiness();
@@ -57,7 +60,6 @@ export function useInboxSummary(): InboxSummary {
     // under its run, so a run is counted once here and its step rows are presentation.
     const workflowAttention = useWorkflowAttentionSource();
     const automationAttention = useAutomationAttentionSource();
-    const serverId = storage(state => state.profileScope?.serverId ?? null);
     const discussionAttention = useInboxDiscussionAttention(serverId);
     const discussionCount = React.useMemo(() => countInboxDiscussionItems(discussionAttention.source), [discussionAttention.source]);
     const visibleFriendRequestCount = friendsEnabled && friendsIdentityReadiness.isReady

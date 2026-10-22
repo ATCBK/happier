@@ -57,6 +57,7 @@ import {
   collectOpenApprovalSessionReferences,
   listApprovalArtifactIdsNeedingHydrationForSession,
   listDiscussionRequesterApprovals,
+  listOpenApprovalInboxArtifactHydrationRequests,
   listTranscriptApprovalArtifactsForSession,
   type ApprovalSettledPresentation,
   type DiscussionRequesterApproval,
@@ -3244,6 +3245,30 @@ export function useArtifacts(): DecryptedArtifact[] {
   const artifacts = getStorage()((state) => state.artifacts);
   return React.useMemo(() => sortValuesByUpdatedAtDescending(artifacts)
     .filter((artifact) => !artifact.draft), [artifacts]);
+}
+
+/** One demand owner shared by always-mounted summary chrome and the full Inbox model. */
+export function useInboxApprovalBodyHydration(
+  artifacts: readonly DecryptedArtifact[],
+  fallbackServerId: string | null | undefined,
+): void {
+  const requests = React.useMemo(
+    () => listOpenApprovalInboxArtifactHydrationRequests(artifacts, fallbackServerId),
+    [artifacts, fallbackServerId],
+  );
+  React.useEffect(() => {
+    const artifactIdsByServerId = new Map<string, string[]>();
+    for (const request of requests) {
+      const ids = artifactIdsByServerId.get(request.serverId) ?? [];
+      ids.push(request.artifactId);
+      artifactIdsByServerId.set(request.serverId, ids);
+    }
+    for (const [serverId, artifactIds] of artifactIdsByServerId) {
+      void sync.hydrateSessionApprovalArtifacts(serverId, artifactIds).catch(error => {
+        log.log(`Inbox approval hydration failed: ${error instanceof Error ? error.name : 'unknown'}`);
+      });
+    }
+  }, [requests]);
 }
 
 export function useArtifactsLoaded(): boolean {

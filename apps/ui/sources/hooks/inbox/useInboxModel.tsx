@@ -27,7 +27,7 @@ import {
 import type { InboxActionOperationEntry } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
 import { actionOperationAddress } from '@/sync/domains/actionOperations/qualifiedActionOperation';
-import { useArtifacts, useFriendsLoaded, useSessionDisplayNameProjections, useWorkflowRunRows } from '@/sync/domains/state/storage';
+import { useArtifacts, useFriendsLoaded, useInboxApprovalBodyHydration, useSessionDisplayNameProjections, useWorkflowRunRows } from '@/sync/domains/state/storage';
 
 import {
     buildInboxWorkGroups,
@@ -226,6 +226,7 @@ function useCreateInboxModel(): InboxModel {
         () => artifacts.filter(isOpenApprovalInboxArtifact),
         [artifacts],
     );
+    useInboxApprovalBodyHydration(artifacts, profileScope?.serverId);
     const approvalSourceAddresses = React.useMemo(() => openApprovals.flatMap(artifact => {
         const serverId = resolveApprovalHomeServerId(artifact.header);
         const sessionId = typeof artifact.header?.sessionId === 'string' ? artifact.header.sessionId.trim() : '';
