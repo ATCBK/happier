@@ -26,6 +26,7 @@ export type WorkflowAuthoringHostContext = Readonly<{
      */
     existingSessions: readonly WorkflowExistingSessionOption[];
     sessionOptionsStatus: ReturnType<typeof useWorkflowExistingSessionOptions>['sessionOptionsStatus'];
+    retrySessionOptions: () => void;
     /** Every continuable Session on any Machine: what the Session drop target resolves against. */
     sessionDropCandidates: readonly WorkflowExistingSessionOption[];
     sessionBindingScope: EntityDragScopeV1 | null;
@@ -84,7 +85,7 @@ export function useWorkflowAuthoringHost(params: Readonly<{
             && sessionBindingScope !== null && entityDragScopesEqualV1(snapshot.item.scope, sessionBindingScope);
     }, [dragRuntime, sessionBindingScope]);
     const sessionDragDemand = React.useSyncExternalStore(dragRuntime.subscribe, readSessionDragDemand, readSessionDragDemand);
-    const { existingSessions, sessionDropCandidates, sessionOptionsStatus } = useWorkflowExistingSessionOptions({
+    const { existingSessions, sessionDropCandidates, sessionOptionsStatus, retrySessionOptions } = useWorkflowExistingSessionOptions({
         serverId, machineId, enabled: sessionChooserCount > 0 || sessionDragDemand,
     });
 
@@ -97,7 +98,7 @@ export function useWorkflowAuthoringHost(params: Readonly<{
     ), [capturedServerId, capturedSessionId, directory, machineHomeDir, machineId, serverId]);
 
     return React.useMemo(
-        () => ({ authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionOptionsStatus, sessionBindingScope, onSessionOptionsDemandChange }),
-        [authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionOptionsStatus, sessionBindingScope, onSessionOptionsDemandChange],
+        () => ({ authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionOptionsStatus, retrySessionOptions, sessionBindingScope, onSessionOptionsDemandChange }),
+        [authoringFacts, composerScope, existingSessions, sessionDropCandidates, sessionOptionsStatus, retrySessionOptions, sessionBindingScope, onSessionOptionsDemandChange],
     );
 }

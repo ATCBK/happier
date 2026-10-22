@@ -2126,7 +2126,6 @@ describe('workflow editor body', () => {
         const existing = noneField.props.items.find((item) => item.id === 'existing_session');
         expect(existing?.disabled).toBe(true);
         expect(existing?.subtitle).toBe('workflows.conversation.noExistingSessions');
-        expect(none.findByTestId('workflow-editor-defaults-continuity-conversation-existing-unavailable')).not.toBeNull();
         await none.unmount();
     });
 

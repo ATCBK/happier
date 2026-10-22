@@ -24,6 +24,7 @@ import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeL
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { storeWorkflowDefinitionDraftSeed } from '@/sync/domains/workflows/workflowDefinitionDraftSeed';
 import { useWorkflowExistingSessionOptions } from '../screens/useWorkflowExistingSessionOptions';
+import { resolveWorkflowSessionChoice, WORKFLOW_SESSION_RETRY_ITEM_ID, workflowSessionMenuState } from '../presentation/workflowSessionChoice';
 import { readDeviceTimeZone } from '../triggers/sessionTriggerForm';
 import { WorkflowFlowView } from '../flow/WorkflowFlowView';
 import { projectWorkflowFlow } from '../flow/workflowFlowProjection';
@@ -171,15 +172,21 @@ function ExampleSessionChooser(props: Readonly<{
     onUse: (example: WorkflowStarterExampleSelection) => void;
 }>) {
     const scope = useActiveServerAccountScope();
-    const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: scope?.serverId ?? null, machineId: null });
+    const { existingSessions, sessionOptionsStatus, retrySessionOptions } = useWorkflowExistingSessionOptions({ serverId: scope?.serverId ?? null, machineId: null });
     const sessions = scope === null || !props.lifetime?.isCurrent() ? [] : existingSessions;
+    const choice = resolveWorkflowSessionChoice(sessionOptionsStatus, sessions.length > 0);
+    const menu = workflowSessionMenuState(choice, tLoose('workflows.examples.noSessions'));
     return <View style={styles.chooser}>
-        <DropdownMenu open onOpenChange={(open) => { if (!open) props.onClose(); }} search
-            items={sessions.map(session => ({ id: session.sessionId, title: session.label }))} selectedId={null}
+        <DropdownMenu open onOpenChange={(open) => { if (!open) props.onClose(); }} search searchPlaceholder={t('sessionsList.searchSessionsPlaceholder')}
+            items={[...menu.leadingItems, ...sessions.map(session => ({ id: session.sessionId, title: session.label }))]} selectedId={null}
+            {...(menu.emptyLabel === undefined ? {} : { emptyLabel: menu.emptyLabel })}
+            matchTriggerWidth={false} popoverPhonePresentation="sheet" popoverAccessibilityLabel={t('workflows.conversation.chooseExistingSession')}
+            closeOnSelect={false}
             trigger={({ toggle }) => <RoundButton testID={`workflow-examples:${props.example.key}:use`} size="small" display="secondary"
                 title={t('workflows.examples.chooseSession')}
                 accessibilityLabel={`${t('workflows.examples.chooseSession')}: ${tLoose(props.example.titleKey)}`} onPress={toggle} />}
             onSelect={(sessionId) => {
+                if (sessionId === WORKFLOW_SESSION_RETRY_ITEM_ID) { retrySessionOptions(); return; }
                 if (!props.lifetime?.isCurrent()) return;
                 const session = sessions.find(candidate => candidate.sessionId === sessionId);
                 if (!session) return;
@@ -188,7 +195,8 @@ function ExampleSessionChooser(props: Readonly<{
                 props.onClose();
                 props.onUse(selection.example);
             }} />
-        {sessions.length === 0 ? <Text style={styles.description}>{tLoose('workflows.examples.noSessions')}</Text> : null}
+        {/* Only a settled read without Sessions is "none"; loading and failure stay in the open chooser. */}
+        {choice === 'empty' ? <Text style={styles.description}>{tLoose('workflows.examples.noSessions')}</Text> : null}
     </View>;
 }
 

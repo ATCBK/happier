@@ -22,6 +22,7 @@ import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storag
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 
+import { resolveWorkflowSessionChoice, workflowSessionOptionState } from '../presentation/workflowSessionChoice';
 import { workflowEditorStyles } from './workflowEditorStyles';
 import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
@@ -147,17 +148,26 @@ function ContinuityField(props: Readonly<{
     selectedId: string;
     onSelect: (id: string) => void;
     onOpenChange?: (open: boolean) => void;
+    /** An option that acts in place (a retry) and leaves the menu open on its result. */
+    keepsOpen?: (id: string) => boolean;
     testIDPrefix: string;
 }>): React.ReactElement {
     const [open, setOpen] = React.useState(false);
+    const setMenuOpen = (next: boolean) => { setOpen(next); props.onOpenChange?.(next); };
     return (
         <DropdownMenu
             testID={`${props.testIDPrefix}-field`}
             open={open}
-            onOpenChange={(next) => { setOpen(next); props.onOpenChange?.(next); }}
+            onOpenChange={setMenuOpen}
             selectedId={props.selectedId}
             items={props.items}
-            onSelect={props.onSelect}
+            {...(props.keepsOpen === undefined ? { onSelect: props.onSelect } : {
+                closeOnSelect: false,
+                onSelect: (id: string) => {
+                    if (!props.keepsOpen?.(id)) setMenuOpen(false);
+                    props.onSelect(id);
+                },
+            })}
             itemTrigger={{ title: props.title, itemProps: { testID: props.testIDPrefix } }}
         />
     );
@@ -177,6 +187,8 @@ export function WorkflowContinuityControls(props: Readonly<{
     /** Existing Sessions the host offers for continuation; absent means none can be offered here. */
     existingSessions?: readonly WorkflowExistingSessionOption[];
     sessionOptionsStatus?: 'loading' | 'ready' | 'error';
+    /** Reads the host's Session options again after a reported failure (while this control demands them). */
+    onRetrySessionOptions?: () => void;
     onSessionOptionsDemandChange?: (demanded: boolean) => void;
     onChangeConversation: (value: WorkflowConversationSelection | undefined) => void;
     onBindExistingSession?: (sessionId: string) => Promise<EntityDropOutcomeV1>;
@@ -189,6 +201,9 @@ export function WorkflowContinuityControls(props: Readonly<{
         : listWorkflowProducerOptions(draft, props.consumerBlockId);
     const existingSessions = props.existingSessions ?? NO_EXISTING_SESSIONS;
     const existingSessionOffered = existingSessions.length > 0 && props.onBindExistingSession !== undefined;
+    // Only a host that can bind a Session has a chooser to explain; loading and failure are never "none".
+    const sessionChoice = props.onBindExistingSession === undefined ? null
+        : resolveWorkflowSessionChoice(props.sessionOptionsStatus, existingSessions.length > 0);
     const inherits = props.inherited !== undefined;
 
     // What actually runs: the step's own choice, else the default it inherits.
@@ -309,10 +324,11 @@ export function WorkflowContinuityControls(props: Readonly<{
             ? t('workflows.page.inspector.aSession')
             : formatWorkflowConversationLabel({ draft, conversation: recordedSession, existingSessions, sessionLabel: recordedSessionLabel }),
         testID: `${testIDPrefix}-conversation-option-existing`,
-        disabled: !existingSessionOffered,
-        // The reason reaches the option itself, not only nearby text.
-        ...(existingSessionOffered ? {} : { subtitle: existingSessions.length === 0
-            ? t('workflows.conversation.noExistingSessions') : t('entityDragDrop.reasons.generic') }),
+        // The reason reaches the option itself; a failed read keeps it choosable as the retry.
+        ...(sessionChoice === null
+            ? { disabled: true, subtitle: existingSessions.length === 0
+                ? t('workflows.conversation.noExistingSessions') : t('entityDragDrop.reasons.generic') }
+            : workflowSessionOptionState(sessionChoice, t('workflows.conversation.noExistingSessions'))),
     });
     const conversationSelectedId = props.conversation === undefined
         ? (inherits ? DEFAULT_OPTION_ID : 'shared_run')
@@ -363,7 +379,12 @@ export function WorkflowContinuityControls(props: Readonly<{
                 onOpenChange={setConversationOpen}
                 items={conversationItems}
                 selectedId={conversationSelectedId}
+                keepsOpen={(id) => id === EXISTING_SESSION_OPTION_ID && sessionChoice === 'failed'}
                 onSelect={(id) => {
+                    if (id === EXISTING_SESSION_OPTION_ID && sessionChoice === 'failed') {
+                        props.onRetrySessionOptions?.();
+                        return;
+                    }
                     if (id !== EXISTING_SESSION_OPTION_ID) setChoosingSession(false);
                     if (id === DEFAULT_OPTION_ID) {
                         onChangeConversation(undefined);
@@ -396,11 +417,6 @@ export function WorkflowContinuityControls(props: Readonly<{
             {fromStepProducer === null ? null : (
                 <Text testID={`${testIDPrefix}-conversation-waiting-note`} style={workflowEditorStyles.groupSummary}>
                     {t('workflows.conversation.waitingForConversation', { block: fromStepProducer.label })}
-                </Text>
-            )}
-            {existingSessionOffered ? null : (
-                <Text testID={`${testIDPrefix}-conversation-existing-unavailable`} style={workflowEditorStyles.groupSummary}>
-                    {existingSessions.length === 0 ? t('workflows.conversation.noExistingSessions') : t('entityDragDrop.reasons.generic')}
                 </Text>
             )}
             {choosingSession && existingSessionOffered ? (

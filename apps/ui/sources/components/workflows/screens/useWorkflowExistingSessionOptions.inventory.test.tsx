@@ -88,3 +88,50 @@ it('lists paged unopened Sessions without reading hidden/archived snapshots or o
     await waitForHomeGovernance(() => expect(hook.getCurrent().existingSessions).toEqual([]));
     await hook.unmount();
 });
+
+it('starts each demanded acquisition as loading and retries a failed one through the same owner', async () => {
+    const metadata = { flavor: 'claude', claudeSessionId: 'resume-r', claudeTranscriptPath: '/tmp/r.jsonl',
+        machineId: 'machine-a', path: '/repo', host: 'host-a', name: 'Recovered' };
+    const recovered = createPlainSessionCurrentProjectionRecordFixture({ id: 'recovered', active: true, metadata });
+    let failing = true;
+    const batch = createSessionReadBatchHttpBoundary(request => request.path === `/v2/sessions/${recovered.id}`
+        ? Response.json({ session: recovered }) : undefined);
+    homes = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://workflow-picker-retry.test', accountId: 'picker-retry' }],
+        route: request => {
+            if (request.path === '/v2/sessions') return Response.json({ sessions: [recovered], nextCursor: null, hasNext: false });
+            // The detailed inventory's own archived page fails; the Home and its sync stay healthy.
+            if (request.path === '/v2/sessions/archived') {
+                return failing ? new Response('unavailable', { status: 503 })
+                    : Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            }
+            if (request.path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            return batch.handle(request);
+        } });
+    const serverId = homes.homes.a!.id;
+    storage.setState({ isDataReady: true, sessions: {}, sessionListRowsByServerId: {} });
+    const { useWorkflowExistingSessionOptions } = await import('./useWorkflowExistingSessionOptions');
+    const statuses: string[] = [];
+    const hook = await renderHook(({ enabled }) => {
+        const options = useWorkflowExistingSessionOptions({ serverId, machineId: 'machine-a', enabled });
+        statuses.push(options.sessionOptionsStatus);
+        return options;
+    }, { initialProps: { enabled: false } });
+    const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+    await act(async () => { expect((await resolveServerCredentialAccountScope(serverId)).kind).toBe('bound'); });
+    await hook.rerender({ enabled: true });
+    await waitForHomeGovernance(() => expect(hook.getCurrent().sessionOptionsStatus).toBe('error'));
+    // A failed read is not an empty Account, and a new demand never starts from the last one's outcome.
+    await hook.rerender({ enabled: false });
+    expect(hook.getCurrent().sessionOptionsStatus).toBe('ready');
+    statuses.length = 0;
+    await hook.rerender({ enabled: true });
+    expect(statuses[0]).toBe('loading');
+    await waitForHomeGovernance(() => expect(hook.getCurrent().sessionOptionsStatus).toBe('error'));
+    failing = false;
+    statuses.length = 0;
+    await act(async () => { hook.getCurrent().retrySessionOptions(); });
+    expect(statuses).toContain('loading');
+    await waitForHomeGovernance(() => expect(hook.getCurrent().existingSessions.map(option => option.sessionId)).toEqual([recovered.id]));
+    expect(hook.getCurrent().sessionOptionsStatus).toBe('ready');
+    await hook.unmount();
+});

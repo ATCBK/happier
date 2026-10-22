@@ -1826,6 +1826,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 authoringFacts={authoringHost.authoringFacts}
                 existingSessions={authoringHost.existingSessions}
                 sessionOptionsStatus={authoringHost.sessionOptionsStatus}
+                onRetrySessionOptions={authoringHost.retrySessionOptions}
                 sessionDropCandidates={authoringHost.sessionDropCandidates}
                 sessionBindingScope={authoringHost.sessionBindingScope}
                 onSessionOptionsDemandChange={authoringHost.onSessionOptionsDemandChange}

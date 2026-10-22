@@ -106,6 +106,38 @@ describe('WorkflowContinuityControls continuation disclosure', () => {
             restore();
         }
     });
+    it('says loading and failure on the Session option itself and retries in place, never presenting them as none', async () => {
+        const restore = withPopoverWebGlobals();
+        try {
+            const retry = vi.fn();
+            const props = {
+                draft: createWorkflowEditorDraft({ draftId: 'states', name: 'Review', blocks: [stepBlock('step', 'Review')] }),
+                conversation: { kind: 'shared_run' as const }, workspace: { kind: 'inherit' as const },
+                existingSessions: [], onRetrySessionOptions: retry, onSessionOptionsDemandChange: () => {},
+                onBindExistingSession: async () => ({ status: 'applied' as const }),
+                onChangeConversation: () => {}, onChangeWorkspace: () => {}, testIDPrefix: 'states',
+            };
+            const screen = await renderScreen(<WorkflowContinuityControls {...props} sessionOptionsStatus="loading" />);
+            const field = () => screen.findAll(node => node.props.testID === 'states-conversation-field'
+                && Array.isArray(node.props.items))[0]!;
+            const existing = () => field().props.items.find((item: { id: string }) => item.id === 'existing_session');
+            expect(existing()).toMatchObject({ disabled: true, subtitle: 'workflows.conversation.sessionsLoading' });
+            await screen.update(<WorkflowContinuityControls {...props} sessionOptionsStatus="error" />);
+            expect(existing().disabled).not.toBe(true);
+            expect(existing().subtitle).toBe('workflows.conversation.sessionsFailedRetry');
+            await act(async () => { field().props.onOpenChange(true); });
+            await act(async () => { field().props.onSelect('existing_session'); });
+            expect(retry).toHaveBeenCalledTimes(1);
+            expect(field().props.open).toBe(true);
+            expect(screen.findByTestId('states-conversation-session-picker')).toBeNull();
+            await screen.update(<WorkflowContinuityControls {...props} sessionOptionsStatus="ready" />);
+            expect(existing()).toMatchObject({ disabled: true, subtitle: 'workflows.conversation.noExistingSessions' });
+            await screen.unmount();
+        } finally {
+            await standardCleanup();
+            restore();
+        }
+    });
     it('does not offer Session binding without the mounted qualified binding owner', async () => {
         const changed = vi.fn();
         const screen = await renderScreen(<WorkflowContinuityControls

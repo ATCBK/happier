@@ -437,6 +437,46 @@ describe('a workflow trigger in its popover (07 S4)', () => {
         expect(getStorage().getState().sessions[session.id]).toBeUndefined();
         await screen.unmount();
     });
+    it('says a failed Session read on "A session…" and retries it in place until the Session is offered', async () => {
+        const { createDefaultWhen } = await import('./sessionTriggerForm');
+        const session = createPlainSessionCurrentProjectionRecordFixture({ id: 'retry-destination', active: true, metadata: {
+            flavor: 'claude', claudeSessionId: 'resume', claudeTranscriptPath: '/tmp/retry.jsonl',
+            machineId: 'machine-1', path: '/repo', host: 'host', name: 'Nightly summary',
+        } });
+        let failing = true;
+        const batch = createSessionReadBatchHttpBoundary(request => request.path === `/v2/sessions/${session.id}`
+            ? Response.json({ session }) : undefined);
+        const served = await serveAccountHomes({ homes: [{ key: 'retry', serverUrl: 'https://trigger-retry.test', accountId: 'retry-account' }],
+            route: request => {
+                if (request.path === '/v2/sessions') return Response.json({ sessions: [session], nextCursor: null, hasNext: false });
+                // The detailed inventory's own page fails; the Home itself stays reachable.
+                if (request.path === '/v2/sessions/archived') return failing ? new Response('unavailable', { status: 503 })
+                    : Response.json({ sessions: [], nextCursor: null, hasNext: false });
+                if (request.path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+                return batch.handle(request);
+            } });
+        onTestFinished(() => served.dispose());
+        const retryServerId = served.homes.retry!.id;
+        getStorage().setState({ isDataReady: true, sessions: {}, sessionListRowsByServerId: {} });
+        const screen = await renderScreen(<TriggerPopover testID="retry-prompt" anchorRef={React.createRef()}
+            onRequestClose={vi.fn()} whenKinds={['schedule']} sessionId={null} serverId={retryServerId} machineId="machine-1"
+            initial={{ when: createDefaultWhen('schedule'), enabled: true, then: { kind: 'sendPrompt', prompt: 'Summarize the night', selection: {} } }}
+            workflowOptions={[]} onSubmit={vi.fn<ExistingTriggerSubmit>(async () => {})} />);
+        const { resolveServerCredentialAccountScope } = await import('@/sync/domains/scope/serverCredentialAccountScope');
+        await act(async () => { expect((await resolveServerCredentialAccountScope(retryServerId)).kind).toBe('bound'); });
+        const menu = () => screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'retry-prompt-runs-in')!;
+        const sessionChoice = () => (menu().props.items as readonly { id: string; disabled?: boolean; subtitle?: string }[])
+            .find(item => item.id === 'session');
+        await act(async () => { menu().props.onOpenChange(true); });
+        await waitForHomeGovernance(() => expect(sessionChoice()?.subtitle).toBe('workflows.conversation.sessionsFailedRetry'));
+        expect(sessionChoice()?.disabled).not.toBe(true);
+        failing = false;
+        await act(async () => { menu().props.onSelect('session'); });
+        expect(menu().props.open).toBe(true);
+        await waitForHomeGovernance(() => expect(sessionChoice()?.subtitle).toBeUndefined());
+        expect(sessionChoice()?.disabled).not.toBe(true);
+        await screen.unmount();
+    });
     it.each(['account', 'session'] as const)('does not submit a retired prompt destination from the %s editor, but keeps an unloaded destination', async (scope) => {
         const { buildTriggerTarget, createDefaultWhen, readTriggerThen } = await import('./sessionTriggerForm');
         const { TriggerTargetV1Schema } = await import('@happier-dev/protocol/workflows/triggers/triggerTargetV1');
@@ -464,6 +504,13 @@ describe('a workflow trigger in its popover (07 S4)', () => {
         expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(false);
         await act(async () => { getStorage().getState().deleteSession(session.id, serverId); });
         expect(screen.findByTestId('retired-target-submit')?.props.disabled).toBe(true);
+        if (scope === 'account') {
+            // The stored Session stays named with why it cannot be chosen, never an empty "Choose…".
+            const stored = screen.findAllByType(DropdownMenu).find(menu => menu.props.testID === 'retired-target-runs-in-session')
+                ?.props.items.find((item: { id: string }) => item.id === session.id);
+            expect(stored).toMatchObject({ disabled: true, subtitle: 'workflows.conversation.sessionGone' });
+            expect(stored.title).not.toBe('workflows.conversation.savedSession');
+        }
         await screen.pressByTestIdAsync('retired-target-submit');
         expect(submit).not.toHaveBeenCalled();
         if (scope === 'account') {

@@ -21,7 +21,12 @@ type WorkflowSessionOptions = Readonly<{
     /** Every continuable Session on any Machine: what the Session drop target resolves against. */
     sessionDropCandidates: readonly WorkflowExistingSessionOption[];
 }>;
-type WorkflowSessionOptionsState = WorkflowSessionOptions & Readonly<{ sessionOptionsStatus: 'loading' | 'ready' | 'error' }>;
+type WorkflowSessionOptionsState = WorkflowSessionOptions & Readonly<{
+    sessionOptionsStatus: 'loading' | 'ready' | 'error';
+    /** Reads again after a reported failure, through the same inventory and snapshot owners; only while demanded. */
+    retrySessionOptions: () => void;
+}>;
+type AcquisitionStatus = Readonly<{ acquisition: object | null; status: 'loading' | 'ready' | 'error' }>;
 
 const NO_OPTIONS: readonly WorkflowExistingSessionOption[] = [];
 const NO_ROWS: readonly SessionListRenderableSession[] = [];
@@ -109,19 +114,24 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     const { serverId, machineId } = params;
     const enabled = params.enabled !== false;
     const { binding, resolution } = useServerCredentialAccountScopeBinding(serverId);
-    const [inventoryStatus, setInventoryStatus] = React.useState<'loading' | 'ready' | 'error'>('ready');
+    const [retries, setRetries] = React.useState(0);
+    const retrySessionOptions = React.useCallback(() => setRetries(count => count + 1), []);
+    // One acquisition per demand (or retry): an outcome never outlives the acquisition that
+    // produced it, so a new demand starts as loading rather than as the last one's error.
+    const acquisition = React.useMemo(() => ({}), [binding, enabled, retries]);
+    const [inventory, setInventory] = React.useState<AcquisitionStatus>({ acquisition: null, status: 'ready' });
     React.useEffect(() => {
         if (!enabled || !binding) return;
         const controller = new AbortController();
-        setInventoryStatus('loading');
         void ensureSessionMetadataInventoryForServerAccountScope({ scope: binding.scope, accountLifetime: binding,
             signal: controller.signal }).then(() => {
-            if (!controller.signal.aborted && binding.isCurrent()) setInventoryStatus('ready');
+            if (!controller.signal.aborted && binding.isCurrent()) setInventory({ acquisition, status: 'ready' });
         }).catch(() => {
-            if (!controller.signal.aborted && binding.isCurrent()) setInventoryStatus('error');
+            if (!controller.signal.aborted && binding.isCurrent()) setInventory({ acquisition, status: 'error' });
         });
         return () => controller.abort();
-    }, [binding, enabled]);
+    }, [acquisition, binding, enabled]);
+    const inventoryStatus = !binding ? 'ready' : inventory.acquisition === acquisition ? inventory.status : 'loading';
 
     const unopenedSelector = React.useMemo(() => createUnopenedRowsSelector(serverId), [serverId]);
     const unopenedRows = getStorage()(unopenedSelector);
@@ -131,13 +141,14 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
     const [unopened, setUnopened] = React.useState<Readonly<{
         binding: typeof binding;
         options: readonly WorkflowExistingSessionOption[];
-        status: 'loading' | 'ready' | 'error';
-    }>>({ binding: null, options: NO_OPTIONS, status: 'ready' });
+    }> & AcquisitionStatus>({ binding: null, options: NO_OPTIONS, acquisition: null, status: 'ready' });
+    const snapshotAcquisition = React.useMemo(() => ({}), [acquisition, unopenedRows, settings]);
     React.useEffect(() => {
         if (!enabled || !binding || unopenedRows.length === 0) return;
         const controller = new AbortController();
         const retirement = binding.onRetire(() => controller.abort());
-        setUnopened(previous => ({ binding, options: previous.binding === binding ? previous.options : NO_OPTIONS, status: 'loading' }));
+        setUnopened(previous => ({ binding, options: previous.binding === binding ? previous.options : NO_OPTIONS,
+            acquisition: snapshotAcquisition, status: 'loading' }));
         void (async () => {
             const authority = await captureServerRequestAuthorityForServerAccountScope({ scope: binding.scope,
                 activeRequest: (path, init) => serverFetch(path, init) });
@@ -157,14 +168,15 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
                         serverId: binding.scope.serverId, sessionId: session.id, metadata: session.metadata });
                     if (sessionMachineId) options.push({ sessionId: session.id, machineId: sessionMachineId, label: getSessionName(session) });
                 }
-                if (!controller.signal.aborted && binding.isCurrent()) setUnopened(previous => ({ binding,
+                if (!controller.signal.aborted && binding.isCurrent()) setUnopened(previous => ({ binding, acquisition: snapshotAcquisition,
                     options: sameOptions(previous.options, options) ? previous.options : options, status: failed ? 'error' : 'ready' }));
             } finally { await authority.release(); }
         })().catch(() => {
-            if (!controller.signal.aborted && binding.isCurrent()) setUnopened(previous => ({ ...previous, status: 'error' }));
+            if (!controller.signal.aborted && binding.isCurrent()) setUnopened(previous => ({ ...previous, acquisition: snapshotAcquisition, status: 'error' }));
         });
         return () => { controller.abort(); retirement.dispose(); };
-    }, [binding, enabled, unopenedRows, settings]);
+    }, [snapshotAcquisition, binding, enabled, unopenedRows, settings]);
+    const unopenedStatus = unopened.acquisition === snapshotAcquisition ? unopened.status : 'loading';
     // Every Session the canonical candidacy owner can continue, on any Machine
     // of this server: the drop target needs them to state *why* a Session on
     // another Machine is refused (07 J19), while the picker offers only the
@@ -180,7 +192,8 @@ export function useWorkflowExistingSessionOptions(params: Readonly<{
             existingSessions: extra.length ? candidates.filter(option => machineId === null || option.machineId === machineId) : hydrated.existingSessions,
             sessionOptionsStatus: !enabled ? 'ready' : serverId && resolution.kind !== 'bound'
                 ? resolution.kind === 'resolving' ? 'loading' : 'error'
-                : inventoryStatus === 'error' || unopenedRows.length > 0 && unopened.status === 'error' ? 'error'
-                    : inventoryStatus === 'loading' || unopenedRows.length > 0 && unopened.status === 'loading' ? 'loading' : 'ready' };
-    }, [binding, enabled, hydrated, inventoryStatus, machineId, resolution, serverId, unopened, unopenedRows]);
+                : inventoryStatus === 'error' || unopenedRows.length > 0 && unopenedStatus === 'error' ? 'error'
+                    : inventoryStatus === 'loading' || unopenedRows.length > 0 && unopenedStatus === 'loading' ? 'loading' : 'ready',
+            retrySessionOptions };
+    }, [binding, enabled, hydrated, inventoryStatus, machineId, resolution, retrySessionOptions, serverId, unopened, unopenedRows, unopenedStatus]);
 }

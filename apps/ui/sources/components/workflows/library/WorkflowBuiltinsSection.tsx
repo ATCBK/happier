@@ -13,6 +13,7 @@ import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { t, tLoose } from '@/text';
 import { useWorkflowExistingSessionOptions } from '../screens/useWorkflowExistingSessionOptions';
+import { resolveWorkflowSessionChoice, WORKFLOW_SESSION_RETRY_ITEM_ID, workflowSessionMenuState } from '../presentation/workflowSessionChoice';
 import { WorkflowPurposeGlyph } from '../presentation/WorkflowPurposeGlyph';
 import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
@@ -48,12 +49,21 @@ export function WorkflowBuiltinSessionButton(props: Readonly<{ entry: BuiltinWor
     const accountLifetime = useWorkflowAccountLifetime();
     const scope = accountLifetime === undefined ? focusedScope : accountLifetime?.scope;
     const [open, setOpen] = React.useState(false);
-    const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: scope?.serverId ?? null, machineId: null, enabled: open });
-    return <DropdownMenu open={open} onOpenChange={setOpen} search
-        items={(scope === null ? [] : existingSessions).map((session) => ({ id: session.sessionId, title: session.label }))}
+    const { existingSessions, sessionOptionsStatus, retrySessionOptions } = useWorkflowExistingSessionOptions({
+        serverId: scope?.serverId ?? null, machineId: null, enabled: open });
+    const sessions = scope === null ? [] : existingSessions;
+    const menu = workflowSessionMenuState(resolveWorkflowSessionChoice(sessionOptionsStatus, sessions.length > 0),
+        t('workflows.conversation.noSessionsYet'));
+    return <DropdownMenu open={open} onOpenChange={setOpen} search searchPlaceholder={t('sessionsList.searchSessionsPlaceholder')}
+        items={[...menu.leadingItems, ...sessions.map((session) => ({ id: session.sessionId, title: session.label }))]}
+        {...(menu.emptyLabel === undefined ? {} : { emptyLabel: menu.emptyLabel })}
+        // Session names are long; the chooser takes the width they need, not the button's.
+        matchTriggerWidth={false} popoverPhonePresentation="sheet" popoverAccessibilityLabel={t('workflows.conversation.chooseExistingSession')}
         trigger={({ toggle }) => <RoundButton testID={props.testID} size="small" display={props.primary ? 'default' : 'secondary'} title={t('workflows.examples.chooseSession')} onPress={toggle} />}
         selectedId={null}
+        closeOnSelect={false}
         onSelect={(sessionId) => {
+            if (sessionId === WORKFLOW_SESSION_RETRY_ITEM_ID) { retrySessionOptions(); return; }
             if (!scope || accountLifetime === null || accountLifetime && !accountLifetime.isCurrent()
                 || !existingSessions.some((session) => session.sessionId === sessionId)) return;
             setOpen(false);

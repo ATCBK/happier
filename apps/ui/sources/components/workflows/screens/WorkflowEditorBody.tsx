@@ -438,6 +438,7 @@ export type WorkflowEditorBodyProps = Readonly<{
      */
     existingSessions?: readonly WorkflowExistingSessionOption[];
     sessionOptionsStatus?: React.ComponentProps<typeof WorkflowInspector>['sessionOptionsStatus'];
+    onRetrySessionOptions?: () => void;
     /** Every continuable Session on any Machine (the authoring host's): enables the web Session drop onto a step. */
     sessionDropCandidates?: readonly WorkflowExistingSessionOption[];
     sessionBindingScope?: EntityDragScopeV1 | null;
@@ -836,6 +837,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         ...(props.existingSessions === undefined ? {} : { existingSessions: props.existingSessions }),
         onSessionOptionsDemandChange: props.onSessionOptionsDemandChange,
         sessionOptionsStatus: props.sessionOptionsStatus,
+        onRetrySessionOptions: props.onRetrySessionOptions,
         ...(sessionDrop === undefined ? {} : { bindExistingSession: sessionDrop.bind }),
         ...(props.projectTarget === undefined ? {} : { projectTarget: props.projectTarget }),
         machineName: props.machineName,
@@ -856,6 +858,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
         props.existingSessions,
         props.onSessionOptionsDemandChange,
         props.sessionOptionsStatus,
+        props.onRetrySessionOptions,
         sessionDrop,
         props.executionTarget,
         props.inspectorGroupDisclosure,

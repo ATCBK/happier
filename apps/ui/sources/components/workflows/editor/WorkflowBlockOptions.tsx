@@ -552,6 +552,7 @@ function StepMainPage(props: WorkflowInspectorProps & Readonly<{
                         {...(props.existingSessions === undefined ? {} : { existingSessions: props.existingSessions })}
                         onSessionOptionsDemandChange={props.onSessionOptionsDemandChange}
                         sessionOptionsStatus={props.sessionOptionsStatus}
+                        onRetrySessionOptions={props.onRetrySessionOptions}
                         onChangeConversation={(value) => onChange(setWorkflowStepExecutionField(draft, step.id, 'conversation', value))}
                         {...(props.bindExistingSession === undefined ? {} : {
                             onBindExistingSession: (sessionId: string) => props.bindExistingSession!(step.id, sessionId),

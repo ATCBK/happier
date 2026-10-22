@@ -31,6 +31,9 @@ import { useActionFieldOptionsForMachine } from '@/components/sessions/actions/u
 import { findWorkflowActionSpec } from '@/components/workflows/presentation/workflowActionCatalog';
 import { useWorkflowActionCatalog } from '@/components/workflows/presentation/useWorkflowActionCatalog';
 import { useWorkflowExistingSessionOptions } from '@/components/workflows/screens/useWorkflowExistingSessionOptions';
+import { resolveWorkflowSessionChoice, WORKFLOW_SESSION_RETRY_ITEM_ID, workflowSessionMenuState, workflowSessionOptionState } from '@/components/workflows/presentation/workflowSessionChoice';
+import { useSessionDisplayNameSource } from '@/sync/store/hooks';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { WorkflowRunInputs } from '@/components/workflows/run/WorkflowRunComposer';
 import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields, type WorkflowRunInputFieldState } from '@/sync/domains/workflows/workflowAuthoring';
 
@@ -255,6 +258,10 @@ function FieldSelect(props: Readonly<{
     selectedId: string | null;
     onSelect: (id: string) => void;
     onOpenChange?: (open: boolean) => void;
+    /** The menu's line when it has no rows (a list still loading, or none to choose). */
+    emptyLabel?: string;
+    /** An option that acts in place (a retry) and leaves the menu open on its result. */
+    keepsOpen?: (id: string) => boolean;
 }>) {
     const [open, setOpen] = React.useState(false);
     React.useEffect(() => {
@@ -270,7 +277,9 @@ function FieldSelect(props: Readonly<{
             onOpenChange={setOpen}
             items={props.items}
             selectedId={props.selectedId}
-            onSelect={(id) => { setOpen(false); props.onSelect(id); }}
+            {...(props.keepsOpen === undefined ? {} : { closeOnSelect: false })}
+            {...(props.emptyLabel === undefined ? {} : { emptyLabel: props.emptyLabel })}
+            onSelect={(id) => { if (!props.keepsOpen?.(id)) setOpen(false); props.onSelect(id); }}
             // A description wraps; a truncated consequence is no consequence.
             itemTrigger={{
                 title: props.title,
@@ -811,11 +820,21 @@ function RunsInRows(props: Readonly<{
     onChange: (next: TriggerRunsIn) => void;
 }>) {
     const activeServerId = useActiveServerAccountScope()?.serverId ?? null;
+    const serverId = props.serverId ?? activeServerId;
     const [runsInOpen, setRunsInOpen] = React.useState(false);
     const [sessionOpen, setSessionOpen] = React.useState(false);
-    const { existingSessions } = useWorkflowExistingSessionOptions({ serverId: props.serverId ?? activeServerId,
-        machineId: props.machineId, enabled: runsInOpen || sessionOpen });
+    const demanded = runsInOpen || sessionOpen;
+    const { existingSessions, sessionOptionsStatus, retrySessionOptions } = useWorkflowExistingSessionOptions({ serverId,
+        machineId: props.machineId, enabled: demanded });
     const first = existingSessions[0];
+    const choice = resolveWorkflowSessionChoice(sessionOptionsStatus, first !== undefined);
+    const keepsOpen = React.useCallback((id: string) => choice === 'failed'
+        && (id === 'session' || id === WORKFLOW_SESSION_RETRY_ITEM_ID), [choice]);
+    const storedSessionId = props.runsIn.kind === 'session' ? props.runsIn.sessionId : '';
+    const stored = useStoredSessionItem({ sessionId: storedSessionId, serverId,
+        offered: existingSessions.some((option) => option.sessionId === storedSessionId),
+        settled: demanded && sessionOptionsStatus === 'ready' });
+    const sessionMenu = workflowSessionMenuState(choice, t('workflows.triggers.then.noSessionOnMachine'));
     return (
         <>
             {/* Three long choices: a select, not a segmented bar that cannot fit a popover or a phone (DESIGN-18 T1). */}
@@ -827,15 +846,18 @@ function RunsInRows(props: Readonly<{
                     id: kind,
                     testID: `${props.testID}-runs-in:${kind}`,
                     title: t(`workflows.triggers.then.runsInChoice.${kind}`),
-                    ...(kind === 'session' && first === undefined
-                        ? { subtitle: t('workflows.triggers.then.noSessionOnMachine'), disabled: true } : {}),
+                    // The chosen kind needs no reason; its Session field below speaks for it.
+                    ...(kind === 'session' && props.runsIn.kind !== 'session'
+                        ? workflowSessionOptionState(choice, t('workflows.triggers.then.noSessionOnMachine')) : {}),
                 }))}
                 selectedId={props.runsIn.kind}
+                keepsOpen={keepsOpen}
                 onSelect={(id) => {
                     const kind = RUNS_IN_KINDS.find((candidate) => candidate === id);
                     if (kind === undefined) return;
                     if (kind === 'session') {
-                        if (first !== undefined) props.onChange({ kind: 'session', sessionId: first.sessionId, machineId: first.machineId });
+                        if (choice === 'failed') retrySessionOptions();
+                        else if (first !== undefined) props.onChange({ kind: 'session', sessionId: first.sessionId, machineId: first.machineId });
                         return;
                     }
                     props.onChange({ kind });
@@ -846,9 +868,13 @@ function RunsInRows(props: Readonly<{
                     testID={`${props.testID}-runs-in-session`}
                     onOpenChange={setSessionOpen}
                     title={t('workflows.triggers.then.session')}
-                    items={existingSessions.map((option) => ({ id: option.sessionId, title: option.label }))}
+                    items={[...sessionMenu.leadingItems, ...(stored === null ? [] : [stored]),
+                        ...existingSessions.map((option) => ({ id: option.sessionId, title: option.label }))]}
+                    {...(sessionMenu.emptyLabel === undefined ? {} : { emptyLabel: sessionMenu.emptyLabel })}
                     selectedId={props.runsIn.sessionId}
+                    keepsOpen={keepsOpen}
                     onSelect={(sessionId) => {
+                        if (sessionId === WORKFLOW_SESSION_RETRY_ITEM_ID) { retrySessionOptions(); return; }
                         const option = existingSessions.find((candidate) => candidate.sessionId === sessionId);
                         if (option) props.onChange({ kind: 'session', sessionId: option.sessionId, machineId: option.machineId });
                     }}
@@ -856,6 +882,24 @@ function RunsInRows(props: Readonly<{
             ) : null}
         </>
     );
+}
+
+/**
+ * The stored Session of a "A session…" trigger while it is not among the offered Sessions: by its name
+ * when this device knows it, never as an empty "Choose…". It is called unavailable only on evidence
+ * (deleted here, or a settled read that no longer offers it); an unloaded Session is not a missing one.
+ */
+function useStoredSessionItem(params: Readonly<{ sessionId: string; serverId: string | null; offered: boolean; settled: boolean }>): DropdownMenuItem | null {
+    const nameSource = useSessionDisplayNameSource(params.sessionId, params.serverId);
+    const { deleted } = useSessionReferenceTarget(params.sessionId, params.serverId);
+    if (params.sessionId.length === 0 || params.offered) return null;
+    const name = nameSource === null ? null : getSessionName(nameSource);
+    const unavailable = deleted || params.settled;
+    return {
+        id: params.sessionId,
+        title: name ?? (unavailable ? t('workflows.conversation.sessionNoLongerAvailable') : t('workflows.conversation.savedSession')),
+        ...(unavailable ? { disabled: true, subtitle: deleted ? t('workflows.conversation.sessionGone') : t('workflows.conversation.sessionNotHere') } : {}),
+    };
 }
 
 /**
