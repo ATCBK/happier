@@ -215,7 +215,7 @@ export function presentHappierCapabilityStatus(
   const fix = status.fix?.kind ?? spec.fix;
   return {
     pill:
-      speaks && status.kind !== 'ready'
+      speaks
         ? {
             variant: spec.variant,
             chrome: spec.chrome,

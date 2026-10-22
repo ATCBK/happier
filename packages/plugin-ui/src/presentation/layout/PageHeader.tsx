@@ -473,6 +473,10 @@ function PageHeaderMetaLine(props: Readonly<{
   const focusColor = useOptionalHappierUiTheme()?.colors.focus;
   // Each fact's vertical centre in the line; facts on one wrapped row share it.
   const [centres, setCentres] = useState<Readonly<Record<string, number>>>({});
+  // A fact reports its layout when its own size changes, not when a narrower line only moves it to
+  // the next row (web measures size). The line's width keys the facts, so a new width measures them
+  // again and a separator that now ends a line is hidden.
+  const [lineWidth, setLineWidth] = useState(0);
   const measureFact = (key: string) => (event: HappierLayoutChangeEvent) => {
     const { y, height } = event.nativeEvent.layout;
     const centre = y + height / 2;
@@ -486,6 +490,10 @@ function PageHeaderMetaLine(props: Readonly<{
   return (
     <View
       testID={props.testID}
+      onLayout={(event: HappierLayoutChangeEvent) => {
+        const width = Math.round(event.nativeEvent.layout.width);
+        setLineWidth((current) => (current === width ? current : width));
+      }}
       style={[
         { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: props.centered ? 'center' : 'flex-start', columnGap: 6, minHeight: 18 },
         props.spaced ? { marginTop: HAPPIER_PAGE_METRICS.pageHeaderLineGapPx } : null,
@@ -494,7 +502,7 @@ function PageHeaderMetaLine(props: Readonly<{
       {props.facts.map((fact, index) => (
         // A fact and the separator that closes it wrap as one group: the fact's words never break
         // across lines, so a line never ends on a lone "·" after half a fact.
-        <View key={fact.key} testID={fact.testID} onLayout={measureFact(fact.key)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0, maxWidth: '100%' }}>
+        <View key={`${fact.key}@${lineWidth}`} testID={fact.testID} onLayout={measureFact(fact.key)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 0, maxWidth: '100%' }}>
           {fact.onPress === undefined ? <>
             {fact.icon ?? null}
             {props.renderText({ role: 'meta', text: fact.text, header: false, ...(fact.mono ? { mono: true } : {}) })}

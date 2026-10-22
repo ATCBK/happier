@@ -65,23 +65,22 @@ function statusLabels(
 ): HappierCapabilityStatusLabels {
   return {
     status: (kind, machine) => {
-      const on = machine === undefined ? {} : { machine };
       switch (kind) {
         case 'error':
           return machine
-            ? translate(`${KEY}.status.errorOn`, `Stopped on ${machine}`, on)
+            ? translate(`${KEY}.status.errorOn`, `Stopped on ${machine}`, { machine })
             : translate(`${KEY}.status.error`, 'Couldn’t start');
         case 'cantrun':
           return machine
             ? translate(
                 `${KEY}.status.cantrunOn`,
                 `Can’t run on ${machine}`,
-                on,
+                { machine },
               )
             : translate(`${KEY}.status.cantrun`, 'Can’t run');
         case 'masked':
           return machine
-            ? translate(`${KEY}.status.maskedOn`, `${machine}’s copy wins`, on)
+            ? translate(`${KEY}.status.maskedOn`, `${machine}’s copy wins`, { machine })
             : translate(`${KEY}.status.masked`, 'Another copy wins');
         case 'signin':
           return translate(`${KEY}.status.signin`, 'Needs sign-in');
