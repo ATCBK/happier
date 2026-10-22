@@ -52,6 +52,7 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { ApprovalRequesterThreadCard } from '@/components/approvals/ApprovalRequesterThreadCard';
+import { DiscussionParticipantRequestLine } from '@/components/discussions/DiscussionParticipantRequestLine';
 import { useDestinationPageTitle } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { PageHeaderMenu, type PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { useDiscussionSettings } from './useDiscussionSettings';
@@ -1324,6 +1325,12 @@ function DiscussionContent(props: DiscussionProps & Readonly<{
                     : t('session.collaboration.discussion.home.approvalPending')}
                 action={{ testID: 'session-discussion-waiting-approval-review', label: t('approvals.review'), onPress: reviewWaiting }}
             /></View> : null}
+            {/* C3 §10 step 5: a participant Session waiting on its owner says so here and leads to the request in
+                that Session; only a viewer who can see that Session gets the line, and nothing here answers it. */}
+            {discussion.archivedAt === null ? rosterSessionAddresses.map((address, index) => <DiscussionParticipantRequestLine
+                key={address.sessionId} style={[styles.stateLine, threadColumn]} sessionId={address.sessionId} serverId={address.serverId}
+                accountLifetime={props.accountLifetime} enabled={props.active && !accessRevoked}
+                label={rosterSessionTitles[index] ?? resolveSessionLabel(address.sessionId) ?? t('session.collaboration.discussion.participants.session')} />) : null}
             {/* A thread re-attached from its Doc: the next comment is posted on this passage (lab K1-S's passage head). */}
             {draft.passage && discussion.archivedAt === null && discussion.capabilities.postMessages ? <View style={[styles.draftPassage, styles.draftPassageRow, threadColumn]}>
                 <View style={styles.draftPassageQuote}><ArtifactPassageQuote testID="discussion-draft-passage-quote" passage={sourceRefused ? null : draft.passage} /></View>
