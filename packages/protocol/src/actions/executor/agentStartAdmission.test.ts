@@ -135,7 +135,9 @@ describe('canonical Action agent-start adapter', () => {
     }
     expect(resolveRunStartModelAndConfig({ configOptions: { text: 'alias' },
       sessionConfigOptionOverrides: { v: 1, updatedAt: 1, overrides: { text: { updatedAt: 1, value: 'canonical' } } },
-    })).toEqual({ ok: false });
+    })).toMatchObject({ ok: false, error: { errorCode: 'invalid_parameters', details: {
+      issues: [{ code: 'conflicting_selection', path: ['configOptions', 'text'] }],
+    } } });
   });
   it('passes deferred workflow selection to the owner and returns a typed frozen-depth child refusal', () => {
     const request = { kind: 'workflow_run_leaf', selection: 'deferred', leaf: {

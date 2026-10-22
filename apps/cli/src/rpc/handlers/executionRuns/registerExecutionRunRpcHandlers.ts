@@ -190,7 +190,9 @@ function createExecutionRunRpcRegistrarExecutor(params: Readonly<{
       });
 
       if (!result.ok && result.errorCode === 'invalid_parameters') {
-        return { ok: true, result: invalidParams() };
+        // Retain the canonical refusal for the shared RPC projector, including
+        // its safe field issues and start certainty, while keeping the RPC code.
+        return { ...result, ...invalidParams() };
       }
 
       return result;

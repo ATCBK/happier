@@ -627,7 +627,8 @@ describe('createActionExecutor run options parity (model + effort)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+        issues: [{ code: 'custom', path: ['sessionId'] }] },
     });
     expect(executionRunCheckProtocolV2).not.toHaveBeenCalled();
     expect(executionRunStart).not.toHaveBeenCalled();
@@ -1392,7 +1393,8 @@ describe('createActionExecutor run options parity (model + effort)', () => {
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+        issues: [{ code: 'conflicting_selection', path: ['configOptions', 'reasoning_effort'] }] },
     });
     expect(executionRunStart).not.toHaveBeenCalled();
   });
@@ -1694,11 +1696,12 @@ describe('createActionExecutor run options parity (model + effort)', () => {
       { ...UI_CALLER, defaultSessionId: 's1' },
     );
 
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       errorCode: 'invalid_parameters',
       error: 'invalid_parameters',
-      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' } },
+      details: { executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+        issues: expect.arrayContaining([{ code: 'invalid_union', path: ['connectedServices'] }]) },
     });
     expect(executionRunStart).not.toHaveBeenCalled();
   });

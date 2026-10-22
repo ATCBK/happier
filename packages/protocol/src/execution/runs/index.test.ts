@@ -436,6 +436,20 @@ describe('executionRuns protocol', () => {
     })).toBe('outcomeUnknown');
   });
 
+  it('preserves content-free input repair issues alongside Run start certainty', () => {
+    const details = withExecutionRunStartFailureDetails({ issues: [{ code: 'invalid_value', path: ['retentionPolicy'],
+      acceptedValues: ['ephemeral', 'resumable'], message: 'private rejected value', input: 'private rejected value' }],
+      privateDiagnostic: 'private rejected value' }, 'noRunCreated');
+    expect(ExecutionRunStartFailureDetailsV1Schema.parse(details)).toEqual({
+      executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+      issues: [{ code: 'invalid_value', path: ['retentionPolicy'], acceptedValues: ['ephemeral', 'resumable'] }],
+    });
+    expect(withExecutionRunStartFailureDetails(details, 'outcomeUnknown')).toEqual({ ...details,
+      executionRunStart: { v: 1, runCreation: 'outcomeUnknown' } });
+    expect(withExecutionRunStartFailureDetails({ issues: [{ message: 'private rejected value' }] }, 'noRunCreated'))
+      .toEqual({ executionRunStart: { v: 1, runCreation: 'noRunCreated' } });
+  });
+
   it('exposes one strict detached start request projection for durable callers', () => {
     const request = {
       intent: 'task',

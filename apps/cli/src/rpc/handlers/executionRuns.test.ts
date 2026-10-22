@@ -1607,6 +1607,10 @@ describe('executionRuns session RPC handlers', () => {
 
     expect(res.ok).toBe(false);
     expect(res.errorCode).toBe('execution_run_invalid_action_input');
+    expect(res).toMatchObject({ details: {
+      executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+      issues: expect.arrayContaining([expect.objectContaining({ path: ['permissionMode'] })]),
+    } });
   });
 
   it('prefers backendTarget over legacy backendId in execution.run.list filters on the canonical handler path', async () => {

@@ -1,6 +1,7 @@
-import type { core } from 'zod/mini';
+import { z, type core } from 'zod/mini';
 import type { ErrorObject } from 'ajv';
 import type { PluginJsonSchemaValidator } from '../../plugins/actions/protocolComposableSchema.js';
+import { lazyZodSchema } from '../../lazyZodSchema.js';
 
 import type { ActionExecuteFailure } from '../actionExecutionResult.js';
 
@@ -11,6 +12,14 @@ type ActionInputIssue = Readonly<{
   expected?: string;
   acceptedValues?: readonly JsonPrimitive[];
 }>;
+
+/** Diagnostic facts are additive-open/drop; input-bearing extras never survive forwarding. */
+export const ActionInputIssueSchema = lazyZodSchema(() => z.object({
+  code: z.string(),
+  path: z.array(z.union([z.string(), z.number()])),
+  expected: z.optional(z.string()),
+  acceptedValues: z.optional(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))),
+}));
 
 function isJsonPrimitive(value: unknown): value is JsonPrimitive {
   return value === null || typeof value === 'string' || typeof value === 'boolean'
@@ -71,10 +80,8 @@ export function projectActionInputJsonSchemaIssues(
 
 /** Semantic checks use the same content-free repair envelope as schema validation. */
 export function actionInputIssueFailure(...issues: readonly ActionInputIssue[]): ActionExecuteFailure {
-  return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters', details: { issues: issues.map(issue => ({
-    code: issue.code,
-    path: [...issue.path],
-    ...(issue.expected === undefined ? {} : { expected: issue.expected }),
+  return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters', details: { issues: issues.map(issue => ActionInputIssueSchema.parse({
+    ...issue,
     ...(issue.acceptedValues === undefined ? {} : { acceptedValues: issue.acceptedValues.filter(isJsonPrimitive) }),
   })) } };
 }

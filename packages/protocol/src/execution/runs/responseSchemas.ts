@@ -43,6 +43,7 @@ import { ProviderAgentTargetKeySchema } from '../../providers/ids.js';
 import { ProviderBoundModelRefSchema } from '../../providers/selection/v1.js';
 import { ReviewFindingsV2Schema } from '../../messages/structured/reviewFindingsV2.js';
 import { SessionRuntimeIssueV1Schema } from '../../sessions/control/runtimeIssueV1.js';
+import { ActionInputIssueSchema } from '../../actions/executor/actionInputValidation.js';
 
 /** A refusal offers choices, never credential material or permission to use a route. */
 export const ExecutionRunChildChoiceV1Schema = lazyZodSchema(() => z.strictObject({
@@ -106,6 +107,7 @@ export const ExecutionRunStartFailureDetailsV1Schema = lazyZodSchema(() => z.str
   executionRunStart: ExecutionRunStartFailureEvidenceV1Schema,
   updateRequired: z.optional(OperationUpdateRequiredV1Schema),
   childChoice: z.optional(ExecutionRunChildChoiceV1Schema),
+  issues: z.optional(z.array(ActionInputIssueSchema)),
 }));
 export type ExecutionRunStartFailureDetailsV1 = z.infer<typeof ExecutionRunStartFailureDetailsV1Schema>;
 
@@ -128,10 +130,13 @@ export function withExecutionRunStartFailureDetails(
     : null;
   const childChoice = ExecutionRunChildChoiceV1Schema.safeParse(details && typeof details === 'object'
     && 'childChoice' in details ? details.childChoice : undefined);
+  const issues = z.array(ActionInputIssueSchema).safeParse(details && typeof details === 'object'
+    && 'issues' in details ? details.issues : undefined);
   return {
     executionRunStart: { v: 1, runCreation },
     ...(updateRequired?.success ? { updateRequired: updateRequired.data } : {}),
     ...(childChoice.success ? { childChoice: childChoice.data } : {}),
+    ...(issues.success ? { issues: issues.data } : {}),
   };
 }
 

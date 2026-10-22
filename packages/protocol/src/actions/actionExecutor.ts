@@ -4316,6 +4316,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           baseline: startContext?.baseline ?? { machineId: '', directory: '' } });
         if (!starts.ok) return classifyExecutionRunStartPreDispatchFailure(actionId, {
           ok: false, errorCode: starts.errorCode, error: starts.errorCode,
+          ...(starts.details === undefined ? {} : { details: starts.details }),
         });
         for (const start of starts.requests) {
           const admission = admitActionAgentStartV1(ctx, start, startContext);
@@ -7264,7 +7265,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           }
           const runOptions = resolveRunStartModelAndConfig(data);
           if (!runOptions.ok) {
-            return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
+            return runOptions.error;
           }
           const {
             teamCredentialSessionBindingConsent: _teamCredentialSessionBindingConsent,
@@ -7806,7 +7807,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           const runOptions = resolveRunStartModelAndConfig(data);
           if (!runOptions.ok) {
             return classifyExecutionRunStartFailure(
-              { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' },
+              runOptions.error,
               'noRunCreated',
             );
           }
@@ -7834,7 +7835,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             const normalized = normalizeConnectedServiceSelectionInput(request.connectedServices);
             if (!normalized.ok) {
               return classifyExecutionRunStartFailure(
-                { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' },
+                actionInputIssueFailure({ code: 'invalid_selection', path: ['connectedServices'] }),
                 'noRunCreated',
               );
             }

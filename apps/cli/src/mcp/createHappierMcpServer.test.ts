@@ -382,6 +382,57 @@ describe('createHappierMcpServer real host admission', () => {
     } finally { await client.close(); bridge.happierMcpServer.stop(); await sessionAuthority.close(); await daemon.close(); }
   }, 30_000);
 
+  it('retains canonical Run start issues and certainty for all three cont24 native payloads', async () => {
+    const sessionId = 'c666666666666666666666670';
+    const daemon = await installAccountCatalogDaemonTransport({ sessionId, readMetadata: () => createTestMetadata() });
+    process.env.HAPPIER_E2E_PROVIDER_USE_CLI_SOURCE_ENTRYPOINT = '1';
+    vi.spyOn(daemonControlClient, 'readDaemonPluginCatalog').mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+    const sessionAuthority = await createSessionDaemonAuthorityFixture({ sessionId,
+      execute: operation => daemon.executor.execute(ActionIdSchema.parse(operation.actionId), operation.input, {
+        surface: operation.surface, authority: 'account_automation', actionCaller: { kind: 'host' }, defaultSessionId: sessionId,
+      }) });
+    const bridge = await createHappierMcpBridge(hostClient(sessionId, {
+      getActiveTurnAdmissionWitness: () => ({ turnId: 'catalog-turn', inputId: 'catalog-input', userMessageSeq: 1, userMessageSeqs: [1],
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+    }));
+    const client = new Client({ name: 'native-run-start-repair-test', version: '1' });
+    const base = { intent: 'agent', backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      instructions: 'Reply with exactly: Run ORC_C2_CONT24_OK. Do not use tools, files, shell, or delegate.',
+      display: { title: 'C2-cont24 F1 Execution Run 20261022' }, permissionMode: 'read_only', retentionPolicy: 'persistent',
+      runClass: 'bounded', ioMode: 'request_response', cwd: '/tmp', configOptions: { reasoning_effort: 'low' },
+      waitForCompletion: true, waitTimeoutSeconds: 45 };
+    const selections = [
+      { modelId: 'gpt-6-luna', connectedServices: ['happier.agent.codex/openai-codex:profile:705530f2-81e8-4ba2-bc7b-7929a4b95b5a'] },
+      { modelId: 'gpt-6-luna', connectedServices: { v: 2, bindingsByServiceId: {
+        'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: '705530f2-81e8-4ba2-bc7b-7929a4b95b5a' },
+      } } },
+      { modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-6-luna' } },
+    ];
+    try {
+      const config = bridge.mcpServers.happier;
+      await client.connect(new StdioClientTransport({ command: config.command,
+        args: [...(config.args ?? [])], env: config.env ? { ...config.env } : undefined }));
+      for (const selection of selections) {
+        const reply = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
+          arguments: { actionId: 'execution.run.start', input: { ...base, ...selection } } }));
+        expect(reply.isError).toBe(true);
+        const content = reply.content.find(item => item.type === 'text');
+        if (content?.type !== 'text') throw new Error('Missing Run refusal');
+        expect(JSON.parse(content.text)).toMatchObject({ errorCode: 'invalid_parameters', details: {
+          executionRunStart: { v: 1, runCreation: 'noRunCreated' },
+          issues: [{ code: 'invalid_value', path: ['retentionPolicy'], acceptedValues: ['ephemeral', 'resumable'] }],
+        } });
+        expect(content.text).not.toContain(base.instructions);
+        expect(content.text).not.toContain('705530f2');
+        // Changing only the refused field admits each discovered selection
+        // through the real input contract, without starting a native process.
+        expect(getActionSpec('execution.run.start').inputSchema.safeParse({
+          ...base, ...selection, retentionPolicy: 'resumable',
+        }).success).toBe(true);
+      }
+    } finally { await client.close(); bridge.happierMcpServer.stop(); await sessionAuthority.close(); await daemon.close(); }
+  }, 30_000);
+
   it.each([
     { name: 'action_spec_get', arguments: { id: 'workflow.run.start', schemaPath: 'private-malformed-pointer' },
       issue: { code: 'invalid_format', path: ['schemaPath'], expected: 'starts_with "/"' } },

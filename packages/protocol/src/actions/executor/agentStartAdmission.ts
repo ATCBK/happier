@@ -25,6 +25,7 @@ import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import { ManagedAcquireAgentStartV1Schema } from '../../machines/managed/agentStartV1.js';
 import { PROFILE_ACTION_OUTPUT_SCHEMAS_V1, parseProfileActionRequestV1 } from '../../profiles/profileActionsV1.js';
 import { SessionCapabilitySelectionAuthoringV1Schema, SessionSkillSelectionAuthoringV1Schema } from '../../reach/sessionCapabilitySelectionV1.js';
+import { actionInputIssueFailure } from './actionInputValidation.js';
 
 /** Only fresh Session creation admits a Profile; resume keeps its stored session selection. */
 export async function resolveProfileSkillSeedsAtAdmissionV1(input: Readonly<Record<string, unknown>>,
@@ -129,8 +130,11 @@ export function resolveRunStartModelAndConfig(data: Readonly<Record<string, unkn
     const canonicalOverrides = canonical.success ? canonical.data : undefined;
     const shorthand = RunStartConfigOptionsSchema.safeParse(data.configOptions);
     const configOptions = shorthand.success ? shorthand.data : undefined;
-    if (findSpawnConfigOptionAliasConflicts({ sessionConfigOptionOverrides: canonicalOverrides, configOptions }).length > 0) {
-        return { ok: false as const };
+    const conflicts = findSpawnConfigOptionAliasConflicts({ sessionConfigOptionOverrides: canonicalOverrides, configOptions });
+    if (conflicts.length > 0) {
+        return { ok: false as const, error: actionInputIssueFailure(...conflicts.map(conflict => ({
+            code: 'conflicting_selection', path: ['configOptions', conflict.id],
+        }))) };
     }
     const merged = mergeSpawnConfigOptionAliases({
         ...(canonicalOverrides ? { sessionConfigOptionOverrides: canonicalOverrides } : {}),
@@ -157,6 +161,7 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
 }> | Readonly<{
     ok: false;
     errorCode: 'target_unavailable' | 'invalid_parameters';
+    details?: ActionExecuteFailure['details'];
     knownFacts?: AgentStartFactsV1;
     /** Concrete fan-out members still need Workflow admission while another member is deferred. */
     knownRequests?: readonly AgentStartRequestV1[];
@@ -317,7 +322,9 @@ export function resolveActionAgentStartRequestsV1(params: Readonly<{
         return { ok: false, errorCode: 'target_unavailable', knownRequests: requests,
             knownFacts: selectedFacts(executionRunStartFactsV1(startInput, unresolved, context, baseline)),
         };
-    if (!runOptions.ok || (intent && !intent.success))
+    if (!runOptions.ok)
+        return { ok: false, errorCode: 'invalid_parameters', details: runOptions.error.details };
+    if (intent && !intent.success)
         return { ok: false, errorCode: 'invalid_parameters' };
     let projectedConnectedServices: Readonly<Record<string, unknown>> | undefined;
     if (overrideEngine && Array.isArray(targetValues) && perTargetConnectedServices
