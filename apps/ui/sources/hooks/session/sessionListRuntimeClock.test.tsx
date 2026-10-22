@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { installTimerCensus } from '@/dev/testkit/performance/timerCensus';
 import { formatNextScheduledRun, readNextScheduledRunRefreshAtMs } from '@/components/workflows/triggers/formatTriggerSummary';
 import { formatRelativeTimeShort, readRelativeTimeShortRefreshAtMs } from '@/utils/time/formatShortRelativeTime';
 
@@ -29,6 +30,33 @@ function useClockConsumer(params: {
 }
 
 describe('sessionListRuntimeClock', () => {
+    it('keeps settled Home row observers timer-free until a named consumer requests a deadline', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const clock = createSessionListRuntimeClock();
+        const census = installTimerCensus(stack => /[\\/]sessionListRuntimeClock\.ts:/.test(stack)
+            ? 'session-list requested deadline' : null);
+        const observer = await renderHook(() => useSessionListRuntimeNowMs(true, clock));
+        try {
+            // Baseline: a mounted observer with no freshness deadline owns zero
+            // timers. No timing/noise margin applies to a fake-timer census.
+            expect(census.read()).toEqual([]);
+            expect(vi.getTimerCount()).toBe(0);
+            const relativeAgeRow = {};
+            clock.requestWake(relativeAgeRow, 2_000);
+            expect(census.read()).toEqual([{
+                kind: 'timeout', delayMs: 1_000, consumer: 'session-list requested deadline',
+            }]);
+            clock.clearWake(relativeAgeRow);
+            expect(census.read()).toEqual([]);
+            await flushHookEffects({ advanceTimersMs: 300_000, cycles: 1, turns: 2 });
+            expect(observer.getCurrent()).toBe(1_000);
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            await observer.unmount();
+            census.stop();
+        }
+    });
     it('refreshes rounded occurrences and floor ages independently while unrelated subscribers stay stable', async () => {
         vi.useFakeTimers();
         const now = new Date(2026, 9, 10, 10).getTime();
