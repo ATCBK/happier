@@ -1,4 +1,5 @@
 import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import {
@@ -14,7 +15,7 @@ export type ServerCredentialAccountScopeResolution =
     | Readonly<{ kind: 'unknown_home' }>
     | Readonly<{ kind: 'unavailable' }>
     | Readonly<{ kind: 'signed_out' }>
-    | Readonly<{ kind: 'bound'; scope: ServerAccountScope; lifetime?: ServerAccountScopeLifetime & Readonly<{ revision: number }> }>;
+    | Readonly<{ kind: 'bound'; scope: ServerAccountScope; credentialKey?: string; lifetime?: ServerAccountScopeLifetime & Readonly<{ revision: number }> }>;
 
 type RetryListener = (serverId: string) => void;
 const retryListeners = new Set<RetryListener>();
@@ -70,7 +71,7 @@ export function resolveAdmittedEmbedServerCredentialAccountScope(
     const admitted = getSyncSingleton().getEmbedSessionRequestContext();
     if (!admitted || admitted.serverId !== serverId || !admitted.isCurrent()) return { kind: 'unavailable' };
     const scope = createServerAccountScope(admitted.serverId, admitted.accountId);
-    return scope ? { kind: 'bound', scope, lifetime: {
+    return scope ? { kind: 'bound', scope, credentialKey: resolveAuthCredentialsScopeKey(admitted.credentials), lifetime: {
         scope, revision: admitted.revision, isCurrent: admitted.isCurrent, onRetire: admitted.onRetire,
     } } : { kind: 'unavailable' };
 }
@@ -103,7 +104,7 @@ export async function resolveServerCredentialAccountScope(
             canonicalServerId,
             credentials ? parseToken(credentials.token) : null,
         );
-        return scope ? { kind: 'bound', scope } : { kind: 'signed_out' };
+        return scope && credentials ? { kind: 'bound', scope, credentialKey: resolveAuthCredentialsScopeKey(credentials) } : { kind: 'signed_out' };
     } catch {
         // A malformed credential cannot establish an Account binding.
         return { kind: 'signed_out' };

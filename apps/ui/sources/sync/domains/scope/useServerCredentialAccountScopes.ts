@@ -29,6 +29,8 @@ export type ServerCredentialAccountScopeBinding = ServerAccountScopeLifetime & R
     serverId: string;
     accountId: string;
     revision: number;
+    /** Exact credential/material fingerprint for retained display data; never an authorization verdict. */
+    credentialKey?: string;
 }>;
 
 type UnboundScopeResolution =
@@ -102,6 +104,7 @@ function useCredentialScopeEntries(
             if (resolution.kind === 'bound' && resolution.lifetime) {
                 next.set(serverId, { resolution: { kind: 'bound', scope: resolution.scope }, binding: {
                     ...resolution.lifetime, serverId, accountId: resolution.scope.accountId,
+                    credentialKey: resolution.credentialKey,
                 } });
             } else {
                 // Keep document identity during renewal, not current authority.
@@ -198,6 +201,7 @@ function useCredentialScopeEntries(
                 accountId: scope.accountId,
                 scope,
                 revision,
+                credentialKey: resolution.credentialKey,
                 isCurrent,
                 onRetire: (cancel) => {
                     if (!isCurrent()) {

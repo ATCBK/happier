@@ -135,7 +135,7 @@ describe('resolveServerCredentialAccountScope', () => {
             return store.get(key) ?? null;
         });
 
-        await expect(resolveServerCredentialAccountScope(home.id)).resolves.toEqual({
+        await expect(resolveServerCredentialAccountScope(home.id)).resolves.toMatchObject({
             kind: 'bound',
             scope: { serverId: home.id, accountId: 'legacy-account' },
         });
