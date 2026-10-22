@@ -9,10 +9,11 @@ import {
     getAgentIconSvgXml,
     getAgentIconTintColor,
 } from '@/agents/catalog/catalog';
+import { Icon } from '@/components/ui/icons/Icon';
 import { SafeExpoImage } from '@/components/ui/media/SafeExpoImage';
 
 type AgentIconProps = Readonly<{
-    agentId: string;
+    agentId: string | null;
     size: number;
     color?: string;
     style?: StyleProp<ImageStyle>;
@@ -49,6 +50,10 @@ export const AgentIcon = React.memo(function AgentIcon(props: AgentIconProps) {
     const { theme, rt } = useUnistyles();
     // Raw SVG XML is resolved in JS, so subscribe it to adaptive appearance changes explicitly.
     void rt.colorScheme;
+
+    if (agentId === null) {
+        return <Icon name="stack-simple" size={size} color={color ?? theme.colors.text.secondary} style={style} testID={testID} />;
+    }
 
     const svgXml = getAgentIconSvgXml(agentId, theme);
     if (svgXml) {

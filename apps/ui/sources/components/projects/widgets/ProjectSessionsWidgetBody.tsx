@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { readSessionRowPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -112,11 +112,7 @@ export function ProjectSessionsWidgetBody(
             testID={`${props.testID}.session:${item.sessionId}`}
             mark={
               <SessionAgentCatalogIdentityIcon
-                agentId={
-                  resolveAgentIdFromSessionMetadata(
-                    session.metadata as never,
-                  ) ?? ''
-                }
+                agentId={readSessionRowPresentationAgentId(session) ?? ''}
                 machineId={resolveSessionMachineId(session.metadata)}
                 serverId={serverId}
                 color={theme.colors.text.primary}

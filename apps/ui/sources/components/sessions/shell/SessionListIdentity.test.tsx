@@ -5,6 +5,10 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { SessionAgentCatalogIdentityIcon } from '../presentation/SessionAgentCatalogIdentityIcon';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { buildSessionListCacheEntryFromRenderable, buildSessionListRenderableFromCacheEntry } from '@/sync/domains/state/warmCacheAdapters';
+import { SessionListCacheEntryV1Schema } from '@/sync/domains/state/warmCachePersistence';
+
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,6 +58,25 @@ describe('SessionListIdentity', () => {
             testID: 'identity',
         });
         expect(screen.tree.root.findAllByType('Avatar')).toHaveLength(0);
+    });
+
+    it.each([
+        { identity: { runtimeDescriptorV1: { v: 1 as const, agentId: 'acme.agent', agent: {}, provider: {} } }, expected: 'acme.agent' },
+        { identity: { flavor: 'codex-acp' }, expected: 'codex' },
+        { identity: {}, expected: null },
+    ])('retains Agent presentation through compact and persisted cache rows: $expected', async ({ identity, expected }) => {
+        const { SessionListIdentity } = await import('./SessionListIdentity');
+        const full = createSessionFixture({ metadataLayoutVersion: 0,
+            metadata: { path: '/repo', host: 'home', ...identity } });
+        const compact = buildSessionListRenderableFromSession(full);
+        const persisted = SessionListCacheEntryV1Schema.parse(JSON.parse(JSON.stringify(buildSessionListCacheEntryFromRenderable(compact))));
+        const restored = buildSessionListRenderableFromCacheEntry(persisted);
+        for (const session of [full, compact, restored]) {
+            const screen = await renderScreen(<SessionListIdentity session={session} display="agentLogo"
+                serverId="home" color="currentColor" avatarSize={28} agentLogoSize={22} connected={true} />);
+            expect(screen.tree.root.findByType(SessionAgentCatalogIdentityIcon).props.agentId).toBe(expected ?? '');
+            await screen.unmount();
+        }
     });
 
     it('dims the provider logo for a session that is not live, as the avatar is greyed', async () => {

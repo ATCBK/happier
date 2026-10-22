@@ -54,7 +54,6 @@ import {
 } from '../../presentation/externalSessionIdentityPresentation';
 import type { ExternalSessionRuntimePresentation } from '../../presentation/externalSessionRuntimePresentation';
 import { SessionRowAttentionIndicator } from '../row/SessionRowAttentionIndicator';
-import { resolveAgentIdFromFlavor, resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { Icon } from '@/components/ui/icons/Icon';
 import { ActionOperationActivityButton } from '@/components/inbox/actionOperations/ActionOperationActivityButton';
 import { resolveSessionCompanionHeaderPlacement } from '@/components/sessions/companion/sessionCompanionHeaderPlacement';
@@ -356,10 +355,9 @@ export function resolveSessionViewHeaderProps(input: ResolveSessionViewHeaderPro
         ? input.workspaceSubtitleEllipsizeMode ?? 'head' as const
         : undefined;
     const avatarId = getSessionAvatarId(session);
-    const agentId = resolveAgentIdFromSessionMetadata(session.metadata)
-        ?? resolveAgentIdFromFlavor(session.metadata?.flavor ?? null);
+    const agentId = readSessionPresentationAgentId(session);
     const isConnected = getSessionStatus(session).isConnected;
-    const flavor = readSessionPresentationAgentId(session) ?? ownerMetadata?.flavor ?? null;
+    const flavor = agentId;
     // Only an external Session names its storage: every other Session here is a Happier Session,
     // and a badge saying so is healthy-state noise that costs the title its width.
     const resolvedStorageBadge = externalSessionIdentity.agentId !== null ? externalSessionIdentity.storageLabel : null;

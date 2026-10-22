@@ -8,7 +8,7 @@
  * the draft repository — so a row says exactly what the session list says.
  */
 
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
+import { readSessionRowPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { readableMessageText } from '@/components/sessions/transcript/messageDisplayText';
 
 import type { IconName } from '@/components/ui/icons/Icon';
@@ -70,6 +70,7 @@ type RowsState = Readonly<{
 type SessionLike = Readonly<{
     id?: string;
     metadata?: unknown;
+    metadataLayoutVersion?: number;
     createdAt: number;
     meaningfulActivityAt?: number | null;
     serverId?: unknown;
@@ -148,7 +149,7 @@ export function readSessionSwitcherRows(params: Readonly<{
                 section: entry.section,
                 target: { kind: 'session', sessionId: address.sessionId, serverId: address.serverId, tabId: entry.tabId },
                 title: tab && !session ? tab.title : getSessionName({ id: address.sessionId, metadata: session?.metadata ?? null } as never, address.serverId),
-                agentId: session ? resolveAgentIdFromSessionMetadata(session.metadata as never) : null,
+                agentId: session ? readSessionRowPresentationAgentId(session) : null,
                 machineId: session ? resolveSessionMachineId(session.metadata as never) : null,
                 serverId: address.serverId,
                 icon: null,

@@ -17,6 +17,7 @@ vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNati
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
+let contributedAgentId: string | null = null;
 let fail = false;
 let sessionIds = ['own'];
 let requests = 0;
@@ -65,7 +66,7 @@ const runtime = installSessionPaneRuntimeTestHarness({
             } })),
         } : {
             metadataLayoutVersion: 0,
-            metadata: JSON.stringify({ path: '/repo', machineId: 'machine', projectId: id.startsWith('other') ? 'other-project' : 'anchor' }),
+            metadata: JSON.stringify({ path: '/repo', machineId: 'machine', projectId: id.startsWith('other') ? 'other-project' : 'anchor', ...(contributedAgentId ? { runtimeDescriptorV1: { v: 1, agentId: contributedAgentId, agent: {}, provider: {} } } : {}) }),
         }),
         metadataVersion: 1, agentState: null, agentStateVersion: 1, share: null,
         effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionAccessFixture().capabilities },
@@ -85,6 +86,7 @@ const { listSessionsForVoiceTool } = await import('@/voice/tools/actionImpl/sess
 
 describe('Project Sessions widget body', () => {
     beforeEach(() => {
+        contributedAgentId = null;
         fail = false;
         paged = false;
         layoutOne = false;
@@ -111,6 +113,20 @@ describe('Project Sessions widget body', () => {
         expect(screen.findByTestId('w.empty')).toBeNull();
         expect(screen.findHostByTestId('w.more')).not.toBeNull();
         expect(continuationRequested).toBe(false);
+    });
+
+    it('keeps a contributed Agent mark through the real compact Project roster', async () => {
+        contributedAgentId = 'acme.agent';
+        sessionIds = ['contributed'];
+        const { SessionAgentCatalogIdentityIcon } = await import('@/components/sessions/presentation/SessionAgentCatalogIdentityIcon');
+        const checkout = { id: 'checkout', serverId: runtime.serverId, machineId: 'machine', rootPath: '/repo', projectKey: 'anchor', createdAtMs: 1 };
+        applyProjectAccountRowsFixture(storage, { workspaceRefs: [checkout] });
+        const screen = await renderScreen(<runtime.Wrapper><ProjectSessionsWidgetBody checkout={checkout} testID="agent-widget" /></runtime.Wrapper>);
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            expect(screen.findHostByTestId('agent-widget.session:contributed')).not.toBeNull();
+        });
+        expect(screen.tree.root.findAllByType(SessionAgentCatalogIdentityIcon).map(node => node.props.agentId)).toContain('acme.agent');
     });
 
     it('automatically renders owner rows past a page with no Project matches', async () => {

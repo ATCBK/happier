@@ -130,7 +130,7 @@ import {
 } from '@/sync/domains/state/storage';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
-import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
+import { readSessionRowPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
 import type { ExternalSessionIdentityPresentation } from '../presentation/externalSessionIdentityPresentation';
 import {
@@ -783,12 +783,8 @@ const SessionItemContent = React.memo(
         // both degrade to their neutral mark; painting the default Agent's brand
         // on someone else's Session is a lie, not a fallback.
         const agentId = React.useMemo(
-            () => (
-                'agentState' in resolvedSession
-                    ? readSessionPresentationAgentId(resolvedSession)
-                    : resolveAgentIdFromSessionMetadata(resolvedSessionMetadata)
-            ),
-            [resolvedSession, resolvedSessionMetadata],
+            () => readSessionRowPresentationAgentId(resolvedSession),
+            [resolvedSession],
         );
         const resolvedSelectionKey = selectionKey ?? '';
         const rowSelection = useOptionalSessionListSelectionRow(resolvedSelectionKey);

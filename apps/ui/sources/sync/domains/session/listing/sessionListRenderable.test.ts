@@ -352,6 +352,16 @@ describe('preserveSessionListRenderableStaleFields', () => {
 });
 
 describe('buildSessionListRenderableFromSession', () => {
+    it.each([
+        { flavor: 'claude', runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: {}, provider: {} } },
+        { codexSessionId: 'native-codex-session' },
+    ])('preserves canonical legacy Agent identity when compacting metadata: %j', (identity) => {
+        const session = createSessionFixture({ metadataLayoutVersion: 0,
+            metadata: { path: '/repo', host: 'home', ...identity } });
+        expect(buildSessionListRenderableFromSession(session).metadata?.flavor).toBe('codex');
+    });
+
+
     // Immutable server-v0.2.11 (98ea8fb) projected the Session-scoped cursor
     // and owner metadata for both owners and `share` recipients. These vectors
     // pin the UI's bounded pre-viewer compatibility decision.
@@ -518,7 +528,8 @@ describe('buildSessionListRenderableFromSession', () => {
                 homeDir: '/owner',
                 host: 'owner.local',
                 machineId: 'owner-machine',
-                flavor: 'claude',
+                flavor: 'codex',
+                runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {}, provider: {} },
             } as Session['metadata'],
             metadataVersion: 1,
             agentState: null,

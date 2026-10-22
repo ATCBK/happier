@@ -786,12 +786,13 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
         expect(header.badges ?? []).toEqual([]);
     });
 
-    it('uses the layout-v1 owner compatibility view for the private workspace subtitle', () => {
+    it.each(['codex', null])('uses layout-v1 public Agent presentation %s alongside the private workspace subtitle', (agentId) => {
         const session = createSessionFixture({
             id: 'layout-v1-session',
             metadataLayoutVersion: 1,
             metadata: {
                 v: 1,
+                ...(agentId ? { agentPresentation: { agentId } } : {}),
                 summary: {
                     text: 'Shared title',
                     updatedAt: 1,
@@ -799,6 +800,7 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
             } as never,
             ownerMetadataView: {
                 path: '/Users/private/project',
+                flavor: 'claude',
                 host: 'private-host',
                 homeDir: '/Users/private',
                 machineId: 'private-machine',
@@ -832,6 +834,8 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
         });
 
         expect(result.subtitle).toBe('~/project');
+        expect(result.agentId).toBe(agentId);
+        expect(result.flavor).toBe(agentId);
     });
 
     it('keeps an external machine badge when the current machine is different or unknown', () => {

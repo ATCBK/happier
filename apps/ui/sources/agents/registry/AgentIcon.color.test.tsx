@@ -110,6 +110,14 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => ({
     getAgentIconTintColor: catalogSpies.getAgentIconTintColor,
 }));
 
+it('renders an unknown Agent as a neutral mark', async () => {
+    const { AgentIcon } = await import('./AgentIcon');
+    const { Icon } = await import('@/components/ui/icons/Icon');
+    const screen = await renderScreen(<AgentIcon agentId={null} size={16} testID="unknown-agent" />);
+    expect(screen.root.findAll(node => node.type === Icon && node.props.name === 'stack-simple')).toHaveLength(1);
+    await screen.unmount();
+});
+
 describe('AgentIcon color override', () => {
     afterEach(() => {
         standardCleanup();

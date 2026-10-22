@@ -48,6 +48,7 @@ import {
 } from './sessionListReadableActivity';
 import { resolveSessionProjectGroupingKeyParts } from './sessionListProjectGroupingKeys';
 import { readSessionPresentationCompletedRequests } from '../presentation/readSessionPresentationCompletedRequests';
+import { readSessionPresentationAgentId } from '../presentation/readSessionPresentationAgentId';
 import {
     areSessionListRenderableExternalSessionIdentitiesEqual,
     areSessionListRenderableMetadataComparisonsEqual,
@@ -332,7 +333,10 @@ export function readSessionListRenderableSourceMetadata(
 ): Metadata | null {
     const metadataLayoutVersion = readSessionMetadataLayoutVersion(session.metadataLayoutVersion);
     if (metadataLayoutVersion === 0) {
-        return session.metadata;
+        const metadata = session.metadata;
+        if (!metadata) return metadata;
+        const agentId = readSessionPresentationAgentId(session);
+        return metadata.flavor === agentId ? metadata : { ...metadata, flavor: agentId };
     }
     if (metadataLayoutVersion !== 1) {
         return null;

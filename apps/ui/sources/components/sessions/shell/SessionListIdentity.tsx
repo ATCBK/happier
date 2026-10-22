@@ -1,4 +1,3 @@
-import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -7,7 +6,7 @@ import { useSetting } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
+import { readSessionRowPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { getSessionAvatarId } from '@/utils/sessions/sessionUtils';
 
 import { SessionAgentCatalogIdentityIcon } from '../presentation/SessionAgentCatalogIdentityIcon';
@@ -43,9 +42,7 @@ export const SessionListIdentity = React.memo(function SessionListIdentity(props
     const metadata = 'agentState' in props.session
         ? readSessionOwnerMetadataView(props.session)
         : props.session.metadata;
-    const agentId = 'agentState' in props.session
-        ? readSessionPresentationAgentId(props.session)
-        : resolveAgentIdFromSessionMetadata(metadata);
+    const agentId = readSessionRowPresentationAgentId(props.session);
 
     if (props.display === 'avatar') {
         return (
