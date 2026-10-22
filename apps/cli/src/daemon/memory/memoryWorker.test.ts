@@ -11,6 +11,82 @@ import { encodeBase64, encryptLegacy } from '@/api/encryption';
 await import('@/api/api');
 
 describe('memoryWorker', () => {
+  it.each(['new_only', 'all_history'] as const)('keeps idle 6/6/5 readiness stable when only Session metadata changes (%s)', async backfillPolicy => {
+    const session = { id: 'metadata-tail', machineId: 'machine_1', seq: 6, createdAt: 2000, updatedAt: 3000,
+      active: true, activeAt: 3000, archivedAt: null, encryptionMode: 'plain' };
+    let inventoryGate: Promise<void> | null = null;
+    let inventoryEntered = () => {};
+    vi.doMock('@/session/transport/http/sessionsHttp', () => ({
+      fetchSessionsPage: async ({ archivedOnly }: { archivedOnly?: boolean }) => {
+        if (!archivedOnly && inventoryGate) { inventoryEntered(); await inventoryGate; }
+        return { sessions: archivedOnly ? [] : [{ ...session }], nextCursor: null, hasNext: false };
+      },
+      fetchSessionById: async () => ({ ...session }),
+    }));
+    let text = 'quartz retained reply';
+    vi.doMock('@/session/replay/fetchEncryptedTranscriptMessages', () => ({
+      fetchEncryptedTranscriptMessagesPage: async ({ afterSeq, roles }: { afterSeq?: number; roles?: readonly string[] }) => ({
+        messages: [
+          { id: 'reply', seq: 5, createdAt: 2000, messageRole: 'agent',
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text } } } },
+          { id: 'event', seq: 6, createdAt: 2001, messageRole: 'event',
+            content: { t: 'plain', v: { role: 'event', content: { type: 'event', data: { type: 'turn-end' } } } } },
+        ].filter(row => row.seq > (afterSeq ?? 0) && (!roles || roles.includes(row.messageRole))),
+        hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+      }),
+    }));
+    const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
+    await writeMemorySettingsToDisk({ v: 1, enabled: true, enabledAtMs: 1000, indexMode: 'deep', backfillPolicy,
+      coveragePolicy: { type: 'full' }, deep: { minChunkMessages: 1 },
+      worker: { inventoryRefreshIntervalMs: 5000, tickIntervalMs: 60_000 } });
+    const { startMemoryWorker } = await import('./memoryWorker');
+    const worker = await startMemoryWorker({ credentials: { token: 'fixture', encryption: null }, machineId: 'machine_1' });
+    const { configuration } = await import('@/configuration');
+    const previousDaemon = configuration.isDaemonProcess;
+    let releaseInventory = () => {};
+    try {
+      await worker.ensureUpToDate(session.id);
+      await worker.ensureUpToDate(session.id);
+      const initial = worker.getWorkerStatus();
+      expect(initial).toMatchObject({ state: 'idle', activeOperations: [],
+        sessionProgress: [{ sessionId: session.id, observedSeq: 6, checkedSeq: 6, indexedSeq: 5 }] });
+      // Let the work wake finish against the old inventory while the real HTTP
+      // boundary holds the new metadata row. Then publish inventory alone.
+      configuration.isDaemonProcess = true;
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      await worker.reloadSettings();
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', currentPhase: null, activeOperations: [] }));
+      session.updatedAt++;
+      inventoryGate = new Promise<void>(resolve => { releaseInventory = resolve; });
+      const entered = new Promise<void>(resolve => { inventoryEntered = resolve; });
+      await vi.advanceTimersByTimeAsync(5000);
+      await entered;
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', currentPhase: null, activeOperations: [] }));
+      const before = worker.getWorkerStatus();
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
+      releaseInventory();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await vi.waitFor(() => expect(worker.getWorkerStatus()).toMatchObject({ state: 'idle', currentPhase: null, activeOperations: [] }));
+      const after = worker.getWorkerStatus();
+      expect(after.sessionProgress).toEqual(initial.sessionProgress);
+      expect(after.lastTickAtMs).toBe(before.lastTickAtMs);
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
+      inventoryGate = null;
+      configuration.isDaemonProcess = previousDaemon;
+      // The direct Session path consumes the same metadata contract.
+      session.updatedAt++;
+      await worker.ensureUpToDate(session.id);
+      text = 'sapphire revised reply';
+      await worker.noteSessionTranscriptRevised?.({ sessionId: session.id, seq: 5, messageId: 'reply' });
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'indexing' });
+      await worker.ensureUpToDate(session.id);
+      const { searchTier2Memory } = await import('./searchMemory');
+      const result = await searchTier2Memory({ dbPath: worker.getDeepDbPath()!,
+        query: { v: 1, query: 'sapphire', scope: { type: 'session', sessionId: session.id }, mode: 'deep' }, previewChars: 240 });
+      expect(result.ok && result.hits).toHaveLength(1);
+      expect(worker.getIndexSources?.()).toContainEqual({ source: { type: 'happier_session', sessionId: session.id }, state: 'ready' });
+    } finally { releaseInventory(); await worker.stop(); configuration.isDaemonProcess = previousDaemon; vi.useRealTimers(); }
+  });
   it.each(['new_only', 'all_history'] as const)('keeps a checked 6/5 event-tail Session ready while another Session in the %s batch is reading', async backfillPolicy => {
     const covered = { id: 'event-tail', machineId: 'machine_1', seq: 6, createdAt: 2000, updatedAt: 3000,
       active: true, activeAt: 3000, archivedAt: null, encryptionMode: 'plain' };

@@ -113,7 +113,6 @@ export type MemoryInventoryRefresh = Readonly<{
   sessionIds: readonly string[];
   allowInitialBackfillSessionIds: readonly string[];
   observedSeqBySessionId: ReadonlyMap<string, number>;
-  observedUpdatedAtBySessionId: ReadonlyMap<string, number>;
   state: MemoryInventoryState;
 }>;
 
@@ -223,7 +222,6 @@ export async function refreshMemoryInventoryOnce(params: Readonly<{
   const sessionIds: string[] = [];
   const allowInitialBackfillSessionIds: string[] = [];
   const observedSeqBySessionId = new Map<string, number>();
-  const observedUpdatedAtBySessionId = new Map<string, number>();
   const emitted = new Set<string>();
   const nextState: Record<MemoryInventoryScope, MemoryInventoryScopeCursorV1> = {
     active: params.state.active,
@@ -256,7 +254,6 @@ export async function refreshMemoryInventoryOnce(params: Readonly<{
           if (!eligibility || emitted.has(eligibility.sessionId)) continue;
           emitted.add(eligibility.sessionId);
           observedSeqBySessionId.set(eligibility.sessionId, eligibility.observedSeq);
-          observedUpdatedAtBySessionId.set(eligibility.sessionId, row.updatedAt);
           if (eligibility.allowInitialBackfill) {
             allowInitialBackfillSessionIds.push(eligibility.sessionId);
           }
@@ -310,7 +307,6 @@ export async function refreshMemoryInventoryOnce(params: Readonly<{
       if (!eligibility) continue;
       emitted.add(id);
       observedSeqBySessionId.set(id, eligibility.observedSeq);
-      observedUpdatedAtBySessionId.set(id, row.updatedAt);
       if (params.seenSessionIds.has(id)) continue;
       sessionIds.push(id);
     }
@@ -329,7 +325,6 @@ export async function refreshMemoryInventoryOnce(params: Readonly<{
     sessionIds,
     allowInitialBackfillSessionIds,
     observedSeqBySessionId,
-    observedUpdatedAtBySessionId,
     state: nextState,
   };
 }

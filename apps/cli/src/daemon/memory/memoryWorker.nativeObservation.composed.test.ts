@@ -2,16 +2,35 @@ import { appendFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import axios from 'axios';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 
-// Prepare the real registration graph outside the individual workload deadline.
-await import('@/plugins/testkit/admittedRuntime');
-await import('./memoryWorker');
-await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
-
 describe('registered native transcript source observation', () => {
+  let directory: string;
+  let env: ReturnType<typeof createEnvKeyScope>;
+  beforeEach(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'happier-memory-source-observation-'));
+    const agentDir = join(directory, 'agent');
+    env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'PI_CODING_AGENT_DIR', 'HOME', 'USERPROFILE', 'XDG_DATA_HOME', 'GEMINI_CLI_HOME', 'QWEN_RUNTIME_DIR', 'COPILOT_HOME', 'CODEBUDDY_CONFIG_DIR', 'GROK_HOME', 'KIRO_HOME', 'KIMI_CODE_HOME', 'CODEX_HOME', 'HAPPIER_CODEX_HOME']);
+    env.patch({ HAPPIER_HOME_DIR: join(directory, 'home'), HAPPIER_SERVER_URL: 'https://home.test',
+      HAPPIER_WEBAPP_URL: 'https://home.test', PI_CODING_AGENT_DIR: agentDir, HOME: directory, USERPROFILE: directory,
+      XDG_DATA_HOME: join(directory, 'data'), GEMINI_CLI_HOME: directory, QWEN_RUNTIME_DIR: join(directory, '.qwen'),
+      COPILOT_HOME: join(directory, '.copilot'), CODEBUDDY_CONFIG_DIR: join(directory, '.codebuddy'),
+      GROK_HOME: join(directory, '.grok'), KIRO_HOME: join(directory, '.kiro'), KIMI_CODE_HOME: join(directory, '.kimi-code'),
+      CODEX_HOME: join(directory, '.codex'), HAPPIER_CODEX_HOME: join(directory, '.codex') });
+    vi.resetModules();
+    // Reset first, then load the real graph against this case's isolated Home.
+    // Loading it before reset charged a second cold graph to the reader test.
+    await import('@/plugins/testkit/admittedRuntime');
+    await import('./memoryWorker');
+    await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
+  });
+  afterEach(async () => {
+    env?.restore();
+    vi.resetModules();
+    if (directory) await rm(directory, { recursive: true, force: true });
+  });
   it.each([
     { agentId: 'codex', pluginId: 'happier.agent.codex' },
     { agentId: 'pi', pluginId: 'happier.agent.pi' },
@@ -31,16 +50,7 @@ describe('registered native transcript source observation', () => {
     { agentId: 'kimi', pluginId: 'happier.agent.kimi' },
     { agentId: 'devin', pluginId: 'happier.agent.devin' },
   ])('$agentId indexes append and removal through the shared source observer', async ({ agentId, pluginId }) => {
-    const directory = await mkdtemp(join(tmpdir(), 'happier-memory-source-observation-'));
     const agentDir = join(directory, 'agent');
-    const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'PI_CODING_AGENT_DIR', 'HOME', 'USERPROFILE', 'XDG_DATA_HOME', 'GEMINI_CLI_HOME', 'QWEN_RUNTIME_DIR', 'COPILOT_HOME', 'CODEBUDDY_CONFIG_DIR', 'GROK_HOME', 'KIRO_HOME', 'KIMI_CODE_HOME', 'CODEX_HOME', 'HAPPIER_CODEX_HOME']);
-    env.patch({ HAPPIER_HOME_DIR: join(directory, 'home'), HAPPIER_SERVER_URL: 'https://home.test',
-      HAPPIER_WEBAPP_URL: 'https://home.test', PI_CODING_AGENT_DIR: agentDir, HOME: directory, USERPROFILE: directory,
-      XDG_DATA_HOME: join(directory, 'data'), GEMINI_CLI_HOME: directory, QWEN_RUNTIME_DIR: join(directory, '.qwen'),
-      COPILOT_HOME: join(directory, '.copilot'), CODEBUDDY_CONFIG_DIR: join(directory, '.codebuddy'),
-      GROK_HOME: join(directory, '.grok'), KIRO_HOME: join(directory, '.kiro'), KIMI_CODE_HOME: join(directory, '.kimi-code'),
-      CODEX_HOME: join(directory, '.codex'), HAPPIER_CODEX_HOME: join(directory, '.codex') });
-    vi.resetModules();
     // Home HTTP and OS watch delivery are the only controlled boundaries.
     const get = vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
@@ -475,9 +485,6 @@ describe('registered native transcript source observation', () => {
       await runtime?.dispose();
       devinFixture?.close();
       get.mockRestore();
-      env.restore();
-      vi.resetModules();
-      await rm(directory, { recursive: true, force: true });
     }
   });
 });

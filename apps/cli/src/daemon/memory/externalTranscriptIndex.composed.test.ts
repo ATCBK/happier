@@ -35,6 +35,72 @@ vi.mock('../../../../../apps/ui/sources/sync/runtime/orchestration/serverScopedR
 vi.mock('../../../../../apps/ui/sources/sync/ops/machineExternalSessions', () => ({ machineExternalSessionsCandidatesList: transports.list }));
 
 describe('external memory transcript ingestion', () => {
+  it('finishes a multi-page Codex backfill before starting the remaining backlog, then indexes its append', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-codex-backfill-'));
+    const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });
+    const lifetime = new AbortController();
+    try {
+      const id = '11111111-1111-4111-8111-111111111111';
+      const project = join(dir, 'sessions', '2026', '10', '22');
+      await mkdir(project, { recursive: true });
+      const path = join(project, `rollout-2026-10-22T00-00-00-${id}.jsonl`);
+      const timestamp = new Date().toISOString();
+      const row = (index: number) => JSON.stringify({ type: 'response_item', timestamp, payload: {
+        type: 'message', role: 'user', content: [{ type: 'input_text', text: `r252ordinal${index} ${'native backfill '.repeat(440)}` }],
+      } }) + '\n';
+      await writeFile(path, JSON.stringify({ type: 'session_meta', timestamp, payload: { id, cwd: '/synthetic' } }) + '\n'
+        + Array.from({ length: 200 }, (_, index) => row(index)).join(''));
+      const reader = createBoundedAgentExternalSessionsContribution({ contribution: createCodexExternalSessionsContribution({ env: { CODEX_HOME: dir } }),
+        identity: { pluginId: 'fixture.codex', agentId: 'codex', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.codex/agents/codex', sourceCustody: { kind: 'development', registeredRootId: 'fixture' } },
+        retirementSignal: lifetime.signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const source = { type: 'external_transcript' as const, agentId: 'codex', sourceKey: 'local', nativeSessionId: id };
+      const native = { agentId: 'codex', sourceKey: 'local', source: { kind: 'codexHome', home: 'user' }, reader,
+        observation: { lifetime: lifetime.signal } };
+      const candidate = { source, native };
+      const settings = normalizeMemorySettings({ enabled: true, indexMode: 'deep', backfillPolicy: 'all_history', coveragePolicy: { type: 'full' },
+        conversationSearch: { indexExternal: { enabled: true, agents: ['codex'], historyDays: 1 } } });
+      const traversal = createMemoryExternalTranscriptTraversal();
+      traversal.replace([candidate]);
+      const sync = async () => {
+        const selected = traversal.take(1);
+        await syncExternalMemoryTranscriptsBatch({ candidates: selected, db, settings, nowMs: Date.now(), signal: lifetime.signal,
+          onSourceResult: traversal.noteSyncResult });
+      };
+      const started = performance.now();
+      await sync();
+      const sessionId = externalMemoryStorageId(source);
+      const first = db.getExternalSourceState({ sessionId })!;
+      expect(JSON.parse(first.cursor!)).toMatchObject({ type: 'page' });
+      // The stored retention bit alone is not initial-history completeness.
+      // The canonical readiness owner also requires the exhausted frontier.
+      expect(traversal.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
+      // The same scheduling queue in production can hold thousands of unstarted
+      // native conversations. Continuation must not wait for every first page.
+      const backlog = await Promise.all(Array.from({ length: 300 }, async (_, index) => {
+        const nativeSessionId = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+        await writeFile(join(project, `rollout-2026-10-22T00-00-00-${nativeSessionId}.jsonl`),
+          JSON.stringify({ type: 'session_meta', timestamp, payload: { id: nativeSessionId, cwd: '/synthetic' } }) + '\n' + row(999));
+        return { native, source: { ...source, nativeSessionId } };
+      }));
+      traversal.replace([candidate, ...backlog]);
+      const pages = Math.ceil(200 / (first.nextOrdinal - 1));
+      for (let page = 1; page < pages; page++) await sync();
+      expect(db.getExternalSourceState({ sessionId })!.nextOrdinal).toBe(201);
+      expect(db.getExternalSourceState({ sessionId })!.coverageComplete).toBe(true);
+      const indexed = db.search({ query: 'backfill', scope: { type: 'global' }, maxResults: 201, includeExternal: true });
+      expect(indexed).toHaveLength(200);
+      expect(indexed.map(hit => Number(/r252ordinal(\d+)\b/.exec(hit.text)?.[1])).sort((a, b) => a - b))
+        .toEqual(Array.from({ length: 200 }, (_, index) => index));
+      await appendFile(path, row(200));
+      traversal.changed('codex', 'local', [id]);
+      // One of each two selections serves requested refreshes.
+      for (let turn = 0; turn < 2; turn++) await sync();
+      expect(db.search({ query: 'r252ordinal200', scope: { type: 'global' }, maxResults: 1, includeExternal: true })).toHaveLength(1);
+      expect(db.getExternalSourceState({ sessionId })!.nextOrdinal).toBe(202);
+    } finally { lifetime.abort(); db.close(); await rm(dir, { recursive: true, force: true }); }
+  });
   it('keeps a safe Codex reader failure class through bounded ingestion and source status', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-memory-codex-failure-'));
     const db = openDeepIndexDb({ dbPath: join(dir, 'deep.sqlite') });

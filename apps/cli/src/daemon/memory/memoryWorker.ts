@@ -174,7 +174,7 @@ export async function startMemoryWorker(params: Readonly<{
   let archivedExclusionPending = false;
   const inventorySeenSessionIds = new Set<string>();
   const candidateObservedSeqBySessionId = new Map<string, number>();
-  const observedUpdatedAtBySessionId = new Map<string, number>();
+  const observedSessionIds = new Set<string>();
   const editedSessionIds = new Set<string>();
   const externalSources = createMemoryExternalTranscriptSources({ credentials: params.credentials,
     onChange: refreshSources => { externalSourcesNeedRefresh ||= refreshSources; workLoop?.trigger(); } });
@@ -489,6 +489,16 @@ export async function startMemoryWorker(params: Readonly<{
       : value.contentPolicy,
   });
 
+  const observeSession = (sessionId: string): void => {
+    if (observedSessionIds.has(sessionId)) return;
+    // Revalidate retained content on first observation after startup. Subsequent
+    // edits come from the durable transcript-change feed, not Session updatedAt
+    // (which also changes for metadata without any transcript change).
+    const cursors = tier1?.getSessionCursors({ sessionId, nowMs: Date.now() });
+    if ((cursors?.lastHintedSeq ?? 0) > 0 || (cursors?.lastDeepIndexedSeq ?? 0) > 0) editedSessionIds.add(sessionId);
+    observedSessionIds.add(sessionId);
+  };
+
   /**
    * The one eligibility/inventory pass every policy and `ensureUpToDate` use.
    * `apply` replaces the candidate set for the snapshot policy and extends it
@@ -521,13 +531,7 @@ export async function startMemoryWorker(params: Readonly<{
       await removeSessions([...excludedScopeSessionIds].filter(id => retained.has(id)
         || inventorySeenSessionIds.has(id) || candidateObservedSeqBySessionId.has(id)));
     }
-    for (const [sessionId, updatedAt] of refresh.observedUpdatedAtBySessionId) {
-      const previous = observedUpdatedAtBySessionId.get(sessionId);
-      const cursors = tier1?.getSessionCursors({ sessionId, nowMs: Date.now() });
-      const retained = (cursors?.lastHintedSeq ?? 0) > 0 || (cursors?.lastDeepIndexedSeq ?? 0) > 0;
-      if ((previous !== undefined && previous !== updatedAt) || (previous === undefined && retained)) editedSessionIds.add(sessionId);
-      observedUpdatedAtBySessionId.set(sessionId, updatedAt);
-    }
+    for (const sessionId of refresh.observedSeqBySessionId.keys()) observeSession(sessionId);
 
     if (options?.apply === false) return refresh;
 
@@ -578,7 +582,7 @@ export async function startMemoryWorker(params: Readonly<{
       candidateObservedSeqBySessionId.delete(sessionId);
       inventorySeenSessionIds.delete(sessionId);
       sessionCryptoContextCache.delete(sessionId);
-      observedUpdatedAtBySessionId.delete(sessionId);
+      observedSessionIds.delete(sessionId);
       editedSessionIds.delete(sessionId);
     }
   };
@@ -1438,7 +1442,7 @@ export async function startMemoryWorker(params: Readonly<{
           for (const suffix of ['', '-wal', '-shm']) await rm(`${dbPath}${suffix}`, { force: true });
         }
         sessionCryptoContextCache.clear();
-        observedUpdatedAtBySessionId.clear();
+        observedSessionIds.clear();
         editedSessionIds.clear();
       } finally {
         externalSourcesNeedRefresh = true;
@@ -1500,11 +1504,7 @@ export async function startMemoryWorker(params: Readonly<{
       return;
     }
 
-    const previousUpdatedAt = observedUpdatedAtBySessionId.get(_sessionId);
-    const cursors = tier1.getSessionCursors({ sessionId: _sessionId, nowMs: Date.now() });
-    const retained = cursors.lastHintedSeq > 0 || cursors.lastDeepIndexedSeq > 0;
-    if ((previousUpdatedAt !== undefined && previousUpdatedAt !== session!.updatedAt) || (previousUpdatedAt === undefined && retained)) editedSessionIds.add(_sessionId);
-    observedUpdatedAtBySessionId.set(_sessionId, session!.updatedAt);
+    observeSession(_sessionId);
 
     await runTrackedSyncEligibleSessions({
       sessionIds: [eligibility.sessionId],
