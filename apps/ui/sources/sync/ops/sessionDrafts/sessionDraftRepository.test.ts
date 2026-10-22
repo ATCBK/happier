@@ -688,6 +688,27 @@ describe('sessionDraftRepository', () => {
         expect(read()).toEqual({ commitMessage: '', pullRequest: null });
     });
 
+    it('retains an in-flight PR description and its arrival beside edits across draft consumer remounts', () => {
+        const persisted = createMemoryStorage();
+        const repository = createSessionDraftRepository({ storage: persisted, cipher: plainCipher(), syncEnabled: false });
+        const bodyDraft = { key: JSON.stringify(['/repo', 'feature', 'dev']),
+            attempt: { bodyAtRequest: '', baselineResultId: 'earlier-result', baselineRevision: 3, started: null }, candidate: null };
+        const pullRequest = { title: 'Describe the changes', body: '', draft: true, base: 'dev', bodyDraft };
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { scmPullRequestV1: pullRequest } });
+        const read = () => readSessionScmDraftFromDraft(repository.getSessionDraftSnapshot(scope, sessionAddress)?.document).pullRequest;
+        expect(read()).toEqual(pullRequest);
+        repository.writeExistingSessionDraft({ scope, sessionId: 'session-a',
+            patch: { scmPullRequestV1: { ...read()!, body: 'My notes' } } });
+        const restored = createSessionDraftRepository({ storage: persisted, cipher: plainCipher(), syncEnabled: false });
+        const remounted = readSessionScmDraftFromDraft(restored.getSessionDraftSnapshot(scope, sessionAddress)?.document).pullRequest;
+        expect(remounted).toEqual({ ...pullRequest, body: 'My notes' });
+        const arrived = { ...remounted!, bodyDraft: { ...bodyDraft, attempt: null, candidate: 'Generated description' } };
+        restored.writeExistingSessionDraft({ scope, sessionId: 'session-a', patch: { scmPullRequestV1: arrived } });
+        const movedBack = createSessionDraftRepository({ storage: persisted, cipher: plainCipher(), syncEnabled: false });
+        expect(readSessionScmDraftFromDraft(movedBack.getSessionDraftSnapshot(scope, sessionAddress)?.document).pullRequest).toEqual(arrived);
+        expect(movedBack.getSessionDraftSnapshot(targetScope, sessionAddress)).toBeNull();
+    });
+
     it('retains opaque envelope fields and the predecessor entry pointer when editing a hydrated scope', () => {
         const storage = createMemoryStorage();
         const repository = createSessionDraftRepository({ storage, cipher: plainCipher(), syncEnabled: false });

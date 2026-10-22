@@ -212,6 +212,15 @@ export type SessionScmPullRequestDraftV1 = Readonly<{
     draft: boolean;
     /** The branch it merges into; `null` means the provider's default. */
     base: string | null;
+    /** Description request and unapplied arrival shared by every placement of this form. */
+    bodyDraft?: SessionScmPullRequestBodyDraft;
+}>;
+
+export type SessionScmPullRequestBodyDraft = Readonly<{
+    /** Captured execution target and branch comparison; another repository must never consume this arrival. */
+    key: string;
+    attempt: Readonly<{ bodyAtRequest: string; baselineResultId: string | null; baselineRevision: number | null; started: boolean | null }> | null;
+    candidate: string | null;
 }>;
 
 export function readSessionNextPromptPermissionModeFromDraft(document: SessionDraftDocumentV2 | null | undefined): PermissionMode | null {
@@ -247,6 +256,15 @@ const SessionScmPullRequestDraftV1Schema = z.strictObject({
     body: z.string(),
     draft: z.boolean(),
     base: z.nullable(z.string()),
+    bodyDraft: z.optional(z.strictObject({
+        key: z.string(),
+        attempt: z.nullable(z.strictObject({
+            bodyAtRequest: z.string(), baselineResultId: z.nullable(z.string()),
+            baselineRevision: z.nullable(z.number().check(z.int(), z.nonnegative())),
+            started: z.nullable(z.boolean()),
+        })),
+        candidate: z.nullable(z.string()),
+    })),
 });
 
 const EMPTY_SESSION_SCM_DRAFT: SessionScmDraft = Object.freeze({ commitMessage: '', pullRequest: null });
