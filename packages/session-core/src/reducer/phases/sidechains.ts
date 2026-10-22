@@ -17,6 +17,7 @@ export function runSidechainsPhase(params: Readonly<{
     sidechainMessages: TracedMessage[];
     changed: Set<string>;
     allocateId: () => string;
+    onChildInserted: (message: ReducerMessage, sidechainId: string) => void;
 }>): boolean {
     const { state, sidechainMessages, changed, allocateId } = params;
     let stateChanged = false;
@@ -44,6 +45,11 @@ export function runSidechainsPhase(params: Readonly<{
 
         // Get or create the sidechain array for this Task
         const existingSidechain = state.sidechains.get(sidechainId) || [];
+        const insertChild = (message: ReducerMessage) => {
+            insertSidechainMessageInChronology(existingSidechain, message);
+            params.onChildInserted(message, sidechainId);
+            changed.add(message.id);
+        };
         const parentMessageId = state.toolIdToMessageId.get(sidechainId) ?? null;
         const isChainTail = (messageId: string | null): boolean =>
             messageId != null && existingSidechain[existingSidechain.length - 1]?.id === messageId;
@@ -65,7 +71,7 @@ export function runSidechainsPhase(params: Readonly<{
                 meta: msg.meta,
             };
             state.messages.set(mid, userMsg);
-            insertSidechainMessageInChronology(existingSidechain, userMsg);
+            insertChild(userMsg);
             setSidechainThinkingMergeCursor(state, sidechainId, null, 'sidechain-root');
         } else if (msg.role === 'agent') {
             // Process agent content in sidechain
@@ -85,8 +91,8 @@ export function runSidechainsPhase(params: Readonly<{
                             isThinking: false,
                             text: nextText,
                             meta: msg.meta,
-                            markChanged: () => {},
-                            onCreate: (message) => insertSidechainMessageInChronology(existingSidechain, message),
+                            markChanged: (id) => changed.add(id),
+                            onCreate: insertChild,
                         });
 
                         if (upsert.accepted && hasVisibleText) {
@@ -116,6 +122,7 @@ export function runSidechainsPhase(params: Readonly<{
 
                     if (canMerge) {
                         last.text = String(last.text ?? '') + String(c.text ?? '');
+                        changed.add(last.id);
                         // Sidechain children must never be emitted as root-level transcript messages.
                         // Marking the owning Task/SubAgentRun tool-call as changed (below) is sufficient
                         // to refresh the child transcript in both the task view and the main session view.
@@ -135,7 +142,7 @@ export function runSidechainsPhase(params: Readonly<{
                             meta: msg.meta,
                         };
                         state.messages.set(mid, textMsg);
-                        insertSidechainMessageInChronology(existingSidechain, textMsg);
+                        insertChild(textMsg);
                     }
 
                     if (hasVisibleText) {
@@ -155,8 +162,8 @@ export function runSidechainsPhase(params: Readonly<{
                             isThinking: true,
                             text: nextText,
                             meta: msg.meta,
-                            markChanged: () => {},
-                            onCreate: (message) => insertSidechainMessageInChronology(existingSidechain, message),
+                            markChanged: (id) => changed.add(id),
+                            onCreate: insertChild,
                         });
 
                         // A merge cursor may only point at the newest block: a re-delivered or
@@ -191,12 +198,14 @@ export function runSidechainsPhase(params: Readonly<{
                     ) {
                         const merged = unwrapThinkingText(cursorMessage.text) + chunk;
                         cursorMessage.text = merged;
+                        changed.add(cursorMessage.id);
                         setSidechainThinkingMergeCursor(state, sidechainId, cursorId, 'sidechain-thinking-append');
                     } else {
                         const last = findSidechainMergeTarget(existingSidechain, msg);
                         if (last && last.role === 'agent' && last.isThinking && typeof last.text === 'string') {
                             const merged = unwrapThinkingText(last.text) + chunk;
                             last.text = merged;
+                            changed.add(last.id);
                             if (isChainTail(last.id)) {
                                 setSidechainThinkingMergeCursor(state, sidechainId, last.id, 'sidechain-thinking-append');
                             }
@@ -219,7 +228,7 @@ export function runSidechainsPhase(params: Readonly<{
                                 meta: msg.meta,
                             };
                             state.messages.set(mid, textMsg);
-                            insertSidechainMessageInChronology(existingSidechain, textMsg);
+                            insertChild(textMsg);
                             if (isChainTail(mid)) {
                                 setSidechainThinkingMergeCursor(state, sidechainId, mid, 'sidechain-thinking-create');
                             }
@@ -271,7 +280,7 @@ export function runSidechainsPhase(params: Readonly<{
                         meta: msg.meta,
                     };
                     state.messages.set(mid, toolMsg);
-                    insertSidechainMessageInChronology(existingSidechain, toolMsg);
+                    insertChild(toolMsg);
 
                     // Map sidechain tool separately to avoid overwriting permission mapping
                     state.sidechainToolIdToMessageId.set(c.id, mid);

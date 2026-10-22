@@ -1,5 +1,6 @@
 import type { Message } from "../messages/messageTypes.js";
 import { compareTranscriptMessagesOldestFirst, hasTranscriptMessageOrderChanged } from "../messages/transcriptOrdering.js";
+import {patchMessageRecord} from './messageRecord.js';
 
 export type OrderedTranscript = {
     messageIdsOldestFirst: string[];
@@ -46,20 +47,18 @@ function mergeSortedMessageIdsOldestFirst(
 export function applyReducedMessages<T extends OrderedTranscript>(prev: T, changed: readonly Message[]): T {
     const idsToRemove = new Set<string>();
     const idsToInsert: string[] = [];
-    let messagesById = prev.messagesById;
+    const messagesById = patchMessageRecord(prev.messagesById, changed);
+    if (messagesById === prev.messagesById) return prev;
     for (const message of changed) {
-        const previous = messagesById[message.id];
+        const previous = prev.messagesById[message.id];
         if (previous === message) continue;
-        if (messagesById === prev.messagesById) messagesById = { ...messagesById };
         if (!previous) {
             idsToInsert.push(message.id);
         } else if (hasTranscriptMessageOrderChanged(previous, message)) {
             idsToRemove.add(message.id);
             idsToInsert.push(message.id);
         }
-        messagesById[message.id] = message;
     }
-    if (messagesById === prev.messagesById) return prev;
     if (idsToInsert.length === 0) return { ...prev, messagesById };
 
     const uniqueInsertIds = Array.from(new Set(idsToInsert));

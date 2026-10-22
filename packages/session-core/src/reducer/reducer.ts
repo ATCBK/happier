@@ -143,6 +143,7 @@ import {
     type TranscriptMessageMetadataUpdate,
 } from "../messages/transcriptObservationProvenance.js";
 import { applyTranscriptAccountActorMetadata, type TranscriptAccountActorMetadata } from "../messages/transcriptAccountActor.js";
+import {indexTranscriptRow, readTranscriptIndex, type TranscriptMetadataIndex} from './helpers/transcriptIndex.js';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -265,11 +266,7 @@ export type ReducerMessage = {
 
 export type ReducerState = {
     /** One durable source can render as several text/tool/sidechain projections. */
-    transcriptMetadataIndex?: {
-        byId: Map<string, Set<ReducerMessage>>;
-        byLocalId: Map<string, Set<ReducerMessage>>;
-        sidechainByMessageId: Map<string, string>;
-    };
+    transcriptMetadataIndex?: TranscriptMetadataIndex;
     toolIdToMessageId: Map<string, string>; // toolId/permissionId -> messageId (since they're the same now)
     sidechainToolIdToMessageId: Map<string, string>; // toolId -> sidechain messageId (for dual tracking)
     permissions: Map<string, ReducerStoredPermission>; // Store permission details by ID for quick lookup
@@ -359,9 +356,9 @@ function readAuthoritativeTranscriptTextTarget(
     if (directMessageId && isExactAgentTextTarget(directMessage)) {
         return { messageId: directMessageId, message: directMessage, text: source.content[0].text };
     }
-    for (const [messageId, message] of state.messages) {
+    for (const message of readTranscriptIndex(state).byId.get(source.id) ?? []) {
         if (isExactAgentTextTarget(message)) {
-            return { messageId, message, text: source.content[0].text };
+            return { messageId: message.id, message, text: source.content[0].text };
         }
     }
     return null;
@@ -389,7 +386,7 @@ function isUnmarkedDurableAgentTextDuplicate(
     const sourceSeq = normalizeTranscriptSeq(source.seq);
     if (sourceSeq === null) return false;
 
-    for (const message of state.messages.values()) {
+    for (const message of readTranscriptIndex(state).byId.get(source.id) ?? []) {
         if (
             message.role === 'agent'
             && message.realID === source.id
@@ -497,38 +494,13 @@ export type ReducerResult = {
     reducerStateChanged?: boolean;
 };
 
-function rebuildTranscriptMetadataIndex(state: ReducerState): void {
-    const index: NonNullable<ReducerState['transcriptMetadataIndex']> = {
-        byId: new Map(), byLocalId: new Map(), sidechainByMessageId: new Map(),
-    };
-    const add = (map: Map<string, Set<ReducerMessage>>, key: string | null | undefined, message: ReducerMessage) => {
-        if (!key) return;
-        const projections = map.get(key) ?? new Set<ReducerMessage>();
-        projections.add(message);
-        map.set(key, projections);
-    };
-    const indexMessage = (message: ReducerMessage) => {
-        add(index.byId, message.realID, message);
-        add(index.byLocalId, message.localId, message);
-    };
-    for (const message of state.messages.values()) indexMessage(message);
-    for (const [sidechainId, chain] of state.sidechains) {
-        for (const message of chain) {
-            indexMessage(message);
-            index.sidechainByMessageId.set(message.id, sidechainId);
-        }
-    }
-    state.transcriptMetadataIndex = index;
-}
-
 function reconcileTranscriptMetadata(
     state: ReducerState,
     sources: readonly TranscriptMessageMetadataUpdate[],
     changed: Set<string>,
 ): void {
     if (sources.length === 0) return;
-    if (!state.transcriptMetadataIndex) rebuildTranscriptMetadataIndex(state);
-    const index = state.transcriptMetadataIndex!;
+    const index = readTranscriptIndex(state);
     const byId = new Map(sources.map((source) => [source.id, source]));
     const byLocalId = new Map(sources.filter((source) => source.localId !== null).map((source) => [source.localId!, source]));
     const targets = new Set<ReducerMessage>();
@@ -612,60 +584,12 @@ export function reducer(
     let latestReadyEventSeq: number | null = null;
     let latestReadyEventAt: number | null = null;
 
-    const sidechainMessageIds = new Set<string>();
-    for (const chain of state.sidechains.values()) {
-        for (const m of chain) sidechainMessageIds.add(m.id);
-    }
-
     // Only allow streaming chunks to append when the *latest* main-timeline message
     // is itself appendable. Use transcript ordering (`seq`) when available to avoid
     // relying on non-monotonic timestamps (e.g. mixed clock sources during streaming).
-    let lastMainMessageId: string | null = null;
-    let lastMainMessageSeq: number | null = null;
-    let lastMainMessageCreatedAt: number | null = null;
-    let completedRequestHistoryStartAt: number | null = null;
-    for (const [mid, m] of state.messages) {
-        if (sidechainMessageIds.has(mid)) continue;
-
-        const nextSeq = normalizeTranscriptSeq(m.seq);
-        if ((nextSeq !== null || m.realID !== null) && Number.isFinite(m.createdAt)) {
-            completedRequestHistoryStartAt = Math.min(completedRequestHistoryStartAt ?? m.createdAt, m.createdAt);
-        }
-
-        if (lastMainMessageId === null) {
-            lastMainMessageId = mid;
-            lastMainMessageSeq = nextSeq;
-            lastMainMessageCreatedAt = m.createdAt;
-            continue;
-        }
-
-        const prevSeq = lastMainMessageSeq;
-        const prevCreatedAt = lastMainMessageCreatedAt;
-
-        const shouldReplace = (() => {
-            if (prevSeq !== null && nextSeq !== null) {
-                if (nextSeq > prevSeq) return true;
-                if (nextSeq < prevSeq) return false;
-                // Tie-break: prefer later timestamps / later inserts.
-                if (prevCreatedAt === null) return true;
-                return m.createdAt >= prevCreatedAt;
-            }
-            if (prevSeq === null && nextSeq !== null) {
-                return true;
-            }
-            if (prevSeq !== null && nextSeq === null) {
-                return false;
-            }
-            if (prevCreatedAt === null) return true;
-            return m.createdAt > prevCreatedAt || m.createdAt === prevCreatedAt;
-        })();
-
-        if (shouldReplace) {
-            lastMainMessageId = mid;
-            lastMainMessageSeq = nextSeq;
-            lastMainMessageCreatedAt = m.createdAt;
-        }
-    }
+    const transcriptIndex = readTranscriptIndex(state);
+    const lastMainMessageId = transcriptIndex.lastMainMessageId;
+    let completedRequestHistoryStartAt = transcriptIndex.completedRequestHistoryStartAt;
 
     const lastMain = lastMainMessageId != null ? state.messages.get(lastMainMessageId) : null;
     const cursorThinking = state.thinkingMergeCursor != null ? state.messages.get(state.thinkingMergeCursor) : null;
@@ -842,6 +766,9 @@ export function reducer(
         sidechainMessages,
         changed,
         allocateId,
+        onChildInserted: (message, sidechainId) => {
+            transcriptIndex.sidechainByMessageId.set(message.id, sidechainId);
+        },
     });
 
     runModeSwitchEventsPhase({
@@ -851,10 +778,11 @@ export function reducer(
         allocateId,
     });
 
-    // Content phases can create, merge, or re-identify projections. Refresh the
-    // reducer-owned lookup at that boundary, not on presentation-only refreshes.
-    if (changed.size > 0 || sidechainStateChanged || !state.transcriptMetadataIndex) {
-        rebuildTranscriptMetadataIndex(state);
+    // Content phases can create, merge or re-identify rows. Retain lookup
+    // buckets and ordering facts for all rows outside this apply's change set.
+    for (const id of changed) {
+        const message = state.messages.get(id);
+        if (message) indexTranscriptRow(transcriptIndex, message);
     }
     for (const [source, target] of authoritativeTranscriptTargetsBySource) {
         if (applyAuthoritativeTranscriptTextUpdate(target, source)) {
@@ -869,16 +797,13 @@ export function reducer(
 
     // Sidechain children should never be emitted as top-level transcript updates. They belong to
     // sidechain state only and are rendered under the owning tool-call when that tool-call exists.
-    const sidechainChildIds = new Set<string>();
-    for (const [sidechainId, chain] of state.sidechains) {
-        for (const m of chain) {
-            sidechainChildIds.add(m.id);
-            if (changed.has(m.id)) {
-                sidechainStateChanged = true;
-                const parentId = state.toolIdToMessageId.get(sidechainId);
-                if (parentId) changed.add(parentId);
-            }
-        }
+    const sidechainChildIds = transcriptIndex.sidechainByMessageId;
+    for (const id of changed) {
+        const sidechainId = sidechainChildIds.get(id);
+        if (!sidechainId) continue;
+        sidechainStateChanged = true;
+        const parentId = state.toolIdToMessageId.get(sidechainId);
+        if (parentId) changed.add(parentId);
     }
 
     const filteredSidechainChildIds: string[] = [];

@@ -7,6 +7,7 @@ describe('replayed tool metadata', () => {
     it('keeps admitted inherited tool correlation independent across original Sessions and Homes', () => {
         const state = createReducer();
         let transcript: OrderedTranscript = { messageIdsOldestFirst: [], messagesById: {} };
+        let createdAt = 0;
         for (const [serverId, sessionId, itemId] of [
             ['home', 'grandparent', 'first'], ['home', 'parent', 'second'], ['other-home', 'parent', 'third'],
         ]) {
@@ -15,7 +16,7 @@ describe('replayed tool metadata', () => {
                 const data = phase === 'tool-call'
                     ? { type: phase, callId: 'reused-native-id', name: 'session_board_item_upsert', id, input: { itemId } }
                     : { type: phase, callId: 'reused-native-id', id, output: { itemId } };
-                const message = normalizeRawMessage(id, null, 1, { role: 'agent', content: { type: 'acp', agentId: 'codex', data },
+                const message = normalizeRawMessage(id, null, ++createdAt, { role: 'agent', content: { type: 'acp', agentId: 'codex', data },
                     meta: { forkVisualOriginV1: { v: 1, serverId, sessionId, sourceMessageId: id, sourceSeq: phase === 'tool-call' ? 1 : 2 } } });
                 if (!message) throw new Error('Invalid admitted tool fixture');
                 transcript = applyReducedMessages(transcript, reducer(state, [message], null).messages);

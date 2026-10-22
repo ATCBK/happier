@@ -33,4 +33,33 @@ describe('ordered transcript', () => {
         expect(revised.messageIdsOldestFirst).toEqual(['first', 'tail', 'middle']);
         expect(Object.keys(revised.messagesById)).toHaveLength(3);
     });
+
+    it('keeps retained snapshots enumerable and unchanged through repeated row revisions', () => {
+        const first = applyReducedMessages({ messageIdsOldestFirst: [], messagesById: {} }, [
+            message('first', 1), message('tail', 2),
+        ]);
+        let current = first;
+        for (let revision = 0; revision < 1000; revision++) {
+            current = applyReducedMessages(current, [message('tail', 2, String(revision))]);
+        }
+        expect(first.messagesById.tail).toMatchObject({ text: 'tail' });
+        expect(current.messagesById.tail).toMatchObject({ text: '999' });
+        expect(current.messageIdsOldestFirst).toBe(first.messageIdsOldestFirst);
+        expect(Object.keys(current.messagesById)).toEqual(['first', 'tail']);
+        expect({ ...current.messagesById }).toEqual({ first: first.messagesById.first, tail: current.messagesById.tail });
+        expect(JSON.parse(JSON.stringify(current.messagesById))).toEqual({ ...current.messagesById });
+    });
+
+    it('retains distinct keys with colliding hashes and normal Record enumeration order', () => {
+        // These distinct ids collide under the record's FNV-1a hash. Updates
+        // must still address exact ids, never the hash alone.
+        const ids = ['costarring', 'liquid', '10', '2', '4294967295'];
+        const first = applyReducedMessages({ messageIdsOldestFirst: [], messagesById: {} }, ids.map((id, index) => message(id, index)));
+        const revised = applyReducedMessages(first, [message('costarring', 0, 'changed')]);
+        expect(revised.messagesById.costarring).toMatchObject({text: 'changed'});
+        expect(revised.messagesById.liquid).toBe(first.messagesById.liquid);
+        expect(first.messagesById.costarring).toMatchObject({text: 'costarring'});
+        expect(Object.keys(revised.messagesById)).toEqual(['2', '10', 'costarring', 'liquid', '4294967295']);
+        expect(Object.prototype.hasOwnProperty.call(revised.messagesById, 'liquid')).toBe(true);
+    });
 });
