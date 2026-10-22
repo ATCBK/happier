@@ -40,7 +40,7 @@ function normalizeId(raw: unknown): string {
 }
 
 function toMachineTransportCacheKey(serverId: string, machineId: string, token: string): string {
-    const tokenKey = getOrCreateScopedCacheTokenKey(token, readMaxMachineKeyCacheEntriesFromEnv());
+    const tokenKey = getOrCreateScopedCacheTokenKey(token);
     return `${serverId}::${machineId}::${tokenKey}`;
 }
 
@@ -57,34 +57,6 @@ type MachineTransportEvidence = MachineTransportSelection & Readonly<{
 }>;
 
 const machineTransportCache = new Map<string, MachineTransportSelection>();
-
-function readMaxMachineKeyCacheEntriesFromEnv(): number {
-    const raw = String(process.env.EXPO_PUBLIC_HAPPIER_SCOPED_RPC_MACHINE_KEY_CACHE_MAX ?? '').trim();
-    if (!raw) return 256;
-    const parsed = Number.parseInt(raw, 10);
-    if (!Number.isFinite(parsed)) return 256;
-    return Math.max(1, Math.min(10_000, parsed));
-}
-
-function getMachineTransportFromCache(cacheKey: string): MachineTransportSelection | undefined {
-    const existing = machineTransportCache.get(cacheKey);
-    if (existing === undefined) return undefined;
-    // Refresh LRU ordering.
-    machineTransportCache.delete(cacheKey);
-    machineTransportCache.set(cacheKey, existing);
-    return existing;
-}
-
-function setMachineTransportCache(cacheKey: string, value: MachineTransportSelection): void {
-    machineTransportCache.set(cacheKey, value);
-
-    const max = readMaxMachineKeyCacheEntriesFromEnv();
-    while (machineTransportCache.size > max) {
-        const oldest = machineTransportCache.keys().next();
-        if (oldest.done) break;
-        machineTransportCache.delete(oldest.value);
-    }
-}
 
 async function fetchMachineTransport(params: Readonly<{
     serverUrl: string;
@@ -135,7 +107,7 @@ async function fetchMachineTransport(params: Readonly<{
         }
         const published = machine?.dataEncryptionKey;
         const input = readMachineEncryptionContextInput(machine ?? {}, params.accountId ?? null);
-        const cached = getMachineTransportFromCache(params.cacheKey);
+        const cached = machineTransportCache.get(params.cacheKey);
         const basis = MachineKeyBasisStoredReadV1Schema.safeParse(machine?.keyBasis);
         const metadataVersion = basis.success ? basis.data.metadataVersion : machine?.metadataVersion;
         const daemonStateVersion = basis.success ? basis.data.daemonStateVersion : machine?.daemonStateVersion;
@@ -161,7 +133,7 @@ async function fetchMachineTransport(params: Readonly<{
         };
         // Publish selection before opening yields so a changed key/access
         // identity retires pending work, including same-key access withdrawal.
-        setMachineTransportCache(params.cacheKey, selected);
+        machineTransportCache.set(params.cacheKey, selected);
         // The caller's Encryption owner alone retains openings under its own material.
         const dataKey = typeof published === 'string'
             && !isPlainMachineDataKeyMarker(published)

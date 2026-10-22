@@ -29,6 +29,28 @@ function readAuthorizationHeader(headers: RequestInit['headers']): string {
 }
 
 describe('resolveScopedMachineTransport', () => {
+    it('keeps unchanged Machine evidence current when unrelated Machines are read', async () => {
+        let originalKey: string = MACHINE_PLAIN_DATA_KEY_MARKER;
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => Response.json({ machine: {
+            id: decodeURIComponent(new URL(url).pathname.split('/').at(-1)!),
+            dataEncryptionKey: url.endsWith('/original') ? originalKey : MACHINE_PLAIN_DATA_KEY_MARKER,
+        } })));
+        const scope = { serverId: 'many-machines', serverUrl: 'https://many-machines.example.test',
+            token: 'many-machines-token', expectedAccountMode: 'plain' as const };
+        const original = await resolveScopedMachineTransport({ ...scope, machineId: 'original' });
+        expect(original?.context?.isCurrent()).toBe(true);
+        // Inventory size is not a revocation or key-change witness.
+        for (let index = 0; index < 256; index += 1) {
+            await resolveScopedMachineTransport({ ...scope, machineId: `other-${index}`, token: `other-token-${index}` });
+        }
+        expect(original?.context?.isCurrent()).toBe(true);
+        // The original credential must still address the same evidence owner
+        // after unrelated credentials have been seen. A real key change retires it.
+        originalKey = 'changed-published-key';
+        await resolveScopedMachineTransport({ ...scope, machineId: 'original' });
+        expect(original?.context?.isCurrent()).toBe(false);
+    });
+
     it('keeps concurrent openings of the same authenticated Machine key available across scoped crypto instances', async () => {
         const first = await Encryption.create(new Uint8Array(32).fill(17));
         const second = await Encryption.create(new Uint8Array(32).fill(17));
@@ -384,7 +406,6 @@ describe('resolveScopedMachineTransport', () => {
 
     afterEach(async () => {
         vi.unstubAllGlobals();
-        delete process.env.EXPO_PUBLIC_HAPPIER_SCOPED_RPC_MACHINE_KEY_CACHE_MAX;
         resetScopedMachineTransportCacheForTests();
         try {
             const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
@@ -810,65 +831,6 @@ describe('resolveScopedMachineTransport', () => {
         expect(second).toMatchObject({ mode: 'e2ee', dataKey: new Uint8Array([9, 9, 9]) });
         expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/v1/machines')).length).toBe(2);
         expect(decryptSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it('evicts oldest machine keys when cache exceeds EXPO_PUBLIC_HAPPIER_SCOPED_RPC_MACHINE_KEY_CACHE_MAX', async () => {
-        process.env.EXPO_PUBLIC_HAPPIER_SCOPED_RPC_MACHINE_KEY_CACHE_MAX = '1';
-
-        const fetchSpy = vi.fn(async (url: string) => {
-            if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
-                return { ok: true, status: 200, json: async () => ({}) };
-            }
-            return {
-                ok: true,
-                status: 200,
-                json: async () => {
-                    const machineId = url.split('/').at(-1);
-                    return {
-                        machine: {
-                            id: machineId,
-                            dataEncryptionKey: machineId === 'machine-1'
-                                ? 'encrypted-key-1'
-                                : 'encrypted-key-2',
-                        },
-                    };
-                },
-            };
-        });
-        vi.stubGlobal('fetch', fetchSpy);
-
-        const decryptSpy = vi.fn(async (value: string) => {
-            if (value === 'encrypted-key-1') return new Uint8Array([1]);
-            if (value === 'encrypted-key-2') return new Uint8Array([2]);
-            return new Uint8Array([0]);
-        });
-
-        await resolveScopedMachineTransport({
-            serverId: 'server-b',
-            serverUrl: 'https://server-b.example.test',
-            token: 'token-b',
-            machineId: 'machine-1',
-            decryptEncryptionKey: decryptSpy,
-        });
-
-        await resolveScopedMachineTransport({
-            serverId: 'server-b',
-            serverUrl: 'https://server-b.example.test',
-            token: 'token-b',
-            machineId: 'machine-2',
-            decryptEncryptionKey: decryptSpy,
-        });
-
-        // machine-1 entry should have been evicted (max=1), causing a refetch.
-        await resolveScopedMachineTransport({
-            serverId: 'server-b',
-            serverUrl: 'https://server-b.example.test',
-            token: 'token-b',
-            machineId: 'machine-1',
-            decryptEncryptionKey: decryptSpy,
-        });
-
-        expect(fetchSpy.mock.calls.filter(([url]) => String(url).includes('/v1/machines')).length).toBe(3);
     });
 
     it('does not attempt the machine list request when reachability probes fail (offline)', async () => {
