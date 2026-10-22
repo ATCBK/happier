@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ToolCall } from '@happier-dev/session-core/messages';
+
 import {
+  isQuestionRoutedToManager,
   resolveAskUserQuestionFooterHint,
   resolveAskUserQuestionLead,
 } from './askUserQuestionCardState';
@@ -86,5 +89,22 @@ describe('resolveAskUserQuestionFooterHint', () => {
         answered: 0,
       }),
     ).toEqual({ kind: 'starts_next_turn' });
+  });
+});
+
+describe('isQuestionRoutedToManager', () => {
+  const question = (permission?: ToolCall['permission']): ToolCall =>
+    ({ id: 'q1', name: 'AskUserQuestion', state: 'running', input: {}, createdAt: 1, startedAt: 1, completedAt: null, description: null, result: null, permission }) as ToolCall;
+  const request = (currentHandler: unknown) => ({ tool: 'AskUserQuestion', arguments: {}, currentHandler });
+
+  it('is true while a manager Session handles it, and once a manager answered it', () => {
+    expect(isQuestionRoutedToManager({ tool: question(), agentState: { requests: { q1: request({ kind: 'session', sessionId: 'manager-1' }) } } as never })).toBe(true);
+    expect(isQuestionRoutedToManager({ tool: question({ id: 'q1', status: 'approved', answeredBy: { kind: 'session', sessionId: 'manager-1' } }), agentState: null })).toBe(true);
+  });
+
+  it('is false for a question the person handles or answered', () => {
+    expect(isQuestionRoutedToManager({ tool: question(), agentState: { requests: { q1: request({ kind: 'person' }) } } as never })).toBe(false);
+    expect(isQuestionRoutedToManager({ tool: question({ id: 'q1', status: 'approved', answeredBy: { kind: 'person' } }), agentState: null })).toBe(false);
+    expect(isQuestionRoutedToManager({ tool: question(), agentState: null })).toBe(false);
   });
 });

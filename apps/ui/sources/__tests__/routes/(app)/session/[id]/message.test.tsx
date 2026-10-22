@@ -249,6 +249,35 @@ describe('Session message route hydration', () => {
     }
   });
 
+  describe('names the Agent that asked a question a manager handles', () => {
+    const questionTool = {
+      id: 'q1', name: 'AskUserQuestion', state: 'running', result: null,
+      input: { questions: [{ question: 'Record manager attribution?', header: 'Attribution', options: [{ label: 'Yes' }, { label: 'No' }], multiSelect: false }] },
+      permission: { id: 'q1', status: 'pending' },
+    };
+    const openQuestion = (currentHandler: unknown) => {
+      mockSearchParams = { id: 'session-1', messageId: 'message-1' };
+      mockSession = {
+        id: 'session-1', accessLevel: 'edit', metadata: { name: 'Worker that asks' },
+        agentState: { requests: { q1: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, currentHandler } } },
+      };
+      mockMessage = { kind: 'tool-call', id: 'message-1', localId: null, createdAt: 1, tool: questionTool, children: [] };
+    };
+    const headerAskedBy = () => (toolFullViewSpy.mock.calls.at(-1)?.[0].header as React.ReactElement<{ askedBy?: string | null }>).props.askedBy;
+
+    it('passes the asking Session name to the page header when a manager Session is handling the question', async () => {
+      openQuestion({ kind: 'session', sessionId: 'manager-1' });
+      await renderMessageScreen(MessageScreen);
+      expect(headerAskedBy()).toBe('Worker that asks');
+    });
+
+    it('adds no asker when the person is the one handling it', async () => {
+      openQuestion({ kind: 'person' });
+      await renderMessageScreen(MessageScreen);
+      expect(headerAskedBy() ?? null).toBeNull();
+    });
+  });
+
   it('renders invalid link fallback when session id param is missing', async () => {
     mockSearchParams = { id: '', messageId: 'message-1' };
     const screen = await renderMessageScreen(MessageScreen);

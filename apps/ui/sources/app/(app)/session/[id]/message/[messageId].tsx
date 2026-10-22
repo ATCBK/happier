@@ -13,6 +13,8 @@ import { DefaultBackButton } from '@/components/navigation/Header';
 import { NavigationBackChromeProvider, useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
 import { ToolDetailsPageHeader } from '@/components/tools/shell/presentation/ToolDetailsPageHeader';
+import { isQuestionRoutedToManager } from '@/components/tools/renderers/workflow/askUserQuestionCardState';
+import { readInboxSessionTitle } from '@/components/inbox/sessionAttention/inboxSessionPrivacy';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
@@ -97,9 +99,16 @@ function SessionMessageRouteLoaded(props: { sessionId: string; messageId: string
         : message ? t('common.message') : null);
     const ownerMetadata = React.useMemo(() => session ? readSessionOwnerMetadataView(session) : null, [session]);
     // The page names the call and its outcome itself, in the transcript row's vocabulary, for every tool kind.
+    // The Agent that asked is the Session itself; the Inbox names it by this same title.
+    const agentState = session?.agentState;
+    const sessionServerId = session?.serverId ?? null;
+    const askedBy = React.useMemo(
+        () => session && tool && isQuestionRoutedToManager({ tool, agentState }) ? readInboxSessionTitle(session, sessionServerId) : null,
+        [agentState, session, sessionServerId, tool],
+    );
     const toolPageHeader = React.useMemo(
-        () => tool ? <ToolDetailsPageHeader tool={tool} metadata={ownerMetadata} /> : null,
-        [ownerMetadata, tool],
+        () => tool ? <ToolDetailsPageHeader tool={tool} metadata={ownerMetadata} askedBy={askedBy} /> : null,
+        [askedBy, ownerMetadata, tool],
     );
 
     // A call's page is opened from its Session: Back returns there, even on a deep link with no history. A hosted

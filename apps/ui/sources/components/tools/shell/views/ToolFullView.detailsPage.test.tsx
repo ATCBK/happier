@@ -143,6 +143,19 @@ describe('ToolFullView as the tool-details page', () => {
     expect(headerOutcome(screen)).toBe('toolView.approvalRequested.title');
   });
 
+  it('names the Agent that asked a question in the page header, and nothing when no asker is given', async () => {
+    const question = makeToolCall({
+      name: 'AskUserQuestion',
+      state: 'running',
+      input: { questions: [{ question: 'Record manager attribution?', header: 'Attribution', options: [{ label: 'Yes' }, { label: 'No' }], multiSelect: false }] },
+    });
+    const header = async (askedBy: string | null) =>
+      collectHostText((await renderScreen(React.createElement(ToolDetailsPageHeader, { tool: question, metadata: null, askedBy }))).tree).join('\n');
+
+    expect(await header('Worker that asks')).toContain('requester=Worker that asks');
+    expect(await header(null)).not.toContain('askedBy');
+  });
+
   it('reads an accepted, unsettled Create session as in progress, by meaning, never as Completed', async () => {
     const screen = await renderScreen(
       React.createElement(ToolFullView, {

@@ -1,8 +1,10 @@
 import type { SessionQuestionContextV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
 import type { SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
-import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
+import type { ToolCall, TranscriptAccountActor } from '@happier-dev/session-core/messages';
+import type { AgentState } from '@happier-dev/session-core/state';
 
 import { t } from '@/text';
+import { resolvePermissionRequestId } from '@/components/tools/renderers/core/resolvePermissionRequestId';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
@@ -88,4 +90,19 @@ export function resolveAskUserQuestionFooterHint(
   return input.mode === 'continue'
     ? { kind: 'next_step' }
     : { kind: 'starts_next_turn' };
+}
+
+/**
+ * Whether a manager Session handles this question or answered it. Its asker is then a different Session
+ * than the one that settles it, so a page that shows only the question names the asker. A person's own
+ * question is the Session the page already belongs to and needs no name.
+ */
+export function isQuestionRoutedToManager(
+  input: Readonly<{ tool: ToolCall; agentState: AgentState | null | undefined }>,
+): boolean {
+  if (input.tool.permission?.answeredBy?.kind === 'session') return true;
+  const requestId = resolvePermissionRequestId(input.tool);
+  if (!requestId) return false;
+  const request = input.agentState?.requests?.[requestId] ?? input.agentState?.completedRequests?.[requestId];
+  return request?.currentHandler?.kind === 'session';
 }

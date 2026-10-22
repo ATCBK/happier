@@ -41,6 +41,8 @@ export const ToolDetailsPageHeader = React.memo(function ToolDetailsPageHeader(
   props: Readonly<{
     tool: ToolCall;
     metadata: Metadata | null;
+    /** The Session whose Agent asked, named when a manager Session handles its question (an Agent-raised question). */
+    askedBy?: string | null;
   }>,
 ) {
   const model = React.useMemo(
@@ -94,6 +96,10 @@ export const ToolDetailsPageHeader = React.memo(function ToolDetailsPageHeader(
       </View>
     );
   }
+  const meta = React.useMemo(
+    () => (props.askedBy ? [{ key: 'asked-by', text: t('session.collaboration.discussion.attribution.askedBy', { requester: props.askedBy }), testID: 'tool-details-asked-by' }] : undefined),
+    [props.askedBy],
+  );
   return (
     <PageHeader
       testID="tool-details-header"
@@ -101,6 +107,7 @@ export const ToolDetailsPageHeader = React.memo(function ToolDetailsPageHeader(
       title={model.title}
       description={model.subtitle ?? undefined}
       details={outcome}
+      meta={meta}
     />
   );
 });
