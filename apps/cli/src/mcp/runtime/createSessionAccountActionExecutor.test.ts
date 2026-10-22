@@ -53,6 +53,8 @@ describe('Session MCP Account routing', () => {
     { actionId: 'action.options.resolve' as const, input: { actionId: 'execution.run.start', fieldPath: 'configOptions',
       draftInput: { backendTargetKey: 'agent:acme.discovery/assistant', machineId: 'shared-machine', modelId: 'small' } }, uncertain: false },
     { actionId: 'session.activity.get' as const, input: { sessionId: 'caller-session' }, uncertain: false },
+    { actionId: 'session.goal.get' as const, input: { sessionId: { selector: 'workers' } }, uncertain: false },
+    { actionId: 'session.goal.clear' as const, input: { sessionId: { selector: 'self', of: 'led-child' } }, uncertain: false },
     { actionId: 'scm.diff.file' as const, input: { cwd: '/run/workspace', path: 'file.ts' }, uncertain: false },
     { actionId: 'scm.file.read' as const, input: { cwd: '/run/workspace', path: 'file.ts', selector: { side: 'before', area: 'pending' } }, uncertain: false },
     { actionId: 'scm.blame.get' as const, input: { cwd: '/run/workspace', path: 'file.ts' }, uncertain: false },

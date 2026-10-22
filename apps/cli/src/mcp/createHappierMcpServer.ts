@@ -298,10 +298,10 @@ export function createHappierMcpServer(
         await (client.executionRuns?.action?.(request) ?? sessionScopedRpc('execution.run.action', request)),
       ),
     wait: async (request: unknown, signal?: AbortSignal) =>
-      normalizeExecutionRunRpcPayload(
-        await (client.executionRuns?.wait?.(request, signal ? { signal } : undefined)
-          ?? sessionScopedRpc('execution.run.wait', request, signal ? { signal } : undefined)),
-      ),
+      // Wait already returns the canonical observation union. Generic service
+      // normalization strips its `ok` discriminant and loses a completed result.
+      await (client.executionRuns?.wait?.(request, signal ? { signal } : undefined)
+        ?? sessionScopedRpc('execution.run.wait', request, signal ? { signal } : undefined)),
   };
   const executionRunScopeMismatch = () => ({
     ok: false as const,

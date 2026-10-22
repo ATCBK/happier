@@ -93,6 +93,10 @@ function createRunScopedMcpSessionView(
     getServerBinding: () => session.getServerBinding(),
     ...(session.getCurrentSessionSkillItems
       ? { getCurrentSessionSkillItems: () => session.getCurrentSessionSkillItems!() } : {}),
+    ...(session.getSessionRoleContext
+      ? { getSessionRoleContext: () => session.getSessionRoleContext!() } : {}),
+    ...(session.readRoleSources
+      ? { readRoleSources: (signal?: AbortSignal) => session.readRoleSources!(signal) } : {}),
     getMcpRequestAuthPort: () => session.getMcpRequestAuthPort?.(),
     getPluginMcpPort: () => session.getPluginMcpPort?.() ?? null,
     ...(session.getEphemeralStreamConnectionEpoch

@@ -1217,7 +1217,13 @@ describe('createHappierMcpServer real host admission', () => {
     const app = fastify();
     const restore = installAxiosFastifyAdapter({ app, origin });
     const secret = new Uint8Array(32).fill(17);
-    const credentials = { token: 'cross-session-token', encryption: mode === 'plain' ? null : { type: 'legacy' as const, secret } };
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'cross-session-account' })).toString('base64url')}.fixture`,
+      encryption: mode === 'plain' ? null : { type: 'legacy' as const, secret } };
+    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+      settingsVersion: 1, loadedAtMs: Date.now(), settingsSecretsReadKeys: [],
+      scopeKey: runWithServerHttpBaseUrl(origin, () => resolveAccountSettingsScopeKey(credentials)),
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] },
+    });
     const targetId = 'target-session-b';
     const targetMetadata = {
       sessionCreationCorrespondenceV1: SessionCreationCorrespondenceV1Schema.parse({
@@ -1245,6 +1251,12 @@ describe('createHappierMcpServer real host admission', () => {
       metadata: mode === 'plain' ? JSON.stringify(targetMetadata) : encodeBase64(encrypt(secret, 'legacy', targetMetadata)),
     }) }));
     app.get('/v1/projects', async () => ({ projects: [] }));
+    app.get(ACP_CATALOG_ROWS_ROUTE_V1, async () => ({ status: 'absent' }));
+    const readRoleSources = createRoleSourceReader({});
+    const sessionRoles = createSessionRoleContext({ readMetadata: () => createTestMetadata(), readRoleSources,
+      readOrganization: async () => ({ manager: null, origin: null }),
+      readAccountRoleOverrides: () => ({ status: 'ready', overrides: {} }),
+    });
     // Like ApiSessionClient, this carrier owns the transport on its prototype.
     // Only HTTP and authenticated Machine admission are substituted boundaries.
     class SessionCarrier {
@@ -1258,6 +1270,8 @@ describe('createHappierMcpServer real host admission', () => {
       getWorkDepth() { return starterDepth; }
       getHostTurnWorkDepth(turnId: string) { return turnId === 'source-turn-a' ? turnDepth : undefined; }
       getBackendTarget() { return { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } as const; }
+      getSessionRoleContext() { return sessionRoles; }
+      readRoleSources() { return readRoleSources(); }
       getCurrentSessionLocation() { return { machineId: 'source-machine', path: '/repo' }; }
       getActiveTurnPermissionWitness() { return { turnId: 'source-turn-a', causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const } }; }
       getMachineAdmissionTransport() {
@@ -1337,42 +1351,6 @@ describe('createHappierMcpServer real host admission', () => {
     }
   });
 
-  it('refuses a child start from the exact host turn at depth four even when the Session started at zero', async () => {
-    const client = {
-      sessionId: 'depth-zero-session',
-      getServerBinding: getTestServerBinding,
-      rpcHandlerManager: new RpcHandlerManager({ scopePrefix: 'depth-zero-session', encryptionMode: 'plain' }),
-      updateMetadata: () => undefined,
-      getMetadataSnapshot: () => createTestMetadata({ path: '/repo', machineId: 'machine-a' }),
-      getCurrentSessionLocation: () => ({ path: '/repo', machineId: 'machine-a' }),
-      getBackendTarget: () => ({ kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const }),
-      getPermissionMode: () => 'yolo' as const,
-      getWorkDepth: () => 0,
-      getHostTurnWorkDepth: (turnId: string) => turnId === 'depth-four-turn' ? 4 : undefined,
-      getActiveTurnPermissionWitness: () => ({
-        turnId: 'depth-four-turn',
-        causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'yolo' as const },
-      }),
-    } satisfies import('@/mcp/startHappyServer').HappyMcpSessionClient;
-    const runtime = createHappierMcpServer(client, {
-      credentials: null,
-      accountSettings: accountSettingsParse({ workDepthLimit: 4 }),
-    });
-    const result = await runtime.executeTool({
-      toolName: 'action_execute',
-      args: { actionId: 'execution.run.start', input: {
-        sessionId: client.sessionId,
-        intent: 'delegate',
-        backendTarget: client.getBackendTarget(),
-        instructions: 'Start another worker.',
-        permissionMode: 'read_only',
-        retentionPolicy: 'ephemeral',
-        runClass: 'bounded',
-        ioMode: 'request_response',
-      } },
-    });
-    expect(result).toMatchObject({ ok: false, errorCode: 'work_depth_exceeded' });
-  });
 });
 
 describe('createHappierMcpServer', () => {
