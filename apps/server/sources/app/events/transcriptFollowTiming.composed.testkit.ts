@@ -80,7 +80,9 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
         else await harness?.close();
     });
 
-    it.each([1, 2] as const)('returns committed rows promptly through V%s, with a held writer and retained subscription', async version => {
+    it.each([1, 2] as const)(provider === 'postgres'
+        ? 'queues committed rows through V%s behind a held writer, then returns with a retained subscription'
+        : 'returns committed rows promptly through V%s, with a held writer and retained subscription', async version => {
         const material = version === 2 ? { type: 'dataKey' as const, machineKey: tweetnacl.randomBytes(32) } : null;
         const contentPublicKey = material ? tweetnacl.box.keyPair.fromSecretKey(material.machineKey).publicKey : null;
         const owner = await db.account.create({ data: contentPublicKey
@@ -332,10 +334,22 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                 })();
                 let timer: ReturnType<typeof setTimeout> | undefined;
                 let deliveryFailed = false;
+                let deliveryTransactionsBeforeWriterRelease: number | undefined;
                 try {
+                    await spareRead;
+                    if (provider === 'postgres') {
+                        // C43 reserves the other native connection for discovery;
+                        // delivery snapshots share the writer's sole inTx permit.
+                        // The independent writer must finish without awaiting delivery.
+                        deliveryTransactionsBeforeWriterRelease = deliveryTransactions;
+                        expect(deliveryTransactionsBeforeWriterRelease).toBe(0);
+                        expect(stamps.responseOpened).toBeUndefined();
+                        stamps.writerReleased = performance.now();
+                        releaseWriter?.();
+                        await writer;
+                    }
                     const observed = await Promise.race([response,
                         new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
-                    await spareRead;
                     const hopMs = (from: string, to: string) => stamps[from] === undefined || stamps[to] === undefined
                         ? null : stamps[to]! - stamps[from]!;
                     console.info('WAKE3_HOME_TIMING', JSON.stringify({ provider, version, index, httpRoundTripDelayMs,
@@ -350,10 +364,15 @@ describe(`Home Action transcript follow through real HTTP, RPC, Socket.IO and ${
                             pageToDaemonReturn: hopMs('pageEnd', 'daemonReturn'),
                             daemonToHttpHeaders: hopMs('daemonReturn', 'httpReturn'),
                             responseOpen: hopMs('httpReturn', 'responseOpened'),
-                        }, commitToResponseMs: observed ? hopMs('commitAcknowledged', 'responseOpened') : null, writerHeld: true,
+                        }, commitToResponseMs: observed ? hopMs('commitAcknowledged', 'responseOpened') : null,
+                        writerReleaseToResponseMs: observed ? hopMs('writerReleased', 'responseOpened') : null,
+                        writerHeld: provider !== 'postgres', deliveryTransactionsBeforeWriterRelease,
                         observerConnections, deliveryTransactions, pages: [...pages] }));
-                    expect(observed, 'Home follow must return before the next writer releases').not.toBeNull();
-                    expect(stamps.responseOpened! - stamps.commitAcknowledged!).toBeLessThan(1000);
+                    expect(observed, provider === 'postgres'
+                        ? 'Home follow must return after the queued delivery can acquire the released permit'
+                        : 'Home follow must return before the next writer releases').not.toBeNull();
+                    const deliveryReadyAt = provider === 'postgres' ? stamps.writerReleased! : stamps.commitAcknowledged!;
+                    expect(stamps.responseOpened! - deliveryReadyAt).toBeLessThan(1000);
                     expect(observed).toMatchObject({ status: 200, body: { execution: { ok: true,
                         result: { items: [{ seq: message.seq }], nextCursor: String(message.seq) } } } });
                     const items = observed!.body.execution.result.items;
