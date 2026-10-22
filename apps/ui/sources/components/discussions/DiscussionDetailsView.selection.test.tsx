@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   SessionMessageAccountActorV1Schema,
   type SessionMessageAccountActorV1,
@@ -18,7 +18,9 @@ import { prepareDiscussionContentForPassage, prepareDiscussionContentForRecipien
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import type { SessionDiscussionDraftMutationAttempt } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
-import { createSessionFixture, renderScreen } from '@/dev/testkit';
+import { createSessionFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { activateStorageAccountScope } from '@/dev/testkit/runtime/storageRuntime';
 import { MarkdownView } from '@/components/markdown/MarkdownView';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
@@ -53,7 +55,7 @@ const repositoryPost = vi.hoisted(() =>
 const repositoryDismiss = vi.hoisted(() => vi.fn(() => true));
 const launchability = vi.hoisted(() => ({ current: true }));
 const shellSession = vi.hoisted(() => ({
-  current: null as null | Record<string, unknown>,
+  current: null as null | ReturnType<typeof createSessionFixture>,
 }));
 const repositoryRename = vi.hoisted(() =>
   vi.fn<() => Promise<DiscussionRepositoryMutationOutcome<unknown>>>(
@@ -345,10 +347,6 @@ vi.mock('@/sync/domains/discussions/discussionVisibleReadController', () => ({
     observeVisibleMessageSeqs,
   }),
 }));
-vi.mock('@/sync/domains/session/sessionSurfaceVisibility', () => ({
-  useSessionSurfaceVisibilitySnapshot: () => 1,
-  isSessionSurfaceVisible: () => true,
-}));
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } =
     await import('@/dev/testkit/mocks/reactNative');
@@ -366,9 +364,13 @@ vi.mock(
   '@/components/sessions/presentation/sessionComposerPresentationTargets',
   () => ({ requestRegisteredSessionComposerFocus: focusComposer }),
 );
-vi.mock('@/sync/sync', () => ({
-  sync: { patchSessionMetadataWithRetry: metadataWrites },
-}));
+vi.mock('@/sync/sync', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/sync/sync')>();
+  return { ...actual, sync: new Proxy({}, {
+    // Retain this suite's existing metadata-write double; cold acquisition uses the real owner.
+    get: (_target, key) => key === 'patchSessionMetadataWithRetry' ? metadataWrites : Reflect.get(actual.sync, key),
+  }) };
+});
 // The real provider module (the Run… start modal reads its context snapshot); only handler registration is stubbed.
 vi.mock('@/keyboard/KeyboardShortcutProvider', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/keyboard/KeyboardShortcutProvider')>()),
@@ -440,6 +442,9 @@ vi.mock('@/hooks/session/useSessionExecutionRunLaunchability', () => ({
 }));
 
 import { DiscussionDetailsView } from '@/components/discussions/DiscussionDetailsView';
+await loadSyncSingletonForTests();
+let activeScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
+afterEach(async () => { await standardCleanup(); activeScope?.dispose(); activeScope = null; });
 
 import {
   consumeInteractiveExecutionRunDraftNavigationIntent,
@@ -460,7 +465,8 @@ async function press(
 }
 
 describe('DiscussionDetailsView selection', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    activeScope = await activateStorageAccountScope({ serverId: 'server-a', accountId: 'viewer' }, getStorage());
     const state = getStorage().getState();
     getStorage().setState({
       sessions: {},
@@ -505,7 +511,7 @@ describe('DiscussionDetailsView selection', () => {
     repositoryPost.mockClear();
     repositoryDismiss.mockClear();
     launchability.current = true;
-    shellSession.current = { id: 'session-a' };
+    shellSession.current = createSessionFixture({ id: 'session-a', serverId: 'server-a' });
     repositoryRename.mockClear();
     repositoryArchive.mockClear();
     repositoryRestore.mockClear();
@@ -680,14 +686,7 @@ describe('DiscussionDetailsView selection', () => {
     expect(composerProps.current?.disabled).toBe(false);
 
     // Known refusal from the exact Session's own access projection.
-    shellSession.current = {
-      id: 'session-a',
-      access: {
-        role: 'recipient',
-        level: 'view',
-        capabilities: { readTranscript: true, submitAgentInput: false },
-      },
-    };
+    shellSession.current = createSessionFixture({ id: 'session-a', serverId: 'server-a', accessLevel: 'view' });
     await screen.update(<DiscussionDetailsView target={target} active />);
 
     expect(composerProps.current?.disabled).toBe(false);
@@ -700,14 +699,7 @@ describe('DiscussionDetailsView selection', () => {
       'Private draft I am still writing',
     );
 
-    shellSession.current = {
-      id: 'session-a',
-      access: {
-        role: 'recipient',
-        level: 'edit',
-        capabilities: { readTranscript: true, submitAgentInput: true },
-      },
-    };
+    shellSession.current = createSessionFixture({ id: 'session-a', serverId: 'server-a', accessLevel: 'edit' });
     await screen.update(<DiscussionDetailsView target={target} active />);
     expect(composerProps.current?.disabled).toBe(false);
     expect((composerProps.current?.value as { text: string }).text).toBe(
@@ -1802,6 +1794,9 @@ describe('DiscussionDetailsView selection', () => {
       [exactHomeBinding.current.serverId, exactHomeBinding.current],
     ]);
     const originalMessages = snapshot.threads['discussion-a'].messages;
+    activeScope?.dispose();
+    activeScope = await activateStorageAccountScope(exactHomeBinding.current.scope, getStorage());
+    shellSession.current = createSessionFixture({ id: 'session/a', serverId: exactHomeBinding.current.serverId });
     snapshot.threads['discussion-a'].messages = originalMessages.map(
       ({ messageRef: _messageRef, ...message }) =>
         openedMessage(message, exactHomeBinding.current.serverId),

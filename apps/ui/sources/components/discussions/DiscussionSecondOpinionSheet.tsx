@@ -7,6 +7,7 @@ import type {
   DiscussionSecondOpinionPreviewV1,
 } from '@happier-dev/protocol/discussions/secondOpinion';
 import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
+import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
 
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldItem } from '@/components/ui/forms/FieldItem';
@@ -29,6 +30,8 @@ import {
   type DiscussionSecondOpinionSnapshot,
 } from './discussionSecondOpinionController';
 import { executableParticipantOptionId, useExecutableParticipantSections } from './useExecutableParticipantSections';
+import { useDiscussionWorkflowProject } from './useDiscussionWorkflowProject';
+import { WorkflowProjectTargetControl } from '@/components/workflows/editor/WorkflowProjectTargetControl';
 import { useExecutableParticipantLabel } from '@/components/sessions/authoring/useExecutableParticipantLabel';
 
 export type DiscussionSecondOpinionIntent = 'second_opinion' | 'discuss';
@@ -39,8 +42,8 @@ type SheetProps = Readonly<{
   /** The committed answer as the person read it; the quote leads the sheet before any preview. */
   sourceText: string;
   onClose: () => void;
-  /** Opens the created Discussion through the hosting surface's navigation owner. */
-  onOpenDiscussion: (href: string) => void;
+  /** Opens a route the sheet produced (the Discussion, or the Fresh opinions Run) through the host's navigation owner. */
+  onNavigate: (href: string) => void;
 }>;
 
 const NO_SERVER_IDS: readonly string[] = [];
@@ -154,6 +157,8 @@ function BoundForm(
   );
   const [question, setQuestion] = React.useState(snapshot.draft.question);
   const [readinessSessionId, setReadinessSessionId] = React.useState<string | null>(null);
+  // Asking several starts Fresh opinions, a Workflow that runs where the Discussion's Workflows run.
+  const [project, setProject] = React.useState<WorkflowProjectTargetV1 | null>(null);
   const toggleReviewer = React.useCallback((selection: ExecutableParticipantSelectionV1) => {
     if (controller.toggleReviewer(selection, question) && controller.getSnapshot().draft.reviewers.length > 0) {
       void controller.preview();
@@ -207,35 +212,30 @@ function BoundForm(
       // other preview change stops here and is shown before anything is asked.
       if (!sourceAccess && (!next || JSON.stringify(next) !== shown)) return;
     }
-    await controller.ask();
+    await controller.ask({ project });
   };
 
-  const result = snapshot.result;
-  const outcome = result?.outcome;
-  const value = outcome?.kind === 'succeeded' ? outcome.value : null;
-  const status = value && 'status' in value ? value.status : null;
   const done = snapshot.discussionHref !== null;
-  const unavailable = status === 'unavailable';
+  const several = snapshot.draft.reviewers.length > 1;
   const preview = snapshot.preview?.preview ?? null;
-  const reviewerPreview = preview?.reviewers[0] ?? null;
-  const needsGrant =
-    reviewerPreview !== null &&
-    reviewerPreview.sourceAccess === 'read' &&
-    reviewerPreview.missingSourceAccountIds.length > 0;
+  const reviewerPreviews = preview?.reviewers ?? [];
+  const needsGrant = reviewerPreviews.some(needsSourceGrant);
   // A reviewer outside the answer's audience is a gap the person can close by sharing the source
   // (the Ask grants, then rechecks before anything is disclosed); any other refusal stays one.
-  const repairable = isRepairableSourceGap(reviewerPreview);
   const blocked =
-    (reviewerPreview && !reviewerPreview.disclosure.ok && !repairable) ||
-    (preview && !preview.discussionDisclosure.ok) ||
-    (needsGrant && !reviewerPreview!.canGrantSource);
+    reviewerPreviews.some((reviewer) =>
+      (!reviewer.disclosure.ok && !isRepairableSourceGap(reviewer)) ||
+      (needsSourceGrant(reviewer) && !reviewer.canGrantSource)) ||
+    (preview !== null && !preview.discussionDisclosure.ok);
   const canAsk =
     !snapshot.working &&
     !done &&
-    !unavailable &&
     !blocked &&
     preview !== null &&
-    (discuss || (snapshot.draft.reviewers.length === 1 && question.trim().length > 0));
+    (discuss ||
+      (snapshot.draft.reviewers.length > 0 &&
+        question.trim().length > 0 &&
+        (!several || project !== null)));
 
   const subtitle = sourceTitle
     ? t('session.collaboration.discussion.secondOpinion.subtitle', {
@@ -256,7 +256,7 @@ function BoundForm(
         size="small"
         title={t('session.collaboration.discussion.secondOpinion.open')}
         onPress={() => {
-          props.onOpenDiscussion(snapshot.discussionHref!);
+          props.onNavigate(snapshot.discussionHref!);
           props.onClose();
         }}
       />
@@ -293,7 +293,11 @@ function BoundForm(
             ? t('session.collaboration.discussion.create')
             : needsGrant
               ? t('session.collaboration.discussion.secondOpinion.shareAndAsk')
-              : t('session.collaboration.discussion.secondOpinion.ask')
+              : several
+                ? t('session.collaboration.discussion.secondOpinion.askFreshOpinions', {
+                    count: snapshot.draft.reviewers.length,
+                  })
+                : t('session.collaboration.discussion.secondOpinion.ask')
         }
         action={() =>
           discuss ? controller.discuss().then(() => undefined) : ask()
@@ -325,6 +329,10 @@ function BoundForm(
           snapshot={snapshot}
           discuss={discuss}
           reviewerLabel={reviewerLabel}
+          onOpenRun={(href) => {
+            props.onNavigate(href);
+            props.onClose();
+          }}
         />
       ) : null}
       {/* The question sits with the answer it is about; on a real Account the list of Sessions to ask runs
@@ -413,23 +421,18 @@ function BoundForm(
           ) : null)}
         </View>
       ) : null}
-      {unavailable ? (
-        <SurfaceStateCard
-          size="line"
-          kind="unavailable"
-          title={t(
-            'session.collaboration.discussion.secondOpinion.freshOpinionsUnavailableTitle',
-          )}
-          reason={t(
-            'session.collaboration.discussion.secondOpinion.freshOpinionsUnavailableReason',
-          )}
+      {several && !discuss && !done ? (
+        <FreshOpinionsWhere
+          accountLifetime={binding}
+          disabled={snapshot.working || snapshot.submitted}
+          onProject={setProject}
         />
       ) : null}
       {!done && preview ? (
         <ReadsSheet
           preview={preview}
           discuss={discuss}
-          reviewerLabel={reviewerLabel}
+          serverId={binding.scope.serverId}
           viewerAccountId={binding.scope.accountId}
           sourceTitle={sourceTitle}
         />
@@ -490,119 +493,74 @@ function SheetFrame(
   );
 }
 
+type ReviewerPreview = DiscussionSecondOpinionPreviewV1['reviewers'][number];
+type ReadRowModel = Readonly<{ icon: IconName; title: string; body: string; warning?: boolean }>;
+
+/** The reviewer would read the answer's session but isn't in its audience yet. */
+function needsSourceGrant(reviewer: ReviewerPreview): boolean {
+  return reviewer.sourceAccess === 'read' && reviewer.missingSourceAccountIds.length > 0;
+}
+
+/**
+ * Where Fresh opinions runs: the same Where owner and contextual default as the Discussion composer's
+ * Run…. Mounted only while two or more are picked, so a one-reviewer ask reads no Workflow memory.
+ */
+function FreshOpinionsWhere(props: Readonly<{
+  accountLifetime: ServerCredentialAccountScopeBinding;
+  disabled: boolean;
+  onProject: (project: WorkflowProjectTargetV1 | null) => void;
+}>) {
+  const { target, project, machines, machineName, choose } = useDiscussionWorkflowProject(props.accountLifetime);
+  const { onProject } = props;
+  React.useEffect(() => {
+    onProject(project);
+    return () => onProject(null);
+  }, [onProject, project]);
+  return (
+    <WorkflowProjectTargetControl
+      presentation="field"
+      purpose="workflow"
+      accountLifetime={props.accountLifetime}
+      title={t('workflows.page.sections.whereTitle')}
+      subtitle={t('session.collaboration.discussion.secondOpinion.whereBody')}
+      target={target}
+      machines={props.disabled ? undefined : machines}
+      onChange={props.disabled ? undefined : choose}
+      machineName={machineName}
+      testIDPrefix="second-opinion"
+    />
+  );
+}
+
 /** "What they can read": one line per party, saying what each will be able to open. */
 function ReadsSheet(
   props: Readonly<{
     preview: DiscussionSecondOpinionPreviewV1;
     discuss: boolean;
-    reviewerLabel: string | null;
+    serverId: string;
     viewerAccountId: string;
     sourceTitle: string | null;
   }>,
 ) {
-  const reviewer = props.preview.reviewers[0];
-  const name =
-    props.reviewerLabel ??
-    t('session.collaboration.discussion.heldParticipant');
-  const session =
-    props.sourceTitle ??
-    t('session.collaboration.discussion.secondOpinion.thisSession');
-  const rows: {
-    key: string;
-    icon: IconName;
-    title: string;
-    body: string;
-    warning?: boolean;
-  }[] = [];
-  if (reviewer && !props.discuss) {
-    if (!reviewer.disclosure.ok && !isRepairableSourceGap(reviewer)) {
-      rows.push({
-        key: 'reviewer',
-        icon: 'warning',
-        warning: true,
-        title: t(
-          'session.collaboration.discussion.secondOpinion.cannotAskTitle',
-          { name },
-        ),
-        body: disclosureReason(reviewer.disclosure.reason),
-      });
-    } else if (reviewer.sourceAccess === 'quote_only') {
-      rows.push({
-        key: 'reviewer',
-        icon: 'quotes',
-        title: t(
-          'session.collaboration.discussion.secondOpinion.quoteOnlyTitle',
-          { name },
-        ),
-        body: t('session.collaboration.discussion.secondOpinion.quoteOnlyBody'),
-      });
-    } else if (reviewer.missingSourceAccountIds.length > 0) {
-      rows.push({
-        key: 'reviewer',
-        icon: 'eye',
-        title: t('session.collaboration.discussion.secondOpinion.grantTitle', {
-          name,
-        }),
-        body: reviewer.canGrantSource
-          ? t('session.collaboration.discussion.secondOpinion.grantBody', {
-              name,
-              session,
-            })
-          : t(
-              'session.collaboration.discussion.secondOpinion.grantUnavailable',
-            ),
-      });
-    } else {
-      rows.push({
-        key: 'reviewer',
-        icon: 'eye',
-        title:
-          reviewer.runtimeAccountId === props.viewerAccountId
-            ? t(
-                'session.collaboration.discussion.secondOpinion.readsAsYouTitle',
-                { name },
-              )
-            : t('session.collaboration.discussion.secondOpinion.readsTitle', {
-                name,
-              }),
-        body: t(
-          'session.collaboration.discussion.secondOpinion.readsAsYouBody',
-        ),
-      });
-    }
-  }
   const others = props.preview.discussionAudienceAccountIds.filter(
     (id) => id !== props.viewerAccountId,
   ).length;
-  rows.push(
-    props.preview.discussionDisclosure.ok
-      ? {
-          key: 'discussion',
-          icon: 'users',
-          title: t(
-            'session.collaboration.discussion.secondOpinion.discussionTitleRow',
-          ),
-          body:
-            others === 0
-              ? t(
-                  'session.collaboration.discussion.secondOpinion.discussionOnlyYou',
-                )
-              : t(
-                  'session.collaboration.discussion.secondOpinion.discussionPeople',
-                  { count: others },
-                ),
-        }
-      : {
-          key: 'discussion',
-          icon: 'warning',
-          warning: true,
-          title: t(
-            'session.collaboration.discussion.secondOpinion.discussionTitleRow',
-          ),
-          body: disclosureReason(props.preview.discussionDisclosure.reason),
-        },
-  );
-  const { theme } = useUnistyles();
+  const discussionRow: ReadRowModel = props.preview.discussionDisclosure.ok
+    ? {
+        icon: 'users',
+        title: t('session.collaboration.discussion.secondOpinion.discussionTitleRow'),
+        body:
+          others === 0
+            ? t('session.collaboration.discussion.secondOpinion.discussionOnlyYou')
+            : t('session.collaboration.discussion.secondOpinion.discussionPeople', { count: others }),
+      }
+    : {
+        icon: 'warning',
+        warning: true,
+        title: t('session.collaboration.discussion.secondOpinion.discussionTitleRow'),
+        body: disclosureReason(props.preview.discussionDisclosure.reason),
+      };
+  const reviewers = props.discuss ? [] : props.preview.reviewers;
   return (
     <View>
       <CollectionListGroupLabel
@@ -610,26 +568,88 @@ function ReadsSheet(
         presentation="menu"
       />
       <View style={styles.reads}>
-        {rows.map((row, index) => (
-          <View
-            key={row.key}
-            style={[styles.readRow, index > 0 ? styles.readDivider : null]}
-          >
-            <Icon
-              name={row.icon}
-              size={ICON_SIZE.sm}
-              color={
-                row.warning
-                  ? theme.colors.state.warning.foreground
-                  : theme.colors.text.secondary
-              }
-            />
-            <View style={styles.readText}>
-              <Text style={styles.readTitle}>{row.title}</Text>
-              <Text style={styles.meta}>{row.body}</Text>
-            </View>
-          </View>
+        {reviewers.map((reviewer, index) => (
+          <ReviewerReadRow
+            key={executableParticipantOptionId(reviewer.selection) + (reviewer.participantSlotId ?? '')}
+            reviewer={reviewer}
+            divider={index > 0}
+            serverId={props.serverId}
+            viewerAccountId={props.viewerAccountId}
+            sourceTitle={props.sourceTitle}
+          />
         ))}
+        <ReadRow row={discussionRow} divider={reviewers.length > 0} />
+      </View>
+    </View>
+  );
+}
+
+/** One reviewer's line, named through the shared participant label owner. */
+function ReviewerReadRow(
+  props: Readonly<{
+    reviewer: ReviewerPreview;
+    divider: boolean;
+    serverId: string;
+    viewerAccountId: string;
+    sourceTitle: string | null;
+  }>,
+) {
+  const { reviewer } = props;
+  const name =
+    useExecutableParticipantLabel(reviewer.selection, props.serverId) ??
+    t('session.collaboration.discussion.heldParticipant');
+  const session =
+    props.sourceTitle ??
+    t('session.collaboration.discussion.secondOpinion.thisSession');
+  const row: ReadRowModel =
+    !reviewer.disclosure.ok && !isRepairableSourceGap(reviewer)
+      ? {
+          icon: 'warning',
+          warning: true,
+          title: t('session.collaboration.discussion.secondOpinion.cannotAskTitle', { name }),
+          body: disclosureReason(reviewer.disclosure.reason),
+        }
+      : reviewer.sourceAccess === 'quote_only'
+        ? {
+            icon: 'quotes',
+            title: t('session.collaboration.discussion.secondOpinion.quoteOnlyTitle', { name }),
+            body: t('session.collaboration.discussion.secondOpinion.quoteOnlyBody'),
+          }
+        : reviewer.missingSourceAccountIds.length > 0
+          ? {
+              icon: 'eye',
+              title: t('session.collaboration.discussion.secondOpinion.grantTitle', { name }),
+              body: reviewer.canGrantSource
+                ? t('session.collaboration.discussion.secondOpinion.grantBody', { name, session })
+                : t('session.collaboration.discussion.secondOpinion.grantUnavailable'),
+            }
+          : {
+              icon: 'eye',
+              title:
+                reviewer.runtimeAccountId === props.viewerAccountId
+                  ? t('session.collaboration.discussion.secondOpinion.readsAsYouTitle', { name })
+                  : t('session.collaboration.discussion.secondOpinion.readsTitle', { name }),
+              body: t('session.collaboration.discussion.secondOpinion.readsAsYouBody'),
+            };
+  return <ReadRow row={row} divider={props.divider} />;
+}
+
+function ReadRow(props: Readonly<{ row: ReadRowModel; divider: boolean }>) {
+  const { theme } = useUnistyles();
+  return (
+    <View style={[styles.readRow, props.divider ? styles.readDivider : null]}>
+      <Icon
+        name={props.row.icon}
+        size={ICON_SIZE.sm}
+        color={
+          props.row.warning
+            ? theme.colors.state.warning.foreground
+            : theme.colors.text.secondary
+        }
+      />
+      <View style={styles.readText}>
+        <Text style={styles.readTitle}>{props.row.title}</Text>
+        <Text style={styles.meta}>{props.row.body}</Text>
       </View>
     </View>
   );
@@ -680,8 +700,30 @@ function DoneLine(
     snapshot: DiscussionSecondOpinionSnapshot;
     discuss: boolean;
     reviewerLabel: string | null;
+    onOpenRun: (href: string) => void;
   }>,
 ) {
+  const outcome = props.snapshot.result?.outcome;
+  const asked = outcome?.kind === 'succeeded' && 'status' in outcome.value && outcome.value.status === 'asked'
+    ? outcome.value : null;
+  const runHref = props.snapshot.runHref;
+  if (asked?.mode === 'fresh_opinions') {
+    return (
+      <SurfaceStateCard
+        size="line"
+        kind="success"
+        testID="second-opinion.done"
+        title={t('session.collaboration.discussion.secondOpinion.freshStarted', {
+          count: props.snapshot.draft.reviewers.length,
+        })}
+        reason={t('session.collaboration.discussion.secondOpinion.freshStartedBody')}
+        action={runHref ? {
+          label: t('session.collaboration.discussion.secondOpinion.openRun'),
+          onPress: () => props.onOpenRun(runHref),
+        } : undefined}
+      />
+    );
+  }
   return (
     <SurfaceStateCard
       size="line"

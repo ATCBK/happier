@@ -54,7 +54,9 @@ const draftState = vi.hoisted(() => ({
     pendingMutationAttempt: null as SessionDiscussionDraftMutationAttempt | null,
     submitted: null as DiscussionDraftSubmittedContentV2 | null,
     setComposer: () => undefined, setTitle: () => undefined,
-    recipients: [] as readonly never[], setRecipients: () => undefined,
+    recipients: [] as readonly import('@happier-dev/protocol/discussions/references').DiscussionParticipantRefV1[], setRecipients: () => undefined,
+    replyTarget: null as import('@happier-dev/protocol/discussions/replyTargets').DiscussionReplyTargetV1 | null,
+    setReplyTarget: vi.fn(),
     // The real draft binding with no recipients or passage: content goes out as written.
     prepareContent: (content: DiscussionMessageContentV1) => content,
     participants: [] as readonly never[], setParticipants: () => undefined,
@@ -195,6 +197,9 @@ describe('DiscussionDetailsView visible read', () => {
         draftState.title = '';
         draftState.text = '';
         draftState.mentions = [];
+        draftState.replyTarget = null;
+        draftState.recipients = [];
+        draftState.setReplyTarget.mockClear();
         draftState.pendingMutationAttempt = null;
         draftState.submitted = null;
     });
@@ -268,6 +273,51 @@ describe('DiscussionDetailsView visible read', () => {
         } finally {
             await act(async () => { detach(); });
         }
+    });
+
+    it('opens route focus for navigation without turning a new post into a reply', async () => {
+        const network = installNetwork(() => [message(1, true)]);
+        await renderScreen(<DiscussionDetailsView target={{ ...target, messageId: 'message-1' }} active standaloneSurface />);
+        await vi.waitFor(() => expect(composerProps.current).not.toBeNull());
+        const content = buildDiscussionContentFromPendingText({ previousText: '', pendingText: 'Independent post', mentions: [] });
+        await act(async () => { composerProps.current!.onSend(content); });
+        await vi.waitFor(() => expect(network.post).toHaveBeenCalled());
+        expect(network.post.mock.calls[0]![0].replyTarget).toBeUndefined();
+        expect(network.post.mock.calls[0]![0].content).toEqual(content);
+    });
+
+    it('posts the explicit draft Reply target even when route focus points elsewhere and the parent is outside the loaded page', async () => {
+        const network = installNetwork(() => [message(1, true)]);
+        draftState.replyTarget = { kind: 'message', messageId: 'older-parent' };
+        await renderScreen(<DiscussionDetailsView target={{ ...target, messageId: 'message-1' }} active standaloneSurface />);
+        await vi.waitFor(() => expect(composerProps.current).not.toBeNull());
+        const content = buildDiscussionContentFromPendingText({ previousText: '', pendingText: 'Deliberate reply', mentions: [] });
+        await act(async () => { composerProps.current!.onSend(content); });
+        await vi.waitFor(() => expect(network.post).toHaveBeenCalled());
+        expect(network.post.mock.calls[0]![0].replyTarget).toEqual({ kind: 'message', messageId: 'older-parent' });
+    });
+
+    it('replies to a message only through its explicit Reply action, and the Replying-to line clears it', async () => {
+        installNetwork(() => [message(1, true)]);
+        const screen = await renderScreen(<DiscussionDetailsView target={{ ...target, messageId: 'message-1' }} active standaloneSurface />);
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-reply-message-1')).not.toBeNull());
+        // Route focus is navigation only: nothing reads as a reply until the person chooses Reply.
+        expect(screen.findByTestId('discussion-draft-reply')).toBeNull();
+        await screen.pressByTestIdAsync('session-discussion-reply-message-1');
+        expect(draftState.setReplyTarget).toHaveBeenLastCalledWith({ kind: 'message', messageId: 'message-1' });
+        draftState.replyTarget = { kind: 'message', messageId: 'message-1' };
+        await screen.update(<DiscussionDetailsView target={target} active standaloneSurface />);
+        await vi.waitFor(() => expect(screen.findByTestId('discussion-draft-reply')).not.toBeNull());
+        expect(screen.getTextContent()).toContain('message 1');
+        await screen.pressByTestIdAsync('discussion-draft-reply-clear');
+        expect(draftState.setReplyTarget).toHaveBeenLastCalledWith(null);
+    });
+
+    it('says which Send to recipients were dropped because they left the Discussion', async () => {
+        installNetwork(() => [message(1, true)]);
+        draftState.recipients = [{ kind: 'session', sessionId: 'departed-session' }];
+        const screen = await renderScreen(<DiscussionDetailsView target={target} active standaloneSurface />);
+        await vi.waitFor(() => expect(screen.findByTestId('session-discussion-recipients-removed')).not.toBeNull());
     });
 
     it.each(['create', 'post'] as const)('uses the exact pending submitted content for %s person attention', async (kind) => {

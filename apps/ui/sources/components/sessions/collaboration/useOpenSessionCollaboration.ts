@@ -78,6 +78,7 @@ export function useOpenSessionCollaboration(input: Readonly<{
 }>): (handoff?: SessionCollaborationHandoff) => void {
     const router = useRouter();
     const cockpitNavigation = useSessionCockpitSurfaceNavigation();
+    const switchCockpitSurface = cockpitNavigation?.switchSurface;
     const { cockpitEnabled } = useMobileWorkspaceExperienceState();
     const serverId = input.target?.serverId;
     const sessionId = input.target?.sessionId;
@@ -93,8 +94,8 @@ export function useOpenSessionCollaboration(input: Readonly<{
             // search is mounted-surface state, not route state.
             publishSessionCollaborationIntent({ serverId, sessionId }, focusTarget, handoff?.query);
         }
-        if (serverId && openRight && cockpitNavigation) {
-            cockpitNavigation.switchSurface('collaboration');
+        if (serverId && openRight && switchCockpitSurface) {
+            switchCockpitSurface('collaboration');
             return;
         }
         if (serverId && openRight && setRightTab) {
@@ -105,5 +106,5 @@ export function useOpenSessionCollaboration(input: Readonly<{
         const href = buildSessionCollaborationRouteHref({ sessionId, serverId, cockpitEnabled, focusTarget });
         if (replace) router.replace(href as Href);
         else router.push(href as Href);
-    }, [cockpitEnabled, cockpitNavigation, focusTarget, openRight, replace, router, serverId, sessionId, setRightTab]);
+    }, [cockpitEnabled, switchCockpitSurface, focusTarget, openRight, replace, router, serverId, sessionId, setRightTab]);
 }

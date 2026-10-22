@@ -8,8 +8,10 @@ import { randomUUID } from '@/platform/randomUUID';
 import { buildDiscussionRouteHref } from './discussionRoutes';
 import type { ExecutableParticipantSelectionV1 } from '@happier-dev/protocol/discussions/executableParticipants';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows/workflowWorkspaceV1';
+import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 
-type Draft = Pick<DiscussionSecondOpinionStartInputV1, 'title' | 'question' | 'reviewers' | 'participants' | 'project'>;
+type Draft = Pick<DiscussionSecondOpinionStartInputV1, 'title' | 'question' | 'reviewers' | 'participants'>;
 type Preview = Extract<DiscussionSecondOpinionStartResultV1, { status: 'preview' }>;
 type Result = Readonly<{ operation: 'second_opinion'; outcome: DiscussionClientOutcome<DiscussionSecondOpinionStartResultV1> }>
     | Readonly<{ operation: 'discuss'; outcome: DiscussionClientOutcome<DiscussionCreateResultV1> }>;
@@ -22,6 +24,8 @@ export type DiscussionSecondOpinionSnapshot = Readonly<{
     working: boolean;
     submitted: boolean;
     discussionHref: string | null;
+    /** Asking several starts Fresh opinions; this is that Run. */
+    runHref: string | null;
 }>;
 
 /** L7's retained draft only; every effect stays at the captured-Home Action owner. */
@@ -35,7 +39,7 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
     let snapshot: DiscussionSecondOpinionSnapshot = {
         source: options.source, draft: options.draft,
         retry: { creationLocalId: randomUUID(), quoteLocalId: randomUUID(), questionLocalId: randomUUID() },
-        preview: null, result: null, working: false, submitted: false, discussionHref: null,
+        preview: null, result: null, working: false, submitted: false, discussionHref: null, runHref: null,
     };
     const listeners = new Set<() => void>();
     const publish = (patch: Partial<DiscussionSecondOpinionSnapshot>) => {
@@ -55,7 +59,8 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
             ...(value?.status === 'preview_changed' && snapshot.preview
                 ? { preview: { ...snapshot.preview, preview: value.preview } } : {}),
             ...(value?.status === 'asked' ? { discussionHref: href(value.discussion.serverId,
-                value.discussion.discussionId, value.messageRef.messageId) } : {}),
+                value.discussion.discussionId, value.messageRef.messageId),
+                runHref: value.runId ? createWorkflowRunRoute(value.runId, value.discussion.serverId) : null } : {}),
         });
         return outcome;
     };
@@ -97,12 +102,14 @@ export function createDiscussionSecondOpinionController(options: Readonly<{
             if (snapshot.draft !== draft) { publish({ working: false }); return outcome; }
             return applyAsk(outcome);
         },
-        async ask(signal?: AbortSignal) {
+        /** Asking several starts Fresh opinions, which runs where `project` says; one reviewer needs no placement. */
+        async ask(options: Readonly<{ project?: WorkflowProjectTargetV1 | null; signal?: AbortSignal }> = {}) {
             if (snapshot.working || !snapshot.preview || retainedDiscuss) return;
+            const project = snapshot.draft.reviewers.length > 1 ? options.project ?? undefined : undefined;
             retainedAsk = DiscussionSecondOpinionStartInputV1Schema.parse({ ...snapshot.draft, source: snapshot.source, retry: snapshot.retry,
-                intent: 'ask', confirmedPreview: snapshot.preview.preview });
+                intent: 'ask', confirmedPreview: snapshot.preview.preview, ...(project ? { project } : {}) });
             publish({ submitted: true });
-            return runAsk(retainedAsk, signal);
+            return runAsk(retainedAsk, options.signal);
         },
         async discuss(signal?: AbortSignal) {
             if (snapshot.working || !snapshot.preview || retainedAsk || snapshot.draft.reviewers.length !== 0) return;

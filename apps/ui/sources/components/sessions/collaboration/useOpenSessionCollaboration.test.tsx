@@ -7,6 +7,7 @@ import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { createWorkspaceFileDetailsTab } from '@/components/appShell/panes/details/fileDetailsTab';
 import { useOpenSessionCollaboration } from './useOpenSessionCollaboration';
+import { SessionCockpitSurfaceNavigationProvider } from '@/components/workspaceCockpit/session/SessionCockpitSurfaceNavigation';
 import { consumeSessionCollaborationIntent, resetSessionCollaborationIntentsForTests } from './sessionCollaborationIntent';
 
 const route = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
@@ -83,6 +84,28 @@ describe('open Session Collaboration', () => {
         expect(hook.getCurrent().pane.scopeState?.details).toEqual(detailsBefore);
         expect(route.push).not.toHaveBeenCalled();
         expect(route.replace).not.toHaveBeenCalled();
+        expect(consumeSessionCollaborationIntent({ serverId: 'home-b', sessionId: 'same-id' })?.focusTarget).toBe('access');
+    });
+
+    it('retains the access command across unrelated Cockpit navigation publication and uses a replacement surface command', async () => {
+        let switchSurface = vi.fn();
+        function Wrapper({ children }: React.PropsWithChildren) {
+            return <PaneWrapper><SessionCockpitSurfaceNavigationProvider value={{ switchSurface, returnToPreviousSurface: () => {} }}>
+                {children}
+            </SessionCockpitSurfaceNavigationProvider></PaneWrapper>;
+        }
+        const hook = await renderHook(() => {
+            const pane = useAppPaneScope('session:home-b:same-id');
+            return useOpenSessionCollaboration({ target: { serverId: 'home-b', sessionId: 'same-id' }, pane, focusTarget: 'access' });
+        }, { wrapper: Wrapper });
+        const before = hook.getCurrent();
+        await hook.rerender();
+        expect(hook.getCurrent()).toBe(before);
+        switchSurface = vi.fn();
+        await hook.rerender();
+        expect(hook.getCurrent()).not.toBe(before);
+        await act(async () => { hook.getCurrent()(); });
+        expect(switchSurface).toHaveBeenCalledWith('collaboration');
         expect(consumeSessionCollaborationIntent({ serverId: 'home-b', sessionId: 'same-id' })?.focusTarget).toBe('access');
     });
 

@@ -8,7 +8,7 @@ import { approvalArtifactBodyMatchesHeaderV1, buildExecutionRunHostActionApprova
 import { readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 import { ExecutionRunHostActionApprovalRequestV1Schema, type ExecutionRunHostActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/executionRunHostActionApprovalRequestV1';
 import { TargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
-import { ApprovalRequesterConfirmationV1Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { ApprovalRequesterConfirmationV1Schema, isSessionDiscussionApprovalPublicationV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { WorkspaceSyncConflictResolutionResultV1Schema, WorkspaceSyncConflictResolutionV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 import { Text } from '@/components/ui/text/Text';
@@ -190,6 +190,11 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
   );
   const projectCommandTitle = useProjectCommandApprovalTitle(projectCommand);
   const projectCommandDecisions = projectCommand ? describeProjectCommandApprovalDecisions(projectCommand) : null;
+  // An agent's private Discussion draft is decided as what it does there: Post it, or Decline it (C3 §6).
+  const discussionDraftDecisions = React.useMemo(() => (
+    parsed?.kind === 'built_in' && isSessionDiscussionApprovalPublicationV1(parsed.request)
+      ? { approve: t('session.collaboration.discussion.draftReview.post'), reject: t('session.collaboration.discussion.draftReview.decline') }
+      : null), [parsed]);
   // An Agent's enable request is decided by its own controller here too: Allow · Always in <place> · Not now (P8 U8.5).
   const capabilityEnable = review?.capabilityEnable ?? null;
   const approvalWithheld = approveAdmission?.status === 'unavailable';
@@ -801,7 +806,8 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
           <ApprovalDecisionBar testID="approvals.actions" busy={isDeciding && !homeUnavailable}
             layout={handoffTargetPresentation ? 'stacked' : 'inline'}
             approve={!confidentialAction ? {
-              testID: 'approvals.approve', label: handoffTargetPresentation?.decisionLabel ?? projectCommandDecisions?.approve ?? proposalLabels?.approve,
+              testID: 'approvals.approve', label: handoffTargetPresentation?.decisionLabel ?? projectCommandDecisions?.approve ?? proposalLabels?.approve
+                ?? discussionDraftDecisions?.approve,
               disabled: isDeciding || approvalWithheld || approvalRouteUnavailable || Boolean(proposal?.approveWithheld),
               accessibilityHint: approvalRouteUnavailable ? t('actionConfirmations.homeUnavailable')
                 : approvalWithheld ? t('approvals.approveUnavailableHint') : undefined,
@@ -809,7 +815,7 @@ export const ApprovalDetailScreen = React.memo((props: Readonly<{
             } : undefined}
             dismiss={projectCommand ? undefined : { testID: 'approvals.cancel', disabled: isDeciding, accessibilityHint: t('approvals.dismissHint'),
               onPress: () => decide('cancel') }}
-            reject={{ testID: 'approvals.reject', label: projectCommandDecisions?.reject ?? proposalLabels?.reject, disabled: isDeciding || approvalRouteUnavailable,
+            reject={{ testID: 'approvals.reject', label: projectCommandDecisions?.reject ?? proposalLabels?.reject ?? discussionDraftDecisions?.reject, disabled: isDeciding || approvalRouteUnavailable,
               accessibilityHint: approvalRouteUnavailable ? t('actionConfirmations.homeUnavailable') : undefined,
               onPress: () => decide('reject') }} />
         </ItemGroup>

@@ -16,7 +16,7 @@ import {
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createLockedEncryptedSessionByIdResponseFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { renderScreen as renderUiScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup, createRootLayoutFeaturesResponse } from '@/dev/testkit';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
@@ -953,8 +953,8 @@ async function prepareApprovalFixture() {
     if (homeId === account.serverId && key !== fixtureKey) continue;
     const sessions = sessionFixturesByServerId[key] ?? (homeId === account.serverId ? sessionFixtures : {});
     const machines = machineFixturesByServerId[key] ?? (homeId === account.serverId ? machineFixtures : {});
-    for (const session of Object.values(sessions)) installSessionActionFixture({ homes, storage,
-      serverId: resolveServerProfileScopeIdForIdentifier(homeId), session: { ...session, serverId: resolveServerProfileScopeIdForIdentifier(homeId) } });
+    for (const session of Object.values(sessions)) await publishApprovalSessionFixture(session,
+      resolveServerProfileScopeIdForIdentifier(homeId));
     await account.publishMachines(homeId, [...Object.values(machines), ...(homeId === account.serverId
       && includeExactApprovalMachine ? [exactApprovalMachine()] : [])]);
   }
@@ -962,11 +962,10 @@ async function prepareApprovalFixture() {
   // Publish the focused Home last so its records cannot be replaced by another Home's duplicate ids.
   const selectedSessions = sessionFixturesByServerId[fixtureKey] ?? sessionFixtures;
   const focusedHomeId = resolveServerProfileScopeIdForIdentifier(account.serverId);
-  storage.setState({ sessions: Object.fromEntries(Object.values(selectedSessions).map(session => {
-    const published = installSessionActionFixture({ homes, storage, serverId: focusedHomeId,
-      session: { ...session, serverId: focusedHomeId } });
+  storage.setState({ sessions: Object.fromEntries(await Promise.all(Object.values(selectedSessions).map(async session => {
+    const published = await publishApprovalSessionFixture(session, focusedHomeId);
     return [published.id, published];
-  })) });
+  }))) });
   await account.publishMachines(account.serverId, [
     ...Object.values(machineFixturesByServerId[fixtureKey] ?? machineFixtures),
     ...(includeExactApprovalMachine ? [exactApprovalMachine()] : []),
@@ -978,6 +977,18 @@ async function prepareApprovalFixture() {
     return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide', requestId: envelope.requestId, execution: daemonReply }) };
   } });
   prepared = true;
+}
+
+async function publishApprovalSessionFixture(session: Session, serverId: string): Promise<Session> {
+  const published = installSessionActionFixture({ homes, storage, serverId, session: { ...session, serverId } });
+  if (published.encryptionMode === 'e2ee') {
+    const response = await createLockedEncryptedSessionByIdResponseFixture(published);
+    homes.answer(serverId, `/v2/sessions/${published.id}`, { body: response });
+    homes.answer(serverId, `/v2/sessions/${published.id}?accessProjectionVersion=1`, { body: response });
+    homes.answer(serverId, `/v1/sessions/${published.id}/turns`, { body: { v: 1, sessionId: published.id,
+      updatedAt: published.updatedAt, turns: [] } });
+  }
+  return published;
 }
 
 async function renderScreen(element: React.ReactElement) {
@@ -1201,6 +1212,22 @@ describe('ApprovalDetailScreen', () => {
     } finally {
       actionOperationStore.reset();
     }
+  });
+
+  it('names an agent draft for a Discussion as Post and Decline', async () => {
+    const artifact = await createCurrentApprovalArtifact('server-cache');
+    const produced = JSON.parse(artifact.body);
+    const post = { discussionId: 'discussion-1', localId: 'draft-local-1', mentionedSessionIds: [],
+      content: { v: 1, parts: [{ type: 'text', text: 'Start backoff at 800 ms.' }] } };
+    const request = ApprovalRequestV2Schema.parse({ ...produced, actionId: 'discussion.post', actionArgs: post,
+      requestedSurface: 'agent', createdBy: { surface: 'agent', sessionId: 'session-1' },
+      executionOriginV1: { ...produced.executionOriginV1, actionId: 'discussion.post', surface: 'agent',
+        caller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 } } });
+    currentArtifact = { ...artifact, header: buildApprovalRequestArtifactHeaderV1(request), body: JSON.stringify(request) };
+    const screen = await renderScreen(<approvalDetailScreenModule.ApprovalDetailScreen artifactId="artifact-1" />);
+    await vi.waitFor(() => expect(screen.findByTestId('approvals.approve')).not.toBeNull());
+    expect(decisionButton(screen, 'approvals.approve')?.props.title).toBe('session.collaboration.discussion.draftReview.post');
+    expect(decisionButton(screen, 'approvals.reject')?.props.title).toBe('session.collaboration.discussion.draftReview.decline');
   });
 
   it('keeps settled capability review fields readable without offering another approval', async () => {
@@ -1737,9 +1764,11 @@ describe('ApprovalDetailScreen', () => {
     expect(daemonDecisions()).toHaveLength(0);
     expect(clientExecutionEffects()).toHaveLength(0);
     expect(artifactWrites()).toHaveLength(0);
-    expect(screen.findByTestId('approvals.approve')?.props.disabled).toBe(true);
-    expect(screen.findByTestId('approvals.reject')?.props.disabled).toBe(true);
-    expect(screen.findByTestId('approvals.home-unavailable')).not.toBeNull();
+    // Losing the Artifact's Home retires its reader as well as its decision route.
+    expect(screen.findByTestId('approvals.approve')).toBeNull();
+    expect(screen.findByTestId('approvals.reject')).toBeNull();
+    expect(screen.findByTestId('approvals.retry')).not.toBeNull();
+    expect(readRenderedText(screen)).toContain('actionConfirmations.homeUnavailable');
   });
 
   it('explains how to recover when the deep-linked Home is unavailable before the Artifact can load', async () => {
@@ -2563,6 +2592,7 @@ describe('ApprovalDetailScreen', () => {
 
   it('uses the approval Home for duplicate session ids and opens the scoped session route', async () => {
     currentArtifact = await createCurrentApprovalArtifact('server-approval');
+    expect(JSON.parse(currentArtifact.body).executionOriginV1).toMatchObject({ sessionId: 'session-1' });
     approvalHomeFixture = {
       kind: 'resolved',
       serverIdentityId: 'srv_approval_home_a',
@@ -2618,8 +2648,8 @@ describe('ApprovalDetailScreen', () => {
       <ApprovalDetailScreen artifactId="artifact-1" />,
     );
 
+    await waitForHomeGovernance(() => expect(readRenderedText(screen)).toContain('Approval Home workstation'));
     expect(readRenderedText(screen)).toContain('Approval Home session');
-    expect(readRenderedText(screen)).toContain('Approval Home workstation');
     expect(readRenderedText(screen)).toContain('/approval');
     expect(readRenderedText(screen)).not.toContain('Active Home session');
 
@@ -2634,6 +2664,7 @@ describe('ApprovalDetailScreen', () => {
 
   it('keeps approval actions available for an authorized locked Session without exposing cached title or path', async () => {
     currentArtifact = await createCurrentApprovalArtifact('server-approval');
+    expect(JSON.parse(currentArtifact.body).executionOriginV1).toMatchObject({ sessionId: 'session-1' });
     sessionFixturesByServerId = {
       'server-approval': {
         'session-1': createSessionFixture({
@@ -2661,6 +2692,7 @@ describe('ApprovalDetailScreen', () => {
       <ApprovalDetailScreen artifactId="artifact-1" />,
     );
 
+    await waitForHomeGovernance(() => expect(readRenderedText(screen)).toContain('detailPages.approval.requesterYou'));
     expect(readRenderedText(screen)).not.toContain('Private cached title');
     expect(readRenderedText(screen)).not.toContain('secret-project');
     // The fixture's request is the person's own (UI origin): the locked Session is context, never the requester.

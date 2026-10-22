@@ -59,7 +59,7 @@ async function mount() {
     [serverId]: [createMachineFixture({ id: 'review-machine', active: false, activeAt: 0 })] } });
   const screen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
   await act(async () => { presentDiscussionSecondOpinion({ source, sourceText: 'The source answer.', intent: 'second_opinion',
-    onOpenDiscussion: () => {}, }); });
+    onNavigate: () => {}, }); });
   return { screen, serverId, previewPath };
 }
 
@@ -106,7 +106,7 @@ it('demands only the highlighted Session readiness and asks two reviewers as Fre
   const { t } = await import('@/text');
   const ask = () => screen.findByTestId('second-opinion.ask');
   await vi.waitFor(() => expect(ask()?.props.disabled).toBe(false));
-  expect(ask()?.props.title).toBe(t('session.collaboration.discussion.secondOpinion.askFreshOpinions', { count: 2 }));
+  expect(screen.getTextContent()).toContain(t('session.collaboration.discussion.secondOpinion.askFreshOpinions', { count: 2 }));
   expect(boundary.http.requestsFor('/v1/discussions')).toHaveLength(0);
   await screen.pressByTestIdAsync('second-opinion.ask');
   // The Machine and folder Discussion Workflows run in is the multi-reviewer placement: without it the

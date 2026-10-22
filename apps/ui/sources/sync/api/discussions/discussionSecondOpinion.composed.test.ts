@@ -277,22 +277,27 @@ it.each([false, true])('carries selected Workflow placement to multi-reviewer ad
     homes.answer(serverId, 'POST /v1/discussions/second-opinion/preview', { body: { ok: true, value: selectedPreview } });
     answerDiscussionThreadForTests(homes, serverId, { loseCreate: false, loseFirstRejoin: false });
     // Stop at the real Home invitation boundary; the Protocol composition covers Run admission/start.
-    homes.answer(serverId, 'POST /v1/discussions/committed-thread/participants', {
-        status: 403, body: { error: 'discussion_participant_invite_denied' },
+    homes.answer(serverId, 'POST /v1/discussions/committed-thread/participants/invite', {
+        status: 403, body: { error: 'discussion_access_forbidden' },
     });
     const draft: Parameters<typeof createDiscussionSecondOpinionController>[0]['draft'] = {
         title: 'Review', question: 'What changes?', reviewers,
-        ...(withProject ? { project: { machineId: 'review-machine', directory: '/selected/review' } } : {}),
     };
     const controller = createDiscussionSecondOpinionController({ scope: { serverId, accountId: 'alice' }, availability: 'available', source,
         draft });
     await controller.preview();
     expect(controller.getSnapshot().preview?.preview).toEqual(selectedPreview);
-    await controller.ask();
+    await controller.ask({ project: withProject ? { machineId: 'review-machine', directory: '/selected/review' } : null });
     expect(controller.getSnapshot().result).toMatchObject({ operation: 'second_opinion',
-        outcome: withProject ? { kind: 'succeeded', value: { status: 'pending', stage: 'invite' } }
+        outcome: withProject ? { kind: 'succeeded', value: { status: 'pending', stage: 'invite', errorCode: 'discussion_access_forbidden' } }
             : { kind: 'failed', errorCode: 'target_unavailable' } });
     expect(homes.requestsFor('/v1/discussions').filter(row => row.input !== null)).toHaveLength(withProject ? 1 : 0);
+    if (withProject) {
+        await controller.retry();
+        expect(controller.getSnapshot().result).toMatchObject({ outcome: { kind: 'succeeded', value: {
+            status: 'pending', stage: 'invite', errorCode: 'discussion_access_forbidden',
+        } } });
+    }
 });
 
 it('removes a configured model by its retained selection and refuses changes during its real preview', async () => {

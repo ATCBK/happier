@@ -432,12 +432,29 @@ or concrete Session references, not labels or a second roster. The shared
 choices to the existing Send to chip. Bound model participants use their backing
 Session; unbound model slots cannot become routing targets. The selection survives
 draft reload and accepted-send clearing until explicitly changed. At send time,
-`useDiscussionDraft.prepareContent` supplies default typed mentions only when the
-existing content has no explicit participant mention and there is no Reply target.
+`useDiscussionRecipientSelection.prepareContent` intersects those defaults with the
+admitted roster before delegating to `useDiscussionDraft.prepareContent`. The model's
+`removedRecipients` identifies dropped selections for visible composition. A missing
+roster is not a removal: preparation returns `null` when Send-to defaults need that
+roster, retaining the draft until it is available. Explicit mentions and Reply still
+override the defaults through the existing content owner. Default typed mentions
+are supplied only when the existing content has no explicit participant mention
+and there is no Reply target.
 Any Reply (including a Doc or Task target) wins. The existing content/addressing
 owner remains the only parser, and admission still checks live membership.
 This is data-layer behavior; the visible menu/chip and live journey belong to the
 Discussion composition lane and are not certified by these owner tests.
+
+Route `messageId` only acquires, scrolls to and highlights a message. Deliberate
+Reply intent belongs to the same private V2 draft as its text: `replyTarget` and
+`setReplyTarget(target | null)` are exposed by `useDiscussionDraft`. The composition
+lane binds a message's Reply action and its clearable replying-to control to that
+setter. A post captures this target in the existing retry intent; observed success
+clears only the captured reply field, preserving a newer choice made while sending.
+Failed or uncertain sends retain their original target. Draft reload retains the
+explicit choice independently of route focus. The server still resolves and admits
+the parent inside the addressed Discussion, including a parent outside the loaded
+client page.
 
 After observing a committed create, `NewDiscussion.finish` clears only the still-current
 submitted fields, retires the attempt and persists local draft custody before `onCreated`
@@ -733,11 +750,13 @@ guess one from the entry id or choose the first matching connection. Until the
 source owner supplies that qualified read/open handoff, Task headers and replies
 keep a shared unavailable source/quote state without a fabricated title or link.
 
-A retained Session anchor also remains visible when its authorized title is
-unavailable; that state supplies no navigation callback. An available anchor
+A retained Session anchor acquires its authorized metadata on the Discussion's
+captured Home even when that Session has never been opened. A pending read shows
+loading; a deleted or archived Session, or a denied or unreadable source title,
+remains unavailable without a navigation callback. An available anchor
 returns to its exact committed message, when present, through the shared
 Home-qualified Session route. Activation rechecks the captured Account lifetime
-and current source readability rather than spending a stale rendered link.
+and current source readability/archive eligibility rather than spending a stale rendered link.
 
 ### Second-opinion composition (development integration)
 
@@ -785,11 +804,13 @@ Session. Late setup from a retired Home/Account must not become a reviewer choic
 One reviewer receives the ordinary U2 addressed question after an unaddressed
 anchored quote. Create, quote and question keep distinct retained retry ids;
 uncertain responses retry those identities and current admission, not a new
-Discussion or model slot. Multiple reviewers currently return the typed
-`fresh_opinions_unavailable` result before effects: this path cannot substitute
-a Session origin or local multi-reviewer loop for the missing Fresh opinions
-builtin. The controller and optional committed-answer opener are
-data bindings; rendered L7 composition and loaded desktop/phone validation are
+Discussion or model slot. In current development source, multiple reviewers use
+`builtin:fresh-opinions` through ordinary `workflow.run.start`, with the committed
+Discussion question as the origin. Ask carries the selected Machine/folder in the
+`project` operand; missing placement is refused before any grant or creation.
+Retry retains that placement and the existing question identities. The controller
+and optional committed-answer opener are data bindings; rendered L7 composition
+and loaded desktop/phone validation are
 still integration work, not released availability. The separate background
 Agent Second opinion role is unchanged.
 
@@ -841,7 +862,7 @@ results. Discussion access does not grant access to private Run content.
 
 These are data/hooks for the Discussion composition owner, not a claim that the
 visible Run header or controls have been mounted or validated in a loaded app.
-Fresh opinions remains unavailable until its canonical builtin exists.
+Fresh opinions uses the same ordinary Workflow admission and source-disclosure checks.
 `workflow.definition.capture` is not registered, so Save as pattern reports
 `workflow_definition_capture_unavailable`; it does not create a local graph,
 save through a different Action or run automatically.
@@ -1116,9 +1137,17 @@ sender kind and available Account, Team, Session and display-name facts. These
 labels describe the request; they grant no authority. A person uses the admitted
 Account profile's name; an Agent Session, Bot or model uses its authorized Session
 presentation, not its human Account owner's name. An unavailable name remains
-unavailable rather than borrowing a different actor's identity. Background items, including
-compact Doc cards, use that same owner's `<happier_discussion_context>` block:
-each item carries its author and escaped content marked as data, not instructions.
+unavailable rather than borrowing a different actor's identity. A retained wait/return
+obligation advertises `session.message.reply` with the receiving Session and exact
+`requestLocalId`; the exact turn's final-result return remains the fallback. A returned
+informational answer does not advertise another reply obligation. The renderer preserves
+the complete escaped input-context block rather than silently dropping its trailing fields.
+Provenance alone advertises no reply Action. Discussion intake uses C1's exact-original
+classifier to distinguish an addressed ask from ambient watch custody; the latter does
+not advertise an automatic final-answer return.
+Background items use that same owner's `<happier_discussion_context>` block: participant
+content carries its author, while compact Doc cards are labelled `host_reference_metadata`.
+Both carry escaped content marked as data, not instructions.
 Quoted mentions or commands in those items do not become addressed requests.
 Workflow inputs and digests must consume this shared renderer when their
 Discussion context is wired; this intake change does not certify those consumers.
@@ -1176,11 +1205,13 @@ uses C2's `cancelled.result` reference to its exact committed partial assistant
 row. The existing result reader opens that text and the same return publisher,
 subject to its existing answer-policy approval, posts it once, attributed to the answering Session and marked cancelled/stopped;
 a committed explicit reply still wins and suppresses fallback. No partial text
-means a bare cancellation, not an invented answer. Foreground Stop integration
-is not yet complete: its transcript flush currently omits the result anchor from
-the cancelled terminal mutation, so that producer must be corrected before this
-path can publish the retained partial. Native-result fulfillment is a distinct
-producer and does not establish foreground Stop coverage.
+means a bare cancellation, not an invented answer. The foreground Stop projector
+now returns the acknowledged drained assistant sequence, and the host retains it
+on that exact cancelled turn. Source-composed host-abort coverage proves the
+partial anchor and the empty-cancellation neighbor; the reply owner resolves that
+anchor to `cancelled.result`, including after late anchor projection. This source
+proof does not certify a loaded native Stop-to-Discussion journey. Native-result
+fulfillment remains a distinct producer.
 `discussion.pass` acts on the current protected
 original through the existing Session reply owner. Automatic publication,
 approved replay and absent-host intake are still being validated; these
