@@ -135,7 +135,7 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         capabilities: { serverIdentity: { serverIdentityId: serverIdentityId ?? null } } });
     const authoringMemory = createAuthoringMemoryHttpBoundary();
     // The Account-carrier Action transport admits only a Home Machine row that proves its custodian and ready access.
-    const { createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
+    const { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
     const issuerFor = async (actionId: FilesystemActionId) => {
         if (!serverIdentityId) return null;
         const { createExternalActionAccountHttpBoundary } = await import('@/dev/testkit/harness/externalActionAccountHttpBoundary');
@@ -191,6 +191,11 @@ export async function createSessionFilesViewFixture(input: Readonly<{
         if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
         if (path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
         if (machine && path === `/v1/machines/${machine.id}`) return Response.json({ machine: machineRow });
+        if (path === '/v1/machines/read-batch' && init?.method === 'POST') {
+            // The published row is the wire shape; `availability` is derived on the client from presence.
+            const { availability: _clientDerived, ...publishedRow } = machineRow ?? {};
+            return createMachineReadBatchResponseFixture(init.body, id => machine && machineRow && id === machine.id ? publishedRow : null);
+        }
         if (path === '/v1/machines') return Response.json(machineRow ? [machineRow] : []);
         if ((init?.method ?? 'GET') === 'GET' && /^\/v2\/sessions\/[^/]+$/.test(path)) {
             return Response.json(V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 });

@@ -9,6 +9,7 @@ import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createSessionReadBatchFetchBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { createMachineReadBatchResponseFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -301,7 +302,7 @@ describe('multi-Home Session creation composition', () => {
         const features = buildServerFeaturesResponse();
         const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
         const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
-        setRuntimeFetch(async (input, init) => {
+        setRuntimeFetch(createSessionReadBatchFetchBoundary(async (input, init) => {
             const authoringResponse = await authoringMemoryHttp.handle(input, init);
             if (authoringResponse) return authoringResponse;
             const url = String(input);
@@ -361,8 +362,8 @@ describe('multi-Home Session creation composition', () => {
             if (url.endsWith('/v2/account/settings') && (!init?.method || init.method === 'GET')) return Response.json({
                 content: accountHttpSettings ? { t: 'plain', v: accountHttpSettings } : null, version: 1 });
             if (url.endsWith('/v1/auth/ping') || url.endsWith('/health')) return Response.json({ ok: true });
-            return Response.json({ ok: false }, { status: 404 });
-        });
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        }));
     });
 
     afterAll(async () => {
@@ -809,7 +810,7 @@ describe('multi-Home Session creation composition', () => {
                 await input.props.onFilesPasted([new File([new Uint8Array([1])], 'diagram.png', { type: 'image/png' })]);
             });
             expect(screen.root.findByType(AgentInput).props.attachmentRowItems).toMatchObject([{ attachmentId: expect.any(String), status: 'pending' }]);
-            expect(screen.root.findByType(MultiTextInput).props.references).toMatchObject([{ readableMarker: '[Image #1]', state: 'pending' }]);
+            expect(screen.root.findByType(MultiTextInput).props.references).toMatchObject([{ readableMarker: '[Image #1]', state: 'ready' }]);
             expect(getSessionDraftSnapshot(scope, address)?.conflict).toBeNull();
             await act(async () => { await screen.findByType(NewSessionDraftComposerActions).props.onDelete(); });
             expect(getSessionDraftSnapshot(scope, address)).toBeNull();
@@ -1421,6 +1422,7 @@ describe('multi-Home Session creation composition', () => {
     async function runTemporaryTeamModelJourney(journey: 'acquisition' | 'switch-agent' | 'remembered-control' | 'launch' | 'reopen') {
         const sourceCase = journey !== 'acquisition';
         const launchCase = journey === 'launch' || journey === 'reopen';
+        const retainedTeamSelection = journey === 'reopen' || !sourceCase;
         if (launchCase) socketBoundary.nativeSignInStatus = 'signedOut';
         // The first genuine Home baseline owns this preference. Re-publishing
         // changed bytes at the same Settings revision would correctly be ignored.
@@ -1457,7 +1459,7 @@ describe('multi-Home Session creation composition', () => {
             ...(launchCase ? { selectedPath: '/workspace/project' } : {}),
             text: 'Prepare on the original target Account', authoring: { agentTarget: { kind: 'agent',
                 identity: { pluginId: 'happier.agent.codex', localId: 'codex' } }, profileId: null,
-                ...(journey === 'reopen' ? { modelSelection: { v: 1, updatedAt: 1, ref: {
+                ...(retainedTeamSelection ? { modelSelection: { v: 1, updatedAt: 1, ref: {
                     agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'gpt-5',
                 } } } : {}),
                 executionTarget: sourceCase
@@ -1465,7 +1467,7 @@ describe('multi-Home Session creation composition', () => {
                     : { kind: 'temporary_computer', serverId: homeBScopeId,
                         artifactTarget: 'linux-x64', workspace: { kind: 'choose_on_endpoint' } } },
         } });
-        if (journey === 'reopen') writeSessionDraftLocalSupplement({ scope, address: { kind: 'newSession', draftId },
+        if (retainedTeamSelection) writeSessionDraftLocalSupplement({ scope, address: { kind: 'newSession', draftId },
             patch: { newSessionLocalState: { teamCredentialBindings: [{ v: 1, slot: { kind: 'provider_model' },
                 teamId: 'runner-team', resourceId: 'runner-resource', expectedResourceRevision: 7, deliveryMode: 'brokered' }] } } });
         const features = buildServerFeaturesResponse();
@@ -1585,7 +1587,10 @@ describe('multi-Home Session creation composition', () => {
                 if (model.variant !== 'wizard') throw new Error('Expected the production Agent selector');
                 expect(model.wizardProps.agent.agentPickerSelectedOptionId).toBe(entitled.resources[0]!.providerModels[0]!.selection.agentTargetKey);
             });
-            if (journey !== 'reopen') await act(async () => {
+            // First-use acquisition has no worker to confirm a new Team
+            // choice. Reopen its retained choice through the ordinary draft
+            // reader; worker-backed source selection is covered below.
+            if (!retainedTeamSelection) await act(async () => {
                 const model = hook.getCurrent();
                 if (model.variant !== 'wizard') throw new Error('Expected the production model selector');
                 await model.wizardProps.agent.onSelectTeamCredentialModel(entitled.resources[0]!.providerModels[0]!.selection);

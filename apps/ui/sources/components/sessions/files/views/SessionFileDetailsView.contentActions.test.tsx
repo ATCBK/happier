@@ -58,7 +58,7 @@ async function renderFile(path = filePath) {
 }
 
 async function setToolbarWidth(screen: Awaited<ReturnType<typeof renderFile>>, width: number) {
-    await act(async () => { invokeTestInstanceHandler(screen.findByTestId('file-action-toolbar'), 'onLayout', { nativeEvent: { layout: { width } } }); });
+    await act(async () => { invokeTestInstanceHandler(screen.findByTestId('file-details-header.root'), 'onLayout', { nativeEvent: { layout: { width } } }); });
 }
 
 describe('shared file reader content actions', () => {
