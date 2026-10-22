@@ -61,10 +61,13 @@ describe('bundled app-exact Plugin UI artifact source', () => {
         expect(readBundledAssetBytes).toHaveBeenCalledTimes(1);
     });
 
-    it('matches immutable bytes by digest rather than release occurrence', async () => {
+    it('matches immutable bytes shared by bundled release occurrences by digest', async () => {
         const readBundledAssetBytes = vi.fn(async () => new Uint8Array([1, 2, 3]));
+        const inventory = createInventory();
         const source = createBundledPluginUiAppExactArtifactSourceFromInventory({
-            inventory: createInventory(),
+            inventory: [...inventory, ...inventory.map(entry => ({ ...entry,
+                pluginId: 'happier.other', releaseVersion: '0.0.1',
+            }))],
             readBundledAssetBytes,
         });
 

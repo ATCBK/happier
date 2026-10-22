@@ -20,8 +20,9 @@ function findExactArtifact(
     inventory: BundledPluginUiAppArtifactInventory,
     artifact: PluginSelectedArtifactIdentity,
 ): BundledPluginUiAppArtifact | null {
-    const matches = inventory.filter((candidate) => candidate.digest === artifact.digest);
-    return matches.length === 1 ? matches[0]! : null;
+    // Several packaged release occurrences can contain the same immutable bytes.
+    // Selection/admission belongs to the lease, which verifies this file set.
+    return inventory.find((candidate) => candidate.digest === artifact.digest) ?? null;
 }
 
 /**
