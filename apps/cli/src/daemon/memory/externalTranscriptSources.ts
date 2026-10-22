@@ -110,14 +110,20 @@ export function createMemoryExternalTranscriptTraversal() {
         let first: [string, Entry] | undefined;
         let refresh: [string, Entry] | undefined;
         let backfill: [string, Entry] | undefined;
+        let continuation: [string, Entry] | undefined;
         for (const pair of candidates) {
           if (selected.has(pair[0])) continue;
           first ??= pair;
           if (pair[1].refresh) refresh ??= pair;
           if (pair[1].state !== 'current') backfill ??= pair;
-          if (refresh && backfill) break;
+          if (pair[1].state === 'more' && !pair[1].refresh) continuation ??= pair;
+          if (refresh && continuation) break;
         }
-        const next = preferRefresh ? refresh ?? backfill ?? first : backfill ?? refresh ?? first;
+        // Finish admitted history pages before opening another conversation.
+        // Otherwise each page waits behind the whole unstarted corpus. Explicit
+        // refreshes still alternate with backfill under the same allowance.
+        const history = continuation ?? backfill;
+        const next = preferRefresh ? refresh ?? history ?? first : history ?? refresh ?? first;
         if (!next) break;
         const [id, entry] = next;
         selected.add(id);

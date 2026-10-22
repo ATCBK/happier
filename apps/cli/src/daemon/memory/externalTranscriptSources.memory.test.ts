@@ -28,7 +28,7 @@ type ConfigureInventory = (next: (page: number) => string | null,
 
 async function withInventory(run: (sources: ReturnType<typeof createMemoryExternalTranscriptSources>, configure: ConfigureInventory,
   signal: AbortSignal, settings: ReturnType<typeof normalizeMemorySettings>, demands: WeakRef<Disposable>[], db: ReturnType<typeof openDeepIndexDb>,
-  notifyTopology: () => void) => Promise<void>) {
+  notifyTopology: (kind?: 'file' | 'topology') => void) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'happier-memory-inventory-'));
   const db = openDeepIndexDb({ dbPath: join(directory, 'index.sqlite') });
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
@@ -38,15 +38,24 @@ async function withInventory(run: (sources: ReturnType<typeof createMemoryExtern
   const { createAuthoredAdmittedPluginRuntimeFixture: createRuntime } = await import('@/plugins/testkit/admittedRuntime');
   const { resolvePluginContributes } = await import('@/plugins/projection/registry/resolvePluginContributions');
   const { createResolvedContributionRegistry } = await import('@/plugins/projection/registry/createResolvedContributionRegistry');
-  const { createExternalSessionObservationDaemonProjection } = await import('@/api/session/external/leases/createExternalSessionObservationDaemonProjection');
+  const { createExternalSessionObservationReconciler } = await import('@/api/session/external/leases/createExternalSessionObservationReconciler');
   let runtime: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>> | undefined;
   let sources: ReturnType<typeof createMemoryExternalTranscriptSources> | undefined;
   const topologyChanges = new Map<string, (changedFile?: string) => void>();
-  const observation = createExternalSessionObservationDaemonProjection({
-    publishField: async () => { throw new Error('Native inventory must not fabricate a Happier Session'); },
+  const contentChanges = new Map<string, (changedFile?: string) => void>();
+  // Use the actual batched directory-delivery owner so both OS event kinds
+  // reach source inventory; the projection's legacy test hook is structural-only.
+  const observation = createExternalSessionObservationReconciler({
     // Replace only OS attachments; admission, resource sharing and disposal stay real.
     watchFile: () => () => {},
-    watchTopologyDirectory: (path, onChange) => { topologyChanges.set(path, onChange); return () => { topologyChanges.delete(path); }; },
+    watchTopologyDirectories: (targets, lifecycle) => {
+      for (const target of targets) {
+        topologyChanges.set(target.directory, target.onStructuralChange);
+        if (target.onFileChange) contentChanges.set(target.directory, target.onFileChange);
+      }
+      lifecycle.onReady();
+      return () => { for (const target of targets) { topologyChanges.delete(target.directory); contentChanges.delete(target.directory); } };
+    },
   });
   try {
     runtime = await createRuntime({ controller: pluginReloadController,
@@ -121,8 +130,8 @@ export function activate(api) {
     const settings = normalizeMemorySettings({ v: 1, enabled: true, conversationSearch: { indexExternal: { enabled: true, agents: [agentId] } } });
     expect(settings.conversationSearch.indexExternal).toMatchObject({ enabled: true, agents: [agentId] });
     await sources.refresh(settings, signal);
-    await run(sources, configure, signal, settings, demands, db, () => {
-      const notify = topologyChanges.get('/synthetic');
+    await run(sources, configure, signal, settings, demands, db, (kind = 'topology') => {
+      const notify = (kind === 'file' ? contentChanges : topologyChanges).get('/synthetic');
       if (!notify) throw new Error('Synthetic source has no admitted topology watcher');
       notify('/synthetic/new-sibling.jsonl');
     });
@@ -154,7 +163,7 @@ describe('native inventory cursor lifetime', () => {
       expect(sources.getIndexSources(db)).toMatchObject([{ state: 'indexing' }]);
     });
   });
-  it('discovers new siblings during a retained crawl without starving its initial coverage', async () => {
+  it.each(['file', 'topology'] as const)('discovers new siblings from a %s event during a retained crawl without starving its initial coverage', async kind => {
     await withInventory(async (sources, configure, signal, settings, _demands, db, notifyTopology) => {
       const lastPage = 6;
       const next = (page: number) => page < lastPage ? cursor(page + 1) : null;
@@ -162,7 +171,7 @@ describe('native inventory cursor lifetime', () => {
       await sources.refresh(settings, signal);
       await sources.inventory(signal);
       configure(next, { watchedFiles: 1, candidates: true, headId: 'new-sibling' });
-      notifyTopology();
+      notifyTopology(kind);
       const changed = await sources.inventory(signal);
       expect(sources.take(1).map(candidate => candidate.source.nativeSessionId)).toEqual(['new-sibling']);
       const ids = () => sources.take(sources.getReadySourceCount()).map(candidate => candidate.source.nativeSessionId);
@@ -171,7 +180,7 @@ describe('native inventory cursor lifetime', () => {
       // More structural writes must not reset either active continuation. The
       // initial crawl gets one of every two pages under the existing allowance.
       for (let page = 0; page < lastPage * 2; page++) {
-        notifyTopology();
+        notifyTopology(kind);
         await sources.inventory(signal);
       }
       expect(ids()).toEqual(expect.arrayContaining(Array.from({ length: lastPage }, (_, index) => `fixture-${index + 1}`)));

@@ -348,9 +348,19 @@ export function createExternalSessionObservationReconciler(
         if (disposed || !resource.active || resourcesByKey.get(resource.key) !== resource) return;
         for (const record of resource.accounting) {
             if (!record.active) continue;
-            if (input.changedFile && !record.watchedFiles.has(input.changedFile)) continue;
+            let change = input;
+            if (input.changedFile && !record.watchedFiles.has(input.changedFile)) {
+                // Directory delivery can discover a new file before its rename
+                // notification (or after that notification was missed). It is
+                // topology work for this demand, not an ignorable named write.
+                const roots = record.demand.watchFileChanges?.topologyDirectories ?? [];
+                let parent = dirname(input.changedFile);
+                while (!roots.includes(parent) && dirname(parent) !== parent) parent = dirname(parent);
+                if (!roots.includes(parent)) continue;
+                change = { reason: 'topology_changed' };
+            }
             try {
-                record.demand.onChange(input);
+                record.demand.onChange(change);
             } catch {
                 // A consumer cannot prevent the shared source invalidation.
             }

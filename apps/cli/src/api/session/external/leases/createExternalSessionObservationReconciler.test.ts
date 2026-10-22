@@ -4,6 +4,7 @@ import type {
     ExternalAgentObservationLinkEvidenceBatchV1,
     ExternalAgentObservationReconcileResultV1,
 } from '@happier-dev/protocol';
+import type { DirectoryTopologyWatchTarget } from '@/integrations/watcher/startDirectoryTopologyWatcher';
 
 import {
     createExternalSessionObservationReconciler,
@@ -94,6 +95,28 @@ afterEach(() => {
 });
 
 describe('createExternalSessionObservationReconciler', () => {
+    it('requests source discovery for a named file outside the accounting snapshot', async () => {
+        let targets: readonly DirectoryTopologyWatchTarget[] = [];
+        const received: Parameters<ExternalSessionAccountingSourceDemand['onChange']>[0][] = [];
+        const reconciler = createExternalSessionObservationReconciler({
+            acquireObserver: async () => ({ dispose() {} }),
+            watchTopologyDirectories: (next, lifecycle) => { targets = next; lifecycle.onReady(); return () => {}; },
+        });
+        const accounting = await reconciler.registerAccountingSource({
+            resource: resource(), source: { kind: 'fixture' }, changeObservation: 'watch_file_changes',
+            watchFileChanges: { files: ['/fixture/known.jsonl'], topologyDirectories: ['/fixture'] },
+            onChange: change => { received.push(change); },
+        });
+        try {
+            targets[0]!.onFileChange!('/fixture/known.jsonl');
+            targets[0]!.onFileChange!('/fixture/new-sibling.jsonl');
+            targets[0]!.onFileChange!('/fixture-sibling/unrelated.jsonl');
+            expect(received).toEqual([
+                { reason: 'file_changed', changedFile: '/fixture/known.jsonl' },
+                { reason: 'topology_changed' },
+            ]);
+        } finally { await accounting.dispose(); await reconciler.dispose(); }
+    });
     it('filters accounting file changes to each demand and stops delivery on disposal', async () => {
         const fileCallbacks = new Map<string, (file: string) => void>();
         const received: string[] = [];
