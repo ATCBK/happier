@@ -2,6 +2,7 @@ import { buildReviewTriageTransitionRequestV1 } from '@happier-dev/protocol/revi
 import type { ReviewCommentListResponseV1, ReviewCommentGetResponseV1, ReviewCommentTransitionResponseV1 } from '@happier-dev/protocol/reviews/comments/actions';
 import type { ReviewCommentV1 } from '@happier-dev/protocol/reviews/comments/v1';
 import type { ReviewTriageStatus } from '@happier-dev/protocol/reviews/reviewTriageStatus';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { randomUUID } from '@/platform/randomUUID';
 import { areServerAccountScopesEqual, serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -87,6 +88,18 @@ function entryFor(target: ReviewRunCommentsTarget): Entry {
 
 function publish(entry: Entry, next: ReviewRunCommentsSnapshot): void {
     if (next === entry.snapshot) return;
+    const previous = entry.snapshot;
+    if (next.comments !== previous.comments) {
+        const held = new Map(previous.comments.map(comment => [comment.id, comment]));
+        const comments = next.comments.map(comment => {
+            const current = held.get(comment.id);
+            return current && sameStrictJsonValue(current, comment) ? current : comment;
+        });
+        next = { ...next, comments: comments.length === previous.comments.length
+            && comments.every((comment, index) => comment === previous.comments[index]) ? previous.comments : comments };
+    }
+    if (next.pending !== previous.pending && sameStrictJsonValue(next.pending, previous.pending)) next = { ...next, pending: previous.pending };
+    if (next.status === previous.status && next.comments === previous.comments && next.pending === previous.pending) return;
     entry.snapshot = next;
     for (const listener of entry.listeners) listener();
 }

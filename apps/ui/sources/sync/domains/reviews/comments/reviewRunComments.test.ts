@@ -15,6 +15,7 @@ import {
     readReviewRunComments,
     recordReviewCommentWrites,
     resetReviewRunCommentsForTests,
+    subscribeReviewRunComments,
 } from './reviewRunComments';
 
 // Only HTTP and stored credentials are substituted: the Action front door, the Home's account
@@ -69,6 +70,30 @@ async function serveTwoHomes() {
 }
 
 describe('review run comments (one cache, bound to its Home and Account)', () => {
+    it('retains equal confirmed comments and reloads without hiding a same-revision content change', async () => {
+        const target = { scope: { serverId: 'publication-home', accountId: 'account-b' }, sessionId: 'sess_1', runId: 'run_1' };
+        const item = comment('account-b');
+        const execute = async () => ({ items: [structuredClone(item)], cursor: null });
+        await loadReviewRunComments({ ...target, execute });
+        const loaded = readReviewRunComments(target);
+        const notify = vi.fn();
+        const stop = subscribeReviewRunComments(target, notify);
+        try {
+            recordReviewCommentWrites([structuredClone(item)], target.scope);
+            expect(readReviewRunComments(target)).toBe(loaded);
+            await loadReviewRunComments({ ...target, execute });
+            expect(readReviewRunComments(target)).toBe(loaded);
+            expect(notify).not.toHaveBeenCalled();
+            recordReviewCommentWrites([{ ...item, body: 'Changed body at the same revision' }], target.scope);
+            expect(readReviewRunComments(target).comments[0].body).toBe('Changed body at the same revision');
+            expect(notify).toHaveBeenCalledTimes(1);
+            recordReviewCommentWrites([{ ...item, serverRevision: item.serverRevision - 1 }], target.scope);
+            expect(notify).toHaveBeenCalledTimes(1);
+            recordReviewCommentWrites([{ ...item, serverRevision: item.serverRevision + 1 }], target.scope);
+            expect(readReviewRunComments(target).comments[0].serverRevision).toBe(item.serverRevision + 1);
+            expect(notify).toHaveBeenCalledTimes(2);
+        } finally { stop(); }
+    });
     it('keeps one canonical revision when another reviewer opens an older reference afterwards', async () => {
         let revision = 5;
         const served = await serveActionHomes({

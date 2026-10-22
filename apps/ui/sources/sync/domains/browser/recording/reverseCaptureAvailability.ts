@@ -27,8 +27,9 @@ function subscribe(listener: () => void): () => void {
 export function registerDesktopBrowserRecordingReverseCaptureHandler(machineId: string): () => void {
     const normalized = normalizeMachineId(machineId);
     if (!normalized) return () => {};
-    registeredMachineCounts.set(normalized, (registeredMachineCounts.get(normalized) ?? 0) + 1);
-    emitChange();
+    const previousCount = registeredMachineCounts.get(normalized) ?? 0;
+    registeredMachineCounts.set(normalized, previousCount + 1);
+    if (previousCount === 0) emitChange();
     let disposed = false;
     return () => {
         if (disposed) return;
@@ -36,10 +37,10 @@ export function registerDesktopBrowserRecordingReverseCaptureHandler(machineId: 
         const count = registeredMachineCounts.get(normalized) ?? 0;
         if (count <= 1) {
             registeredMachineCounts.delete(normalized);
+            emitChange();
         } else {
             registeredMachineCounts.set(normalized, count - 1);
         }
-        emitChange();
     };
 }
 
