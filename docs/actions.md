@@ -4465,9 +4465,14 @@ Account profile ids belong in `connectedServices`, not the Provider connection
 field. Execution Runs accept that native model string directly as `modelId`.
 
 Session-scoped native hosts send Agent-start Actions through their existing
-credentialed daemon channel, as Session spawn already does. The shared admission
-owner resolves Account catalogs and Role policy before dispatching an attached
-Run to its bound Session RPC. An unavailable host start context returns the
+credentialed daemon channel, as Session spawn already does. Shared admission
+resolves Account catalogs and Role policy, but credentialed admission alone does
+not establish attached Run dispatch. The native MCP host has a bound Run adapter
+that carries private admission context through local RPC. The credentialed CLI
+adapter cannot authenticate that context through public Session RPC and currently
+refuses attached starts carrying depth or workspace-write stamps with
+`execution_run_target_unavailable` and `noRunCreated`, before resuming or starting
+the Run. An unavailable host start context returns the
 content-free `details.issues` path `host`; Run refusals retain their authoritative
 creation certainty through the existing failure projector.
 
@@ -5581,6 +5586,13 @@ Account or Providers feature while approval is pending retires that intent. A la
 Inbox approval cannot replay the retired field intent; the canonical executor
 returns `approval_stale`. The shared approval policy still owns waivers, and a
 successful live approval writes the confirmation once.
+
+Ordinary approved results stay schema-complete in the private approval Artifact,
+including blocking Session/MCP calls whose effect runs on the approving app.
+The original waiter consumes that private receipt. Public approval reads,
+decisions and Action observations independently apply the Action's observation
+projection; those redacted views are not caller receipts. This is a 0.3
+development contract, not a claim about released availability.
 
 The result-custody exception is
 `approvalResultCustody: 'live_only'`, where the exact invocation stays the blocking waiter because
